@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use scour_core::{
-    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, Maintenance, Page,
-    ScanOptions, ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
+    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, Maintenance, Page, ScanOptions,
+    ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
 use scour_engine::{Engine, EngineOptions};
 use scour_index_tantivy::{IndexOptions, TantivyIndex};

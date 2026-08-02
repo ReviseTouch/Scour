@@ -2,12 +2,37 @@
 //!
 //! Only this file composes sentences. Everything below it returned numbers,
 //! codes and typed variants precisely so that the wording lives in one place
-//! and can be translated once.
+//! and can be translated once — which is what `t()` below actually does.
+//!
+//! The English text is the key, so an untranslated string is still correct,
+//! just untranslated. `SCOUR_LANG=tr scour status` switches this program alone.
+
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use humansize::{BINARY, format_size};
-use scour_core::{Kind, TreeNode};
+use scour_core::{Catalog, Kind, TreeNode};
+use scour_i18n::Catalogue;
 use scour_proto::Response;
+
+/// The language this run speaks.
+fn catalogue() -> &'static Catalogue {
+    static C: OnceLock<Catalogue> = OnceLock::new();
+    C.get_or_init(Catalogue::from_environment)
+}
+
+/// Translate. The argument is the English text, which is also the key.
+fn t(msgid: &str) -> String {
+    catalogue().get(msgid).into_owned()
+}
+
+/// A label, padded so the column lines up whatever language it is in.
+fn label(msgid: &str) -> String {
+    // Twelve columns *and* a space. `değiştirilme` is exactly twelve
+    // characters, so padding alone leaves the value touching the label — the
+    // kind of thing that only shows up in the language nobody tested in.
+    format!("{:<12} ", t(msgid))
+}
 
 pub fn human(reply: &Response) -> Result<()> {
     match reply {
@@ -52,21 +77,29 @@ pub fn human(reply: &Response) -> Result<()> {
         }
         Response::Tree { root } => print_tree(root, ""),
         Response::Stat(e) => {
-            println!("path      {}", e.path);
-            println!("name      {}", e.name());
-            println!("kind      {}", kind_tag(e.kind()));
+            println!("{}{}", label("path"), e.path);
+            println!("{}{}", label("name"), e.name());
+            println!("{}{}", label("kind"), kind_tag(e.kind()));
             if !e.is_dir {
-                println!("size      {}", format_size(e.meta.size as u64, BINARY));
-                println!("on disk   {}", format_size(e.meta.disk as u64, BINARY));
+                println!(
+                    "{}{}",
+                    label("size"),
+                    format_size(e.meta.size as u64, BINARY)
+                );
+                println!(
+                    "{}{}",
+                    label("on disk"),
+                    format_size(e.meta.disk as u64, BINARY)
+                );
             } else if e.meta.items >= 0 {
-                println!("items     {}", e.meta.items);
+                println!("{}{}", label("items"), e.meta.items);
             }
-            println!("modified  {}", stamp(e.meta.mtime));
-            println!("created   {}", stamp(e.meta.ctime));
-            println!("accessed  {}", stamp(e.meta.atime));
+            println!("{}{}", label("modified"), stamp(e.meta.mtime));
+            println!("{}{}", label("created"), stamp(e.meta.ctime));
+            println!("{}{}", label("accessed"), stamp(e.meta.atime));
             let mode = scour_core::mode_string(e.meta.mode);
             if !mode.is_empty() {
-                println!("mode      {mode}  {}:{}", e.meta.uid, e.meta.gid);
+                println!("{}{mode}  {}:{}", label("mode"), e.meta.uid, e.meta.gid);
             }
         }
         Response::Explain {
@@ -75,7 +108,10 @@ pub fn human(reply: &Response) -> Result<()> {
         } => {
             println!("{description}");
             if *needs_content {
-                println!("(needs document contents, which this index may not have)");
+                println!(
+                    "({})",
+                    t("needs document contents, which this index may not have")
+                );
             }
         }
         Response::Sources { sources } => {
@@ -88,39 +124,55 @@ pub fn human(reply: &Response) -> Result<()> {
             }
         }
         Response::Status(s) => {
-            println!("entries       {}", s.entries);
-            println!("index         {}", format_size(s.index_bytes, BINARY));
-            println!("sources       {}  watching {}", s.sources, s.watching);
-            println!("scanning      {}", if s.scanning { "yes" } else { "no" });
-            if s.scanning {
-                println!("seen so far   {}", s.scanned);
-            }
-            println!("pending       {}", s.pending);
+            println!("{}{}", label("entries"), s.entries);
+            println!("{}{}", label("index"), format_size(s.index_bytes, BINARY));
             println!(
-                "unsorted      {}{}",
+                "{}{}  {} {}",
+                label("sources"),
+                s.sources,
+                t("watching"),
+                s.watching
+            );
+            println!(
+                "{}{}",
+                label("scanning"),
+                if s.scanning { t("yes") } else { t("no") }
+            );
+            if s.scanning {
+                println!("{}{}", label("seen so far"), s.scanned);
+            }
+            println!("{}{}", label("pending"), s.pending);
+            println!(
+                "{}{}{}",
+                label("unsorted"),
                 s.unsorted,
                 if s.rebuild_advised {
-                    "  (a rebuild would speed searches up)"
+                    format!("  ({})", t("a rebuild would speed searches up"))
                 } else {
-                    ""
+                    String::new()
                 }
             );
             if s.cold {
-                println!("\nThe index is empty. Run `scour rescan`.");
+                println!("\n{}", t("The index is empty. Run `scour rescan`."));
             }
         }
         Response::Stats(s) => {
-            println!("entries       {}", s.entries);
-            println!("folders       {}", s.dirs);
-            println!("on disk       {}", format_size(s.bytes_on_disk, BINARY));
-            println!("segments      {}", s.segments);
-            println!("unsorted      {}", s.unsorted_entries);
+            println!("{}{}", label("entries"), s.entries);
+            println!("{}{}", label("folders"), s.dirs);
             println!(
-                "contents      {}",
+                "{}{}",
+                label("on disk"),
+                format_size(s.bytes_on_disk, BINARY)
+            );
+            println!("{}{}", label("segments"), s.segments);
+            println!("{}{}", label("unsorted"), s.unsorted_entries);
+            println!(
+                "{}{}",
+                label("contents"),
                 if s.has_content {
-                    "indexed"
+                    t("indexed")
                 } else {
-                    "not indexed"
+                    t("not indexed")
                 }
             );
         }
@@ -133,7 +185,7 @@ pub fn human(reply: &Response) -> Result<()> {
                 r.took_ms
             );
         }
-        Response::Accepted => println!("accepted"),
+        Response::Accepted => println!("{}", t("accepted")),
         Response::Text { text } => println!("{text}"),
     }
     Ok(())
@@ -164,17 +216,14 @@ fn print_tree(node: &TreeNode, prefix: &str) {
     }
 }
 
-fn kind_tag(k: Kind) -> &'static str {
-    match k {
-        Kind::Dir => "folder",
-        Kind::Code => "code",
-        Kind::Image => "image",
-        Kind::Archive => "archive",
-        Kind::Doc => "document",
-        Kind::Exec => "program",
-        Kind::Media => "media",
-        Kind::File => "file",
-    }
+/// The word for a kind.
+///
+/// Through `Kind::msgid()` rather than a second table here: the kinds are core
+/// vocabulary and every frontend has to name them the same way, or a filter
+/// called "Belge" in one place and "Document" in another is the same filter
+/// with two names.
+fn kind_tag(k: Kind) -> String {
+    t(k.msgid())
 }
 
 /// `YYYY-MM-DD HH:MM` in UTC.
@@ -213,19 +262,30 @@ fn civil(z: i64) -> (i64, i64, i64) {
 /// you reach for when the service is the thing not working.
 pub fn locations() -> Result<()> {
     let (config, problem) = scour_config::Config::load_or_default();
-    println!("settings   {}", scour_config::config_path().display());
-    println!("index      {}", config.index.dir.display());
-    println!("socket     {}", config.socket());
     println!(
-        "service    {}",
+        "{}{}",
+        label("settings"),
+        scour_config::config_path().display()
+    );
+    println!("{}{}", label("index"), config.index.dir.display());
+    println!("{}{}", label("socket"), config.socket());
+    println!(
+        "{}{}",
+        label("service"),
         if scour_ipc::is_running(&config.socket()) {
-            "running"
+            t("running")
         } else {
-            "not running"
+            t("not running")
         }
     );
+    println!(
+        "{}{} ({})",
+        label("language"),
+        catalogue().locale(),
+        languages()
+    );
     if let Some(e) = problem {
-        println!("\nproblem    {e}");
+        println!("\n{}{e}", label("problem"));
     }
     Ok(())
 }
@@ -248,8 +308,20 @@ pub fn mcp_config() -> Result<()> {
   }}
 }}"#
     );
-    eprintln!("\nStart `scourd` first — the MCP server is a client of it, like this one.");
+    eprintln!(
+        "\n{}",
+        t("Start `scourd` first — the MCP server is a client of it, like this one.")
+    );
     Ok(())
+}
+
+/// Which languages this build ships, for `scour where`.
+fn languages() -> String {
+    scour_i18n::LANGUAGES
+        .iter()
+        .map(|(tag, name)| format!("{tag} {name}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -264,9 +336,64 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_has_a_word() {
-        for k in Kind::ALL {
-            assert!(!kind_tag(k).is_empty());
+    fn every_kind_has_a_word_in_every_shipped_language() {
+        for (tag, _) in scour_i18n::LANGUAGES {
+            let c = scour_i18n::Catalogue::for_language(tag);
+            for k in Kind::ALL {
+                let word = c.get(k.msgid());
+                assert!(!word.is_empty(), "{tag} has no word for {k:?}");
+            }
         }
+    }
+
+    /// Every string this file asks for exists in the Turkish catalogue.
+    ///
+    /// A missing one is not a failure at run time — it falls back to English —
+    /// which is exactly why it needs a test: a half-translated program looks
+    /// fine until someone reads it.
+    #[test]
+    fn the_turkish_catalogue_covers_what_this_file_uses() {
+        let c = scour_i18n::Catalogue::for_language("tr");
+        let used = [
+            "path",
+            "name",
+            "kind",
+            "size",
+            "on disk",
+            "items",
+            "modified",
+            "created",
+            "accessed",
+            "mode",
+            "entries",
+            "folders",
+            "index",
+            "sources",
+            "watching",
+            "scanning",
+            "seen so far",
+            "pending",
+            "unsorted",
+            "segments",
+            "contents",
+            "yes",
+            "no",
+            "indexed",
+            "not indexed",
+            "running",
+            "not running",
+            "settings",
+            "socket",
+            "service",
+            "problem",
+            "accepted",
+            "full scan",
+            "a rebuild would speed searches up",
+            "The index is empty. Run `scour rescan`.",
+            "needs document contents, which this index may not have",
+            "Start `scourd` first — the MCP server is a client of it, like this one.",
+        ];
+        let missing: Vec<&str> = used.iter().copied().filter(|m| c.get(m) == **m).collect();
+        assert!(missing.is_empty(), "untranslated: {missing:?}");
     }
 }

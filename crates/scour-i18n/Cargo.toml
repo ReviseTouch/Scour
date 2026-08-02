@@ -1,0 +1,15 @@
+[package]
+name        = "scour-i18n"
+description = "Translation. gettext catalogues, compiled in, with the English source as the key."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scour-core = { workspace = true }

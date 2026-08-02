@@ -68,14 +68,74 @@ reappearing — were invisible to timing and only caught by that comparison.
 
 ## Surfaces
 
-### CLI — `scour`
-
-*(filled in at M10)*
-
-### MCP — `scour-mcp`
-
-*(filled in at M11)*
+Changing any of these changes this section, in the same commit.
 
 ### Wire — `scour-proto`
 
-*(filled in at M8)*
+Newline-delimited JSON over a local socket. One message per line; a reply
+carries the `id` of the call it answers. Requests:
+
+| op | mutating | notes |
+|---|---|---|
+| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` |
+| `count` | | `query`, `cap` — the total is a floor when `capped` |
+| `facets` | | `query`, `by`: `kind` / `ext{top}` / `dir{path,top}` |
+| `tree` | | `path`, `depth`, `limit` — bounded *per level* |
+| `stat` | | `path`; answered from the source, so a new file is never missing |
+| `explain` | | `query` → how it was understood, without running it |
+| `sources` | | what is indexed, and each source's `Caps` |
+| `status` | | numbers and flags only, never a sentence |
+| `stats` | | index size, segments, unsorted tail |
+| `rescan` | ✓ | optional `path` to narrow it |
+| `maintain` | ✓ | `flush` / `compact` / `rebuild` |
+| `syntax` | | the query language reference, as text |
+| `shutdown` | ✓ | |
+
+Queries cross as **text**, not as a parsed tree: the service parses, so the
+language means one thing rather than three.
+
+`Response` is internally tagged, which constrains what a variant may hold — a
+struct or its own named fields, never a bare string or a sequence. serde reports
+the violation when the message is *sent*, and the client sees it as a connection
+closing for no reason. `every_response_round_trips` is the guard.
+
+### CLI — `scour`
+
+A client and nothing else: no index, no filesystem, does not link the engine.
+
+```
+scour <query>                        search (the default)
+scour search <q> --sort --limit --offset --ascending
+scour count <q>                      scour facets <q> --by kind|ext|<dir>
+scour tree <path> --depth --limit    scour stat <path>
+scour explain <q>                    scour syntax
+scour sources                        scour status
+scour rescan [path]                  scour maintain flush|compact|rebuild
+scour where                          scour mcp-config
+```
+
+`--json` on every command prints the protocol type serialised directly — the
+same bytes the service sent. `where` and `mcp-config` answer without a service,
+because both are what you reach for when the service is what is not working.
+
+### MCP — `scour-mcp`
+
+Eight tools, all read-only: `scour_search`, `scour_count`, `scour_facets`,
+`scour_tree`, `scour_stat`, `scour_explain`, `scour_syntax`, `scour_sources`.
+
+Two rules that are not negotiable:
+
+* **Every answer is bounded**, and says so when it was cut. A model that cannot
+  tell a full listing from a truncated one draws confident wrong conclusions.
+* **Nothing mutating is exposed.** `rescan`, `maintain` and `shutdown` exist in
+  the protocol and stay out of the tool list.
+
+Tool descriptions say what a tool is *for*, not what it does — a model choosing
+between `scour_search` and `scour_tree` is making the same decision a person
+does, and the descriptions exist to make it easy.
+
+### Service — `scourd`
+
+`src/wire.rs` is the only file in the workspace that names `TantivyIndex` or
+`FsSource`. If a second one ever does, something above has stopped being written
+against its trait.

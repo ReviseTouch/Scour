@@ -1,0 +1,154 @@
+# Turkish translation for Scour.
+#
+# The msgid is the English source text, not an invented key: a string with no
+# entry here degrades to correct English rather than to a bare identifier.
+# When the user interface arrives it uses Slint's @tr(), which is gettext and
+# is also keyed by the source string — so this same file serves both sides.
+msgid ""
+msgstr ""
+"Project-Id-Version: scour\n"
+"Language: tr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+# --- kinds. These are Kind::msgid(), shared by every frontend. ---
+msgid "File"
+msgstr "Dosya"
+
+msgid "Folder"
+msgstr "Klasör"
+
+msgid "Code"
+msgstr "Kod"
+
+msgid "Image"
+msgstr "Görsel"
+
+msgid "Archive"
+msgstr "Arşiv"
+
+msgid "Document"
+msgstr "Belge"
+
+msgid "Executable"
+msgstr "Çalıştırılabilir"
+
+msgid "Media"
+msgstr "Medya"
+
+# --- field labels ---
+msgid "path"
+msgstr "yol"
+
+msgid "name"
+msgstr "ad"
+
+msgid "kind"
+msgstr "tür"
+
+msgid "size"
+msgstr "boyut"
+
+msgid "on disk"
+msgstr "diskte"
+
+msgid "items"
+msgstr "öğe"
+
+msgid "modified"
+msgstr "değiştirilme"
+
+msgid "created"
+msgstr "oluşturulma"
+
+msgid "accessed"
+msgstr "erişilme"
+
+msgid "mode"
+msgstr "izinler"
+
+msgid "entries"
+msgstr "kayıt"
+
+msgid "folders"
+msgstr "klasör"
+
+msgid "index"
+msgstr "dizin"
+
+msgid "sources"
+msgstr "kaynak"
+
+msgid "watching"
+msgstr "izlenen"
+
+msgid "scanning"
+msgstr "taranıyor"
+
+msgid "seen so far"
+msgstr "şu ana dek"
+
+msgid "pending"
+msgstr "bekleyen"
+
+msgid "unsorted"
+msgstr "sırasız"
+
+msgid "segments"
+msgstr "parça"
+
+msgid "contents"
+msgstr "içerik"
+
+msgid "yes"
+msgstr "evet"
+
+msgid "no"
+msgstr "hayır"
+
+msgid "indexed"
+msgstr "indeksli"
+
+msgid "not indexed"
+msgstr "indekssiz"
+
+msgid "running"
+msgstr "çalışıyor"
+
+msgid "not running"
+msgstr "çalışmıyor"
+
+msgid "language"
+msgstr "dil"
+
+msgid "settings"
+msgstr "ayarlar"
+
+msgid "socket"
+msgstr "soket"
+
+msgid "service"
+msgstr "servis"
+
+msgid "problem"
+msgstr "sorun"
+
+msgid "accepted"
+msgstr "kabul edildi"
+
+# --- sentences ---
+msgid "a rebuild would speed searches up"
+msgstr "yeniden inşa aramaları hızlandırır"
+
+msgid "The index is empty. Run `scour rescan`."
+msgstr "Dizin boş. `scour rescan` çalıştırın."
+
+msgid "full scan"
+msgstr "tam tarama"
+
+msgid "needs document contents, which this index may not have"
+msgstr "belge içeriği gerekiyor, bu dizinde olmayabilir"
+
+msgid "Start `scourd` first — the MCP server is a client of it, like this one."
+msgstr "Önce `scourd` başlatın — MCP sunucusu, bunun gibi, onun istemcisidir."

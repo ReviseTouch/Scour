@@ -10,6 +10,7 @@ members = [
     "crates/scour-proto",
     "crates/scour-engine",
     "crates/scour-ipc",
+    "crates/scour-i18n",
     "apps/scourd",
     "apps/scour",
     "apps/scour-mcp",
