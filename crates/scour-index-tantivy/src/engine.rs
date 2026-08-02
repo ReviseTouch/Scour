@@ -69,6 +69,8 @@ pub struct TantivyIndex {
     meta: RwLock<Meta0>,
     pending: RwLock<Pending>,
     opts: IndexOptions,
+    /// Documents handed to the writer since the last commit.
+    in_flight: std::sync::atomic::AtomicU64,
     /// The pass every upsert is stamped with. See `Index::begin_generation`.
     generation: std::sync::atomic::AtomicU64,
 }
@@ -80,6 +82,24 @@ struct Held {
     writer: tantivy::IndexWriter<TantivyDocument>,
     heap_mb: usize,
 }
+
+/// How many documents may be in flight before a commit is forced.
+///
+/// This is the number that decides how much memory a bulk scan costs, and it
+/// took a graph to find. `add_document` hands a document to tantivy's indexing
+/// thread through an unbounded queue; a directory walk produces entries far
+/// faster than they can be indexed, so nothing bounded how many were waiting.
+/// Measured on a whole home directory: the walk finished in 9.5 seconds and
+/// memory then climbed to **1,580 MB** over the next nine while the queue
+/// drained — 962,867 documents at roughly 1.6 KB each, which is a path, a
+/// name, eleven numbers and eight ancestor tokens.
+///
+/// A commit blocks until the queue is empty, so committing every so often is
+/// the back pressure. The cost is one segment per commit; at this size that is
+/// about ten for a whole home directory, which compaction folds away. Raising
+/// it trades memory for fewer segments, and the arithmetic is roughly
+/// `documents x 1.6 KB`.
+const MAX_IN_FLIGHT: u64 = 50_000;
 
 /// The budget for a steady stream of changes.
 ///
@@ -178,6 +198,7 @@ impl TantivyIndex {
             meta: RwLock::new(meta),
             pending: RwLock::new(Pending::default()),
             opts,
+            in_flight: std::sync::atomic::AtomicU64::new(0),
             generation: std::sync::atomic::AtomicU64::new(gen0),
         })
     }
@@ -222,7 +243,10 @@ impl TantivyIndex {
             // simply return the wrong page. Compaction is explicit, and only
             // ever merges segments that are already unordered.
             writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
-            *slot = Some(Held { writer, heap_mb: heap_mb.max(STEADY_HEAP_MB) });
+            *slot = Some(Held {
+                writer,
+                heap_mb: heap_mb.max(STEADY_HEAP_MB),
+            });
         }
         let held = slot.as_mut().expect("just built");
         f(&mut held.writer)
@@ -342,7 +366,13 @@ impl TantivyIndex {
             w.delete_all_documents().map_err(tv)?;
             for (_, ord, doc) in &order {
                 if let Some(e) = self.entry_at(&searcher, *ord, *doc) {
-                    add_doc(&self.index, self.opts.index_paths, self.generation.load(std::sync::atomic::Ordering::Relaxed), w, &e)?;
+                    add_doc(
+                        &self.index,
+                        self.opts.index_paths,
+                        self.generation.load(std::sync::atomic::Ordering::Relaxed),
+                        w,
+                        &e,
+                    )?;
                 }
             }
             w.commit().map_err(tv)?;
@@ -450,7 +480,10 @@ impl Index for TantivyIndex {
                 .writer_with_num_threads(1, STEADY_HEAP_MB * 1024 * 1024)
                 .map_err(tv)?;
             writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
-            *slot = Some(Held { writer, heap_mb: STEADY_HEAP_MB });
+            *slot = Some(Held {
+                writer,
+                heap_mb: STEADY_HEAP_MB,
+            });
         }
         let w = &mut slot.as_mut().expect("just built").writer;
 
@@ -464,6 +497,19 @@ impl Index for TantivyIndex {
                     add_doc(&self.index, self.opts.index_paths, stamp, w, &e)?;
                     p.tail += 1;
                     report.upserted += 1;
+                    // Back pressure. Without it a walk of a large filesystem
+                    // queues every entry it finds, and the queue is the whole
+                    // filesystem.
+                    if self
+                        .in_flight
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        + 1
+                        >= MAX_IN_FLIGHT
+                    {
+                        w.commit().map_err(tv)?;
+                        self.in_flight
+                            .store(0, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 Change::Remove(id) => {
                     p.hidden.insert(eid_hash(&id));
@@ -554,6 +600,8 @@ impl Index for TantivyIndex {
         if let Some(h) = self.writer.lock().as_mut() {
             h.writer.commit().map_err(tv)?;
         }
+        self.in_flight
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         self.reader.reload().map_err(tv)?;
         let mut p = self.pending.write();
         p.hidden.clear();

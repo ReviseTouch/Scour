@@ -217,3 +217,64 @@ Queries at 962,375 entries, over an index with no ordered body at all
 
 The comparable figure before the fast-path fix was 215–232 ms. That gain is
 real and is not affected by any of the above.
+
+## 2026-08-02 — the root cause, found by watching the curve
+
+Sampling one known process every three seconds during a whole-home scan, and
+splitting resident memory into anonymous and file-backed:
+
+| s | RSS | anonymous | file-backed | segments |
+|---|---|---|---|---|
+| 9 | 96 MB | 89 MB | 8 MB | 0 |
+| **12** | 466 MB | 457 MB | 8 MB | 41 |
+| **21** | 1,588 MB | **1,580 MB** | 8 MB | 230 |
+| 96 | 1,768 MB | 1,632 MB | 8 MB | 457 |
+
+The walk finished in 9.5 seconds. Memory then climbed for another nine, with
+file-backed pages flat at 8 MB throughout. Nothing was being mapped; something
+was being *queued*.
+
+`add_document` hands a document to tantivy's indexing thread through an
+unbounded channel. A directory walk produces entries far faster than they can
+be indexed, so the queue became the filesystem: 962,867 documents at roughly
+1.6 KB each — a path, a name, eleven numbers and eight ancestor tokens —
+is about 1.5 GB. The measurement said 1,580 MB.
+
+tantivy was not being wasteful. It was being handed a million documents at
+once and asked to hold them.
+
+The fix is back pressure, and it is ours: commit every 50,000 documents. A
+commit blocks until the queue drains, so the queue can no longer grow past
+that. The cost is one segment per commit, which compaction folds away.
+
+| | before | after |
+|---|---|---|
+| peak anonymous during a scan | 1,580 MB | **396 MB** |
+| segments after the scan | 457 | 22 |
+| index on disk | 352 MB | 220 MB |
+| after `maintain rebuild` | — | **166 MB** |
+| resident while idle | 2,052 MB | **121 MB** |
+| resident while serving searches | — | 123 MB |
+
+963,103 entries. Against the shipped SQLite index at 571,334 entries and
+288 MB — 504 bytes an entry against **181**.
+
+### A regression this exposed, unexplained
+
+Some queries became *slower* after a rebuild than they were before it:
+
+| query | 22 unsorted segments | 6 ordered segments |
+|---|---|---|
+| `main` (2,539) | 10.09 ms | 24.61 ms |
+| `ext:rs` (65,786) | 13.81 ms | 174.74 ms |
+| `kind:image` (56,739) | 9.90 ms | 489.45 ms |
+
+The suspect is the tie handling at the page boundary. Once documents are
+ordered by date, a page boundary can land inside an enormous run of identical
+timestamps — a package install stamping fifty thousand files at one instant —
+and the walk collects the whole run before truncating it. Collection is
+bounded *after* the fact and not during.
+
+That is a hypothesis with an obvious shape, not a finding. It is the next
+thing to measure, and until it is, "the rebuild makes searches faster" is not
+a claim this project can make on a real filesystem.
