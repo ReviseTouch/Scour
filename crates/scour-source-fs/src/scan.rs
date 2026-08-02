@@ -234,9 +234,7 @@ impl Source for FsSource {
         // An id is not a path. Content extraction goes through `stat` to
         // resolve a path first; when a durable path->id map exists this can
         // answer directly.
-        Err(Error::Unsupported {
-            what: "opening by entry id",
-        })
+        Err(Error::unsupported("opening by entry id"))
     }
 
     fn stat(&self, p: &str) -> Result<Entry> {

@@ -1,0 +1,380 @@
+//! What a client and the service say to each other.
+//!
+//! Types and nothing else — no socket, no threads, no serialisation format
+//! chosen. That separation is what lets the same vocabulary carry over a local
+//! socket, inside one process, and, when a phone eventually wants to talk to a
+//! desktop, over something else entirely. It is also what lets the MCP server
+//! be a thin mapping rather than a second implementation of everything.
+//!
+//! Queries cross as **text**, not as a parsed tree. The service parses. A model
+//! or a script writing `ext:rs size:>1mb` should not have to know the shape of
+//! an `Ast`, and every caller parsing for itself would be three chances for
+//! the language to mean three things.
+
+use scour_core::{
+    Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
+    SearchResponse, SortKey, SourceInfo, Status, TreeNode,
+};
+use serde::{Deserialize, Serialize};
+
+/// The protocol version. Bumped when an existing message changes shape;
+/// adding a variant does not need it.
+pub const VERSION: u32 = 1;
+
+/// One request, with the id its reply will carry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Call {
+    pub id: u64,
+    #[serde(flatten)]
+    pub request: Request,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reply {
+    pub id: u64,
+    #[serde(flatten)]
+    pub outcome: Outcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    Ok(Response),
+    Error(Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Request {
+    /// Search, and return a page of rows.
+    Search {
+        query: String,
+        #[serde(default)]
+        sort: SortKey,
+        #[serde(default = "yes")]
+        descending: bool,
+        #[serde(default)]
+        page: Page,
+    },
+    /// How many match, up to the cap.
+    Count {
+        query: String,
+        #[serde(default = "default_cap")]
+        cap: u32,
+    },
+    /// Group the matching set — by kind, by extension, or by folder.
+    Facets {
+        query: String,
+        by: FacetBy,
+    },
+    /// List a directory from the index.
+    ///
+    /// The operation an assistant exploring a filesystem actually performs, and
+    /// the reason it is a request of its own rather than a search: it is
+    /// bounded per level, so a directory holding a million files answers in the
+    /// same time as one holding ten.
+    Tree {
+        path: String,
+        #[serde(default = "one")]
+        depth: u32,
+        #[serde(default = "default_tree_limit")]
+        limit: u32,
+    },
+    /// Everything known about one path.
+    Stat {
+        path: String,
+    },
+    /// Read a query back as a sentence, without running it.
+    ///
+    /// The parser is forgiving by design: a mistyped field is searched for as
+    /// literal text rather than rejected. This is how a caller checks what its
+    /// query was actually understood to mean.
+    Explain {
+        query: String,
+    },
+    /// The configured sources and what each can do.
+    Sources {},
+    Status {},
+    Stats {},
+    /// Walk a source again. `path` narrows it to one subtree.
+    Rescan {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    Maintain {
+        #[serde(default)]
+        level: Maintenance,
+    },
+    /// The query language reference, as text.
+    Syntax {},
+    /// Stop the service.
+    Shutdown {},
+}
+
+fn yes() -> bool {
+    true
+}
+fn one() -> u32 {
+    1
+}
+fn default_cap() -> u32 {
+    10_000
+}
+fn default_tree_limit() -> u32 {
+    200
+}
+
+/// Internally tagged, which constrains the shapes allowed here: a variant may
+/// hold a struct (its fields are flattened alongside the tag) or its own named
+/// fields, but **not** a bare string or a sequence — serde cannot merge a tag
+/// into those, and the failure appears at run time as a serialisation error
+/// rather than at compile time. `Sources` and `Text` are named-field variants
+/// for exactly that reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum Response {
+    Search(SearchResponse),
+    Count {
+        total: u64,
+        /// The count stopped at the cap, so this is a floor.
+        capped: bool,
+    },
+    Facets(FacetResponse),
+    Tree {
+        root: TreeNode,
+    },
+    Stat(Entry),
+    Explain {
+        /// The query as it was understood.
+        description: String,
+        /// True when the query asks for document contents.
+        needs_content: bool,
+    },
+    Sources {
+        sources: Vec<SourceInfo>,
+    },
+    Status(Status),
+    Stats(IndexStats),
+    Maintained(MaintReport),
+    /// Accepted; the work happens in the background.
+    Accepted,
+    Text {
+        text: String,
+    },
+}
+
+impl Request {
+    /// Does this request change anything?
+    ///
+    /// A read-only client — the MCP server offering a model a filesystem to
+    /// explore, say — can refuse the rest without knowing what each one does.
+    pub fn is_mutating(&self) -> bool {
+        matches!(
+            self,
+            Request::Rescan { .. } | Request::Maintain { .. } | Request::Shutdown {}
+        )
+    }
+
+    /// A short, stable name for logs and metrics.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Request::Search { .. } => "search",
+            Request::Count { .. } => "count",
+            Request::Facets { .. } => "facets",
+            Request::Tree { .. } => "tree",
+            Request::Stat { .. } => "stat",
+            Request::Explain { .. } => "explain",
+            Request::Sources {} => "sources",
+            Request::Status {} => "status",
+            Request::Stats {} => "stats",
+            Request::Rescan { .. } => "rescan",
+            Request::Maintain { .. } => "maintain",
+            Request::Syntax {} => "syntax",
+            Request::Shutdown {} => "shutdown",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_minimal_search_request_needs_only_a_query() {
+        // Everything a caller can reasonably leave out has a default, because
+        // the most common caller is a person typing JSON by hand or a model
+        // filling in a schema.
+        let call: Call =
+            serde_json::from_str(r#"{"id":1,"op":"search","query":"rapor"}"#).expect("parse");
+        assert_eq!(call.id, 1);
+        let Request::Search {
+            query,
+            sort,
+            descending,
+            page,
+        } = call.request
+        else {
+            panic!("expected a search");
+        };
+        assert_eq!(query, "rapor");
+        assert_eq!(sort, SortKey::Modified);
+        assert!(descending, "newest first is what a search box shows");
+        assert_eq!(page.limit, 200);
+    }
+
+    #[test]
+    fn every_request_round_trips() {
+        let all = [
+            Request::Search {
+                query: "x".into(),
+                sort: SortKey::Size,
+                descending: false,
+                page: Page::new(20, 10),
+            },
+            Request::Count {
+                query: "x".into(),
+                cap: 50,
+            },
+            Request::Facets {
+                query: String::new(),
+                by: FacetBy::Ext { top: 5 },
+            },
+            Request::Tree {
+                path: "/a".into(),
+                depth: 2,
+                limit: 10,
+            },
+            Request::Stat {
+                path: "/a/b".into(),
+            },
+            Request::Explain {
+                query: "size:abc".into(),
+            },
+            Request::Sources {},
+            Request::Status {},
+            Request::Stats {},
+            Request::Rescan {
+                path: Some("/a".into()),
+            },
+            Request::Maintain {
+                level: Maintenance::Rebuild,
+            },
+            Request::Syntax {},
+            Request::Shutdown {},
+        ];
+        let mut names = Vec::new();
+        for r in all {
+            let json = serde_json::to_string(&r).expect("serialise");
+            assert_eq!(
+                serde_json::from_str::<Request>(&json).expect("deserialise"),
+                r
+            );
+            names.push(r.name());
+        }
+        names.sort_unstable();
+        let n = names.len();
+        names.dedup();
+        assert_eq!(names.len(), n, "every request needs its own name");
+    }
+
+    /// Every response shape, serialised and read back.
+    ///
+    /// The guard this exists to be: an internally tagged enum cannot carry a
+    /// bare string or a sequence, and serde reports that when the message is
+    /// *sent*, not when it is written. Without this, the failure surfaces as a
+    /// client whose connection silently closes.
+    #[test]
+    fn every_response_round_trips() {
+        let all = [
+            Response::Search(SearchResponse::default()),
+            Response::Count {
+                total: 5,
+                capped: true,
+            },
+            Response::Facets(FacetResponse::default()),
+            Response::Tree {
+                root: TreeNode {
+                    name: "u".into(),
+                    path: "/home/u".into(),
+                    is_dir: true,
+                    kind: scour_core::Kind::Dir,
+                    size: 0,
+                    mtime: 0,
+                    children: 3,
+                    nodes: Vec::new(),
+                    truncated: false,
+                },
+            },
+            Response::Explain {
+                description: "everything".into(),
+                needs_content: false,
+            },
+            Response::Sources {
+                sources: Vec::new(),
+            },
+            Response::Status(Status::default()),
+            Response::Stats(IndexStats::default()),
+            Response::Maintained(MaintReport::default()),
+            Response::Accepted,
+            Response::Text {
+                text: "hello".into(),
+            },
+        ];
+        for r in all {
+            let json = serde_json::to_string(&r)
+                .unwrap_or_else(|e| panic!("{r:?} cannot be sent at all: {e}"));
+            assert_eq!(
+                serde_json::from_str::<Response>(&json).expect("deserialise"),
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn a_reply_carries_either_an_answer_or_a_typed_failure() {
+        let ok = Reply {
+            id: 7,
+            outcome: Outcome::Ok(Response::Accepted),
+        };
+        let json = serde_json::to_string(&ok).expect("serialise");
+        assert_eq!(
+            serde_json::from_str::<Reply>(&json).expect("deserialise"),
+            ok
+        );
+
+        let bad = Reply {
+            id: 8,
+            outcome: Outcome::Error(Error::QueryTooShort { need: 3 }),
+        };
+        let json = serde_json::to_string(&bad).expect("serialise");
+        let back: Reply = serde_json::from_str(&json).expect("deserialise");
+        let Outcome::Error(e) = back.outcome else {
+            panic!("expected an error")
+        };
+        // The code is what a caller matches on; the English is a fallback.
+        assert_eq!(e.code(), "query_too_short");
+    }
+
+    #[test]
+    fn mutating_requests_are_identified() {
+        assert!(
+            !Request::Search {
+                query: String::new(),
+                sort: SortKey::Name,
+                descending: true,
+                page: Page::default()
+            }
+            .is_mutating()
+        );
+        assert!(
+            !Request::Tree {
+                path: "/".into(),
+                depth: 1,
+                limit: 1
+            }
+            .is_mutating()
+        );
+        assert!(Request::Rescan { path: None }.is_mutating());
+        assert!(Request::Shutdown {}.is_mutating());
+    }
+}

@@ -113,11 +113,11 @@ impl Source for TinySource {
         &self,
         _s: Box<dyn scour_core::ChangeSink>,
     ) -> scour_core::Result<Box<dyn WatchHandle>> {
-        Err(Error::Unsupported { what: "watch" })
+        Err(Error::unsupported("watch"))
     }
 
     fn open(&self, _id: &EntryId) -> scour_core::Result<Box<dyn Read + Send>> {
-        Err(Error::Unsupported { what: "open" })
+        Err(Error::unsupported("open"))
     }
 
     fn stat(&self, path: &str) -> scour_core::Result<Entry> {

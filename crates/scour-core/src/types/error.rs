@@ -24,7 +24,7 @@ pub enum Error {
     /// The query could not be parsed. `at` is a byte offset into the input.
     QuerySyntax {
         at: usize,
-        expected: &'static str,
+        expected: String,
     },
     /// A substring index cannot answer a term this short.
     ///
@@ -51,7 +51,7 @@ pub enum Error {
     /// The source does not support what was asked of it. `Caps` says which
     /// things those are before they are attempted; this covers the rest.
     Unsupported {
-        what: &'static str,
+        what: String,
     },
     NotFound {
         path: String,
@@ -73,6 +73,10 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn unsupported(what: impl Into<String>) -> Self {
+        Error::Unsupported { what: what.into() }
+    }
+
     pub fn io(e: &std::io::Error, path: &str) -> Self {
         match e.kind() {
             std::io::ErrorKind::NotFound => Error::NotFound {
@@ -163,7 +167,7 @@ mod tests {
         let all = [
             Error::QuerySyntax {
                 at: 0,
-                expected: "a term",
+                expected: "a term".into(),
             },
             Error::QueryTooShort { need: 3 },
             Error::ContentNotIndexed,
@@ -175,7 +179,7 @@ mod tests {
             Error::SourceUnavailable {
                 source: SourceId(0),
             },
-            Error::Unsupported { what: "x" },
+            Error::unsupported("x"),
             Error::NotFound {
                 path: String::new(),
             },

@@ -134,9 +134,9 @@ fn lower_match(m: &Match, schema: &Schema, opts: &IndexOptions) -> Result<Loweri
 
         Match::PathContains(t) => {
             if !opts.index_paths {
-                return Err(Error::Unsupported {
-                    what: "path search on an index built without paths",
-                });
+                return Err(Error::unsupported(
+                    "path search on an index built without paths",
+                ));
             }
             Lowering::Exact(trigram_phrase(f(field::PATH_NORM)?, t)?)
         }

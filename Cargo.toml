@@ -6,6 +6,10 @@ members = [
     "crates/scour-mock",
     "crates/scour-index-tantivy",
     "crates/scour-source-fs",
+    "crates/scour-config",
+    "crates/scour-proto",
+    "crates/scour-engine",
+    "crates/scour-ipc",
 ]
 
 [workspace.package]

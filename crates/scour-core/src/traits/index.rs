@@ -29,6 +29,21 @@ pub trait Index: Send + Sync + Debug {
     /// its contents visible for the second or two until the next flush.
     fn apply(&self, changes: &mut dyn Iterator<Item = Change>) -> Result<ApplyReport>;
 
+    /// Start a reconciliation pass, and return its number.
+    ///
+    /// Every entry upserted afterwards is stamped with it. This exists because
+    /// a full rescan can only report what it *found*, and the interesting part
+    /// of reconciling is what it did not: files deleted while nothing was
+    /// watching. Remembering every id seen would cost hundreds of megabytes on
+    /// a large tree; a stamp costs one column.
+    fn begin_generation(&self) -> Result<u64>;
+
+    /// Remove everything under `under` that is not stamped with `generation`.
+    ///
+    /// Called once a scan of that subtree has finished. Returns how many
+    /// entries went.
+    fn sweep(&self, under: &str, generation: u64) -> Result<u64>;
+
     /// Make everything applied so far durable and visible to new readers.
     ///
     /// Expensive — tens of milliseconds — which is why the engine batches

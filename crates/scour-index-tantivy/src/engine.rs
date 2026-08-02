@@ -28,6 +28,9 @@ use crate::schema::{
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Meta0 {
     opts: IndexOptions,
+    /// The most recent reconciliation pass.
+    #[serde(default)]
+    generation: u64,
     /// Segments written by a rebuild, and therefore ordered newest-first.
     sorted_segments: Vec<String>,
 }
@@ -59,6 +62,8 @@ pub struct TantivyIndex {
     meta: RwLock<Meta0>,
     pending: RwLock<Pending>,
     opts: IndexOptions,
+    /// The pass every upsert is stamped with. See `Index::begin_generation`.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 const META_FILE: &str = "scour-index.json";
@@ -99,6 +104,7 @@ impl TantivyIndex {
             dir.to_owned(),
             Meta0 {
                 opts,
+                generation: 0,
                 sorted_segments: Vec::new(),
             },
         )?;
@@ -121,6 +127,7 @@ impl TantivyIndex {
 
     fn wrap(index: tantivy::Index, dir: PathBuf, meta: Meta0) -> Result<Self> {
         let opts = meta.opts;
+        let gen0 = meta.generation;
         let writer = index
             .writer_with_num_threads(1, opts.writer_heap_mb * 1024 * 1024)
             .map_err(tv)?;
@@ -138,6 +145,7 @@ impl TantivyIndex {
             meta: RwLock::new(meta),
             pending: RwLock::new(Pending::default()),
             opts,
+            generation: std::sync::atomic::AtomicU64::new(gen0),
         })
     }
 
@@ -200,6 +208,7 @@ impl TantivyIndex {
             g(field::UID)        => e.meta.uid,
             g(field::GID)        => e.meta.gid,
             g(field::ITEMS)      => e.meta.items,
+            g(field::GENERATION) => self.generation.load(std::sync::atomic::Ordering::Relaxed) as i64,
         );
         if self.opts.index_paths {
             d.add_text(g(field::PATH_NORM), &r.path_norm);
@@ -375,6 +384,56 @@ impl Index for TantivyIndex {
         Ok(report)
     }
 
+    fn begin_generation(&self) -> Result<u64> {
+        let g = {
+            let mut m = self.meta.write();
+            m.generation += 1;
+            m.generation
+        };
+        self.generation
+            .store(g, std::sync::atomic::Ordering::Relaxed);
+        self.save_meta()?;
+        Ok(g)
+    }
+
+    fn sweep(&self, under: &str, generation: u64) -> Result<u64> {
+        use tantivy::query::{BooleanQuery, Occur, RangeQuery, TermQuery};
+        let before = self.reader.searcher().num_docs();
+        let scope: Box<dyn Query> = if under.is_empty() || under == "/" {
+            Box::new(tantivy::query::AllQuery)
+        } else {
+            // The subtree, by its ancestor token, plus its own record.
+            Box::new(BooleanQuery::new(vec![
+                (
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.field(field::DIRS)?, under),
+                        tantivy::schema::IndexRecordOption::Basic,
+                    )) as Box<dyn Query>,
+                ),
+                (
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(self.field(field::PATH_EXACT)?, under),
+                        tantivy::schema::IndexRecordOption::Basic,
+                    )) as Box<dyn Query>,
+                ),
+            ]))
+        };
+        let f_gen = self.field(field::GENERATION)?;
+        let stale: Box<dyn Query> = Box::new(RangeQuery::new(
+            std::ops::Bound::Unbounded,
+            std::ops::Bound::Excluded(Term::from_field_i64(f_gen, generation as i64)),
+        ));
+        let q = BooleanQuery::new(vec![(Occur::Must, scope), (Occur::Must, stale)]);
+        {
+            let w = self.writer.lock();
+            w.delete_query(Box::new(q)).map_err(tv)?;
+        }
+        self.commit()?;
+        Ok(before.saturating_sub(self.reader.searcher().num_docs()))
+    }
+
     fn commit(&self) -> Result<()> {
         self.writer.lock().commit().map_err(tv)?;
         self.reader.reload().map_err(tv)?;
@@ -469,7 +528,7 @@ impl Index for TantivyIndex {
         let fast = req.sort == SortKey::Modified && req.descending && all_sorted;
 
         if !fast {
-            let total = self.count_upto(&plan, &searcher, &read_hit, cap)?;
+            let total = self.count_upto(&plan, &searcher, &pending, &read_hit, cap)?;
             let hits = self.top_k(&searcher, &plan, req, &read_hit, want)?;
             return Ok(SearchResponse {
                 hits: hits.into_iter().skip(offset).take(limit).collect(),
@@ -663,10 +722,19 @@ impl TantivyIndex {
     /// applied `.min(cap)` to the answer, which capped the *number* and not the
     /// *work* — it still visited every hit, and made the fast path six hundred
     /// times slower than it should have been. The walk below actually stops.
+    ///
+    /// `pending` is passed in rather than read from `self`: the caller already
+    /// holds that lock, and taking a second read on the same thread deadlocks
+    /// the moment a writer is queued between the two — `parking_lot` blocks new
+    /// readers once a writer is waiting, so the second read waits for a write
+    /// that is waiting for the first read. It only ever happens under
+    /// concurrent indexing, which is to say in production and not in a
+    /// single-threaded test.
     fn count_upto(
         &self,
         plan: &Lowered,
         searcher: &tantivy::Searcher,
+        pending: &Pending,
         read_hit: &dyn Fn(u32, DocId) -> Option<Hit>,
         cap: usize,
     ) -> Result<usize> {
@@ -674,7 +742,6 @@ impl TantivyIndex {
             .query
             .weight(EnableScoring::disabled_from_searcher(searcher))
             .map_err(tv)?;
-        let pending = self.pending.read();
         let mut n = 0usize;
         for (ord, seg) in searcher.segment_readers().iter().enumerate() {
             let hashes: Column<u64> = seg.fast_fields().u64(field::EID_HASH).map_err(tv)?;

@@ -4,6 +4,7 @@ mod entry;
 mod error;
 mod search;
 mod source;
+mod status;
 
 pub use ast::{Ast, Cmp, Group, Match, TimeField};
 pub use change::Change;
@@ -14,3 +15,4 @@ pub use search::{
     Maintenance, Page, SearchRequest, SearchResponse, SortKey,
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};
+pub use status::{Status, TreeNode};

@@ -102,6 +102,7 @@ pub mod field {
     pub const UID: &str = "uid";
     pub const GID: &str = "gid";
     pub const ITEMS: &str = "items";
+    pub const GENERATION: &str = "generation";
 }
 
 /// How an index is built. Fixed when it is created: changing any of these
@@ -218,6 +219,8 @@ pub fn build_schema(opts: &IndexOptions) -> Schema {
     sb.add_i64_field(field::UID, FAST);
     sb.add_i64_field(field::GID, FAST);
     sb.add_i64_field(field::ITEMS, FAST);
+    // Which reconciliation pass last saw this entry.
+    sb.add_i64_field(field::GENERATION, FAST | INDEXED);
 
     sb.build()
 }
