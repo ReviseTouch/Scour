@@ -71,6 +71,18 @@ pub enum Match {
     NameGlob(String),
     /// Substring of the case-folded path.
     PathContains(String),
+    /// Anywhere below this directory.
+    ///
+    /// Not a substring test: the index holds every ancestor directory of every
+    /// entry as its own token, so scoping a search to a folder is one term
+    /// rather than a scan. `/a` does not match `/ab`, and the directory itself
+    /// is not among its own descendants.
+    ///
+    /// The value is a path and is compared as the filesystem stores it, not
+    /// case-folded — unlike a name, which is.
+    Under(String),
+    /// Directly inside this directory, one level down.
+    ParentIs(String),
     /// Any one of these extensions, without the dot.
     Ext(Vec<String>),
     IsDir(bool),

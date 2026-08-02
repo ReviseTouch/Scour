@@ -31,6 +31,8 @@ matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
 | `ext:rs` | extension is `rs` |
 | `ext:rs;toml;md` | extension is any of these |
 | `path:src/api` | the full path contains this |
+| `under:/home/u/Projeler` | anywhere below this folder |
+| `parent:/home/u` | directly inside this folder, one level down |
 | `file:` | files only |
 | `folder:` | folders only |
 | `size:>1mb` | larger than a megabyte |
@@ -59,6 +61,10 @@ Without an operator, `size:1mb` means "at least 1 MB".
 Search is case-insensitive. Turkish `i`, `ı`, `I` and `İ` are treated as the
 same letter, so `ISTANBUL`, `İstanbul` and `ıstanbul` all find each other.
 
+`under:` and `parent:` are the exception: they take a path and compare it the
+way the filesystem stores it. They are also much faster than `path:`, because
+the index holds every ancestor folder as a term — prefer them for scoping.
+
 Terms shorter than three characters cannot be answered by the index and are
 rejected: it is built on trigrams.
 
@@ -80,5 +86,6 @@ rejected: it is built on trigrams.
     folder: node_modules          folders named like node_modules
     path:src ext:rs !test         Rust files under src, excluding tests
     kind:image dm:today           images touched today
+    under:/home/u/Projeler *.rs   Rust files anywhere in one project tree
     "annual report" ext:docx;pdf  an exact phrase, in two formats
 "#;

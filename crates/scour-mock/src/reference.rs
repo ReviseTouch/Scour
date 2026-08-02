@@ -23,6 +23,15 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::NameContains(t) => name.contains(t.as_str()),
         Match::NameGlob(p) => glob_matches(p, &name),
         Match::PathContains(t) => DefaultFolder.fold(&e.path).contains(t.as_str()),
+        Match::Under(d) => {
+            let d = d.trim_end_matches('/');
+            e.path.len() > d.len()
+                && e.path.starts_with(d)
+                && (d.is_empty() || e.path.as_bytes().get(d.len()) == Some(&b'/'))
+        }
+        Match::ParentIs(d) => {
+            e.parent() == d.trim_end_matches('/') || (d == "/" && e.parent() == "/")
+        }
         Match::Ext(list) => list.contains(&e.ext()),
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),

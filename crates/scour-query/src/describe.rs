@@ -45,6 +45,8 @@ fn describe_match(m: &Match) -> String {
         Match::NameContains(t) => format!("name contains \"{t}\""),
         Match::NameGlob(p) => format!("name matches \"{p}\""),
         Match::PathContains(t) => format!("path contains \"{t}\""),
+        Match::Under(d) => format!("is under {d}"),
+        Match::ParentIs(d) => format!("is directly in {d}"),
         Match::Ext(e) if e.len() == 1 => format!("extension is .{}", e[0]),
         Match::Ext(e) => format!("extension is one of .{}", e.join(", .")),
         Match::IsDir(true) => "is a folder".into(),

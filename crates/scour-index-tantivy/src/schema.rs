@@ -83,6 +83,7 @@ pub mod field {
     pub const NAME_NORM: &str = "name_norm";
     pub const PATH_NORM: &str = "path_norm";
     pub const DIRS: &str = "dirs";
+    pub const PARENT: &str = "parent";
     pub const PATH_EXACT: &str = "path_exact";
     pub const CONTENT: &str = "content";
     pub const NAME: &str = "name";
@@ -178,6 +179,11 @@ pub fn build_schema(opts: &IndexOptions) -> Schema {
     );
     sb.add_text_field(field::DIRS, whole.clone());
     sb.add_text_field(field::PATH_EXACT, whole.clone());
+    // The immediate parent, as a term. `dirs` answers "anywhere below D";
+    // this answers "directly inside D", which is what walking a tree one level
+    // at a time needs — and what an assistant exploring a directory asks for.
+    // Its dictionary is small: thousands of files share one parent.
+    sb.add_text_field(field::PARENT, whole.clone());
     // The extension is both filtered on and sorted by, so it is indexed and a
     // fast column. Its dictionary is tiny — a few hundred distinct values.
     sb.add_text_field(field::EXT, whole.set_fast(Some("raw")));
@@ -328,7 +334,10 @@ pub struct Row {
     pub name_norm: String,
     pub path: String,
     pub path_norm: String,
+    /// Case-folded, for sorting.
     pub parent: String,
+    /// As the filesystem spells it, for the `parent` term.
+    pub parent_raw: String,
     pub ext: String,
     pub kind: Kind,
 }
@@ -343,6 +352,7 @@ impl Row {
             name_norm: DefaultFolder.fold(&name),
             path_norm: DefaultFolder.fold(&e.path),
             parent: DefaultFolder.fold(e.parent()),
+            parent_raw: e.parent().to_owned(),
             kind: scour_core::kind_of(e.is_dir, &ext, e.meta.mode),
             ext,
             name,
@@ -456,6 +466,7 @@ mod tests {
         assert_eq!(r.name_norm, "rapor.pdf");
         assert_eq!(r.path_norm, "/home/u/belgeler/rapor.pdf");
         assert_eq!(r.parent, "/home/u/belgeler");
+        assert_eq!(r.parent_raw, "/home/u/Belgeler");
         assert_eq!(r.ext, "pdf");
         assert_eq!(r.kind, Kind::Doc);
     }

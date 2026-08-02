@@ -1,0 +1,21 @@
+[package]
+name        = "scour-source-fs"
+description = "The local filesystem as a scour_core::Source. Portable: one implementation for Linux, Windows and macOS."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scour-core        = { workspace = true }
+ignore            = { workspace = true }
+notify            = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -5,6 +5,7 @@ members = [
     "crates/scour-query",
     "crates/scour-mock",
     "crates/scour-index-tantivy",
+    "crates/scour-source-fs",
 ]
 
 [workspace.package]

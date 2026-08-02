@@ -143,6 +143,19 @@ fn lower_match(m: &Match, schema: &Schema, opts: &IndexOptions) -> Result<Loweri
 
         Match::ContentContains(t) => Lowering::Exact(trigram_phrase(f(field::CONTENT)?, t)?),
 
+        // Both are single terms, which is the whole point of storing every
+        // ancestor and the immediate parent: scoping a search to a folder costs
+        // one posting list rather than a substring test on every candidate.
+        Match::Under(d) => Lowering::Exact(Box::new(TermQuery::new(
+            Term::from_field_text(f(field::DIRS)?, d),
+            IndexRecordOption::Basic,
+        ))),
+
+        Match::ParentIs(d) => Lowering::Exact(Box::new(TermQuery::new(
+            Term::from_field_text(f(field::PARENT)?, d),
+            IndexRecordOption::Basic,
+        ))),
+
         Match::NameGlob(p) => {
             // `*.rs` is the overwhelmingly common wildcard, and it is exactly
             // an extension test — which the index answers from a term.

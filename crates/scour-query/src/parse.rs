@@ -78,7 +78,8 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
     }
 
     if let Some((field, value)) = split_field(rest) {
-        let folded = DefaultFolder::of(&unquote(value));
+        let raw = unquote(value);
+        let folded = DefaultFolder::of(&raw);
         let m: Option<Match> = match field.as_str() {
             "ext" => Some(Match::Ext(
                 folded
@@ -89,6 +90,16 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
                     .collect(),
             )),
             "path" => Some(Match::PathContains(folded)),
+            // Paths are compared as the filesystem stores them. Folding them
+            // would make `under:` disagree with the tokens the index actually
+            // holds, and a scope that silently matches nothing is worse than
+            // one that refuses.
+            "under" | "in" | "altinda" | "altında" => {
+                (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw)))
+            }
+            "parent" | "child" | "children" => {
+                (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw)))
+            }
             "file" | "files" => Some(Match::IsDir(false)),
             "folder" | "folders" | "dir" => Some(Match::IsDir(true)),
             "size" => parse_size(&folded),
@@ -161,6 +172,18 @@ fn split_field(s: &str) -> Option<(String, &str)> {
 
 fn unquote(s: &str) -> String {
     s.replace('"', "")
+}
+
+/// A directory path in the form the index stores it: `/`-separated, with no
+/// trailing slash. `/home/u/` and `/home/u` are the same folder.
+fn trim_dir(s: &str) -> String {
+    let t = s.replace('\\', "/");
+    let trimmed = t.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 /// Split off a leading comparison operator. Absent means `>=`.
@@ -282,6 +305,28 @@ mod tests {
         );
         assert_eq!(m("kind:kod"), vec![(false, Match::Kind(Kind::Code))]);
         assert_eq!(m("kind:KLASÖR"), vec![(false, Match::Kind(Kind::Dir))]);
+    }
+
+    #[test]
+    fn scope_fields_keep_the_path_as_written() {
+        assert_eq!(
+            m("under:/home/U/Projeler"),
+            vec![(false, Match::Under("/home/U/Projeler".into()))]
+        );
+        assert_eq!(
+            m("in:/home/u/x/"),
+            vec![(false, Match::Under("/home/u/x".into()))]
+        );
+        assert_eq!(
+            m("parent:/etc"),
+            vec![(false, Match::ParentIs("/etc".into()))]
+        );
+        assert_eq!(m("under:/"), vec![(false, Match::Under("/".into()))]);
+        // Empty is not a scope; it falls back to text like any unusable value.
+        assert_eq!(
+            m("under:"),
+            vec![(false, Match::NameContains("under:".into()))]
+        );
     }
 
     #[test]

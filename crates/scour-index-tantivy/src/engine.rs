@@ -187,6 +187,7 @@ impl TantivyIndex {
             g(field::PATH)       => r.path.as_str(),
             g(field::NAME_SORT)  => r.name_norm.as_str(),
             g(field::PARENT_SORT)=> r.parent.as_str(),
+            g(field::PARENT)     => r.parent_raw.as_str(),
             g(field::EXT)        => r.ext.as_str(),
             g(field::MTIME)      => e.meta.mtime,
             g(field::CTIME)      => e.meta.ctime,
