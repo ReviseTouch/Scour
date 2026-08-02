@@ -1,0 +1,32 @@
+[package]
+name        = "scour-mcp"
+description = "Scour as an MCP server, so a model can search and explore a filesystem."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# A separate binary rather than a subcommand of `scour`, and this is why: the
+# MCP SDK needs an async runtime, and the command line and the service should
+# not carry one to satisfy a third program.
+[dependencies]
+scour-core   = { workspace = true }
+scour-proto  = { workspace = true }
+scour-ipc    = { workspace = true }
+scour-config = { workspace = true }
+anyhow       = { workspace = true }
+rmcp         = { workspace = true }
+tokio        = { workspace = true }
+schemars     = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+humansize    = { workspace = true }

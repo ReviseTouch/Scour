@@ -685,7 +685,10 @@ impl Index for TantivyIndex {
             dirs,
             bytes_on_disk: dir_size(&self.dir),
             segments: searcher.segment_readers().len() as u32,
-            unsorted_entries: self.tail_docs().max(p.tail),
+            // From the segments, not from a running total: a counter of
+            // upserts keeps climbing across sweeps and rebuilds and ends up
+            // reporting more unsorted entries than the index has.
+            unsorted_entries: self.tail_docs(),
             pending_removals: p.hidden.len() as u64,
             has_content: self.opts.index_content,
         })

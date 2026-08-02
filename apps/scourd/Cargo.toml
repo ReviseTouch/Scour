@@ -1,0 +1,29 @@
+[package]
+name        = "scourd"
+description = "The Scour service. The only place that names a concrete implementation."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scourd"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+scour-core          = { workspace = true }
+scour-query         = { workspace = true }
+scour-proto         = { workspace = true }
+scour-ipc           = { workspace = true }
+scour-config        = { workspace = true }
+scour-engine        = { workspace = true }
+scour-index-tantivy = { workspace = true }
+scour-source-fs     = { workspace = true }
+anyhow              = { workspace = true }
+clap                = { workspace = true }
+ctrlc               = { workspace = true }

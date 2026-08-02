@@ -35,7 +35,16 @@ pub fn build(index: &dyn Index, path: &str, depth: u32, limit: u32) -> Result<Tr
 }
 
 fn fill(index: &dyn Index, node: &mut TreeNode, depth: u32, limit: u32) -> Result<()> {
-    if depth == 0 || !node.is_dir {
+    if !node.is_dir {
+        return Ok(());
+    }
+    if depth == 0 {
+        // Still count. A directory at the depth limit reported as holding zero
+        // entries reads as empty, and a caller — a person or a model — will
+        // conclude there is nothing in it and stop looking. Counting without
+        // listing costs one query and no rows.
+        node.children = count_children(index, &node.path)?;
+        node.truncated = node.children > 0;
         return Ok(());
     }
     let res = index.search(&SearchRequest {
@@ -73,6 +82,22 @@ fn fill(index: &dyn Index, node: &mut TreeNode, depth: u32, limit: u32) -> Resul
     }
     node.nodes = nodes;
     Ok(())
+}
+
+/// How many entries are directly inside, without materialising any of them.
+fn count_children(index: &dyn Index, path: &str) -> Result<u64> {
+    Ok(index
+        .search(&SearchRequest {
+            query: one(Match::ParentIs(path.to_owned())),
+            sort: SortKey::Name,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 0,
+                count_cap: 1_000_000,
+            },
+        })?
+        .total)
 }
 
 /// The entry for this exact path, if the index holds it.

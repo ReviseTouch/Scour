@@ -1,0 +1,28 @@
+[package]
+name        = "scour"
+description = "The Scour command line."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# A client and nothing more: it holds no index, walks no filesystem, and does
+# not link the engine.
+[dependencies]
+scour-core   = { workspace = true }
+scour-proto  = { workspace = true }
+scour-ipc    = { workspace = true }
+scour-config = { workspace = true }
+anyhow       = { workspace = true }
+clap         = { workspace = true }
+serde_json   = { workspace = true }
+humansize    = { workspace = true }

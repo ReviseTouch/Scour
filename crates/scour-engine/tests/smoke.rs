@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use scour_core::{
-    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, Flow, Index, Maintenance, Page,
+    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, Maintenance, Page,
     ScanOptions, ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
 use scour_engine::{Engine, EngineOptions};

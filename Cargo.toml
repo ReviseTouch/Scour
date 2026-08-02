@@ -10,6 +10,9 @@ members = [
     "crates/scour-proto",
     "crates/scour-engine",
     "crates/scour-ipc",
+    "apps/scourd",
+    "apps/scour",
+    "apps/scour-mcp",
 ]
 
 [workspace.package]
@@ -67,6 +70,7 @@ directories = "6"
 interprocess = "2"
 
 crossbeam-channel = "0.5"
+ctrlc             = "3"
 parking_lot = "0.12"
 humansize   = "2"
 rustc-hash  = "2"
