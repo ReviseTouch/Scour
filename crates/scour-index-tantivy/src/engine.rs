@@ -327,16 +327,6 @@ impl TantivyIndex {
             .sum()
     }
 
-    fn add(&self, w: &mut tantivy::IndexWriter<TantivyDocument>, e: &Entry) -> Result<()> {
-        add_doc(
-            &self.index,
-            self.opts.index_paths,
-            self.generation.load(std::sync::atomic::Ordering::Relaxed),
-            w,
-            e,
-        )
-    }
-
     /// Rewrite the whole index newest-first, folding in everything added since
     /// the last rebuild.
     ///
@@ -1035,7 +1025,12 @@ impl TantivyIndex {
             // The boundary tie group is contained when the window ran out of
             // matches, when it holds no more than a page, or when the row after
             // the page carries a different sort value.
-            let contained = keyed.len() < over
+            // `want == 0` is a real request — a count with no rows, which is
+            // how a directory listing asks how many children a folder has.
+            // There is no page, so there is no boundary to contain, and
+            // `want - 1` would be an underflow.
+            let contained = want == 0
+                || keyed.len() < over
                 || keyed.len() <= want
                 || keyed[want - 1].0 != keyed[keyed.len() - 1].0;
             if !contained && over < MAX_TIE_WINDOW {
@@ -1046,7 +1041,7 @@ impl TantivyIndex {
             // Trim to the page plus whatever ties with its last row, then
             // materialise — once, and only what can still appear.
             let mut keyed = keyed;
-            if keyed.len() > want {
+            if want > 0 && keyed.len() > want {
                 let boundary = keyed[want - 1].0.clone();
                 let end = keyed[want..]
                     .iter()
@@ -1194,25 +1189,6 @@ const TIE_SLACK: usize = 1_024;
 
 /// Where growing the window to contain a tie group stops being worth it.
 const MAX_TIE_WINDOW: usize = 262_144;
-
-/// Do two rows tie on the sort column, before the path breaks the tie?
-fn same_sort_key(a: &Hit, b: &Hit, key: SortKey) -> bool {
-    match key {
-        SortKey::Name => DefaultFolder.fold(a.name()) == DefaultFolder.fold(b.name()),
-        SortKey::Path => a.path == b.path,
-        SortKey::Ext => scour_core::ext_of(a.name()) == scour_core::ext_of(b.name()),
-        SortKey::Size => a.meta.size == b.meta.size,
-        SortKey::Modified => a.meta.mtime == b.meta.mtime,
-        SortKey::Created => a.meta.ctime == b.meta.ctime,
-        SortKey::Accessed => a.meta.atime == b.meta.atime,
-        SortKey::Kind => a.kind == b.kind,
-        SortKey::Items => a.meta.items == b.meta.items,
-        SortKey::Mode => a.meta.mode == b.meta.mode,
-        SortKey::Uid => a.meta.uid == b.meta.uid,
-        SortKey::Gid => a.meta.gid == b.meta.gid,
-        SortKey::Disk => a.meta.disk == b.meta.disk,
-    }
-}
 
 /// Write one entry.
 ///
