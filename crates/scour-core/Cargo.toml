@@ -1,0 +1,21 @@
+[package]
+name        = "scour-core"
+description = "Shared vocabulary and interfaces. Every other Scour crate depends on this one and on nothing else of Scour's."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Deliberately minimal. This crate is the contract; a dependency added here is
+# a dependency added to every crate in the workspace.
+[dependencies]
+serde    = { workspace = true }
+bitflags = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,0 +1,90 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/scour-core",
+    "crates/scour-query",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.88"          # rmcp's MSRV, the highest of any dependency
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/hasantr/scour"
+publish      = false
+
+[workspace.dependencies]
+# --- internal -----------------------------------------------------------
+#
+# The dependency rule of this workspace: nothing but `scour-core` may be
+# depended on by more than one layer. Every other crate is an implementation
+# that is chosen at the top, in `apps/scourd`. If you find yourself adding an
+# implementation crate to another implementation crate's dependencies, the
+# abstraction it needs is missing from `scour-core`.
+scour-core          = { path = "crates/scour-core" }
+scour-query         = { path = "crates/scour-query" }
+scour-proto         = { path = "crates/scour-proto" }
+scour-ipc           = { path = "crates/scour-ipc" }
+scour-index-tantivy = { path = "crates/scour-index-tantivy" }
+scour-source-fs     = { path = "crates/scour-source-fs" }
+scour-config        = { path = "crates/scour-config" }
+scour-i18n          = { path = "crates/scour-i18n" }
+scour-engine        = { path = "crates/scour-engine" }
+scour-mock          = { path = "crates/scour-mock" }
+
+# --- external -----------------------------------------------------------
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+toml        = "1"
+bitflags    = { version = "2", features = ["serde"] }
+anyhow      = "1"
+clap        = { version = "4", features = ["derive"] }
+
+# The search engine. Pinned to a minor version because the measured design
+# depends on internals that are not covered by semver: hand-driving a `DocSet`
+# for early termination, `alive_bitset` filtering, and `NoMergePolicy`.
+tantivy     = "0.26"
+
+# Filesystem traversal and watching. `ignore` is BurntSushi's parallel walker
+# from ripgrep; it is portable and already understands ignore files, which the
+# scanner has to respect anyway.
+ignore      = "0.4"
+notify      = "8"
+notify-debouncer-full = "0.7"
+
+# Platform config/data directories. Replaces the hand-rolled XDG logic, which
+# put macOS config in ~/.config instead of ~/Library/Application Support.
+directories = "6"
+
+# Local IPC: Unix domain socket on unix, named pipe on Windows, one API.
+interprocess = "2"
+
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+humansize   = "2"
+rustc-hash  = "2"
+
+# MCP. Only `apps/scour-mcp` depends on these, which is the whole reason it is
+# a separate binary: the CLI and the daemon stay free of an async runtime.
+rmcp        = { version = "3", features = ["server", "macros", "transport-io"] }
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "signal"] }
+schemars    = "1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Interfaces here are `&dyn Trait` heavy on purpose; the lint fires on shapes
+# that are the point rather than an accident.
+too_many_arguments = "allow"
+type_complexity    = "allow"
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+
+[profile.dev]
+opt-level = 1   # a debug-speed walker makes the scan tests unbearable

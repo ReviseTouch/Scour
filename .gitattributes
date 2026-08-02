@@ -1,0 +1,11 @@
+# This repository is edited from both Linux and Windows working copies that
+# synchronise only through GitHub. Pinning the line ending in the repository
+# keeps the two sides from producing a whole-file diff every time the other one
+# saves.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.mo  binary

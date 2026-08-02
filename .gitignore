@@ -1,0 +1,8 @@
+/target
+**/target
+Cargo.lock.bak
+
+# Local measurement output and scratch indexes.
+/bench
+/docs/*.local.md
+*.profraw

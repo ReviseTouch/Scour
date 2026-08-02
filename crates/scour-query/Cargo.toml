@@ -1,0 +1,18 @@
+[package]
+name        = "scour-query"
+description = "The Scour query language: text in, an Ast out. Knows no backend."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+scour-core = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
