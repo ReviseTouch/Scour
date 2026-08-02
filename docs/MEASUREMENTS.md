@@ -106,3 +106,63 @@ After the fix, the same query on the same index: **232 ms → 80 ms.**
   currently does.
 * 5M and 10M entries, a subtree rename, and the rebuild threshold: still
   unmeasured on this engine.
+
+## 2026-08-02 — where the 350 MB and the 1.2 GB actually went
+
+Both numbers overshot what the prototype measured (99 bytes an entry, 33 MB
+resident while searching). Neither was a surprise that should have been
+allowed to happen: both come from decisions taken in this session and never
+measured.
+
+### The index
+
+Same corpus, one setting changed:
+
+| | entries | index | `.idx` | `.pos` |
+|---|---|---|---|---|
+| `paths = true` | 855,126 | **352 MB** | 150.6 MB | 101.9 MB |
+| `paths = false` | 917,055 | **195 MB** | 60.7 MB | 18.3 MB |
+
+**Indexing full paths as trigrams costs ~174 MB — about 45% of the index.**
+It was added this session to make `path:` a real term instead of a filter,
+its cost was described in the code as "the single largest lever on index
+size", and then it was never measured. `index.paths = false` in the settings
+turns it off; `under:` and `parent:` keep working either way, because those
+are ancestor tokens rather than trigrams.
+
+Even without it, 213 bytes an entry against the prototype's 99. Not
+investigated, but the obvious suspect is the entry id: the prototype keyed
+documents by a `u64`, and this stores a variable-length byte key **indexed
+and stored**, which puts 855,126 unique keys in the term dictionary, the
+postings *and* the document store.
+
+### The memory
+
+`smaps_rollup`, same process, three moments:
+
+| | RSS | anonymous | file-backed |
+|---|---|---|---|
+| index open, no query yet | 209 MB | **201 MB** | 8 MB |
+| after four searches | 229 MB | 198 MB | 8 MB |
+| after a full scan | 2,063 MB | **2,052 MB** | 9 MB |
+
+Two things follow, and they point in opposite directions.
+
+**Searching is as cheap as claimed.** Four searches over 855,126 entries cost
+20 MB, and the memory-mapped index barely registers — 8 MB of file-backed
+pages, all of it reclaimable. The design's central promise holds.
+
+**The writer is the entire problem.** 201 MB before a single query, and 2 GB
+after a scan that never comes back — all of it anonymous, none of it
+reclaimable. That is not tantivy's doing: `TantivyIndex` holds one
+`IndexWriter` alive for the life of the process with a 512 MB budget, and the
+arena grows past that budget and is never released.
+
+The remedy is not a smaller budget. It is not holding a writer at all while
+idle: create one when there is work, drop it when the queue drains, and use a
+small heap for incremental updates and a large one only for a rebuild. On
+glibc, `malloc_trim` afterwards, because a freed arena still sits in the
+allocator.
+
+Until that is done, this is a service that costs 200 MB to leave running and
+2 GB to leave running after it has indexed anything.
