@@ -47,6 +47,7 @@ pub fn build(config: &Config) -> Result<Engine> {
             commit_interval: Duration::from_millis(config.service.commit_interval_ms.max(50)),
             rebuild_threshold: config.index.rebuild_threshold,
             result_limit: config.ui.result_limit.max(1_000),
+            ..EngineOptions::default()
         },
     ))
 }

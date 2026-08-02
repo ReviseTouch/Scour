@@ -51,14 +51,21 @@ pub struct TantivyIndex {
     dir: PathBuf,
     index: tantivy::Index,
     reader: tantivy::IndexReader,
-    /// One writer, behind one lock.
+    /// The writer, held only while there is something to write.
     ///
-    /// Not merely for safety: on Windows two concurrent `commit()` calls race
-    /// on the atomic rename of `.managed.json` and one of them fails with
-    /// `PermissionDenied` (tantivy #2847). Serialising here is the workaround,
-    /// and it costs nothing, because writing is a single background job by
-    /// design.
-    writer: Mutex<tantivy::IndexWriter<TantivyDocument>>,
+    /// Two reasons for the lock, and a third for the `Option`.
+    ///
+    /// On Windows two concurrent `commit()` calls race on the atomic rename of
+    /// `.managed.json` and one fails with `PermissionDenied` (tantivy #2847),
+    /// so commits are serialised. Writing is a single background job by
+    /// design, so this costs nothing.
+    ///
+    /// The `Option` is the memory. A tantivy writer holds an arena that grows
+    /// to its budget and is never given back while the writer lives — measured
+    /// at 201 MB before a single query and 2 GB after one scan, all of it
+    /// anonymous and none of it reclaimable. Dropping the writer is the only
+    /// thing that returns it, so it is not held while idle.
+    writer: Mutex<Option<Held>>,
     meta: RwLock<Meta0>,
     pending: RwLock<Pending>,
     opts: IndexOptions,
@@ -67,6 +74,38 @@ pub struct TantivyIndex {
 }
 
 const META_FILE: &str = "scour-index.json";
+
+/// A writer, and the budget it was built with.
+struct Held {
+    writer: tantivy::IndexWriter<TantivyDocument>,
+    heap_mb: usize,
+}
+
+/// The budget for a steady stream of changes.
+///
+/// Small on purpose. These documents are a path, a name and ten numbers —
+/// there is no body text — so the arena is sized for how often it should
+/// flush, not for how much text it has to hold. A default meant for
+/// full-text indexing is two orders of magnitude too large here.
+const STEADY_HEAP_MB: usize = 16;
+
+/// Give freed memory back to the operating system.
+///
+/// glibc keeps a freed arena in its own pools rather than returning it, so
+/// dropping the writer is necessary but not sufficient. Everywhere else this
+/// is someone else's problem and does nothing.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn trim_allocator() {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn trim_allocator() {}
 
 // Hand-written: neither `IndexReader` nor `IndexWriter` is `Debug`, and dumping
 // them would not say anything useful anyway. What a reader wants here is where
@@ -128,20 +167,14 @@ impl TantivyIndex {
     fn wrap(index: tantivy::Index, dir: PathBuf, meta: Meta0) -> Result<Self> {
         let opts = meta.opts;
         let gen0 = meta.generation;
-        let writer = index
-            .writer_with_num_threads(1, opts.writer_heap_mb * 1024 * 1024)
-            .map_err(tv)?;
-        // Automatic merges concatenate segments in arrival order, which would
-        // quietly destroy the newest-first ordering the fast path depends on —
-        // and nothing would report an error; searches would simply return the
-        // wrong page. Compaction is `Maintenance::Rebuild`.
-        writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
+        // No writer yet. One is built the first time something is written and
+        // dropped again when the work stops; see `Held`.
         let reader = index.reader().map_err(tv)?;
         Ok(Self {
             dir,
             index,
             reader,
-            writer: Mutex::new(writer),
+            writer: Mutex::new(None),
             meta: RwLock::new(meta),
             pending: RwLock::new(Pending::default()),
             opts,
@@ -154,6 +187,95 @@ impl TantivyIndex {
             detail: e.to_string(),
         })?;
         std::fs::write(self.dir.join(META_FILE), json).map_err(|e| Error::io(&e, META_FILE))
+    }
+
+    /// Run something with a writer, building one if there is none.
+    ///
+    /// `heap_mb` is what this piece of work wants. A bigger request replaces a
+    /// smaller writer — a bulk scan should not run through a buffer sized for
+    /// a handful of changes a second — and a smaller request is content with
+    /// whatever is already there.
+    fn with_writer<R>(
+        &self,
+        heap_mb: usize,
+        f: impl FnOnce(&mut tantivy::IndexWriter<TantivyDocument>) -> Result<R>,
+    ) -> Result<R> {
+        let mut slot = self.writer.lock();
+        let need_new = match slot.as_ref() {
+            None => true,
+            Some(h) => h.heap_mb < heap_mb,
+        };
+        if need_new {
+            // Replacing one means committing what it holds first, or the work
+            // already accepted disappears without anyone being told.
+            if let Some(old) = slot.take() {
+                let mut old = old;
+                old.writer.commit().map_err(tv)?;
+            }
+            let writer = self
+                .index
+                .writer_with_num_threads(1, heap_mb.max(STEADY_HEAP_MB) * 1024 * 1024)
+                .map_err(tv)?;
+            // Automatic merges concatenate segments in arrival order, which
+            // would quietly destroy the newest-first ordering the fast path
+            // depends on — and nothing would report an error; searches would
+            // simply return the wrong page. Compaction is explicit, and only
+            // ever merges segments that are already unordered.
+            writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
+            *slot = Some(Held { writer, heap_mb: heap_mb.max(STEADY_HEAP_MB) });
+        }
+        let held = slot.as_mut().expect("just built");
+        f(&mut held.writer)
+    }
+
+    /// Commit and let the writer go.
+    ///
+    /// The only thing that returns the arena. Called when no further writes
+    /// are expected — which, on a machine that is not being used, is most of
+    /// the time.
+    fn release_writer(&self) -> Result<()> {
+        let held = { self.writer.lock().take() };
+        if let Some(mut h) = held {
+            h.writer.commit().map_err(tv)?;
+            drop(h);
+            self.reader.reload().map_err(tv)?;
+            let mut p = self.pending.write();
+            p.hidden.clear();
+            p.hidden_prefixes.clear();
+        }
+        trim_allocator();
+        Ok(())
+    }
+
+    /// Merge the unordered segments into one.
+    ///
+    /// Safe in a way a general merge is not: the result is still unordered, so
+    /// nothing the fast path relies on changes. What it removes is the *per
+    /// segment* cost — opening columns, building a scorer, holding a file
+    /// handle — which is what a stream of small commits accumulates. It does
+    /// not reduce the number of documents that have to be walked; only a
+    /// rebuild does that.
+    fn compact(&self) -> Result<u64> {
+        let tail: Vec<tantivy::index::SegmentId> = {
+            let sorted = &self.meta.read().sorted_segments;
+            self.reader
+                .searcher()
+                .segment_readers()
+                .iter()
+                .filter(|s| !sorted.contains(&s.segment_id().uuid_string()))
+                .map(|s| s.segment_id())
+                .collect()
+        };
+        if tail.len() < 2 {
+            return Ok(0);
+        }
+        let n = tail.len() as u64;
+        self.with_writer(STEADY_HEAP_MB, |w| {
+            w.merge(&tail).wait().map_err(tv)?;
+            Ok(())
+        })?;
+        self.reader.reload().map_err(tv)?;
+        Ok(n)
     }
 
     pub fn options(&self) -> IndexOptions {
@@ -182,45 +304,13 @@ impl TantivyIndex {
     }
 
     fn add(&self, w: &mut tantivy::IndexWriter<TantivyDocument>, e: &Entry) -> Result<()> {
-        let r = Row::build(e);
-        let s = self.index.schema();
-        let g = |n: &str| s.get_field(n).expect("schema built by this crate");
-
-        let mut d = doc!(
-            g(field::EID)        => r.eid.clone(),
-            g(field::EID_HASH)   => r.eid_hash,
-            g(field::NAME_NORM)  => r.name_norm.as_str(),
-            g(field::PATH_EXACT) => e.path.as_str(),
-            g(field::NAME)       => r.name.as_str(),
-            g(field::PATH)       => r.path.as_str(),
-            g(field::NAME_SORT)  => r.name_norm.as_str(),
-            g(field::PARENT_SORT)=> r.parent.as_str(),
-            g(field::PARENT)     => r.parent_raw.as_str(),
-            g(field::EXT)        => r.ext.as_str(),
-            g(field::MTIME)      => e.meta.mtime,
-            g(field::CTIME)      => e.meta.ctime,
-            g(field::ATIME)      => e.meta.atime,
-            g(field::SIZE)       => e.meta.size,
-            g(field::DISK)       => e.meta.disk,
-            g(field::KIND)       => r.kind.as_u8() as i64,
-            g(field::IS_DIR)     => i64::from(e.is_dir),
-            g(field::MODE)       => e.meta.mode,
-            g(field::UID)        => e.meta.uid,
-            g(field::GID)        => e.meta.gid,
-            g(field::ITEMS)      => e.meta.items,
-            g(field::GENERATION) => self.generation.load(std::sync::atomic::Ordering::Relaxed) as i64,
-        );
-        if self.opts.index_paths {
-            d.add_text(g(field::PATH_NORM), &r.path_norm);
-        }
-        // Every ancestor as its own token: deleting a subtree is then one term
-        // rather than a walk. Measured at 378,100 documents marked in 1.3 µs.
-        let dirs = g(field::DIRS);
-        for a in Row::ancestors(&e.path) {
-            d.add_text(dirs, a);
-        }
-        w.add_document(d).map_err(tv)?;
-        Ok(())
+        add_doc(
+            &self.index,
+            self.opts.index_paths,
+            self.generation.load(std::sync::atomic::Ordering::Relaxed),
+            w,
+            e,
+        )
     }
 
     /// Rewrite the whole index newest-first, folding in everything added since
@@ -246,15 +336,18 @@ impl TantivyIndex {
         }
         order.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.2.cmp(&a.2)));
 
-        let mut w = self.writer.lock();
-        w.delete_all_documents().map_err(tv)?;
-        for (_, ord, doc) in &order {
-            if let Some(e) = self.entry_at(&searcher, *ord, *doc) {
-                self.add(&mut w, &e)?;
+        // A rebuild is the one place a large buffer earns its keep, and the
+        // one place it is certain to be handed back afterwards.
+        self.with_writer(self.opts.writer_heap_mb, |w| {
+            w.delete_all_documents().map_err(tv)?;
+            for (_, ord, doc) in &order {
+                if let Some(e) = self.entry_at(&searcher, *ord, *doc) {
+                    add_doc(&self.index, self.opts.index_paths, self.generation.load(std::sync::atomic::Ordering::Relaxed), w, &e)?;
+                }
             }
-        }
-        w.commit().map_err(tv)?;
-        drop(w);
+            w.commit().map_err(tv)?;
+            Ok(())
+        })?;
         self.reader.reload().map_err(tv)?;
 
         // Every segment that exists now came out of this rebuild.
@@ -344,12 +437,22 @@ impl SegCols {
 
 impl Index for TantivyIndex {
     fn apply(&self, changes: &mut dyn Iterator<Item = Change>) -> Result<ApplyReport> {
-        let mut w = self.writer.lock();
         let mut p = self.pending.write();
         let mut report = ApplyReport::default();
         let f_eid = self.field(field::EID)?;
         let f_dirs = self.field(field::DIRS)?;
         let f_path = self.field(field::PATH_EXACT)?;
+        let stamp = self.generation.load(std::sync::atomic::Ordering::Relaxed);
+        let mut slot = self.writer.lock();
+        if slot.is_none() {
+            let writer = self
+                .index
+                .writer_with_num_threads(1, STEADY_HEAP_MB * 1024 * 1024)
+                .map_err(tv)?;
+            writer.set_merge_policy(Box::new(tantivy::merge_policy::NoMergePolicy));
+            *slot = Some(Held { writer, heap_mb: STEADY_HEAP_MB });
+        }
+        let w = &mut slot.as_mut().expect("just built").writer;
 
         for c in changes {
             match c {
@@ -358,7 +461,7 @@ impl Index for TantivyIndex {
                     // A file that was hidden and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
                     p.hidden.remove(&eid_hash(&e.id));
-                    self.add(&mut w, &e)?;
+                    add_doc(&self.index, self.opts.index_paths, stamp, w, &e)?;
                     p.tail += 1;
                     report.upserted += 1;
                 }
@@ -385,6 +488,17 @@ impl Index for TantivyIndex {
     }
 
     fn begin_generation(&self) -> Result<u64> {
+        // A generation *is* a bulk pass — the engine starts one before every
+        // full walk — so this is the honest place to switch the writer to the
+        // bulk budget rather than guessing from the shape of the traffic.
+        //
+        // Measured the hard way: running a whole-home scan through the small
+        // steady-state buffer produced **228 segments** where the large one had
+        // produced three, and then the idle compaction that had to merge them
+        // cost more memory than the buffer had ever saved. A buffer sized for a
+        // trickle is the wrong tool for a flood.
+        self.release_writer()?;
+        self.with_writer(self.opts.writer_heap_mb, |_| Ok(()))?;
         let g = {
             let mut m = self.meta.write();
             m.generation += 1;
@@ -426,16 +540,20 @@ impl Index for TantivyIndex {
             std::ops::Bound::Excluded(Term::from_field_i64(f_gen, generation as i64)),
         ));
         let q = BooleanQuery::new(vec![(Occur::Must, scope), (Occur::Must, stale)]);
-        {
-            let w = self.writer.lock();
+        self.with_writer(STEADY_HEAP_MB, |w| {
             w.delete_query(Box::new(q)).map_err(tv)?;
-        }
+            Ok(())
+        })?;
         self.commit()?;
         Ok(before.saturating_sub(self.reader.searcher().num_docs()))
     }
 
     fn commit(&self) -> Result<()> {
-        self.writer.lock().commit().map_err(tv)?;
+        // Nothing held means nothing uncommitted; building a writer in order
+        // to commit an empty change set would allocate an arena for no reason.
+        if let Some(h) = self.writer.lock().as_mut() {
+            h.writer.commit().map_err(tv)?;
+        }
         self.reader.reload().map_err(tv)?;
         let mut p = self.pending.write();
         p.hidden.clear();
@@ -713,15 +831,23 @@ impl Index for TantivyIndex {
         let before = dir_size(&self.dir);
         match level {
             Maintenance::Flush => self.commit()?,
+            // Give the arena back. The only thing that does.
+            Maintenance::Idle => self.release_writer()?,
             Maintenance::Compact => {
                 self.commit()?;
-                self.writer
-                    .lock()
-                    .garbage_collect_files()
-                    .wait()
-                    .map_err(tv)?;
+                self.compact()?;
+                self.with_writer(STEADY_HEAP_MB, |w| {
+                    w.garbage_collect_files().wait().map_err(tv)?;
+                    Ok(())
+                })?;
+                // Compaction happens when nothing else is going on, so this is
+                // exactly the moment to stop holding a buffer.
+                self.release_writer()?;
             }
-            Maintenance::Rebuild => self.rebuild()?,
+            Maintenance::Rebuild => {
+                self.rebuild()?;
+                self.release_writer()?;
+            }
         }
         Ok(MaintReport {
             level,
@@ -992,6 +1118,59 @@ fn same_sort_key(a: &Hit, b: &Hit, key: SortKey) -> bool {
         SortKey::Gid => a.meta.gid == b.meta.gid,
         SortKey::Disk => a.meta.disk == b.meta.disk,
     }
+}
+
+/// Write one entry.
+///
+/// A free function rather than a method, so it can be called while the writer
+/// is mutably borrowed out of its slot without also borrowing the index that
+/// owns the slot.
+fn add_doc(
+    index: &tantivy::Index,
+    index_paths: bool,
+    generation: u64,
+    w: &mut tantivy::IndexWriter<TantivyDocument>,
+    e: &Entry,
+) -> Result<()> {
+    let r = Row::build(e);
+    let s = index.schema();
+    let g = |n: &str| s.get_field(n).expect("schema built by this crate");
+
+    let mut d = doc!(
+        g(field::EID)        => r.eid.clone(),
+        g(field::EID_HASH)   => r.eid_hash,
+        g(field::NAME_NORM)  => r.name_norm.as_str(),
+        g(field::PATH_EXACT) => e.path.as_str(),
+        g(field::NAME)       => r.name.as_str(),
+        g(field::PATH)       => r.path.as_str(),
+        g(field::NAME_SORT)  => r.name_norm.as_str(),
+        g(field::PARENT_SORT)=> r.parent.as_str(),
+        g(field::PARENT)     => r.parent_raw.as_str(),
+        g(field::EXT)        => r.ext.as_str(),
+        g(field::MTIME)      => e.meta.mtime,
+        g(field::CTIME)      => e.meta.ctime,
+        g(field::ATIME)      => e.meta.atime,
+        g(field::SIZE)       => e.meta.size,
+        g(field::DISK)       => e.meta.disk,
+        g(field::KIND)       => r.kind.as_u8() as i64,
+        g(field::IS_DIR)     => i64::from(e.is_dir),
+        g(field::MODE)       => e.meta.mode,
+        g(field::UID)        => e.meta.uid,
+        g(field::GID)        => e.meta.gid,
+        g(field::ITEMS)      => e.meta.items,
+        g(field::GENERATION) => generation as i64,
+    );
+    if index_paths {
+        d.add_text(g(field::PATH_NORM), &r.path_norm);
+    }
+    // Every ancestor as its own token: deleting a subtree is then one term
+    // rather than a walk. Measured at 378,100 documents marked in 1.3 µs.
+    let dirs = g(field::DIRS);
+    for a in Row::ancestors(&e.path) {
+        d.add_text(dirs, a);
+    }
+    w.add_document(d).map_err(tv)?;
+    Ok(())
 }
 
 /// Deterministic ordering, with an explicit tie-break on the path.

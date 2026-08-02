@@ -208,6 +208,15 @@ pub enum Maintenance {
     /// Flush pending changes. Milliseconds.
     #[default]
     Flush,
+    /// No writes are expected soon: give back whatever was being held for
+    /// them.
+    ///
+    /// Separate from `Flush` because they happen at different rates. Flushing
+    /// is what a burst of changes needs every second; this is what a machine
+    /// sitting idle overnight needs once. An index that holds a large write
+    /// buffer — which is most of them — is otherwise a process that costs
+    /// hundreds of megabytes to leave running.
+    Idle,
     /// Reclaim space from deleted entries. Seconds.
     Compact,
     /// Rebuild the ordered body from scratch, folding in everything indexed

@@ -22,6 +22,16 @@ pub struct EngineOptions {
     pub rebuild_threshold: u64,
     /// Rows a page may hold, whatever a caller asks for.
     pub result_limit: u32,
+    /// How many unordered segments may accumulate before they are merged.
+    ///
+    /// A stream of small commits leaves one segment each, and every query pays
+    /// a fixed cost per segment — opening columns, building a scorer, holding a
+    /// file handle. Merging them costs seconds and does not reduce how many
+    /// documents the tail holds; only a rebuild does that.
+    pub compact_segments: u32,
+    /// How long the index may sit untouched before it is asked to give back
+    /// whatever it was holding for writes.
+    pub idle_after: Duration,
 }
 
 impl Default for EngineOptions {
@@ -31,6 +41,8 @@ impl Default for EngineOptions {
             commit_interval: Duration::from_millis(1_000),
             rebuild_threshold: 200_000,
             result_limit: 1_000,
+            compact_segments: 8,
+            idle_after: Duration::from_secs(20),
         }
     }
 }
@@ -311,6 +323,8 @@ fn run(
     changes_tx: Sender<Change>,
 ) {
     let mut dirty = false;
+    // Housekeeping runs once per quiet period, not once per tick.
+    let mut idle_done = false;
     let mut last_commit = Instant::now();
     let tick = crossbeam_channel::tick(Duration::from_millis(100));
 
@@ -321,6 +335,7 @@ fn run(
                 Ok(Job::Scan { source, subtree }) => {
                     scan(&shared, &changes_tx, source, subtree);
                     dirty = true;
+                    idle_done = false;
                 }
                 Ok(Job::Maintain(level)) => {
                     let _ = shared.index.maintain(level);
@@ -357,6 +372,7 @@ fn run(
                     shared.pending.fetch_add(batch.len() as u64, Ordering::Relaxed);
                     let _ = shared.index.apply(&mut batch.into_iter());
                     dirty = true;
+                    idle_done = false;
                 }
                 Err(_) => break,
             },
@@ -368,6 +384,28 @@ fn run(
             shared.pending.store(0, Ordering::Relaxed);
             dirty = false;
             last_commit = Instant::now();
+            idle_done = false;
+        }
+
+        // Housekeeping, once the machine has stopped asking for anything.
+        //
+        // Both of these were reported and acted on by nobody: an index would
+        // advise a rebuild forever and accumulate segments forever, waiting for
+        // someone to type a command. Doing it while idle is the whole point —
+        // neither is something to run while the user is waiting on a search.
+        if !dirty && !idle_done && last_commit.elapsed() >= shared.opts.idle_after {
+            if let Ok(stats) = shared.index.stats() {
+                if stats.segments > shared.opts.compact_segments {
+                    let _ = shared.index.maintain(Maintenance::Compact);
+                } else if stats.unsorted_entries >= shared.opts.rebuild_threshold {
+                    let _ = shared.index.maintain(Maintenance::Rebuild);
+                }
+            }
+            // Whatever happened, stop holding a write buffer. On an idle
+            // machine this is the difference between a service that costs
+            // hundreds of megabytes to leave running and one that does not.
+            let _ = shared.index.maintain(Maintenance::Idle);
+            idle_done = true;
         }
         if shared.stop.load(Ordering::Relaxed) && jobs.is_empty() && changes.is_empty() {
             break;

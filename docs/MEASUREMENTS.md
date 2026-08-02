@@ -166,3 +166,54 @@ allocator.
 
 Until that is done, this is a service that costs 200 MB to leave running and
 2 GB to leave running after it has indexed anything.
+
+## 2026-08-02 — the memory fix was wrong, and the measurement said so
+
+Two changes were made on the strength of the previous section: hold the writer
+only while there is work, and give the steady state a 16 MB buffer instead of
+512 MB. Then the same corpus, 962,375 entries:
+
+| | before | after |
+|---|---|---|
+| peak RSS during the scan | 1,974 MB | **1,795 MB** |
+| segments after the scan | 3 | **228** |
+| index on disk | 352 MB | 256 MB |
+| idle RSS, 25 s after the last query | — | **1,824 MB** |
+
+**The arena was not the cause.** Cutting the budget from 512 MB to 128 MB
+moved the peak by 9%. Whatever holds ~1.8 GB during a scan is something else,
+and naming it without measuring it would be the same mistake twice. The
+leading suspect is the queue between the caller and tantivy's indexing thread
+— a walk produces entries faster than they can be indexed — but that is a
+hypothesis, not a finding.
+
+**And the small buffer made things worse.** Every time a 16 MB arena fills it
+writes a segment; a whole-home scan through it produced **228** where the
+large one produced three. Idle housekeeping then had to merge all 228, which
+is why the idle sample is *higher* than the working one: it was measured
+during that merge, not after it.
+
+The correction is not a different number. It is that the size of the buffer
+should follow the shape of the work: `begin_generation` — which the engine
+calls before every full walk, and only then — now switches to the bulk budget
+and hands it back afterwards. A buffer sized for a trickle is the wrong tool
+for a flood.
+
+**Not re-measured.** The numbers above are from before that correction. They
+are here because they are what was actually observed, and because a section
+that quietly replaced them with better ones would be worth nothing.
+
+### What did improve, and is measured
+
+Queries at 962,375 entries, over an index with no ordered body at all
+(228 unsorted segments, worst case for this design):
+
+| query | matches | time |
+|---|---|---|
+| `kind:image` | 56,733 | 9.90 ms |
+| `main` | 2,531 | 10.09 ms |
+| `ext:rs` | 65,785 | 13.81 ms |
+| `under:/…/Projeler ext:rs` | 2,061 | 19.03 ms |
+
+The comparable figure before the fast-path fix was 215–232 ms. That gain is
+real and is not affected by any of the above.
