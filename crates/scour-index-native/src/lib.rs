@@ -47,12 +47,18 @@
 mod build;
 mod columns;
 mod dirs;
+mod ids;
+mod index;
 mod names;
 mod search;
+mod segment;
 pub(crate) mod varint;
 
-pub use build::{SegmentBytes, build};
+pub use build::{SegmentBytes, build, build_sorted};
 pub use columns::{ColumnBlocks, ColumnWriter, Field};
 pub use dirs::{DirScope, DirTable, DirWriter};
+pub use ids::{IdMap, IdWriter, digest};
+pub use index::NativeIndex;
 pub use names::{Folded, NameArena, NameWriter};
-pub use search::{Found, Plan, Segment, Wanted, run};
+pub use search::{Found, Plan, Segment, Wanted, run, run_with};
+pub use segment::Live;

@@ -60,6 +60,16 @@ impl<'a> Segment<'a> {
         self.cols.get(field, row).unwrap_or(0)
     }
 
+    /// One column of one row, for callers outside the walk — faceting, stats.
+    pub fn num_of(&self, field: Field, row: usize) -> i64 {
+        self.num(field, row)
+    }
+
+    /// Which directory a row lives in, as a number into [`Segment::dirs`].
+    pub fn dir_id(&self, row: usize) -> u32 {
+        self.num(Field::DirId, row) as u32
+    }
+
     /// The full path of a row: its directory joined to its name.
     pub fn path(&self, row: usize, name: &str) -> String {
         let dir = self
@@ -207,7 +217,7 @@ impl Plan {
     ///
     /// `name` is passed in because the caller already has it — the walk reads
     /// names sequentially, which is the whole reason the arena has no offsets.
-    fn accepts(&self, seg: &Segment<'_>, row: usize, name: &str, fold: &mut Folded) -> bool {
+    pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &str, fold: &mut Folded) -> bool {
         for clause in &self.clauses {
             let mut any = false;
             for (negated, test) in &clause.alts {
@@ -354,6 +364,25 @@ pub struct Found {
 
 /// Walk the segment and answer.
 pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
+    run_with(seg, plan, want, &mut |_, _, _| false)
+}
+
+/// The same walk, with a veto over rows that match but must not be shown.
+///
+/// This exists for exactly one thing: a removal has to disappear from searches
+/// the moment it is applied, but erasing it from a segment is work saved for
+/// the next commit. Between those two moments the row is still in the file and
+/// still matches, and something has to say so.
+///
+/// The veto runs *after* the query has accepted a row, not before, because it
+/// is the dearer of the two — it reconstructs the row's identity or its path —
+/// and on any real query the filters have already rejected almost everything.
+pub fn run_with(
+    seg: &Segment<'_>,
+    plan: &Plan,
+    want: Wanted,
+    conceals: &mut dyn FnMut(&Segment<'_>, usize, &str) -> bool,
+) -> Found {
     let mut fold = Folded::new();
     let mut counted = 0usize;
     let mut visited = 0u64;
@@ -371,6 +400,9 @@ pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
     seg.names.walk(0, |row, name| {
         visited += 1;
         if !seg.is_alive(row) || !plan.accepts(seg, row, name, &mut fold) {
+            return true;
+        }
+        if conceals(seg, row, name) {
             return true;
         }
         counted += 1;
@@ -431,7 +463,7 @@ pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
 /// Timestamps tie constantly — a package install stamps thousands of files at
 /// one instant — so without a second key the same query returns a different
 /// page each time.
-fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
+pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
     use scour_core::text::{DefaultFolder, Folder};
 
     // Text keys are computed once a row, not once a comparison. Folding inside

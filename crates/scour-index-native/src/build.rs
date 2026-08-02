@@ -1,4 +1,4 @@
-//! Turning entries into the four files.
+//! Turning entries into the files of a segment.
 //!
 //! One pass to intern directories and collect names, one sort, one pass to
 //! write the columns. The sort is the whole design being established: rows come
@@ -9,20 +9,22 @@ use scour_core::{Entry, Key};
 
 use crate::columns::{ColumnWriter, Field};
 use crate::dirs::DirWriter;
+use crate::ids::IdWriter;
 use crate::names::NameWriter;
 
-/// The four blobs a segment consists of.
+/// The blobs a segment consists of.
 #[derive(Debug, Default, Clone)]
 pub struct SegmentBytes {
     pub names: Vec<u8>,
     pub cols: Vec<u8>,
     pub dirs: Vec<u8>,
+    pub ids: Vec<u8>,
     pub alive: Vec<u8>,
 }
 
 impl SegmentBytes {
     pub fn total(&self) -> usize {
-        self.names.len() + self.cols.len() + self.dirs.len() + self.alive.len()
+        self.names.len() + self.cols.len() + self.dirs.len() + self.ids.len() + self.alive.len()
     }
 }
 
@@ -34,18 +36,42 @@ impl SegmentBytes {
 pub fn build(entries: &[Entry]) -> SegmentBytes {
     let mut order: Vec<&Entry> = entries.iter().collect();
     order.sort_unstable_by(|a, b| b.meta.mtime.cmp(&a.meta.mtime).then(a.path.cmp(&b.path)));
+    build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| {
+        for e in &order {
+            emit(e);
+        }
+    })
+}
 
+/// Build a segment from entries already in the stored order.
+///
+/// `pass` is invoked **twice** and must produce the same entries in the same
+/// order both times: once to intern directories and collect names, once to
+/// write the columns. Two passes rather than one buffer because the buffer is
+/// what is being avoided — a rebuild folds every entry in the index, and
+/// holding a million of them as `Entry` values costs a quarter of a gigabyte
+/// for as long as it takes.
+///
+/// The order is not checked. Producing entries out of order does not corrupt
+/// anything, it only costs the early exit: the rows will simply not be in the
+/// order a search assumes they are.
+pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentBytes {
     let mut dirs = DirWriter::new();
     let mut names = NameWriter::new();
-    let mut provisional = Vec::with_capacity(order.len());
-    for e in &order {
+    let mut provisional: Vec<u32> = Vec::new();
+    pass(&mut |e: &Entry| {
         provisional.push(dirs.intern(e.parent()));
         names.push(e.name());
-    }
+    });
     let (dir_bytes, remap) = dirs.finish();
 
     let mut cols = ColumnWriter::new();
-    for (i, e) in order.iter().enumerate() {
+    let mut ids = IdWriter::new();
+    let mut rows = 0usize;
+    pass(&mut |e: &Entry| {
+        let i = rows;
+        rows += 1;
+        ids.push(&e.id, i as u32);
         let mut r = [0i64; Field::ALL.len()];
         r[Field::DirId.index()] = remap[provisional[i] as usize] as i64;
         r[Field::Size.index()] = e.meta.size;
@@ -76,15 +102,32 @@ pub fn build(entries: &[Entry]) -> SegmentBytes {
             Key::Opaque(_) => r[Field::KeyKind.index()] = 0,
         }
         cols.push(r);
-    }
+    });
 
     SegmentBytes {
         names: names.finish(),
         cols: cols.finish(),
         dirs: dir_bytes,
+        ids: ids.finish(),
         // Every row starts alive. A removal clears a bit; nothing is rewritten.
-        alive: vec![0xff; order.len().div_ceil(8)],
+        alive: alive_bits(rows),
     }
+}
+
+/// A bitmap with exactly `rows` bits set.
+///
+/// The last byte is masked rather than left full, because the bits past the end
+/// are not "spare" — anything that counts live rows counts them, and an index
+/// of three entries then reports eight.
+fn alive_bits(rows: usize) -> Vec<u8> {
+    let mut alive = vec![0xffu8; rows.div_ceil(8)];
+    let spare = rows % 8;
+    if spare != 0
+        && let Some(last) = alive.last_mut()
+    {
+        *last = (1u8 << spare) - 1;
+    }
+    alive
 }
 
 #[cfg(test)]
