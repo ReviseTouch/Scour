@@ -3,6 +3,8 @@ resolver = "3"
 members = [
     "crates/scour-core",
     "crates/scour-query",
+    "crates/scour-mock",
+    "crates/scour-index-tantivy",
 ]
 
 [workspace.package]
