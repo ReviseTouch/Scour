@@ -184,7 +184,7 @@ impl NativeIndex {
                     let mut out = Vec::new();
                     seg.names.walk(0, |row, name| {
                         if live.is_alive(row) {
-                            let path = seg.path(row, name);
+                            let path = seg.path(row, &String::from_utf8_lossy(name));
                             if prefixes.iter().any(|p| under(&path, p)) {
                                 out.push(row);
                             }
@@ -287,14 +287,22 @@ impl NativeIndex {
             build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(&segs, &views, emit))
         };
         let old: Vec<u64> = which.iter().map(|&i| inner.segments[i].number).collect();
-        let live = Live::write(&self.dir, number, generation, &bytes)?;
+        // A generation whose rows have all been swept folds to nothing, and
+        // nothing is what should be left. Writing the empty segment anyway put
+        // two of them in a real index — permanent, since a segment with no rows
+        // has no dead rows either and so never qualifies to be folded again.
+        let folded = if bytes.names.is_empty() || bytes.alive.is_empty() {
+            None
+        } else {
+            Some(Live::write(&self.dir, number, generation, &bytes)?)
+        };
         let mut keep = 0;
         inner.segments.retain(|_| {
             let drop = which.contains(&keep);
             keep += 1;
             !drop
         });
-        inner.segments.push(live);
+        inner.segments.extend(folded);
         // Newest last is what the search loop and `merge_rows` both assume; a
         // fold has to leave the order it found.
         inner.segments.sort_by_key(|s| s.number);
@@ -302,6 +310,7 @@ impl NativeIndex {
         for n in old {
             Live::erase(&self.dir, n);
         }
+        trim_allocator();
         Ok(())
     }
 
@@ -324,7 +333,7 @@ impl NativeIndex {
         &self,
         inner: &Inner,
         query: &scour_core::Ast,
-        mut f: impl FnMut(&Segment<'_>, usize, &str) -> bool,
+        mut f: impl FnMut(&Segment<'_>, usize, &[u8]) -> bool,
     ) -> Result<()> {
         let mut fold = Folded::new();
         for live in &inner.segments {
@@ -353,7 +362,7 @@ impl NativeIndex {
 /// Costs nothing when there are none, which is the normal state: the checks are
 /// behind an emptiness test, and the dearer of the two — building the path —
 /// only runs when a subtree is pending.
-fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, name: &str) -> bool {
+fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
     if !inner.hidden.is_empty() {
         let id = seg.entry_id(row);
         if inner
@@ -365,7 +374,7 @@ fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, name: &str) -> bool {
         }
     }
     if !inner.hidden_prefixes.is_empty() {
-        let path = seg.path(row, name);
+        let path = seg.path(row, &String::from_utf8_lossy(name));
         if inner.hidden_prefixes.iter().any(|p| under(&path, p)) {
             return true;
         }
@@ -442,6 +451,26 @@ fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry
         }
     }
 }
+
+/// Give freed memory back to the operating system.
+///
+/// A fold builds the whole of a new segment in memory — a name arena, four
+/// output buffers, a table of interned directories — and then drops it. glibc
+/// keeps the freed arena in its own pools rather than returning it, so the
+/// process stays large for the rest of its life having briefly needed the room.
+/// Everywhere else this is someone else's problem and does nothing.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn trim_allocator() {
+    unsafe extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+    unsafe {
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn trim_allocator() {}
 
 fn dir_size(dir: &Path) -> u64 {
     std::fs::read_dir(dir)
@@ -524,7 +553,7 @@ impl Index for NativeIndex {
                     if live.is_alive(row) {
                         let in_scope = whole
                             || scope.contains(seg.dir_id(row))
-                            || under(&seg.path(row, name), under_path);
+                            || under(&seg.path(row, &String::from_utf8_lossy(name)), under_path);
                         if in_scope {
                             out.push(row);
                         }
@@ -564,8 +593,10 @@ impl Index for NativeIndex {
         let mut all: Vec<Hit> = Vec::new();
         let mut counted = 0u64;
         let mut budget = cap;
-        let mut every_segment_stopped = !inner.segments.is_empty();
+        let mut visited = 0u64;
+        let mut rows = 0u64;
         for live in &inner.segments {
+            rows += live.rows() as u64;
             let seg = live.view()?;
             let plan = Plan::compile(&req.query, &seg)?;
             let found = run_with(
@@ -593,7 +624,7 @@ impl Index for NativeIndex {
             );
             counted += found.total;
             budget = budget.saturating_sub(found.total as usize);
-            every_segment_stopped &= found.early_exit;
+            visited += found.rows_visited;
             all.extend(found.hits);
         }
 
@@ -604,7 +635,14 @@ impl Index for NativeIndex {
             total: counted.min(cap as u64),
             capped: counted >= cap as u64,
             took_us: started.elapsed().as_micros() as u64,
-            fast_path: every_segment_stopped,
+            // Did the walk get away with looking at less than everything?
+            //
+            // Not "did every segment stop", which was the first definition and
+            // was useless: a segment holding fewer matches than a page runs to
+            // its own end and reports no early exit, so one small segment made
+            // a query that had stopped after four hundred rows out of a million
+            // report a full scan.
+            fast_path: rows > 0 && visited < rows,
         })
     }
 
@@ -629,13 +667,13 @@ impl Index for NativeIndex {
                     *counts.entry(k.msgid().to_owned()).or_default() += 1;
                 }
                 FacetBy::Ext { .. } => {
-                    let ext = scour_core::ext_of(name);
+                    let ext = scour_core::ext_of(&String::from_utf8_lossy(name));
                     if !ext.is_empty() {
                         *counts.entry(ext).or_default() += 1;
                     }
                 }
                 FacetBy::Dir { .. } => {
-                    let path = seg.path(row, name);
+                    let path = seg.path(row, &String::from_utf8_lossy(name));
                     if let Some(rest) = path
                         .strip_prefix(parent.as_str())
                         .and_then(|r| r.strip_prefix('/'))

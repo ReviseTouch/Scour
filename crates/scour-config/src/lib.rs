@@ -13,4 +13,6 @@ mod paths;
 mod schema;
 
 pub use paths::{config_path, data_dir, default_index_dir, socket_path};
-pub use schema::{Config, ContentCfg, ExcludeCfg, IndexCfg, ScanCfg, ServiceCfg, SourceCfg, UiCfg};
+pub use schema::{
+    Config, ContentCfg, EngineCfg, ExcludeCfg, IndexCfg, ScanCfg, ServiceCfg, SourceCfg, UiCfg,
+};

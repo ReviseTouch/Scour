@@ -28,6 +28,13 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct IndexCfg {
     pub dir: PathBuf,
+    /// Which implementation answers searches.
+    ///
+    /// The two do not share a file format and do not read each other's
+    /// directories, so changing this means the first scan runs again. They are
+    /// kept side by side because the comparison is the only honest way to know
+    /// which one to ship — see `docs/MEASUREMENTS.md`.
+    pub engine: EngineCfg,
     /// Index full paths as trigrams, so `path:` is a term rather than a
     /// filter applied to every candidate.
     ///
@@ -44,10 +51,27 @@ pub struct IndexCfg {
     pub rebuild_threshold: u64,
 }
 
+/// The implementations of `Index` a build knows about.
+///
+/// Named rather than numbered so the file says what it means, and so a build
+/// without one of them can report an unknown engine instead of a wrong one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineCfg {
+    /// The index written for this workload: no inverted index, rows in date
+    /// order, 44.5 bytes an entry.
+    #[default]
+    Native,
+    /// tantivy. Carries the machinery for document text, which is what it
+    /// costs and what it will be worth when there is document text.
+    Tantivy,
+}
+
 impl Default for IndexCfg {
     fn default() -> Self {
         Self {
             dir: crate::paths::default_index_dir(),
+            engine: EngineCfg::default(),
             paths: false,
             // Only ever used for a bulk scan or a rebuild, and handed back
             // afterwards. These documents are a path, a name and ten numbers —

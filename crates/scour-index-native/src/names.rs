@@ -132,7 +132,13 @@ impl<'a> NameArena<'a> {
     /// The sequential form, and the one a search actually uses: no offsets are
     /// consulted after the first, and the NUL scan is `memchr`, which is the
     /// same SIMD loop `grep` uses. Stops when `f` returns `false`.
-    pub fn walk(&self, from: usize, mut f: impl FnMut(usize, &'a str) -> bool) {
+    ///
+    /// Bytes, not `&str`. Validating UTF-8 on the way past is a second pass
+    /// over every name in the index for the benefit of the forty that end up
+    /// on screen, and the tests that matter — a substring, an extension, a
+    /// glob — are all answerable without it. The rows that are actually
+    /// returned go through [`NameArena::get`], which does validate.
+    pub fn walk(&self, from: usize, mut f: impl FnMut(usize, &'a [u8]) -> bool) {
         if from >= self.rows {
             return;
         }
@@ -153,11 +159,7 @@ impl<'a> NameArena<'a> {
             let Some(n) = memchr::memchr(0, rest) else {
                 return;
             };
-            let Ok(name) = std::str::from_utf8(&rest[..n]) else {
-                at += n + 1;
-                continue;
-            };
-            if !f(row, name) {
+            if !f(row, &rest[..n]) {
                 return;
             }
             at += n + 1;
@@ -190,22 +192,35 @@ impl Folded {
     }
 
     /// Fold `name` into the buffer and return it.
+    pub fn fold<'s>(&'s mut self, name: &str) -> &'s str {
+        let folded = self.fold_bytes(name.as_bytes());
+        // Folding never produces invalid UTF-8 from valid input.
+        std::str::from_utf8(folded).unwrap_or("")
+    }
+
+    /// The same, on bytes, which is what a walk has.
     ///
     /// The fast path is a byte loop: most names are pure ASCII, and folding
     /// ASCII is `to_ascii_lowercase`. Anything else goes through the real
     /// folding rules, which are the ones the index was built with — `İ`, `I`,
     /// `ı` and `i` all become `i`, or a Turkish name is stored under one
     /// spelling and searched for under another and never found.
-    pub fn fold<'s>(&'s mut self, name: &str) -> &'s str {
-        let bytes = name.as_bytes();
+    pub fn fold_bytes<'s>(&'s mut self, bytes: &[u8]) -> &'s [u8] {
         if bytes.len() <= FOLD_CAP && bytes.is_ascii() {
-            for (i, &b) in bytes.iter().enumerate() {
-                self.buf[i] = b.to_ascii_lowercase();
-            }
-            self.len = bytes.len();
-            // Lowercasing ASCII cannot produce invalid UTF-8.
-            return std::str::from_utf8(&self.buf[..self.len]).unwrap_or("");
+            let n = bytes.len();
+            self.buf[..n].copy_from_slice(bytes);
+            self.buf[..n].make_ascii_lowercase();
+            self.len = n;
+            return &self.buf[..n];
         }
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            // Not text. Match it as the bytes it is rather than drop the row.
+            let n = bytes.len().min(FOLD_CAP);
+            self.buf[..n].copy_from_slice(&bytes[..n]);
+            self.buf[..n].make_ascii_lowercase();
+            self.len = n;
+            return &self.buf[..n];
+        };
 
         self.len = 0;
         for c in name.chars() {
@@ -220,13 +235,13 @@ impl Folded {
                 let s = lc.encode_utf8(&mut tmp);
                 if self.len + s.len() > FOLD_CAP {
                     // Absurdly long: match what fitted rather than panic.
-                    return std::str::from_utf8(&self.buf[..self.len]).unwrap_or("");
+                    return &self.buf[..self.len];
                 }
                 self.buf[self.len..self.len + s.len()].copy_from_slice(s.as_bytes());
                 self.len += s.len();
             }
         }
-        std::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+        &self.buf[..self.len]
     }
 }
 
@@ -265,7 +280,7 @@ mod tests {
 
         let mut seen = Vec::new();
         arena.walk(0, |row, name| {
-            seen.push((row, name.to_owned()));
+            seen.push((row, String::from_utf8_lossy(name).into_owned()));
             true
         });
         assert_eq!(seen.len(), 5);
@@ -282,7 +297,7 @@ mod tests {
         // And starting partway through lands on the right row.
         let mut from_three = Vec::new();
         arena.walk(3, |row, name| {
-            from_three.push((row, name.to_owned()));
+            from_three.push((row, String::from_utf8_lossy(name).into_owned()));
             true
         });
         assert_eq!(from_three, vec![(3, "d.rs".into()), (4, "e.rs".into())]);
@@ -296,7 +311,7 @@ mod tests {
         let arena = NameArena::open(&bytes).expect("open");
         let mut first = None;
         arena.walk(257, |row, name| {
-            first = Some((row, name.to_owned()));
+            first = Some((row, String::from_utf8_lossy(name).into_owned()));
             false
         });
         assert_eq!(first, Some((257, "n257".to_owned())));

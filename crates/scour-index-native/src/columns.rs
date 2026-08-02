@@ -90,30 +90,70 @@ impl Field {
     }
 }
 
-/// Collects rows and encodes them one column at a time.
+/// Encodes rows as they arrive, one block at a time.
+///
+/// Nothing is buffered but the block being filled. The first version held every
+/// row until `finish` — sixteen numbers at eight bytes each, so **152 MB** at a
+/// million entries, all of it anonymous and all of it live for the whole of a
+/// rebuild. Encoding as the block fills costs the same arithmetic and holds
+/// only what will be written.
 #[derive(Debug, Default)]
 pub struct ColumnWriter {
-    rows: Vec<[i64; Field::ALL.len()]>,
+    /// The block being filled, in row order.
+    pending: Vec<[i64; Field::ALL.len()]>,
+    /// Encoded blocks and their offsets, one per column.
+    blocks: Vec<Vec<u8>>,
+    offsets: Vec<Vec<u32>>,
+    rows: usize,
 }
 
 impl ColumnWriter {
     pub fn new() -> ColumnWriter {
-        ColumnWriter::default()
+        ColumnWriter {
+            pending: Vec::with_capacity(BLOCK),
+            blocks: vec![Vec::new(); Field::ALL.len()],
+            offsets: vec![Vec::new(); Field::ALL.len()],
+            rows: 0,
+        }
     }
 
     pub fn push(&mut self, row: [i64; Field::ALL.len()]) {
-        self.rows.push(row);
+        self.pending.push(row);
+        self.rows += 1;
+        if self.pending.len() == BLOCK {
+            self.seal();
+        }
+    }
+
+    /// Encode the pending rows into every column and forget them.
+    fn seal(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let mut vals = Vec::with_capacity(self.pending.len());
+        for field in Field::ALL {
+            let c = field.index();
+            vals.clear();
+            vals.extend(self.pending.iter().map(|r| r[c]));
+            let (min, bits) = varint::width_for(&vals);
+            let blocks = &mut self.blocks[c];
+            self.offsets[c].push(blocks.len() as u32);
+            blocks.extend_from_slice(&min.to_le_bytes());
+            blocks.push(bits as u8);
+            varint::pack(blocks, &vals, min, bits);
+        }
+        self.pending.clear();
     }
 
     pub fn len(&self) -> usize {
-        self.rows.len()
+        self.rows
     }
 
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        self.rows == 0
     }
 
-    /// Encode every column.
+    /// Assemble the file.
     ///
     /// Layout: a header of (row count, column count), then per column a
     /// 64-bit offset to its section. A section is a count of blocks, a 32-bit
@@ -125,44 +165,26 @@ impl ColumnWriter {
     /// without it reaching block *b* means walking the headers of the *b*
     /// before it — which turned a single-column filter over a million rows
     /// into five seconds. Four bytes a block is 0.03 bytes an entry.
-    pub fn finish(&self) -> Vec<u8> {
-        let n = self.rows.len();
+    pub fn finish(mut self) -> Vec<u8> {
+        self.seal();
         let cols = Field::ALL.len();
-        let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(cols);
-
-        let n_blocks = n.div_ceil(BLOCK);
-        for field in Field::ALL {
-            let c = field.index();
-            let mut blocks = Vec::new();
-            let mut offsets: Vec<u32> = Vec::with_capacity(n_blocks);
-            for chunk in self.rows.chunks(BLOCK) {
-                offsets.push(blocks.len() as u32);
-                let vals: Vec<i64> = chunk.iter().map(|r| r[c]).collect();
-                let (min, bits) = varint::width_for(&vals);
-                blocks.extend_from_slice(&min.to_le_bytes());
-                blocks.push(bits as u8);
-                varint::pack(&mut blocks, &vals, min, bits);
-            }
-            let mut body = Vec::with_capacity(4 + offsets.len() * 4 + blocks.len());
-            body.extend_from_slice(&(offsets.len() as u32).to_le_bytes());
-            for o in &offsets {
-                body.extend_from_slice(&o.to_le_bytes());
-            }
-            body.extend_from_slice(&blocks);
-            bodies.push(body);
-        }
-
         let header = 8 + cols * 8;
-        let mut out = Vec::with_capacity(header + bodies.iter().map(Vec::len).sum::<usize>());
-        out.extend_from_slice(&(n as u32).to_le_bytes());
+        let body_len = |c: usize| 4 + self.offsets[c].len() * 4 + self.blocks[c].len();
+
+        let mut out = Vec::with_capacity(header + (0..cols).map(body_len).sum::<usize>());
+        out.extend_from_slice(&(self.rows as u32).to_le_bytes());
         out.extend_from_slice(&(cols as u32).to_le_bytes());
         let mut at = header as u64;
-        for b in &bodies {
+        for c in 0..cols {
             out.extend_from_slice(&at.to_le_bytes());
-            at += b.len() as u64;
+            at += body_len(c) as u64;
         }
-        for b in &bodies {
-            out.extend_from_slice(b);
+        for c in 0..cols {
+            out.extend_from_slice(&(self.offsets[c].len() as u32).to_le_bytes());
+            for o in &self.offsets[c] {
+                out.extend_from_slice(&o.to_le_bytes());
+            }
+            out.extend_from_slice(&self.blocks[c]);
         }
         out
     }

@@ -428,3 +428,108 @@ fix, and the file formats do not have to change for it to be added.
 `under:/…/Projeler ext:rs` is 2.10 ms at one segment for the same reason in
 miniature: the pair matches too few rows to fill a page early, so the walk runs
 to the end.
+
+## 2026-08-03 — the two engines, side by side, on a real home directory
+
+Machine: Linux 6.18, NVMe. Release build. `/home/hasan`, **1,197,514 entries**
+including `target/` and `node_modules/`. Both engines scanned the same tree
+through the same `scourd`, and both answered through the same CLI, so the
+socket, the parse, the sort and forty materialised rows are in every number.
+
+```toml
+[index]
+engine = "native"   # or "tantivy"
+```
+
+```bash
+scourd --config <cfg> --scan-only     # first scan
+scourd --config <cfg> &               # serve
+scour maintain rebuild
+scour search "<query>" -n 40          # best of five, warm
+```
+
+### What the index costs
+
+| | native | tantivy |
+|---|---|---|
+| on disk, after rebuild | **56.51 MiB** | 213.07 MiB |
+| bytes an entry | **49.5** | 186.6 |
+| first scan, wall | **6.7 s** | 34.5 s |
+| rebuild, wall | **≈4 s** | 39.8 s |
+| peak RSS during the scan | **273 MB** | 400 MB |
+| peak RSS during the rebuild | **318 MB** | 664 MB |
+| resident while serving | **113 MB** | 203 MB |
+
+### What a query costs
+
+Milliseconds, best of five, warm, page of 40, count cap 100,000 — which is what
+the CLI asks for, and which means a query matching 73,886 files has to count all
+of them. A search box would ask for 500 and stop far earlier.
+
+| query | matches | native | tantivy |
+|---|---|---|---|
+| `rapor` | 15 | 28.88 | **1.73** |
+| `main` | 2,788 | **29.77** | 34.09 |
+| `ext:rs` | 73,886 | **18.21** | 80.03 |
+| `*.pdf` | 18 | 18.80 | **1.41** |
+| `kind:image` | 56,916 | **19.76** | 51.97 |
+| `kind:code dm:7d` | 100,000+ | **9.04** | 75.69 |
+| `under:/…/Projeler ext:rs` | 2,157 | **23.22** | 68.90 |
+| `size:>10mb` | 4,390 | 21.81 | **20.67** |
+| `ab` | 52,538 | **29.38** | *refused* |
+| `sco` | 3,501 | 31.70 | **23.48** |
+
+`ab` is two characters, which a trigram index cannot answer at all. A scan has
+no such limit, and that is one of the things it buys.
+
+### Reading this honestly
+
+The scan wins where a scan should: filters over columns, a scope, an extension,
+anything that reads numbers rather than text. It loses where an inverted index
+should win — a **selective substring**. `rapor` matches fifteen files out of
+1.2 million, so there is no page to fill and no cap to reach, and the walk runs
+to the end: 28.88 ms against 1.73.
+
+That is the one case a trigram layer fixes, it is the case the layout was
+designed to leave room for, and adding it changes none of the existing files —
+it adds two and turns step one of the search into "start from the candidates".
+
+Everything else says ship the native index: a quarter of the disk, a fifth of
+the scan time, a tenth of the rebuild, half the memory, and no minimum term
+length.
+
+### What the measurement changed on the way
+
+Four things, each found by running this and none of them visible in the mock:
+
+**Empty segments were permanent.** A generation swept down to nothing folded
+into an empty segment, and an empty segment has no dead rows either — so it
+never qualified to be folded again. A real index reported three segments where
+one held everything.
+
+**The columns were buffered whole before being encoded.** Sixteen numbers at
+eight bytes a row is **152 MB** at 1.2 million entries, live for the whole of a
+rebuild. Encoding each block as it fills is the same arithmetic and holds only
+what will be written: rebuild peak 528 → 318 MB.
+
+**Freed memory was not being given back.** A fold builds a whole segment in
+memory and drops it; glibc keeps the arena. `malloc_trim` after a fold:
+resident 233 → 113 MB.
+
+**Half the walk was UTF-8 validation and a searcher being rebuilt per row.**
+The walk handed out `&str`, which validates every name in the index for the
+benefit of the forty that reach the screen, and `str::contains` constructs a
+Two-Way searcher on every call. Walking bytes and prebuilding the searcher:
+
+| query | before | after |
+|---|---|---|
+| `rapor` | 71.43 | **28.88** |
+| `ext:rs` | 68.05 | **18.21** |
+| `sco` | 77.33 | **31.70** |
+
+A third version was written between those two — fold and compare in place, no
+copy — on the theory that avoiding the buffer would be faster. It measured at
+exactly no improvement, because it gives up SIMD on both halves: the fold
+becomes a byte loop instead of `make_ascii_lowercase` and the search becomes a
+hand-written scan instead of `memmem`. It was removed, and the comment saying
+why is in `search.rs`.

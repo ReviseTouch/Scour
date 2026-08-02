@@ -426,6 +426,13 @@ fn a_generation_is_never_folded_into_another_one() {
         .collect();
     assert_eq!(left.len(), 4);
     assert!(left.iter().all(|p| p.contains("new")), "{left:?}");
+
+    // And the generation the sweep emptied folds to nothing rather than to an
+    // empty segment. An empty one would be permanent: no rows means no dead
+    // rows, so it would never qualify to be folded again — which is how a real
+    // index ended up reporting three segments where one held everything.
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    assert_eq!(index.stats().expect("stats").segments, 1);
 }
 
 #[test]

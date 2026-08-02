@@ -1535,6 +1535,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-engine",
+ "scour-index-native",
  "scour-index-tantivy",
  "scour-ipc",
  "scour-proto",

@@ -7,13 +7,17 @@
 //!
 //! A general search engine carries machinery for a different problem —
 //! relevance, phrases, stemming, positions — and that machinery is what costs.
-//! Measured on comparable corpora: **504** bytes an entry in SQLite and **181**
-//! in tantivy at 963,103 entries, against **44.5** here at 1,083,334 — of which
-//! eight are the identity table that exists only so a removal can find its row.
+//! Measured on the same 1,197,514-entry home directory, through the same
+//! service and the same command line: **49.5** bytes an entry here against
+//! **186.6** in tantivy, a first scan of 6.7 seconds against 34.5, a rebuild of
+//! four seconds against forty, and 113 MB resident against 203.
 //!
-//! What that buys, on the same corpus: every query a search box issues answers
-//! in 0.03–2.1 ms. See `docs/MEASUREMENTS.md`, including the orders that
-//! cannot stop early and cost forty times that.
+//! It loses one thing, and it is the thing an inverted index is for: a
+//! *selective* substring. `rapor` matches fifteen files out of 1.2 million, so
+//! there is no page to fill and the walk runs to the end — 28.9 ms against 1.7.
+//! Everything that filters on a number, a scope or an extension is two to eight
+//! times faster here, and a two-character term is answerable at all, which a
+//! trigram index cannot do. See `docs/MEASUREMENTS.md`.
 //!
 //! ## Where the space goes, and why
 //!

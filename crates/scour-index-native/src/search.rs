@@ -27,6 +27,7 @@
 //! million when it cannot terminate early. That is the case a trigram layer
 //! would fix, and it can be added without changing any of these files.
 
+use memchr::memmem::Finder;
 use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Key, Kind, Match, Meta, SortKey, SourceId};
 
 use crate::columns::{ColumnBlocks, Field};
@@ -150,13 +151,19 @@ enum Test {
     /// resolved once by the directory table.
     DirIn(DirScope),
     /// The name contains this, case-folded.
-    NameHas(String),
+    ///
+    /// A prebuilt searcher rather than the string, because `str::contains`
+    /// constructs a Two-Way searcher on every call and this is called once a
+    /// row. On a term that matches almost nothing — which is what a user types
+    /// when they are looking for one file — the walk cannot stop early and
+    /// that per-row construction is most of the query.
+    NameHas(Needle),
     /// The name matches this wildcard pattern, anchored end to end.
     NameGlob(String),
     /// The extension, taken from the name, is one of these.
     Ext(Vec<String>),
     /// The whole path contains this, case-folded. The most expensive test.
-    PathHas(String),
+    PathHas(Needle),
     /// Matches nothing. What an impossible condition compiles to — an `under:`
     /// naming a directory that is not in the table, say.
     Never,
@@ -173,6 +180,46 @@ impl Test {
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::PathHas(_) => 30,
         }
+    }
+}
+
+/// A needle the query owns, prepared once.
+///
+/// Two decisions, both measured on a real home directory of 1,197,474 entries
+/// where a term matching fifteen files cannot stop early and so pays for every
+/// row.
+///
+/// The searcher is built once rather than per row: `str::contains` constructs a
+/// Two-Way searcher on every call.
+///
+/// And the row is folded into a buffer before being searched, rather than
+/// compared in place. Comparing in place looks cheaper — no copy — but it
+/// gives up SIMD on both halves: the fold becomes a byte loop instead of
+/// `make_ascii_lowercase`, and the search becomes a hand-written scan instead
+/// of `memmem`. That version was written, measured at exactly no improvement,
+/// and removed.
+#[derive(Debug)]
+pub struct Needle {
+    finder: Finder<'static>,
+}
+
+impl Needle {
+    fn new(needle: &str) -> Needle {
+        Needle {
+            finder: Finder::new(needle.as_bytes()).into_owned(),
+        }
+    }
+
+    fn found_in(&self, hay: &[u8], fold: &mut Folded) -> bool {
+        self.finder.find(fold.fold_bytes(hay)).is_some()
+    }
+}
+
+/// The extension of a name, as bytes, by the same rule as `scour_core`.
+fn ext_bytes(name: &[u8]) -> &[u8] {
+    match name.iter().rposition(|&b| b == b'.') {
+        Some(i) if i > 0 && i + 1 < name.len() && name.len() - i - 1 <= 12 => &name[i + 1..],
+        _ => b"",
     }
 }
 
@@ -217,7 +264,7 @@ impl Plan {
     ///
     /// `name` is passed in because the caller already has it — the walk reads
     /// names sequentially, which is the whole reason the arena has no offsets.
-    pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &str, fold: &mut Folded) -> bool {
+    pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
         for clause in &self.clauses {
             let mut any = false;
             for (negated, test) in &clause.alts {
@@ -237,7 +284,7 @@ impl Plan {
 fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error> {
     use scour_core::TimeField;
     Ok(match m {
-        Match::NameContains(t) => Test::NameHas(t.clone()),
+        Match::NameContains(t) => Test::NameHas(Needle::new(t)),
         // `*.rs` is the overwhelmingly common wildcard, and it is exactly an
         // extension test — which reads one short string instead of running a
         // pattern matcher over the whole name. Measured at 175 ms against 47.
@@ -247,7 +294,7 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             }
             _ => Test::NameGlob(p.clone()),
         },
-        Match::PathContains(t) => Test::PathHas(t.clone()),
+        Match::PathContains(t) => Test::PathHas(Needle::new(t)),
         Match::Ext(list) => Test::Ext(list.clone()),
         Match::IsDir(want) => Test::Num {
             field: Field::IsDir,
@@ -304,7 +351,7 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
     })
 }
 
-fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &str, fold: &mut Folded) -> bool {
+fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
     match test {
         Test::Never => false,
         Test::Num {
@@ -324,20 +371,23 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &str, fold: &mut F
             // Folded into the buffer rather than into a fresh `String`. This
             // runs once a row, so allocating here was measured as most of what
             // an `ext:` filter costs on a query the walk cannot stop early.
-            let raw = scour_core::ext_str(name);
+            let raw = ext_bytes(name);
             if raw.is_empty() {
                 return false;
             }
-            let folded = fold.fold(raw);
-            list.iter().any(|e| e == folded)
+            let folded = fold.fold_bytes(raw);
+            list.iter().any(|e| e.as_bytes() == folded)
         }
-        Test::NameHas(t) => fold.fold(name).contains(t.as_str()),
-        Test::NameGlob(p) => scour_query::glob_matches(p, fold.fold(name)),
-        Test::PathHas(t) => {
+        Test::NameHas(n) => n.found_in(name, fold),
+        Test::NameGlob(p) => match std::str::from_utf8(name) {
+            Ok(name) => scour_query::glob_matches(p, fold.fold(name)),
+            Err(_) => false,
+        },
+        Test::PathHas(n) => {
             // The dearest test, and the reason it is sorted last: it builds a
             // string. Everything else reads what is already there.
-            let path = seg.path(row, name);
-            fold.fold(&path).contains(t.as_str())
+            let path = seg.path(row, &String::from_utf8_lossy(name));
+            n.found_in(path.as_bytes(), fold)
         }
     }
 }
@@ -388,7 +438,7 @@ pub fn run_with(
     seg: &Segment<'_>,
     plan: &Plan,
     want: Wanted,
-    conceals: &mut dyn FnMut(&Segment<'_>, usize, &str) -> bool,
+    conceals: &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool,
 ) -> Found {
     let mut fold = Folded::new();
     let mut counted = 0usize;
@@ -482,20 +532,22 @@ pub fn run_with(
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum SortValue {
     Num(i64),
-    Text(String),
+    Text(Vec<u8>),
 }
 
 fn sort_value(
     seg: &Segment<'_>,
     row: usize,
-    name: &str,
+    name: &[u8],
     key: SortKey,
     fold: &mut Folded,
 ) -> SortValue {
     match key {
-        SortKey::Name => SortValue::Text(fold.fold(name).to_owned()),
-        SortKey::Ext => SortValue::Text(scour_core::ext_of(name)),
-        SortKey::Path => SortValue::Text(seg.path(row, name)),
+        SortKey::Name => SortValue::Text(fold.fold_bytes(name).to_vec()),
+        SortKey::Ext => SortValue::Text(fold.fold_bytes(ext_bytes(name)).to_vec()),
+        SortKey::Path => {
+            SortValue::Text(seg.path(row, &String::from_utf8_lossy(name)).into_bytes())
+        }
         SortKey::Size => SortValue::Num(seg.num(Field::Size, row)),
         SortKey::Modified => SortValue::Num(seg.num(Field::Mtime, row)),
         SortKey::Created => SortValue::Num(seg.num(Field::Ctime, row)),
@@ -583,5 +635,65 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
     });
     for (slot, (_, h)) in hits.iter_mut().zip(keyed) {
         *slot = h;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_needle_finds_what_a_plain_lowercase_contains_would() {
+        let mut fold = Folded::new();
+        for (name, needle) in [
+            ("main.rs", "main"),
+            ("MAIN.RS", "main"),
+            ("Rapor-2026.pdf", "rapor"),
+            ("rapor", "rapor"),
+            ("a", "ab"),
+            ("abc", "bc"),
+            ("abc", "d"),
+            ("", "x"),
+            ("READ[ME]", "d[m"),
+            ("READ{ME}", "d[m"),
+        ] {
+            let n = Needle::new(needle);
+            let want = name.to_ascii_lowercase().contains(needle);
+            assert_eq!(
+                n.found_in(name.as_bytes(), &mut fold),
+                want,
+                "{name:?} contains {needle:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_ascii_name_still_goes_through_the_real_folding() {
+        let mut fold = Folded::new();
+        // The Turkish rule: the query is folded by the parser, the name here.
+        assert!(Needle::new("istanbul").found_in("İSTANBUL.txt".as_bytes(), &mut fold));
+        assert!(Needle::new("isparta").found_in("ısparta.md".as_bytes(), &mut fold));
+        assert!(Needle::new("öğüt").found_in("Öğüt.docx".as_bytes(), &mut fold));
+        assert!(!Needle::new("zzz").found_in("Öğüt.docx".as_bytes(), &mut fold));
+    }
+
+    #[test]
+    fn the_byte_extension_is_the_one_the_core_defines() {
+        for name in [
+            "main.rs",
+            "a.tar.gz",
+            ".bashrc",
+            "noext",
+            "trailing.",
+            "x.averyverylongextension",
+            "UPPER.PDF",
+            "İstanbul.TXT",
+        ] {
+            assert_eq!(
+                ext_bytes(name.as_bytes()),
+                scour_core::ext_str(name).as_bytes(),
+                "{name:?}"
+            );
+        }
     }
 }

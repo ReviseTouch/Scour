@@ -9,23 +9,33 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use scour_config::Config;
-use scour_core::{Source, SourceId};
+use scour_config::{Config, EngineCfg};
+use scour_core::{Index, Source, SourceId};
 use scour_engine::{Engine, EngineOptions};
+use scour_index_native::NativeIndex;
 use scour_index_tantivy::{IndexOptions, TantivyIndex};
 use scour_source_fs::{FsSource, platform_defaults};
 
 pub fn build(config: &Config) -> Result<Engine> {
-    let index = TantivyIndex::open_or_create(
-        &config.index.dir,
-        IndexOptions {
-            index_paths: config.index.paths,
-            index_content: config.content.enabled,
-            writer_heap_mb: config.index.heap_mb,
-            rebuild_threshold: config.index.rebuild_threshold,
-        },
-    )
-    .with_context(|| format!("opening the index at {}", config.index.dir.display()))?;
+    let dir = index_dir(config);
+    let index: Arc<dyn Index> = match config.index.engine {
+        EngineCfg::Native => Arc::new(
+            NativeIndex::open_or_create(&dir)
+                .with_context(|| format!("opening the index at {}", dir.display()))?,
+        ),
+        EngineCfg::Tantivy => Arc::new(
+            TantivyIndex::open_or_create(
+                &dir,
+                IndexOptions {
+                    index_paths: config.index.paths,
+                    index_content: config.content.enabled,
+                    writer_heap_mb: config.index.heap_mb,
+                    rebuild_threshold: config.index.rebuild_threshold,
+                },
+            )
+            .with_context(|| format!("opening the index at {}", dir.display()))?,
+        ),
+    };
 
     let sources: Vec<Arc<dyn Source>> = config
         .sources
@@ -41,7 +51,7 @@ pub fn build(config: &Config) -> Result<Engine> {
 
     Ok(Engine::new(
         sources,
-        Arc::new(index),
+        index,
         EngineOptions {
             scan: scan_options(config),
             commit_interval: Duration::from_millis(config.service.commit_interval_ms.max(50)),
@@ -50,6 +60,20 @@ pub fn build(config: &Config) -> Result<Engine> {
             ..EngineOptions::default()
         },
     ))
+}
+
+/// Where this engine's files go.
+///
+/// A subdirectory each, rather than the configured directory itself. The two
+/// formats have nothing in common, so sharing a directory would mean switching
+/// engines left the other one's files lying beside the new ones, counted by
+/// `bytes_on_disk` and never read. It also lets both exist at once, which is
+/// what makes the comparison a matter of one line in a file.
+fn index_dir(config: &Config) -> std::path::PathBuf {
+    match config.index.engine {
+        EngineCfg::Native => config.index.dir.join("native"),
+        EngineCfg::Tantivy => config.index.dir.join("tantivy"),
+    }
 }
 
 /// The configured exclusions, plus the platform's own.
