@@ -34,7 +34,7 @@ fn main() {
 
     let mut cols = ColumnWriter::new();
     for (i, e) in order.iter().enumerate() {
-        let mut r = [0i64; 12];
+        let mut r = [0i64; 16];
         r[Field::DirId.index()] = remap[provisional[i] as usize] as i64;
         r[Field::Size.index()] = e.meta.size;
         r[Field::Mtime.index()] = e.meta.mtime;
@@ -47,6 +47,15 @@ fn main() {
         r[Field::Items.index()] = e.meta.items;
         r[Field::Kind.index()] = e.kind().as_u8() as i64;
         r[Field::IsDir.index()] = i64::from(e.is_dir);
+        match &e.id.key {
+            scour_core::Key::Inode { dev, ino } => {
+                r[Field::KeyKind.index()] = 1;
+                r[Field::KeyA.index()] = *dev as i64;
+                r[Field::KeyB.index()] = *ino as i64;
+            }
+            _ => r[Field::KeyKind.index()] = 2,
+        }
+        r[Field::Source.index()] = e.id.source.0 as i64;
         cols.push(r);
     }
     let col_bytes = cols.finish();
@@ -59,7 +68,7 @@ fn main() {
     for (what, b) in [
         ("raw paths (not stored)", raw_paths),
         ("dirs.dat", dir_bytes.len()),
-        ("cols.dat (12 numbers)", col_bytes.len()),
+        ("cols.dat (16 numbers)", col_bytes.len()),
         ("names.dat (uncompressed)", names.len()),
         ("alive.bits", alive),
         ("TOTAL", total),

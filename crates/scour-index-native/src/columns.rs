@@ -1,6 +1,7 @@
 //! The numbers, in columns.
 //!
-//! Twelve values an entry — eleven from `stat` plus the directory number —
+//! Sixteen values an entry — eleven from `stat`, the directory number, and
+//! four that carry the entry's identity —
 //! stored one column at a time in blocks of 128, each block bit-packed against
 //! its own minimum. Measured on the real corpus: **8.85 bytes an entry** for
 //! all of them, against 80 stored plainly.
@@ -47,10 +48,25 @@ pub enum Field {
     Items = 9,
     Kind = 10,
     IsDir = 11,
+    /// Which source produced the entry.
+    Source = 12,
+    /// Which shape of [`Key`] the two below hold: 1 inode, 2 path hash.
+    ///
+    /// Identity lives in columns rather than in a side arena because it is
+    /// read for the forty rows that make a page and for every row a removal
+    /// touches, and because it packs almost to nothing — `dev` is one value
+    /// per filesystem and `source` is usually one value in total.
+    ///
+    /// [`Key`]: scour_core::Key
+    KeyKind = 13,
+    /// `dev` for an inode, the hash for a path hash.
+    KeyA = 14,
+    /// `ino` for an inode, zero otherwise.
+    KeyB = 15,
 }
 
 impl Field {
-    pub const ALL: [Field; 12] = [
+    pub const ALL: [Field; 16] = [
         Field::DirId,
         Field::Size,
         Field::Mtime,
@@ -63,6 +79,10 @@ impl Field {
         Field::Items,
         Field::Kind,
         Field::IsDir,
+        Field::Source,
+        Field::KeyKind,
+        Field::KeyA,
+        Field::KeyB,
     ];
 
     pub fn index(self) -> usize {
@@ -96,23 +116,39 @@ impl ColumnWriter {
     /// Encode every column.
     ///
     /// Layout: a header of (row count, column count), then per column a
-    /// 64-bit offset to its data, then per column a run of blocks, each an
-    /// 8-byte minimum, a byte of width, and the packed values.
+    /// 64-bit offset to its section. A section is a count of blocks, a 32-bit
+    /// offset for each, and then the blocks — each an 8-byte minimum, a byte
+    /// of width, and the packed values.
+    ///
+    /// The offset array is what makes a read O(1), and it was added after a
+    /// measurement rather than by foresight. Blocks are variable width, so
+    /// without it reaching block *b* means walking the headers of the *b*
+    /// before it — which turned a single-column filter over a million rows
+    /// into five seconds. Four bytes a block is 0.03 bytes an entry.
     pub fn finish(&self) -> Vec<u8> {
         let n = self.rows.len();
         let cols = Field::ALL.len();
         let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(cols);
 
+        let n_blocks = n.div_ceil(BLOCK);
         for field in Field::ALL {
-            let mut body = Vec::new();
             let c = field.index();
+            let mut blocks = Vec::new();
+            let mut offsets: Vec<u32> = Vec::with_capacity(n_blocks);
             for chunk in self.rows.chunks(BLOCK) {
+                offsets.push(blocks.len() as u32);
                 let vals: Vec<i64> = chunk.iter().map(|r| r[c]).collect();
                 let (min, bits) = varint::width_for(&vals);
-                body.extend_from_slice(&min.to_le_bytes());
-                body.push(bits as u8);
-                varint::pack(&mut body, &vals, min, bits);
+                blocks.extend_from_slice(&min.to_le_bytes());
+                blocks.push(bits as u8);
+                varint::pack(&mut blocks, &vals, min, bits);
             }
+            let mut body = Vec::with_capacity(4 + offsets.len() * 4 + blocks.len());
+            body.extend_from_slice(&(offsets.len() as u32).to_le_bytes());
+            for o in &offsets {
+                body.extend_from_slice(&o.to_le_bytes());
+            }
+            body.extend_from_slice(&blocks);
             bodies.push(body);
         }
 
@@ -165,27 +201,26 @@ impl<'a> ColumnBlocks<'a> {
         self.rows == 0
     }
 
-    /// One value.
+    /// One value, in constant time.
     ///
     /// Random access rather than bulk decode: a filter usually rejects a row on
-    /// the first column it looks at, and decoding the other eleven would be
+    /// the first column it looks at, and decoding the other fifteen would be
     /// work thrown away.
     pub fn get(&self, field: Field, row: usize) -> Option<i64> {
         if row >= self.rows {
             return None;
         }
         let at = field.index() * 8;
-        let base = u64::from_le_bytes(self.offsets.get(at..at + 8)?.try_into().ok()?) as usize;
-
-        // Blocks are variable width, so reaching block `b` means walking the
-        // headers of the ones before it. At 128 rows a block that is at most
-        // a few hundred steps for a million rows, and each step is an add.
+        let section = u64::from_le_bytes(self.offsets.get(at..at + 8)?.try_into().ok()?) as usize;
+        let n_blocks =
+            u32::from_le_bytes(self.bytes.get(section..section + 4)?.try_into().ok()?) as usize;
         let block = row / BLOCK;
-        let mut at = base;
-        for _ in 0..block {
-            let bits = *self.bytes.get(at + 8)? as u32;
-            at += 9 + varint::packed_len(BLOCK, bits);
+        if block >= n_blocks {
+            return None;
         }
+        let idx = section + 4 + block * 4;
+        let start = u32::from_le_bytes(self.bytes.get(idx..idx + 4)?.try_into().ok()?) as usize;
+        let at = section + 4 + n_blocks * 4 + start;
         let min = i64::from_le_bytes(self.bytes.get(at..at + 8)?.try_into().ok()?);
         let bits = *self.bytes.get(at + 8)? as u32;
         let packed = self.bytes.get(at + 9..)?;
@@ -197,8 +232,8 @@ impl<'a> ColumnBlocks<'a> {
 mod tests {
     use super::*;
 
-    fn row(dir: i64, size: i64, mtime: i64) -> [i64; 12] {
-        let mut r = [0i64; 12];
+    fn row(dir: i64, size: i64, mtime: i64) -> [i64; 16] {
+        let mut r = [0i64; 16];
         r[Field::DirId.index()] = dir;
         r[Field::Size.index()] = size;
         r[Field::Mtime.index()] = mtime;
@@ -211,6 +246,9 @@ mod tests {
         r[Field::Items.index()] = -1;
         r[Field::Kind.index()] = 2;
         r[Field::IsDir.index()] = 0;
+        r[Field::KeyKind.index()] = 1;
+        r[Field::KeyA.index()] = 66_310;
+        r[Field::KeyB.index()] = dir * 1000 + size;
         r
     }
 
@@ -245,7 +283,7 @@ mod tests {
         let bytes = w.finish();
         let cols = ColumnBlocks::open(&bytes).expect("open");
 
-        // Twelve i64 stored plainly would be 96 bytes an entry. The real
+        // Sixteen i64 stored plainly would be 128 bytes an entry. The real
         // corpus measured 8.85 for eleven of them; this synthetic block has
         // more constant columns and fewer rows, so it lands lower. What the
         // test asserts is the order of magnitude, not a figure it invented:
@@ -302,6 +340,7 @@ mod tests {
         assert_eq!(Field::DirId.index(), 0);
         assert_eq!(Field::Mtime.index(), 2);
         assert_eq!(Field::IsDir.index(), 11);
-        assert_eq!(Field::ALL.len(), 12);
+        assert_eq!(Field::KeyB.index(), 15);
+        assert_eq!(Field::ALL.len(), 16);
     }
 }

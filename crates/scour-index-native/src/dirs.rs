@@ -174,20 +174,34 @@ impl<'a> DirTable<'a> {
 
     /// Every directory number at or beneath `prefix`.
     ///
-    /// The table is sorted, so a subtree is a contiguous run and this is a
-    /// binary search followed by a walk. It is how a folder is deleted or
-    /// scoped to without touching a single entry.
-    pub fn subtree(&self, prefix: &str) -> std::ops::Range<u32> {
+    /// **Not one range**, and the reason is a mistake worth recording. A
+    /// subtree looks like it should be contiguous in a sorted table, and it
+    /// almost is — but a sibling can sort *between* a directory and its own
+    /// children. `/home/u/Projeler-414` falls between `/home/u/Projeler` and
+    /// `/home/u/Projeler/Belgeler`, because `-` is 0x2D and `/` is 0x2F. A
+    /// walk that stops at the first non-descendant therefore stops one row in,
+    /// and a search scoped to a folder silently returns only the files sitting
+    /// directly in it.
+    ///
+    /// The descendants *are* contiguous, as `[prefix + "/", prefix + "0")` —
+    /// `0` being the byte after `/`. The directory's own row sits earlier, on
+    /// its own. So: two ranges, found by two binary searches.
+    pub fn subtree(&self, prefix: &str) -> DirScope {
         let prefix = prefix.trim_end_matches('/');
-        let start = self.lower_bound(prefix);
-        let mut end = start;
-        while (end as usize) < self.count {
-            match self.get(end) {
-                Some(p) if under(&p, prefix) => end += 1,
-                _ => break,
-            }
-        }
-        start..end
+        let own = self.exact(prefix);
+        let below = {
+            let from = self.lower_bound(&format!("{prefix}/"));
+            let to = self.lower_bound(&format!("{prefix}0"));
+            from..to.max(from)
+        };
+        DirScope { own, below }
+    }
+
+    /// The number of exactly this path, if the table holds it.
+    pub fn exact(&self, path: &str) -> Option<u32> {
+        let path = path.trim_end_matches('/');
+        let at = self.lower_bound(path);
+        (self.get(at).as_deref() == Some(path)).then_some(at)
     }
 
     /// The first number whose path is not less than `prefix`.
@@ -204,15 +218,32 @@ impl<'a> DirTable<'a> {
     }
 }
 
-/// Is `path` inside `prefix`, or the prefix itself?
-///
-/// By component, not by characters: `/ab` is not inside `/a`. The mistake this
-/// prevents is the one every path-prefix comparison makes once.
-fn under(path: &str, prefix: &str) -> bool {
-    if prefix.is_empty() {
-        return true;
+/// A directory and everything below it, as the two ranges it really is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirScope {
+    /// The directory's own number, when the table holds it.
+    pub own: Option<u32>,
+    /// Its descendants, which *are* contiguous.
+    pub below: std::ops::Range<u32>,
+}
+
+impl DirScope {
+    pub fn contains(&self, id: u32) -> bool {
+        self.own == Some(id) || self.below.contains(&id)
     }
-    path == prefix || (path.starts_with(prefix) && path.as_bytes().get(prefix.len()) == Some(&b'/'))
+
+    /// Nothing at all — what an unknown path resolves to.
+    pub fn is_empty(&self) -> bool {
+        self.own.is_none() && self.below.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        usize::from(self.own.is_some()) + self.below.len()
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.own.into_iter().chain(self.below.clone())
+    }
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -274,24 +305,62 @@ mod tests {
     }
 
     #[test]
-    fn a_subtree_is_a_contiguous_range() {
-        // What makes deleting or scoping to a folder O(1) in the entries.
-        let paths = ["/a", "/a/x", "/a/x/deep", "/a/y", "/ab", "/ab/z", "/b"];
+    fn a_subtree_survives_a_sibling_that_sorts_between_it_and_its_children() {
+        // The bug this test was written for, found by comparing against brute
+        // force: `/a-x` sorts *after* `/a` and *before* `/a/y`, because `-` is
+        // 0x2D and `/` is 0x2F. A walk from `/a` that stops at the first
+        // non-descendant stops at `/a-x` and never sees `/a/y` at all — so a
+        // search scoped to a folder silently returned only the files sitting
+        // directly in it.
+        let paths = [
+            "/a",
+            "/a-x",
+            "/a-x/deep",
+            "/a/x",
+            "/a/x/deep",
+            "/a/y",
+            "/ab",
+            "/ab/z",
+            "/b",
+        ];
         let (bytes, _) = build(&paths);
         let table = DirTable::open(&bytes).expect("open");
 
-        let range = table.subtree("/a");
-        let got: Vec<String> = range.map(|i| table.get(i).expect("row")).collect();
+        let scope = table.subtree("/a");
+        let mut got: Vec<String> = scope.ids().map(|i| table.get(i).expect("row")).collect();
+        got.sort();
         assert_eq!(got, vec!["/a", "/a/x", "/a/x/deep", "/a/y"]);
 
-        // The mistake this exists to prevent.
+        // Both near misses stay out.
         assert!(
             !got.iter().any(|p| p.starts_with("/ab")),
             "/ab is not inside /a"
         );
+        assert!(
+            !got.iter().any(|p| p.starts_with("/a-")),
+            "/a-x is not inside /a"
+        );
 
-        assert_eq!(table.subtree("/b").count(), 1);
-        assert_eq!(table.subtree("/nowhere").count(), 0);
+        assert_eq!(table.subtree("/b").len(), 1);
+        assert!(table.subtree("/nowhere").is_empty());
+        // A directory with no children is still itself.
+        assert_eq!(table.subtree("/ab/z").len(), 1);
+    }
+
+    #[test]
+    fn an_exact_lookup_does_not_match_a_longer_name() {
+        let paths = ["/a", "/ab", "/abc"];
+        let (bytes, _) = build(&paths);
+        let table = DirTable::open(&bytes).expect("open");
+        assert_eq!(
+            table.exact("/a").and_then(|i| table.get(i)).as_deref(),
+            Some("/a")
+        );
+        assert_eq!(
+            table.exact("/ab/").and_then(|i| table.get(i)).as_deref(),
+            Some("/ab")
+        );
+        assert_eq!(table.exact("/abcd"), None);
     }
 
     #[test]
@@ -347,7 +416,7 @@ mod tests {
         let table = DirTable::open(&bytes).expect("open");
         assert!(table.is_empty());
         assert_eq!(table.get(0), None);
-        assert_eq!(table.subtree("/a").count(), 0);
+        assert!(table.subtree("/a").is_empty());
         assert!(remap.is_empty());
         assert_eq!(DirTable::open(&[1, 2, 3]).map(|t| t.len()), None);
     }

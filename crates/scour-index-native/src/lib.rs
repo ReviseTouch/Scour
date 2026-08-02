@@ -44,9 +44,15 @@
 //! it adds two more and turns step three of the search into "start from the
 //! candidates" instead of "start from row zero".
 
+mod build;
 mod columns;
 mod dirs;
+mod names;
+mod search;
 pub(crate) mod varint;
 
+pub use build::{SegmentBytes, build};
 pub use columns::{ColumnBlocks, ColumnWriter, Field};
-pub use dirs::{DirTable, DirWriter};
+pub use dirs::{DirScope, DirTable, DirWriter};
+pub use names::{Folded, NameArena, NameWriter};
+pub use search::{Found, Plan, Segment, Wanted, run};

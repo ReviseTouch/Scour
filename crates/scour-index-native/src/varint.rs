@@ -99,6 +99,12 @@ pub fn unpack_one(bytes: &[u8], min: i64, bits: u32, i: usize) -> i64 {
 }
 
 /// Bytes a packed block of `n` values at `bits` each occupies.
+///
+/// Part of the format's arithmetic rather than of any hot path — a reader
+/// finds a block through its offset, not by adding these up. It stays because
+/// the round-trip tests check `pack` against it, which is how a packing bug
+/// would be caught rather than merely suspected.
+#[allow(dead_code)]
 pub fn packed_len(n: usize, bits: u32) -> usize {
     (n * bits as usize).div_ceil(8)
 }
