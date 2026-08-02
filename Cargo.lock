@@ -1433,6 +1433,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-index-native"
+version = "0.1.0"
+dependencies = [
+ "memchr",
+ "memmap2",
+ "parking_lot",
+ "scour-core",
+ "scour-mock",
+ "scour-query",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "scour-index-tantivy"
 version = "0.1.0"
 dependencies = [
