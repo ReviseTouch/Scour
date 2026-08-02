@@ -77,6 +77,8 @@ enum Command {
     Sources,
     /// What the service is doing.
     Status,
+    /// What the index contains.
+    Stats,
     /// Walk the filesystem again.
     Rescan {
         /// Narrow it to one subtree.
@@ -217,6 +219,7 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},
+        Some(Command::Stats) => Request::Stats {},
         Some(Command::Rescan { path }) => Request::Rescan { path: path.clone() },
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),

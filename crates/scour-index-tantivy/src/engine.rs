@@ -521,11 +521,22 @@ impl Index for TantivyIndex {
         // index whose every segment a rebuild produced. Everything else is
         // correct by the ordinary route and pays for it.
         let sorted: HashSet<String> = self.meta.read().sorted_segments.iter().cloned().collect();
-        let all_sorted = searcher
+        // The walk applies to one view — newest first — and it does *not*
+        // require every segment to be ordered.
+        //
+        // An earlier version demanded that, and the cost only showed up under
+        // measurement: after a rebuild of 855,126 entries, two files changed,
+        // one two-document segment appeared, and every search went from
+        // milliseconds to 220 ms. One saved file turned the whole design off.
+        // The loop below already treats an unsorted segment correctly by
+        // reading all of its matches; a sorted one is what it can stop early
+        // in. Mixing them is the normal state of a running index, not an
+        // exception to handle by giving up.
+        let any_sorted = searcher
             .segment_readers()
             .iter()
-            .all(|s| sorted.contains(&s.segment_id().uuid_string()));
-        let fast = req.sort == SortKey::Modified && req.descending && all_sorted;
+            .any(|s| sorted.contains(&s.segment_id().uuid_string()));
+        let fast = req.sort == SortKey::Modified && req.descending;
 
         if !fast {
             let total = self.count_upto(&plan, &searcher, &pending, &read_hit, cap)?;
@@ -629,7 +640,10 @@ impl Index for TantivyIndex {
             total: counted.min(cap) as u64,
             capped: counted >= cap,
             took_us: started.elapsed().as_micros() as u64,
-            fast_path: true,
+            // Reported rather than assumed: a walk over segments none of which
+            // are ordered is correct and linear, and a design whose fast path
+            // is quietly not being taken looks exactly like one that is.
+            fast_path: any_sorted,
         })
     }
 
