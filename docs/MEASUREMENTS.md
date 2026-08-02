@@ -304,3 +304,51 @@ not the thing being bounded.
 50,000 is where the curve turns. It should be a setting rather than a
 constant, because the right answer depends on the machine — but the default
 is measured rather than picked.
+
+## 2026-08-02 — the tie window, and what is still wrong
+
+The 333 ms was in `top_k`, and it was neither the count nor the cache. The
+window that grows to contain a tie group **materialised every row of every
+attempt**, and it quadruples up to 262,144 — a quarter of a million document
+store reads for a page of forty. It now carries only sort keys and addresses
+and materialises once, at the end.
+
+| sorted by | before | after |
+|---|---|---|
+| `main` by name (2,555) | 333.4 ms | **25.4 ms** |
+| `ext:rs` by name (65,813) | — | **35.8 ms** |
+
+Repeated three times each, identical. The same mistake existed in the fast
+path's own truncation — it looked for the first candidate older than the
+window's last, which trims nothing when the whole window shares one timestamp,
+and after a rebuild that is the normal case. Now a hard cap.
+
+### Not fixed, and not understood
+
+Sorting by date on this index still costs 340–450 ms for large result sets:
+
+| query | matches | time |
+|---|---|---|
+| `*.pdf` | 18 | 16.3 ms |
+| `rapor` | ~600 | 14.2 ms |
+| `main` | 2,555 | 342.3 ms |
+| `ext:rs` | 65,813 | 361.6 ms |
+| `under:/…/Projeler ext:rs` | 2,061 | 445.5 ms |
+
+Two things are visibly wrong and are the next session's work.
+
+**The sorted body is not surviving.** Every one of those reports `(full scan)`,
+meaning no segment is recognised as ordered — on an index that was rebuilt.
+Either compaction is replacing segments without the record following them, or
+the record is not being reloaded. Until that is understood, none of these
+numbers say anything about the design; they measure the design *switched off*.
+
+**And the cost per match is 5.5 µs, not the 0.1 µs the prototype measured** —
+fifty times. `main` with 2,555 matches taking 342 ms is not explained by the
+match count at all, so there is a fixed cost in here that has not been found.
+Three guesses have already been wrong (the count cap, the page cache, the
+writer arena); the next step is a profile, not a fourth.
+
+**What this means for the comparison.** SQLite answered in 0.2–12 ms at
+571,334 entries. On these numbers it is faster, and saying otherwise would
+require the two problems above to be understood first.

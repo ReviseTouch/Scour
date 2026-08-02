@@ -783,14 +783,23 @@ impl Index for TantivyIndex {
         // Narrow to the rows that can still make the page before paying to
         // materialise any of them, keeping whole tie groups intact.
         cands.sort_unstable_by_key(|c| std::cmp::Reverse(c.0));
-        if cands.len() > want + TIE_SLACK {
-            let bound = cands[want + TIE_SLACK - 1].0;
-            let keep = cands
-                .iter()
-                .position(|c| c.0 < bound)
-                .unwrap_or(cands.len());
-            cands.truncate(keep.max(want));
-        }
+        // Hard cap, not a conditional one.
+        //
+        // The earlier version looked for the first candidate *older* than the
+        // window's last and kept everything up to it — which trims nothing at
+        // all when the whole window shares one timestamp, and after a rebuild
+        // that is the normal case: documents are in date order, so the page
+        // boundary lands inside a run of identical stamps. A package install
+        // stamping fifty thousand files then meant fifty thousand rows read out
+        // of the document store for a page of forty.
+        //
+        // What this gives up is stated rather than hidden: when more than
+        // `TIE_SLACK` entries share a sort value, which of them reach the page
+        // is deterministic but arbitrary. Being exact would mean materialising
+        // the whole run, and nobody looking at fifty thousand files stamped in
+        // the same second cares which forty they are — only that the same forty
+        // come back next time.
+        cands.truncate(want + TIE_SLACK);
         let mut hits: Vec<Hit> = cands
             .into_iter()
             .filter_map(|(_, seg, doc)| read_hit(seg, doc))
@@ -986,15 +995,22 @@ impl TantivyIndex {
         // Over-fetch, then check whether the window cut a tie group in half.
         //
         // Tantivy orders by one column and breaks ties by internal document
-        // order, which is not stable for a reader. Re-sorting fixes the order
-        // of what was fetched, but cannot recover a row that was never fetched
-        // — and on a real filesystem a page is often a single timestamp shared
-        // by a hundred files. So the window grows until the last row it
-        // contains no longer shares its sort value with the row at the page
-        // boundary, or until it is clearly not worth continuing.
+        // order, which is not an order a reader can predict. Re-sorting fixes
+        // what was fetched but cannot recover a row that was never fetched, and
+        // on a real filesystem a page is routinely one timestamp shared by a
+        // hundred files. So the window grows until the row at the page boundary
+        // no longer shares its sort value with the last row fetched.
+        //
+        // **Only keys and addresses cross this loop.** An earlier version
+        // materialised every row of every attempt, and since the window
+        // quadruples up to 262,144 that meant a quarter of a million document
+        // store reads for a page of forty — measured at 333 ms on 971,187
+        // entries, identical across repeated runs and unrelated to the number
+        // of matches. It is the same lesson the fast path already learned:
+        // read the sort key, not the row.
         let mut over = want + TIE_SLACK;
         loop {
-            let addrs: Vec<tantivy::DocAddress> = if is_text {
+            let keyed: Vec<(SortValue, tantivy::DocAddress)> = if is_text {
                 searcher
                     .search(
                         &plan.query,
@@ -1002,7 +1018,7 @@ impl TantivyIndex {
                     )
                     .map_err(tv)?
                     .into_iter()
-                    .map(|(_, a)| a)
+                    .map(|(k, a)| (SortValue::Text(k), a))
                     .collect()
             } else {
                 searcher
@@ -1012,23 +1028,40 @@ impl TantivyIndex {
                     )
                     .map_err(tv)?
                     .into_iter()
-                    .map(|(_, a)| a)
+                    .map(|(k, a)| (SortValue::Num(k), a))
                     .collect()
             };
-            let exhausted = addrs.len() < over;
-            let mut hits: Vec<Hit> = addrs
+
+            // The boundary tie group is contained when the window ran out of
+            // matches, when it holds no more than a page, or when the row after
+            // the page carries a different sort value.
+            let contained = keyed.len() < over
+                || keyed.len() <= want
+                || keyed[want - 1].0 != keyed[keyed.len() - 1].0;
+            if !contained && over < MAX_TIE_WINDOW {
+                over *= 4;
+                continue;
+            }
+
+            // Trim to the page plus whatever ties with its last row, then
+            // materialise — once, and only what can still appear.
+            let mut keyed = keyed;
+            if keyed.len() > want {
+                let boundary = keyed[want - 1].0.clone();
+                let end = keyed[want..]
+                    .iter()
+                    .position(|(k, _)| *k != boundary)
+                    .map_or(keyed.len(), |p| want + p);
+                // A little extra for rows a predicate or a pending removal
+                // drops, which would otherwise leave the page short.
+                keyed.truncate((end + 64).min(keyed.len()));
+            }
+            let mut hits: Vec<Hit> = keyed
                 .into_iter()
-                .filter_map(|a| read_hit(a.segment_ord, a.doc_id))
+                .filter_map(|(_, a)| read_hit(a.segment_ord, a.doc_id))
                 .collect();
             sort_hits(&mut hits, req.sort, req.descending);
-
-            let cut = !exhausted
-                && hits.len() > want
-                && same_sort_key(&hits[want - 1], hits.last().expect("non-empty"), req.sort);
-            if !cut || over >= MAX_TIE_WINDOW {
-                return Ok(hits);
-            }
-            over *= 4;
+            return Ok(hits);
         }
     }
 
@@ -1136,6 +1169,19 @@ impl TantivyIndex {
         out.truncate(top.max(1));
         Ok(out)
     }
+}
+
+/// A sort value, as the collector hands it back.
+///
+/// Compared and cloned, never inspected: all this has to answer is whether two
+/// rows tie, which is what decides if the window cut a group in half.
+#[derive(Clone, PartialEq)]
+enum SortValue {
+    /// `None` where the column has no value for that document — a file with no
+    /// extension, sorted by extension. Two of those tie with each other, which
+    /// is what `Option`'s equality already says.
+    Num(Option<i64>),
+    Text(Option<String>),
 }
 
 /// How far past the page to look for rows that tie with the last one.
