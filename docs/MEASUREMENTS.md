@@ -278,3 +278,29 @@ bounded *after* the fact and not during.
 That is a hypothesis with an obvious shape, not a finding. It is the next
 thing to measure, and until it is, "the rebuild makes searches faster" is not
 a claim this project can make on a real filesystem.
+
+### How much back pressure
+
+Same corpus, 963k entries, one constant changed:
+
+| documents in flight | peak anonymous | scan | segments | index |
+|---|---|---|---|---|
+| 10,000 | **234 MB** | 21.4 s | 107 | 244 MB |
+| **50,000** | 396 MB | **13.0 s** | 22 | 220 MB |
+| 200,000 | 1,145 MB | 14.7 s | **12** | 210 MB |
+
+Two things this settles.
+
+**Above 50,000 the memory buys nothing.** Four times the queue is three times
+the memory and a scan that is *slower*, not faster. Committing is cheap;
+holding a million documents is not.
+
+**Below it, the trade is real but poor.** Ten thousand saves 162 MB and costs
+8.4 seconds and five times the segments — which the next compaction then has
+to merge. And it cannot go much lower: at 10,000 the queue itself is only
+about 16 MB, so the remaining ~218 MB is the writer's arena and the walker,
+not the thing being bounded.
+
+50,000 is where the curve turns. It should be a setting rather than a
+constant, because the right answer depends on the machine — but the default
+is measured rather than picked.
