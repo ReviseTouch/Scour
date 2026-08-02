@@ -26,5 +26,5 @@ pub use types::{
     ApplyReport, Ast, Caps, Change, Cmp, Entry, EntryId, Error, Facet, FacetBy, FacetRequest,
     FacetResponse, Group, Hit, IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, Page,
     Result, ScanOptions, ScanReport, SearchRequest, SearchResponse, SortKey, SourceId, SourceInfo,
-    SourceKind, Status, TimeField, TreeNode, ext_of, kind_of, mode_string,
+    SourceKind, Status, TimeField, TreeNode, ext_of, ext_str, kind_of, mode_string,
 };

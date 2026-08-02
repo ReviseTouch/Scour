@@ -51,8 +51,10 @@ use crate::segment::Live;
 /// Too large and the buffer is the memory spike it exists to prevent.
 ///
 /// A hundred thousand entries is roughly 25 MB of `Entry` values, and leaves
-/// about ten segments after a whole home directory — which one compaction folds
-/// into one.
+/// eleven segments after a million — which is a search at 5.15 ms instead of
+/// 1.02 until something compacts, and compacting is 2.7 seconds. Raising it
+/// buys fewer segments with memory at the ratio the whole design exists to
+/// avoid paying, so the answer is to compact, not to buffer.
 const MAX_STAGED: usize = 100_000;
 
 /// How many rows a facet count will look at before it answers approximately.
@@ -255,33 +257,63 @@ impl NativeIndex {
         Ok(())
     }
 
-    /// Fold every segment into one, dropping rows that are no longer live.
+    /// Fold these segments into one, dropping rows that are no longer live.
+    ///
+    /// They must share a generation, and that is not a formality: the merged
+    /// segment can only carry one stamp, so folding across a generation
+    /// boundary would give rows from an old pass a new one and a later
+    /// [`Index::sweep`] would walk past exactly the rows it exists to remove.
     ///
     /// The entries are never all in memory at once: the merge runs twice, once
     /// to collect directories and names and once to write the columns, which
     /// costs a second read of what is already mapped and saves holding a
     /// million `Entry` values — about a quarter of a gigabyte at that size.
-    fn fold_into_one(&self, inner: &mut Inner) -> Result<()> {
-        self.flush(inner)?;
-        if inner.segments.len() < 2 && inner.segments.iter().all(|s| s.dead_rows() == 0) {
+    fn fold(&self, inner: &mut Inner, which: &[usize]) -> Result<()> {
+        if which.len() < 2 && which.iter().all(|&i| inner.segments[i].dead_rows() == 0) {
             return Ok(());
         }
+        let generation = inner.segments[which[0]].generation;
+        debug_assert!(
+            which
+                .iter()
+                .all(|&i| inner.segments[i].generation == generation),
+            "a fold may not cross a generation"
+        );
         let number = inner.next_segment;
         inner.next_segment += 1;
         let bytes = {
-            let segs: &[Live] = &inner.segments;
+            let segs: Vec<&Live> = which.iter().map(|&i| &inner.segments[i]).collect();
             let views: Vec<Segment<'_>> = segs.iter().map(|s| s.view()).collect::<Result<_>>()?;
-            build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(segs, &views, emit))
+            build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(&segs, &views, emit))
         };
-        let old: Vec<u64> = inner.segments.iter().map(|s| s.number).collect();
-        let live = Live::write(&self.dir, number, inner.generation, &bytes)?;
-        inner.segments.clear();
+        let old: Vec<u64> = which.iter().map(|&i| inner.segments[i].number).collect();
+        let live = Live::write(&self.dir, number, generation, &bytes)?;
+        let mut keep = 0;
+        inner.segments.retain(|_| {
+            let drop = which.contains(&keep);
+            keep += 1;
+            !drop
+        });
         inner.segments.push(live);
+        // Newest last is what the search loop and `merge_rows` both assume; a
+        // fold has to leave the order it found.
+        inner.segments.sort_by_key(|s| s.number);
         self.save_meta(inner)?;
         for n in old {
             Live::erase(&self.dir, n);
         }
         Ok(())
+    }
+
+    /// Segment indices grouped by generation, largest group first.
+    fn groups(inner: &Inner) -> Vec<Vec<usize>> {
+        let mut by_gen: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (i, s) in inner.segments.iter().enumerate() {
+            by_gen.entry(s.generation).or_default().push(i);
+        }
+        let mut out: Vec<Vec<usize>> = by_gen.into_values().collect();
+        out.sort_by_key(|g| std::cmp::Reverse(g.len()));
+        out
     }
 
     /// Run `f` for every live row that the query accepts, across all segments.
@@ -384,7 +416,7 @@ impl Eq for Cursor {}
 ///
 /// Each segment is already in that order, so this is a k-way merge and the
 /// heap never holds more than one row a segment.
-fn merge_rows(segs: &[Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry)) {
+fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry)) {
     use std::collections::BinaryHeap;
 
     let next = |i: usize, from: usize| -> Option<(Entry, usize)> {
@@ -531,6 +563,7 @@ impl Index for NativeIndex {
 
         let mut all: Vec<Hit> = Vec::new();
         let mut counted = 0u64;
+        let mut budget = cap;
         let mut every_segment_stopped = !inner.segments.is_empty();
         for live in &inner.segments {
             let seg = live.view()?;
@@ -546,11 +579,20 @@ impl Index for NativeIndex {
                     // applied once, after the merge.
                     offset: 0,
                     limit: need,
-                    count_cap: cap,
+                    // What is left of the *global* count, not a fresh copy of
+                    // it. Handing every segment the whole cap was measured at
+                    // thirteen times the cost of one segment on a fragmented
+                    // index: each one walked until it had found five hundred
+                    // matches of its own, and thirty-two of those is the whole
+                    // corpus. With the budget shared, a segment that cannot
+                    // add to the count stops as soon as it has enough rows to
+                    // be considered for the page — which is what it is for.
+                    count_cap: budget,
                 },
                 &mut |seg, row, name| conceals(&inner, seg, row, name),
             );
             counted += found.total;
+            budget = budget.saturating_sub(found.total as usize);
             every_segment_stopped &= found.early_exit;
             all.extend(found.hits);
         }
@@ -664,18 +706,51 @@ impl Index for NativeIndex {
                 inner.staged.shrink_to_fit();
                 inner.staged_at.shrink_to_fit();
             }
+            // Fold the head; leave the body alone.
+            //
+            // What a search pays for is the *number* of segments, not their
+            // size: at 1,083,334 entries one segment answers `"rapor"` in 1.11
+            // ms and eleven answer it in 5.20, because each of the eleven has
+            // to find its own page before it can stop. Folding ten of them
+            // into one leaves two, and costs a pass over a tenth of the index
+            // instead of over all of it.
+            //
+            // The largest member of the group is what a rebuild left behind,
+            // so it is the one worth not rewriting — unless a quarter of it is
+            // rows nobody can see any more, at which point rewriting is what
+            // gives the space back.
             Maintenance::Compact => {
                 self.flush(&mut inner)?;
-                let total: u64 = inner.segments.iter().map(|s| s.rows() as u64).sum();
-                let dead: u64 = inner.segments.iter().map(|s| s.dead_rows()).sum();
-                // Rewriting costs a full pass, so it has to buy something: a
-                // segment count that slows every search, or space held by rows
-                // nobody can see.
-                if inner.segments.len() > 4 || (total > 0 && dead * 10 > total) {
-                    self.fold_into_one(&mut inner)?;
+                // Recomputed each time round, because folding renumbers what
+                // is left. A group of eleven becomes two, which no longer
+                // qualifies, so this terminates.
+                while let Some(group) = Self::groups(&inner).into_iter().find(|g| g.len() >= 3) {
+                    let biggest = *group
+                        .iter()
+                        .max_by_key(|&&i| inner.segments[i].rows())
+                        .expect("a group is not empty");
+                    let stale = inner.segments[biggest].dead_rows() * 4
+                        > inner.segments[biggest].rows() as u64;
+                    let head: Vec<usize> = if stale {
+                        group
+                    } else {
+                        group.into_iter().filter(|&i| i != biggest).collect()
+                    };
+                    self.fold(&mut inner, &head)?;
                 }
             }
-            Maintenance::Rebuild => self.fold_into_one(&mut inner)?,
+            // Everything of one generation becomes one segment. In practice
+            // there is one generation: a scan re-upserts every file it finds
+            // under the new stamp and the sweep removes what it did not.
+            Maintenance::Rebuild => {
+                self.flush(&mut inner)?;
+                while let Some(group) = Self::groups(&inner)
+                    .into_iter()
+                    .find(|g| g.len() > 1 || inner.segments[g[0]].dead_rows() > 0)
+                {
+                    self.fold(&mut inner, &group)?;
+                }
+            }
         }
         Ok(MaintReport {
             level,

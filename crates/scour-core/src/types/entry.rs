@@ -307,11 +307,20 @@ const EXEC_EXT: &[&str] = &["exe", "bat", "cmd", "com", "ps1", "msi", "appimage"
 /// Turkish `İ`/`I`/`ı`/`i` distinction has to disappear identically on both
 /// sides or `ext:JPG` misses `photo.jpg` in a Turkish locale.
 pub fn ext_of(name: &str) -> String {
+    crate::text::DefaultFolder::of(ext_str(name))
+}
+
+/// The same extension, as it is spelled and without allocating.
+///
+/// Separate because an index tests `ext:` once a row and folding into a fresh
+/// `String` a million times a query is the kind of cost that does not show up
+/// anywhere except the total. Callers that can fold into a buffer of their own
+/// use this and stay identical to [`ext_of`] by construction — the rule for
+/// what counts as an extension lives here and only here.
+pub fn ext_str(name: &str) -> &str {
     match name.rsplit_once('.') {
-        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 12 => {
-            crate::text::DefaultFolder::of(ext)
-        }
-        _ => String::new(),
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 12 => ext,
+        _ => "",
     }
 }
 

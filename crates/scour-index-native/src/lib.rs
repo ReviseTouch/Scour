@@ -7,8 +7,13 @@
 //!
 //! A general search engine carries machinery for a different problem —
 //! relevance, phrases, stemming, positions — and that machinery is what costs.
-//! Measured against a real 631,008-entry index: 548 bytes an entry in SQLite,
-//! 75–98 in tantivy, and about **22** here.
+//! Measured on comparable corpora: **504** bytes an entry in SQLite and **181**
+//! in tantivy at 963,103 entries, against **44.5** here at 1,083,334 — of which
+//! eight are the identity table that exists only so a removal can find its row.
+//!
+//! What that buys, on the same corpus: every query a search box issues answers
+//! in 0.03–2.1 ms. See `docs/MEASUREMENTS.md`, including the orders that
+//! cannot stop early and cost forty times that.
 //!
 //! ## Where the space goes, and why
 //!

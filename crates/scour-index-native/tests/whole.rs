@@ -352,6 +352,83 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
 }
 
 #[test]
+fn a_compaction_folds_the_head_and_leaves_the_body() {
+    // What a search pays for is the number of segments, so a compaction only
+    // has to get that number down — and rewriting the body to do it would cost
+    // a pass over the whole index for nothing.
+    let f = Fixture::new(8_000, 800);
+    let before = f.search("ext:rs", SortKey::Modified, true, 60);
+    let started = f.index.stats().expect("stats");
+    assert!(
+        started.segments >= 10,
+        "the fixture is supposed to be fragmented"
+    );
+
+    f.index.maintain(Maintenance::Compact).expect("compact");
+    let after = f.index.stats().expect("stats");
+    assert_eq!(after.segments, 2, "one body, one folded head");
+    assert_eq!(after.entries, started.entries);
+    assert_eq!(f.search("ext:rs", SortKey::Modified, true, 60), before);
+    f.check("", SortKey::Modified, true);
+    f.check("rapor", SortKey::Name, false);
+
+    // And doing it again changes nothing, rather than folding the body in.
+    f.index.maintain(Maintenance::Compact).expect("compact");
+    assert_eq!(f.index.stats().expect("stats").segments, 2);
+}
+
+#[test]
+fn a_generation_is_never_folded_into_another_one() {
+    // The merged segment can only carry one stamp. Folding across a boundary
+    // would give old rows a new one, and the next sweep would walk straight
+    // past exactly the rows it exists to remove.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    for i in 0..4u64 {
+        index
+            .apply(&mut std::iter::once(Change::Upsert(entry(
+                &format!("/w/old{i}.rs"),
+                100 + i as i64,
+                i,
+            ))))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    let g = index.begin_generation().expect("generation");
+    for i in 10..14u64 {
+        index
+            .apply(&mut std::iter::once(Change::Upsert(entry(
+                &format!("/w/new{i}.rs"),
+                200 + i as i64,
+                i,
+            ))))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    assert_eq!(
+        index.stats().expect("stats").segments,
+        2,
+        "one segment a generation, not one overall"
+    );
+
+    // The sweep still finds the older pass.
+    assert_eq!(index.sweep("/w", g).expect("sweep"), 4);
+    let left: Vec<String> = index
+        .search(&SearchRequest {
+            page: Page::new(0, 20),
+            ..Default::default()
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    assert_eq!(left.len(), 4);
+    assert!(left.iter().all(|p| p.contains("new")), "{left:?}");
+}
+
+#[test]
 fn a_rebuild_folds_everything_into_one_segment_and_changes_no_answer() {
     let f = Fixture::new(8_000, 1_000);
     let before: Vec<String> = f.search("ext:rs", SortKey::Modified, true, 60);

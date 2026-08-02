@@ -352,3 +352,79 @@ writer arena); the next step is a profile, not a fourth.
 **What this means for the comparison.** SQLite answered in 0.2–12 ms at
 571,334 entries. On these numbers it is faster, and saying otherwise would
 require the two problems above to be understood first.
+
+## 2026-08-03 — the native index: what a segment count costs
+
+Machine: Linux 6.18, NVMe. Release build. Mock tree, **1,083,334 entries**.
+
+```bash
+cargo run --release -p scour-index-native --example fragment 1000000
+```
+
+### Layout
+
+An index built through `Index::apply` in one pass, then the same index after a
+compaction and after a rebuild. `MAX_STAGED` is 100,000, so a single-pass scan
+of a million entries leaves eleven segments no matter how the caller batches.
+
+| layout | segments | index time | MB | B/entry | maintenance |
+|---|---|---|---|---|---|
+| rebuilt | 1 | 1.7 s | 46.0 | **44.5** | rebuild 3.0 s |
+| compacted | 2 | 1.9 s | 46.7 | 45.2 | compact 2.7 s |
+| as scanned | 11 | 1.8 s | 50.8 | 49.1 | — |
+| 32 commits | 32 | 2.5 s | 55.4 | 53.7 | — |
+
+44.5 bytes an entry, against the two numbers recorded above at a comparable
+size: **181 in tantivy** (963,103 entries, after a rebuild) and **504 in
+SQLite** (571,334 entries). Eight of the 44.5 are the `ids` table, which exists
+only so that a removal and a re-upsert can find the row they are about.
+
+### Query cost against segment count
+
+Best of five, warm, page of 40, count cap 500 — the shape a search box issues.
+
+| query | 1 seg | 2 seg | 11 seg | 16 seg | 32 seg |
+|---|---|---|---|---|---|
+| `""` | 0.03 | 0.07 | 0.37 | 0.50 | 1.17 |
+| `rapor` | 1.02 | 1.15 | 5.15 | 5.76 | 7.52 |
+| `ext:rs` | 0.61 | 0.66 | 3.43 | 3.80 | 5.01 |
+| `kind:code dm:30d` | 0.09 | 0.14 | 2.88 | 4.40 | 6.23 |
+| `under:/…/Projeler ext:rs` | 2.10 | 2.27 | 5.83 | 6.65 | 9.73 |
+| `ext:rs` by size | 44.30 | 44.73 | 44.22 | 44.73 | 45.89 |
+
+**Two segments cost what one costs.** That is the whole compaction policy: fold
+the head, leave the body. Rewriting the body would cost a pass over the entire
+index to move 1.15 ms to 1.02.
+
+### Three things this measurement changed
+
+**The count cap was being spent per segment.** Every segment was handed the
+whole cap of 500 and walked until it had found five hundred matches *of its
+own* — and thirty-two segments doing that is the whole corpus. `rapor` at 32
+segments was **13.48 ms**; with the budget shared it is 4.66. The page limit
+still has to be per segment, because the winning rows may be in any of them,
+but the count does not.
+
+**`ext:` allocated a `String` a row.** `scour_core::ext_of` folds into a fresh
+`String`, which is right for a caller that wants one and wrong a million times
+a query. Split into `ext_str` (borrowed, unfolded) plus the fold, so the index
+folds into its stack buffer and the rule for what counts as an extension still
+lives in exactly one place.
+
+**Every match was materialised in order to be sorted.** Sorting by size built a
+`Hit` — including reconstructing a front-coded path — for each of ~200,000
+matches, to keep forty. Collecting a sort value and a row number instead took
+`ext:rs` by size from **93.9 ms to 44.3**.
+
+Replacing the sort with a selection changed nothing measurable at this size:
+the walk dominates. It stays, but it is not why the query is fast.
+
+### Where the remaining time goes
+
+`ext:rs` by size is 44 ms because it visits all 1,083,334 rows and cannot stop
+— no sort order but the stored one can. That is the case a trigram layer would
+fix, and the file formats do not have to change for it to be added.
+
+`under:/…/Projeler ext:rs` is 2.10 ms at one segment for the same reason in
+miniature: the pair matches too few rows to fill a page early, so the walk runs
+to the end.
