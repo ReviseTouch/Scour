@@ -206,37 +206,37 @@ impl NativeIndex {
                 .retain(|e| !prefixes.iter().any(|p| under(&e.path, p)));
         }
 
-        // Named removals.
-        let removed: Vec<EntryId> = inner.hidden.values().cloned().collect();
-        for id in &removed {
-            for (i, live) in inner.segments.iter_mut().enumerate() {
-                if let Some(row) = live.find(id)? {
-                    live.kill(row);
-                    touched[i] = true;
-                }
+        // Named removals, and the old row of everything being re-upserted.
+        //
+        // One sorted list, one merge a segment. The obvious shape — look each
+        // identity up in each segment — is a binary search per identity per
+        // segment, and a bulk scan makes both numbers large at once: indexing
+        // ten million entries spent most of a hundred seconds in probes that
+        // found nothing. Sorting the identities once puts them in the same
+        // order the segment's table is already in, and the whole check becomes
+        // one sequential pass.
+        //
+        // The old rows are killed *always*, not only when a generation says
+        // they might exist. A cheaper rule exists — during a bulk pass every
+        // existing row carries an older generation and `sweep` will take it —
+        // but it is wrong the moment the engine skips a sweep, and the failure
+        // is a duplicated row rather than an error.
+        let mut wanted: Vec<(u32, EntryId)> = inner
+            .hidden
+            .values()
+            .chain(inner.staged.iter().map(|e| &e.id))
+            .map(|id| (crate::ids::IdMap::key_of(id), id.clone()))
+            .collect();
+        wanted.sort_unstable_by_key(|(h, _)| *h);
+        for (i, live) in inner.segments.iter_mut().enumerate() {
+            if live.kill_ids(&wanted)? > 0 {
+                touched[i] = true;
             }
         }
         let hidden_digests: Vec<u64> = inner.hidden.keys().copied().collect();
         inner
             .staged
             .retain(|e| !hidden_digests.contains(&digest(&e.id)));
-
-        // The old row of everything being re-upserted.
-        //
-        // Always, rather than only when a generation says it might be needed.
-        // A cheaper rule exists — during a bulk pass every existing row carries
-        // an older generation and `sweep` will take it — but it is a rule that
-        // is wrong the moment the engine skips a sweep, and the failure is a
-        // duplicated row rather than an error.
-        let staged_ids: Vec<EntryId> = inner.staged.iter().map(|e| e.id.clone()).collect();
-        for id in &staged_ids {
-            for (i, live) in inner.segments.iter_mut().enumerate() {
-                if let Some(row) = live.find(id)? {
-                    live.kill(row);
-                    touched[i] = true;
-                }
-            }
-        }
 
         if !inner.staged.is_empty() {
             let number = inner.next_segment;
@@ -295,6 +295,15 @@ impl NativeIndex {
     /// costs a second read of what is already mapped and saves holding a
     /// million `Entry` values — about a quarter of a gigabyte at that size.
     fn fold(&self, inner: &mut Inner, which: &[usize]) -> Result<()> {
+        let done = self.fold_inner(inner, which);
+        // After `fold_inner` has returned, and not inside it: the segment it
+        // built is half a gigabyte at ten million entries, and trimming while
+        // that is still held gives back nothing.
+        trim_allocator();
+        done
+    }
+
+    fn fold_inner(&self, inner: &mut Inner, which: &[usize]) -> Result<()> {
         if which.len() < 2 && which.iter().all(|&i| inner.segments[i].dead_rows() == 0) {
             return Ok(());
         }
@@ -336,7 +345,6 @@ impl NativeIndex {
         for n in old {
             Live::erase(&self.dir, n);
         }
-        trim_allocator();
         Ok(())
     }
 

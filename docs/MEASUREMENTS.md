@@ -766,3 +766,75 @@ Nothing above 3.2 ms on 1.2 million files, including the two-character term.
 counting all 52,924 matches exactly. That is proportional to the answer, not to
 the index, and no filter can make it otherwise — the rows have to be counted
 because they all match.
+
+## 2026-08-03 — the curve, from 270,000 to 10,833,334
+
+Everything above is one point. This is the shape.
+
+```bash
+cargo run --release -p scour-index-native --example scale 10000000
+```
+
+Mock tree, so the per-entry size is 50 bytes rather than the 60.6 a real home
+directory measured — real names and paths are longer and more varied. The
+*shape* is what this is for.
+
+| entries | MB | B/entry | index | rebuild | anon MB |
+|---|---|---|---|---|---|
+| 270,834 | 13.1 | 50.8 | 0.30 s | 0.60 s | 1 |
+| 541,667 | 26.1 | 50.6 | 0.60 s | 1.3 s | 1 |
+| 1,083,334 | 52.1 | 50.4 | 1.4 s | 2.7 s | 2 |
+| 2,166,667 | 103.8 | 50.3 | 3.2 s | 6.1 s | 2 |
+| 5,416,667 | 258.3 | 50.0 | 10.1 s | 16.2 s | 3 |
+| 10,833,334 | 515.4 | 49.9 | 22.9 s | 36.9 s | 4 |
+
+**Size is linear and the per-entry cost falls slightly** — bigger blocks pack a
+little better.
+
+**Building is linear.** It was not: see below.
+
+**Memory does not move.** Four megabytes of anonymous memory to serve a
+515 MB index over ten million entries. The index is mapped, so what it costs
+resident is page cache the kernel reclaims whenever it wants to.
+
+### Latency against forty times the corpus
+
+Best of five, warm, a page of forty counting to five hundred.
+
+| query | 270k | 1,083k | 5,416k | 10,833k | ×40 |
+|---|---|---|---|---|---|
+| `""` | 0.03 | 0.04 | 0.11 | 0.19 | 6.3 |
+| `rapor` | 0.59 | 0.59 | 0.70 | 0.85 | **1.4** |
+| `ra` | 0.29 | 0.32 | 0.44 | 0.56 | **1.9** |
+| `ext:rs` | 0.32 | 0.34 | 0.43 | 0.56 | **1.8** |
+| `*.pdf` | 0.32 | 0.34 | 0.43 | 0.56 | **1.8** |
+| `kind:image` | 0.12 | 0.15 | 0.30 | 0.50 | 4.2 |
+| `size:>10mb` | 0.01 | 0.04 | 0.21 | 0.93 | 93 |
+| `under:/…/Projeler ext:rs` | 0.74 | 1.24 | 1.45 | 2.32 | 3.1 |
+
+**Not linear, and for a reason.** A text query costs what its *answer* costs:
+the trigram filter hands the walk a candidate set proportional to the matches,
+not to the corpus, so forty times the files costs 1.4 to 1.9 times the
+milliseconds. What grows is the fixed part — testing 84,000 block ranges
+instead of 2,000 — and that is what `size:>10mb` is showing at 0.93 ms. Linear
+with a very small constant, and still under a millisecond at ten million.
+
+Nothing here exceeds **2.4 ms at 10.8 million entries**.
+
+### Two things this measurement fixed
+
+**Indexing was quadratic in the segment count.** 10.8 million entries took
+**101.9 seconds**, against 24 for half as many. A commit checks every identity
+it writes against every existing segment, and doing that one identity at a time
+is a binary search per identity per segment — 577 million probes over the
+course of the load, almost all finding nothing.
+
+The identities are now sorted once and merged against the segment's table,
+which is already in that order: one sequential pass a segment instead of a
+hundred thousand searches. **101.9 → 22.9 s**, and linear.
+
+**`malloc_trim` was running while the thing it should release was still held.**
+A fold calls it after writing the new segment — but the new segment's bytes,
+half a gigabyte at this size, were still alive until the function returned.
+Moving the trim outside took the resident cost of serving ten million entries
+from **360 MB to 4**.

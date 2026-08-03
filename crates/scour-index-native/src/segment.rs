@@ -154,14 +154,91 @@ impl Live {
     /// actually stored in the columns, so a digest collision costs one extra
     /// column read and cannot produce a wrong answer.
     pub fn find(&self, id: &EntryId) -> Result<Option<usize>> {
+        // The identity table first, and the segment view only if it says there
+        // is something to confirm.
+        //
+        // A commit probes every entry it writes against every existing segment,
+        // and almost every one of those probes finds nothing — so what the
+        // probe costs *when it finds nothing* is the whole cost. Opening the
+        // view parses four headers; doing that before the binary search made
+        // indexing ten million entries quadratic in the segment count.
+        let rows: Vec<usize> = self
+            .ids()?
+            .candidates(id)
+            .map(|r| r as usize)
+            .filter(|&r| self.is_alive(r))
+            .collect();
+        if rows.is_empty() {
+            return Ok(None);
+        }
         let seg = self.view()?;
-        for row in self.ids()?.candidates(id) {
-            let row = row as usize;
-            if self.is_alive(row) && seg.entry_id(row) == *id {
-                return Ok(Some(row));
+        Ok(rows.into_iter().find(|&row| seg.entry_id(row) == *id))
+    }
+
+    /// Kill the rows holding any of these identities. Returns how many died.
+    ///
+    /// `wanted` must be sorted by [`IdMap::key_of`]. Both sides are then in the
+    /// same order and this is a merge, not a hundred thousand binary searches:
+    /// a commit checks everything it writes against every existing segment, and
+    /// doing that one identity at a time is quadratic in the segment count —
+    /// measured at a hundred seconds to index ten million entries, almost all
+    /// of it in probes that found nothing.
+    pub fn kill_ids(&mut self, wanted: &[(u32, EntryId)]) -> Result<u64> {
+        if wanted.is_empty() || self.rows == 0 {
+            return Ok(0);
+        }
+        let victims: Vec<usize> = {
+            let ids = self.ids()?;
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < ids.len() && j < wanted.len() {
+                let (h, row) = ids.at(i);
+                match h.cmp(&wanted[j].0) {
+                    std::cmp::Ordering::Less => i += 1,
+                    std::cmp::Ordering::Greater => j += 1,
+                    std::cmp::Ordering::Equal => {
+                        // A run of equal hashes on each side. Both are tiny —
+                        // a collision in a 32-bit key is rare and a repeated
+                        // identity is a bug — so the cross product is cheap.
+                        let mut i2 = i;
+                        while i2 < ids.len() && ids.at(i2).0 == h {
+                            i2 += 1;
+                        }
+                        let mut j2 = j;
+                        while j2 < wanted.len() && wanted[j2].0 == h {
+                            j2 += 1;
+                        }
+                        for k in i..i2 {
+                            for w in j..j2 {
+                                pairs.push((ids.at(k).1 as usize, w));
+                            }
+                        }
+                        let _ = row;
+                        i = i2;
+                        j = j2;
+                    }
+                }
+            }
+            if pairs.is_empty() {
+                Vec::new()
+            } else {
+                // Only now is the segment opened, and only to confirm that the
+                // half-digest was not a collision.
+                let seg = self.view()?;
+                pairs
+                    .into_iter()
+                    .filter(|&(row, w)| self.is_alive(row) && seg.entry_id(row) == wanted[w].1)
+                    .map(|(row, _)| row)
+                    .collect()
+            }
+        };
+        let mut gone = 0;
+        for row in victims {
+            if self.kill(row) {
+                gone += 1;
             }
         }
-        Ok(None)
+        Ok(gone)
     }
 
     /// Every live entry, in stored order. Used by a merge.

@@ -116,6 +116,17 @@ impl<'a> IdMap<'a> {
         self.len == 0
     }
 
+    /// The `i`-th pair, in stored order: hash first, then row.
+    pub fn at(&self, i: usize) -> (u32, u32) {
+        (self.hash_at(i), self.row_at(i))
+    }
+
+    /// The half-digest a lookup is keyed on. Public so a caller holding many
+    /// identities can sort them the same way and merge rather than search.
+    pub fn key_of(id: &EntryId) -> u32 {
+        narrow(digest(id))
+    }
+
     fn hash_at(&self, i: usize) -> u32 {
         let at = i * 8;
         u32::from_le_bytes(self.pairs[at..at + 4].try_into().expect("4 bytes"))
