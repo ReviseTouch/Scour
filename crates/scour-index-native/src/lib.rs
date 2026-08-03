@@ -7,14 +7,14 @@
 //!
 //! A general search engine carries machinery for a different problem —
 //! relevance, phrases, stemming, positions — and that machinery is what costs.
-//! Measured on a real home directory of 1,199,919 entries, through the same
-//! service and the same command line as tantivy: **59.6** bytes an entry here
-//! against **186.6**, a first scan of 7.9 seconds against 34.5, a rebuild of
-//! 2.7 seconds against forty, and 100 MB resident against 203.
+//! Measured on a real home directory of 1,209,503 entries, through the same
+//! service and the same command line as tantivy: **60.6** bytes an entry here
+//! against **186.6**, a first scan of 7.5 seconds against 34.5, a rebuild of
+//! 2.5 seconds against forty, and about 100 MB resident against 203.
 //!
 //! A page of forty counting to five hundred — what a search box asks for —
-//! answers in **0.24 to 9.7 ms**, and the slowest of those is a two-character
-//! term, which a trigram index cannot answer at all. See
+//! answers in **0.26 to 3.2 ms** across every query measured, including the
+//! two-character term a trigram index has to refuse outright. See
 //! `docs/MEASUREMENTS.md`.
 //!
 //! ## Where the space goes, and why

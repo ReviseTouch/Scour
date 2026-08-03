@@ -133,6 +133,14 @@ pub struct SearchResponse {
     /// match. Reported rather than hidden, because a design whose fast path is
     /// silently not being taken looks exactly like one that is.
     pub fast_path: bool,
+    /// Rows the index had to look at, when it can say. Zero when it cannot.
+    ///
+    /// Reported for the same reason as `fast_path`: an index that has quietly
+    /// stopped skipping looks exactly like one that never could, and the number
+    /// is what tells them apart. It is also what turns "why is this query slow"
+    /// from a guess into a subtraction.
+    #[serde(default)]
+    pub rows_visited: u64,
 }
 
 /// What to group a facet count by.

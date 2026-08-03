@@ -58,7 +58,15 @@ pub fn human(reply: &Response) -> Result<()> {
                 "{} of {total} in {:.2} ms{}",
                 r.hits.len(),
                 r.took_us as f64 / 1000.0,
-                if r.fast_path { "" } else { " (full scan)" }
+                if r.fast_path {
+                    if r.rows_visited > 0 {
+                        format!(" ({} rows)", r.rows_visited)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    " (full scan)".to_owned()
+                }
             );
         }
         Response::Count { total, capped } => {

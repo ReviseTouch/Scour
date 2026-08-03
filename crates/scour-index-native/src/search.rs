@@ -30,7 +30,7 @@
 use memchr::memmem::Finder;
 use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Key, Kind, Match, Meta, SortKey, SourceId};
 
-use crate::columns::{ColumnBlocks, Field};
+use crate::columns::{BLOCK, ColumnBlocks, Field};
 use crate::dirs::{DirScope, DirTable};
 use crate::names::{Folded, NameArena};
 use crate::trigram::TrigramIndex;
@@ -49,6 +49,23 @@ pub struct Segment<'a> {
 impl<'a> Segment<'a> {
     pub fn rows(&self) -> usize {
         self.cols.rows().min(self.names.rows())
+    }
+
+    /// Is any row of this block still live?
+    ///
+    /// Sixteen bytes of the bitmap, read once instead of a hundred and
+    /// twenty-eight times. A segment that a sweep emptied is otherwise walked
+    /// in full on every query until something rebuilds it — which is exactly
+    /// what a real index was found doing, 1,204,270 rows a query to return
+    /// nothing.
+    pub fn block_alive(&self, block: usize) -> bool {
+        let from = block * BLOCK / 8;
+        let to = (from + BLOCK / 8).min(self.alive.len());
+        match self.alive.get(from..to) {
+            Some(b) => b.iter().any(|&x| x != 0),
+            // An absent bitmap means nothing has been deleted yet.
+            None => self.alive.is_empty(),
+        }
     }
 
     pub fn is_alive(&self, row: usize) -> bool {
@@ -230,6 +247,19 @@ fn ext_bytes(name: &[u8]) -> &[u8] {
     }
 }
 
+/// Can `cmp value` hold for any number in `[lo, hi]`?
+fn admits(cmp: Cmp, value: i64, span: i64, lo: i64, hi: i64) -> bool {
+    match cmp {
+        // A dated `=` is a half-open window, not a point.
+        Cmp::Eq if span > 1 => value <= hi && value.saturating_add(span) > lo,
+        Cmp::Eq => lo <= value && value <= hi,
+        Cmp::Lt => lo < value,
+        Cmp::Le => lo <= value,
+        Cmp::Gt => hi > value,
+        Cmp::Ge => hi >= value,
+    }
+}
+
 /// The blocks a search has to look at, if the trigram index can say.
 ///
 /// Only a clause that is one plain `NameHas` counts. An OR would need the union
@@ -344,6 +374,41 @@ impl Plan {
 
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
+    }
+
+    /// Could any row of this block match?
+    ///
+    /// Two comparisons against the range the block holds, which is stored and
+    /// needs no decoding. It can only reject: a block whose range admits the
+    /// filter has every row tested exactly as before, so this turns misses into
+    /// skips and never a match into a miss.
+    fn block_possible(&self, seg: &Segment<'_>, block: usize) -> bool {
+        for c in &self.clauses {
+            let [(false, test)] = &c.alts[..] else {
+                continue;
+            };
+            let admits = match test {
+                Test::Never => false,
+                Test::Num {
+                    field,
+                    cmp,
+                    value,
+                    span,
+                } => match seg.cols.block_range(*field, block) {
+                    Some((lo, hi)) => admits(*cmp, *value, *span, lo, hi),
+                    None => true,
+                },
+                Test::DirIn(scope) => match seg.cols.block_range(Field::DirId, block) {
+                    Some((lo, hi)) if lo >= 0 => scope.intersects(lo as u32, hi as u32),
+                    _ => true,
+                },
+                _ => true,
+            };
+            if !admits {
+                return false;
+            }
+        }
+        true
     }
 
     /// Does answering this require reading names at all?
@@ -602,38 +667,51 @@ pub fn run_with(
         true
     };
 
-    match &plan.candidates {
-        // Nothing here reads a name, so nothing here reads the arena.
-        None if !plan.needs_name() && !has_veto => {
-            for row in 0..seg.rows() {
+    // Which blocks are worth opening at all. Two filters, and both can only
+    // remove: the trigram index says which blocks could contain the text, and
+    // the zone map says which could satisfy the numbers. What survives is
+    // walked exactly as it always was.
+    let n_blocks = seg.rows().div_ceil(BLOCK);
+    let blocks: Vec<u32> = match &plan.candidates {
+        Some(c) => c
+            .iter()
+            .copied()
+            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
+            .collect(),
+        None => (0..n_blocks as u32)
+            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
+            .collect(),
+    };
+
+    // Nothing here reads a name, so nothing here reads the arena.
+    let by_row = !plan.needs_name() && !has_veto;
+    let mut i = 0usize;
+    'runs: while i < blocks.len() {
+        // Adjacent blocks are walked as one, so a dense set costs no more
+        // seeking than a full walk would.
+        let mut j = i;
+        while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
+            j += 1;
+        }
+        let from = blocks[i] as usize * BLOCK;
+        let to = ((blocks[j] as usize + 1) * BLOCK).min(seg.rows());
+        if by_row {
+            for row in from..to {
                 if !visit(row, b"") {
-                    break;
+                    break 'runs;
                 }
             }
-        }
-        None => seg.names.walk(0, visit),
-        // Runs of adjacent blocks are walked as one, so a dense candidate set
-        // costs no more seeking than a full walk would.
-        Some(blocks) => {
-            let mut i = 0usize;
-            while i < blocks.len() {
-                let mut j = i;
-                while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
-                    j += 1;
-                }
-                let from = blocks[i] as usize * crate::columns::BLOCK;
-                let to = (blocks[j] as usize + 1) * crate::columns::BLOCK;
-                let mut go = true;
-                seg.names.walk_range(from, to, |row, name| {
-                    go = visit(row, name);
-                    go
-                });
-                if !go {
-                    break;
-                }
-                i = j + 1;
+        } else {
+            let mut go = true;
+            seg.names.walk_range(from, to, |row, name| {
+                go = visit(row, name);
+                go
+            });
+            if !go {
+                break 'runs;
             }
         }
+        i = j + 1;
     }
 
     if !stored_order {

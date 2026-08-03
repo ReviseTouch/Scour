@@ -63,10 +63,10 @@ const MAX_STAGED: usize = 100_000;
 const FACET_SCAN_CAP: usize = 200_000;
 
 const META_FILE: &str = "native-index.json";
-/// Bumped when the files change shape. Version 2 added the trigram filter;
-/// an index without it is refused rather than opened and quietly walked in
-/// full.
-const FORMAT: u32 = 2;
+/// Bumped when the files change shape. Version 2 added the trigram filter and
+/// version 3 the per-block minimum and maximum; an index without them is
+/// refused rather than opened and quietly walked in full.
+const FORMAT: u32 = 3;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -256,8 +256,31 @@ impl NativeIndex {
         }
         inner.hidden.clear();
         inner.hidden_prefixes.clear();
+        self.drop_empty(inner);
         self.save_meta(inner)?;
         Ok(())
+    }
+
+    /// Erase segments nothing is left alive in.
+    ///
+    /// Not housekeeping — a correctness-shaped performance bug. A full rescan
+    /// stamps a new generation and the sweep kills every row of the old one,
+    /// and until this ran the emptied segment stayed in the list and was walked
+    /// end to end by every query. Measured on a real index: 1,204,270 rows read
+    /// per search to produce nothing.
+    fn drop_empty(&self, inner: &mut Inner) {
+        let mut gone = Vec::new();
+        inner.segments.retain(|s| {
+            if s.rows() > 0 && s.live_rows() == 0 {
+                gone.push(s.number);
+                false
+            } else {
+                true
+            }
+        });
+        for n in gone {
+            Live::erase(&self.dir, n);
+        }
     }
 
     /// Fold these segments into one, dropping rows that are no longer live.
@@ -326,6 +349,15 @@ impl NativeIndex {
         let mut out: Vec<Vec<usize>> = by_gen.into_values().collect();
         out.sort_by_key(|g| std::cmp::Reverse(g.len()));
         out
+    }
+
+    /// Hand each segment to `f`. For diagnostics that need to see inside.
+    pub fn for_each_segment(&self, f: &mut dyn FnMut(usize, &Segment<'_>)) -> Result<()> {
+        let inner = self.inner.read();
+        for (i, live) in inner.segments.iter().enumerate() {
+            f(i, &live.view()?);
+        }
+        Ok(())
     }
 
     /// Run `f` for every live row that the query accepts, across all segments.
@@ -577,6 +609,8 @@ impl Index for NativeIndex {
                 live.save_alive(&self.dir)?;
             }
         }
+        self.drop_empty(&mut inner);
+        self.save_meta(&inner)?;
         Ok(gone)
     }
 
@@ -652,6 +686,7 @@ impl Index for NativeIndex {
             // a query that had stopped after four hundred rows out of a million
             // report a full scan.
             fast_path: rows > 0 && visited < rows,
+            rows_visited: visited,
         })
     }
 

@@ -686,3 +686,83 @@ What is not in this table, and was the actual reason for the rewrite, is the
 coupling: an engine reachable only through one GUI, a store that had to be
 SQLite, a watcher that had to be Linux. `trait Index` is why both of these
 numbers could be taken through the same command line an hour apart.
+
+## 2026-08-03 — the zone map, and the segment that was not there
+
+`ab` at 33 ms and `kind:image` at 15 turned out to be two different problems,
+and the second one was not the query.
+
+### A segment a sweep had emptied was still being walked
+
+`scour search "" -n 5` reported **1,304,270 rows visited** on an index of
+1,204,537 entries. The `probe` example, written to stop guessing, said why:
+
+```
+query ""  cap 100000
+  seg 0: 1204270 rows, visited 1204270, counted 0, hits 0, stop false
+  seg 1: 1204537 rows, visited  100000, counted 100000, hits 40, stop true
+```
+
+Segment 0 held nothing alive. A rescan stamps a new generation, the sweep kills
+every row of the old one — and the emptied segment stayed in the list, read end
+to end by every query until a rebuild happened to remove it.
+
+Two fixes, one for each level:
+
+* **A segment with no live row is erased** by the flush and by the sweep,
+  rather than waiting for a rebuild.
+* **A block with no live row is skipped**, on the strength of sixteen bytes of
+  the bitmap read once instead of a hundred and twenty-eight times. This is what
+  makes a *partly* deleted segment cheap, which the first fix does not cover.
+
+Every number recorded between the trigram commit and this one was taken on an
+index carrying that ballast, and is wrong by however much of it was there.
+
+### The zone map
+
+Each column block already stored a minimum. It now stores the true maximum
+beside it — eight bytes a block a column, **one byte an entry** — so a numeric
+filter rejects a hundred and twenty-eight rows with two comparisons.
+
+The width-derived bound was far too loose to do this: a block of file sizes
+spanning a kilobyte to a megabyte has twenty bits of width, so its derived
+maximum is a megabyte whatever it actually holds.
+
+`under:` uses it too, on the directory column, because a scope is a range.
+
+### Where it landed
+
+1,209,503 entries, one segment, 69.88 MiB — **60.6 bytes an entry**.
+
+| query | before | after | tantivy |
+|---|---|---|---|
+| `size:>10mb` | 19.50 | **4.02** | 20.67 |
+| `kind:image` | 15.45 | **8.18** | 51.97 |
+| `under:/…/Projeler ext:rs` | 4.03 | **1.57** | 68.90 |
+| `kind:code dm:7d` | 8.93 | **5.49** | 75.69 |
+| `ext:rs` | 3.37 | 3.04 | 80.03 |
+| `rapor` | 0.24 | 0.26 | 1.73 |
+| `ab` | 33.20 | 30.52 | *refused* |
+
+### What a search box actually feels like
+
+A page of forty counting to five hundred, typing one letter at a time:
+
+| keystroke | rows read | ms |
+|---|---|---|
+| `r` | 3,965 | 1.01 |
+| `ra` | 25,272 | 2.00 |
+| `rap` | 39,028 | 2.64 |
+| `rapo` | 11,264 | 0.54 |
+| `rapor` | 4,480 | 0.26 |
+| `ab` | 35,771 | **1.79** |
+| `abc` | 56,830 | 2.61 |
+| `kind:image` | 130,420 | 3.18 |
+| `size:>10mb` | 35,988 | 1.92 |
+
+Nothing above 3.2 ms on 1.2 million files, including the two-character term.
+
+`ab` at 30 ms remains, and it is the honest cost of a different question:
+counting all 52,924 matches exactly. That is proportional to the answer, not to
+the index, and no filter can make it otherwise — the rows have to be counted
+because they all match.

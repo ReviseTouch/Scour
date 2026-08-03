@@ -75,6 +75,17 @@ impl Fixture {
             .collect()
     }
 
+    fn expected_count(&self, q: &str) -> u64 {
+        brute_force(
+            &self.entries,
+            &parse_at(q, NOW),
+            SortKey::Modified,
+            true,
+            usize::MAX,
+        )
+        .len() as u64
+    }
+
     fn check(&self, q: &str, sort: SortKey, desc: bool) {
         assert_eq!(
             self.search(q, sort, desc, 50),
@@ -442,4 +453,75 @@ fn an_extension_and_a_glob_narrow_the_same_way_a_substring_does() {
             "narrowing changed the answer for {q:?}"
         );
     }
+}
+
+#[test]
+fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
+    // The zone map. A block whose sizes are all under a megabyte cannot hold a
+    // file over one, and rejecting it costs two comparisons against numbers
+    // that were already in the file.
+    let f = Fixture::new(50_000);
+    let seg = f.segment();
+    for q in ["size:>1mb", "kind:image", "folder:", "dc:>2024-01-01"] {
+        let plan = Plan::compile(&parse_at(q, NOW), &seg).expect("compile");
+        let found = run(
+            &seg,
+            &plan,
+            Wanted {
+                sort: SortKey::Modified,
+                descending: true,
+                offset: 0,
+                limit: 40,
+                count_cap: 10_000_000,
+            },
+        );
+        assert_eq!(
+            found.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+            f.expected(q, SortKey::Modified, true, 40),
+            "skipping changed the answer for {q:?}"
+        );
+    }
+
+    // And it has to actually skip, or it is only a slower way to be correct.
+    // Calibrated from the fixture rather than guessed: no file is larger than
+    // the largest file, so every block can be rejected on its maximum alone.
+    let biggest = f
+        .entries
+        .iter()
+        .map(|e| e.meta.size)
+        .max()
+        .expect("entries");
+    let plan = Plan::compile(&parse_at(&format!("size:>{biggest}"), NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Modified,
+            descending: true,
+            offset: 0,
+            limit: 40,
+            count_cap: 10_000_000,
+        },
+    );
+    assert_eq!(
+        found.rows_visited, 0,
+        "every block should have been rejected"
+    );
+    assert_eq!(found.total, 0);
+
+    // A block of files cannot hold a directory, which is the same test on a
+    // column that only ever holds nought or one.
+    let plan = Plan::compile(&parse_at("folder:", NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Modified,
+            descending: true,
+            offset: 0,
+            limit: 40,
+            count_cap: 10_000_000,
+        },
+    );
+    assert_eq!(found.total, f.expected_count("folder:"));
 }

@@ -656,3 +656,87 @@ fn an_empty_index_answers_nothing_rather_than_failing() {
     index.commit().expect("an empty commit is not an error");
     index.maintain(Maintenance::Rebuild).expect("empty rebuild");
 }
+
+#[test]
+fn a_segment_a_sweep_emptied_stops_costing_anything() {
+    // The bug this exists for, found on a real index rather than in a test: a
+    // rescan stamps a new generation, the sweep kills every row of the old one,
+    // and the emptied segment stays in the list. Every query then reads it end
+    // to end — 1,204,270 rows to produce nothing — until a rebuild happens to
+    // remove it.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let first: Vec<Entry> = (0..2_000)
+        .map(|i| entry(&format!("/w/old{i}.rs"), 1_000 + i, i as u64))
+        .collect();
+    index
+        .apply(&mut first.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+    assert_eq!(index.stats().expect("stats").segments, 1);
+
+    // A rescan that finds a different set entirely.
+    let g = index.begin_generation().expect("generation");
+    let second: Vec<Entry> = (0..10)
+        .map(|i| entry(&format!("/w/new{i}.rs"), 5_000 + i, 10_000 + i as u64))
+        .collect();
+    index
+        .apply(&mut second.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.sweep("/w", g).expect("sweep");
+
+    let s = index.stats().expect("stats");
+    assert_eq!(s.entries, 10);
+    assert_eq!(s.segments, 1, "the emptied segment should be gone");
+
+    let res = index
+        .search(&SearchRequest {
+            page: Page::new(0, 40),
+            ..Default::default()
+        })
+        .expect("search");
+    assert_eq!(res.hits.len(), 10);
+    assert!(
+        res.rows_visited <= 128,
+        "read {} rows for ten entries",
+        res.rows_visited
+    );
+}
+
+#[test]
+fn deleted_rows_stop_being_walked_before_they_are_erased() {
+    // The same idea one level down: a block with no live row is skipped on the
+    // strength of sixteen bytes of the bitmap, whether or not the segment as a
+    // whole still has something in it.
+    let f = Fixture::new(8_000, 8_000);
+    let doomed: Vec<EntryId> = f
+        .entries
+        .iter()
+        .take(f.entries.len() / 2)
+        .map(|e| e.id.clone())
+        .collect();
+    f.index
+        .apply(&mut doomed.into_iter().map(Change::Remove))
+        .expect("apply");
+    f.index.commit().expect("commit");
+
+    let res = f
+        .index
+        .search(&SearchRequest {
+            query: parse_at("zzzznothing", NOW),
+            page: Page {
+                offset: 0,
+                limit: 40,
+                count_cap: 10_000_000,
+            },
+            ..Default::default()
+        })
+        .expect("search");
+    assert_eq!(res.hits.len(), 0);
+    assert!(
+        res.rows_visited * 2 < f.entries.len() as u64,
+        "visited {} of {}",
+        res.rows_visited,
+        f.entries.len()
+    );
+}

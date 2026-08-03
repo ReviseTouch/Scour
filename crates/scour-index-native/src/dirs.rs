@@ -232,6 +232,16 @@ impl DirScope {
         self.own == Some(id) || self.below.contains(&id)
     }
 
+    /// Could any number between `lo` and `hi` be in this scope?
+    ///
+    /// For the zone map: a block whose directory numbers all fall outside a
+    /// scope holds nothing under it, and a hundred and twenty-eight rows go
+    /// without being looked at.
+    pub fn intersects(&self, lo: u32, hi: u32) -> bool {
+        self.own.is_some_and(|o| lo <= o && o <= hi)
+            || (self.below.start <= hi && self.below.end > lo)
+    }
+
     /// Nothing at all — what an unknown path resolves to.
     pub fn is_empty(&self) -> bool {
         self.own.is_none() && self.below.is_empty()

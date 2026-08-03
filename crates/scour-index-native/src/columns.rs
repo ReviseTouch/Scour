@@ -136,9 +136,19 @@ impl ColumnWriter {
             vals.clear();
             vals.extend(self.pending.iter().map(|r| r[c]));
             let (min, bits) = varint::width_for(&vals);
+            let max = vals.iter().copied().max().unwrap_or(min);
             let blocks = &mut self.blocks[c];
             self.offsets[c].push(blocks.len() as u32);
             blocks.extend_from_slice(&min.to_le_bytes());
+            // The *true* maximum, not `min + 2^bits - 1`.
+            //
+            // Eight bytes a block a column — one byte an entry — and it is what
+            // lets a numeric filter reject a hundred and twenty-eight rows with
+            // one comparison. The width-derived bound is far too loose to do
+            // that: a block of file sizes spanning a kilobyte to a megabyte has
+            // twenty bits of width, so the derived maximum is a megabyte
+            // whatever the block actually holds.
+            blocks.extend_from_slice(&max.to_le_bytes());
             blocks.push(bits as u8);
             varint::pack(blocks, &vals, min, bits);
         }
@@ -157,8 +167,8 @@ impl ColumnWriter {
     ///
     /// Layout: a header of (row count, column count), then per column a
     /// 64-bit offset to its section. A section is a count of blocks, a 32-bit
-    /// offset for each, and then the blocks — each an 8-byte minimum, a byte
-    /// of width, and the packed values.
+    /// offset for each, and then the blocks — each an 8-byte minimum, an 8-byte
+    /// maximum, a byte of width, and the packed values.
     ///
     /// The offset array is what makes a read O(1), and it was added after a
     /// measurement rather than by foresight. Blocks are variable width, so
@@ -244,9 +254,34 @@ impl<'a> ColumnBlocks<'a> {
         let start = u32::from_le_bytes(self.bytes.get(idx..idx + 4)?.try_into().ok()?) as usize;
         let at = section + 4 + n_blocks * 4 + start;
         let min = i64::from_le_bytes(self.bytes.get(at..at + 8)?.try_into().ok()?);
-        let bits = *self.bytes.get(at + 8)? as u32;
-        let packed = self.bytes.get(at + 9..)?;
+        let bits = *self.bytes.get(at + 16)? as u32;
+        let packed = self.bytes.get(at + 17..)?;
         Some(varint::unpack_one(packed, min, bits, row % BLOCK))
+    }
+
+    /// The range of values a block holds, without decoding any of them.
+    ///
+    /// The zone map. A filter that cannot be satisfied anywhere in `[min, max]`
+    /// rejects a hundred and twenty-eight rows with two comparisons, and the
+    /// walk never touches their names, their paths or any other column.
+    ///
+    /// It can only reject. A block whose range admits the filter still has
+    /// every row tested exactly as before, so this cannot turn a match into a
+    /// miss — only a miss into a skip.
+    pub fn block_range(&self, field: Field, block: usize) -> Option<(i64, i64)> {
+        let at = field.index() * 8;
+        let section = u64::from_le_bytes(self.offsets.get(at..at + 8)?.try_into().ok()?) as usize;
+        let n_blocks =
+            u32::from_le_bytes(self.bytes.get(section..section + 4)?.try_into().ok()?) as usize;
+        if block >= n_blocks {
+            return None;
+        }
+        let idx = section + 4 + block * 4;
+        let start = u32::from_le_bytes(self.bytes.get(idx..idx + 4)?.try_into().ok()?) as usize;
+        let at = section + 4 + n_blocks * 4 + start;
+        let min = i64::from_le_bytes(self.bytes.get(at..at + 8)?.try_into().ok()?);
+        let max = i64::from_le_bytes(self.bytes.get(at + 8..at + 16)?.try_into().ok()?);
+        Some((min, max))
     }
 }
 
