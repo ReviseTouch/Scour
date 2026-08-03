@@ -82,7 +82,7 @@ carries the `id` of the call it answers. Requests:
 | `facets` | | `query`, `by`: `kind` / `ext{top}` / `dir{path,top}` |
 | `tree` | | `path`, `depth`, `limit` — bounded *per level* |
 | `stat` | | `path`; answered from the source, so a new file is never missing |
-| `explain` | | `query` → how it was understood, without running it |
+| `explain` | | `query`, optional `cursor` → the sentence, the coloured `spans`, and `completions` at the caret — without running it |
 | `sources` | | what is indexed, and each source's `Caps` |
 | `status` | | numbers and flags only, never a sentence |
 | `stats` | | index size, segments, unsorted tail |

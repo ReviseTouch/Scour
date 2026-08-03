@@ -24,4 +24,4 @@
 mod engine;
 mod tree;
 
-pub use engine::{Engine, EngineOptions};
+pub use engine::{Engine, EngineOptions, Explained};

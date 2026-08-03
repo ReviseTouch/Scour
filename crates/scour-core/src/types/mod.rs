@@ -5,6 +5,7 @@ mod error;
 mod search;
 mod source;
 mod status;
+mod syntax;
 
 pub use ast::{Ast, Cmp, Group, Match, TimeField};
 pub use change::Change;
@@ -16,3 +17,4 @@ pub use search::{
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};
 pub use status::{Status, TreeNode};
+pub use syntax::{Completion, CompletionKind, Role, Span};

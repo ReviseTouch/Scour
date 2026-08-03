@@ -12,8 +12,8 @@
 //! the language to mean three things.
 
 use scour_core::{
-    Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
-    SearchResponse, SortKey, SourceInfo, Status, TreeNode,
+    Completion, Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
+    SearchResponse, SortKey, SourceInfo, Span, Status, TreeNode,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,13 +84,23 @@ pub enum Request {
     Stat {
         path: String,
     },
-    /// Read a query back as a sentence, without running it.
+    /// Read a query back — as a sentence, as coloured pieces, and as what
+    /// could be typed next. Nothing is run.
     ///
     /// The parser is forgiving by design: a mistyped field is searched for as
     /// literal text rather than rejected. This is how a caller checks what its
     /// query was actually understood to mean.
+    ///
+    /// It is also what a search box calls on every keystroke, which is why the
+    /// colouring lives here and not in the frontend. A frontend that tokenised
+    /// the query itself would be a second parser, and the day the two
+    /// disagreed the box would be confidently colouring a lie.
     Explain {
         query: String,
+        /// Where the caret is, as a byte offset, when completions are wanted.
+        /// Absent means none are — `scour explain` has no caret.
+        #[serde(default)]
+        cursor: Option<u32>,
     },
     /// The configured sources and what each can do.
     Sources {},
@@ -149,6 +159,18 @@ pub enum Response {
         description: String,
         /// True when the query asks for document contents.
         needs_content: bool,
+        /// The query cut into runs, in order, covering every byte of it.
+        ///
+        /// A frontend maps a [`Role`] to a colour and does nothing else. Two
+        /// of the roles say *this is not what you think it is*, which is the
+        /// only way a forgiving parser can be honest about what it did.
+        ///
+        /// [`Role`]: scour_core::Role
+        #[serde(default)]
+        spans: Vec<Span>,
+        /// What could be typed at `cursor`. Empty unless one was given.
+        #[serde(default)]
+        completions: Vec<Completion>,
     },
     Sources {
         sources: Vec<SourceInfo>,
@@ -249,6 +271,7 @@ mod tests {
             },
             Request::Explain {
                 query: "size:abc".into(),
+                cursor: Some(4),
             },
             Request::Sources {},
             Request::Status {},
@@ -308,6 +331,8 @@ mod tests {
             Response::Explain {
                 description: "everything".into(),
                 needs_content: false,
+                spans: vec![scour_core::Span::new(0, 3, scour_core::Role::Text)],
+                completions: Vec::new(),
             },
             Response::Sources {
                 sources: Vec::new(),

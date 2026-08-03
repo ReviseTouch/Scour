@@ -72,10 +72,13 @@ rejected: it is built on trigrams.
 
 * The parser never fails. An unrecognised field, or one whose value will not
   parse, is searched for as literal text — `size:abc` looks for the string
-  "size:abc". If a query returns something unexpected, ask for its description
-  to see how it was actually read.
+  "size:abc", and so does `boyut:1mb`, because there is no `boyut` field. If a
+  query returns something unexpected, ask for its description to see how it was
+  actually read.
+* Field names are case-insensitive and folded like everything else, so `EXT:`,
+  `Ext:` and `ext:` are one field, and `TÜR:` is `tür:`.
 * `C:/Users` and `http://example` are not fields: a field name is two or more
-  ASCII letters.
+  letters, of any alphabet, and nothing else.
 * Result counts are capped by default. A response marked `capped` means "at
   least this many", not "exactly this many".
 

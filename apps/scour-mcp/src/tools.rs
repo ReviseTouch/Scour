@@ -196,7 +196,10 @@ impl Scour {
                        use this when a search returns something surprising."
     )]
     fn scour_explain(&self, Parameters(a): Parameters<QueryArgs>) -> String {
-        self.call(Request::Explain { query: a.query })
+        self.call(Request::Explain {
+            query: a.query,
+            cursor: None,
+        })
     }
 
     #[tool(description = "The query language reference. Read this before composing a query.")]

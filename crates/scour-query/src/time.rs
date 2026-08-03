@@ -26,6 +26,20 @@ pub fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Can a time field read this value, and to what instant?
+///
+/// The same judgement [`parse_time`] makes, without a field to attach it to —
+/// the highlighter has to decide whether `dm:soon` is a date before it knows
+/// whether the term survives, and asking two different questions there is how
+/// a search box ends up colouring a term green that the parser then reads as
+/// text.
+pub(crate) fn parse_time_value(v: &str, now: i64) -> Option<i64> {
+    match parse_time(TimeField::Modified, v, now) {
+        Some(Match::Time(_, _, at)) => Some(at),
+        _ => None,
+    }
+}
+
 pub(crate) fn parse_time(field: TimeField, v: &str, now: i64) -> Option<Match> {
     let (cmp, rest) = split_cmp(v);
     let rest = rest.trim();

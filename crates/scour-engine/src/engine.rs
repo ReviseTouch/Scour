@@ -8,10 +8,20 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use parking_lot::{Mutex, RwLock};
 use scour_core::{
-    Change, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Index, IndexStats,
-    MaintReport, Maintenance, Page, Result, ScanOptions, SearchRequest, SearchResponse, SortKey,
-    Source, SourceInfo, Status, TreeNode, WatchHandle,
+    Change, Completion, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Index,
+    IndexStats, MaintReport, Maintenance, Page, Result, ScanOptions, SearchRequest, SearchResponse,
+    SortKey, Source, SourceInfo, Span, Status, TreeNode, WatchHandle,
 };
+
+/// One reading of a query: what it means, what its pieces are, and what could
+/// come next.
+#[derive(Debug, Clone, Default)]
+pub struct Explained {
+    pub description: String,
+    pub needs_content: bool,
+    pub spans: Vec<Span>,
+    pub completions: Vec<Completion>,
+}
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -233,10 +243,23 @@ impl Engine {
         })
     }
 
-    /// Read a query back without running it.
-    pub fn explain(&self, query: &str) -> (String, bool) {
+    /// Read a query back without running it: what it means, what its pieces
+    /// are, and what could follow the caret.
+    ///
+    /// One call rather than three because a search box wants all of it on the
+    /// same keystroke, and because the three answers have to agree with each
+    /// other — they are one reading of the query, not three.
+    pub fn explain(&self, query: &str, cursor: Option<u32>) -> Explained {
         let ast = scour_query::parse(query);
-        (scour_query::describe(&ast), ast.needs_content())
+        Explained {
+            description: scour_query::describe(&ast),
+            needs_content: ast.needs_content(),
+            spans: scour_query::spans(query),
+            completions: match cursor {
+                Some(at) => scour_query::complete(query, at as usize),
+                None => Vec::new(),
+            },
+        }
     }
 
     /// One entry, from the index if it is there and from the source if not.

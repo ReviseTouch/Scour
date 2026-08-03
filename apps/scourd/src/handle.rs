@@ -42,11 +42,13 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
             root: engine.tree(&path, depth, limit)?,
         },
         Request::Stat { path } => Response::Stat(engine.stat(&path)?),
-        Request::Explain { query } => {
-            let (description, needs_content) = engine.explain(&query);
+        Request::Explain { query, cursor } => {
+            let e = engine.explain(&query, cursor);
             Response::Explain {
-                description,
-                needs_content,
+                description: e.description,
+                needs_content: e.needs_content,
+                spans: e.spans,
+                completions: e.completions,
             }
         }
         Request::Sources {} => Response::Sources {

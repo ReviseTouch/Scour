@@ -34,7 +34,7 @@ fn label(msgid: &str) -> String {
     format!("{:<12} ", t(msgid))
 }
 
-pub fn human(reply: &Response) -> Result<()> {
+pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
     match reply {
         Response::Search(r) => {
             for h in &r.hits {
@@ -113,7 +113,15 @@ pub fn human(reply: &Response) -> Result<()> {
         Response::Explain {
             description,
             needs_content,
+            spans,
+            ..
         } => {
+            // The colouring is meant for a search box, but a terminal has
+            // colours too — and printing it here is what proves the spans line
+            // up with the query rather than merely claiming to.
+            if let Some(q) = echo {
+                println!("{}", paint(q, spans));
+            }
             println!("{description}");
             if *needs_content {
                 println!(
@@ -330,6 +338,44 @@ fn languages() -> String {
         .map(|(tag, name)| format!("{tag} {name}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The query, with each run in the colour its role earns.
+///
+/// A terminal is not the audience for this — a search box is — but the two
+/// warning roles are worth having at the command line too, because they are
+/// the cases where the engine answers a question nobody asked. `kind:zurna`
+/// looks like a filter and is a text search, and here it is underlined in red
+/// rather than discovered three screens of results later.
+///
+/// Colours are dropped when the output is not a terminal, so `scour explain |
+/// grep` sees plain text.
+fn paint(query: &str, spans: &[scour_core::Span]) -> String {
+    use scour_core::Role;
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        return query.to_owned();
+    }
+    let mut out = String::with_capacity(query.len() * 2);
+    for s in spans {
+        let text = s.of(query);
+        let code = match s.role {
+            Role::Text => "0",
+            Role::Glob => "35",
+            Role::Phrase => "36",
+            Role::Quote => "2;36",
+            Role::Field => "1;34",
+            Role::Colon | Role::Sep => "2",
+            Role::Value => "32",
+            Role::Cmp => "33",
+            Role::Not => "1;31",
+            Role::Or => "1;33",
+            Role::Space => "0",
+            // The two that mean "this is not doing what it looks like".
+            Role::UnknownField | Role::BadValue => "4;31",
+        };
+        out.push_str(&format!("\x1b[{code}m{text}\x1b[0m"));
+    }
+    out
 }
 
 #[cfg(test)]

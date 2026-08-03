@@ -305,15 +305,38 @@ fn a_tree_listing_is_bounded_per_level_and_says_when_it_truncated() {
 #[test]
 fn explain_reads_a_query_back_without_running_it() {
     let f = fixture(100);
-    let (text, needs_content) = f.engine.explain("rapor ext:pdf");
-    assert_eq!(text, "name contains \"rapor\" and extension is .pdf");
-    assert!(!needs_content);
+    let e = f.engine.explain("rapor ext:pdf", None);
+    assert_eq!(
+        e.description,
+        "name contains \"rapor\" and extension is .pdf"
+    );
+    assert!(!e.needs_content);
+    // The same reading, cut into pieces a search box can colour. The spans
+    // cover the query byte for byte, so a frontend can rebuild it from them.
+    let rebuilt: String = e.spans.iter().map(|s| s.of("rapor ext:pdf")).collect();
+    assert_eq!(rebuilt, "rapor ext:pdf");
+    assert!(
+        e.spans.iter().all(|s| !s.role.is_warning()),
+        "nothing in a correct query is a mistake"
+    );
+    assert!(e.completions.is_empty(), "no caret, no completions");
     // The forgiving parser is exactly why this exists: a field name that does
     // not exist is searched for as text, quietly and reasonably, and this is
     // how a caller finds that out. (Case is not the mistake — field names are
     // folded, so `sizE:` really is `size:`.)
-    assert_eq!(f.engine.explain("sze:>1mb").0, "name contains \"sze:>1mb\"");
-    assert!(f.engine.explain("content:x").1);
+    let bad = f.engine.explain("sze:>1mb", None);
+    assert_eq!(bad.description, "name contains \"sze:>1mb\"");
+    assert!(
+        bad.spans.iter().any(|s| s.role.is_warning()),
+        "and the colouring says so too, while it is being typed"
+    );
+    assert!(f.engine.explain("content:x", None).needs_content);
+    // With a caret, the same call offers what could come next.
+    let c = f.engine.explain("ext", Some(3));
+    assert_eq!(
+        c.completions.first().map(|c| c.insert.as_str()),
+        Some("ext:")
+    );
 }
 
 #[test]

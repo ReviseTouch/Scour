@@ -135,8 +135,11 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
     if let Some((field, value)) = split_field(rest) {
         let raw = unquote(value);
         let folded = DefaultFolder::of(&raw);
-        let m: Option<Match> = match field.as_str() {
-            "ext" => Some(Match::Ext(
+        // The field table is the only place a field name is written down. It
+        // used to be this match arm, with the reference text in `syntax.rs` as
+        // a hand-kept second copy — and the two had already drifted.
+        let m: Option<Match> = match crate::fields::lookup(&field).map(|f| f.name) {
+            Some("ext") => Some(Match::Ext(
                 folded
                     .split(';')
                     .map(|e| e.trim_start_matches('.'))
@@ -144,32 +147,26 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
                     .map(str::to_owned)
                     .collect(),
             )),
-            "path" => Some(Match::PathContains(folded)),
+            Some("path") => Some(Match::PathContains(folded)),
             // Paths are compared as the filesystem stores them. Folding them
             // would make `under:` disagree with the tokens the index actually
             // holds, and a scope that silently matches nothing is worse than
             // one that refuses.
-            "under" | "in" | "altinda" | "altında" => {
-                (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw)))
-            }
-            "parent" | "child" | "children" => {
-                (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw)))
-            }
-            "file" | "files" => Some(Match::IsDir(false)),
-            "folder" | "folders" | "dir" => Some(Match::IsDir(true)),
-            "size" => parse_size(&folded),
+            Some("under") => (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw))),
+            Some("parent") => (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw))),
+            Some("file") => Some(Match::IsDir(false)),
+            Some("folder") => Some(Match::IsDir(true)),
+            Some("size") => parse_size(&folded),
             // Turkish spellings are aliases on purpose; see `Kind::from_name`.
-            "kind" | "type" | "tur" | "tür" => Kind::from_name(&folded).map(Match::Kind),
-            "dm" | "modified" => parse_time(TimeField::Modified, &folded, now),
-            "dc" | "created" => parse_time(TimeField::Created, &folded, now),
-            "da" | "accessed" => parse_time(TimeField::Accessed, &folded, now),
+            Some("kind") => Kind::from_name(&folded).map(Match::Kind),
+            Some("dm") => parse_time(TimeField::Modified, &folded, now),
+            Some("dc") => parse_time(TimeField::Created, &folded, now),
+            Some("da") => parse_time(TimeField::Accessed, &folded, now),
             // Reserved from the first day so the language does not have to
             // change shape when content indexing arrives. An index built
             // without contents rejects it explicitly rather than silently
             // finding nothing.
-            "content" | "text" | "icerik" | "içerik" => {
-                (!folded.is_empty()).then(|| Match::ContentContains(folded.clone()))
-            }
+            Some("content") => (!folded.is_empty()).then(|| Match::ContentContains(folded.clone())),
             _ => None,
         };
         // An unknown field, or a value that will not parse, becomes a search

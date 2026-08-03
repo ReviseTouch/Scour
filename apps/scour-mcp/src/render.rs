@@ -95,6 +95,8 @@ pub fn human(r: &Response) -> String {
         Response::Explain {
             description,
             needs_content,
+            // A model reads the sentence; the colouring is for a search box.
+            ..
         } => {
             let mut out = format!("The query means: {description}");
             if *needs_content {

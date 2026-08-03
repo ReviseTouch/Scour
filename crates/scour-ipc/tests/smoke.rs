@@ -42,9 +42,11 @@ impl Running {
                             Request::Syntax {} => Outcome::Ok(Response::Text {
                                 text: "hello".into(),
                             }),
-                            Request::Explain { query } => Outcome::Ok(Response::Explain {
+                            Request::Explain { query, .. } => Outcome::Ok(Response::Explain {
                                 description: query,
                                 needs_content: false,
+                                spans: Vec::new(),
+                                completions: Vec::new(),
                             }),
                             Request::Shutdown {} => {
                                 Outcome::Error(scour_core::Error::unsupported("shutdown"))
@@ -103,13 +105,16 @@ fn one_connection_carries_many_requests_in_order() {
         let got = c
             .call(Request::Explain {
                 query: want.clone(),
+                cursor: None,
             })
             .expect("call");
         assert_eq!(
             got,
             Response::Explain {
                 description: want,
-                needs_content: false
+                needs_content: false,
+                spans: Vec::new(),
+                completions: Vec::new(),
             }
         );
     }
@@ -134,12 +139,19 @@ fn several_clients_are_served_at_once() {
                 let mut c = Client::connect(&addr).expect("connect");
                 for j in 0..10 {
                     let q = format!("{i}-{j}");
-                    let got = c.call(Request::Explain { query: q.clone() }).expect("call");
+                    let got = c
+                        .call(Request::Explain {
+                            query: q.clone(),
+                            cursor: None,
+                        })
+                        .expect("call");
                     assert_eq!(
                         got,
                         Response::Explain {
                             description: q,
-                            needs_content: false
+                            needs_content: false,
+                            spans: Vec::new(),
+                            completions: Vec::new(),
                         }
                     );
                 }

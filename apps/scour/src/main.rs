@@ -166,12 +166,18 @@ fn main() -> Result<()> {
     })?;
 
     let request = build(&args)?;
+    // `explain` prints the query back with its own colouring, so the text has
+    // to survive the call. Nothing else needs the request afterwards.
+    let echo = match &request {
+        scour_proto::Request::Explain { query, .. } => Some(query.clone()),
+        _ => None,
+    };
     let reply = client.call(request)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&reply)?);
         return Ok(());
     }
-    render::human(&reply)
+    render::human(&reply, echo.as_deref())
 }
 
 fn build(args: &Args) -> Result<Request> {
@@ -223,7 +229,11 @@ fn build(args: &Args) -> Result<Request> {
             limit: *limit,
         },
         Some(Command::Stat { path }) => Request::Stat { path: path.clone() },
-        Some(Command::Explain { query }) => Request::Explain { query: join(query) },
+        Some(Command::Explain { query }) => Request::Explain {
+            query: join(query),
+            // A command line has no caret, so there is nothing to complete.
+            cursor: None,
+        },
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},

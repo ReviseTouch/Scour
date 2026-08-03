@@ -15,13 +15,17 @@
 //! [`Ast`]: scour_core::Ast
 
 mod describe;
+mod fields;
 mod glob;
+mod highlight;
 mod parse;
 mod syntax;
 mod time;
 
 pub use describe::describe;
+pub use fields::{FIELDS, Field, Takes};
 pub use glob::glob_matches;
+pub use highlight::{complete, spans, spans_at};
 pub use parse::{parse, parse_at};
 pub use syntax::SYNTAX;
 pub use time::now_secs;

@@ -3,9 +3,11 @@
 //! Two callers want this and for the same reason. A language model that issues
 //! a query should be able to check what it actually asked for, because the
 //! parser is forgiving by design and a typo becomes a plain text search rather
-//! than an error — `sizE:>1mb` looks for the *string* `size:>1mb`, silently and
-//! reasonably. And a person looking at a saved search wants to read it without
-//! learning the syntax.
+//! than an error — `boyut:1mb` looks for the *string* "boyut:1mb", silently and
+//! reasonably, because there is no `boyut` field. (`sizE:>1mb` is not an example
+//! of this, though it was used as one here for a while: field names are folded,
+//! so that one is the size field.) And a person looking at a saved search wants
+//! to read it without learning the syntax.
 //!
 //! The English here is a message id, like everywhere else: a frontend with a
 //! catalogue translates it, one without is still correct.
