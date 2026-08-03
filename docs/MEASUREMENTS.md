@@ -1003,3 +1003,39 @@ Every keystroke under a millisecond except one, on 1.2 million files. The
 remaining costs — an exact count of fifty thousand matches, the whole corpus
 sorted by path — are proportional to the answer rather than to the index, and
 that is where they should be.
+
+## 2026-08-03 — what a directory weighs
+
+The measurement behind `docs/REPORTS.md`. TreeSize answers this by walking the
+filesystem; everything it needs is already indexed, and directory numbers being
+handed out in sorted path order makes the rollup two sequential passes.
+
+```bash
+cargo run --release -p scour-index-native --example rollup <index-dir>
+```
+
+Per 100,000 entries, best of the segments measured:
+
+| pass | what it does | ms |
+|---|---|---|
+| rows | `bytes[dir_id] += size`, live rows only | **2.0** |
+| rollup | one stack walk over the sorted directory table | **1.7** |
+| together | | **3.7** |
+
+**About 45 ms for a whole 1.2 million entry disk**, and proportional to the
+subtree when scoped — the zone map on `DirId` skips the blocks outside it.
+
+Nothing is stored. Caching the per-directory arrays would cost 20 bytes a
+directory, 2.8 MB here, and would have to be kept correct across every removal;
+that is not worth doing until 45 ms is measurably in someone's way.
+
+The top of the answer is also a fair check that it works — this machine's real
+five, from the whole-disk run:
+
+```
+57.1 GB   /home/hasan/Projeler
+25.5 GB   /home/hasan/Projeler/ColpanRust/target
+20.5 GB   /home/hasan/Projeler/RustWailsChat
+19.9 GB   /home/hasan/Projeler/SnipperSlint
+ 8.8 GB   /home/hasan/.AffinityLinux
+```
