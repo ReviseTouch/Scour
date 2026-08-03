@@ -625,3 +625,64 @@ A query with no text at all — `kind:image`, `size:>10mb` — has nothing to na
 on and walks. It got faster anyway: with no test that reads a name and nothing
 hidden, the walk no longer touches the name arena at all, which was a `memchr`
 and twenty bytes of memory traffic a row for tests that never looked at it.
+
+## 2026-08-03 — against SQLite, which is what this replaces
+
+The RustEverything index is still on this machine and still being served, so it
+can be measured rather than remembered. It is SQLite with an FTS5 **trigram**
+index over folded names — the same idea as the filter above, which is why the
+latencies are close and the sizes are not.
+
+Two different corpora: SQLite holds 674,000 entries and Scour 1,201,115 of the
+same home directory, so per-entry figures are the fair comparison and every
+latency below flatters SQLite by a factor of 1.8 in row count.
+
+```bash
+sqlite3 'file:~/.local/share/rusteverything/index.db?mode=ro'   # .timer on
+```
+
+| | SQLite | Scour |
+|---|---|---|
+| entries | 674,000 | 1,201,115 |
+| index on disk | 356.2 MB + 14.7 MB WAL | **68.2 MB** |
+| bytes an entry | 577 | **59.6** |
+| daemon, anonymous | 46 MB | 50 MB |
+| daemon, RSS | 51 MB | 56–81 MB |
+
+The memory is a wash and the disk is not: **9.7× less an entry**. Scour's RSS
+is higher and its *anonymous* memory is not — the difference is mapped index
+pages, which the kernel reclaims whenever it wants them back.
+
+### Latency
+
+SQLite's timer has millisecond resolution, so anything under one is reported as
+zero rather than invented.
+
+| query | SQLite (674k) | Scour (1.2M) |
+|---|---|---|
+| `rapor` | <1 | 0.24 |
+| `main` | <1 | 4.04 |
+| `sco` | <1 | 5.18 |
+| `size:>10mb`, 40 newest | 1 | 19.50 |
+| `ab` | 2 | 33.20 |
+| `kind:image`, 40 newest | 6 | 15.45 |
+| `ext:rs`, 40 newest | 10 | 3.37 |
+| `*.pdf`, 40 newest | **136** | **0.74** |
+| count `ext:rs` | **46** | 3.37 |
+
+**FTS5 is not slow.** A name term answers in under a millisecond, and saying
+otherwise would be false. What SQLite has instead is *outliers*: a rare
+extension sorted by date costs 136 ms, because there is no index on `ext` and
+the plan walks the `mtime` index looking for forty of them. An exact count costs
+46 ms for the same reason. Scour has no such shape — the columns are the index.
+
+### So what was actually bought
+
+Ten times the disk, no outliers, and a two-character term that neither engine
+refuses. Not a tenfold latency win on the common case, and the file that claims
+one should be corrected rather than believed.
+
+What is not in this table, and was the actual reason for the rewrite, is the
+coupling: an engine reachable only through one GUI, a store that had to be
+SQLite, a watcher that had to be Linux. `trait Index` is why both of these
+numbers could be taken through the same command line an hour apart.
