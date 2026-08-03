@@ -1106,3 +1106,30 @@ promised it would: nothing, until it is large enough to matter.
 
 `maintain rebuild` reported `Rebuild: 0 B → 0 B in 0 ms` while demonstrably
 folding sixteen segments into one — `MaintReport` is not being filled in.
+
+## 2026-08-03 — the mockup and the engine, coloured side by side
+
+The design mockup has no engine behind it, so it reimplements the field table
+and the span rules in JavaScript. The product does not: `explain` returns the
+spans and a frontend maps a role to a colour. This measures the difference
+between those two arrangements, because the mockup is the only place the
+duplication actually exists and so the only place it can be priced.
+
+Twenty-eight queries, coloured twice — once by `scour explain --json`, once by
+the mockup's own `spans()` — and compared run for run:
+
+```bash
+python3 <scratchpad>/agree.py
+```
+
+**First run: 27 of 28 agreed.** The one that did not was `"iki kelime"`. The
+mockup split terms on a whitespace regex, so it cut the phrase in half and
+coloured the first word as a quote and the second as plain text; the engine
+keeps a quoted run whole. Nothing about that would have shown up in a
+screenshot — the query still looked coloured, and the colour was wrong.
+
+After porting the engine's tokeniser: **28 of 28**.
+
+That is the whole argument for the wire carrying spans rather than the frontend
+tokenising for itself, made as a number rather than as an opinion. A second
+parser does not announce itself when it drifts.
