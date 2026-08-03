@@ -30,6 +30,7 @@ matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
 |---|---|
 | `ext:rs` | extension is `rs` |
 | `ext:rs;toml;md` | extension is any of these |
+| `ext:rs ; toml` | the same — spaces around a `;` inside a field's value are closed up |
 | `path:src/api` | the full path contains this |
 | `under:/home/u/Projeler` | anywhere below this folder |
 | `parent:/home/u` | directly inside this folder, one level down |

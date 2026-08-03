@@ -33,14 +33,72 @@ pub fn spans(input: &str) -> Vec<Span> {
 /// saved query can be coloured as it was read at the time it ran.
 pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
     let mut out = Vec::new();
-    for (start, token) in tokens(input) {
-        if token.chars().all(char::is_whitespace) {
-            out.push(Span::new(start, token.len(), Role::Space));
+    let toks = tokens(input);
+    // A list is a context, not a character. `ext:rs ; toml` is one filter, so
+    // the spaces in it are separators rather than term boundaries — and the
+    // word after the separator is a value, not a new search term. Colouring
+    // either of them the other way would show a query the engine does not see.
+    let mut list: Option<&'static fields::Field> = None;
+    let mut expect_value = false;
+    for (i, (start, token)) in toks.iter().enumerate() {
+        let (start, token) = (*start, *token);
+        if is_space(token) {
+            let joins = list.is_some()
+                && (expect_value || next_word(&toks, i).is_some_and(|t| t.starts_with(';')));
+            let role = if joins { Role::Sep } else { Role::Space };
+            out.push(Span::new(start, token.len(), role));
+            if !joins {
+                list = None;
+                expect_value = false;
+            }
+            continue;
+        }
+        if let Some(f) = list
+            && (expect_value || token.starts_with(';'))
+        {
+            let mut at = start;
+            let mut rest = token;
+            if let Some(r) = rest.strip_prefix(';') {
+                out.push(Span::new(at, 1, Role::Sep));
+                at += 1;
+                rest = r;
+                // A separator standing on its own means the value it
+                // separates has not been written yet.
+                expect_value = true;
+            }
+            if !rest.is_empty() {
+                expect_value = rest.ends_with(';');
+            }
+            value_spans(&mut out, at, rest, f, now);
             continue;
         }
         term(&mut out, start, token, now);
+        list = field_of(token);
+        expect_value = list.is_some() && token.ends_with(';');
     }
     out
+}
+
+/// The field a token filters on, if it is a field term at all.
+fn field_of(token: &str) -> Option<&'static fields::Field> {
+    if token.starts_with('"') {
+        return None;
+    }
+    let t = token.strip_prefix('!').unwrap_or(token);
+    let (name, _) = field_split(t)?;
+    fields::lookup(&DefaultFolder::of(name))
+}
+
+/// The next token that is not whitespace.
+fn next_word<'a>(toks: &[(usize, &'a str)], i: usize) -> Option<&'a str> {
+    toks[i + 1..]
+        .iter()
+        .find(|(_, t)| !is_space(t))
+        .map(|(_, t)| *t)
+}
+
+fn is_space(t: &str) -> bool {
+    t.chars().all(char::is_whitespace)
 }
 
 /// Split into terms and the whitespace between them, keeping quoted runs whole
@@ -593,6 +651,72 @@ mod tests {
                 "{} was not read as a kind",
                 c.insert
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+    use scour_core::Role;
+
+    fn roles(q: &str) -> Vec<(Role, &str)> {
+        spans_at(q, 0)
+            .into_iter()
+            .map(|s| (s.role, s.of(q)))
+            .collect()
+    }
+
+    #[test]
+    fn whitespace_inside_a_list_is_a_separator_not_a_boundary() {
+        // The parser closes these spaces up, so colouring them as term
+        // boundaries would show a query the engine does not see.
+        assert_eq!(
+            roles("ext:rs ; toml"),
+            vec![
+                (Role::Field, "ext"),
+                (Role::Colon, ":"),
+                (Role::Value, "rs"),
+                (Role::Sep, " "),
+                (Role::Sep, ";"),
+                (Role::Sep, " "),
+                (Role::Value, "toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn whitespace_that_is_a_boundary_stays_one() {
+        assert_eq!(
+            roles("ext:rs toml"),
+            vec![
+                (Role::Field, "ext"),
+                (Role::Colon, ":"),
+                (Role::Value, "rs"),
+                (Role::Space, " "),
+                (Role::Text, "toml"),
+            ]
+        );
+        // No list in front of it, so the parser leaves this alone too.
+        assert_eq!(
+            roles("rapor ; pdf")
+                .into_iter()
+                .filter(|(r, _)| *r == Role::Space)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn the_spans_still_cover_the_query() {
+        for q in [
+            "ext:rs ; toml",
+            "ext:rs ;toml",
+            "ext:rs; toml",
+            "rapor ; pdf",
+        ] {
+            let rebuilt: String = spans_at(q, 0).iter().map(|s| s.of(q)).collect();
+            assert_eq!(rebuilt, q, "{q}");
         }
     }
 }

@@ -60,6 +60,21 @@ impl Role {
     pub fn is_warning(self) -> bool {
         matches!(self, Role::UnknownField | Role::BadValue)
     }
+
+    /// Is this run punctuation rather than something the user typed to search
+    /// for?
+    ///
+    /// What a caret sitting next to one of these will delete is a piece of
+    /// *syntax*, and the meaning of the query changes rather than its wording:
+    /// backspacing over the `:` in `ext:pdf` turns a filter into a search for
+    /// the text "extpdf". A frontend can mark the character the caret is
+    /// touching so that is visible before the key is pressed rather than after.
+    pub fn is_syntax(self) -> bool {
+        matches!(
+            self,
+            Role::Colon | Role::Sep | Role::Quote | Role::Cmp | Role::Not | Role::Or
+        )
+    }
 }
 
 /// A run of query text with one role.

@@ -25,7 +25,7 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in join_operators(tokenize(input)) {
+    for token in join_operators(join_lists(tokenize(input))) {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
         let alts: Vec<(bool, Match)> = token
@@ -79,6 +79,48 @@ fn tokenize(input: &str) -> Vec<String> {
 /// Only a pipe or bang that stands alone, or sits at the edge of a token, is
 /// treated as an operator — so a file called `hello!` and a query `hello! doc`
 /// are still two ordinary words.
+/// Close up the spaces around a `;` inside a field's value.
+///
+/// `;` separates the values of a list field — `ext:rs;toml` — and space
+/// separates terms, so `ext:rs ; toml` used to be three terms: an extension
+/// filter, a search for the literal text ";", and a search for "toml". Nobody
+/// means that, and a search box that puts breathing room around its separators
+/// (which is what makes a long query readable) would produce it constantly.
+///
+/// Only after something that is already a field. `rapor ; pdf` stays two terms
+/// and a stray semicolon, because there is no list there to extend and joining
+/// them would invent one.
+fn join_lists(tokens: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    // Set when the previous token ended in a way that wants what comes next.
+    let mut open = false;
+    for t in tokens {
+        if t.starts_with('"') {
+            out.push(t);
+            open = false;
+            continue;
+        }
+        // Only a real field's value can be continued, on either side of the
+        // separator. Without this condition on *both*, `rapor ; pdf` became
+        // `rapor;` and `pdf` — a list invented where there was none.
+        let after_field = out.last().is_some_and(|p| split_field(p).is_some());
+        if after_field && (open || t.starts_with(';')) {
+            let prev = out.last_mut().expect("checked by after_field");
+            // The spaces go; the separator stays exactly once, however many
+            // sides of it it was written on.
+            if !prev.ends_with(';') {
+                prev.push(';');
+            }
+            prev.push_str(t.trim_start_matches(';'));
+        } else {
+            out.push(t);
+        }
+        let last = out.last().map(String::as_str).unwrap_or("");
+        open = last.ends_with(';') && split_field(last).is_some();
+    }
+    out
+}
+
 fn join_operators(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut pending_bang = false;
@@ -451,5 +493,71 @@ mod tests {
     fn narrowing_terms_survive_the_round_trip() {
         let q = parse_at("rapor !tmp *.rs ab ext:pdf", 0);
         assert_eq!(q.narrowing_terms(3), vec!["rapor"]);
+    }
+}
+
+#[cfg(test)]
+mod list_separator_tests {
+    use super::*;
+
+    fn one(q: &str) -> Vec<(bool, Match)> {
+        parse_at(q, 0)
+            .groups
+            .into_iter()
+            .flat_map(|g| g.alts)
+            .collect()
+    }
+
+    fn exts(q: &str) -> Vec<String> {
+        match one(q).into_iter().next() {
+            Some((_, Match::Ext(e))) => e,
+            other => panic!("{q} parsed to {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_separator_may_be_written_with_spaces_around_it() {
+        // The three spellings a person actually types, all one filter.
+        let want = vec!["rs".to_owned(), "toml".to_owned()];
+        assert_eq!(exts("ext:rs;toml"), want);
+        assert_eq!(exts("ext:rs ; toml"), want);
+        assert_eq!(exts("ext:rs; toml"), want);
+        assert_eq!(exts("ext:rs ;toml"), want);
+        assert_eq!(exts("ext:rs  ;  toml"), want, "and more than one space");
+    }
+
+    #[test]
+    fn a_longer_list_survives_the_same_treatment() {
+        assert_eq!(
+            exts("ext:rs ; toml ; md"),
+            vec!["rs".to_owned(), "toml".to_owned(), "md".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_rest_of_the_query_is_untouched() {
+        let got = parse_at("rapor ext:rs ; toml dm:7d", 0);
+        assert_eq!(got.groups.len(), 3, "name, extension, date");
+    }
+
+    #[test]
+    fn a_semicolon_that_continues_nothing_is_still_text() {
+        // There is no list in front of it, so joining would invent one.
+        assert_eq!(
+            one("rapor ; pdf"),
+            vec![
+                (false, Match::NameContains("rapor".into())),
+                (false, Match::NameContains(";".into())),
+                (false, Match::NameContains("pdf".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_separator_inside_quotes_is_an_ordinary_character() {
+        assert_eq!(
+            one("\"a ; b\""),
+            vec![(false, Match::NameContains("a ; b".into()))]
+        );
     }
 }
