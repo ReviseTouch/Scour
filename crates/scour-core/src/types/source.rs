@@ -112,4 +112,12 @@ pub struct ScanReport {
     pub took_ms: u64,
     /// True when the walk stopped early because the sink asked it to.
     pub cancelled: bool,
+    /// True when a root could not be walked at all — it does not exist, is not
+    /// readable, or is not mounted.
+    ///
+    /// This exists because a scan that found nothing and a scan that could not
+    /// look are the same `entries: 0` and mean opposite things. Reconciling the
+    /// first deletes what is gone; reconciling the second deletes everything.
+    /// A source that cannot see a root must say so here.
+    pub root_unreadable: bool,
 }

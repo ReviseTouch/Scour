@@ -354,3 +354,43 @@ fn identities_are_stable_across_two_scans() {
     let ids: HashSet<_> = run().into_values().collect();
     assert_eq!(ids.len(), 11, "two entries must never share an id");
 }
+
+#[test]
+fn a_source_told_not_to_watch_says_it_cannot() {
+    // `source.watch` had been in the configuration since it was written and
+    // nothing read it — every source was watched regardless. The engine asks
+    // `caps()`, so this is where the answer belongs.
+    let s = FsSource::new(SourceId(0), "t", vec!["/tmp".into()]);
+    assert!(s.caps().contains(Caps::WATCH), "watching by default");
+    let s = s.with_watch(false);
+    assert!(!s.caps().contains(Caps::WATCH));
+    assert!(!s.caps().contains(Caps::RECURSIVE_WATCH));
+    // And the rest of what it can do is unchanged.
+    assert!(s.caps().contains(Caps::CONTENT));
+}
+
+#[test]
+fn a_root_that_cannot_be_read_is_reported_as_such() {
+    // The difference between "found nothing" and "could not look". The engine
+    // reconciles on a scan report, and reconciling the second deletes the whole
+    // index for that source — measured at five entries becoming zero.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let real = tmp.path().join("here");
+    std::fs::create_dir(&real).expect("mkdir");
+    std::fs::write(real.join("a.txt"), b"x").expect("write");
+
+    let good = FsSource::new(SourceId(0), "t", vec![real.clone()]);
+    let mut sink = Collect::default();
+    let r = good.scan(&ScanOptions::default(), &mut sink).expect("scan");
+    assert!(!r.root_unreadable);
+    assert!(r.entries > 0);
+
+    let gone = FsSource::new(SourceId(0), "t", vec![tmp.path().join("nowhere")]);
+    let mut sink = Collect::default();
+    let r = gone.scan(&ScanOptions::default(), &mut sink).expect("scan");
+    assert!(
+        r.root_unreadable,
+        "a root that is not there has to be distinguishable from an empty one"
+    );
+    assert_eq!(r.entries, 0);
+}

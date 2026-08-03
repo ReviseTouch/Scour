@@ -44,7 +44,8 @@ pub fn build(config: &Config) -> Result<Engine> {
         .map(|(i, s)| {
             Arc::new(
                 FsSource::new(SourceId(i as u32), s.name.clone(), s.roots.clone())
-                    .with_kind(s.kind.into()),
+                    .with_kind(s.kind.into())
+                    .with_watch(s.watch),
             ) as Arc<dyn Source>
         })
         .collect();

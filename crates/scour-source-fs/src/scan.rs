@@ -26,6 +26,7 @@ pub struct FsSource {
     name: String,
     roots: Vec<PathBuf>,
     kind: SourceKind,
+    watch: bool,
 }
 
 impl FsSource {
@@ -35,7 +36,21 @@ impl FsSource {
             name: name.into(),
             roots,
             kind: SourceKind::Local,
+            watch: true,
         }
+    }
+
+    /// Whether this source should be watched for changes.
+    ///
+    /// Expressed by *withholding the capability* rather than by a flag the
+    /// engine has to remember to check. The configuration has had a `watch`
+    /// field since it was written and nothing read it — every source was
+    /// watched regardless — because the engine asks `caps()` and `caps()` was
+    /// a constant. Saying it here is the same sentence the rest of the design
+    /// already speaks: a source declares what it can do, and the engine adapts.
+    pub fn with_watch(mut self, watch: bool) -> Self {
+        self.watch = watch;
+        self
     }
 
     pub fn with_kind(mut self, kind: SourceKind) -> Self {
@@ -69,11 +84,14 @@ impl Source for FsSource {
     }
 
     fn caps(&self) -> Caps {
-        let mut c = Caps::WATCH | Caps::CONTENT;
+        let mut c = Caps::CONTENT;
+        if self.watch {
+            c |= Caps::WATCH;
+        }
         // One watch covers a subtree on Windows and macOS. On Linux inotify
         // needs one per directory, and a home directory exhausts the per-user
         // limit — which is why this is declared rather than assumed.
-        if cfg!(any(windows, target_os = "macos")) {
+        if self.watch && cfg!(any(windows, target_os = "macos")) {
             c |= Caps::RECURSIVE_WATCH;
         }
         if cfg!(unix) {
@@ -92,6 +110,17 @@ impl Source for FsSource {
         let Some((first, rest)) = roots.split_first() else {
             return Ok(ScanReport::default());
         };
+
+        // Can every root be read at all?
+        //
+        // The walker reports an unreadable root as one error among many and
+        // then finishes normally, so a scan of a root that is not there and a
+        // scan of a root that is genuinely empty both come back `entries: 0`.
+        // The engine reconciles on that, and reconciling the second is right
+        // while reconciling the first deletes the whole index for that source.
+        // Unplug a drive, let a share drop, boot before an encrypted home is
+        // mounted — measured: five entries became zero.
+        let root_unreadable = roots.iter().any(|r| std::fs::read_dir(r).is_err());
 
         // `ignore`'s parallel walker, with every one of its opinions turned
         // off. It is used here purely as a fast concurrent directory walk: a
@@ -223,6 +252,7 @@ impl Source for FsSource {
             unreadable: unreadable.load(Ordering::Relaxed),
             took_ms: started.elapsed().as_millis() as u64,
             cancelled: cancelled.load(Ordering::Relaxed),
+            root_unreadable,
         })
     }
 

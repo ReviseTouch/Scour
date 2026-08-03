@@ -245,7 +245,18 @@ impl Engine {
     /// is in the index, and answering "not found" for something the user can
     /// see would be indefensible.
     pub fn stat(&self, path: &str) -> Result<Entry> {
-        let idx = self.owner_of(path).unwrap_or(0);
+        // Only a source that owns the path may answer for it.
+        //
+        // This used to fall back to source zero when nobody owned it, and that
+        // source's `stat` is a bare `symlink_metadata` with no root check — so
+        // `stat /etc/shadow` returned its size, mode and owner. No contents
+        // leaked, but the size, times and permissions of any path on the
+        // machine did, and it answered "does this exist" for all of them. The
+        // MCP server offers this to a model as read-only and scoped to what is
+        // indexed, which was not true.
+        let idx = self.owner_of(path).ok_or_else(|| Error::NotFound {
+            path: path.to_owned(),
+        })?;
         self.shared
             .sources
             .get(idx)
@@ -447,7 +458,16 @@ fn scan(shared: &Arc<Shared>, changes: &Sender<Change>, source: usize, subtree: 
     // Anything under the walked subtree that this pass did not stamp is gone
     // from the filesystem. A scan can only report what it found; this is how
     // what it did not find stops being in the index.
-    if report.as_ref().is_ok_and(|r| !r.cancelled) {
+    //
+    // Which is why it must not run when the walk could not look. A cancelled
+    // walk is incomplete and a walk whose root was unreadable saw nothing at
+    // all; sweeping on either deletes what is merely out of reach. The failure
+    // is silent and total — the index empties, `rescan` reports success, and
+    // the files come back only when the root does.
+    let trustworthy = report
+        .as_ref()
+        .is_ok_and(|r| !r.cancelled && !r.root_unreadable);
+    if trustworthy {
         let roots: Vec<String> = match &subtree {
             Some(s) => vec![s.clone()],
             None => src.describe().roots,
