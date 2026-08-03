@@ -1039,3 +1039,70 @@ five, from the whole-disk run:
 19.9 GB   /home/hasan/Projeler/SnipperSlint
  8.8 GB   /home/hasan/.AffinityLinux
 ```
+
+## 2026-08-03 — an NTFS volume, and where the milliseconds actually go
+
+The first run against a filesystem this was not developed on: `/mnt/depo`,
+881 GB of `ntfs3` with 405 GB used, mounted `uid=1000 fmask=0022
+windows_names`. A Windows disk, read from Linux — Turkish filenames throughout,
+a legal-document archive, and the Windows side of every project.
+
+```bash
+scourd --config depo.toml --scan-only     # roots = ["/mnt/depo"], watch = false
+```
+
+| | |
+|---|---|
+| entries | **1,509,184** (172,363 of them directories) |
+| scan, cold cache | **4,772 ms** |
+| scan, warm | **2,272 ms** |
+| peak RSS while scanning | **148.4 MiB** |
+| index on disk | **88.4 MB** → 85.6 MB after `maintain rebuild` |
+| bytes per entry | **59.4** |
+
+59.4 bytes an entry, against 60.6 on the home directory. The format does not
+care what filesystem the names came from.
+
+Watching was off and stayed off — `sources` reports `Caps(STABLE_IDS | CONTENT
+| CASE_SENSITIVE)`, with no `WATCH`. That is worth stating because the first
+attempt used a binary built minutes before the fix, which ignored `watch =
+false` and spent a minute installing inotify watches across 172,363
+directories before it would answer at all.
+
+### The count is the whole cost
+
+The same eight queries at the CLI's default cap of 100,000 and at a search
+box's cap of 200:
+
+| query | matches | cap 100,000 | cap 200 |
+|---|---|---|---|
+| `ab` | 86,303 | 143.8 ms (full scan) | **0.33 ms** |
+| `rapor` | 15,339 | 94.0 ms | **2.78 ms** |
+| `raporu` | 8,146 | 93.1 ms | **2.48 ms** |
+| `hukuk` | 11,110 | 83.2 ms | **0.49 ms** |
+| `kind:image` | 100,000+ | 17.0 ms | **1.51 ms** |
+| `ext:pdf` | 44,578 | 15.5 ms | **0.35 ms** |
+| `2026` | 100,000+ | 6.6 ms | **1.89 ms** |
+| `ext:rs` | 6,648 | 2.0 ms | — |
+
+Two things fall out of this table.
+
+**The worst case is not the widest query.** `2026` matches more than 100,000
+entries and answers in 6.6 ms, because the count hits the cap and stops.
+`raporu` matches 8,146 — comfortably *under* the cap — and takes 93.1 ms,
+because nothing stops it: an exact total means visiting every row. The
+expensive region is matches just below the cap, not matches above it.
+
+**A search box paying keystroke prices gets them.** At a cap of 200 the whole
+set is 0.33–2.78 ms on 1.5 million entries, which is the same class as the home
+directory. This is what the GUI must do per keystroke, with a higher cap only
+when the user stops typing or asks for a report.
+
+Rebuilding first (16 segments → 1, 1,409,184 unsorted → 0) changed none of
+these timings by more than noise. The unsorted tail costs what the format
+promised it would: nothing, until it is large enough to matter.
+
+### Noted
+
+`maintain rebuild` reported `Rebuild: 0 B → 0 B in 0 ms` while demonstrably
+folding sixteen segments into one — `MaintReport` is not being filled in.
