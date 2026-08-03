@@ -909,3 +909,97 @@ which is the same lesson as `fast_path` and `rows_visited` before it.
 `path` over the whole corpus, at 269 ms, is the one thing that cannot be
 abbreviated: two paths that share sixteen bytes are the normal case, so the
 sort has to build 1.2 million strings. With any filter at all it is 22 ms.
+
+## 2026-08-03 — three optimisations that measured nothing
+
+Before moving on, everything plausible was tried. Three of them were built,
+measured against the version without them on the same machine minutes apart,
+and **removed**. They are recorded because the next person to have these ideas
+should have the numbers rather than the ideas.
+
+### A per-block column cache
+
+`ColumnBlocks::get` re-derives the section offset, the block count, the block
+offset and the block header on every row — six bounds-checked reads to deliver
+one number, for a filter that asks the same column about a hundred and
+twenty-eight consecutive rows.
+
+Cached the block header for the duration of the block, threaded through
+`accepts` and `sort_value`.
+
+| query | without | with |
+|---|---|---|
+| `kind:image` | 3.53 | 3.95 |
+| `size:>10mb` | 1.98 | 2.11 |
+| `ab` | 2.13 | 1.61 |
+| `ext:rs` | 1.02 | 1.29 |
+| everything by name | 34.91 | 36.03 |
+| everything by path | 273.78 | 290.08 |
+
+Noise in both directions. The compiler was already keeping the offset table in
+a register and the branch predictor was already right; what looked like six
+reads is one cache line that is always hot. Removed — it was a new public type
+and a parameter on two hot functions for nothing.
+
+### Spreading the walk over cores
+
+The orders that cannot stop early visit every candidate block whatever happens,
+so there is nothing speculative about doing it on twenty threads. Built with
+rayon, chunked by block so the concatenation stays in block order and the answer
+stays byte-identical.
+
+| query | one thread | twenty |
+|---|---|---|
+| everything by name | 55.92 | 55.07 |
+| everything by path | 433.54 | 395.61 |
+| everything by size | 43.61 | 42.21 |
+| everything by extension | 47.98 | 48.04 |
+
+**Five per cent, on twenty cores.** Amdahl, and the sequential part is not the
+walk: it is building the candidate list. `everything by size` visits 1.2 million
+rows and keeps a `(SortValue, u32)` for each — 48 bytes a row, **58 MB**, grown
+by doubling and then selected over. Threads make the cheap half cheaper.
+
+Removed, along with the dependency.
+
+### And the SIMD question
+
+There was none left to add. The three primitives in the inner loop are already
+vectorised by the crates chosen for exactly that reason:
+
+* the NUL scan between names is `memchr`, which is the loop `grep` uses;
+* folding a name is `make_ascii_lowercase`, which LLVM vectorises;
+* the substring test is `memchr::memmem`, prebuilt per query.
+
+What is left is bit-unpacking a column, and the cache experiment above is the
+evidence that it is not the bottleneck: if decoding a block header were
+expensive, caching it would have shown. The remaining cost is memory bandwidth
+in the candidate list, which no instruction set makes narrower.
+
+Hand-written intrinsics would also mean runtime feature detection and a scalar
+fallback on a project that has to run on three platforms and possibly a phone.
+Not for five per cent of an operation nobody waits on.
+
+### Where it actually stands
+
+1,217,362 entries, one segment, 70.56 MiB. A page of forty counting to five
+hundred:
+
+| query | ms |
+|---|---|
+| `r` | 0.16 |
+| `ra` | 0.29 |
+| `rapor` | 0.29 |
+| `ext:rs` | 0.34 |
+| `*.pdf` | 0.55 |
+| `ab` | 0.59 |
+| `kind:code dm:7d` | 0.60 |
+| `main` | 0.71 |
+| `size:>10mb` | 0.71 |
+| `under:/…/Projeler ext:rs` | 0.92 |
+| `kind:image` | 2.38 |
+
+Every keystroke under a millisecond except one, on 1.2 million files. The
+remaining costs — an exact count of fifty thousand matches, the whole corpus
+sorted by path — are proportional to the answer rather than to the index, and
+that is where they should be.
