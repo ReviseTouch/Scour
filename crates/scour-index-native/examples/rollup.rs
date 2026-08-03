@@ -97,8 +97,9 @@ fn main() {
                     if let Some((_, parent)) = stack.last() {
                         total[*parent] += t_bytes;
                         files[*parent] += t_files;
-                        for k in 0..BANDS {
-                            age[*parent][k] += age[t_id][k];
+                        let child = age[t_id];
+                        for (slot, add) in age[*parent].iter_mut().zip(child) {
+                            *slot += add;
                         }
                     }
                 }
@@ -112,8 +113,8 @@ fn main() {
                 if let Some((_, parent)) = stack.last() {
                     total[*parent] += b;
                     files[*parent] += f;
-                    for k in 0..BANDS {
-                        age[*parent][k] += a[k];
+                    for (slot, add) in age[*parent].iter_mut().zip(a) {
+                        *slot += add;
                     }
                 }
             }

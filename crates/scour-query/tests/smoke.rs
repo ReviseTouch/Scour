@@ -256,3 +256,55 @@ fn every_documented_example_still_works() {
         Match::NameContains("http://example".into())
     );
 }
+
+#[test]
+fn a_comparison_on_a_relative_window_is_not_dropped() {
+    // `dm:<7d` used to mean `dm:7d`: the operator was computed and discarded,
+    // so a query for "not touched in a week" returned exactly the files that
+    // *had* been. A confident answer to the opposite question, and nothing
+    // reported it.
+    let now = 1_785_000_000;
+    let week = 7 * 86_400;
+    let of = |q: &str| match &parse_at(q, now).groups[..] {
+        [g] => match &g.alts[..] {
+            [(false, Match::Time(f, cmp, at))] => (*f, *cmp, *at),
+            other => panic!("{q}: {other:?}"),
+        },
+        other => panic!("{q}: {other:?}"),
+    };
+    assert_eq!(of("dm:7d"), (TimeField::Modified, Cmp::Ge, now - week));
+    assert_eq!(of("dm:>7d"), (TimeField::Modified, Cmp::Gt, now - week));
+    assert_eq!(of("dm:<7d"), (TimeField::Modified, Cmp::Lt, now - week));
+    assert_eq!(of("da:<24h"), (TimeField::Accessed, Cmp::Lt, now - 86_400));
+}
+
+#[test]
+fn operators_survive_the_spaces_around_them() {
+    // Whitespace splitting runs first, so `a | b` arrived as three tokens and
+    // the lone pipe parsed to nothing — the query quietly became `a AND b`.
+    // `! main` did the same and searched *for* main.
+    let now = 1_785_000_000;
+    let shape = |q: &str| {
+        parse_at(q, now)
+            .groups
+            .iter()
+            .map(|g| g.alts.len())
+            .collect::<Vec<_>>()
+    };
+    for q in ["a|b", "a | b", "a |b", "a| b"] {
+        assert_eq!(shape(q), vec![2], "{q:?} should be one group of two");
+    }
+    for q in ["!main", "! main"] {
+        let ast = parse_at(q, now);
+        assert_eq!(ast.groups.len(), 1, "{q:?}");
+        assert!(ast.groups[0].alts[0].0, "{q:?} should be negated");
+    }
+    // And a bang that is part of a word stays part of the word.
+    let ast = parse_at("hello! doc", now);
+    assert_eq!(ast.groups.len(), 2);
+    assert!(
+        !ast.groups[0].alts[0].0,
+        "`hello!` is a name, not a negation"
+    );
+    assert!(!ast.groups[1].alts[0].0);
+}

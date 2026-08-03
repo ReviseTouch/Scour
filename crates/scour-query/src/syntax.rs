@@ -1,7 +1,7 @@
 //! The language, written down.
 //!
-//! This text is served verbatim as the `scour://syntax` MCP resource and
-//! printed by `scour help query`. It lives next to the parser so that a change
+//! This text is served verbatim by the `scour_syntax` MCP tool and printed by
+//! `scour syntax`. It lives next to the parser so that a change
 //! to one is visibly a change to the other; the smoke tests check that every
 //! example in it actually parses to what it claims.
 

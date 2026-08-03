@@ -25,7 +25,7 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in tokenize(input) {
+    for token in join_operators(tokenize(input)) {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
         let alts: Vec<(bool, Match)> = token
@@ -64,6 +64,61 @@ fn tokenize(input: &str) -> Vec<String> {
     }
     if !cur.is_empty() {
         out.push(cur);
+    }
+    out
+}
+
+/// Reattach `|` and `!` to what they operate on.
+///
+/// Whitespace splitting happens first, so `a | b` arrives as three tokens and
+/// `! main` as two. Left alone, the lone `|` parsed to nothing and the query
+/// silently became `a AND b`; the lone `!` did the same and `! main` searched
+/// *for* main rather than against it. Both are the opposite of what was asked,
+/// and neither reported anything.
+///
+/// Only a pipe or bang that stands alone, or sits at the edge of a token, is
+/// treated as an operator — so a file called `hello!` and a query `hello! doc`
+/// are still two ordinary words.
+fn join_operators(tokens: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut pending_bang = false;
+    let mut want_alt = false;
+    for t in tokens {
+        // A quoted run is literal all the way through.
+        let quoted = t.starts_with('"');
+        if !quoted && t == "|" {
+            want_alt = true;
+            continue;
+        }
+        let mut t = t;
+        if !quoted && t.starts_with('|') && !out.is_empty() {
+            want_alt = true;
+            t.remove(0);
+        }
+        let trailing_alt = !quoted && t.len() > 1 && t.ends_with('|');
+        if trailing_alt {
+            t.pop();
+        }
+        if !quoted && t == "!" {
+            pending_bang = true;
+            continue;
+        }
+        if t.is_empty() {
+            want_alt |= trailing_alt;
+            continue;
+        }
+        if std::mem::take(&mut pending_bang) {
+            t.insert(0, '!');
+        }
+        if std::mem::take(&mut want_alt)
+            && let Some(prev) = out.last_mut()
+        {
+            prev.push('|');
+            prev.push_str(&t);
+        } else {
+            out.push(t);
+        }
+        want_alt = trailing_alt;
     }
     out
 }

@@ -33,7 +33,20 @@ pub(crate) fn parse_time(field: TimeField, v: &str, now: i64) -> Option<Match> {
         return None;
     }
     if let Some(window) = relative_window(rest) {
-        return Some(Match::Time(field, Cmp::Ge, now - window));
+        // The window resolves to an instant, and the comparison applies to it
+        // exactly as it would to a written date. A bare `dm:7d` means "within
+        // the last week", so no operator is `Ge`; `dm:<7d` means the file has
+        // not been touched since then.
+        //
+        // The operator used to be computed and then dropped here, which made
+        // `dm:<7d` and `dm:>7d` both mean `dm:7d` — a confident answer to the
+        // opposite question.
+        let cmp = if v.starts_with(['>', '<', '=']) {
+            cmp
+        } else {
+            Cmp::Ge
+        };
+        return Some(Match::Time(field, cmp, now - window));
     }
     let day = parse_iso_date(rest)?;
     // `split_cmp` defaults to `Ge`, which is right for sizes and wrong for a
