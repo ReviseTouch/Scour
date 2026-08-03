@@ -533,3 +533,95 @@ exactly no improvement, because it gives up SIMD on both halves: the fold
 becomes a byte loop instead of `make_ascii_lowercase` and the search becomes a
 hand-written scan instead of `memmem`. It was removed, and the comment saying
 why is in `search.rs`.
+
+## 2026-08-03 — the trigram filter
+
+Same machine, same tree: `/home/hasan`, **1,199,919 entries**, one segment after
+a rebuild. The gap the side-by-side found was a *selective* substring, and this
+closes it.
+
+```bash
+cargo run --release -p scour-index-native --example fragment   # unit tests aside
+scour search "<query>" -n 40 [--count-cap N]
+```
+
+### What it costs
+
+| | without | with |
+|---|---|---|
+| index on disk | 56.5 MiB | **68.2 MiB** |
+| bytes an entry | 49.5 | **59.6** |
+| first scan | 6.7 s | 7.9 s |
+| rebuild | ≈4 s | **2.7 s** |
+| resident while serving | 113 MB | **100 MB** |
+
+Ten bytes an entry, against tantivy's 186.6 for the whole index.
+
+### What it buys
+
+Count cap 100,000 — the CLI default, which makes a query matching 73,889 files
+count all of them.
+
+| query | matches | before | after | tantivy |
+|---|---|---|---|---|
+| `rapor` | 15 | 28.88 | **0.24** | 1.73 |
+| `main` | 2,795 | 29.77 | **4.04** | 34.09 |
+| `ext:rs` | 73,889 | 18.21 | **3.37** | 80.03 |
+| `*.pdf` | 18 | 18.80 | **0.74** | 1.41 |
+| `kind:image` | 56,916 | 19.76 | **15.45** | 51.97 |
+| `kind:code dm:7d` | 100,000+ | 9.04 | **8.93** | 75.69 |
+| `under:/…/Projeler ext:rs` | 2,160 | 23.22 | **4.03** | 68.90 |
+| `size:>10mb` | 4,445 | 21.81 | 19.50 | **20.67** |
+| `ab` | 52,602 | 29.38 | 33.20 | *refused* |
+| `sco` | 3,436 | 31.70 | **5.18** | 23.48 |
+
+And the shape a search box actually issues — a page of forty, counting to five
+hundred:
+
+| query | ms |
+|---|---|
+| `rapor` | 0.36 |
+| `*.pdf` | 0.74 |
+| `ext:rs` | 1.88 |
+| `main` | 2.34 |
+| `sco` | 3.30 |
+| `under:/…/Projeler ext:rs` | 3.95 |
+| `kind:code dm:7d` | 4.48 |
+| `size:>10mb` | 6.53 |
+| `ab` | 9.24 |
+| `kind:image` | 9.66 |
+
+**0.24 to 9.7 milliseconds on 1.2 million files**, and the slowest of them is a
+two-character term or a pure column filter — neither of which has any text to
+narrow on.
+
+### Why it cannot be wrong
+
+The posting lists hold **block numbers**, not rows: which groups of 128 rows
+contain a trigram. A query intersects the lists of its trigrams and the walk
+visits only those blocks, where it applies the same exact byte comparison it
+always did. A name containing the needle contains every trigram of the needle,
+so its block survives every intersection — **no match can be missed**. A block
+that survives without containing one costs microseconds.
+
+Three tests hold that down: every substring of every fiftieth name compared
+against brute force, a term that occurs once asserted to visit under a tenth of
+the corpus, and `ext:` and glob queries checked the same way.
+
+The one bug it did have was found this way. The writer took the name as the
+filesystem spells it and the query arrived folded, so `Colpan` was unfindable as
+`colpan` — a silent false negative, the one failure this design is not allowed
+to have. The writer now folds, so a caller cannot forget.
+
+### The two things that are not narrowing
+
+`ext:pdf` and `*.pdf` narrow on `.pdf`, because a name with extension `pdf`
+contains `.pdf` — an extension is only an extension when something precedes the
+dot. `rap*or` narrows on its longest literal run. Both are containment claims
+that follow from what the test means; anything less certain is left out, because
+over-narrowing loses files and reports nothing.
+
+A query with no text at all — `kind:image`, `size:>10mb` — has nothing to narrow
+on and walks. It got faster anyway: with no test that reads a name and nothing
+hidden, the walk no longer touches the name arena at all, which was a `memchr`
+and twenty bytes of memory traffic a row for tests that never looked at it.

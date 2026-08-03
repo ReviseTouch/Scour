@@ -33,13 +33,15 @@ use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Key, Kind, Match, Meta, SortKey,
 use crate::columns::{ColumnBlocks, Field};
 use crate::dirs::{DirScope, DirTable};
 use crate::names::{Folded, NameArena};
+use crate::trigram::TrigramIndex;
 
-/// The three files plus the liveness bits, opened together.
+/// The files a search reads, opened together.
 #[derive(Debug, Clone, Copy)]
 pub struct Segment<'a> {
     pub names: NameArena<'a>,
     pub cols: ColumnBlocks<'a>,
     pub dirs: DirTable<'a>,
+    pub tri: TrigramIndex<'a>,
     /// One bit a row, set when the row is still live.
     pub alive: &'a [u8],
 }
@@ -213,6 +215,11 @@ impl Needle {
     fn found_in(&self, hay: &[u8], fold: &mut Folded) -> bool {
         self.finder.find(fold.fold_bytes(hay)).is_some()
     }
+
+    /// The needle as the parser folded it — what the trigram index is keyed on.
+    fn folded(&self) -> &[u8] {
+        self.finder.needle()
+    }
 }
 
 /// The extension of a name, as bytes, by the same rule as `scour_core`.
@@ -221,6 +228,76 @@ fn ext_bytes(name: &[u8]) -> &[u8] {
         Some(i) if i > 0 && i + 1 < name.len() && name.len() - i - 1 <= 12 => &name[i + 1..],
         _ => b"",
     }
+}
+
+/// The blocks a search has to look at, if the trigram index can say.
+///
+/// Only a clause that is one plain `NameHas` counts. An OR would need the union
+/// of its alternatives and a negation inverts the question, and neither is
+/// worth the risk here: getting this wrong in the narrowing direction loses
+/// files silently. Several such clauses intersect, because every one of them
+/// has to hold.
+fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
+    let mut out: Option<Vec<u32>> = None;
+    for c in clauses {
+        let [(false, test)] = &c.alts[..] else {
+            continue;
+        };
+        let Some(needle) = filterable(test) else {
+            continue;
+        };
+        let Some(blocks) = seg.tri.candidates(&needle) else {
+            continue;
+        };
+        out = Some(match out {
+            None => blocks,
+            Some(have) => intersect_blocks(&have, &blocks),
+        });
+    }
+    out
+}
+
+/// A string every matching name must contain, if there is one.
+///
+/// The only thing being claimed is containment, and each of these is a
+/// straightforward consequence of what the test means. Anything less certain
+/// does not belong here: over-narrowing loses files and reports nothing.
+fn filterable(test: &Test) -> Option<Vec<u8>> {
+    match test {
+        Test::NameHas(n) => Some(n.folded().to_vec()),
+        // A name with extension `pdf` contains `.pdf`, because an extension is
+        // only an extension when something precedes the dot. One extension
+        // only: a list would need the union of its lists, not the intersection.
+        Test::Ext(list) => match &list[..] {
+            [only] => Some(format!(".{only}").into_bytes()),
+            _ => None,
+        },
+        // A name matching `rap*or` contains `rap` and contains `or`. The
+        // longest run is the most selective of them.
+        Test::NameGlob(p) => p
+            .split(['*', '?'])
+            .max_by_key(|run| run.len())
+            .filter(|run| run.len() >= 3)
+            .map(|run| run.as_bytes().to_vec()),
+        _ => None,
+    }
+}
+
+fn intersect_blocks(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(a.len().min(b.len()));
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                out.push(a[i]);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Alternatives ORed together; `bool` is negation.
@@ -233,6 +310,11 @@ struct Clause {
 #[derive(Debug, Default)]
 pub struct Plan {
     clauses: Vec<Clause>,
+    /// Blocks the walk has to visit, when the trigram index could say.
+    ///
+    /// `None` is "all of them", which is what every query did before this
+    /// existed and what a query with no usable trigram still does.
+    candidates: Option<Vec<u32>>,
 }
 
 impl Plan {
@@ -253,11 +335,30 @@ impl Plan {
         // Cheapest clause first. A clause is only as cheap as its dearest
         // alternative, because an OR has to try them until one succeeds.
         clauses.sort_by_key(|c| c.alts.iter().map(|(_, t)| t.cost()).max().unwrap_or(0));
-        Ok(Plan { clauses })
+        let candidates = narrow_to_blocks(&clauses, seg);
+        Ok(Plan {
+            clauses,
+            candidates,
+        })
     }
 
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
+    }
+
+    /// Does answering this require reading names at all?
+    ///
+    /// `kind:image size:>10mb` does not, and the difference is the whole inner
+    /// loop: without this the walk reads every name in the index — a `memchr`
+    /// and twenty bytes of memory traffic a row — to hand it to tests that
+    /// never look at it.
+    fn needs_name(&self) -> bool {
+        self.clauses.iter().flat_map(|c| &c.alts).any(|(_, t)| {
+            matches!(
+                t,
+                Test::NameHas(_) | Test::NameGlob(_) | Test::Ext(_) | Test::PathHas(_)
+            )
+        })
     }
 
     /// Does this row match?
@@ -421,7 +522,7 @@ pub struct Found {
 
 /// Walk the segment and answer.
 pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
-    run_with(seg, plan, want, &mut |_, _, _| false)
+    run_with(seg, plan, want, None)
 }
 
 /// The same walk, with a veto over rows that match but must not be shown.
@@ -434,12 +535,17 @@ pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
 /// The veto runs *after* the query has accepted a row, not before, because it
 /// is the dearer of the two — it reconstructs the row's identity or its path —
 /// and on any real query the filters have already rejected almost everything.
+///
+/// `None` rather than a closure that always says no, because the difference is
+/// visible: with no veto and no test that reads names, the walk never touches
+/// the name arena.
 pub fn run_with(
     seg: &Segment<'_>,
     plan: &Plan,
     want: Wanted,
-    conceals: &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool,
+    mut conceals: Option<&mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool>,
 ) -> Found {
+    let has_veto = conceals.is_some();
     let mut fold = Folded::new();
     let mut counted = 0usize;
     let mut visited = 0u64;
@@ -460,12 +566,14 @@ pub fn run_with(
     let need = want.offset + want.limit;
     let mut done = false;
 
-    seg.names.walk(0, |row, name| {
+    let mut visit = |row: usize, name: &[u8]| -> bool {
         visited += 1;
         if !seg.is_alive(row) || !plan.accepts(seg, row, name, &mut fold) {
             return true;
         }
-        if conceals(seg, row, name) {
+        if let Some(veto) = conceals.as_deref_mut()
+            && veto(seg, row, name)
+        {
             return true;
         }
         counted += 1;
@@ -492,7 +600,41 @@ pub fn run_with(
             keyed.push((sort_value(seg, row, name, want.sort, &mut fold), row as u32));
         }
         true
-    });
+    };
+
+    match &plan.candidates {
+        // Nothing here reads a name, so nothing here reads the arena.
+        None if !plan.needs_name() && !has_veto => {
+            for row in 0..seg.rows() {
+                if !visit(row, b"") {
+                    break;
+                }
+            }
+        }
+        None => seg.names.walk(0, visit),
+        // Runs of adjacent blocks are walked as one, so a dense candidate set
+        // costs no more seeking than a full walk would.
+        Some(blocks) => {
+            let mut i = 0usize;
+            while i < blocks.len() {
+                let mut j = i;
+                while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
+                    j += 1;
+                }
+                let from = blocks[i] as usize * crate::columns::BLOCK;
+                let to = (blocks[j] as usize + 1) * crate::columns::BLOCK;
+                let mut go = true;
+                seg.names.walk_range(from, to, |row, name| {
+                    go = visit(row, name);
+                    go
+                });
+                if !go {
+                    break;
+                }
+                i = j + 1;
+            }
+        }
+    }
 
     if !stored_order {
         kept = narrow(&mut keyed, need, want.descending);

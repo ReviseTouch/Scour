@@ -47,6 +47,13 @@ enum Command {
         limit: u32,
         #[arg(long, short, default_value_t = 0)]
         offset: u32,
+        /// Stop counting matches here.
+        ///
+        /// The total is the only work left that is proportional to the number
+        /// of matches, so a low cap is what a search box wants and a high one
+        /// is what a report wants. Capped totals are printed with a `+`.
+        #[arg(long, default_value_t = 100_000)]
+        count_cap: u32,
     },
     /// How many files match.
     Count { query: Vec<String> },
@@ -184,6 +191,7 @@ fn build(args: &Args) -> Result<Request> {
             ascending,
             limit,
             offset,
+            count_cap,
         }) => Request::Search {
             query: join(query),
             sort: (*sort).into(),
@@ -191,7 +199,7 @@ fn build(args: &Args) -> Result<Request> {
             page: Page {
                 offset: *offset,
                 limit: *limit,
-                count_cap: 100_000,
+                count_cap: *count_cap,
             },
         },
         Some(Command::Count { query }) => Request::Count {

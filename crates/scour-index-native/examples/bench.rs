@@ -5,7 +5,9 @@
 use std::time::Instant;
 
 use scour_core::SortKey;
-use scour_index_native::{ColumnBlocks, DirTable, NameArena, Plan, Segment, Wanted, build, run};
+use scour_index_native::{
+    ColumnBlocks, DirTable, NameArena, Plan, Segment, TrigramIndex, Wanted, build, run,
+};
 use scour_mock::{MockOptions, generate};
 use scour_query::parse_at;
 
@@ -35,6 +37,7 @@ fn main() {
         names: NameArena::open(&bytes.names).expect("names"),
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
+        tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),
         alive: &bytes.alive,
     };
 

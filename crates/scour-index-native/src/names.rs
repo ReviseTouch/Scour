@@ -138,8 +138,17 @@ impl<'a> NameArena<'a> {
     /// on screen, and the tests that matter — a substring, an extension, a
     /// glob — are all answerable without it. The rows that are actually
     /// returned go through [`NameArena::get`], which does validate.
-    pub fn walk(&self, from: usize, mut f: impl FnMut(usize, &'a [u8]) -> bool) {
-        if from >= self.rows {
+    pub fn walk(&self, from: usize, f: impl FnMut(usize, &'a [u8]) -> bool) {
+        self.walk_range(from, self.rows, f);
+    }
+
+    /// The same, stopping at `to` (exclusive).
+    ///
+    /// What the trigram filter uses: it names a handful of blocks, and each is
+    /// a contiguous run of rows.
+    pub fn walk_range(&self, from: usize, to: usize, mut f: impl FnMut(usize, &'a [u8]) -> bool) {
+        let to = to.min(self.rows);
+        if from >= to {
             return;
         }
         let Some(block_at) = self.block_start(from / BLOCK) else {
@@ -152,7 +161,7 @@ impl<'a> NameArena<'a> {
                 None => return,
             }
         }
-        for row in from..self.rows {
+        for row in from..to {
             let Some(rest) = self.bytes.get(at..) else {
                 return;
             };

@@ -63,7 +63,10 @@ const MAX_STAGED: usize = 100_000;
 const FACET_SCAN_CAP: usize = 200_000;
 
 const META_FILE: &str = "native-index.json";
-const FORMAT: u32 = 1;
+/// Bumped when the files change shape. Version 2 added the trigram filter;
+/// an index without it is refused rather than opened and quietly walked in
+/// full.
+const FORMAT: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -590,11 +593,17 @@ impl Index for NativeIndex {
         let need = offset + limit;
         let cap = req.page.count_cap.max(1) as usize;
 
+        // Only when something is hidden. With no veto and no test that reads
+        // names, the walk never touches the name arena at all.
+        let hiding = !inner.hidden.is_empty() || !inner.hidden_prefixes.is_empty();
+
         let mut all: Vec<Hit> = Vec::new();
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;
         let mut rows = 0u64;
+        let mut veto =
+            |seg: &Segment<'_>, row: usize, name: &[u8]| conceals(&inner, seg, row, name);
         for live in &inner.segments {
             rows += live.rows() as u64;
             let seg = live.view()?;
@@ -620,7 +629,7 @@ impl Index for NativeIndex {
                     // be considered for the page — which is what it is for.
                     count_cap: budget,
                 },
-                &mut |seg, row, name| conceals(&inner, seg, row, name),
+                hiding.then_some(&mut veto as &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool),
             );
             counted += found.total;
             budget = budget.saturating_sub(found.total as usize);

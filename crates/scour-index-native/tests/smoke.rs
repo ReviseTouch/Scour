@@ -11,7 +11,8 @@
 
 use scour_core::{Entry, SortKey};
 use scour_index_native::{
-    ColumnBlocks, DirTable, NameArena, Plan, Segment, SegmentBytes, Wanted, build, run,
+    ColumnBlocks, DirTable, NameArena, Plan, Segment, SegmentBytes, TrigramIndex, Wanted, build,
+    run,
 };
 use scour_mock::{MockOptions, brute_force, generate};
 use scour_query::parse_at;
@@ -42,6 +43,7 @@ impl Fixture {
             names: NameArena::open(&self.bytes.names).expect("names"),
             cols: ColumnBlocks::open(&self.bytes.cols).expect("cols"),
             dirs: DirTable::open(&self.bytes.dirs).expect("dirs"),
+            tri: TrigramIndex::open(&self.bytes.tri_dict, &self.bytes.tri_post).expect("tri"),
             alive: &self.bytes.alive,
         }
     }
@@ -292,6 +294,7 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
         names: NameArena::open(&f.bytes.names).expect("names"),
         cols: ColumnBlocks::open(&f.bytes.cols).expect("cols"),
         dirs: DirTable::open(&f.bytes.dirs).expect("dirs"),
+        tri: TrigramIndex::open(&f.bytes.tri_dict, &f.bytes.tri_post).expect("tri"),
         alive: &alive,
     };
     let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
@@ -343,5 +346,100 @@ fn short_terms_are_answered_rather_than_refused() {
     let f = Fixture::new(5_000);
     for q in ["a", "rs", "x"] {
         f.check(q, SortKey::Modified, true);
+    }
+}
+
+#[test]
+fn a_selective_term_stops_reading_the_corpus() {
+    // The reason the trigram filter exists, and the assertion that it is
+    // actually being taken: a name that occurs once must not cost a walk of
+    // fifty thousand rows.
+    let f = Fixture::new(50_000);
+    let mut times: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for e in &f.entries {
+        *times.entry(e.name()).or_default() += 1;
+    }
+    let needle = f
+        .entries
+        .iter()
+        .map(|e| e.name())
+        .find(|n| times[n] == 1 && n.len() >= 6 && n.is_ascii())
+        .expect("some name occurs exactly once");
+
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at(needle, NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Modified,
+            descending: true,
+            offset: 0,
+            limit: 40,
+            count_cap: 10_000_000,
+        },
+    );
+    assert!(
+        found.rows_visited * 10 < seg.rows() as u64,
+        "visited {} of {} rows for {needle:?}",
+        found.rows_visited,
+        seg.rows()
+    );
+    assert_eq!(
+        found.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+        f.expected(needle, SortKey::Modified, true, 40),
+        "narrowing changed the answer"
+    );
+}
+
+#[test]
+fn narrowing_never_loses_a_match() {
+    // Every substring of every name, checked against the walk that cannot take
+    // a shortcut. A false positive here is microseconds; a false negative is a
+    // file the user cannot find, and nothing would report it.
+    let f = Fixture::new(20_000);
+    let mut tried = 0;
+    for e in f.entries.iter().step_by(97) {
+        let name = e.name();
+        if name.len() < 5 || !name.is_ascii() {
+            continue;
+        }
+        for q in [&name[..4], &name[1..5], &name[name.len() - 4..]] {
+            assert_eq!(
+                f.search(q, SortKey::Modified, true, 50),
+                f.expected(q, SortKey::Modified, true, 50),
+                "query {q:?} taken from {name:?}"
+            );
+            tried += 1;
+        }
+    }
+    assert!(tried > 100, "only {tried} substrings were tried");
+}
+
+#[test]
+fn an_extension_and_a_glob_narrow_the_same_way_a_substring_does() {
+    // `*.pdf` and `ext:pdf` are the same question as "contains .pdf", and a
+    // rare extension is as selective as a rare name. Both still have to agree
+    // with the walk that cannot take a shortcut.
+    let f = Fixture::new(50_000);
+    let seg = f.segment();
+    for q in ["ext:pdf", "*.pdf", "rap*or", "ext:rs;toml", "ext:rs"] {
+        let plan = Plan::compile(&parse_at(q, NOW), &seg).expect("compile");
+        let found = run(
+            &seg,
+            &plan,
+            Wanted {
+                sort: SortKey::Modified,
+                descending: true,
+                offset: 0,
+                limit: 40,
+                count_cap: 10_000_000,
+            },
+        );
+        assert_eq!(
+            found.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+            f.expected(q, SortKey::Modified, true, 40),
+            "narrowing changed the answer for {q:?}"
+        );
     }
 }

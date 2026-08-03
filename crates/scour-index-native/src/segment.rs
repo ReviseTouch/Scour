@@ -19,15 +19,16 @@ use crate::dirs::DirTable;
 use crate::ids::IdMap;
 use crate::names::NameArena;
 use crate::search::Segment;
+use crate::trigram::TrigramIndex;
 
 /// The pieces a segment is made of, and the extension each is stored under.
-const PARTS: [&str; 4] = ["names", "cols", "dirs", "ids"];
+const PARTS: [&str; 6] = ["names", "cols", "dirs", "ids", "tgrams", "tpost"];
 
 fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
     dir.join(format!("seg-{number:08}.{ext}"))
 }
 
-/// An opened segment: four mapped files and one bitmap that is not.
+/// An opened segment: six mapped files and one bitmap that is not.
 #[derive(Debug)]
 pub struct Live {
     pub number: u64,
@@ -44,7 +45,14 @@ pub struct Live {
 impl Live {
     /// Write a segment and open it.
     pub fn write(dir: &Path, number: u64, generation: u64, bytes: &SegmentBytes) -> Result<Live> {
-        let blobs = [&bytes.names, &bytes.cols, &bytes.dirs, &bytes.ids];
+        let blobs = [
+            &bytes.names,
+            &bytes.cols,
+            &bytes.dirs,
+            &bytes.ids,
+            &bytes.tri_dict,
+            &bytes.tri_post,
+        ];
         for (ext, blob) in PARTS.iter().zip(blobs) {
             let p = part_path(dir, number, ext);
             std::fs::write(&p, blob).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
@@ -99,6 +107,8 @@ impl Live {
             names: NameArena::open(&self.maps[0]).ok_or_else(|| corrupt("names"))?,
             cols: ColumnBlocks::open(&self.maps[1]).ok_or_else(|| corrupt("cols"))?,
             dirs: DirTable::open(&self.maps[2]).ok_or_else(|| corrupt("dirs"))?,
+            tri: TrigramIndex::open(&self.maps[4], &self.maps[5])
+                .ok_or_else(|| corrupt("tgrams"))?,
             alive: &self.alive,
         })
     }

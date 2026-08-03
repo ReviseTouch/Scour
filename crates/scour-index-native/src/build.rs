@@ -11,6 +11,7 @@ use crate::columns::{ColumnWriter, Field};
 use crate::dirs::DirWriter;
 use crate::ids::IdWriter;
 use crate::names::NameWriter;
+use crate::trigram::TrigramWriter;
 
 /// The blobs a segment consists of.
 #[derive(Debug, Default, Clone)]
@@ -19,12 +20,22 @@ pub struct SegmentBytes {
     pub cols: Vec<u8>,
     pub dirs: Vec<u8>,
     pub ids: Vec<u8>,
+    /// Which blocks hold which trigrams — the filter that keeps a selective
+    /// term from walking the whole segment.
+    pub tri_dict: Vec<u8>,
+    pub tri_post: Vec<u8>,
     pub alive: Vec<u8>,
 }
 
 impl SegmentBytes {
     pub fn total(&self) -> usize {
-        self.names.len() + self.cols.len() + self.dirs.len() + self.ids.len() + self.alive.len()
+        self.names.len()
+            + self.cols.len()
+            + self.dirs.len()
+            + self.ids.len()
+            + self.tri_dict.len()
+            + self.tri_post.len()
+            + self.alive.len()
     }
 }
 
@@ -58,10 +69,13 @@ pub fn build(entries: &[Entry]) -> SegmentBytes {
 pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentBytes {
     let mut dirs = DirWriter::new();
     let mut names = NameWriter::new();
+    let mut tri = TrigramWriter::new();
     let mut provisional: Vec<u32> = Vec::new();
     pass(&mut |e: &Entry| {
         provisional.push(dirs.intern(e.parent()));
-        names.push(e.name());
+        let name = e.name();
+        names.push(name);
+        tri.push(name.as_bytes());
     });
     let (dir_bytes, remap) = dirs.finish();
 
@@ -104,11 +118,14 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         cols.push(r);
     });
 
+    let (tri_dict, tri_post) = tri.finish();
     SegmentBytes {
         names: names.finish(),
         cols: cols.finish(),
         dirs: dir_bytes,
         ids: ids.finish(),
+        tri_dict,
+        tri_post,
         // Every row starts alive. A removal clears a bit; nothing is rewritten.
         alive: alive_bits(rows),
     }
@@ -137,6 +154,7 @@ mod tests {
     use crate::dirs::DirTable;
     use crate::names::NameArena;
     use crate::search::Segment;
+    use crate::trigram::TrigramIndex;
     use scour_core::{EntryId, Meta, SourceId};
 
     fn entry(path: &str, mtime: i64) -> Entry {
@@ -191,6 +209,7 @@ mod tests {
             names: NameArena::open(&b.names).expect("names"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
+            tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
             alive: &b.alive,
         };
         let got = seg.entry(0).expect("row 0");
@@ -209,6 +228,7 @@ mod tests {
             names: NameArena::open(&b.names).expect("names"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
+            tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
             alive: &b.alive,
         };
         assert_eq!(seg.entry(0).expect("row").path, "/lonely.txt");
