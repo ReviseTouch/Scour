@@ -1212,3 +1212,67 @@ benchmark:
 200 of 200+ in 0.82 ms (432 rows)
 200 of 200+ in 56.76 ms (59404 rows) · 50200 yol kuruldu
 ```
+
+## 2026-08-04 — what the filesystem actually promises
+
+`Caps` was a compile-time constant: every Unix build declared `STABLE_IDS |
+CASE_SENSITIVE` whatever it was pointed at. Measured on this machine, both
+halves are wrong somewhere.
+
+```bash
+stat -f -c '%t %T' /  /home  /mnt/depo  /tmp  /proc
+```
+
+| path | magic | `coreutils` says |
+|---|---|---|
+| `/`, `/home` | `0x9123683e` | btrfs |
+| `/mnt/depo` | `0x7366746e` | **UNKNOWN** |
+| `/tmp` | `0x1021994` | tmpfs |
+| `/proc` | `0x9fa0` | proc |
+
+The NTFS volume's magic is not in `coreutils`' table: `0x7366746e` is `ntfs`
+as little-endian bytes, the **ntfs3** driver's own value, distinct from the
+`0x5346544e` that ntfs-3g reports. It had to be measured to be known.
+
+**The same disk is case-sensitive here and will not be under Windows.**
+`/mnt/depo/PROJELER` resolves and `/mnt/depo/projeler` does not — Linux's
+ntfs3 is case-sensitive unless mounted `nocase`. So the answer belongs to the
+mounted filesystem and its driver, not to the format and not to the operating
+system.
+
+`FsTraits` now asks, once per root, with one `statfs`:
+
+```
+/              stable_ids=true  case_sensitive=true
+/mnt/depo      stable_ids=true  case_sensitive=true
+/proc          stable_ids=false case_sensitive=true
+/nonexistent   stable_ids=false case_sensitive=true
+```
+
+The unknown case withholds `stable_ids`, and a compile-time assertion keeps it
+that way. The asymmetry is deliberate: a wrongly *claimed* stable identity
+means a rescan decides every file is new — the index doubles and the sweep
+then removes the originals, silently — while a wrongly *withheld* one only
+means a rename is seen as a delete plus an add.
+
+`entry_of` follows the same answer, so an exFAT stick gets a path hash instead
+of an `st_ino` its driver invented.
+
+### Also measured: btrfs subvolumes
+
+`/`, `/home`, `/srv` and `/var/log` are separate subvolumes of one btrfs
+filesystem, and **each one's root is inode 256**:
+
+| path | `st_dev` | root inode |
+|---|---|---|
+| `/` | 36 | 256 |
+| `/home` | 52 | 256 |
+| `/srv` | 54 | 256 |
+| `/var/log` | 58 | 256 |
+
+So carrying `dev` in `Key::Inode` is not ceremony — without it these four
+directories would be one identity. But `/proc/self/mountinfo` reports `0:34`
+for all of them, and major 0 means an **anonymous** block device: a number the
+kernel hands out at mount time rather than one stored on disk. If it can differ
+between boots, every identity in a persisted index changes with it and the next
+scan sees a filesystem full of new files. Not yet tested — it needs a reboot.

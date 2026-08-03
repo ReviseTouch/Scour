@@ -22,7 +22,8 @@ mod rules;
 mod scan;
 mod watch;
 
-pub mod path;
+pub mod fs;
+mod path;
 
 pub use rules::{Rules, platform_defaults};
 pub use scan::FsSource;

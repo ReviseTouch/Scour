@@ -11,6 +11,7 @@ use scour_core::{
     Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
 
+use crate::fs::FsTraits;
 use crate::path;
 use crate::rules::Rules;
 
@@ -27,16 +28,27 @@ pub struct FsSource {
     roots: Vec<PathBuf>,
     kind: SourceKind,
     watch: bool,
+    /// What the filesystems under the roots actually promise, asked once at
+    /// construction rather than assumed at compile time.
+    traits: FsTraits,
 }
 
 impl FsSource {
     pub fn new(id: SourceId, name: impl Into<String>, roots: Vec<PathBuf>) -> Self {
+        // One `statfs` per root, at construction. A source spanning two
+        // filesystems takes the narrower promise of the two — see `FsTraits`.
+        let traits = roots
+            .iter()
+            .map(|r| crate::fs::traits_of(r))
+            .reduce(FsTraits::and)
+            .unwrap_or(FsTraits::UNKNOWN);
         Self {
             id,
             name: name.into(),
             roots,
             kind: SourceKind::Local,
             watch: true,
+            traits,
         }
     }
 
@@ -66,6 +78,12 @@ impl FsSource {
     pub fn source_id(&self) -> SourceId {
         self.id
     }
+
+    /// Whether this source's filesystems offer an identity that survives a
+    /// remount. The watcher needs it for the same reason the scan does.
+    pub fn stable_ids(&self) -> bool {
+        self.traits.stable_ids
+    }
 }
 
 impl Source for FsSource {
@@ -94,8 +112,15 @@ impl Source for FsSource {
         if self.watch && cfg!(any(windows, target_os = "macos")) {
             c |= Caps::RECURSIVE_WATCH;
         }
-        if cfg!(unix) {
-            c |= Caps::STABLE_IDS | Caps::CASE_SENSITIVE;
+        // Measured, not assumed. This used to be `cfg!(unix)`, which told a
+        // caller that an exFAT stick had stable identities and that an NTFS
+        // volume was case-sensitive — the second of which is true for Linux's
+        // ntfs3 and false for the same disk under Windows.
+        if self.traits.stable_ids {
+            c |= Caps::STABLE_IDS;
+        }
+        if self.traits.case_sensitive {
+            c |= Caps::CASE_SENSITIVE;
         }
         c
     }
@@ -144,6 +169,7 @@ impl Source for FsSource {
         let dirs = AtomicU64::new(0);
         let cancelled = AtomicBool::new(false);
         let want_meta = !opts.skip_metadata;
+        let stable_ids = self.traits.stable_ids;
 
         // The walker runs on its own threads and the sink is drained on this
         // one, over a bounded channel.
@@ -212,6 +238,7 @@ impl Source for FsSource {
                                 &normalised,
                                 md.as_ref(),
                                 is_dir,
+                                stable_ids,
                             )))
                             .is_err()
                         {
@@ -275,6 +302,7 @@ impl Source for FsSource {
             &path::from_path(&native),
             Some(&md),
             md.is_dir(),
+            self.traits.stable_ids,
         ))
     }
 }
@@ -292,16 +320,19 @@ pub(crate) fn entry_of(
     path: &str,
     md: Option<&std::fs::Metadata>,
     is_dir: bool,
+    stable_ids: bool,
 ) -> Entry {
     let id = match md {
+        // `stable_ids` is the filesystem's answer, not the platform's. On FAT
+        // and exFAT `st_ino` is invented by the driver and can change across a
+        // remount; an identity built from it makes a rescan decide every file
+        // is new, which doubles the index and then sweeps the originals away.
         #[cfg(unix)]
-        Some(m) => {
+        Some(m) if stable_ids => {
             use std::os::unix::fs::MetadataExt;
             EntryId::inode(source, m.dev(), m.ino())
         }
-        #[cfg(not(unix))]
-        Some(_) => EntryId::path_hash(source, path),
-        None => EntryId::path_hash(source, path),
+        _ => EntryId::path_hash(source, path),
     };
     Entry {
         id,

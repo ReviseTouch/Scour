@@ -27,11 +27,12 @@ pub fn start(source: FsSource, sink: Box<dyn ChangeSink>) -> Result<Box<dyn Watc
     let sink: Arc<dyn ChangeSink> = Arc::from(sink);
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
+    let stable_ids = source.stable_ids();
 
     let handler = {
         let sink = Arc::clone(&sink);
         move |res: notify::Result<Event>| match res {
-            Ok(event) => translate(id, &event, sink.as_ref()),
+            Ok(event) => translate(id, stable_ids, &event, sink.as_ref()),
             Err(e) => {
                 // The interesting failures are the ones that mean "I stopped
                 // seeing things": inotify running out of watches, a Windows
@@ -85,7 +86,7 @@ pub fn start(source: FsSource, sink: Box<dyn ChangeSink>) -> Result<Box<dyn Watc
 /// A create or a modify becomes an upsert *after re-examining the path*, never
 /// from the event's own description: by the time this runs the file may have
 /// been changed again, or removed, and the event says only where to look.
-fn translate(id: scour_core::SourceId, event: &Event, sink: &dyn ChangeSink) {
+fn translate(id: scour_core::SourceId, stable_ids: bool, event: &Event, sink: &dyn ChangeSink) {
     let upsert = |p: &std::path::Path| {
         let path = path::from_path(p);
         match std::fs::symlink_metadata(p) {
@@ -94,6 +95,7 @@ fn translate(id: scour_core::SourceId, event: &Event, sink: &dyn ChangeSink) {
                 &path,
                 Some(&md),
                 md.is_dir(),
+                stable_ids,
             ))),
             // Gone between the event and the look. That is a removal, and it is
             // the common case under any kind of churn.
