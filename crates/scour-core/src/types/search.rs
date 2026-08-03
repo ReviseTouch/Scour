@@ -141,6 +141,17 @@ pub struct SearchResponse {
     /// from a guess into a subtraction.
     #[serde(default)]
     pub rows_visited: u64,
+    /// Rows whose path was reconstructed, including the ones then skipped to
+    /// reach `offset`.
+    ///
+    /// The number that makes deep paging diagnosable instead of merely slow.
+    /// Reaching offset 200,000 means building 200,200 paths and discarding all
+    /// but two hundred of them — measured at 225 ms against 0.54 ms for the
+    /// first page, and multiplied again by the number of segments, because each
+    /// one is asked for the whole prefix. A client that can see this can tell
+    /// "the query is expensive" from "you asked for page a thousand".
+    #[serde(default)]
+    pub rows_built: u64,
 }
 
 /// What to group a facet count by.

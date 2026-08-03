@@ -55,7 +55,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 r.total.to_string()
             };
             eprintln!(
-                "{} of {total} in {:.2} ms{}",
+                "{} of {total} in {:.2} ms{}{}",
                 r.hits.len(),
                 r.took_us as f64 / 1000.0,
                 if r.fast_path {
@@ -65,7 +65,17 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                         String::new()
                     }
                 } else {
-                    " (full scan)".to_owned()
+                    format!(" ({})", t("full scan"))
+                },
+                // Only when it dominates. Paging deep means building a path
+                // per row to reach the offset and throwing all but a page of
+                // them away — 225 ms at offset 200,000 against 0.54 ms at
+                // zero — and without this the slowness looks like the query's
+                // fault rather than the page number's.
+                if r.rows_built > r.hits.len() as u64 * 2 {
+                    format!(" · {} {}", r.rows_built, t("paths built"))
+                } else {
+                    String::new()
                 }
             );
         }
@@ -442,6 +452,7 @@ mod tests {
             "problem",
             "accepted",
             "full scan",
+            "paths built",
             "a rebuild would speed searches up",
             "The index is empty. Run `scour rescan`.",
             "needs document contents, which this index may not have",

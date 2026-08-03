@@ -293,6 +293,7 @@ mod tests {
             took_us: 1_200,
             fast_path: true,
             rows_visited: 0,
+            rows_built: 0,
         }));
         assert!(out.contains("1 shown of 500"), "{out}");
         assert!(out.contains("narrow the query"), "{out}");

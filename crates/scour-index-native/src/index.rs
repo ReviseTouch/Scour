@@ -675,6 +675,9 @@ impl Index for NativeIndex {
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;
+        // Paths reconstructed, page and discarded prefix alike — see
+        // `SearchResponse::rows_built`.
+        let mut built = 0u64;
         let mut rows = 0u64;
         let mut veto =
             |seg: &Segment<'_>, row: usize, name: &[u8]| conceals(&inner, seg, row, name);
@@ -708,6 +711,7 @@ impl Index for NativeIndex {
             counted += found.total;
             budget = budget.saturating_sub(found.total as usize);
             visited += found.rows_visited;
+            built += found.rows_built;
             all.extend(found.hits);
         }
 
@@ -727,6 +731,7 @@ impl Index for NativeIndex {
             // report a full scan.
             fast_path: rows > 0 && visited < rows,
             rows_visited: visited,
+            rows_built: built,
         })
     }
 

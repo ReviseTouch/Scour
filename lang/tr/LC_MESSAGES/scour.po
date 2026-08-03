@@ -147,6 +147,11 @@ msgstr "Dizin boş. `scour rescan` çalıştırın."
 msgid "full scan"
 msgstr "tam tarama"
 
+# Deep paging: a path is reconstructed per row to reach the offset, and all
+# but a page of them are thrown away.
+msgid "paths built"
+msgstr "yol kuruldu"
+
 msgid "needs document contents, which this index may not have"
 msgstr "belge içeriği gerekiyor, bu dizinde olmayabilir"
 

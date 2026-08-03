@@ -77,7 +77,7 @@ carries the `id` of the call it answers. Requests:
 
 | op | mutating | notes |
 |---|---|---|
-| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}` |
+| `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}`; the reply carries `rows_visited` and `rows_built`, the second being what makes a deep page's cost visible |
 | `count` | | `query`, `cap` — the total is a floor when `capped` |
 | `facets` | | `query`, `by`: `kind` / `ext{top}` / `dir{path,top}` |
 | `tree` | | `path`, `depth`, `limit` — bounded *per level* |

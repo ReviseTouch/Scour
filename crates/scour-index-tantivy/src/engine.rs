@@ -705,6 +705,7 @@ impl Index for TantivyIndex {
                 fast_path: false,
                 // A posting list is not a row walk; there is no such number
                 // here, and inventing one would be worse than reporting none.
+                rows_built: 0,
                 rows_visited: 0,
             });
         }
@@ -812,6 +813,7 @@ impl Index for TantivyIndex {
             // are ordered is correct and linear, and a design whose fast path
             // is quietly not being taken looks exactly like one that is.
             fast_path: any_sorted,
+            rows_built: 0,
             rows_visited: 0,
         })
     }

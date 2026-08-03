@@ -1167,3 +1167,48 @@ And `shutdown` now ends the process. It used to set a flag that the accept loop
 only looked at when the next connection arrived — on an idle machine, never.
 Measured: the reply arrives (`{"id":1,"ok":{"result":"accepted"}}`) and two
 seconds later `pgrep -xc scourd` reports 0, where it reported 1 before.
+
+## 2026-08-03 — what a deep page costs
+
+Before designing a scrollbar over a million rows, the measurement it depends
+on. `search.rs` sets `need = offset + limit` and materialises all of it —
+building a front-coded path per match, which the code's own comment calls the
+expensive part of the whole operation — and only then skips to the offset.
+Across segments it is worse: each one is asked for the whole prefix.
+
+Same NTFS index, 1,509,184 entries, `a` with a count cap of 200, page of 200:
+
+| offset | 16 segments | 1 segment |
+|---|---|---|
+| 0 | 14.35 ms | **0.54 ms** |
+| 1,000 | 38.68 ms | 2.34 ms |
+| 10,000 | 298.74 ms | 12.98 ms |
+| 50,000 | 1,274.07 ms | 62.03 ms |
+| 200,000 | 1,762.89 ms | 225.07 ms |
+
+```bash
+scour search "a" --offset N --limit 200 --count-cap 200
+scour maintain rebuild          # between the two columns
+```
+
+**Linear in the offset, multiplied by the segment count.** At offset 10,000 the
+sixteen-segment index is 23× slower than the one-segment index — more than the
+segment count itself, because each segment builds its own full prefix and the
+merge then throws away all but a page.
+
+That decides the GUI's addressable window, and it is smaller than the 50,000
+this roadmap first guessed. A 60 fps scroll has about 16 ms per frame; after a
+rebuild that is around **row 12,000**, and after a large scan it is around row
+1,000. So: address the first ten thousand rows, say so plainly when the user
+reaches the end, and invite a narrower query — which is what a search tool
+should encourage anyway. The principled fix later is a keyset term on the wire
+(`after: <sort value, row>`), which the total order already makes well-defined.
+
+`rows_built` is now on `SearchResponse`, and the CLI prints it when it
+dominates, so this is diagnosable from a client rather than only from a
+benchmark:
+
+```
+200 of 200+ in 0.82 ms (432 rows)
+200 of 200+ in 56.76 ms (59404 rows) · 50200 yol kuruldu
+```
