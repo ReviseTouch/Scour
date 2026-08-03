@@ -18,6 +18,21 @@ use std::time::Instant;
 
 use scour_index_native::{Field, NativeIndex};
 
+/// Age bands: today, this week, this month, six months, this year, older.
+const BANDS: usize = 6;
+const DAY: i64 = 86_400;
+
+fn band(ago: i64) -> usize {
+    match ago {
+        a if a < DAY => 0,
+        a if a < 7 * DAY => 1,
+        a if a < 30 * DAY => 2,
+        a if a < 180 * DAY => 3,
+        a if a < 365 * DAY => 4,
+        _ => 5,
+    }
+}
+
 fn main() {
     let dir = std::env::args().nth(1).expect("index dir");
     let top: usize = std::env::args()
@@ -25,6 +40,10 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(15);
     let index = NativeIndex::open_or_create(std::path::Path::new(&dir)).expect("open");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
 
     index
         .for_each_segment(&mut |_, seg| {
@@ -36,14 +55,21 @@ fn main() {
             let t = Instant::now();
             let mut own_bytes = vec![0u64; n_dirs];
             let mut own_files = vec![0u32; n_dirs];
+            // And the same bytes split by how old they are. This is the thing
+            // no disk-usage tool shows and the one that decides what to delete:
+            // twenty-five gigabytes matters less than twenty-five gigabytes
+            // nothing has touched in a year.
+            let mut own_age = vec![[0u64; BANDS]; n_dirs];
             for row in 0..rows {
                 if !seg.is_alive(row) {
                     continue;
                 }
                 let d = seg.dir_id(row) as usize;
                 if d < n_dirs {
-                    own_bytes[d] += seg.num_of(Field::Size, row).max(0) as u64;
+                    let b = seg.num_of(Field::Size, row).max(0) as u64;
+                    own_bytes[d] += b;
                     own_files[d] += 1;
+                    own_age[d][band(now - seg.num_of(Field::Mtime, row))] += b;
                 }
             }
             let pass1 = t.elapsed();
@@ -56,6 +82,7 @@ fn main() {
             let t = Instant::now();
             let mut total = vec![0u64; n_dirs];
             let mut files = vec![0u64; n_dirs];
+            let mut age = vec![[0u64; BANDS]; n_dirs];
             let mut stack: Vec<(String, usize)> = Vec::new();
             for id in 0..n_dirs {
                 let Some(path) = seg.dirs.get(id as u32) else {
@@ -70,18 +97,24 @@ fn main() {
                     if let Some((_, parent)) = stack.last() {
                         total[*parent] += t_bytes;
                         files[*parent] += t_files;
+                        for k in 0..BANDS {
+                            age[*parent][k] += age[t_id][k];
+                        }
                     }
-                    let _ = t_id;
                 }
                 total[id] = own_bytes[id];
                 files[id] = u64::from(own_files[id]);
+                age[id] = own_age[id];
                 stack.push((path, id));
             }
             while let Some((_, id)) = stack.pop() {
-                let (b, f) = (total[id], files[id]);
+                let (b, f, a) = (total[id], files[id], age[id]);
                 if let Some((_, parent)) = stack.last() {
                     total[*parent] += b;
                     files[*parent] += f;
+                    for k in 0..BANDS {
+                        age[*parent][k] += a[k];
+                    }
                 }
             }
             let pass2 = t.elapsed();
@@ -93,12 +126,21 @@ fn main() {
 
             let mut order: Vec<usize> = (0..n_dirs).collect();
             order.sort_unstable_by_key(|&i| std::cmp::Reverse(total[i]));
-            println!("  {:>10}  {:>9}  directory", "bytes", "files");
+            println!(
+                "  {:>10}  {:>9}  {:>28}  directory",
+                "bytes", "files", "gun/hafta/ay/6ay/yil/eski %"
+            );
             for &id in order.iter().take(top) {
+                let t = total[id].max(1);
+                let pct: Vec<String> = age[id]
+                    .iter()
+                    .map(|b| format!("{:.0}", (*b as f64 / t as f64) * 100.0))
+                    .collect();
                 println!(
-                    "  {:>10}  {:>9}  {}",
+                    "  {:>10}  {:>9}  {:>28}  {}",
                     human(total[id]),
                     files[id],
+                    pct.join("/"),
                     seg.dirs.get(id as u32).unwrap_or_default()
                 );
             }
