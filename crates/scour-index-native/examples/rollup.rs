@@ -93,7 +93,7 @@ fn main() {
 
             let mut order: Vec<usize> = (0..n_dirs).collect();
             order.sort_unstable_by_key(|&i| std::cmp::Reverse(total[i]));
-            println!("  {:>10}  {:>9}  {}", "bytes", "files", "directory");
+            println!("  {:>10}  {:>9}  directory", "bytes", "files");
             for &id in order.iter().take(top) {
                 println!(
                     "  {:>10}  {:>9}  {}",
