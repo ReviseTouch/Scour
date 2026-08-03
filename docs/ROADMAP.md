@@ -236,7 +236,8 @@ each belongs to whichever phase next touches its file.
 * `scour_query::describe` builds English with `format!`, so its output is not a
   lookupable msgid despite the doc comment saying it is. Explain will be
   English-only until that changes.
-* The design mockup's comments are in Turkish, unlike everything in this
-  repository. It lives in a scratchpad rather than here, and it is a design
-  document rather than code — but the parts of it that become `apps/scour-gui`
-  have to be translated on the way in, not after.
+* The design mockup's comments were in Turkish, unlike everything in this
+  repository. Translated — all 62 of them — so that the parts of it which
+  become `apps/scour-gui` arrive in the source language rather than needing a
+  pass afterwards. Its *visible* text stays Turkish: that is the user-facing
+  half, and in the product it comes from `lang/tr`.
