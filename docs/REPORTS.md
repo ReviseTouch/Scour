@@ -64,21 +64,48 @@ same query with a different field.
 
 | question | what decides it | cost |
 |---|---|---|
-| the *same* file, two names | `dev` and `ino` are equal | free — both are columns |
+| the *same* file, two names | `dev` and `ino` are equal | free — 227,552 extra links here |
 | the same **name** elsewhere | the name arena | free — 658,650 distinct names of 1,564,335 entries, so 2.37 names in three |
-| the same **size** | the `Size` column | free — one sort |
+| the same **size** | the `Size` column | free — one sort, but see below |
 | the same **content** | a digest of the bytes | needs reading the files |
 
-The third is the gate, and it is what makes the fourth affordable: **a file
-whose size is unique cannot have a duplicate.** On a real disk that removes the
-overwhelming majority before anything is opened.
+The third is the gate — but not in the way this document first claimed, and the
+measurement is worth keeping because it changed the design.
 
-So the plan for content:
+**"A file with a unique size cannot have a duplicate" is true and nearly
+useless.** Measured on 1,474,650 files and 493.6 GB: it eliminates **6.2%**.
+Not the overwhelming majority. The reason is that **59.3% of files are 4 KB or
+smaller** — 22,761 of them are exactly zero bytes — and small files collide on
+size trivially. Build output makes this worse, not better.
 
-1. Group by size. Keep groups of two or more.
-2. Within a group, hash the **first and last 4 KB**. Most near-misses die here
-   for two reads instead of a whole file.
+The gate is worthless by file count and excellent by bytes:
+
+| candidates above | files | bytes they hold | head+tail reads to check |
+|---|---|---|---|
+| nothing | 1,382,866 | 169.8 GB | 10.55 GB |
+| 4 KB | 531,020 | 169.0 GB | 4.05 GB |
+| 64 KB | 104,482 | 163.0 GB | 0.80 GB |
+| 1 MB | **18,723** | **141.8 GB** | **0.14 GB** |
+| 10 MB | 1,919 | 90.9 GB | 0.01 GB |
+
+So the design is not "gate by size then hash" but **work down from the
+largest**. Nobody wants a count of duplicates; they want the space back.
+Hashing the head and tail of every size-collision candidate over a megabyte
+costs **140 MB of reads** and covers **141.8 GB** of the possible waste — a
+thousandfold return, and it finishes in seconds rather than the hours a
+whole-disk hash would take.
+
+The plan for content, corrected:
+
+1. Group by size, **descending**. Report the potential saving of each group
+   before reading anything — that number is free and it is what the user is
+   actually asking for.
+2. Hash the **first and last 4 KB** of the largest groups first, so the biggest
+   savings are confirmed first and the job is useful the moment it is
+   interrupted.
 3. Only what survives gets hashed in full.
+4. Stop when the caller stops caring. There is no reason to descend below a
+   megabyte unless someone asks.
 
 Where it lives: a `Digest` column, reserved in the format now and filled by a
 **maintenance job**, not by a query — it is I/O bound and belongs beside
