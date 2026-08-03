@@ -8,6 +8,14 @@ use scour_query::parse_at;
 fn main() {
     let dir = std::env::args().nth(1).expect("index dir");
     let q = std::env::args().nth(2).unwrap_or_default();
+    let sort = match std::env::args().nth(4).unwrap_or_default().as_str() {
+        "name" => scour_core::SortKey::Name,
+        "path" => scour_core::SortKey::Path,
+        "size" => scour_core::SortKey::Size,
+        "ext" => scour_core::SortKey::Ext,
+        "kind" => scour_core::SortKey::Kind,
+        _ => scour_core::SortKey::Modified,
+    };
     let cap: usize = std::env::args()
         .nth(3)
         .and_then(|v| v.parse().ok())
@@ -18,11 +26,12 @@ fn main() {
     index
         .for_each_segment(&mut |i, seg| {
             let plan = Plan::compile(&parse_at(&q, now), seg).expect("compile");
+            let t = std::time::Instant::now();
             let found = run(
                 seg,
                 &plan,
                 Wanted {
-                    sort: scour_core::SortKey::Modified,
+                    sort,
                     descending: true,
                     offset: 0,
                     limit: 40,
@@ -30,12 +39,12 @@ fn main() {
                 },
             );
             println!(
-                "  seg {i}: {} rows, visited {}, counted {}, hits {}, stop {}",
+                "  seg {i}: {} rows, visited {}, built {}, counted {}, in {:.1?}",
                 seg.rows(),
                 found.rows_visited,
+                found.rows_built,
                 found.total,
-                found.hits.len(),
-                found.early_exit
+                t.elapsed()
             );
         })
         .expect("walk");

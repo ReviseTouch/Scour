@@ -86,7 +86,17 @@ pub fn brute_force(
             SortKey::Disk => a.meta.disk.cmp(&b.meta.disk),
         };
         let o = if desc { o.reverse() } else { o };
-        o.then_with(|| a.path.cmp(&b.path))
+        // Ties break the way the index stores rows: newest first, then path.
+        //
+        // Not path alone, which is what this said first and which is only
+        // sensible for a high-cardinality key. Sorting by *kind* on a real disk
+        // puts a hundred thousand rows in one tie group, and breaking that
+        // group on the path means an engine has to look at every one of them to
+        // name the first forty. Newest-first is both cheaper — it is the order
+        // the rows are already in — and the better answer: "code files, newest
+        // first" is what someone sorting by kind wanted.
+        o.then_with(|| b.meta.mtime.cmp(&a.meta.mtime))
+            .then_with(|| a.path.cmp(&b.path))
     });
     hits.truncate(limit);
     hits

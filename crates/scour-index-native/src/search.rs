@@ -583,6 +583,10 @@ pub struct Found {
     /// Whether the walk was able to stop early.
     pub early_exit: bool,
     pub rows_visited: u64,
+    /// Rows built into a `Hit` — the expensive part, since each reconstructs a
+    /// front-coded path. Reported because "why is this sort slow" is otherwise
+    /// a guess between the walk, the selection and this.
+    pub rows_built: u64,
 }
 
 /// Walk the segment and answer.
@@ -684,7 +688,16 @@ pub fn run_with(
     };
 
     // Nothing here reads a name, so nothing here reads the arena.
-    let by_row = !plan.needs_name() && !has_veto;
+    //
+    // The *sort* has to be asked too, and forgetting to was a real bug: the
+    // row-driven path hands `accepts` an empty name, which is correct when no
+    // test reads one — but `sort_value` was reading it as well, so every row
+    // sorted by name got the same key. The answer stayed right, because
+    // everything then tied and `sort_hits` compared the real names, and the
+    // cost was the whole corpus: 1,117,687 rows built to return forty.
+    let sort_reads_name =
+        !stored_order && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
+    let by_row = !plan.needs_name() && !has_veto && !sort_reads_name;
     let mut i = 0usize;
     'runs: while i < blocks.len() {
         // Adjacent blocks are walked as one, so a dense set costs no more
@@ -715,11 +728,12 @@ pub fn run_with(
     }
 
     if !stored_order {
-        kept = narrow(&mut keyed, need, want.descending);
+        kept = narrow(&mut keyed, need, want.descending, key_is_exact(want.sort));
     }
 
     // Materialise. Only now, and only what can appear: reading a row means
     // building its path, which is the expensive part of the whole operation.
+    let rows_built = kept.len() as u64;
     let mut hits: Vec<Hit> = kept
         .into_iter()
         .filter_map(|row| {
@@ -742,17 +756,46 @@ pub fn run_with(
         capped: counted >= want.count_cap,
         early_exit: stored_order && done,
         rows_visited: visited,
+        rows_built,
     }
 }
 
 /// What a row sorts by, without its row being built.
 ///
-/// `Text` still allocates — a folded name has to live somewhere — but it is one
-/// short string rather than a whole row with its path.
+/// Three shapes, and the middle one is the interesting one. Sorting a million
+/// rows by name used to allocate a million short `Vec`s — 1,666 ms on a real
+/// index. `Head` is the first eight bytes of the folded name packed
+/// big-endian into a `u64`, which orders identically to the bytes it came
+/// from and costs nothing: rows that tie on it are the few that share eight
+/// bytes of name, and only those are compared properly.
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum SortValue {
     Num(i64),
+    /// The first sixteen bytes, big-endian. Exact for an extension, which is
+    /// at most twelve bytes by definition; abbreviated for a name, where
+    /// equality means "might be equal" and the boundary group has to be kept
+    /// and compared for real.
+    Head(u128),
     Text(Vec<u8>),
+}
+
+/// The first sixteen bytes, big-endian, so that comparing the numbers is
+/// comparing the bytes. Shorter input is padded with zeroes, which sorts before
+/// anything — the same as a shorter string.
+fn head(bytes: &[u8]) -> u128 {
+    let mut v = [0u8; 16];
+    let n = bytes.len().min(16);
+    v[..n].copy_from_slice(&bytes[..n]);
+    u128::from_be_bytes(v)
+}
+
+/// Is this key exact, or only the beginning of one?
+///
+/// Only the name is abbreviated. An extension is at most twelve bytes — that
+/// is what makes it an extension — so sixteen holds all of it, and sorting
+/// `ext:rs` by extension stops being a single tie group of seventy thousand.
+fn key_is_exact(key: SortKey) -> bool {
+    key != SortKey::Name
 }
 
 fn sort_value(
@@ -763,8 +806,8 @@ fn sort_value(
     fold: &mut Folded,
 ) -> SortValue {
     match key {
-        SortKey::Name => SortValue::Text(fold.fold_bytes(name).to_vec()),
-        SortKey::Ext => SortValue::Text(fold.fold_bytes(ext_bytes(name)).to_vec()),
+        SortKey::Name => SortValue::Head(head(fold.fold_bytes(name))),
+        SortKey::Ext => SortValue::Head(head(fold.fold_bytes(ext_bytes(name)))),
         SortKey::Path => {
             SortValue::Text(seg.path(row, &String::from_utf8_lossy(name)).into_bytes())
         }
@@ -788,27 +831,38 @@ fn sort_value(
 /// still displace it. Cutting at exactly `need` would return a page that is
 /// deterministic, plausible, and not the one brute force produces — timestamps
 /// tie in the thousands on a real filesystem.
-fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool) -> Vec<u32> {
+fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool, exact: bool) -> Vec<u32> {
     if need == 0 || keyed.is_empty() {
         return Vec::new();
     }
     if keyed.len() <= need {
         return keyed.iter().map(|(_, row)| *row).collect();
     }
+    // The row number is the second key, and it is not a formality: rows are
+    // stored newest-first with the path breaking *that*, so ordering ties by
+    // row is ordering them the way the final sort will. It also makes the
+    // comparison total, which is what removes the tie group.
+    //
+    // Removing it matters. Sorting by `kind` puts a hundred thousand rows at
+    // the same value, and keeping that whole group — which breaking ties on
+    // the path required — cost 73 ms where this costs four.
+    let cmp = |a: &(SortValue, u32), b: &(SortValue, u32)| {
+        if desc { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) }.then(a.1.cmp(&b.1))
+    };
     // Selection, not a sort: finding which forty win out of two hundred
     // thousand does not require ordering the rest, and `sort_hits` orders the
     // survivors anyway.
-    //
-    // Measured at no difference from a full sort at a million entries — the
-    // walk dominates by an order of magnitude — so this is not the reason the
-    // query is fast. It is here because it is the same amount of code and it
-    // stops mattering later rather than sooner.
     let k = need - 1;
-    keyed.select_nth_unstable_by(k, |a, b| if desc { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) });
+    keyed.select_nth_unstable_by(k, cmp);
     let (top, rest) = keyed.split_at(need);
-    let boundary = &top[k].0;
     let mut out: Vec<u32> = top.iter().map(|(_, row)| *row).collect();
-    out.extend(rest.iter().filter(|(v, _)| v == boundary).map(|(_, r)| *r));
+    if !exact {
+        // An abbreviated key only says the first eight bytes agree. The rows
+        // that share them still have to be compared properly, and there are
+        // few of them.
+        let boundary = &top[k].0;
+        out.extend(rest.iter().filter(|(v, _)| v == boundary).map(|(_, r)| *r));
+    }
     out
 }
 
@@ -851,7 +905,12 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
             SortKey::Disk => a.meta.disk.cmp(&b.meta.disk),
         };
         let o = if desc { o.reverse() } else { o };
-        o.then_with(|| a.path.cmp(&b.path))
+        // The stored order breaks the tie: newest first, then path. Not the
+        // path alone — on a low-cardinality key like `kind` that makes the
+        // whole result set one tie group, and an engine then has to look at
+        // every row of it to name the first forty.
+        o.then_with(|| b.meta.mtime.cmp(&a.meta.mtime))
+            .then_with(|| a.path.cmp(&b.path))
     });
     for (slot, (_, h)) in hits.iter_mut().zip(keyed) {
         *slot = h;

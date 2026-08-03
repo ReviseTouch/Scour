@@ -838,3 +838,74 @@ A fold calls it after writing the new segment — but the new segment's bytes,
 half a gigabyte at this size, were still alive until the function returned.
 Moving the trim outside took the resident cost of serving ten million entries
 from **360 MB to 4**.
+
+## 2026-08-03 — sorting by the other columns
+
+Every sort key worked and was checked against brute force. What had never been
+measured is what each one *costs*. On the real home directory, 1,214,678
+entries, one segment, a page of forty counting to five hundred:
+
+| query | modified | size | created | accessed | kind | ext | name | path |
+|---|---|---|---|---|---|---|---|---|
+| `rapor` (18) | 0.35 | 0.31 | 0.27 | 0.25 | 0.23 | 0.32 | 0.35 | 0.35 |
+| `ext:rs` (74k) | 1.68 | 5.49 | 6.29 | 4.94 | 9.12 | 5.42 | 7.63 | 21.89 |
+| `kind:image` (57k) | 3.49 | 9.77 | 8.52 | 8.31 | 9.26 | 9.89 | 10.00 | 22.02 |
+| everything (1.2M) | 0.74 | 25.6 | 20.1 | 18.9 | 19.7 | 29.3 | 34.0 | 269.5 |
+
+**A selective query sorts by anything for nothing** — the filter narrows first,
+and forty rows sort in a quarter of a millisecond whichever column they are
+ordered by.
+
+Before the three changes below, the same table read: `ext:rs` by extension
+**84 ms**, by kind **76**; `kind:image` by name **72**; and the whole corpus by
+name **1,687 ms**, by extension **1,516**.
+
+### The tie-break was the whole problem
+
+Ties broke on the path. That is sensible for a key that rarely ties, and
+catastrophic for one that always does: sorting by `kind` puts a hundred
+thousand rows at one value, and deciding which forty come first *by path* means
+building a path for every one of them.
+
+Ties now break the way rows are stored — **newest first, then path**. It is the
+better answer as well as the cheaper one: someone sorting by kind wants "code
+files, newest first", not "code files in alphabetical path order". And because
+rows are already stored in that order, the row number *is* the tie-break: the
+comparison becomes total, and there is no group to keep.
+
+The reference in `scour-mock` and the tantivy engine were changed to match,
+because this is the contract and not an implementation detail. A test pins the
+intent on its own, since changing an implementation and its reference together
+proves they agree and not that either is right.
+
+### Text keys are sixteen bytes, not a string
+
+Sorting a million rows by name allocated a million short `Vec`s. The key is now
+the first sixteen bytes packed big-endian into a `u128`, which orders
+identically to the bytes it came from. An extension is at most twelve bytes by
+definition, so for `ext:` the key is *exact* and there is no group at all —
+which is what took `ext:rs` by extension from 84 ms to 5.4.
+
+A name can be longer, so its key is abbreviated: the rows sharing sixteen bytes
+of name are compared properly, and there are few of them.
+
+### A bug the measurement found
+
+The row-driven walk — the one that skips the name arena when no test reads a
+name — was handing `sort_value` an empty name. Sorting by name with a query
+that has no name test therefore gave *every row the same key*.
+
+The answer stayed correct, because everything then tied and the final sort
+compared the real names. The cost did not: **1,117,687 rows built to return
+forty.**
+
+It was invisible to every test, because the tests that sort by name all use
+`ext:rs`, which reads names. It became obvious the moment `Found` started
+reporting how many rows it had built rather than only how many it had visited —
+which is the same lesson as `fast_path` and `rows_visited` before it.
+
+### What is left
+
+`path` over the whole corpus, at 269 ms, is the one thing that cannot be
+abbreviated: two paths that share sixteen bytes are the normal case, so the
+sort has to build 1.2 million strings. With any filter at all it is 22 ms.

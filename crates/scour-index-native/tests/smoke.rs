@@ -525,3 +525,129 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
     );
     assert_eq!(found.total, f.expected_count("folder:"));
 }
+
+#[test]
+fn ties_come_back_newest_first() {
+    // The tie-break, pinned on its own rather than only against the reference:
+    // both were changed together, and a test that compares them proves they
+    // agree, not that either is right.
+    //
+    // Sorting by kind puts every code file at the same value. Which forty of
+    // them appear is decided by the stored order — newest first — because that
+    // is both the useful answer and the one that costs nothing.
+    let f = Fixture::new(20_000);
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at("kind:code", NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Kind,
+            descending: false,
+            offset: 0,
+            limit: 40,
+            count_cap: 10_000_000,
+        },
+    );
+    let times: Vec<i64> = found.hits.iter().map(|h| h.meta.mtime).collect();
+    assert!(
+        times.len() == 40,
+        "expected a full page, got {}",
+        times.len()
+    );
+    assert!(
+        times.windows(2).all(|w| w[0] >= w[1]),
+        "within one kind the page should be newest first: {times:?}"
+    );
+    assert_eq!(
+        found
+            .hits
+            .iter()
+            .map(|h| h.path.clone())
+            .collect::<Vec<_>>(),
+        f.expected("kind:code", SortKey::Kind, false, 40)
+    );
+}
+
+#[test]
+fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
+    // Names are selected on their first eight bytes. Rows that share those
+    // eight still have to be compared properly, or a page of files whose names
+    // begin alike comes back in the wrong order.
+    let tmp: Vec<Entry> = (0..300)
+        .map(|i| Entry {
+            id: scour_core::EntryId::inode(scour_core::SourceId(0), 1, i),
+            path: format!("/a/samepref{:04}.rs", 299 - i),
+            is_dir: false,
+            meta: scour_core::Meta {
+                mtime: 1000 + i as i64,
+                size: 1,
+                ..scour_core::Meta::UNKNOWN
+            },
+        })
+        .collect();
+    let bytes = build(&tmp);
+    let seg = Segment {
+        names: NameArena::open(&bytes.names).expect("names"),
+        cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
+        dirs: DirTable::open(&bytes.dirs).expect("dirs"),
+        tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),
+        alive: &bytes.alive,
+    };
+    let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
+    let got: Vec<String> = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Name,
+            descending: false,
+            offset: 0,
+            limit: 10,
+            count_cap: 10_000_000,
+        },
+    )
+    .hits
+    .into_iter()
+    .map(|h| h.path)
+    .collect();
+    let want: Vec<String> = (0..10).map(|i| format!("/a/samepref{i:04}.rs")).collect();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn a_query_with_no_name_test_still_sorts_by_name_correctly() {
+    // The row-driven walk skips the name arena, which is right until the sort
+    // key is the name. It was not asked, and the result was forty rows chosen
+    // out of a corpus where every sort key had come back identical — correct by
+    // accident, and at the cost of building every row.
+    let f = Fixture::new(20_000);
+    for q in ["", "size:>1kb", "kind:code"] {
+        for key in [SortKey::Name, SortKey::Ext, SortKey::Path] {
+            assert_eq!(
+                f.search(q, key, false, 40),
+                f.expected(q, key, false, 40),
+                "query {q:?} sorted by {key:?}"
+            );
+        }
+    }
+
+    // And it costs a page, not a corpus.
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Kind,
+            descending: true,
+            offset: 0,
+            limit: 40,
+            count_cap: 10_000_000,
+        },
+    );
+    assert!(
+        found.rows_built < 200,
+        "built {} rows for a page of forty",
+        found.rows_built
+    );
+}

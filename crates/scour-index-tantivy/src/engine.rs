@@ -1268,7 +1268,12 @@ fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
             SortKey::Disk => a.meta.disk.cmp(&b.meta.disk),
         };
         let o = if desc { o.reverse() } else { o };
-        o.then_with(|| a.path.cmp(&b.path))
+        // Newest first, then path. Shared with the native index and with the
+        // reference, because it is the contract rather than an implementation
+        // detail: a low-cardinality key like `kind` otherwise puts the whole
+        // result set in one tie group.
+        o.then_with(|| b.meta.mtime.cmp(&a.meta.mtime))
+            .then_with(|| a.path.cmp(&b.path))
     });
 }
 
