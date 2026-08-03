@@ -38,7 +38,13 @@ pub enum Error {
     /// No index exists yet. The first scan has not finished.
     NotIndexed,
     /// Another writer holds the index.
-    IndexBusy,
+    ///
+    /// `detail` says which directory and is optional so that an older client
+    /// deserialising a newer reply still reads the variant.
+    IndexBusy {
+        #[serde(default)]
+        detail: String,
+    },
     /// The index is unreadable and has to be rebuilt.
     IndexCorrupt {
         detail: String,
@@ -101,7 +107,7 @@ impl Error {
             Error::QueryTooShort { .. } => "query_too_short",
             Error::ContentNotIndexed => "content_not_indexed",
             Error::NotIndexed => "not_indexed",
-            Error::IndexBusy => "index_busy",
+            Error::IndexBusy { .. } => "index_busy",
             Error::IndexCorrupt { .. } => "index_corrupt",
             Error::SourceUnavailable { .. } => "source_unavailable",
             Error::Unsupported { .. } => "unsupported",
@@ -117,7 +123,7 @@ impl Error {
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
-            Error::IndexBusy
+            Error::IndexBusy { .. }
                 | Error::NotIndexed
                 | Error::SourceUnavailable { .. }
                 | Error::Unreachable { .. }
@@ -141,7 +147,8 @@ impl fmt::Display for Error {
                 f.write_str("This index does not contain document contents")
             }
             Error::NotIndexed => f.write_str("The index is not ready yet"),
-            Error::IndexBusy => f.write_str("The index is busy"),
+            Error::IndexBusy { detail } if detail.is_empty() => f.write_str("The index is busy"),
+            Error::IndexBusy { detail } => write!(f, "The index is busy: {detail}"),
             Error::IndexCorrupt { detail } => write!(f, "The index is damaged: {detail}"),
             Error::SourceUnavailable { source } => {
                 write!(f, "Source {} is not available", source.0)
@@ -172,7 +179,9 @@ mod tests {
             Error::QueryTooShort { need: 3 },
             Error::ContentNotIndexed,
             Error::NotIndexed,
-            Error::IndexBusy,
+            Error::IndexBusy {
+                detail: "in use".into(),
+            },
             Error::IndexCorrupt {
                 detail: String::new(),
             },

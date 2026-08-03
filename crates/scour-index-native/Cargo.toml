@@ -20,6 +20,12 @@ parking_lot = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 [dev-dependencies]
 scour-mock = { workspace = true }
 tempfile   = "3"

@@ -383,12 +383,25 @@ fn run(
                     // it lost. Every platform loses track differently; this is
                     // the one place that has to care.
                     if let Change::Rescan { path } = &c {
+                        // An empty path means "I lost track and cannot say
+                        // where" — inotify exhausting its watches, a kernel
+                        // buffer overflowing. It used to match no source and be
+                        // dropped, which is the worst possible reading: the one
+                        // message that exists to say the index is drifting was
+                        // the one message thrown away, and the drift then
+                        // continued silently until someone rescanned by hand.
+                        if path.is_empty() {
+                            for i in 0..shared.sources.len() {
+                                scan(&shared, &changes_tx, i, None);
+                            }
+                            dirty = true;
+                            continue;
+                        }
                         let owner = shared.sources.iter().position(|s| {
                             s.describe().roots.iter().any(|r| path.starts_with(r.as_str()))
                         });
                         if let Some(i) = owner {
-                            let sub = (!path.is_empty()).then(|| path.clone());
-                            scan(&shared, &changes_tx, i, sub);
+                            scan(&shared, &changes_tx, i, Some(path.clone()));
                             dirty = true;
                         }
                         continue;

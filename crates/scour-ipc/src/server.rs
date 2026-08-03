@@ -115,12 +115,37 @@ where
         Ok(c) => c,
         Err(_) => return,
     };
-    let reader = BufReader::new(conn);
-    for line in reader.lines() {
+    // Bounded, not `lines()`. A line is one request and requests are small —
+    // the largest by far is a query someone typed. Reading without a ceiling
+    // means a client that opens the socket and sends bytes with no newline in
+    // them grows the service's memory for as long as it cares to: measured at
+    // 19 MB to 282 MB from a single 256 MB write, from a peer that had to do
+    // nothing but connect.
+    let mut reader = BufReader::new(conn);
+    loop {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(line) = line else { return };
+        let line = match read_line_capped(&mut reader) {
+            Ok(Some(line)) => line,
+            Ok(None) => return,
+            // Over the ceiling: say so and hang up. Continuing would mean
+            // resynchronising on a newline that may never arrive.
+            Err(TooLong) => {
+                let reply = Reply {
+                    id: 0,
+                    outcome: Outcome::Error(Error::Config {
+                        detail: format!("a request may not exceed {MAX_LINE} bytes"),
+                    }),
+                };
+                if let Ok(mut text) = serde_json::to_string(&reply) {
+                    text.push('\n');
+                    let _ = out.write_all(text.as_bytes());
+                    let _ = out.flush();
+                }
+                return;
+            }
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -145,6 +170,62 @@ where
         text.push('\n');
         if out.write_all(text.as_bytes()).is_err() || out.flush().is_err() {
             return;
+        }
+    }
+}
+
+/// The largest request this will read.
+///
+/// A megabyte is far beyond anything the protocol produces — the longest real
+/// request is a query with a path in it — and far below anything that hurts.
+const MAX_LINE: usize = 1024 * 1024;
+
+/// The peer sent more than [`MAX_LINE`] bytes without a newline.
+struct TooLong;
+
+/// One newline-terminated line, or the end of the stream, or a refusal.
+///
+/// `BufRead::read_line` would do this in one call and has no ceiling; every
+/// other part of it — UTF-8 validation, stripping the newline — is reproduced
+/// here because the ceiling is the point.
+fn read_line_capped<R: BufRead>(reader: &mut R) -> std::result::Result<Option<String>, TooLong> {
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Ok(None),
+        };
+        if available.is_empty() {
+            // End of stream. A trailing line without a newline is still a
+            // request, and answering it is friendlier than dropping it.
+            return Ok(if buf.is_empty() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&buf).into_owned())
+            });
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                if buf.len() + i > MAX_LINE {
+                    return Err(TooLong);
+                }
+                buf.extend_from_slice(&available[..i]);
+                reader.consume(i + 1);
+                let mut s = String::from_utf8_lossy(&buf).into_owned();
+                if s.ends_with('\r') {
+                    s.pop();
+                }
+                return Ok(Some(s));
+            }
+            None => {
+                if buf.len() + available.len() > MAX_LINE {
+                    return Err(TooLong);
+                }
+                buf.extend_from_slice(available);
+                let n = available.len();
+                reader.consume(n);
+            }
         }
     }
 }

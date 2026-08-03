@@ -1133,3 +1133,37 @@ After porting the engine's tokeniser: **28 of 28**.
 That is the whole argument for the wire carrying spans rather than the frontend
 tokenising for itself, made as a number rather than as an opinion. A second
 parser does not announce itself when it drifts.
+
+## 2026-08-03 — what durability costs
+
+Nothing in the workspace called `fsync`, the manifest was written in place over
+the only copy of itself, and segment files were unlinked *before* the manifest
+stopped naming them. Each of those turns a kill into an index that does not
+open — not a lost commit, a re-walk of the disk.
+
+Fixing it puts a sync on every segment part, replaces the manifest and the
+`alive` bitmaps by rename, and unlinks only after the manifest has been
+rewritten. The same NTFS volume, same command as above:
+
+| | before | after |
+|---|---|---|
+| scan, warm cache | 2,272 ms | **3,033 ms** / 3,067 ms |
+| peak RSS | 148.4 MiB | 141.8 MiB |
+| index on disk | 88.4 MB | 86.4 MB |
+
+**About 34%**, paid per commit rather than per entry, on 1.5 million entries.
+A first run measured 17,056 ms and was discarded: a release build was running
+on the same machine. The two clean runs agree to 34 ms of each other.
+
+The directory lock costs one `flock` at open. A second service on the same
+index now refuses to start:
+
+```
+Error: opening the index at …/depo-index/native
+Caused by: The index is busy: another Scour process is writing …/depo-index/native
+```
+
+And `shutdown` now ends the process. It used to set a flag that the accept loop
+only looked at when the next connection arrived — on an idle machine, never.
+Measured: the reply arrives (`{"id":1,"ok":{"result":"accepted"}}`) and two
+seconds later `pgrep -xc scourd` reports 0, where it reported 1 before.

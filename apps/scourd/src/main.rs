@@ -11,6 +11,7 @@ mod wire;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -95,10 +96,24 @@ fn main() -> Result<()> {
 
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
+    let wake_addr = addr.clone();
     server.serve(
         move |req| {
             if matches!(req, scour_proto::Request::Shutdown {}) {
                 handler_stop.store(true, Ordering::Relaxed);
+                // Setting the flag is not enough: the accept loop is blocked
+                // inside `accept` and only looks at it when a connection
+                // arrives. Without this the service answered `shutdown` and
+                // then kept running until something else happened to connect —
+                // which, on an idle machine, is never.
+                //
+                // From another thread, and after a moment, so this request's
+                // own reply is written before the loop is torn down.
+                let addr = wake_addr.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(50));
+                    let _ = scour_ipc::Client::connect(&addr);
+                });
             }
             handle::dispatch(&handler_engine, req)
         },

@@ -58,8 +58,10 @@
 mod build;
 mod columns;
 mod dirs;
+mod durable;
 mod ids;
 mod index;
+mod lock;
 mod names;
 mod search;
 mod segment;

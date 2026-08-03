@@ -19,3 +19,4 @@ interprocess = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+interprocess = { workspace = true }

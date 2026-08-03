@@ -80,6 +80,17 @@ rustc-hash  = "2"
 memmap2     = "0.9"
 memchr      = "2"
 
+# One writer per index directory. The lock has to be released by the *kernel*
+# when a process dies — a pid file leaves a stale claim after exactly the crash
+# it exists to survive — so this is `flock` and `LockFileEx` directly rather
+# than a crate wrapping them.
+libc        = "0.2"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+] }
+
 # MCP. Only `apps/scour-mcp` depends on these, which is the whole reason it is
 # a separate binary: the CLI and the daemon stay free of an async runtime.
 rmcp        = { version = "3", features = ["server", "macros", "transport-io"] }

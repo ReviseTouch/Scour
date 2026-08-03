@@ -38,7 +38,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::{build, build_sorted};
 use crate::columns::Field;
+use crate::durable::replace_synced;
 use crate::ids::digest;
+use crate::lock::DirLock;
 use crate::names::Folded;
 use crate::search::{Plan, Segment, Wanted, run_with, sort_hits};
 use crate::segment::Live;
@@ -113,12 +115,20 @@ struct Inner {
 pub struct NativeIndex {
     dir: PathBuf,
     inner: RwLock<Inner>,
+    /// Released when this is dropped, or by the kernel if the process dies.
+    /// Held for the lifetime of the index because every writing path — commit,
+    /// sweep, maintain — goes through this value.
+    _lock: DirLock,
 }
 
 impl NativeIndex {
     /// Open the index in `dir`, creating an empty one if there is none.
     pub fn open_or_create(dir: &Path) -> Result<NativeIndex> {
         std::fs::create_dir_all(dir).map_err(|e| Error::io(&e, &dir.to_string_lossy()))?;
+        // Before anything is read, and long before anything is written: a
+        // second writer here does not merely lose an update, it calls
+        // `File::create` on a file the first one has mmapped.
+        let lock = DirLock::acquire(dir)?;
         let meta: Meta = match std::fs::read_to_string(dir.join(META_FILE)) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| Error::IndexCorrupt {
                 detail: format!("{META_FILE}: {e}"),
@@ -142,6 +152,7 @@ impl NativeIndex {
                 next_segment: meta.next_segment,
                 ..Inner::default()
             }),
+            _lock: lock,
         })
     }
 
@@ -162,8 +173,12 @@ impl NativeIndex {
         let json = serde_json::to_string_pretty(&meta).map_err(|e| Error::Io {
             detail: e.to_string(),
         })?;
+        // Written beside itself and renamed over, so a kill mid-write leaves
+        // the old manifest rather than a truncated one. `std::fs::write`
+        // truncates first, and a zero-length manifest is an index that reports
+        // itself corrupt and has to be rebuilt from a walk of the disk.
         let p = self.dir.join(META_FILE);
-        std::fs::write(&p, json).map_err(|e| Error::io(&e, &p.to_string_lossy()))
+        replace_synced(&p, json.as_bytes())
     }
 
     /// Turn everything staged and hidden into files.
@@ -256,8 +271,16 @@ impl NativeIndex {
         }
         inner.hidden.clear();
         inner.hidden_prefixes.clear();
-        self.drop_empty(inner);
+        // Order, and it is the difference between a crash costing a commit and
+        // a crash costing the index: the manifest stops naming these segments
+        // *before* their files go. The other way round — which is how this was
+        // written — leaves a window in which the manifest points at files that
+        // are no longer there, and the index does not open again.
+        let gone = self.forget_empty(inner);
         self.save_meta(inner)?;
+        for n in gone {
+            Live::erase(&self.dir, n);
+        }
         Ok(())
     }
 
@@ -268,7 +291,7 @@ impl NativeIndex {
     /// and until this ran the emptied segment stayed in the list and was walked
     /// end to end by every query. Measured on a real index: 1,204,270 rows read
     /// per search to produce nothing.
-    fn drop_empty(&self, inner: &mut Inner) {
+    fn forget_empty(&self, inner: &mut Inner) -> Vec<u64> {
         let mut gone = Vec::new();
         inner.segments.retain(|s| {
             if s.rows() > 0 && s.live_rows() == 0 {
@@ -278,9 +301,7 @@ impl NativeIndex {
                 true
             }
         });
-        for n in gone {
-            Live::erase(&self.dir, n);
-        }
+        gone
     }
 
     /// Fold these segments into one, dropping rows that are no longer live.
@@ -537,8 +558,15 @@ impl Index for NativeIndex {
                     // A file that was removed and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
                     inner.hidden.remove(&d);
+                    // `get`, not `[]`. The two collections are cleared
+                    // together in `flush` and I could not construct a case
+                    // where the position outlives the buffer — but the cost of
+                    // being sure is nothing, and the cost of being wrong is a
+                    // panic inside a write lock in a long-lived service.
                     match inner.staged_at.get(&d).copied() {
-                        Some(i) if inner.staged[i].id == e.id => inner.staged[i] = e,
+                        Some(i) if inner.staged.get(i).is_some_and(|s| s.id == e.id) => {
+                            inner.staged[i] = e
+                        }
                         _ => {
                             let at = inner.staged.len();
                             inner.staged_at.insert(d, at);
@@ -617,8 +645,12 @@ impl Index for NativeIndex {
                 live.save_alive(&self.dir)?;
             }
         }
-        self.drop_empty(&mut inner);
+        // Same order as `flush`: forget, record, then unlink.
+        let erased = self.forget_empty(&mut inner);
         self.save_meta(&inner)?;
+        for n in erased {
+            Live::erase(&self.dir, n);
+        }
         Ok(gone)
     }
 

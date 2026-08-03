@@ -60,7 +60,19 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
             engine.rescan(path)?;
             Response::Accepted
         }
-        Request::Maintain { level } => Response::Maintained(engine.maintain(level)?),
+        // Flush happens here and has a result worth reporting. The heavy
+        // levels are queued for the worker, and reporting their empty
+        // placeholder printed `Rebuild: 0 B → 0 B in 0 ms` after a rebuild
+        // that demonstrably folded sixteen segments into one — a made-up
+        // measurement, which is worse than no measurement.
+        Request::Maintain { level } => {
+            let report = engine.maintain(level)?;
+            if level == scour_core::Maintenance::Flush {
+                Response::Maintained(report)
+            } else {
+                Response::Accepted
+            }
+        }
         Request::Syntax {} => Response::Text {
             text: scour_query::SYNTAX.to_owned(),
         },

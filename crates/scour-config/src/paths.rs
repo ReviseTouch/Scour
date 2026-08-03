@@ -41,9 +41,25 @@ pub fn default_index_dir() -> PathBuf {
 pub fn socket_path() -> String {
     #[cfg(windows)]
     {
-        // Named pipes are not filesystem paths, and are per-session by
-        // convention rather than by permission.
-        r"\\.\pipe\scour".to_owned()
+        // Named pipes live in one machine-wide namespace, not in a filesystem
+        // where permissions would separate users. A fixed name therefore means
+        // the second user to log in talks to the first user's service — and
+        // reads the first user's file names, which is the whole of what this
+        // index holds. The user name is the separator that a path gives for
+        // free everywhere else.
+        //
+        // It is not an access control: another user who guesses the name can
+        // still connect. It is what stops two people colliding by default, and
+        // an ACL on the pipe is the fix for the rest.
+        let who = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
+        let who: String = who
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        format!(
+            r"\\.\pipe\scour-{}",
+            if who.is_empty() { "user".into() } else { who }
+        )
     }
     #[cfg(not(windows))]
     {

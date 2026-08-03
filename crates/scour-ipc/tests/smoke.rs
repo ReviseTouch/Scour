@@ -190,3 +190,53 @@ fn a_socket_left_by_a_crash_is_cleared_rather_than_fatal() {
     let server = Server::bind(&addr).expect("a dead socket must not block a restart");
     assert_eq!(server.addr(), addr);
 }
+
+/// A peer that connects and sends bytes without a newline used to grow the
+/// service's memory for as long as it cared to — measured at 19 MB to 282 MB
+/// from one 256 MB write. Now it is answered and hung up on.
+#[test]
+fn a_request_without_an_end_is_refused_rather_than_buffered() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let s = Running::start();
+    use interprocess::local_socket::Stream;
+    use interprocess::local_socket::traits::Stream as _;
+    let mut conn = Stream::connect(raw_name(&s.addr)).expect("connect");
+    // Two megabytes with no newline in them, against a one megabyte ceiling.
+    let flood = vec![b'x'; 2 * 1024 * 1024];
+    // The write may fail partway once the far end hangs up, which is itself
+    // the behaviour being asserted; either outcome is a pass at this step.
+    let _ = conn.write_all(&flood);
+    let _ = conn.flush();
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(conn);
+    let n = reader.read_line(&mut line).unwrap_or(0);
+    assert!(n > 0, "the service should answer rather than go silent");
+    assert!(
+        line.contains("may not exceed"),
+        "expected a refusal, got {line}"
+    );
+
+    // And the service is still serving everyone else.
+    let mut ok = Client::connect(&s.addr).expect("reconnect");
+    let reply = ok
+        .call(Request::Explain {
+            query: "still here".into(),
+            cursor: None,
+        })
+        .expect("call");
+    assert!(matches!(reply, Response::Explain { .. }));
+}
+
+/// The address as `interprocess` wants it — the same rule `Server::name` uses,
+/// repeated here because that function is private and this test needs a raw
+/// connection rather than a `Client`.
+fn raw_name(addr: &str) -> interprocess::local_socket::Name<'_> {
+    use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ToFsName, ToNsName};
+    if cfg!(windows) {
+        addr.to_ns_name::<GenericNamespaced>().expect("name")
+    } else {
+        addr.to_fs_name::<GenericFilePath>().expect("name")
+    }
+}

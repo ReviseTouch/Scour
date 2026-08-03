@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::durable::{replace_synced, write_synced};
 use memmap2::Mmap;
 use scour_core::{Entry, EntryId, Error, Result};
 
@@ -53,12 +54,13 @@ impl Live {
             &bytes.tri_dict,
             &bytes.tri_post,
         ];
+        // Synced, not merely written: the manifest is about to name these
+        // files, and a manifest that survives a crash while its segments do
+        // not is an index that cannot be opened.
         for (ext, blob) in PARTS.iter().zip(blobs) {
-            let p = part_path(dir, number, ext);
-            std::fs::write(&p, blob).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
+            write_synced(&part_path(dir, number, ext), blob)?;
         }
-        let p = part_path(dir, number, "alive");
-        std::fs::write(&p, &bytes.alive).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
+        write_synced(&part_path(dir, number, "alive"), &bytes.alive)?;
         Live::open(dir, number, generation)
     }
 
@@ -254,8 +256,10 @@ impl Live {
     }
 
     pub fn save_alive(&self, dir: &Path) -> Result<()> {
-        let p = part_path(dir, self.number, "alive");
-        std::fs::write(&p, &self.alive).map_err(|e| Error::io(&e, &p.to_string_lossy()))
+        // Replaced rather than overwritten: this file is read whole at open
+        // time, and a half-written one turns every row in the segment into a
+        // coin flip between alive and dead.
+        replace_synced(&part_path(dir, self.number, "alive"), &self.alive)
     }
 }
 

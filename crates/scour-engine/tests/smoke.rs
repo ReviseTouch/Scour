@@ -459,3 +459,35 @@ struct NoopWatch;
 impl WatchHandle for NoopWatch {
     fn stop(self: Box<Self>) {}
 }
+
+/// The message that says "I lost track and cannot say where" used to be the
+/// one message dropped.
+///
+/// `notify` emits `Rescan { path: "" }` when inotify runs out of watches or a
+/// kernel buffer overflows — precisely when the index has started drifting and
+/// nothing else will say so. Matching it against the sources' roots found no
+/// owner, because no root is a prefix of the empty string, so it was discarded
+/// and the drift continued until someone rescanned by hand.
+#[test]
+fn a_rescan_that_cannot_say_where_walks_everything() {
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    let before = f.source.scans.load(Ordering::Relaxed);
+
+    f.source.changed(Change::Rescan {
+        path: String::new(),
+    });
+
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > before);
+    assert!(
+        f.source.scans.load(Ordering::Relaxed) > before,
+        "an empty rescan path must still walk"
+    );
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries > 0
+    });
+    assert_eq!(
+        f.engine.status().entries,
+        f.source.entries.read().len() as u64
+    );
+}

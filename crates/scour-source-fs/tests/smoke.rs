@@ -189,9 +189,21 @@ fn a_sink_can_stop_a_walk_partway() {
         ..Default::default()
     };
     let report = src.scan(&ScanOptions::default(), &mut sink).expect("scan");
-    assert!(sink.paths.len() >= 3);
+    // A stop guarantees two things. The sink is not pushed to again — the drain
+    // loop stops feeding it the moment it says so, so this is exact and not a
+    // lower bound. And the report says the scan was cut short, which is what
+    // the engine reads: reconciling on a partial tally would delete every entry
+    // the walk never reached.
+    assert_eq!(sink.paths.len(), 3, "no push after a Stop");
     assert!(report.cancelled);
-    assert!(report.entries < 11, "the walk should not have finished");
+    // What a stop does not guarantee is *where* the walk stopped. The walk is
+    // parallel and sits behind a buffered channel, so by the time the third
+    // entry reaches the sink the other threads have usually counted and queued
+    // theirs already; a tree this small fits in the buffer whole. `entries` is
+    // what the walk found, not what the sink was given, and on a cancelled
+    // report it is a partial tally with no defined stopping point. Asserting a
+    // ceiling on it would be asserting a promptness the walker does not offer.
+    assert!(report.entries >= 3);
 }
 
 #[test]
