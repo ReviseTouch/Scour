@@ -118,45 +118,101 @@ Two defects to fix in the same commit:
 
 ## Phase 5 — The window
 
-Tauri 2.11, vanilla TypeScript, Vite. `apps/scour-gui` is a **frontend**: it
-may name `scour-core`, `scour-proto`, `scour-ipc`, `scour-config`,
-`scour-i18n`, exactly like `apps/scour`, and never the engine or an index.
+**Slint.** One language, no webview, a small bundle, and the desktop app is
+what this is for. A browser client stays possible and secondary — the service
+already speaks a protocol over a socket, so a small HTTP bridge in front of it
+would serve remote or in-browser use without the desktop app knowing.
 
-Stage 0 is not code: `webkit2gtk-4.1` is not installed on this machine
-(`webkitgtk-6.0` is the GTK4 port, which `wry` cannot use), so nothing builds
-until it is.
+`apps/scour-gui` is a **frontend**: it may name `scour-core`, `scour-proto`,
+`scour-ipc`, `scour-config`, `scour-i18n`, exactly like `apps/scour`, and never
+the engine or an index.
+
+Pin exactly — `slint = "=1.16.1"`, `slint-build = "=1.16.1"`. A caret means
+Cargo picks 1.17, whose winit backend divides by a refresh rate it reads as
+zero (`frame_throttle.rs:58`) and crashes under Wine on every start.
 
 | Stage | What | Rough size |
 |---|---|---|
-| 5.1 | Skeleton, two IPC lanes, one `search` command, a plain 200-row table, the mockup's tokens, the measurement line | ~600 lines |
-| 5.2 | Facet rail from `facets`, query-line colouring, sort headers, open/reveal, Turkish-correct highlight offsets computed in Rust, the catalogue | ~700 lines |
-| 5.3 | Virtual list: spacer windowing, LRU pages, generation tokens, skeleton rows, paged scroll remapping | ~250 lines |
+| 5.1 | Skeleton, two IPC connections, `search`, a plain 200-row table, the mockup's tokens, the meter line | ~600 lines |
+| 5.2 | Facet rail from `facets`, the query line, sort headers, open/reveal, match highlighting, the catalogue via `@tr()` | ~800 lines |
+| 5.3 | The list: `ListView`, LRU pages, generation tokens, skeleton rows, the addressable-window bound | ~250 lines |
 | 5.4 | Hidden window, `--show`, single instance, tray, spawn-on-demand daemon | ~300 lines |
 
-Three decisions worth recording because they are not obvious:
+### The query line, which is the hard part
 
-* **Two connections, not one.** `scour-ipc` is one-call-at-a-time with no
-  cancellation, but `scourd` is thread-per-connection and `Engine` is `Sync`.
-  An interactive lane (search, facets) and a background lane (count, tree,
-  stat, status) means a 20 ms report query never sits in front of a keystroke.
-* **Highlight offsets are computed in Rust.** `Hit` carries no match ranges,
-  and a JavaScript `toLowerCase()` gets `İ`/`ı`/`I`/`i` wrong. `fold_indexed`
-  exists for exactly this and its doc comment says so.
-* **Filenames never touch `innerHTML`.** A file named `<img src=x onerror=…>`
-  is trivial to create and the indexer will find it. Rows are cloned from a
-  `<template>` and filled with `textContent`.
+**Slint's `TextInput` has no range colouring.** One `color` for the whole
+field; "the first three characters red" cannot be said. Upstream #9560 puts
+editable text out of scope and 1.17 did not add it. Everything else about this
+line follows from that one sentence.
 
-The scroll-height ceiling is 33.5 M pixels — about 1.1 M rows at 30 px — so a
-1.2 M-row result already exceeds it and needs paged remapping rather than
-linear scaling. But the real bound is 2.2's curve, and for v1 the honest answer
-is a bounded addressable window with a line of text explaining it, not a
-scrollbar that pretends row 800,000 is one drag away. Phase 2.2 measured where
-that bound is: **ten thousand rows**.
+The mockup is therefore not a template to copy — it uses real range colouring,
+which is exactly what is unavailable. What carries over is the *behaviour*, and
+the mockup is where it was worked out:
 
-On Linux the global hotkey is a compositor binding calling `scour-gui --show`,
-intercepted by the single-instance plugin — not a workaround but the design.
-`global-hotkey` 0.8 is X11-only and under Wayland it registers successfully and
-then never fires. Windows and macOS keep the plugin, where it works.
+* **Chips plus a tail.** Completed terms are ordinary `Text` elements, so each
+  can be many colours; the term being typed stays one `TextInput` painted by
+  its *kind*. Rust computes the kind on every keystroke and hands the UI an
+  `int` — colour logic in `.slint` would put the language's rules in two
+  places.
+* **The tail's colour must equal the chip's colour.** If they differ,
+  committing a term changes how it looks and reads as "the colour arrives
+  late". This was got wrong once in the source project and noticed instantly.
+* **Term actions come free.** Hover, the `!` toggle and the `✕` are arithmetic
+  in the mockup — the pointer's x divided by a character width — because there
+  is no element per term. In Slint the terms *are* elements, so this is a
+  `TouchArea` each.
+* **Spans still come from the engine.** `explain` already returns them, and
+  they are what decides a chip's kind. The frontend must not tokenise; that is
+  a second parser, and the mockup measured what happens when two of them drift
+  — 27 of 28 queries agreed, and the one that did not still looked coloured.
+
+Four Slint traps, each of which compiles and then misbehaves:
+
+* A conditional element (`if c.kind == 1: Text`) is **not** included in the
+  parent's `spacing`; give the element its own `width: self.preferred-width +
+  Npx` instead.
+* `visible: false` still occupies layout. Empty the text instead.
+* Referring to an outside element's `has-focus` **from inside a `for`** breaks
+  keyboard input entirely — no error, the `TextInput` simply stops receiving
+  keys. Feed an `in property <bool>` from Rust.
+* `PointerEvent` has no `position`; use `self.absolute-position + self.mouse-x`.
+
+If chips prove not to be enough — inline parse errors, a background badge per
+operator, a query long enough to scroll — the other route is drawing the text
+with `cosmic-text` and handing Slint an `image`. Measured cost in the source
+project: ~1,150 lines plus a ~400-line bridge for keys, clipboard, focus and
+DPI. Not first.
+
+### The list
+
+The addressable window is **ten thousand rows**, measured in phase 2.2. Beyond
+it the UI says so and invites a narrower query, which is what a search tool
+should encourage anyway. `ListView` is virtualised already, so the work is
+paging: LRU pages, a generation token per query so a stale reply is dropped
+rather than shown, and skeleton rows rather than the previous query's rows.
+
+### Two connections, not one
+
+`scour-ipc` is one call at a time with no cancellation, but `scourd` is
+thread-per-connection and `Engine` is `Sync`. An interactive connection
+(`search`, `facets`, `explain`) and a background one (`count`, `tree`, `stat`,
+`status`) is what stops a 20 ms report query sitting in front of a keystroke.
+
+### Highlighting
+
+Match offsets are computed in Rust with `fold_indexed`, never in the UI: Turkish
+folding changes byte lengths — `İ` is two bytes and folds to one — so offsets
+found in folded text cannot be applied to the original. `scour-core` has the
+function and its doc comment says this is what it is for. The same folding must
+serve the filter, the highlight and the sort, or a user sees a row that matched
+but was not highlighted and concludes the search is broken.
+
+### The hotkey
+
+A compositor binding on Linux (`bind = SUPER, SPACE, exec, scour-gui --show`)
+with a single-instance guard, because a portal-less global hotkey is not
+something an application can claim under Wayland. Windows and macOS register
+one directly.
 
 ## Phase 6 — Disk usage and the report tab
 
@@ -178,15 +234,18 @@ age distribution are not.
 
 ## Phase 7 — Shipping
 
-Bundles for `.deb`/`.rpm`/AppImage, NSIS on Windows, `.app`/`.dmg` on macOS.
-Three details that are cheap to get right and expensive to discover:
+Two binaries in one package: `scourd` and `scour-gui`, plus the `scour` CLI.
+Slint links its own renderer, so there is no webview runtime to depend on and
+no `libwebkit2gtk` in `Depends:` — the Linux package needs the graphics stack
+its backend uses and nothing more.
 
-* `bundle.linux.deb.depends` **has no default** — unset, the package installs
-  and then fails to start.
-* `scourd` ships as an ordinary packaged binary, not `externalBin`, which
-  breaks macOS notarisation ([tauri#11992](https://github.com/tauri-apps/tauri/issues/11992), open).
-* Nothing in the updater stops the daemon, and on Windows a running `scourd.exe`
-  holds a lock on its own image. Stop it over the socket first.
+Two details that are cheap to get right and expensive to discover:
+
+* **Nothing stops the daemon during an update.** On Windows a running
+  `scourd.exe` holds a lock on its own image, so an installer that replaces it
+  fails halfway. Stop it over the socket first, then replace, then start.
+* **The GUI is not the service.** Packaging them as one unit is right;
+  starting them as one is not, because the service outlives every window.
 
 Daemon lifecycle differs per platform and each is a known pattern: systemd
 socket activation on Linux (the gpg-agent shape, no postinst), `SMAppService`
@@ -194,9 +253,10 @@ on macOS with the plist inside the signed bundle, `HKCU\…\Run` on Windows —
 with spawn-on-demand as the backstop everywhere, since each of those can be
 disabled.
 
-Signing costs real money and calendar time: ~$99/yr Apple plus ~$250/yr for a
-Windows OV certificate and a ~$130 token. Azure's $9.99/mo alternative is not
-available to individuals in Türkiye. **Skip EV** — Microsoft now states in
+Signing costs real money and calendar time, whichever toolkit is underneath:
+~$99/yr Apple plus ~$250/yr for a Windows OV certificate and a ~$130 token.
+Azure's $9.99/mo alternative is not available
+to individuals in Türkiye. **Skip EV** — Microsoft now states in
 writing that paying the premium for SmartScreen reputation is no longer
 justified.
 
@@ -236,8 +296,9 @@ each belongs to whichever phase next touches its file.
 * `scour_query::describe` builds English with `format!`, so its output is not a
   lookupable msgid despite the doc comment saying it is. Explain will be
   English-only until that changes.
-* The design mockup's comments were in Turkish, unlike everything in this
-  repository. Translated — all 62 of them — so that the parts of it which
-  become `apps/scour-gui` arrive in the source language rather than needing a
-  pass afterwards. Its *visible* text stays Turkish: that is the user-facing
-  half, and in the product it comes from `lang/tr`.
+* The design mockup is a **behaviour** specification, not markup to port. It
+  uses real range colouring, which is the one thing Slint's `TextInput` cannot
+  do; what carries over is what the query line *does* — the roles, the two
+  warning colours, the term actions, the completions. Its comments are English
+  now (all 62 were Turkish); its visible text stays Turkish, because that half
+  comes from `lang/tr` in the product.
