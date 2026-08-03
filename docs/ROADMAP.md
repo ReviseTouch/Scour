@@ -14,7 +14,7 @@ durability, honesty of the ranking, the taxonomy, a window, and a way to ship.
 
 ---
 
-## Phase 1 — Survive being interrupted
+## Phase 1 — Survive being interrupted — **done** (`db9c95c`)
 
 **Why first:** every phase after this one multiplies the number of processes
 touching the index directory. A GUI that spawns the daemon means two writers
@@ -31,8 +31,17 @@ corrupted index and a re-scan of the disk.
 | 1.6 | **Stale-index panic.** `staged_at` is trusted against a segment count that a concurrent maintain can change. | `scour-index-native/src/index.rs` |
 | 1.7 | **Windows pipe name is machine-global.** Two users on one machine collide, and the second one to start talks to the first one's index. Include the user in the name. | `scour-ipc/src/lib.rs` |
 
-Phase 1 is roughly 400 lines and is the only phase with no visible result. It
-is also the only phase whose absence can lose a user's index.
+All seven are done. Measured cost: **34% on a scan** (2,272 ms → 3,033 ms on
+1.5 M entries), paid per commit rather than per entry, and one `flock` at open.
+A second service on the same index refuses to start with the reason; `shutdown`
+now ends the process. Numbers in `MEASUREMENTS.md`.
+
+Two things fell out of doing it. `maintain rebuild` was reporting `0 B → 0 B in
+0 ms` for work it had demonstrably done — the heavy levels are queued for the
+worker, and their empty placeholder was being printed as if it were a
+measurement; they answer `accepted` now. And `Error::IndexBusy` gained a
+`detail`, because "the index is busy" without saying which index is not an
+answer anyone can act on.
 
 ## Phase 2 — Make CI real, and measure the paging curve
 
@@ -220,3 +229,7 @@ each belongs to whichever phase next touches its file.
 * `scour_query::describe` builds English with `format!`, so its output is not a
   lookupable msgid despite the doc comment saying it is. Explain will be
   English-only until that changes.
+* The design mockup's comments are in Turkish, unlike everything in this
+  repository. It lives in a scratchpad rather than here, and it is a design
+  document rather than code — but the parts of it that become `apps/scour-gui`
+  have to be translated on the way in, not after.
