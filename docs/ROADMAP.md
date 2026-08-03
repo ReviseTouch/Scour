@@ -43,7 +43,7 @@ measurement; they answer `accepted` now. And `Error::IndexBusy` gained a
 `detail`, because "the index is busy" without saying which index is not an
 answer anyone can act on.
 
-## Phase 2 — Make CI real, and measure the paging curve
+## Phase 2 — Make CI real, and measure the paging curve — **2.2 and 2.3 done** (`588810f`)
 
 **2.1 — CI has never run.** The workflow exists, the repository has no remote,
 and nothing has ever executed it. It would fail today. Every crate that does
@@ -64,14 +64,20 @@ need`. So the cost of page 250 is roughly `segments × (offset + limit)` paths
 built and thrown away, and it is worst right after a large scan and best right
 after `maintain rebuild`.
 
-No new code: `scour search "a" --offset N --limit 200` for N ∈ {0, 1 k, 10 k,
-50 k, 200 k}, before and after a rebuild, recorded in `MEASUREMENTS.md`. That
-curve decides how far the GUI's scrollbar is allowed to address.
+Measured. Linear in the offset and multiplied by the segment count: offset 0 is
+0.54 ms and offset 200,000 is 225.07 ms on one segment, and at offset 10,000
+sixteen segments cost 298.74 ms against 12.98 ms for one — 23×, more than the
+segment count, because each segment builds its own full prefix. Table in
+`MEASUREMENTS.md`.
 
-**2.3 — Put `rows_built` on the wire.** It is computed in `Found`
-(`search.rs:736`) and dropped before `SearchResponse`. It is the one number
-that makes 2.2 diagnosable from a client. Wire change → `AGENTS.md` in the same
-commit.
+**The addressable window is ten thousand rows, not the fifty thousand guessed
+below.** A 60 fps frame is about 16 ms; after a rebuild that is around row
+12,000 and after a large scan around row 1,000.
+
+**2.3 — `rows_built` is on the wire.** It was computed in `Found` and dropped
+before `SearchResponse`; it is the one number that makes 2.2 diagnosable from a
+client rather than only from a benchmark, and the CLI prints it when it
+dominates.
 
 ## Phase 3 — Ranking
 
@@ -144,7 +150,8 @@ The scroll-height ceiling is 33.5 M pixels — about 1.1 M rows at 30 px — so 
 1.2 M-row result already exceeds it and needs paged remapping rather than
 linear scaling. But the real bound is 2.2's curve, and for v1 the honest answer
 is a bounded addressable window with a line of text explaining it, not a
-scrollbar that pretends row 800,000 is one drag away.
+scrollbar that pretends row 800,000 is one drag away. Phase 2.2 measured where
+that bound is: **ten thousand rows**.
 
 On Linux the global hotkey is a compositor binding calling `scour-gui --show`,
 intercepted by the single-instance plugin — not a workaround but the design.
