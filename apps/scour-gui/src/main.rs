@@ -117,17 +117,14 @@ fn t(cat: &Catalogue, msgid: &str) -> slint::SharedString {
 /// existed.
 const DEBOUNCE_MS: u64 = 0;
 
-/// How many rows are fetched at a time.
+/// The most rows that will be asked for, however tall the window is.
 ///
-/// The screen holds about twenty. Two hundred was the first number here and
-/// every one of them costs a path rebuilt in the engine and six strings
-/// allocated in the window, on every keystroke, for rows nobody scrolls to
-/// before typing the next letter.
-///
-/// Sixty is three screens of scrolling with the mouse already moving, which is
-/// as far as anyone gets before the list has been replaced anyway. Paging past
-/// it is Phase 5.3.
-const PAGE: u32 = 60;
+/// The count itself comes from the window — `visible-rows`, which is what fits
+/// plus a dozen to scroll into — because only the window knows how tall it is
+/// and it changes when somebody drags the edge. This is only the ceiling, so
+/// that a maximised window on a tall screen cannot turn one keystroke into a
+/// thousand rebuilt paths.
+const PAGE_MAX: u32 = 120;
 
 struct State {
     generation: u64,
@@ -232,9 +229,12 @@ fn main() -> Result<()> {
             // Straight out, no timer. At `DEBOUNCE_MS` of zero the wait is
             // the only thing a timer would add, and a stale reply is dropped
             // by generation whether or not one ran.
+            let rows = weak
+                .upgrade()
+                .map_or(60, |w| w.get_visible_rows().max(0) as u32);
             if DEBOUNCE_MS == 0 {
-                trace(&format!("dispatch {generation}"));
-                dispatch(&state, &link);
+                trace(&format!("dispatch {generation}, {rows} rows"));
+                dispatch(&state, &link, rows);
                 return;
             }
             let state = state.clone();
@@ -247,7 +247,7 @@ fn main() -> Result<()> {
                 }
                 let _ = weak;
                 trace(&format!("dispatch {generation}"));
-                dispatch(&state, &link);
+                dispatch(&state, &link, rows);
             });
         });
     }
@@ -270,12 +270,16 @@ fn main() -> Result<()> {
                 };
                 s.generation += 1;
             }
-            if let Some(w) = weak.upgrade() {
-                let s = state.borrow();
-                w.set_active_facet(s.facet.clone().unwrap_or_default().into());
-                w.set_busy(true);
-            }
-            dispatch(&state, &link);
+            let rows = match weak.upgrade() {
+                Some(w) => {
+                    let s = state.borrow();
+                    w.set_active_facet(s.facet.clone().unwrap_or_default().into());
+                    w.set_busy(true);
+                    w.get_visible_rows().max(0) as u32
+                }
+                None => 60,
+            };
+            dispatch(&state, &link, rows);
         });
     }
 
@@ -298,10 +302,14 @@ fn main() -> Result<()> {
                 }
                 s.generation += 1;
             }
-            if let Some(w) = weak.upgrade() {
-                w.set_busy(true);
-            }
-            dispatch(&state, &link);
+            let rows = match weak.upgrade() {
+                Some(w) => {
+                    w.set_busy(true);
+                    w.get_visible_rows().max(0) as u32
+                }
+                None => 60,
+            };
+            dispatch(&state, &link, rows);
         });
     }
 
@@ -393,7 +401,7 @@ fn main() -> Result<()> {
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
-    dispatch(&state, &link);
+    dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
     FIRST.with(|f| f.set(Some(launched)));
     window.run().context("the event loop failed")?;
     Ok(())
@@ -406,7 +414,7 @@ fn main() -> Result<()> {
 /// and sending it beside every search doubled the traffic to answer a question
 /// nobody had finished asking. It goes out once the search it belongs to has
 /// actually been shown — see [`apply`].
-fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
+fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: u32) {
     let (generation, query, sort, descending) = {
         let s = state.borrow();
         (s.generation, full_query(&s), s.sort.clone(), s.descending)
@@ -416,7 +424,7 @@ fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
         sort: order_for(&query, &sort),
         query,
         descending,
-        limit: PAGE,
+        limit: rows.clamp(20, PAGE_MAX),
     });
 }
 

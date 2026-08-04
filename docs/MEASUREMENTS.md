@@ -2447,3 +2447,19 @@ nobody scrolls to before typing the next letter. Sixty is three screens.
 The 110 ms is Slint creating a window and there is nothing here to shave off
 it. One sample of three took 1.8 s, which was the service being busy rather
 than the window being slow.
+
+### And the page size comes from the window
+
+Sixty was a guess too. The window reports what fits — `visible-rows`, the
+height divided by the row height plus a dozen to scroll into — because only it
+knows how tall it is and that changes when somebody drags the edge. At the
+default size that is **31 rows**, not 200.
+
+| rows a keystroke | median key → pixels |
+|---|---|
+| 200 | 9–14 ms |
+| 60 | 3.2 ms |
+| **31 (what fits)** | **2.9 ms**, p90 15.6, worst 72.6 |
+
+`PAGE_MAX` of 120 is the ceiling, so a maximised window on a tall screen cannot
+turn one keystroke into a thousand rebuilt paths.

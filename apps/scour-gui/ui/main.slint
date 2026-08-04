@@ -121,6 +121,14 @@ export component MainWindow inherits Window {
     in property <string> hint;
     in property <bool> busy;
     in property <string> scope-label;
+    /// How many rows would fit, plus a little to scroll into.
+    ///
+    /// Reported by the window rather than guessed by Rust, because only the
+    /// window knows how tall it is — and it changes when somebody drags the
+    /// edge. Every row fetched costs a path rebuilt in the engine and six
+    /// strings allocated here, so asking for two hundred to draw twenty was
+    /// paying nine tenths of that for nothing.
+    out property <int> visible-rows: max(20, Math.floor(list.height / Theme.row-height) + 12);
     // The query as Rust folded it back — set only when Rust changes the text
     // itself (a facet click), never on every keystroke, or the caret jumps.
     in-out property <string> query;
@@ -364,7 +372,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                ListView {
+                list := ListView {
                     for row[i] in root.rows: Rectangle {
                         height: Theme.row-height;
                         background: i == root.selected ? Theme.selection
