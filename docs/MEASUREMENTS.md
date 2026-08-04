@@ -2626,3 +2626,60 @@ fifteen of its sixteen columns are constant and the per-block overhead *is* the
 file at that shape. The real corpus went from 51 MB to 57 for the same rows.
 The bound was raised to 26 and the reason written beside it rather than the
 figure quietly adjusted.
+
+## 2026-08-04 — what a commit was actually holding
+
+`SCOUR_LOCK_TRACE=1` prints how long a commit held the write lock, because the
+last three things blamed for this tail were each the wrong one. On the live
+index it said:
+
+```
+commit held the index for 55ms (3 staged)
+commit held the index for 67ms (5 staged)
+```
+
+**Three staged entries, fifty-five milliseconds, once a second.** Split by
+phase, the answer was in neither of the two places it was expected:
+
+```
+kills 0 µs · 2 alive bitmaps 33162 µs
+kills 1 µs · 4 alive bitmaps 55912 µs
+```
+
+### The kills — fixed, and the fix was a second strategy
+
+`kill_ids` merged the wanted identities against the segment's whole table,
+which is right for the hundred thousand a bulk pass hands over and absurd for
+the three a watcher does: a merge is `O(rows in the segment)` however few are
+wanted, because it advances until it passes the last of them. Below the
+crossover — `wanted × log rows` against `rows` — it is now a binary search per
+identity, which is what the table is sorted for. **0 to 1 µs.**
+
+### The bitmaps — the real holder
+
+`save_alive` replaces the live bits of every touched segment: 262 KB and an
+`fsync`, **13 ms a segment**, three or four segments, every second. Copied
+under the lock now and written outside it. A crash between the two leaves the
+older bitmap, which is exactly what a crash before the write always did.
+
+### Where it lands
+
+| | during a full rescan | normal use |
+|---|---|---|
+| queries in 60 s | 643 | **735** |
+| p50 | 1.35 ms | **1.29 ms** |
+| p99 | 329 ms | **3.28 ms** |
+| worst | 924 ms | **23.0 ms** |
+
+The whole tail, across four commits, each measured under the load that provokes
+it:
+
+| | worst |
+|---|---|
+| a rebuild, before any of it | 22,984 ms |
+| after `fold` left the lock | 2,718 ms |
+| after `flush` left it | 1,061 ms |
+| after the kills and the bitmaps | **924 ms rescanning, 23 ms in use** |
+
+What is left is the merge itself during a bulk pass, which is the case it was
+written for and costs what it costs.

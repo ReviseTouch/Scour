@@ -103,6 +103,24 @@ impl Default for Meta {
     }
 }
 
+/// What a flush left for the caller to write once it has let go of the index.
+#[derive(Debug, Default)]
+struct Pending {
+    /// The new segment's number, generation and rows.
+    staged: Option<(u64, u64, Vec<Entry>)>,
+    /// Live bits to replace, by segment number.
+    alive: Vec<(u64, Vec<u8>)>,
+}
+
+impl Pending {
+    fn write_alive(&self, dir: &Path) -> Result<()> {
+        for (number, bits) in &self.alive {
+            Live::write_alive(dir, *number, bits)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default)]
 struct Inner {
     segments: Vec<Live>,
@@ -242,7 +260,9 @@ impl NativeIndex {
     /// afterwards would find — and kill — the row that was just added.
     /// Flush with the lock held throughout. For callers already inside it.
     fn flush(&self, inner: &mut Inner) -> Result<()> {
-        if let Some((number, generation, staged)) = self.flush_prepare(inner)? {
+        let pending = self.flush_prepare(inner)?;
+        pending.write_alive(&self.dir)?;
+        if let Some((number, generation, staged)) = pending.staged {
             let bytes = build(&staged);
             let live = Live::write(&self.dir, number, generation, &bytes)?;
             inner.segments.push(live);
@@ -278,9 +298,9 @@ impl NativeIndex {
     /// duplicated, because the order inside matters: the identities to kill
     /// are read *from* the staged entries, and taking them out first meant a
     /// re-indexed file kept its old row. Two tests said so immediately.
-    fn flush_prepare(&self, inner: &mut Inner) -> Result<Option<(u64, u64, Vec<Entry>)>> {
+    fn flush_prepare(&self, inner: &mut Inner) -> Result<Pending> {
         if inner.staged.is_empty() && inner.hidden.is_empty() && inner.hidden_prefixes.is_empty() {
-            return Ok(None);
+            return Ok(Pending::default());
         }
         let mut touched = vec![false; inner.segments.len()];
 
@@ -372,17 +392,24 @@ impl NativeIndex {
                 touched[i] = true;
             }
         }
+        let t_kill = Instant::now();
         let hidden_digests: Vec<u64> = inner.hidden.keys().copied().collect();
         inner
             .staged
             .retain(|e| !hidden_digests.contains(&digest(&e.id)));
 
         let pending = Self::take_staged(inner);
-        for (i, live) in inner.segments.iter().enumerate() {
-            if touched.get(i).copied().unwrap_or(false) {
-                live.save_alive(&self.dir)?;
-            }
-        }
+        let _ = t_kill;
+        // Copied, not written. The write is an `fsync` a segment and it happens
+        // once a second; doing it here held the index for 33 to 56 ms while
+        // every search waited.
+        let alive: Vec<(u64, Vec<u8>)> = inner
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| touched.get(*i).copied().unwrap_or(false))
+            .map(|(_, live)| live.alive_snapshot())
+            .collect();
         inner.hidden.clear();
         inner.hidden_prefixes.clear();
         // Order, and it is the difference between a crash costing a commit and
@@ -395,7 +422,10 @@ impl NativeIndex {
         for n in gone {
             Live::erase(&self.dir, n);
         }
-        Ok(pending)
+        Ok(Pending {
+            staged: pending,
+            alive,
+        })
     }
 
     /// Erase segments nothing is left alive in.
@@ -845,8 +875,22 @@ impl Index for NativeIndex {
         // to be inside the lock because it edits rows other threads read, and
         // it is cheap now that a subtree is a range check rather than 2.1 M
         // paths.
+        let held = Instant::now();
         let pending = self.flush_prepare(&mut self.inner.write())?;
-        let Some((number, generation, staged)) = pending else {
+        // How long a search could have been waiting. Printed rather than
+        // guessed at, because the last three things blamed for this tail were
+        // each the wrong one.
+        if std::env::var_os("SCOUR_LOCK_TRACE").is_some() && held.elapsed().as_millis() > 20 {
+            eprintln!(
+                "scourd: commit held the index for {:.0?} ({} staged)",
+                held.elapsed(),
+                pending.staged.as_ref().map_or(0, |(_, _, v)| v.len())
+            );
+        }
+        // Both of the expensive halves, now that the lock is gone: the bits
+        // that say which rows are dead, and the segment holding the new ones.
+        pending.write_alive(&self.dir)?;
+        let Some((number, generation, staged)) = pending.staged else {
             return Ok(());
         };
         let bytes = build(&staged);

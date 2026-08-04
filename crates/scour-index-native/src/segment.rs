@@ -207,12 +207,25 @@ impl Live {
 
     /// Kill the rows holding any of these identities. Returns how many died.
     ///
-    /// `wanted` must be sorted by [`IdMap::key_of`]. Both sides are then in the
-    /// same order and this is a merge, not a hundred thousand binary searches:
-    /// a commit checks everything it writes against every existing segment, and
-    /// doing that one identity at a time is quadratic in the segment count —
-    /// measured at a hundred seconds to index ten million entries, almost all
-    /// of it in probes that found nothing.
+    /// `wanted` must be sorted by [`IdMap::key_of`].
+    ///
+    /// **Two strategies, chosen by size, and the second one was missing.** A
+    /// merge walks both sides once, which is right when a bulk pass hands over
+    /// a hundred thousand identities: doing that one at a time is quadratic in
+    /// the segment count and was measured at a hundred seconds to index ten
+    /// million entries, almost all of it in probes that found nothing.
+    ///
+    /// But a merge is `O(rows in the segment)` *however few* identities are
+    /// wanted, because it advances through the table until it passes the last
+    /// of them. A watcher commit carries three. Measured on the live index:
+    /// **a commit with 3 to 13 staged entries held the write lock for 44 to
+    /// 74 ms**, once a second, with every search queued behind it — to check
+    /// three identities against 2.1 M rows.
+    ///
+    /// So below the crossover it is a binary search per identity, which is
+    /// what the table is sorted for. The crossover is where `wanted × log
+    /// rows` stops being cheaper than `rows`, and `log2` of a two-million-row
+    /// table is about 21.
     pub fn kill_ids(&mut self, wanted: &[(u32, EntryId)]) -> Result<u64> {
         if wanted.is_empty() || self.rows == 0 {
             return Ok(0);
@@ -220,6 +233,42 @@ impl Live {
         let victims: Vec<usize> = {
             let ids = self.ids()?;
             let mut pairs: Vec<(usize, usize)> = Vec::new();
+            // The small case: probe for each identity rather than sweep the
+            // table. `ids.len().ilog2()` is the cost of one probe, so this is
+            // the point where probing everything stops being cheaper than
+            // walking everything.
+            if !ids.is_empty()
+                && wanted
+                    .len()
+                    .saturating_mul(ids.len().ilog2().max(1) as usize)
+                    < ids.len()
+            {
+                for (w, (_, id)) in wanted.iter().enumerate() {
+                    for row in ids.candidates(id) {
+                        pairs.push((row as usize, w));
+                    }
+                }
+                let seg = if pairs.is_empty() {
+                    None
+                } else {
+                    Some(self.view()?)
+                };
+                let victims: Vec<usize> = match seg {
+                    None => Vec::new(),
+                    Some(seg) => pairs
+                        .into_iter()
+                        .filter(|&(row, w)| self.is_alive(row) && seg.entry_id(row) == wanted[w].1)
+                        .map(|(row, _)| row)
+                        .collect(),
+                };
+                let mut gone = 0;
+                for row in victims {
+                    if self.kill(row) {
+                        gone += 1;
+                    }
+                }
+                return Ok(gone);
+            }
             let (mut i, mut j) = (0usize, 0usize);
             while i < ids.len() && j < wanted.len() {
                 let (h, row) = ids.at(i);
@@ -281,6 +330,26 @@ impl Live {
                 None
             }
         }))
+    }
+
+    /// A copy of the live bits, to be written once the lock is released.
+    ///
+    /// 262 KB at two million rows, against an `fsync` — measured at **13 ms a
+    /// segment**, three or four segments a commit, once a second, with every
+    /// search waiting. Copying is the cheap half of that by two orders of
+    /// magnitude.
+    pub fn alive_snapshot(&self) -> (u64, Vec<u8>) {
+        (self.number, self.alive.clone())
+    }
+
+    /// Write bits taken by [`Live::alive_snapshot`], with no lock held.
+    ///
+    /// A crash between the snapshot and this leaves the older bitmap on disk,
+    /// which is what a crash before the write always did: the removed rows
+    /// come back until the next sweep takes them. Nothing new is risked by
+    /// moving it out.
+    pub fn write_alive(dir: &Path, number: u64, bits: &[u8]) -> Result<()> {
+        replace_synced(&part_path(dir, number, "alive"), bits)
     }
 
     pub fn save_alive(&self, dir: &Path) -> Result<()> {
