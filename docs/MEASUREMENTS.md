@@ -2130,3 +2130,68 @@ Quiet machine, 2,981,168 entries, 49 segments:
 And live tracking works end to end: a file created is findable in about three
 seconds, a new folder with a file inside it likewise, a move removes the old
 name and adds the new one, and a delete removes both.
+
+## 2026-08-04 — why the window feels slow, and what the floor actually is
+
+The engine answers in single-digit milliseconds on a benchmark and the window
+felt like seconds. Three separate causes, and the third is the one that matters.
+
+### The debounce collapsed nothing
+
+Sixty milliseconds is shorter than a person's gap between keystrokes, so every
+timer fired before the next key arrived. The trace, typing `toki`:
+
+```
+query-changed "t" / "to" / "tok" / "toki"
+reply 2 / reply 3 / reply 4 / reply 5 / reply 6 / reply 9
+```
+
+Four searches **and** four facet counts, seven of them thrown away *after*
+being paid for. 180 ms collapses a burst; the facet count now follows a result
+that was actually shown rather than riding along with every keystroke.
+
+### A term shorter than a trigram walks the whole index
+
+| typed | relevance | stored order |
+|---|---|---|
+| `t` | 899 ms, full scan | **41 ms** |
+| `to` | 199 ms, full scan | 80 ms |
+| `tok` | 65 ms | 62 ms |
+
+The filter is built on three-letter keys, so below three characters it narrows
+nothing — and relevance has to see every match before it can name the top
+forty. The window now asks for the stored order below three characters, which
+stops as soon as it has a page. Ranking a million matches of `t` by how well
+they answer `t` was never information.
+
+### And the real ceiling, measured on the live index
+
+`examples/innerloop.rs`, one segment, 2,981,748 rows:
+
+| | | a row |
+|---|---|---|
+| `run()`, `rapor`, relevance | 64.3 ms | **145.5 ns** (442,112 visited) |
+| sequential scan of **everything** — read | 22.6 ms | 7.6 ns |
+| — read and fold | 95.3 ms | 32.0 ns |
+| — read, fold, search | 120.8 ms | 40.5 ns |
+| — search, names **stored folded** | **24.7 ms** | **8.3 ns** |
+
+Two findings, and neither was where anyone was looking.
+
+**Folding is three quarters of the inner loop.** 24.4 ns of 40.5, paid on every
+candidate row of every query, to compute something that never changes. Everything
+does not do this — it keeps names in the form it searches.
+
+**The trigram filter is not paying for itself.** It cuts 2.98 M rows to 442 K —
+6.7× — and each surviving row then costs 3.6× more, because a block walk jumps
+around the name arena where a full scan streams it. Net, it is worth 1.9×:
+121 ms against 64 ms.
+
+Put together: **a folded arena makes an unfiltered scan of three million names
+cost 25 ms** — less than the filtered walk costs today. Everything scans about
+a million names in ten; this is the same speed per name. The ceiling is not
+where it looked.
+
+What it costs: a second arena, about 79 MB here, and a format bump. What it
+buys is the difference between a search box that is fast on a benchmark and one
+that is fast under a person's hands.

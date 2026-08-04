@@ -67,6 +67,18 @@ fn deliver(got: Got) {
     }
 }
 
+/// Diagnostics, off unless asked for.
+///
+/// `SCOUR_TRACE=1 scour-gui` — because the interesting failures here are the
+/// ones where a keystroke goes in and nothing comes out, and the only way to
+/// tell which of the four steps dropped it is to watch all four.
+fn trace(what: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("SCOUR_TRACE").is_ok()) {
+        eprintln!("gui: {what}");
+    }
+}
+
 /// A catalogue lookup, ready for the interface.
 ///
 /// `Catalog::get` answers with a `Cow` — borrowed when the language is English
@@ -78,11 +90,17 @@ fn t(cat: &Catalogue, msgid: &str) -> slint::SharedString {
 
 /// How long after a keystroke the search actually goes out.
 ///
-/// Not a guess at typing speed — a bound on wasted work. A search is a handful
-/// of milliseconds, so this could be zero and still feel instant; what it saves
-/// is the six intermediate queries between `r` and `rapor`, each of which
-/// matches far more than the finished one and costs far more to answer.
-const DEBOUNCE_MS: u64 = 60;
+/// **Longer than a person's gap between keys, or it collapses nothing.** Sixty
+/// milliseconds was the first number here and it was worse than useless: a
+/// keystroke every 150 ms means every timer fires before the next key arrives,
+/// so `toki` issued four searches and four facet counts instead of one. The
+/// trace showed all eight going out and all eight coming back, seven of them
+/// to be thrown away *after* being paid for.
+///
+/// A hundred and eighty is above a fast typist's gap and below what reads as
+/// waiting. What makes it safe to be this long is that the first keystroke's
+/// search still goes out at once — only a *burst* is collapsed.
+const DEBOUNCE_MS: u64 = 180;
 
 /// How many rows are fetched at a time.
 ///
@@ -144,12 +162,6 @@ fn main() -> Result<()> {
     let ui_rows = rows.clone();
     let ui_facets = facets.clone();
     let ui_cat = cat.clone();
-    INBOX.with(|slot| {
-        *slot.borrow_mut() = Some(Rc::new(move |got: Got| {
-            let Some(w) = weak.upgrade() else { return };
-            apply(&w, &ui_state, &ui_rows, &ui_facets, &ui_cat, got);
-        }));
-    });
 
     let sink = move |got: Got| {
         let _ = slint::invoke_from_event_loop(move || deliver(got));
@@ -157,12 +169,25 @@ fn main() -> Result<()> {
 
     let link = Rc::new(Link::start(addr, sink));
 
+    {
+        // Registered after the link exists, because answering a search now
+        // asks one more question — the facet count that goes with it.
+        let link = Rc::clone(&link);
+        INBOX.with(|slot| {
+            *slot.borrow_mut() = Some(Rc::new(move |got: Got| {
+                let Some(w) = weak.upgrade() else { return };
+                apply(&w, &ui_state, &ui_rows, &ui_facets, &ui_cat, &link, got);
+            }));
+        });
+    }
+
     // --- the query line ---------------------------------------------------
     {
         let state = state.clone();
         let link = link.clone();
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
+            trace(&format!("query-changed {text:?}"));
             let generation = {
                 let mut s = state.borrow_mut();
                 s.query = text.to_string();
@@ -180,9 +205,11 @@ fn main() -> Result<()> {
             let weak = weak.clone();
             slint::Timer::single_shot(std::time::Duration::from_millis(DEBOUNCE_MS), move || {
                 if state.borrow().generation != generation {
+                    trace(&format!("timer {generation} superseded"));
                     return;
                 }
                 let _ = weak;
+                trace(&format!("dispatch {generation}"));
                 dispatch(&state, &link);
             });
         });
@@ -285,6 +312,22 @@ fn main() -> Result<()> {
         });
     }
 
+    // A way to exercise the whole pipeline without a keyboard.
+    //
+    // `SCOUR_SELFTEST=rapor scour-gui` raises `query-changed` exactly as the
+    // text field does, which splits the one failure that matters — a keystroke
+    // going in and nothing coming out — into the half above the callback and
+    // the half below it.
+    if let Ok(q) = std::env::var("SCOUR_SELFTEST") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1_500), move || {
+            if let Some(w) = weak.upgrade() {
+                trace(&format!("selftest: raising query-changed({q:?})"));
+                w.invoke_query_changed(q.clone().into());
+            }
+        });
+    }
+
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
     dispatch(&state, &link);
@@ -292,7 +335,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Send the search and the facet count for the current state.
+/// Send the search for the current state.
+///
+/// The facet count is **not** sent here, and that is the fix for the second
+/// half of the same problem: it is a sidebar, it costs as much as the search,
+/// and sending it beside every search doubled the traffic to answer a question
+/// nobody had finished asking. It goes out once the search it belongs to has
+/// actually been shown — see [`apply`].
 fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
     let (generation, query, sort, descending) = {
         let s = state.borrow();
@@ -300,12 +349,48 @@ fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
     };
     link.send(Ask::Search {
         generation,
-        query: query.clone(),
-        sort,
+        sort: order_for(&query, &sort),
+        query,
         descending,
         limit: PAGE,
     });
-    link.send(Ask::Facets { generation, query });
+}
+
+/// Below how many characters a term stops narrowing anything.
+///
+/// The trigram filter is built on three-letter keys, so a shorter term hands
+/// the walk every row in the index.
+const TRIGRAM_MIN: usize = 3;
+
+/// Which order to actually ask for.
+///
+/// Relevance has to see **every** match before it knows which forty win. That
+/// is the right trade at `toki` and a terrible one at `t`, because the two
+/// differ by three orders of magnitude in how many rows they match — measured
+/// on 2,981,748 entries:
+///
+/// | | relevance | stored order |
+/// |---|---|---|
+/// | `t` | 899 ms, full scan | **41 ms** |
+/// | `to` | 199 ms, full scan | 80 ms |
+/// | `tok` | 65 ms | 62 ms |
+///
+/// So below the trigram minimum the window asks for the stored order, which
+/// stops as soon as it has a page. This is not a compromise on the answer:
+/// ranking a million matches of `t` by how well the name answers `t` is noise,
+/// and "the most recently changed things with a t in them" is both instant and
+/// more use. From three characters on, relevance is asked for and paid for.
+///
+/// A sort the user chose is never overridden — only the default is.
+fn order_for(query: &str, sort: &str) -> String {
+    if sort != "relevance" {
+        return sort.to_owned();
+    }
+    let shortest = terms_of(query).iter().map(String::len).min();
+    match shortest {
+        Some(n) if n < TRIGRAM_MIN => "modified".into(),
+        _ => sort.to_owned(),
+    }
 }
 
 /// What the user typed, plus whatever the rail has active.
@@ -328,6 +413,7 @@ fn apply(
     rows: &Rc<VecModel<Row>>,
     facets: &Rc<VecModel<Facet>>,
     cat: &Rc<Catalogue>,
+    link: &Rc<Link>,
     got: Got,
 ) {
     match got {
@@ -352,6 +438,11 @@ fn apply(
             w.set_hint(t(cat, "type to search"));
         }
         Got::Search { generation, reply } => {
+            trace(&format!(
+                "reply {generation} (shown {}, current {})",
+                state.borrow().shown,
+                state.borrow().generation
+            ));
             {
                 let s = state.borrow();
                 // Stale: a newer keystroke has already gone out, and showing
@@ -371,6 +462,7 @@ fn apply(
                 .iter()
                 .map(|h| rows::row_of(h, &terms, now, cat))
                 .collect();
+            trace(&format!("drawing {} rows", fresh.len()));
             rows.set_vec(fresh);
             {
                 let mut s = state.borrow_mut();
@@ -379,6 +471,17 @@ fn apply(
             }
             w.set_selected(0);
             w.set_busy(false);
+            // Now, and only now, the sidebar. A facet count costs about what
+            // the search did, and asking for it beside every keystroke doubled
+            // the work to answer a question the user had not finished typing.
+            // This one belongs to a result already on screen.
+            {
+                let s = state.borrow();
+                link.send(Ask::Facets {
+                    generation,
+                    query: full_query(&s),
+                });
+            }
             w.set_meter(
                 format!(
                     "{}{} {} · {:.1} ms",
@@ -562,6 +665,22 @@ mod tests {
         assert_eq!(full_query(&s), "rapor kind:image");
         s.query = "  ".into();
         assert_eq!(full_query(&s), "kind:image");
+    }
+
+    #[test]
+    fn a_term_too_short_to_narrow_is_not_ranked() {
+        // Relevance walks every match. At `t` that is a million rows for an
+        // ordering nobody can read; at `tok` it is the point of the feature.
+        assert_eq!(order_for("t", "relevance"), "modified");
+        assert_eq!(order_for("to", "relevance"), "modified");
+        assert_eq!(order_for("tok", "relevance"), "relevance");
+        // The shortest term decides: one narrow term does not rescue the walk
+        // if another is wide open.
+        assert_eq!(order_for("rapor t", "relevance"), "modified");
+        // A field term is not a name term and does not count either way.
+        assert_eq!(order_for("kind:image", "relevance"), "relevance");
+        // And a sort somebody asked for out loud is left alone.
+        assert_eq!(order_for("t", "size"), "size");
     }
 
     #[test]
