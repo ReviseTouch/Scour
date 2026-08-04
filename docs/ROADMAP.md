@@ -283,6 +283,80 @@ justified.
 
 ---
 
+## The shape of the running system
+
+Settled by measurement over 2026-08-03/04, and worth stating in one place
+because two different things were being called "the service".
+
+### One process is certain: `scourd`, unprivileged
+
+It holds the index, runs the watcher, answers queries. It does **not** need
+root, and that is measured rather than assumed: running the whole-system walk
+as root adds **1,064 files out of 2,129,212** — the rest of what root can see
+is world-readable anyway, including all 58,285 files under `/usr/lib/modules`.
+
+### One process is optional: a privileged scanner
+
+Its justification is not scanning. Root buys a thousandth of the files and no
+speed at all. It exists for two specific things:
+
+* **btrfs `min_transid`** — "what changed since generation N" in **0.3 ms**
+  against 10,883 ms for the whole tree. Needs `CAP_SYS_ADMIN`. This is the
+  first real justification `Caps::JOURNAL` has had on Linux.
+* **A spinning disk**, where a parallel walk is the wrong shape and reading
+  the metadata tree sequentially is the right one. Not measured — there is no
+  HDD here.
+
+It takes **no commands**: no socket, no pipe, no verb. Its only input is a
+root-owned list of roots; its only output is the index. See §7 of
+`ENUMERATION.md`.
+
+### How they talk: two answers, and one of them is "they do not"
+
+**Clients ↔ `scourd`** — a local socket carrying NDJSON, which is what exists
+today. Measured:
+
+| reply | engine | transport |
+|---|---|---|
+| 200 rows | 2.47 ms | **0.27 ms** (73.6 KB) |
+| 1000 rows | 5.65 ms | 0.80 ms (331.8 KB) |
+
+Transport is a tenth of engine time, so gRPC would buy at most 0.1–0.2 ms and
+cost `tonic`, `prost`, `tokio` and `hyper`. Not worth it. The CLI, the GUI, a
+TUI and the MCP server are all clients of this one socket.
+
+**Privileged scanner ↔ `scourd`** — **they do not talk.** The scanner writes
+index files; `scourd` maps them. `mmap` *is* shared memory: the same physical
+pages in both processes, no copy, no protocol, no attack surface. The single
+constraint is the writer lock from `db9c95c` — one writer per directory —
+so the scanner writes a **base layer** and `scourd` an **incremental layer**,
+and a query merges the two. Segments already work exactly that way.
+
+## Sources beyond the local disk
+
+`trait Source` exists for this, and `Key::Opaque` exists because not every
+source has an inode or a stable path. Each of these is one implementation
+named only in `apps/scourd/src/wire.rs`:
+
+| source | identity | notes |
+|---|---|---|
+| Docker container | container id + inode | no watch; the daemon has no inotify inside it |
+| SSH / SFTP | `Key::Opaque` over the path | `Medium::Network` — 4 threads, 5 s debounce |
+| FTP | `Key::PathHash` | no stable ids, no watch |
+| S3 and object stores | `Key::Opaque(etag)` | a change token is a real `Caps::JOURNAL` |
+| A virtual machine's disk | depends on how it is reached | mounted → ordinary `FsSource` |
+
+The classification added in `f02279b` already serves these: a source declares
+its `Medium` and gets the right thread count and debounce with no special
+casing. What each still needs is its own `scan`, `watch` and `open`.
+
+## A terminal client
+
+The CLI already speaks every operation and has `--json` on all of them, so a
+TUI is a third client of the same socket rather than a new subsystem. It shares
+the query line's behaviour with the GUI — the roles, the two warning colours,
+the completions — because those come from `explain` over the wire.
+
 ## Deliberately later
 
 * **Duplicate detection by content** (`REPORTS.md` §B tier four). The first
