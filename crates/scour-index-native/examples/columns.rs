@@ -52,8 +52,8 @@ fn main() {
     // measured is that column and the per-block overhead it cannot avoid.
     println!("{rows} rows\n");
     println!(
-        "  {:<10} {:>12} {:>10}  {}",
-        "column", "bytes", "per row", "distinct"
+        "  {:<10} {:>12} {:>10}  distinct",
+        "column", "bytes", "per row"
     );
     let mut total = 0usize;
     for (i, &f) in Field::ALL.iter().enumerate() {
