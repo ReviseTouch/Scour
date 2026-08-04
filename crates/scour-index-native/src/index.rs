@@ -238,9 +238,47 @@ impl NativeIndex {
     /// segments *before* the new one is written, because one of those removals
     /// is the old row of every entry being re-upserted, and applying them
     /// afterwards would find — and kill — the row that was just added.
+    /// Flush with the lock held throughout. For callers already inside it.
     fn flush(&self, inner: &mut Inner) -> Result<()> {
+        if let Some((number, generation, staged)) = self.flush_prepare(inner)? {
+            let bytes = build(&staged);
+            let live = Live::write(&self.dir, number, generation, &bytes)?;
+            inner.segments.push(live);
+            inner.segments.sort_by_key(|s| s.number);
+            self.save_meta(inner)?;
+        }
+        Ok(())
+    }
+
+    /// Lift the staged entries out, leaving the index consistent without them.
+    ///
+    /// They were never searchable — the trait says a change is not durable
+    /// until `commit` — so removing them from the buffer changes no answer.
+    /// What it buys is that turning them into a segment, which is the only
+    /// expensive part of a flush, can happen with the lock released.
+    fn take_staged(inner: &mut Inner) -> Option<(u64, u64, Vec<Entry>)> {
+        if inner.staged.is_empty() {
+            return None;
+        }
+        let number = inner.next_segment;
+        inner.next_segment += 1;
+        let staged = std::mem::take(&mut inner.staged);
+        inner.staged.shrink_to_fit();
+        inner.staged_at.clear();
+        inner.staged_at.shrink_to_fit();
+        Some((number, inner.generation, staged))
+    }
+
+    /// Everything a flush does **except** building and writing the segment.
+    ///
+    /// Returns what still has to be written, so a caller that can afford to
+    /// let go of the lock does — see [`Index::commit`]. Split rather than
+    /// duplicated, because the order inside matters: the identities to kill
+    /// are read *from* the staged entries, and taking them out first meant a
+    /// re-indexed file kept its old row. Two tests said so immediately.
+    fn flush_prepare(&self, inner: &mut Inner) -> Result<Option<(u64, u64, Vec<Entry>)>> {
         if inner.staged.is_empty() && inner.hidden.is_empty() && inner.hidden_prefixes.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let mut touched = vec![false; inner.segments.len()];
 
@@ -337,17 +375,7 @@ impl NativeIndex {
             .staged
             .retain(|e| !hidden_digests.contains(&digest(&e.id)));
 
-        if !inner.staged.is_empty() {
-            let number = inner.next_segment;
-            inner.next_segment += 1;
-            let bytes = build(&inner.staged);
-            let live = Live::write(&self.dir, number, inner.generation, &bytes)?;
-            inner.segments.push(live);
-            inner.staged.clear();
-            inner.staged.shrink_to_fit();
-            inner.staged_at.clear();
-            inner.staged_at.shrink_to_fit();
-        }
+        let pending = Self::take_staged(inner);
         for (i, live) in inner.segments.iter().enumerate() {
             if touched.get(i).copied().unwrap_or(false) {
                 live.save_alive(&self.dir)?;
@@ -365,7 +393,7 @@ impl NativeIndex {
         for n in gone {
             Live::erase(&self.dir, n);
         }
-        Ok(())
+        Ok(pending)
     }
 
     /// Erase segments nothing is left alive in.
@@ -795,9 +823,40 @@ impl Index for NativeIndex {
         Ok(gone)
     }
 
+    /// Write everything staged, **without holding the index while it writes**.
+    ///
+    /// The engine calls this once a second. Everything a flush does except
+    /// building and writing the segment is bookkeeping the lock has to cover;
+    /// the build and the write are the seconds, and a search issued during
+    /// them used to wait for all of it.
+    ///
+    /// So: take the staged entries out under the lock — they were never
+    /// searchable, so nothing sees a different answer — release, build and
+    /// write, and take the lock again to put the segment in the list. The
+    /// window in between is one where the index holds exactly what it held
+    /// before the commit, which is a state it is allowed to be in.
+    ///
+    /// The same shape as `fold`, and for the same reason: a segment is written
+    /// once and never edited, so writing one touches nothing a search reads.
     fn commit(&self) -> Result<()> {
+        // The bookkeeping half: kills, subtree removals, the manifest. It has
+        // to be inside the lock because it edits rows other threads read, and
+        // it is cheap now that a subtree is a range check rather than 2.1 M
+        // paths.
+        let pending = self.flush_prepare(&mut self.inner.write())?;
+        let Some((number, generation, staged)) = pending else {
+            return Ok(());
+        };
+        let bytes = build(&staged);
+        drop(staged);
+        let live = Live::write(&self.dir, number, generation, &bytes)?;
+        drop(bytes);
+
         let mut inner = self.inner.write();
-        self.flush(&mut inner)
+        inner.next_segment = inner.next_segment.max(number + 1);
+        inner.segments.push(live);
+        inner.segments.sort_by_key(|s| s.number);
+        self.save_meta(&inner)
     }
 
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse> {

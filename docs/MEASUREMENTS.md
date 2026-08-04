@@ -2510,3 +2510,38 @@ the reasoning: a directory's own row lives in its *parent*, so it carries the
 parent's number and the range walks past it. `/home/u/Projeler` survived the
 removal of `/home/u/Projeler`. The parent's number and the last component are
 checked too, and a name is read only for the handful of rows that sit there.
+
+## 2026-08-04 — the commit stopped holding the index while it wrote
+
+`fold` was fixed two commits ago and `flush` was named there as the next one.
+Everything a flush does except building and writing the segment is bookkeeping
+the lock has to cover; the build and the write are the seconds.
+
+So the staged entries are lifted out under the lock — they were never
+searchable, so no answer changes — and the segment is built and written with it
+released. Splitting it needed care the reasoning did not supply and two tests
+did: the identities to kill are read *from* the staged entries, so taking them
+out first left a re-indexed file with its old row still alive.
+
+Measured during a **full rescan**, which is the heaviest write there is —
+2.1 M entries re-indexed while queries run:
+
+| | |
+|---|---|
+| queries completed | 392 |
+| p50 | **1.98 ms** |
+| p99 | 912 ms |
+| worst | **1,061 ms** |
+
+The tail across the three fixes, each measured under the load that provokes it:
+
+| | worst |
+|---|---|
+| before any of it, during a rebuild | 22,984 ms |
+| after `fold` | 2,718 ms |
+| after `flush`, during a *full rescan* | **1,061 ms** |
+
+What is left in the lock during a scan is `kill_ids`: every upsert kills the old
+row of the same identity, and with a hundred thousand staged that is a merge
+against every segment. It edits the bitmap a search reads, so it cannot simply
+move out — it would need the bitmap swapped rather than mutated.
