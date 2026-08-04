@@ -2545,3 +2545,38 @@ What is left in the lock during a scan is `kill_ids`: every upsert kills the old
 row of the same identity, and with a hundred thousand staged that is a merge
 against every segment. It edits the bitmap a search reads, so it cannot simply
 move out — it would need the bitmap swapped rather than mutated.
+
+## 2026-08-04 — where the remaining nanoseconds are, and where they are not
+
+`rapor` visits 433,280 candidate rows. Split by hand on a copy of the index:
+
+| | a candidate row |
+|---|---|
+| walk the folded arena and test the needle | **15.2 ns** |
+| `run()` by kind | 21.8 ns |
+| `run()` by relevance | **25.6 ns** |
+| `run()` in stored order | 26.0 ns |
+| `run()` by size | 28.8 ns |
+
+The machinery — the alive bit, the clause dispatch, the column read a sort
+needs — costs about **ten nanoseconds** over the bare loop, and every sort
+costs the same. There is nothing left to win here.
+
+**And relevance is not special**, which took a third wrong guess to establish.
+The first run of this measurement showed relevance at 109.9 ns against 22.0 for
+the stored order, and the difference was entirely the first `run()` in the
+process paying a page fault per mapped page it touched. Warm, they are 25.6 and
+26.0. The example now says to read the second figure.
+
+### So the lever is selectivity, not speed
+
+433,280 candidates for 15,349 matches is a **3.5% hit rate**. A block is 128
+rows and it is a candidate if the whole block's trigram set contains the term's
+three keys — with 128 names in a block, false positives are the normal case,
+not the exception.
+
+Fewer rows a block would mean fewer wasted candidates and a larger trigram
+index. `BLOCK` is 128 and it is shared with the columns and the name arena, so
+it is a format change and a real experiment rather than a tweak. **Not done**,
+and it is the next real lever: it is the number that decides how a bigger index
+behaves, which is exactly what this is being optimised for.

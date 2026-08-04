@@ -16,6 +16,11 @@
 //!
 //! Point it at a **copy** of the index directory: the service holds a writer
 //! lock on the real one, which is the whole point of that lock.
+//!
+//! **Read the second run of each figure, not the first.** The files are mapped,
+//! so the first `run()` in a process pays a page fault per page it touches and
+//! reports two to four times what the same call costs warm — which is how
+//! relevance came to be blamed for 88 ns a row it does not cost.
 
 use std::time::Instant;
 
@@ -148,6 +153,67 @@ fn main() {
         t.elapsed().as_nanos() as f64 / found2.rows_visited.max(1) as f64,
         found2.rows_visited
     );
+
+    // --- 5b. the same walk under other full-walk sorts ---------------------
+    //
+    // Size and name also have to see every match before they know the page, so
+    // they pay the same walk. What they do *not* pay is `relevance`, which
+    // makes the three of them a subtraction rather than a guess.
+    for (label, key) in [
+        ("run(), by size", scour_core::SortKey::Size),
+        ("run(), by name", scour_core::SortKey::Name),
+        ("run(), by kind", scour_core::SortKey::Kind),
+    ] {
+        let t = Instant::now();
+        let f2 = scour_index_native::run(
+            &seg,
+            &plan,
+            scour_index_native::Wanted { sort: key, ..want },
+        );
+        println!(
+            "  {label:<28} {:>8.1?}  {:>6.1} ns a *visited* row",
+            t.elapsed(),
+            t.elapsed().as_nanos() as f64 / f2.rows_visited.max(1) as f64
+        );
+    }
+
+    // --- 6. the candidate rows, with nothing but the needle ---------------
+    //
+    // The same block set `run` walks, walked by hand with only the substring
+    // test. What is left between this and `run` is the machinery: the alive
+    // bit, the clause dispatch, the scoring, the page. Splitting them says
+    // whether the remaining nanoseconds are the loop or the frame around it.
+    let mut candidate_rows = 0usize;
+    let t = Instant::now();
+    let mut bare_hits = 0usize;
+    if let Some(cand) = plan.candidate_blocks() {
+        let mut i = 0usize;
+        while i < cand.len() {
+            let mut j = i;
+            while j + 1 < cand.len() && cand[j + 1] == cand[j] + 1 {
+                j += 1;
+            }
+            let lo = cand[i] as usize * 128;
+            let hi = ((cand[j] as usize + 1) * 128).min(rows);
+            seg.folded.walk_range(lo, hi, |_, name| {
+                candidate_rows += 1;
+                if finder.find(name).is_some() {
+                    bare_hits += 1;
+                }
+                true
+            });
+            i = j + 1;
+        }
+    }
+    let bare = t.elapsed();
+    if candidate_rows > 0 {
+        println!(
+            "  {:<28} {:>8.1?}  {:>6.1} ns a candidate row  ({candidate_rows} of them, {bare_hits} hit)",
+            "candidates, needle only",
+            bare,
+            bare.as_nanos() as f64 / candidate_rows as f64
+        );
+    }
 
     let per = |d: std::time::Duration| d.as_nanos() as f64 / rows as f64;
     println!(

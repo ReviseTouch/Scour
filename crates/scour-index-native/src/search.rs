@@ -501,6 +501,11 @@ impl Plan {
         self.clauses.is_empty()
     }
 
+    /// The blocks the filter chose, for measurement.
+    pub fn candidate_blocks(&self) -> Option<&[u32]> {
+        self.candidates.as_deref()
+    }
+
     /// Could any row of this block match?
     ///
     /// Two comparisons against the range the block holds, which is stored and
