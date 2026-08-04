@@ -357,79 +357,121 @@ impl NativeIndex {
 
     /// Fold these segments into one, dropping rows that are no longer live.
     ///
-    /// They must share a generation, and that is not a formality: the merged
-    /// segment can only carry one stamp, so folding across a generation
-    /// boundary would give rows from an old pass a new one and a later
-    /// [`Index::sweep`] would walk past exactly the rows it exists to remove.
+    /// Merge segments, **without holding the index against a search**.
     ///
-    /// The entries are never all in memory at once: the merge runs twice, once
-    /// to collect directories and names and once to write the columns, which
-    /// costs a second read of what is already mapped and saves holding a
-    /// million `Entry` values — about a quarter of a gigabyte at that size.
-    fn fold(&self, inner: &mut Inner, which: &[usize]) -> Result<()> {
-        let done = self.fold_inner(inner, which);
-        // After `fold_inner` has returned, and not inside it: the segment it
-        // built is half a gigabyte at ten million entries, and trimming while
-        // that is still held gives back nothing.
-        trim_allocator();
-        done
-    }
-
-    fn fold_inner(&self, inner: &mut Inner, which: &[usize]) -> Result<()> {
-        if which.len() < 2 && which.iter().all(|&i| inner.segments[i].dead_rows() == 0) {
-            return Ok(());
-        }
-        // The merged segment can carry only one stamp, so the group must
-        // either share one or be known to be entirely current — see
-        // [`Inner::open`] and the caller.
-        let generation = which
-            .iter()
-            .map(|&i| inner.segments[i].generation)
-            .max()
-            .unwrap_or(0);
-        let number = inner.next_segment;
-        inner.next_segment += 1;
-        let bytes = {
-            let segs: Vec<&Live> = which.iter().map(|&i| &inner.segments[i]).collect();
+    /// This used to run start to finish under the write lock, and on a real
+    /// index that meant a query issued during a rebuild waited for the whole
+    /// rebuild: **22,984 ms**, measured, against 3 ms when nothing else was
+    /// happening. A search box that is usually instant and occasionally
+    /// twenty-three seconds is not a fast search box.
+    ///
+    /// It does not have to be that way, because a segment is written once and
+    /// never edited. Reading N of them and writing one more touches nothing a
+    /// search looks at; only the *list* changes, and swapping a list is
+    /// microseconds. So the build happens under the **read** lock, which
+    /// searches also hold and therefore do not queue behind, and the write
+    /// lock is taken once at the end.
+    ///
+    /// What that admits is a commit waiting on a long fold — and the engine
+    /// runs both on one worker thread, so it cannot happen there. A caller
+    /// that does otherwise gets a slow commit rather than a wrong answer: the
+    /// numbers folded are checked against the list again before the swap.
+    fn fold(&self, which_numbers: &[u64]) -> Result<()> {
+        let (number, generation, bytes) = {
+            let inner = self.inner.read();
+            let segs: Vec<&Live> = inner
+                .segments
+                .iter()
+                .filter(|s| which_numbers.contains(&s.number))
+                .collect();
+            if segs.len() < 2 && segs.iter().all(|s| s.dead_rows() == 0) {
+                return Ok(());
+            }
+            // The merged segment can carry only one stamp, so the group must
+            // either share one or be known to be entirely current — see
+            // [`Inner::open`] and the caller.
+            let generation = segs.iter().map(|s| s.generation).max().unwrap_or(0);
             let views: Vec<Segment<'_>> = segs.iter().map(|s| s.view()).collect::<Result<_>>()?;
-            build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(&segs, &views, emit))
+            let bytes =
+                build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(&segs, &views, emit));
+            (inner.next_segment, generation, bytes)
         };
-        let old: Vec<u64> = which.iter().map(|&i| inner.segments[i].number).collect();
-        // A generation whose rows have all been swept folds to nothing, and
-        // nothing is what should be left. Writing the empty segment anyway put
-        // two of them in a real index — permanent, since a segment with no rows
-        // has no dead rows either and so never qualifies to be folded again.
+
+        // The segment is written before the lock is taken: it is a new file
+        // that nothing names yet, so nobody can be reading it.
         let folded = if bytes.names.is_empty() || bytes.alive.is_empty() {
             None
         } else {
             Some(Live::write(&self.dir, number, generation, &bytes)?)
         };
-        let mut keep = 0;
-        inner.segments.retain(|_| {
-            let drop = which.contains(&keep);
-            keep += 1;
-            !drop
-        });
+        drop(bytes);
+
+        let mut inner = self.inner.write();
+        // Between the read and the write another commit may have appended a
+        // segment, and `next_segment` may have moved. Take a number that is
+        // still free and fold only what is still there.
+        inner.next_segment = inner.next_segment.max(number + 1);
+        let old: Vec<u64> = inner
+            .segments
+            .iter()
+            .filter(|s| which_numbers.contains(&s.number))
+            .map(|s| s.number)
+            .collect();
+        inner
+            .segments
+            .retain(|s| !which_numbers.contains(&s.number));
         inner.segments.extend(folded);
         // Newest last is what the search loop and `merge_rows` both assume; a
         // fold has to leave the order it found.
         inner.segments.sort_by_key(|s| s.number);
-        self.save_meta(inner)?;
+        self.save_meta(&inner)?;
+        drop(inner);
         for n in old {
             Live::erase(&self.dir, n);
         }
+        trim_allocator();
         Ok(())
     }
 
-    /// Segment indices grouped by generation, largest group first.
-    fn groups(inner: &Inner) -> Vec<Vec<usize>> {
-        let mut by_gen: HashMap<u64, Vec<usize>> = HashMap::new();
-        for (i, s) in inner.segments.iter().enumerate() {
-            by_gen.entry(s.generation).or_default().push(i);
+    /// Segments grouped by generation, **by number rather than by position**.
+    ///
+    /// A number survives the lock being dropped and a position does not, which
+    /// matters now that a fold releases the lock while it builds: an index of
+    /// eight segments can become nine underneath it, and index 3 would then be
+    /// a different segment than the one that was chosen.
+    fn groups(inner: &Inner) -> Vec<Vec<u64>> {
+        let mut by_gen: HashMap<u64, Vec<u64>> = HashMap::new();
+        for s in &inner.segments {
+            by_gen.entry(s.generation).or_default().push(s.number);
         }
-        let mut out: Vec<Vec<usize>> = by_gen.into_values().collect();
+        let mut out: Vec<Vec<u64>> = by_gen.into_values().collect();
         out.sort_by_key(|g| std::cmp::Reverse(g.len()));
         out
+    }
+
+    /// The next group of segments worth folding, or nothing.
+    ///
+    /// Read under its own lock and answered in numbers, so the caller can let
+    /// go of the index before it starts building.
+    fn next_head(&self) -> Option<Vec<u64>> {
+        let inner = self.inner.read();
+        let group = Self::groups(&inner).into_iter().find(|g| g.len() >= 3)?;
+        let rows = |n: u64| {
+            inner
+                .segments
+                .iter()
+                .find(|s| s.number == n)
+                .map_or((0, 0), |s| (s.rows() as u64, s.dead_rows()))
+        };
+        let biggest = *group.iter().max_by_key(|&&n| rows(n).0)?;
+        let (big_rows, big_dead) = rows(biggest);
+        // A quarter of it dead is the point at which rewriting the largest
+        // segment gives back more than it costs.
+        if big_dead * 4 > big_rows {
+            Some(group)
+        } else {
+            Some(group.into_iter().filter(|&n| n != biggest).collect())
+        }
     }
 
     /// Hand each segment to `f`. For diagnostics that need to see inside.
@@ -911,13 +953,13 @@ impl Index for NativeIndex {
     fn maintain(&self, level: Maintenance) -> Result<MaintReport> {
         let started = Instant::now();
         let before = dir_size(&self.dir);
-        let mut inner = self.inner.write();
         match level {
-            Maintenance::Flush => self.flush(&mut inner)?,
+            Maintenance::Flush => self.flush(&mut self.inner.write())?,
             Maintenance::Idle => {
                 // There is no arena to give back — the segments are mapped, so
                 // what they cost is page cache the kernel reclaims on its own.
                 // All this can return is the staging buffer.
+                let mut inner = self.inner.write();
                 self.flush(&mut inner)?;
                 inner.staged.shrink_to_fit();
                 inner.staged_at.shrink_to_fit();
@@ -936,64 +978,50 @@ impl Index for NativeIndex {
             // rows nobody can see any more, at which point rewriting is what
             // gives the space back.
             Maintenance::Compact => {
-                self.flush(&mut inner)?;
-                // Recomputed each time round, because folding renumbers what
-                // is left. A group of eleven becomes two, which no longer
-                // qualifies, so this terminates.
-                while let Some(group) = Self::groups(&inner).into_iter().find(|g| g.len() >= 3) {
-                    let biggest = *group
-                        .iter()
-                        .max_by_key(|&&i| inner.segments[i].rows())
-                        .expect("a group is not empty");
-                    let stale = inner.segments[biggest].dead_rows() * 4
-                        > inner.segments[biggest].rows() as u64;
-                    let head: Vec<usize> = if stale {
-                        group
-                    } else {
-                        group.into_iter().filter(|&i| i != biggest).collect()
-                    };
-                    self.fold(&mut inner, &head)?;
+                self.flush(&mut self.inner.write())?;
+                // The lock is taken to *choose* and released to *build*. Each
+                // round re-reads the list, because folding renumbers what is
+                // left and because a commit may have added to it meanwhile. A
+                // group of eleven becomes two, which no longer qualifies, so
+                // this terminates.
+                while let Some(head) = self.next_head() {
+                    self.fold(&head)?;
                 }
             }
             // Everything becomes one segment, generations included.
             //
-            // It used to fold within a generation, on the reasoning that there
-            // is only ever one: a scan re-upserts every file it finds under a
-            // new stamp and the sweep removes what it did not. That is true of
-            // *one* source and false of two — each source's scan takes its own
-            // generation — so a second source meant a rebuild that could never
-            // get below two segments however often it ran. Measured on a real
-            // index of two sources: 2,951,074 entries, 2 segments, 1,441,890
-            // of them unsorted, and `rapor` at 125 ms where one segment
-            // answers in single digits.
+            // What makes that safe is not that generations do not matter —
+            // they do, and a merged segment carries one stamp — but that
+            // outside a scan there is nothing left for one to decide. Folding
+            // per generation was the old rule and it meant a second source
+            // pinned the index at two segments forever: each source's scan
+            // takes its own generation. Measured at 2,951,074 entries, two
+            // segments, 1,441,890 of them unsorted, `rapor` at 125 ms.
             Maintenance::Rebuild => {
-                self.flush(&mut inner)?;
-                // Everything into one segment when nothing is mid-scan, and
-                // one segment per generation when something is.
-                //
-                // It used to be per generation always, on the reasoning that
-                // there is only ever one: a scan re-upserts every file it
-                // finds under a new stamp and the sweep removes what it did
-                // not. That is true of *one* source and false of two — each
-                // source's scan takes its own generation — so a second source
-                // meant a rebuild that could never get below two segments
-                // however often it ran. Measured on a real index of two
-                // sources: 2,951,074 entries, two segments, 1,441,890 of them
-                // unsorted, and `rapor` at 125 ms where one segment answers in
-                // single digits.
-                //
-                // What makes the merge safe is not that generations do not
-                // matter — they do — but that outside a scan there is nothing
-                // left for one to decide.
-                if inner.open.is_none() && inner.segments.len() > 1 {
-                    let all: Vec<usize> = (0..inner.segments.len()).collect();
-                    self.fold(&mut inner, &all)?;
+                self.flush(&mut self.inner.write())?;
+                let all: Option<Vec<u64>> = {
+                    let inner = self.inner.read();
+                    (inner.open.is_none() && inner.segments.len() > 1)
+                        .then(|| inner.segments.iter().map(|s| s.number).collect())
+                };
+                if let Some(all) = all {
+                    self.fold(&all)?;
                 }
-                while let Some(group) = Self::groups(&inner)
-                    .into_iter()
-                    .find(|g| g.len() > 1 || inner.segments[g[0]].dead_rows() > 0)
-                {
-                    self.fold(&mut inner, &group)?;
+                loop {
+                    let group = {
+                        let inner = self.inner.read();
+                        Self::groups(&inner).into_iter().find(|g| {
+                            g.len() > 1
+                                || inner
+                                    .segments
+                                    .iter()
+                                    .any(|s| s.number == g[0] && s.dead_rows() > 0)
+                        })
+                    };
+                    match group {
+                        Some(g) => self.fold(&g)?,
+                        None => break,
+                    }
                 }
             }
         }

@@ -2325,3 +2325,35 @@ is not.
 case is the worst thing left on the list: `to` matches so much that the stored
 order walks two million rows before it has a page. Both are measured, neither
 is guessed at.
+
+## 2026-08-04 — a query waited for the whole rebuild
+
+Steady state was fine and the window still felt wrong, so the thing to measure
+was not the average. Forty seconds of one query every 150 ms, with a rebuild
+started three seconds in:
+
+| | before | after |
+|---|---|---|
+| queries that completed | 26 | **231** |
+| median | — | **1.8 ms** |
+| **worst** | **22,984 ms** | **2,718 ms** |
+| over 50 ms | 4 of 26 | 8 of 231 |
+
+A search box that is usually instant and occasionally twenty-three seconds is
+not a fast search box, and no amount of shaving the inner loop shows up next to
+that.
+
+`maintain` held the **write** lock from the first byte to the last, and every
+search takes the read lock. It does not have to: a segment is written once and
+never edited, so reading N of them and writing one more touches nothing a
+search looks at. Only the *list* changes, and swapping a list is microseconds.
+
+So the merge builds under the **read** lock — which searches also hold, and
+therefore do not queue behind — and the write lock is taken once at the end.
+Two things had to change with it: `groups` answers in segment *numbers* rather
+than positions, because a position means nothing once the lock has been let go,
+and the swap re-checks which of those numbers are still there.
+
+**2.7 s is still not right**, and the remaining holder is `flush`: it builds and
+writes a segment for the staged rows with the write lock held. The same fix
+applies and is not done here.
