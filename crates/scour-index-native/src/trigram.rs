@@ -38,7 +38,7 @@
 //! full walk. That is worth stating plainly: it is slower, and it is an answer.
 //! A trigram index alone has to refuse them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::columns::BLOCK;
 use crate::names::Folded;
@@ -80,11 +80,20 @@ struct List {
 /// numbers: blocks arrive in increasing order, so nothing needs sorting, and
 /// what is held is what will be written. Buffering the pairs instead would be
 /// eleven million of them at a million entries.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TrigramWriter {
     lists: HashMap<u32, List>,
-    /// Trigrams seen in the block being filled.
-    seen: HashSet<u32>,
+    /// Trigrams seen in the block being filled, as a bitmap over the whole
+    /// 24-bit key space plus the list of keys that were set.
+    ///
+    /// This was a `HashSet<u32>` and it was the single most expensive thing in
+    /// a scan: three bytes make a key, so there are only 2^24 of them, and
+    /// hashing a number that small to store it in a table costs more than
+    /// addressing it directly. The bitmap is 2 MB and lives for one segment;
+    /// the list is what makes clearing it proportional to what was set rather
+    /// than to the key space.
+    seen_bits: Vec<u64>,
+    seen_list: Vec<u32>,
     /// The writer folds, rather than trusting the caller to have folded.
     ///
     /// Not tidiness: a name indexed under its own spelling and searched for
@@ -96,16 +105,35 @@ pub struct TrigramWriter {
     rows: usize,
 }
 
+impl Default for TrigramWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TrigramWriter {
     pub fn new() -> TrigramWriter {
-        TrigramWriter::default()
+        TrigramWriter {
+            lists: HashMap::new(),
+            // 2^24 bits, one per possible key.
+            seen_bits: vec![0u64; (1 << 24) / 64],
+            seen_list: Vec::new(),
+            fold: Folded::default(),
+            block: 0,
+            rows: 0,
+        }
     }
 
     /// Add one row's name, as the filesystem spells it.
     pub fn push(&mut self, name: &[u8]) {
-        let seen = &mut self.seen;
+        let bits = &mut self.seen_bits;
+        let list = &mut self.seen_list;
         for_each(self.fold.fold_bytes(name), |key| {
-            seen.insert(key);
+            let (word, bit) = ((key >> 6) as usize, 1u64 << (key & 63));
+            if bits[word] & bit == 0 {
+                bits[word] |= bit;
+                list.push(key);
+            }
         });
         self.rows += 1;
         if self.rows.is_multiple_of(BLOCK) {
@@ -114,7 +142,8 @@ impl TrigramWriter {
     }
 
     fn seal(&mut self) {
-        for key in self.seen.drain() {
+        for key in self.seen_list.drain(..) {
+            self.seen_bits[(key >> 6) as usize] &= !(1u64 << (key & 63));
             let list = self.lists.entry(key).or_default();
             // The difference from the previous block, which for the first is
             // the block number itself.
@@ -127,7 +156,7 @@ impl TrigramWriter {
 
     /// Dictionary and postings.
     pub fn finish(mut self) -> (Vec<u8>, Vec<u8>) {
-        if !self.seen.is_empty() {
+        if !self.seen_list.is_empty() {
             self.seal();
         }
         let blocks = self.block;

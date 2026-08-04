@@ -1499,3 +1499,63 @@ IOKit is where the real answer lives.
 The Win32 constants (`DRIVE_REMOTE`, `FILE_CASE_SENSITIVE_SEARCH`) are written
 out rather than imported: `windows-sys` moves them between modules across
 versions, and these have not changed since Windows 95.
+
+## 2026-08-04 — what trigrams cost, and what they are worth
+
+The scan profile put trigram extraction at a third of `build`. Measured
+properly this time — interleaved A/B, because a single run at one time of day
+cannot be compared with one at another.
+
+### The cost
+
+Same directory, alternating binaries, four rounds each:
+
+| | scan | index |
+|---|---|---|
+| with trigrams | ~2,980 ms | 97 MB |
+| without | ~1,879 ms | 76 MB |
+
+**37% of the scan and 22% of the index.**
+
+### What they buy
+
+Two indexes of the same directory, same queries, count cap 200:
+
+| query | with | without | ratio |
+|---|---|---|---|
+| `rapor` | 3.66 ms | 68.08 ms | 19× |
+| `readme` | 7.59 ms | 54.44 ms | 7× |
+| `config` | 4.49 ms | 14.32 ms | 3× |
+| `ext:pdf` | 2.66 ms | 41.75 ms | 16× |
+| `*.rs` | 4.28 ms | 19.61 ms | 5× |
+| **`zzqx`** (no match) | **0.45 ms** | 61.90 ms | **138×** |
+| **`kütüphane`** (no match) | **0.08 ms** | 53.54 ms | **669×** |
+
+The two extremes are the ones that decide it: **terms that match nothing**.
+The filter says "these three letters appear in no block here" and skips the
+segment whole. And a search box spends most of its life on prefixes that match
+nothing yet — `k`, `kü`, `küt` — so the case trigrams are best at is the case
+that happens most.
+
+Paying 1.1 s once to save 50 ms per keystroke is not a trade worth reversing.
+
+### Making the cost smaller instead
+
+The writer kept the trigrams of the current block in a `HashSet<u32>`. A key is
+three bytes — 2^24 possible values — and hashing a number that small to store
+it costs more than addressing it directly. Replaced with a 2 MB bitmap over the
+whole key space, plus a list of the keys that were set so that clearing a block
+is proportional to what it held rather than to the key space.
+
+Three-way interleaved, three rounds:
+
+| | mean scan | trigram's share |
+|---|---|---|
+| `HashSet` | 2,937 ms | 1,010 ms |
+| **bitmap** | **2,543 ms** | **616 ms** |
+| no trigrams | 1,927 ms | — |
+
+**The cost fell 39%**, with the same index size, the same search behaviour and
+the same brute-force verification passing. What remains — 616 ms — is folding
+and the postings-list merge, and building them after the scan rather than
+during it is still available if that is worth taking.
