@@ -22,6 +22,88 @@
 
 use std::path::Path;
 
+/// How a mount behaves under a scan.
+///
+/// Separate from [`FsTraits`], which is about correctness. This is about
+/// speed, and the two do not correlate: exFAT has no stable ids and is fast,
+/// NFS has stable ids and is slow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Medium {
+    /// A local device with deep hardware queues. Parallelism is free.
+    Solid,
+    /// A spinning disk. Every concurrent reader is a seek, so parallelism
+    /// actively hurts.
+    Spinning,
+    /// Reached over a network — NFS, SMB, sshfs, a cloud mount. Bounded by
+    /// round trips rather than by the device.
+    Network,
+    /// In memory. tmpfs, ramfs.
+    Memory,
+    /// Could not be determined.
+    Unknown,
+}
+
+impl Medium {
+    /// How many walker threads this mount is worth.
+    ///
+    /// Measured on this machine, `/home/hasan`, 1.85 M entries, two rounds:
+    ///
+    /// | threads | round 1 | round 2 |
+    /// |---|---|---|
+    /// | 8 | 1073 ms | 337 ms |
+    /// | 16 | 284 ms | 306 ms |
+    /// | **20** | **241 ms** | **277 ms** |
+    /// | 32 | 250 ms | 282 ms |
+    /// | 48 | 365 ms | 705 ms |
+    ///
+    /// Twenty is this machine's core count *and* its NVMe hardware queue
+    /// count — the driver opens one queue per core, which is why the two
+    /// agree. Going past it buys nothing and 48 costs dearly.
+    ///
+    /// The previous project's rule was `cores * 2`, on a note claiming 32 beat
+    /// 20 by 20%. That did not reproduce here; the numbers above are why this
+    /// says `cores`.
+    ///
+    /// The network and spinning figures are **not measured** — there is no HDD
+    /// and no network mount on this machine. They are conservative guesses,
+    /// and marked as such rather than presented as findings.
+    pub fn threads(self, cores: usize) -> usize {
+        match self {
+            Medium::Solid | Medium::Memory => cores.clamp(2, 32),
+            // One seek at a time. Concurrency on a spinning disk turns a
+            // sequential read into a head-thrashing one.
+            Medium::Spinning => 1,
+            // Bounded by latency, so some concurrency hides round trips — but
+            // too much floods a link that the local kernel cannot see.
+            Medium::Network => 4,
+            Medium::Unknown => (cores / 2).clamp(2, 8),
+        }
+    }
+
+    /// How long to let filesystem events settle before acting on them.
+    ///
+    /// A network mount reports changes late and in bursts, and each reaction
+    /// costs a round trip; batching harder is worth more there than promptness.
+    pub fn debounce_ms(self) -> u64 {
+        match self {
+            Medium::Solid | Medium::Memory => 200,
+            Medium::Spinning => 500,
+            Medium::Network => 5_000,
+            Medium::Unknown => 500,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Medium::Solid => "solid-state",
+            Medium::Spinning => "spinning",
+            Medium::Network => "network",
+            Medium::Memory => "memory",
+            Medium::Unknown => "unknown",
+        }
+    }
+}
+
 /// What one mounted filesystem promises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FsTraits {
@@ -60,6 +142,24 @@ impl FsTraits {
 /// re-index, and the default is the one thing here that could be changed
 /// without anybody noticing.
 const _: () = assert!(!FsTraits::UNKNOWN.stable_ids);
+
+/// What the mount under `path` is like to read.
+///
+/// Three questions in order, because each is cheaper and more certain than the
+/// next: is the filesystem itself a network or memory one (`statfs` says so
+/// outright), does the kernel call its device rotational, and how many
+/// hardware queues does that device have.
+pub fn medium_of(path: &Path) -> Medium {
+    #[cfg(target_os = "linux")]
+    {
+        linux::medium_of(path)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        Medium::Unknown
+    }
+}
 
 /// What the filesystem under `path` promises.
 ///
@@ -103,6 +203,19 @@ mod linux {
     // UNKNOWN, which is how it came to be measured rather than looked up.
     const NTFS_3G: i64 = 0x5346_544E;
     const NTFS3: i64 = 0x7366_746E;
+    // Reached over a network, whatever the device underneath turns out to be.
+    // `fuse` covers sshfs, rclone and most cloud mounts; it also covers local
+    // FUSE filesystems, and treating one of those as remote costs some
+    // parallelism rather than correctness.
+    const NFS: i64 = 0x6969;
+    const SMB: i64 = 0x517B;
+    const CIFS: i64 = 0xFF53_4D42;
+    const SMB2: i64 = 0xFE53_4D42;
+    const FUSE: i64 = 0x6573_5546;
+    const NINEP: i64 = 0x0102_1997;
+    const AFS: i64 = 0x5346_414F;
+    const CEPH: i64 = 0x00C3_6400;
+    const RAMFS: i64 = 0x8584_5846;
 
     pub fn traits_of(path: &Path) -> FsTraits {
         let Some(magic) = magic(path) else {
@@ -128,6 +241,53 @@ mod linux {
             },
             _ => FsTraits::UNKNOWN,
         }
+    }
+
+    pub fn medium_of(path: &Path) -> super::Medium {
+        use super::Medium;
+        match magic(path) {
+            Some(NFS | SMB | CIFS | SMB2 | FUSE | NINEP | AFS | CEPH) => return Medium::Network,
+            Some(TMPFS | RAMFS) => return Medium::Memory,
+            _ => {}
+        }
+        match rotational(path) {
+            Some(true) => Medium::Spinning,
+            Some(false) => Medium::Solid,
+            None => Medium::Unknown,
+        }
+    }
+
+    /// Does the kernel call the device under this path rotational?
+    ///
+    /// The chain is mount point → source device → `/sys/dev/block/MAJ:MIN`.
+    /// Two things make it less obvious than it looks. A partition's sysfs
+    /// entry has no `queue/`, so the parent disk's has to be read — hence the
+    /// `..` fallback. And btrfs reports its source as `/dev/nvme0n1p5[/@home]`,
+    /// with the subvolume in brackets, which is not a path that exists.
+    fn rotational(path: &Path) -> Option<bool> {
+        let out = std::process::Command::new("findmnt")
+            .args(["-no", "SOURCE", "--target"])
+            .arg(path)
+            .output()
+            .ok()?;
+        let src = String::from_utf8_lossy(&out.stdout);
+        let src = src.trim().split('[').next()?.trim();
+        if !src.starts_with("/dev/") {
+            return None;
+        }
+        let md = std::fs::metadata(src).ok()?;
+        use std::os::unix::fs::MetadataExt;
+        let (maj, min) = (libc::major(md.rdev()), libc::minor(md.rdev()));
+        let base = format!("/sys/dev/block/{maj}:{min}");
+        for p in [
+            format!("{base}/queue/rotational"),
+            format!("{base}/../queue/rotational"),
+        ] {
+            if let Ok(s) = std::fs::read_to_string(&p) {
+                return Some(s.trim() == "1");
+            }
+        }
+        None
     }
 
     /// `statfs(2)`'s `f_type`, or `None` if the path cannot be reached.

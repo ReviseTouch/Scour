@@ -406,3 +406,44 @@ fn a_root_that_cannot_be_read_is_reported_as_such() {
     );
     assert_eq!(r.entries, 0);
 }
+
+/// A spinning disk is not a fast disk with fewer cores.
+///
+/// The thread count belongs to the device, not to the machine: on NVMe it
+/// tracks the core count (and this machine's hardware queue count, which is
+/// the same number), and on a spinning disk it is one, because every extra
+/// concurrent reader is another seek. A network mount sits between the two —
+/// bounded by round trips rather than by the device.
+#[test]
+fn the_device_decides_how_many_threads_are_worth_using() {
+    use scour_source_fs::fs::Medium;
+    assert_eq!(Medium::Spinning.threads(20), 1);
+    assert_eq!(Medium::Solid.threads(20), 20);
+    assert_eq!(Medium::Memory.threads(20), 20);
+    assert_eq!(Medium::Network.threads(20), 4);
+    // A machine with more cores than the ceiling does not get more threads.
+    assert_eq!(Medium::Solid.threads(128), 32);
+    // Nor does a spinning disk on a big machine.
+    assert_eq!(Medium::Spinning.threads(128), 1);
+}
+
+/// A network mount batches harder, because every reaction costs a round trip.
+#[test]
+fn a_network_mount_lets_events_settle_for_longer() {
+    use scour_source_fs::fs::Medium;
+    assert!(Medium::Network.debounce_ms() > Medium::Spinning.debounce_ms());
+    assert!(Medium::Spinning.debounce_ms() > Medium::Solid.debounce_ms());
+}
+
+/// Whatever this machine is, its temp directory is not a spinning disk and not
+/// a network share.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_real_mount_is_classified() {
+    use scour_source_fs::fs::{Medium, medium_of};
+    let m = medium_of(&std::env::temp_dir());
+    assert!(
+        matches!(m, Medium::Solid | Medium::Memory),
+        "temp dir came out as {m:?}"
+    );
+}

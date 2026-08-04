@@ -1365,3 +1365,61 @@ What the exercise did leave: the hard-link constraint is now written down, and
 the measuring method is. A single number taken at one time of day cannot be
 compared with one taken at another — from here on these decisions are made with
 interleaved A/B runs.
+
+## 2026-08-04 — how many threads a disk is worth
+
+`ScanOptions.threads = 0` meant "let the walker decide", and the walker decides
+by core count. That is right on NVMe and wrong on a spinning disk, where every
+concurrent reader is another seek.
+
+`/home/hasan`, 1.85 M entries, two rounds:
+
+| threads | round 1 | round 2 |
+|---|---|---|
+| 8 | 1073 ms | 337 ms |
+| 16 | 284 ms | 306 ms |
+| **20** | **241 ms** | **277 ms** |
+| 32 | 250 ms | 282 ms |
+| 48 | 365 ms | 705 ms |
+
+Twenty is this machine's core count **and** its NVMe hardware queue count —
+`/sys/block/nvme0n1/mq/` holds twenty entries, because the driver opens one
+queue per core. That the two agree is not a coincidence, and it is why the
+rule is `cores` rather than a tuned constant.
+
+**The previous project's rule was `cores * 2`**, on a source comment claiming
+32 beat 20 by 20% on a 20-core machine. It does not reproduce here: 32 ties
+with 20 and 48 costs dearly. Carried over as `cores`.
+
+### Classifying a mount
+
+Three questions, cheapest first:
+
+```
+statfs f_type  →  nfs/smb/cifs/9p/afs/ceph/fuse → Network
+                  tmpfs/ramfs                   → Memory
+/sys/dev/block/MAJ:MIN/queue/rotational = 1     → Spinning
+                                        = 0     → Solid
+```
+
+Two things make the second step less obvious than it looks. A partition's sysfs
+directory has no `queue/`, so the parent disk's has to be read. And btrfs
+reports its source as `/dev/nvme0n1p5[/@home]` — the subvolume in brackets is
+not part of any path that exists.
+
+Measured on this machine:
+
+```
+/              medium=solid-state  threads=20 debounce=200ms
+/home          medium=solid-state  threads=20 debounce=200ms
+/mnt/depo      medium=solid-state  threads=20 debounce=200ms
+/tmp           medium=memory       threads=20 debounce=200ms
+/proc          medium=unknown      threads=8  debounce=500ms
+```
+
+**The spinning and network figures are guesses, not findings.** This machine
+has two NVMe drives and no network mount, so `Spinning => 1` and
+`Network => 4, 5 s debounce` are reasoned defaults marked as unmeasured. The
+Network debounce is the one with an argument behind it: a remote mount reports
+changes late and in bursts, and each reaction costs a round trip, so batching
+harder is worth more there than promptness.

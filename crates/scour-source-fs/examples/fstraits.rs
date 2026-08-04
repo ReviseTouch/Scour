@@ -8,9 +8,18 @@ fn main() {
     };
     for p in paths {
         let t = scour_source_fs::fs::traits_of(std::path::Path::new(&p));
+        let m = scour_source_fs::fs::medium_of(std::path::Path::new(&p));
         println!(
-            "{p:14} stable_ids={:<5} case_sensitive={}",
-            t.stable_ids, t.case_sensitive
+            "{p:14} stable_ids={:<5} case_sensitive={:<5} medium={:<12} threads={} debounce={}ms",
+            t.stable_ids,
+            t.case_sensitive,
+            m.label(),
+            m.threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            ),
+            m.debounce_ms()
         );
     }
 }

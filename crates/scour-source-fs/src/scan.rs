@@ -31,6 +31,9 @@ pub struct FsSource {
     /// What the filesystems under the roots actually promise, asked once at
     /// construction rather than assumed at compile time.
     traits: FsTraits,
+    /// What they are like to read: how many threads are worth using, and how
+    /// long to let events settle.
+    medium: crate::fs::Medium,
 }
 
 impl FsSource {
@@ -42,6 +45,14 @@ impl FsSource {
             .map(|r| crate::fs::traits_of(r))
             .reduce(FsTraits::and)
             .unwrap_or(FsTraits::UNKNOWN);
+        // The slowest root decides, for the same reason `FsTraits` takes the
+        // narrower promise: one spinning disk in the set makes twenty threads
+        // the wrong answer for all of them.
+        let medium = roots
+            .iter()
+            .map(|r| crate::fs::medium_of(r))
+            .reduce(|a, b| if a.threads(64) <= b.threads(64) { a } else { b })
+            .unwrap_or(crate::fs::Medium::Unknown);
         Self {
             id,
             name: name.into(),
@@ -49,6 +60,7 @@ impl FsSource {
             kind: SourceKind::Local,
             watch: true,
             traits,
+            medium,
         }
     }
 
@@ -160,7 +172,19 @@ impl Source for FsSource {
             .hidden(!opts.hidden)
             .follow_links(opts.follow_symlinks)
             .same_file_system(false)
-            .threads(if opts.threads == 0 { 0 } else { opts.threads });
+            // Zero means "decide for me", and the decision belongs to the
+            // device rather than to the core count. `ignore`'s own default is
+            // the core count, which is right on NVMe and wrong on a spinning
+            // disk, where every extra thread is another seek.
+            .threads(if opts.threads == 0 {
+                self.medium.threads(
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(4),
+                )
+            } else {
+                opts.threads
+            });
 
         let src_id = self.id;
         let excluded = AtomicU64::new(0);
