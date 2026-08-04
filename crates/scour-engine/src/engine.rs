@@ -39,6 +39,19 @@ pub struct EngineOptions {
     /// file handle. Merging them costs seconds and does not reduce how many
     /// documents the tail holds; only a rebuild does that.
     pub compact_segments: u32,
+    /// The point at which segments are merged **without** waiting for idle.
+    ///
+    /// Compaction normally waits for the machine to stop asking for things,
+    /// because it costs seconds and nobody should pay them mid-search. That
+    /// rests on churn arriving in bursts with gaps between — which a machine
+    /// that is compiling breaks completely: a continuous stream of changes
+    /// means the idle moment never comes, and the segments never stop
+    /// arriving. Measured here during a build: **222 segments**, and a query
+    /// that answers in 8 ms at one segment taking 13 seconds.
+    ///
+    /// Past this many, searching costs more than merging does, and waiting
+    /// for a quiet moment is waiting for the wrong thing.
+    pub compact_urgent: u32,
     /// How long the index may sit untouched before it is asked to give back
     /// whatever it was holding for writes.
     pub idle_after: Duration,
@@ -52,6 +65,7 @@ impl Default for EngineOptions {
             rebuild_threshold: 200_000,
             result_limit: 1_000,
             compact_segments: 8,
+            compact_urgent: 64,
             idle_after: Duration::from_secs(20),
         }
     }
@@ -150,7 +164,10 @@ impl Engine {
             if !src.caps().contains(scour_core::Caps::WATCH) {
                 continue;
             }
-            match src.watch(Box::new(Forward(self.changes.clone()))) {
+            match src.watch(
+                &self.shared.opts.scan,
+                Box::new(Forward(self.changes.clone())),
+            ) {
                 Ok(h) => {
                     handles.push(h);
                     started += 1;
@@ -161,6 +178,20 @@ impl Engine {
         }
         self.shared.status.write().watching = started;
         Ok(started)
+    }
+
+    /// Subtrees no watcher is covering, gathered from every handle.
+    ///
+    /// Empty is the ordinary answer. When it is not, live updates are partial
+    /// and the paths are what makes that actionable — one root-owned directory
+    /// under a home directory is a thing a person can look at, and "watching
+    /// 0" is not.
+    pub fn unwatched(&self) -> Vec<String> {
+        self.watches
+            .lock()
+            .iter()
+            .flat_map(|h| h.unwatched())
+            .collect()
     }
 
     /// Queue a full walk of every source, or of one subtree.
@@ -367,6 +398,10 @@ fn run(
     let mut dirty = false;
     // Housekeeping runs once per quiet period, not once per tick.
     let mut idle_done = false;
+    // Set by a commit, cleared by the check after it: the moment a batch of
+    // changes has just landed is the only one where merging costs nothing that
+    // was not already being paid.
+    let mut dirty_settled = false;
     let mut last_commit = Instant::now();
     let tick = crossbeam_channel::tick(Duration::from_millis(100));
 
@@ -438,8 +473,23 @@ fn run(
             let _ = shared.index.commit();
             shared.pending.store(0, Ordering::Relaxed);
             dirty = false;
+            dirty_settled = true;
             last_commit = Instant::now();
             idle_done = false;
+        }
+
+        // Too many to wait for a quiet moment that may never come.
+        //
+        // Checked on the commit rather than on every event, so this costs one
+        // `stats()` a second at most, and only while something is writing.
+        if dirty_settled && !dirty {
+            if let Ok(stats) = shared.index.stats()
+                && stats.segments > shared.opts.compact_urgent
+            {
+                let _ = shared.index.maintain(Maintenance::Compact);
+                last_commit = Instant::now();
+            }
+            dirty_settled = false;
         }
 
         // Housekeeping, once the machine has stopped asking for anything.

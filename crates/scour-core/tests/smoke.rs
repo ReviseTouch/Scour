@@ -111,6 +111,7 @@ impl Source for TinySource {
 
     fn watch(
         &self,
+        _o: &scour_core::ScanOptions,
         _s: Box<dyn scour_core::ChangeSink>,
     ) -> scour_core::Result<Box<dyn WatchHandle>> {
         Err(Error::unsupported("watch"))

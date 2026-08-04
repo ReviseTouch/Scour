@@ -102,7 +102,11 @@ impl Source for MemSource {
         })
     }
 
-    fn watch(&self, s: Box<dyn ChangeSink>) -> scour_core::Result<Box<dyn WatchHandle>> {
+    fn watch(
+        &self,
+        _o: &scour_core::ScanOptions,
+        s: Box<dyn ChangeSink>,
+    ) -> scour_core::Result<Box<dyn WatchHandle>> {
         if !self.watchable {
             return Err(Error::unsupported("watch"));
         }

@@ -61,7 +61,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let watching = engine.start_watching().unwrap_or(0);
     // A cold index is scanned without being asked. The alternative is a
     // freshly installed service that answers every question with nothing until
     // someone discovers there is a command for it.
@@ -69,6 +68,8 @@ fn main() -> Result<()> {
         engine.rescan(None)?;
     }
     if args.scan_only {
+        // Nothing is watching in this mode and nothing should be: the process
+        // exists to finish a walk and leave.
         wait_for_scan(&engine);
         engine.shutdown();
         return Ok(());
@@ -77,11 +78,42 @@ fn main() -> Result<()> {
     let server = Server::bind(&addr)?;
     let stop = Arc::new(AtomicBool::new(false));
     eprintln!(
-        "scourd: listening on {addr} · {} sources · watching {watching}",
+        "scourd: listening on {addr} · {} sources · watching starting",
         engine.sources().len()
     );
 
     let engine = Arc::new(engine);
+
+    // Watching starts on a thread of its own, and that is not tidiness.
+    //
+    // A recursive watch on Linux is one inotify watch per directory, installed
+    // one at a time: 342,000 of them took **15.1 seconds** here, during which
+    // the socket did not exist and every client — including a window spawned
+    // on demand — sat waiting for a service that was already running. Nothing
+    // about answering a query needs the watches to be in place, so nothing
+    // waits for them. `scour status` reports the count when it lands.
+    {
+        let engine = Arc::clone(&engine);
+        std::thread::spawn(move || {
+            if let Ok(n) = engine.start_watching() {
+                let skipped = engine.unwatched();
+                if skipped.is_empty() {
+                    eprintln!("scourd: watching {n} source(s)");
+                } else {
+                    // Named, not merely counted — "live updates are partial"
+                    // is not something anyone can act on and a path is. But
+                    // named *briefly*: one unreadable directory tree here
+                    // produced 191 of them, and a log line that long is one
+                    // nobody reads. The shared prefix is the useful part.
+                    eprintln!(
+                        "scourd: watching {n} source(s); {} subtree(s) unreadable, under {}",
+                        skipped.len(),
+                        common_prefix(&skipped)
+                    );
+                }
+            }
+        });
+    }
     {
         // Ctrl-C has to reach the accept loop, which is blocked in `accept`.
         // Setting the flag and connecting once wakes it.
@@ -121,6 +153,29 @@ fn main() -> Result<()> {
     );
     engine.shutdown();
     Ok(())
+}
+
+/// The deepest directory every one of these paths is inside.
+///
+/// What makes a list of 191 skipped subtrees into one line somebody reads:
+/// they were all under `~/.local/share/waydroid/data`, and that is the whole
+/// of what a person needs in order to decide whether to care.
+fn common_prefix(paths: &[String]) -> String {
+    let Some(first) = paths.first() else {
+        return String::new();
+    };
+    let mut best: Vec<&str> = first.split('/').collect();
+    for p in &paths[1..] {
+        let parts: Vec<&str> = p.split('/').collect();
+        let keep = best.iter().zip(&parts).take_while(|(a, b)| a == b).count();
+        best.truncate(keep);
+    }
+    // A prefix that reaches a file rather than its directory says less than it
+    // looks like it does, so stop at the last component every path shares.
+    match best.join("/") {
+        p if p.is_empty() => "/".into(),
+        p => p,
+    }
 }
 
 fn wait_for_scan(engine: &scour_engine::Engine) {

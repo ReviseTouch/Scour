@@ -44,6 +44,17 @@ pub trait ChangeSink: Send + Sync + Debug {
 
 /// Keeps a watch alive. Dropping it stops the watch.
 pub trait WatchHandle: Send + Debug {
+    /// Subtrees the watcher could not cover, and so is not reporting on.
+    ///
+    /// Empty is the ordinary answer. When it is not, live updates are partial,
+    /// and the caller has to decide what to do about that — which it cannot do
+    /// if the only thing it is told is a count. One unreadable directory used
+    /// to take a whole home directory's watching down and report `watching 0`
+    /// with no reason attached, so this exists to carry the reason.
+    fn unwatched(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Stop watching. Dropping does the same; this exists so a caller can wait
     /// for the watcher's threads to finish.
     fn stop(self: Box<Self>);
@@ -65,6 +76,14 @@ pub trait Source: Send + Sync + Debug {
 
     /// Start reporting changes.
     ///
+    /// Takes the **same options as [`Source::scan`]**, and that is the point
+    /// rather than a convenience: watching and scanning have to agree about
+    /// what is inside the source. A watcher that ignores the exclusions
+    /// reports changes for files the walk deliberately skipped, and every one
+    /// of them is an entry the next walk will not renew. Measured: with a
+    /// build directory watched but not scanned, one `cargo test` took a query
+    /// from 8 ms to 13 seconds.
+    ///
     /// Sources without [`Caps::WATCH`] return [`Error::Unsupported`]. Sources
     /// that have it are still allowed to give up: when a watching mechanism
     /// loses track — inotify running out of watches, a Windows buffer
@@ -73,7 +92,7 @@ pub trait Source: Send + Sync + Debug {
     ///
     /// [`Error::Unsupported`]: crate::types::Error::Unsupported
     /// [`Change::Rescan`]: crate::types::Change::Rescan
-    fn watch(&self, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>>;
+    fn watch(&self, opts: &ScanOptions, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>>;
 
     /// Read an entry's bytes, for content extraction.
     ///

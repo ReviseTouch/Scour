@@ -2050,3 +2050,83 @@ disagreed.
 `-n` and `-s` are now accepted before the query, `--help` states the rule, and
 the bare form orders by relevance rather than by date — someone who typed a
 word wants the file that answers it, not the file that happens to be newest.
+
+## 2026-08-04 — `watching 0`, and the four things behind it
+
+The status line had said `watching 0` since the service was first installed,
+and the recorded reason — inotify running out of watches on a home directory —
+was wrong. Nothing had ever asked the system.
+
+```
+/home/hasan/Projeler/Scour: watched, 315.8ms to install
+/home/hasan: REFUSED after 62.5ms — Permission denied
+             about ["/home/hasan/.local/share/waydroid/data/vendor"]
+```
+
+The limit is **524,288** and the tree holds **342,000** directories. It was
+never close. `notify`'s recursive watch walks the tree itself and abandons the
+**whole** watch at the first directory it cannot read, so one root-owned
+Waydroid directory left an entire home directory unwatched — and the reason was
+discarded twice on the way up, once in `watch::start` and once in
+`start_watching`, leaving a count and no cause.
+
+`examples/canwatch.rs` is that probe, kept.
+
+### Ask for the subtree, and split only what is refused
+
+Recursive first; if refused, watch the directory itself and ask each child
+separately, six levels deep. The branch that is genuinely unreadable is the
+only one that gets split.
+
+| | before | after |
+|---|---|---|
+| sources watched | 0 of 1 | **1 of 1** |
+| subtrees skipped | (all of them) | 191, all under `~/.local/share/waydroid/data` |
+
+### Three more, each found by the previous fix
+
+**Watching blocked start-up.** Installing 342,000 inotify watches one at a time
+took **15.1 seconds**, during which the socket did not exist and every client
+waited for a service that was already running. Nothing about answering a query
+needs the watches, so it moved to a thread of its own: **1.3 s** to first
+answer.
+
+**191 queued scans of directories nobody can read.** The first version emitted
+`Change::Rescan` for every skipped subtree. A walk needs exactly the permission
+the watch just did not have, so each one queued a scan that could read nothing —
+and 191 of them behind one worker thread took a query from 14 ms to **51
+seconds**. A subtree nobody can read is not pending work.
+
+**The watcher ignored the scan's exclusions.** It reported changes for files the
+walk deliberately skips, and every one became an index entry the next walk would
+not renew. One `cargo test` under a watched-but-unscanned build directory took a
+query from 8 ms to **13 seconds**. `Source::watch` now takes the same
+`ScanOptions` as `Source::scan`, which is the honest shape: watching and
+scanning have to agree about what is inside a source.
+
+### And the segment explosion underneath all of it
+
+Compaction waited for the machine to go idle, which rests on churn arriving in
+bursts. A machine that is compiling never goes idle: **222 segments**, and a
+query that answers in 8 ms at one segment taking 13 s.
+
+`compact_urgent` merges past a ceiling without waiting — 222 → **7** on the
+next commit. The cost is real and recorded: a compaction holds the index's
+write lock, so a query issued during one waits for it. Measured at 25 s once,
+mid-churn. Making that not block means building the merged segment outside the
+lock, which was tried once for scanning and reverted; it is not done here.
+
+### Where it settles
+
+Quiet machine, 2,981,168 entries, 49 segments:
+
+| query | |
+|---|---|
+| `main` | 12.2 ms |
+| `config` | 24.1 ms |
+| `ext:pdf` | 63.1 ms |
+| `rapor` | 77.0 ms |
+
+And live tracking works end to end: a file created is findable in about three
+seconds, a new folder with a file inside it likewise, a move removes the old
+name and adds the new one, and a delete removes both.

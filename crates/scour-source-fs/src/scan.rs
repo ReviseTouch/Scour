@@ -307,8 +307,8 @@ impl Source for FsSource {
         })
     }
 
-    fn watch(&self, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>> {
-        crate::watch::start(self.clone(), sink)
+    fn watch(&self, opts: &ScanOptions, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>> {
+        crate::watch::start(self.clone(), opts, sink)
     }
 
     fn open(&self, _id: &EntryId) -> Result<Box<dyn Read + Send>> {

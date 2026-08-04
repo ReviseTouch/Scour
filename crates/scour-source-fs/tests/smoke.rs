@@ -314,7 +314,9 @@ fn a_watch_reports_creations_and_removals() {
             self.0.emit(c);
         }
     }
-    let handle = src.watch(Box::new(Fwd(Arc::clone(&seen)))).expect("watch");
+    let handle = src
+        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
+        .expect("watch");
 
     let created: PathBuf = dir.path().join("src/yeni.rs");
     std::fs::write(&created, "fn x() {}").expect("write");
