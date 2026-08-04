@@ -2683,3 +2683,53 @@ it:
 
 What is left is the merge itself during a bulk pass, which is the case it was
 written for and costs what it costs.
+
+## 2026-08-04 — two size ideas, both measured, both refused
+
+### Storing the name once
+
+`names` and `fnames` hold the same names twice, spelled and folded, and the
+obvious saving is to keep one copy wherever the two are identical. Measured
+over 1,286,685 real rows:
+
+| | |
+|---|---|
+| folded is identical to spelled | 586,783 — **45.6%** |
+| differs | 699,902 — 54.4% |
+| two arenas today | 67.4 MB |
+| one arena plus the exceptions | 56.2 MB |
+| **saving** | **11.2 MB** |
+
+Over half the names differ, which is what a machine with Turkish documents and
+CamelCase source looks like. 11.2 MB is 6% of a 186 MB index, and the price is
+a per-row question in the hot loop — "is this one an exception" — on the walk
+that everything else has been spent making tight. **Refused.**
+
+It would not be faster either: the walk only ever touches the folded arena, and
+the spelled one is read for the thirty rows on screen.
+
+### zstd
+
+The ratios are large and mostly unclaimable:
+
+| | raw | zstd -9 |
+|---|---|---|
+| cols | 23.7M | 9.6M (−60%) |
+| names | 33.9M | 7.6M (−77%) |
+| fnames | 33.4M | 7.3M (−78%) |
+| tpost | 16.9M | 9.2M (−46%) |
+| ids | 9.8M | 8.7M (−11%) |
+| **total** | **120.3M** | **43.1M (−64%)** |
+
+Every one of those files is mapped and read in place. Compressing them means
+decoding to read: at 32 rows a block, a query touching 104,000 candidates would
+decode 3,250 frames, which is more than the whole query costs now. The design
+has spent this entire session trading bytes *for* time — 79 MB on a folded
+arena to save 24 ns a row — and this is the same trade backwards.
+
+`tpost` is the one honest candidate: trigram lists are read a few times a query
+rather than once a row, so decoding them is bounded. Eight megabytes. Not
+pursued.
+
+Disk is not the binding constraint here — 186 MB for 2.1 M entries is the same
+order as Everything's index for a million — and latency is.
