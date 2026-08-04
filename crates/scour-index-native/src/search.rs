@@ -375,6 +375,24 @@ fn admits(cmp: Cmp, value: i64, span: i64, lo: i64, hi: i64) -> bool {
 /// files silently. Several such clauses intersect, because every one of them
 /// has to hold.
 fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
+    // `SCOUR_NO_TRIGRAM=1` turns the filter off, and it stays because the
+    // filter was twice claimed — in this file's own notes — not to pay for
+    // itself, and both times the claim was wrong. Measured on 2,137,518
+    // entries with the switch, one segment, twenty rounds each:
+    //
+    //   rapor      14.11 ms    against  37.97 ms
+    //   belge       9.22               37.70
+    //   main        5.62               36.23
+    //   fatura      0.85               35.02
+    //   kütüphane   0.06               35.50
+    //
+    // Between 2.7× and 590×. What made the earlier arithmetic wrong was
+    // comparing against a sequential scan measured *before* names were stored
+    // folded, and then against a busy index with five segments and a watcher
+    // running. A switch is cheaper than either mistake.
+    if std::env::var_os("SCOUR_NO_TRIGRAM").is_some() {
+        return None;
+    }
     let mut out: Option<Vec<u32>> = None;
     for c in clauses {
         let [(false, test)] = &c.alts[..] else {

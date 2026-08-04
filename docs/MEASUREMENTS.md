@@ -2463,3 +2463,50 @@ default size that is **31 rows**, not 200.
 
 `PAGE_MAX` of 120 is the ceiling, so a maximised window on a tall screen cannot
 turn one keystroke into a thousand rebuilt paths.
+
+## 2026-08-04 — the trigram filter, judged instead of assumed
+
+This file twice recorded that the filter was "not paying for itself" and both
+records were wrong. `SCOUR_NO_TRIGRAM=1` now exists so the question is settled
+by running it. 2,137,518 entries, one segment, quiet machine, twenty rounds:
+
+| term | with | without |
+|---|---|---|
+| `rapor` | **14.11 ms** | 37.97 ms |
+| `belge` | **9.22 ms** | 37.70 ms |
+| `config` | **8.91 ms** | 36.48 ms |
+| `main` | **5.62 ms** | 36.23 ms |
+| `fatura` | **0.85 ms** | 35.02 ms |
+| `kütüphane` | **0.06 ms** | 35.50 ms |
+
+Between 2.7× and 590×. What made the earlier arithmetic wrong: the first
+comparison was against a sequential scan measured *before* names were stored
+folded, and the second against a busy index with five segments and a watcher
+running, where the filtered walk was paying for lock contention rather than for
+cache misses. A switch costs less than either mistake.
+
+### What the meter says
+
+| | |
+|---|---|
+| `kütüphane` | 0.000022 s |
+| `fatura` | 0.000743 s |
+| `değişiklik` | 0.002706 s |
+| `main` | 0.004763 s |
+| `belge` | 0.007861 s |
+
+Google's famous line said 0.42 seconds.
+
+### And deleting a folder no longer walks the index
+
+`flush` rebuilt a path for every live row of every segment and compared
+strings, to find the rows under a removed prefix — 2.1 M path constructions to
+delete one folder, with the **write** lock held and every search waiting behind
+it. The directory table answers the same question as a range check on a column,
+which is what `under:` has always used.
+
+One thing had to be added to keep it correct, and the test found it rather than
+the reasoning: a directory's own row lives in its *parent*, so it carries the
+parent's number and the range walks past it. `/home/u/Projeler` survived the
+removal of `/home/u/Projeler`. The parent's number and the last component are
+checked too, and a name is read only for the handful of rows that sit there.

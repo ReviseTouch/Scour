@@ -245,22 +245,55 @@ impl NativeIndex {
         let mut touched = vec![false; inner.segments.len()];
 
         // Subtrees. One pass over each segment covers every prefix at once.
+        //
+        // By **directory number**, not by path. The first version rebuilt a
+        // path for every live row of every segment and compared strings —
+        // 2.1 M path constructions to delete one folder, with the write lock
+        // held and every search waiting behind it. The directory table already
+        // answers "is this row under that prefix" as a range check on a
+        // column, which is the same thing `under:` uses to make scoping a
+        // search a comparison rather than a scan.
         if !inner.hidden_prefixes.is_empty() {
             let prefixes: Vec<String> = inner.hidden_prefixes.clone();
             for (i, live) in inner.segments.iter_mut().enumerate() {
                 let victims: Vec<usize> = {
                     let seg = live.view()?;
-                    let mut out = Vec::new();
-                    seg.names.walk(0, |row, name| {
-                        if live.is_alive(row) {
-                            let path = seg.path(row, &String::from_utf8_lossy(name));
-                            if prefixes.iter().any(|p| under(&path, p)) {
-                                out.push(row);
-                            }
-                        }
-                        true
-                    });
-                    out
+                    let scopes: Vec<crate::dirs::DirScope> =
+                        prefixes.iter().map(|p| seg.dirs.subtree(p)).collect();
+                    // The removed directory's **own** row is not under itself:
+                    // it lives in its parent, so it carries the parent's
+                    // number and the range check walks straight past it. The
+                    // test caught exactly that — `/home/u/Projeler` survived
+                    // the removal of `/home/u/Projeler`. So the parent's
+                    // number and the last component are collected too, and the
+                    // name is only read for the few rows that sit there.
+                    let selves: Vec<(u32, &str)> = prefixes
+                        .iter()
+                        .filter_map(|p| {
+                            let p = p.trim_end_matches('/');
+                            let (parent, name) = p.rsplit_once('/')?;
+                            let parent = if parent.is_empty() { "/" } else { parent };
+                            Some((seg.dirs.exact(parent)?, name))
+                        })
+                        .collect();
+                    if scopes.iter().all(crate::dirs::DirScope::is_empty) && selves.is_empty() {
+                        Vec::new()
+                    } else {
+                        (0..live.rows())
+                            .filter(|&row| {
+                                if !live.is_alive(row) {
+                                    return false;
+                                }
+                                let d = seg.dir_id(row);
+                                if scopes.iter().any(|s| s.contains(d)) {
+                                    return true;
+                                }
+                                selves
+                                    .iter()
+                                    .any(|&(pd, name)| pd == d && seg.names.get(row) == Some(name))
+                            })
+                            .collect()
+                    }
                 };
                 for row in victims {
                     live.kill(row);
