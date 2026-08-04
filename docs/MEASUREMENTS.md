@@ -1919,3 +1919,86 @@ suggestive and no one has profiled it.
 Worth fixing and not yet fixed. Whatever replaces it has to fold *identically*
 to `DefaultFolder` — the two are compared by a test for exactly this reason,
 because a fold that disagrees does not fail, it silently stops matching.
+
+## 2026-08-04 — the fold, confirmed and then fixed
+
+The previous section left a seven-times per-row cost unexplained and marked it
+unconfirmed. It is the fold, it is confirmed, and it is now most of the way
+fixed.
+
+### Confirming it
+
+`examples/folding.rs`, on names shaped like the ones on the volume — the same
+words in English and in Turkish, and a third set that is English with one `ş`
+in every tenth name:
+
+| | ns a name |
+|---|---|
+| ascii | 11.3 |
+| **turkish** | **88.9** |
+| ascii, one in ten not | 14.9 |
+
+**7.9×**, against the 7× measured per row on the real index. The model holds:
+`Folded::fold_bytes` had a vectorised path for names that are entirely ASCII
+and a `char::to_lowercase` loop for everything else, so **one non-ASCII byte
+anywhere moved the whole name onto the slow path**.
+
+### Two changes, measured separately
+
+**Bulk the ASCII runs.** A mixed name is mostly ASCII — `değişiklik.rs` is
+thirteen characters of which three are not — so each run is copied and
+lowercased in bulk and only the rest goes through the rules.
+
+**A table for the two-byte range**, U+0080–U+07FF, which holds every letter
+Turkish, Western European, Greek and Cyrillic writing needs. Built *from*
+`char::to_lowercase` at first use rather than written out, because a hand-typed
+table of 1,920 entries is a second statement of the Unicode rules and two
+statements drift.
+
+Interleaved, six rounds each, runs-only against runs-plus-table:
+
+| | runs only | + table | |
+|---|---|---|---|
+| ascii | 7.6 ns | 7.6 ns | **+0.0%**, won 3/6 |
+| turkish | 49.9 ns | 40.1 ns | **−19.6%**, won 6/6 |
+| ascii, one in ten not | 9.8 ns | 8.4 ns | −14.3%, won 6/6 |
+
+Exactly nothing on the path that was already fast, which is the shape a change
+like this should have.
+
+### End to end, on 2,972,213 entries
+
+| query | before | after |
+|---|---|---|
+| `rapor` | 92.31 ms | **59.10 ms** |
+| `belge` | 65.51 ms | **41.37 ms** |
+| `proje` | 64.07 ms | **41.29 ms** |
+| `config` | 14.68 ms | 14.63 ms |
+| `main` | 8.82 ms | 8.61 ms |
+
+**36% off a Turkish search and nothing off an English one.** Folding a name is
+88.9 ns → 40.1, or 2.2× in total.
+
+### What is left
+
+A Turkish query still costs 134 ns a row against 31 for an English one, and
+40.1 ns against 7.6 for the fold — the same ratio, so the remaining difference
+is still the fold and not something new. Closing it means making the
+per-character path itself cheap, and the table is already the cheap half of
+that. Not obviously worth more.
+
+### The test that made this safe to do
+
+A fold that disagrees with `DefaultFolder` does not fail — the file is stored
+under one spelling, searched for under another, and never found. The existing
+agreement test was ten names somebody thought of.
+
+`folding_agrees_on_every_mixture_of_scripts_it_can_be_handed` generates twenty
+thousand names from an alphabet of ASCII, Turkish, Greek, Cyrillic, CJK, an
+emoji, a character that folds to *two* characters, and a bare combining dot —
+deterministically, so a failure reproduces by running it again.
+
+It earned its place twice. It caught the table copying `U+0307` through where
+the general path drops it, which is exactly what `İ` → `i` depends on. And when
+the Turkish rule was removed on purpose to check the test would notice, it
+failed with `"-ğ.-İ9🙂ğ中ı"` — a case no one would have written by hand.
