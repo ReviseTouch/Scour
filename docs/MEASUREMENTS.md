@@ -2002,3 +2002,51 @@ It earned its place twice. It caught the table copying `U+0307` through where
 the general path drops it, which is exactly what `İ` → `i` depends on. And when
 the Turkish rule was removed on purpose to check the test would notice, it
 failed with `"-ğ.-İ9🙂ğ中ı"` — a case no one would have written by hand.
+
+## 2026-08-04 — what a hostile filename does, checked rather than claimed
+
+Eleven files written into a real indexed directory and searched for through the
+running service, because "mixed scripts are fine" is worth more as a result
+than as an assertion:
+
+| name | found by |
+|---|---|
+| `Değişiklik Raporu 2026.pdf` | `değişiklik`, `DEĞİŞİKLİK` |
+| `İSTANBUL-ıspartaISPARTA.txt` | `istanbul`, `İSTANBUL`, `isparta`, `ısparta`, `ISPARTA` |
+| `ÇalışkanÖğrenciÜniversite.docx` | `çalışkan`, `ÇALIŞKAN`, `öğrenci` |
+| `mixed_ağırlık_weight_βάρος_вес_重量.md` | `ağırlık`, `βάρος`, `вес`, `ВЕС`, `重量` |
+| `🙂 emoji ve ş bir arada.txt` | `emoji` |
+| `combining i̇ dot.txt` | `combining` |
+| `ẞ-eszett-ss.txt` | `eszett` |
+| 245 bytes of `a` then `ş.txt` | `under:` the folder |
+| `ş` then 240 bytes of `b` | `under:` the folder |
+| 78 `ş` characters | `under:` the folder |
+| `bozuk-\xff\xfe-ad.txt` — **not valid UTF-8** | `bozuk` |
+
+All eleven indexed, all eleven found, nothing crashed. The Turkish rule works
+in every direction: `ı`, `i`, `I` and `İ` all reach each other.
+
+### Two misses, both correct
+
+`CALISKAN` does not find `Çalışkan`. Scour folds **case, not diacritics** —
+which is what Everything does too, and a deliberate line. Worth revisiting as
+an option, because a Turkish keyboard is often not in front of a Turkish
+speaker.
+
+`ΒΆΡΟΣ` does not find `βάρος`. `Σ` lowercases to `σ` and the file ends in the
+final sigma `ς`; `char::to_lowercase` is not context-sensitive and
+`DefaultFolder` behaves identically. Fixing it means case *folding* rather than
+lowercasing. Not this language's problem to solve first.
+
+### And one real defect, in the CLI rather than the engine
+
+The first run of this test reported zero for everything, and the tool was
+right — the *test* was wrong. `scour eszett --limit 1` searches for the three
+words `eszett --limit 1`, because the bare form takes everything after the
+program name literally. That is the correct behaviour for a search tool, and
+`scour explain` rejects the same flag rather than swallowing it, so the two
+disagreed.
+
+`-n` and `-s` are now accepted before the query, `--help` states the rule, and
+the bare form orders by relevance rather than by date — someone who typed a
+word wants the file that answers it, not the file that happens to be newest.

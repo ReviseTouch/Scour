@@ -107,7 +107,7 @@ closing for no reason. `every_response_round_trips` is the guard.
 A client and nothing else: no index, no filesystem, does not link the engine.
 
 ```
-scour <query>                        search (the default)
+scour [-n N] [-s SORT] <query>       search, ordered by relevance (the default)
 scour search <q> --sort --limit --offset --ascending
 scour count <q>                      scour facets <q> --by kind|ext|<dir>
 scour tree <path> --depth --limit    scour stat <path>
@@ -117,6 +117,12 @@ scour sources                        scour status
 scour rescan [path]                  scour maintain flush|compact|rebuild
 scour where                          scour mcp-config
 ```
+
+On the bare form **everything after the query is part of the query, flags
+included** — a filename can contain `--` and a tool that refuses to look for it
+is broken. The sharp edge is that `scour rapor -n 100` searches for three words
+and returns a silent zero, so `-n` and `-s` are accepted *before* the query and
+`--help` says so. `scour search` takes them anywhere.
 
 `--json` on every command prints the protocol type serialised directly — the
 same bytes the service sent. `where` and `mcp-config` answer without a service,

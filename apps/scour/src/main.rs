@@ -26,9 +26,22 @@ struct Args {
     /// Print the raw protocol reply.
     #[arg(long, global = true)]
     json: bool,
+    /// How many results. Must come *before* the query.
+    #[arg(long, short = 'n', default_value_t = 40)]
+    limit: u32,
+    /// What to order by. Must come *before* the query.
+    #[arg(long, short, default_value = "relevance")]
+    sort: Sort,
     #[command(subcommand)]
     command: Option<Command>,
     /// A query, when no subcommand is given.
+    ///
+    /// **Everything from here on is the query, flags included.** That is on
+    /// purpose — a filename can contain `--` and a search tool that refuses to
+    /// look for it is broken — but it has one sharp edge worth knowing: a flag
+    /// written *after* the query is searched for rather than obeyed, and the
+    /// result is a silent zero. `scour rapor -n 100` looks for the three words
+    /// `rapor -n 100`. Put options first, or use `scour search`.
     #[arg(trailing_var_arg = true)]
     query: Vec<String>,
 }
@@ -195,13 +208,15 @@ fn main() -> Result<()> {
 fn build(args: &Args) -> Result<Request> {
     let join = |v: &[String]| v.join(" ");
     Ok(match &args.command {
-        // No subcommand: everything after the program name is the query. This
-        // is the shape people actually type.
+        // No subcommand: everything after the program name is the query, which
+        // is the shape people actually type. Ordered by relevance rather than
+        // by date, because someone who typed a word wants the file that answers
+        // it and not the file that happens to be newest.
         None => Request::Search {
             query: join(&args.query),
-            sort: SortKey::Modified,
+            sort: args.sort.into(),
             descending: true,
-            page: Page::new(0, 40),
+            page: Page::new(0, args.limit),
         },
         Some(Command::Search {
             query,
