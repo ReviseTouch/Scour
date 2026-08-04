@@ -182,7 +182,7 @@ through the GUI first:
 * **Format 5**, which is the first bump where *nothing changed shape*. Every
   row of a version-4 index would still decode, into the wrong answer.
 
-## Phase 5 — The window
+## Phase 5 — The window — **5.1 done**
 
 **Slint.** One language, no webview, a small bundle, and the desktop app is
 what this is for. A browser client stays possible and secondary — the service
@@ -199,7 +199,7 @@ zero (`frame_throttle.rs:58`) and crashes under Wine on every start.
 
 | Stage | What | Rough size |
 |---|---|---|
-| 5.1 | Skeleton, two IPC connections, `search`, a plain 200-row table, the mockup's tokens, the meter line | ~600 lines |
+| 5.1 | **Done.** Skeleton, two IPC lanes, `search`, a 200-row table, the mockup's tokens, the facet rail, sort headers, match highlighting, age dots, the meter line | ~700 lines |
 | 5.2 | Facet rail from `facets`, the query line, sort headers, open/reveal, match highlighting, the catalogue via `@tr()` | ~800 lines |
 | 5.3 | The list: `ListView`, LRU pages, generation tokens, skeleton rows, the addressable-window bound | ~250 lines |
 | 5.4 | Hidden window, `--show`, single instance, tray, spawn-on-demand daemon | ~300 lines |

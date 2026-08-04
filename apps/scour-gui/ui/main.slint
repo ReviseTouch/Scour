@@ -1,0 +1,480 @@
+// The window.
+//
+// Everything here is driven from Rust: the rows arrive as a model, the counts
+// arrive as properties, and every decision that needs the query language —
+// what a term means, what colour it is, how a name should be highlighted — is
+// made on the other side and handed over already answered. A `.slint` file
+// that reasons about queries is a second parser, and two parsers drift.
+
+import { Theme, Fonts } from "theme.slint";
+
+// Re-exported so Rust can reach the global — the platform's light/dark
+// preference is not something `.slint` can ask about.
+export { Theme }
+import { ScrollView, ListView } from "std-widgets.slint";
+
+// One result. Flat, and deliberately: a struct of strings is what crosses the
+// language boundary cheaply, and the formatting was done in Rust where the
+// catalogue and the size units already live.
+export struct Row {
+    // The name in three pieces: before the match, the match, after it.
+    //
+    // Split in Rust rather than here because Slint has no way to take a
+    // substring — and that turns out to be the right place anyway. The offsets
+    // come out of folded text, Turkish folding changes byte lengths, and
+    // mapping them back to the original spelling is `scour-core`'s job.
+    pre: string,
+    hit: string,
+    post: string,
+    // The directory, without the name. Shown quieter and to the right.
+    folder: string,
+    size: string,
+    stamp: string,
+    kind: string,
+    is-dir: bool,
+    // Which age band the row falls in, 0 (minutes) to 5 (older).
+    age: int,
+}
+
+// One facet of the rail: a kind, its count, and the token that filters by it.
+export struct Facet {
+    label: string,
+    token: string,
+    count: string,
+}
+
+component AgeDot inherits Rectangle {
+    in property <int> band;
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    background: band == 0 ? Theme.t0
+        : band == 1 ? Theme.t1
+        : band == 2 ? Theme.t2
+        : band == 3 ? Theme.t3
+        : band == 4 ? Theme.t4
+        : Theme.t5;
+}
+
+// A name with the matched run picked out.
+//
+// Three `Text` elements in a row rather than one with markup, because Slint
+// has no rich text — and the middle one carries the highlight. When there is
+// no match the outer two are empty strings; an empty `Text` costs a layout
+// slot and nothing else, which is why this is not a conditional element (one
+// of those is left out of the parent's `spacing` and the name would jump).
+component Marked inherits HorizontalLayout {
+    in property <string> pre;
+    in property <string> hit;
+    in property <string> post;
+    in property <brush> colour: Theme.ink;
+    spacing: 0px;
+
+    Text {
+        text: root.pre;
+        color: root.colour;
+        font-size: Fonts.size;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    // Not a conditional element: one of those is left out of the parent's
+    // `spacing` and the name would shift sideways the moment a match appears.
+    // An empty `Text` costs a layout slot and draws nothing.
+    Rectangle {
+        background: root.hit == "" ? transparent : Theme.mark;
+        border-radius: 2px;
+        width: label.preferred-width;
+        label := Text {
+            text: root.hit;
+            color: Theme.mark-ink;
+            font-size: Fonts.size;
+            vertical-alignment: center;
+        }
+    }
+
+    Text {
+        text: root.post;
+        color: root.colour;
+        font-size: Fonts.size;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    // Eats the rest of the width so the name stays left and the columns after
+    // it do not float.
+    Rectangle { }
+}
+
+export component MainWindow inherits Window {
+    title: "Scour";
+    background: Theme.ground;
+    preferred-width: 1100px;
+    preferred-height: 680px;
+    min-width: 560px;
+    min-height: 320px;
+
+    // --- what Rust sets ---------------------------------------------------
+    in property <[Row]> rows;
+    in property <[Facet]> facets;
+    in property <string> meter;
+    in property <string> hint;
+    in property <bool> busy;
+    in property <string> scope-label;
+    // The query as Rust folded it back — set only when Rust changes the text
+    // itself (a facet click), never on every keystroke, or the caret jumps.
+    in-out property <string> query;
+    in-out property <int> selected: 0;
+    in-out property <string> active-facet;
+
+    // --- what Rust listens for --------------------------------------------
+    callback query-changed(string);
+    callback activated(int);
+    callback reveal(int);
+    callback copy-path(int);
+    callback facet-clicked(string);
+    callback sort-by(string);
+
+    public function focus-query() {
+        input.focus();
+    }
+
+    forward-focus: input;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // ------------------------------------------------------------------
+        // The query line.
+        //
+        // One `TextInput`, one colour, and that is not a shortcut: Slint's
+        // text input has no range colouring at all — upstream #9560 puts
+        // editable text out of scope — so the coloured chips the mockup shows
+        // need a second layer that does not exist yet. The field is painted by
+        // the *kind* of what is in it instead, which is one property from Rust
+        // and reads correctly at a glance.
+        // ------------------------------------------------------------------
+        Rectangle {
+            height: 46px;
+            background: Theme.panel;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+
+                Text {
+                    text: "⌕";
+                    color: input.has-focus ? Theme.focus : Theme.ink-3;
+                    font-size: 18px;
+                    vertical-alignment: center;
+                }
+
+                input := TextInput {
+                    text <=> root.query;
+                    color: Theme.ink;
+                    font-size: 15px;
+                    font-family: Fonts.mono;
+                    single-line: true;
+                    vertical-alignment: center;
+                    selection-background-color: Theme.selection;
+                    selection-foreground-color: Theme.ink;
+
+                    edited => {
+                        root.query-changed(self.text);
+                    }
+
+                    // Down and up move through the results without leaving the
+                    // field, which is the whole interaction: type, glance,
+                    // press Enter. Taking focus away to a list and back is what
+                    // makes a launcher feel slow.
+                    key-pressed(e) => {
+                        if (e.text == Key.DownArrow) {
+                            root.selected = min(root.selected + 1, root.rows.length - 1);
+                            return accept;
+                        }
+                        if (e.text == Key.UpArrow) {
+                            root.selected = max(root.selected - 1, 0);
+                            return accept;
+                        }
+                        if (e.text == Key.Return) {
+                            root.activated(root.selected);
+                            return accept;
+                        }
+                        if (e.text == Key.Escape) {
+                            if (self.text == "") {
+                                return accept;
+                            }
+                            self.text = "";
+                            root.query-changed("");
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+
+                Text {
+                    text: root.hint;
+                    color: Theme.ink-3;
+                    font-size: Fonts.small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // --------------------------------------------------------------
+            // The rail: what the matching set consists of.
+            //
+            // Every row is a `kind:` term and clicking one adds it to the
+            // query rather than filtering behind the query's back — so what
+            // is on screen is always exactly what the text says.
+            // --------------------------------------------------------------
+            Rectangle {
+                width: 168px;
+                background: Theme.panel;
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 1px;
+                    alignment: start;
+
+                    Text {
+                        text: root.scope-label;
+                        color: Theme.ink-3;
+                        font-size: Fonts.small;
+                        overflow: elide;
+                    }
+
+                    Rectangle { height: 6px; }
+
+                    for f[i] in root.facets: Rectangle {
+                        height: 26px;
+                        border-radius: 4px;
+                        background: root.active-facet == f.token ? Theme.selection
+                            : touch.has-hover ? Theme.hover
+                            : transparent;
+
+                        touch := TouchArea {
+                            clicked => {
+                                root.facet-clicked(f.token);
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+                            spacing: 6px;
+
+                            Text {
+                                text: f.label;
+                                color: root.active-facet == f.token ? Theme.ink : Theme.ink-2;
+                                font-size: Fonts.size;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            Rectangle { }
+
+                            Text {
+                                text: f.count;
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --------------------------------------------------------------
+            // The results.
+            // --------------------------------------------------------------
+            VerticalLayout {
+                spacing: 0px;
+
+                // Column headers, and each is a sort.
+                Rectangle {
+                    height: 24px;
+                    background: Theme.panel-2;
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+
+                        TouchArea {
+                            clicked => { root.sort-by("relevance"); }
+                            Text {
+                                x: 0;
+                                text: @tr("Name");
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle { }
+
+                        TouchArea {
+                            width: 90px;
+                            clicked => { root.sort-by("size"); }
+                            Text {
+                                text: @tr("Size");
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                width: parent.width;
+                            }
+                        }
+
+                        TouchArea {
+                            width: 130px;
+                            clicked => { root.sort-by("modified"); }
+                            Text {
+                                text: @tr("Modified");
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                width: parent.width;
+                            }
+                        }
+                    }
+                }
+
+                ListView {
+                    for row[i] in root.rows: Rectangle {
+                        height: Theme.row-height;
+                        background: i == root.selected ? Theme.selection
+                            : rowtouch.has-hover ? Theme.hover
+                            : transparent;
+
+                        rowtouch := TouchArea {
+                            clicked => {
+                                root.selected = i;
+                                root.focus-query();
+                            }
+                            double-clicked => {
+                                root.selected = i;
+                                root.activated(i);
+                            }
+                            pointer-event(e) => {
+                                if (e.button == PointerEventButton.right
+                                    && e.kind == PointerEventKind.down) {
+                                    root.selected = i;
+                                    root.copy-path(i);
+                                }
+                            }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                AgeDot { band: row.age; }
+                            }
+
+                            // The name, with the match picked out, then the
+                            // folder in the same line but quieter: two lines a
+                            // row halves how many fit and the folder is read
+                            // second in every case.
+                            Marked {
+                                pre: row.pre;
+                                hit: row.hit;
+                                post: row.post;
+                                colour: row.is-dir ? Theme.q-key : Theme.ink;
+                                horizontal-stretch: 1;
+                            }
+
+                            Text {
+                                text: row.folder;
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 2;
+                            }
+
+                            Text {
+                                width: 90px;
+                                text: row.size;
+                                color: Theme.ink-2;
+                                font-size: Fonts.small;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                width: 130px;
+                                text: row.stamp;
+                                color: Theme.ink-2;
+                                font-size: Fonts.small;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // The meter. How many, how long, and whether the number is a floor.
+        // ------------------------------------------------------------------
+        Rectangle {
+            height: 22px;
+            background: Theme.panel;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+
+                Text {
+                    text: root.meter;
+                    color: Theme.ink-3;
+                    font-size: Fonts.small;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { }
+
+                if root.busy: Text {
+                    text: "…";
+                    color: Theme.focus;
+                    font-size: Fonts.small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

@@ -1848,3 +1848,74 @@ The bytes of a hard-linked file are credited to **one** of the directories it
 appears in, whichever name was written last. `du` is arbitrary here too — it
 credits whichever it reaches first — so the two can agree on a total and
 disagree about where the weight sits.
+
+## 2026-08-04 — the window, and two things it made visible
+
+Phase 5.1 built, installed, and pointed at a real index of two sources —
+`/home/hasan` and the NTFS volume at `/mnt/depo`, 2,969,355 entries. Using it
+found two defects that no benchmark would have.
+
+### A rebuild could not get below one segment per source
+
+`Maintenance::Rebuild` folded within a generation, on the reasoning written
+into the code: there is only ever one, because a scan re-upserts every file it
+finds under a new stamp and the sweep removes what it did not. **That is true
+of one source and false of two.** Each source's scan takes its own generation,
+so the index sat at two segments and 1,441,890 unsorted entries however often
+a rebuild ran.
+
+What makes folding across generations safe is not that generations stop
+mattering — a merged segment carries one stamp, and giving old rows a new one
+would hide them from the sweep that exists to remove them. It is that **outside
+a scan there is nothing left for a generation to decide**. The index now tracks
+whether a generation is open (handed out, not yet swept) and folds everything
+only when none is. The old behaviour is what it falls back to, so the test that
+pins the invariant passes unchanged.
+
+| | before | after |
+|---|---|---|
+| segments | 2 | **1** |
+| unsorted | 1,441,890 | **0** |
+
+### The first frame cost a full scan
+
+A search window opens with an empty query, and the order it opens in is
+relevance. Relevance with no terms scores every row the same — so the walk
+visited all 2.97 M rows to hand back a page the row layout was already holding,
+and the one frame a person actually watches for cost **121 ms**. Treating "no
+terms" as the stored order makes it **0.58 ms**, which is 208×.
+
+### Where it stands, on 2,969,355 entries in one segment
+
+| query | median | matches |
+|---|---|---|
+| *(empty — what the window opens with)* | **0.58 ms** | 100,000+ |
+| `kütüphane` (no match) | **0.05 ms** | 1 |
+| `*.slint` | 1.38 ms | 1,399 |
+| `sezi` | 3.55 ms | 4,327 |
+| `main` | 8.82 ms | 5,175 |
+| `config` | 14.68 ms | 17,900 |
+| `ext:pdf` | 18.76 ms | 44,611 |
+| `rapor` | **92.31 ms** | 15,436 |
+
+### The one that is out of line, and what it is not
+
+`rapor` visits 439,936 rows in 92 ms — 214 ns a row — while `config` visits
+*more* rows, 476,672, in 14.7 ms, at 31 ns. Seven times the per-row cost for
+the same shape of query.
+
+Two explanations were measured and refused. It is not the sort: `modified`
+takes 88 ms on the same term. It is not name length: the matched names average
+22.8 bytes under `/home/hasan` and 23.6 under `/mnt/depo`.
+
+What is left, and what the code makes likely, is the **fold**.
+`Folded::fold_bytes` has a fast path — `make_ascii_lowercase` over the whole
+name, which the compiler vectorises — and a slow one that calls
+`char::to_lowercase` per character and walks its iterator. A single non-ASCII
+byte anywhere in a name takes the slow path, and the blocks a Turkish word
+selects are full of Turkish names. **Unconfirmed**: the correlation is
+suggestive and no one has profiled it.
+
+Worth fixing and not yet fixed. Whatever replaces it has to fold *identically*
+to `DefaultFolder` — the two are compared by a test for exactly this reason,
+because a fold that disagrees does not fail, it silently stops matching.

@@ -1,0 +1,63 @@
+// The palette, in one place.
+//
+// Taken from the design mockup rather than invented here, and the two halves
+// are not the same colours lightened: a dark interface reads by luminance and
+// a light one by hue, so each was chosen against its own ground.
+//
+// `Theme.dark` is set from Rust, because the platform's preference is not
+// something `.slint` can ask about.
+
+export global Theme {
+    in property <bool> dark: true;
+
+    // --- surfaces ---------------------------------------------------------
+    out property <brush> ground: dark ? #0d1117 : #f7f5f0;
+    out property <brush> panel: dark ? #131920 : #fffefb;
+    out property <brush> panel-2: dark ? #171e26 : #f1efe9;
+    out property <brush> line: dark ? #212a35 : #ddd8cd;
+    out property <brush> line-soft: dark ? #1a222c : #e8e4db;
+
+    // --- text -------------------------------------------------------------
+    out property <brush> ink: dark ? #e7eaee : #1c1e21;
+    out property <brush> ink-2: dark ? #9aa5b1 : #5c636c;
+    out property <brush> ink-3: dark ? #63707e : #8a9198;
+
+    // --- accents ----------------------------------------------------------
+    out property <brush> mark: dark ? #ffd24a : #ffdf6b;
+    out property <brush> mark-ink: dark ? #1a1200 : #2a1f00;
+    out property <brush> focus: dark ? #4a9eff : #2f6ba3;
+    out property <brush> selection: dark ? #1d2b3d : #dce8f5;
+    out property <brush> hover: dark ? #171f29 : #efece4;
+
+    // --- age, oldest last -------------------------------------------------
+    //
+    // Six steps rather than a gradient, because the question they answer is
+    // ordinal: is this from today, this week, or before I started.
+    out property <brush> t0: dark ? #ffb020 : #d98600;
+    out property <brush> t1: dark ? #ff7a45 : #d4532a;
+    out property <brush> t2: dark ? #c2688f : #a8447a;
+    out property <brush> t3: dark ? #7a6fc4 : #5f52ad;
+    out property <brush> t4: dark ? #4a7fb5 : #2f6ba3;
+    out property <brush> t5: dark ? #3b4a58 : #97a1ac;
+
+    // --- the query line ---------------------------------------------------
+    //
+    // Five roles and no more. Two of them say *this is not what you think it
+    // is*, which is the only reason the colouring earns its place.
+    out property <brush> q-key: dark ? #7fa9e0 : #2f6ba3; // field, comparison
+    out property <brush> q-val: dark ? #6fc2a0 : #1a7a58; // value, quoted text
+    out property <brush> q-glob: dark ? #b48ce0 : #6b3fa0; // wildcard
+    out property <brush> q-not: dark ? #e8825a : #b8531f; // exclusion
+    out property <brush> q-bad: dark ? #ff5f56 : #c0392b; // read as plain text
+
+    // --- metrics ----------------------------------------------------------
+    out property <length> unit: 4px;
+    out property <length> row-height: 30px;
+    out property <length> radius: 6px;
+}
+
+export global Fonts {
+    out property <string> mono: "monospace";
+    out property <length> size: 13px;
+    out property <length> small: 11px;
+}

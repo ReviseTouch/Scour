@@ -455,6 +455,70 @@ fn a_rebuild_folds_everything_into_one_segment_and_changes_no_answer() {
 }
 
 #[test]
+fn two_sources_fold_into_one_segment_once_both_have_settled() {
+    // The defect this exists to prevent, found on a real index rather than
+    // reasoned about: a rebuild folded within a generation, each source's scan
+    // takes its own, and a second source therefore meant two segments that no
+    // amount of rebuilding could merge. 2,951,074 entries, 1,441,890 of them
+    // unsorted, and `rapor` at 125 ms.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    for (root, ino) in [("/home/u", 0u64), ("/mnt/depo", 100)] {
+        let g = index.begin_generation().expect("generation");
+        for i in 0..4u64 {
+            index
+                .apply(&mut std::iter::once(Change::Upsert(entry(
+                    &format!("{root}/f{i}.rs"),
+                    100 + i as i64,
+                    ino + i,
+                ))))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+        // What ends a scan, and what makes the next fold safe: after this,
+        // nothing is waiting to judge these rows.
+        index.sweep(root, g).expect("sweep");
+    }
+    assert!(index.stats().expect("stats").segments > 2);
+
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    let s = index.stats().expect("stats");
+    assert_eq!(s.segments, 1, "two settled sources are one segment");
+    assert_eq!(s.entries, 8);
+    assert_eq!(s.unsorted_entries, 0);
+
+    // And both sources are still there and still answerable.
+    let paths: Vec<String> = index
+        .search(&SearchRequest {
+            page: Page::new(0, 20),
+            ..Default::default()
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    assert_eq!(paths.len(), 8);
+    assert_eq!(paths.iter().filter(|p| p.starts_with("/mnt")).count(), 4);
+
+    // A later scan of one source still removes only that source's missing
+    // files — the merged segment did not cost the sweep its precision.
+    let g = index.begin_generation().expect("generation");
+    index
+        .apply(&mut std::iter::once(Change::Upsert(entry(
+            "/mnt/depo/f0.rs",
+            999,
+            100,
+        ))))
+        .expect("apply");
+    index.commit().expect("commit");
+    assert_eq!(index.sweep("/mnt/depo", g).expect("sweep"), 3);
+    let left = index.stats().expect("stats").entries;
+    assert_eq!(left, 5, "four from home and the one depo file that remains");
+}
+
+#[test]
 fn a_rebuild_drops_the_rows_nobody_can_see() {
     let f = Fixture::new(4_000, 1_000);
     let doomed: Vec<EntryId> = f.entries.iter().take(500).map(|e| e.id.clone()).collect();

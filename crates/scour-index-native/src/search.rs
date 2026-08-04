@@ -749,7 +749,15 @@ pub fn run_with(
 
     // The one order the row layout already satisfies. Everything else has to
     // see every match before it knows which forty win.
-    let stored_order = want.sort == SortKey::Modified && want.descending;
+    //
+    // Relevance with nothing to score against is that same order and not a
+    // coincidence: every row gets the same number, so the walk would visit
+    // three million of them to hand back a page the layout was already
+    // holding. It is not a corner case either — it is what a search window
+    // shows the instant it opens, and it cost 121 ms of full scan before this
+    // line existed, on the one frame a person is actually watching for.
+    let stored_order = (want.sort == SortKey::Modified && want.descending)
+        || (want.sort == SortKey::Relevance && want.descending && score_terms.is_empty());
     let need = want.offset + want.limit;
     let mut done = false;
 

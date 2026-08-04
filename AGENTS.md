@@ -139,6 +139,27 @@ Tool descriptions say what a tool is *for*, not what it does — a model choosin
 between `scour_search` and `scour_tree` is making the same decision a person
 does, and the descriptions exist to make it easy.
 
+### Window — `scour-gui`
+
+A frontend, exactly like `apps/scour`: no index, no filesystem walk, does not
+link the engine. Three rules hold it up.
+
+* **The window never waits.** Every call is on a worker thread and comes back
+  as an event. Two lanes — interactive and background — because `scour-ipc` is
+  one call at a time and a 20 ms facet count must not sit in front of a
+  keystroke.
+* **A stale answer is dropped, not shown.** Every request carries the keystroke
+  that caused it. A slow reply to `re` landing after a fast one to `rapor` is
+  the most noticeable defect a search-as-you-type box can have.
+* **The frontend does not parse queries.** What a term means is `explain`'s
+  answer. The one exception is `terms_of`, which decides *which words* to
+  highlight and nothing about what they mean.
+
+Slint's `TextInput` has no range colouring — upstream #9560 puts editable text
+out of scope — so the coloured chips the mockup shows are 5.2, not a shortcut
+taken here. It has no substring either, which is why a highlighted name arrives
+as three strings.
+
 ### Service — `scourd`
 
 `src/wire.rs` is the only file in the workspace that names `TantivyIndex` or

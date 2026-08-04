@@ -1,0 +1,35 @@
+[package]
+name        = "scour-gui"
+description = "The Scour window."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour-gui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# A frontend, exactly like `apps/scour`: it holds no index, walks no
+# filesystem, and does not link the engine. Everything it knows it learned
+# over a socket.
+[dependencies]
+scour-core   = { workspace = true }
+scour-proto  = { workspace = true }
+scour-ipc    = { workspace = true }
+scour-config = { workspace = true }
+scour-i18n   = { workspace = true }
+anyhow       = { workspace = true }
+humansize    = { workspace = true }
+# Pinned exactly, and not out of caution. 1.17's winit backend divides by a
+# refresh rate it reads as zero (`frame_throttle.rs:58`), which crashes on
+# every start under Wine — and a caret is enough for Cargo to pick it.
+slint        = "=1.16.1"
+
+[build-dependencies]
+slint-build  = "=1.16.1"

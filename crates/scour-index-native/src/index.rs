@@ -113,6 +113,19 @@ struct Inner {
     /// Subtrees in the same state.
     hidden_prefixes: Vec<String>,
     generation: u64,
+    /// A generation that has been handed out and not yet reconciled.
+    ///
+    /// A scan takes a generation, writes its rows under it, and finishes by
+    /// sweeping away whatever it did not stamp. Between those two moments the
+    /// index holds rows that are *about to be* judged, and folding a segment
+    /// across a generation boundary in that window would hide them from the
+    /// judgement. Outside it, every row in the index is current by definition,
+    /// which is what makes a full fold safe.
+    ///
+    /// Cleared by the sweep, and replaced when a newer generation begins —
+    /// callers are expected to run one scan at a time, and the engine's single
+    /// worker thread is what guarantees it.
+    open: Option<u64>,
     next_segment: u64,
 }
 
@@ -365,13 +378,14 @@ impl NativeIndex {
         if which.len() < 2 && which.iter().all(|&i| inner.segments[i].dead_rows() == 0) {
             return Ok(());
         }
-        let generation = inner.segments[which[0]].generation;
-        debug_assert!(
-            which
-                .iter()
-                .all(|&i| inner.segments[i].generation == generation),
-            "a fold may not cross a generation"
-        );
+        // The merged segment can carry only one stamp, so the group must
+        // either share one or be known to be entirely current — see
+        // [`Inner::open`] and the caller.
+        let generation = which
+            .iter()
+            .map(|&i| inner.segments[i].generation)
+            .max()
+            .unwrap_or(0);
         let number = inner.next_segment;
         inner.next_segment += 1;
         let bytes = {
@@ -639,6 +653,10 @@ impl Index for NativeIndex {
         self.flush(&mut inner)?;
         inner.generation += 1;
         let g = inner.generation;
+        // Whatever was open is finished: callers scan one at a time. A scan
+        // that ended without sweeping — a cancelled walk, an unreadable root —
+        // deliberately leaves nothing to reconcile.
+        inner.open = Some(g);
         self.save_meta(&inner)?;
         Ok(g)
     }
@@ -646,6 +664,9 @@ impl Index for NativeIndex {
     fn sweep(&self, under_path: &str, generation: u64) -> Result<u64> {
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
+        if inner.open == Some(generation) {
+            inner.open = None;
+        }
         let mut gone = 0u64;
         let mut touched = vec![false; inner.segments.len()];
         for (i, live) in inner.segments.iter_mut().enumerate() {
@@ -927,11 +948,40 @@ impl Index for NativeIndex {
                     self.fold(&mut inner, &head)?;
                 }
             }
-            // Everything of one generation becomes one segment. In practice
-            // there is one generation: a scan re-upserts every file it finds
-            // under the new stamp and the sweep removes what it did not.
+            // Everything becomes one segment, generations included.
+            //
+            // It used to fold within a generation, on the reasoning that there
+            // is only ever one: a scan re-upserts every file it finds under a
+            // new stamp and the sweep removes what it did not. That is true of
+            // *one* source and false of two — each source's scan takes its own
+            // generation — so a second source meant a rebuild that could never
+            // get below two segments however often it ran. Measured on a real
+            // index of two sources: 2,951,074 entries, 2 segments, 1,441,890
+            // of them unsorted, and `rapor` at 125 ms where one segment
+            // answers in single digits.
             Maintenance::Rebuild => {
                 self.flush(&mut inner)?;
+                // Everything into one segment when nothing is mid-scan, and
+                // one segment per generation when something is.
+                //
+                // It used to be per generation always, on the reasoning that
+                // there is only ever one: a scan re-upserts every file it
+                // finds under a new stamp and the sweep removes what it did
+                // not. That is true of *one* source and false of two — each
+                // source's scan takes its own generation — so a second source
+                // meant a rebuild that could never get below two segments
+                // however often it ran. Measured on a real index of two
+                // sources: 2,951,074 entries, two segments, 1,441,890 of them
+                // unsorted, and `rapor` at 125 ms where one segment answers in
+                // single digits.
+                //
+                // What makes the merge safe is not that generations do not
+                // matter — they do — but that outside a scan there is nothing
+                // left for one to decide.
+                if inner.open.is_none() && inner.segments.len() > 1 {
+                    let all: Vec<usize> = (0..inner.segments.len()).collect();
+                    self.fold(&mut inner, &all)?;
+                }
                 while let Some(group) = Self::groups(&inner)
                     .into_iter()
                     .find(|g| g.len() > 1 || inner.segments[g[0]].dead_rows() > 0)
