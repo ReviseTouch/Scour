@@ -14,6 +14,10 @@ use super::{Ast, Entry, EntryId, Kind, Meta};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
+    /// How well the name answers the query, rather than any property of the
+    /// file. Only meaningful for a query with text in it; with none, every row
+    /// scores the same and the order falls back to the stored one.
+    Relevance,
     Name,
     Path,
     Size,

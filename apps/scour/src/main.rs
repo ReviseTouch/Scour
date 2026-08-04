@@ -104,6 +104,9 @@ enum Command {
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Sort {
+    /// How well the name answers the query. Descending by default, like the
+    /// others, and the only order that depends on what was typed.
+    Relevance,
     Name,
     Path,
     Size,
@@ -117,6 +120,7 @@ enum Sort {
 impl From<Sort> for SortKey {
     fn from(s: Sort) -> SortKey {
         match s {
+            Sort::Relevance => SortKey::Relevance,
             Sort::Name => SortKey::Name,
             Sort::Path => SortKey::Path,
             Sort::Size => SortKey::Size,

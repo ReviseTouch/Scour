@@ -239,6 +239,74 @@ impl Needle {
     }
 }
 
+/// How well a name answers the terms that were typed.
+///
+/// Everything the ordinary sorts do is a property of the file — its date, its
+/// size, its spelling. This is the only one that is a property of the *query*,
+/// and the reason it exists is what a default of "newest first" does to a
+/// common word: searching this machine for `main` returns a log file, four git
+/// refs and two generated `main_window.rs` before the `main.rs` anyone was
+/// looking for.
+///
+/// The weights are ordered, not tuned. Each rung is worth more than everything
+/// below it can add up to, so the comparison never turns into arithmetic
+/// nobody can predict:
+///
+/// * the name without its extension is the term — `main.rs` for `main`
+/// * the whole name is the term — a file or folder called exactly `main`
+/// * the name starts with it — `main_window.rs`
+/// * it starts a word inside the name — `my-main.rs`, but not `domain.rs`
+/// * anything else that matched at all
+///
+/// The first two are in that order because of what the alternative did.
+/// Ranking the exact name highest was tried first and it is what a scorer
+/// "should" do; on this machine it filled the page with `.git/refs/heads/main`
+/// and, once those were excluded, with a hundred `android/src/main`
+/// directories. Nobody typing `main` wants either. A stem match means someone
+/// named a *file* after the thing being searched for, which is a much stronger
+/// signal than a directory happening to carry the word.
+///
+/// Then shorter names first, because a name that is mostly the term is more
+/// about the term. Ties fall through to the stored order, which is by date.
+fn relevance(name: &[u8], terms: &[Vec<u8>]) -> i64 {
+    if terms.is_empty() {
+        return 0;
+    }
+    let stem_end = name
+        .iter()
+        .rposition(|&b| b == b'.')
+        .filter(|&i| i > 0)
+        .unwrap_or(name.len());
+    let mut best = 0i64;
+    for t in terms {
+        if t.is_empty() {
+            continue;
+        }
+        let Some(at) = find(name, t) else { continue };
+        let score = if stem_end < name.len() && name[..stem_end] == t[..] {
+            // `main` in `main.rs`: someone named a file after this.
+            4000
+        } else if name == &t[..] {
+            3000
+        } else if at == 0 {
+            2000
+        } else if !name[at - 1].is_ascii_alphanumeric() {
+            1000
+        } else {
+            100
+        };
+        best = best.max(score);
+    }
+    // Up to 255 characters of name work against it, which can never overturn a
+    // rung: the gap between rungs is 900 at its narrowest.
+    best - (name.len().min(255) as i64)
+}
+
+/// Where `needle` first appears in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    memchr::memmem::find(haystack, needle)
+}
+
 /// The extension of a name, as bytes, by the same rule as `scour_core`.
 fn ext_bytes(name: &[u8]) -> &[u8] {
     match name.iter().rposition(|&b| b == b'.') {
@@ -629,6 +697,21 @@ pub fn run_with(
     // then throw all but forty of them away.
     let mut keyed: Vec<(SortValue, u32)> = Vec::new();
 
+    // The terms relevance scores against, folded, collected once. `filterable`
+    // already answers "what must every matching name contain", which is the
+    // same question — a term that cannot be claimed as containment cannot be
+    // scored against either.
+    let score_terms: Vec<Vec<u8>> = if want.sort == SortKey::Relevance {
+        plan.clauses
+            .iter()
+            .flat_map(|c| &c.alts)
+            .filter(|(neg, _)| !neg)
+            .filter_map(|(_, t)| filterable(t))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // The one order the row layout already satisfies. Everything else has to
     // see every match before it knows which forty win.
     let stored_order = want.sort == SortKey::Modified && want.descending;
@@ -666,7 +749,10 @@ pub fn run_with(
             // which is a plausible-looking answer to a different question. The
             // verifier missed it because the test asked for an uncapped count,
             // where the two happen to agree.
-            keyed.push((sort_value(seg, row, name, want.sort, &mut fold), row as u32));
+            keyed.push((
+                sort_value(seg, row, name, want.sort, &mut fold, &score_terms),
+                row as u32,
+            ));
         }
         true
     };
@@ -742,7 +828,14 @@ pub fn run_with(
         })
         .collect();
     if !stored_order {
-        sort_hits(&mut hits, want.sort, want.descending);
+        // Within one segment the rows already carry their score in `keyed`;
+        // this path is the one that did not sort, so it scores from scratch.
+        let owned: Vec<String> = score_terms
+            .iter()
+            .map(|t| String::from_utf8_lossy(t).into_owned())
+            .collect();
+        let terms: Vec<&str> = owned.iter().map(String::as_str).collect();
+        sort_hits(&mut hits, want.sort, want.descending, &terms);
     }
     let hits: Vec<Hit> = hits
         .into_iter()
@@ -804,8 +897,11 @@ fn sort_value(
     name: &[u8],
     key: SortKey,
     fold: &mut Folded,
+    terms: &[Vec<u8>],
 ) -> SortValue {
     match key {
+        // Scored on the folded name, because that is what the terms are.
+        SortKey::Relevance => SortValue::Num(relevance(fold.fold_bytes(name), terms)),
         SortKey::Name => SortValue::Head(head(fold.fold_bytes(name))),
         SortKey::Ext => SortValue::Head(head(fold.fold_bytes(ext_bytes(name)))),
         SortKey::Path => {
@@ -871,13 +967,13 @@ fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool, exact: bool) 
 /// Timestamps tie constantly — a package install stamps thousands of files at
 /// one instant — so without a second key the same query returns a different
 /// page each time.
-pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
+pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&str]) {
     use scour_core::text::{DefaultFolder, Folder};
 
     // Text keys are computed once a row, not once a comparison. Folding inside
     // the comparator costs O(n log n) folds to produce a page of forty, which
     // measured 260 ms where this measures a fraction of it.
-    let mut keyed: Vec<(Option<String>, Hit)> = std::mem::take(&mut hits.to_vec())
+    let mut keyed: Vec<(Option<String>, i64, Hit)> = std::mem::take(&mut hits.to_vec())
         .into_iter()
         .map(|h| {
             let k = match key {
@@ -885,12 +981,26 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
                 SortKey::Ext => Some(scour_core::ext_of(h.name())),
                 _ => None,
             };
-            (k, h)
+            // Scored again here rather than carried: this merges rows from
+            // several segments, each of which scored against the same terms,
+            // so recomputing is cheaper than widening `Hit` to hold a number
+            // no client has any use for.
+            let r = if key == SortKey::Relevance {
+                let folded: Vec<Vec<u8>> = terms
+                    .iter()
+                    .map(|t| DefaultFolder.fold(t).into_bytes())
+                    .collect();
+                relevance(DefaultFolder.fold(h.name()).as_bytes(), &folded)
+            } else {
+                0
+            };
+            (k, r, h)
         })
         .collect();
 
-    keyed.sort_unstable_by(|(ka, a), (kb, b)| {
+    keyed.sort_unstable_by(|(ka, ra, a), (kb, rb, b)| {
         let o = match key {
+            SortKey::Relevance => ra.cmp(rb),
             SortKey::Name | SortKey::Ext => ka.cmp(kb),
             SortKey::Path => a.path.cmp(&b.path),
             SortKey::Size => a.meta.size.cmp(&b.meta.size),
@@ -912,7 +1022,7 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool) {
         o.then_with(|| b.meta.mtime.cmp(&a.meta.mtime))
             .then_with(|| a.path.cmp(&b.path))
     });
-    for (slot, (_, h)) in hits.iter_mut().zip(keyed) {
+    for (slot, (_, _, h)) in hits.iter_mut().zip(keyed) {
         *slot = h;
     }
 }
@@ -974,5 +1084,47 @@ mod tests {
                 "{name:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod relevance_tests {
+    use super::relevance;
+
+    fn score(name: &str, term: &str) -> i64 {
+        relevance(name.as_bytes(), &[term.as_bytes().to_vec()])
+    }
+
+    #[test]
+    fn a_file_named_after_the_term_beats_a_folder_that_merely_is_it() {
+        // The ordering that had to be measured to be believed. Ranking the
+        // exact name highest filled the page with `.git/refs/heads/main` and
+        // then with a hundred `android/src/main` directories.
+        assert!(score("main.rs", "main") > score("main", "main"));
+        assert!(score("main", "main") > score("main_window.rs", "main"));
+    }
+
+    #[test]
+    fn a_word_boundary_beats_the_middle_of_a_word() {
+        assert!(score("my-main.rs", "main") > score("domain.rs", "main"));
+    }
+
+    #[test]
+    fn the_shorter_of_two_equal_matches_wins() {
+        assert!(score("main.rs", "main") > score("mainly-about-something.rs", "main"));
+    }
+
+    #[test]
+    fn length_never_overturns_a_rung() {
+        // 900 is the narrowest gap between rungs and a name is capped at 255,
+        // so no amount of length can promote a weaker match.
+        let long_stem = format!("{}.rs", "main");
+        let short_prefix = "mainx";
+        assert!(score(&long_stem, "main") > score(short_prefix, "main"));
+    }
+
+    #[test]
+    fn a_query_with_no_terms_scores_everything_alike() {
+        assert_eq!(relevance(b"anything.txt", &[]), 0);
     }
 }

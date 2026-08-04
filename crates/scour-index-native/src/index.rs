@@ -715,7 +715,11 @@ impl Index for NativeIndex {
             all.extend(found.hits);
         }
 
-        sort_hits(&mut all, req.sort, req.descending);
+        // The merge across segments has to score against the same terms the
+        // segments did. `narrowing_terms` is the query's own answer to "what
+        // must a name contain", which is the same question relevance asks.
+        let terms = req.query.narrowing_terms(1);
+        sort_hits(&mut all, req.sort, req.descending, &terms);
         let hits: Vec<Hit> = all.into_iter().skip(offset).take(limit).collect();
         Ok(SearchResponse {
             hits,

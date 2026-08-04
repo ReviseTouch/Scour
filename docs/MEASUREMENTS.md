@@ -1559,3 +1559,54 @@ Three-way interleaved, three rounds:
 the same brute-force verification passing. What remains — 616 ms — is folding
 and the postings-list merge, and building them after the scan rather than
 during it is still available if that is worth taking.
+
+## 2026-08-04 — relevance, and what a name alone cannot do
+
+The roadmap calls ranking the largest quality gap, and the demonstration is one
+query. `main`, on this machine, in the default order:
+
+```
+main.log                                  a log file
+.git/logs/refs/heads/main                 git internals
+.git/refs/heads/main
+target/debug/build/…/main_window.rs       generated
+apps/scourd/src/main.rs                   ← eighth
+```
+
+`SortKey::Relevance` now scores a name against the query's terms, in rungs wide
+enough that no length adjustment can overturn one:
+
+| rung | example for `main` |
+|---|---|
+| 4000 | the name without its extension is the term — `main.rs` |
+| 3000 | the whole name is the term — a folder called `main` |
+| 2000 | the name starts with it — `main_window.rs` |
+| 1000 | it starts a word inside — `my-main.rs`, not `domain.rs` |
+| 100 | matched somewhere |
+
+**Two orderings were tried and measured before this one.** Ranking the exact
+name highest is what a scorer "should" do, and it filled the page with
+`.git/refs/heads/main`. Excluding `.git` moved the problem rather than solving
+it: a hundred `android/src/main` directories took its place. A stem match means
+someone named a *file* after the thing being searched for, which turns out to
+be a far stronger signal than a directory carrying the word.
+
+### And it is still not enough
+
+With the rungs in the right order, `main` returns `main.c`, `main.m`, `main.f`
+— all of them from SDKs and package caches. Of the first 200 results:
+
+| | count |
+|---|---|
+| under `~/Projeler` (the user's own work) | **48** |
+| under `~/.pub-cache`, `~/Android`, `~/.cargo`, `~/.local` | **88** |
+
+Scoped to `~/Projeler`, the first four are still `target/` and `build/`
+artefacts; `scourd/src/main.rs` is fifth.
+
+So a name carries no information about whether the file is *yours*, and that is
+the information this query needs. The next rung has to come from the path:
+a penalty for `target/`, `build/`, `.pub-cache`, `Android/Sdk`, `.git`. The
+cheap way to get it is a per-directory table computed once — the directory
+numbers are already handed out in sorted path order, so a penalty is one pass
+over `DirTable` and one byte per directory, about 130 KB here. Not done yet.

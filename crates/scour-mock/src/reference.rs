@@ -69,6 +69,11 @@ pub fn brute_force(
         .collect();
     hits.sort_unstable_by(|a, b| {
         let o = match sort {
+            // The reference does not model relevance: scoring belongs to the
+            // index, and a second implementation of it here would verify that
+            // two copies of one idea agree rather than that the idea is right.
+            // Queries sorted this way are not compared against this.
+            SortKey::Relevance => std::cmp::Ordering::Equal,
             SortKey::Name => DefaultFolder
                 .fold(a.name())
                 .cmp(&DefaultFolder.fold(b.name())),
