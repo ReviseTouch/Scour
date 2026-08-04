@@ -17,6 +17,8 @@ use crate::trigram::TrigramWriter;
 #[derive(Debug, Default, Clone)]
 pub struct SegmentBytes {
     pub names: Vec<u8>,
+    /// The same names, folded once here so no query ever folds them again.
+    pub fnames: Vec<u8>,
     pub cols: Vec<u8>,
     pub dirs: Vec<u8>,
     pub ids: Vec<u8>,
@@ -120,6 +122,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
 
     let (tri_dict, tri_post) = tri.finish();
     SegmentBytes {
+        fnames: names.finish_folded(),
         names: names.finish(),
         cols: cols.finish(),
         dirs: dir_bytes,
@@ -207,6 +210,7 @@ mod tests {
         let b = build(&entries);
         let seg = Segment {
             names: NameArena::open(&b.names).expect("names"),
+            folded: NameArena::open(&b.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
@@ -226,6 +230,7 @@ mod tests {
         let b = build(&[entry("/lonely.txt", 1)]);
         let seg = Segment {
             names: NameArena::open(&b.names).expect("names"),
+            folded: NameArena::open(&b.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),

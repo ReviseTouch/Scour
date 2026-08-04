@@ -41,6 +41,7 @@ impl Fixture {
     fn segment(&self) -> Segment<'_> {
         Segment {
             names: NameArena::open(&self.bytes.names).expect("names"),
+            folded: NameArena::open(&self.bytes.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&self.bytes.cols).expect("cols"),
             dirs: DirTable::open(&self.bytes.dirs).expect("dirs"),
             tri: TrigramIndex::open(&self.bytes.tri_dict, &self.bytes.tri_post).expect("tri"),
@@ -303,6 +304,7 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
 
     let seg = Segment {
         names: NameArena::open(&f.bytes.names).expect("names"),
+        folded: NameArena::open(&f.bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&f.bytes.cols).expect("cols"),
         dirs: DirTable::open(&f.bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&f.bytes.tri_dict, &f.bytes.tri_post).expect("tri"),
@@ -589,6 +591,7 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
     let bytes = build(&tmp);
     let seg = Segment {
         names: NameArena::open(&bytes.names).expect("names"),
+        folded: NameArena::open(&bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),

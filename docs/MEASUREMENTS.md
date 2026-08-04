@@ -2195,3 +2195,55 @@ where it looked.
 What it costs: a second arena, about 79 MB here, and a format bump. What it
 buys is the difference between a search box that is fast on a benchmark and one
 that is fast under a person's hands.
+
+## 2026-08-04 — the folded arena
+
+The previous section measured the ceiling and named the change. Done: a second
+name arena, folded when the segment is written, with the same row numbering.
+A search walks that one and folds nothing; the spelled arena is read only for
+the rows that reach the screen.
+
+### Warm, one segment, 2,987,722 entries
+
+| query | before | after | a visited row |
+|---|---|---|---|
+| `rapor` | 77.0 ms | **28.1 ms** | 192 → **64 ns** |
+| `config` | 68.6 ms | **27.5 ms** | 192 → 57 ns |
+| `belge` | 49.8 ms | **14.8 ms** | → 47 ns |
+| `toki` | 37.5 ms | **12.2 ms** | → 40 ns |
+| `main` | 12.2 ms | **9.9 ms** | → 37 ns |
+
+**2.5 to 3.4 times**, and the per-row number is the one that matters because it
+is the part that scales.
+
+Typing, as the window actually issues it — the stored order below three
+characters, relevance from there:
+
+```
+t     (modified)    13.7 ms
+to    (modified)   132.1 ms
+tok   (relevance)   31.2 ms
+toki  (relevance)   17.2 ms
+```
+
+And whole words, which is what a search box mostly sees:
+`fatura` 1.65 ms, `değişiklik` 3.25 ms, `sunum` 8.1 ms, `belge` 20.9 ms.
+
+### What it cost
+
+The index went from 174 MB to **253 MB** for 2.99 M entries — 79 MB, exactly
+the size of the names, as predicted. Format 6.
+
+### Two things it does not fix
+
+**`t` by relevance is still 1.6 s**, and worse than before, because the walk is
+no longer the expensive part: a term that matches a million rows pushes a
+million sort values into a vector before selecting forty. The window does not
+issue that query — below three characters it asks for the stored order — but
+the CLI will, and the honest fix is a bounded relevance that stops and says it
+stopped, the way counting already does.
+
+**The trigram filter still does not pay for itself.** It was measured at 1.9×
+before and the folded arena makes a plain scan cheaper, so the case for it is
+weaker now, not stronger. Worth re-measuring against a scan with no filter at
+all before it is kept.

@@ -72,8 +72,9 @@ const META_FILE: &str = "native-index.json";
 /// kinds — where nothing changed shape at all and every row of an older index
 /// would still decode, into the wrong answer. `kind:build` would find nothing
 /// and half the sidebar would read `File`: nothing corrupt and everything
-/// wrong, which is the case this constant exists for.
-const FORMAT: u32 = 5;
+/// wrong, which is the case this constant exists for. Version 6 added the
+/// folded name arena, without which a search has nothing to walk.
+const FORMAT: u32 = 6;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -477,7 +478,14 @@ impl NativeIndex {
 /// Costs nothing when there are none, which is the normal state: the checks are
 /// behind an emptiness test, and the dearer of the two — building the path —
 /// only runs when a subtree is pending.
-fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
+/// Should this row be hidden from a search that otherwise accepted it?
+///
+/// `name` is ignored, and deliberately: the walk yields the **folded** name
+/// now, and a path built from that is lowercase — so `under("/home/u/projeler",
+/// "/home/u/Projeler")` is false and a removed subtree comes back. The spelled
+/// name is read from the other arena, which costs one lookup on a path that
+/// already runs only for rows a query has accepted.
+fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, _name: &[u8]) -> bool {
     if !inner.hidden.is_empty() {
         let id = seg.entry_id(row);
         if inner
@@ -489,7 +497,7 @@ fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
         }
     }
     if !inner.hidden_prefixes.is_empty() {
-        let path = seg.path(row, &String::from_utf8_lossy(name));
+        let path = seg.path(row, seg.names.get(row).unwrap_or_default());
         if inner.hidden_prefixes.iter().any(|p| under(&path, p)) {
             return true;
         }

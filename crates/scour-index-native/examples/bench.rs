@@ -35,6 +35,7 @@ fn main() {
 
     let seg = Segment {
         names: NameArena::open(&bytes.names).expect("names"),
+        folded: NameArena::open(&bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),

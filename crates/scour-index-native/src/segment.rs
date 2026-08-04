@@ -23,7 +23,7 @@ use crate::search::Segment;
 use crate::trigram::TrigramIndex;
 
 /// The pieces a segment is made of, and the extension each is stored under.
-const PARTS: [&str; 6] = ["names", "cols", "dirs", "ids", "tgrams", "tpost"];
+const PARTS: [&str; 7] = ["names", "cols", "dirs", "ids", "tgrams", "tpost", "fnames"];
 
 fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
     dir.join(format!("seg-{number:08}.{ext}"))
@@ -53,6 +53,7 @@ impl Live {
             &bytes.ids,
             &bytes.tri_dict,
             &bytes.tri_post,
+            &bytes.fnames,
         ];
         // Synced, not merely written: the manifest is about to name these
         // files, and a manifest that survives a crash while its segments do
@@ -111,6 +112,7 @@ impl Live {
             dirs: DirTable::open(&self.maps[2]).ok_or_else(|| corrupt("dirs"))?,
             tri: TrigramIndex::open(&self.maps[4], &self.maps[5])
                 .ok_or_else(|| corrupt("tgrams"))?,
+            folded: NameArena::open(&self.maps[6]).ok_or_else(|| corrupt("fnames"))?,
             alive: &self.alive,
         })
     }

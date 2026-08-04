@@ -38,7 +38,12 @@ use crate::trigram::TrigramIndex;
 /// The files a search reads, opened together.
 #[derive(Debug, Clone, Copy)]
 pub struct Segment<'a> {
+    /// Names as the filesystem spells them. Read for the rows that are shown.
     pub names: NameArena<'a>,
+    /// The same names, folded when the segment was written. **This is what a
+    /// search walks**, and the reason it exists is measured: folding at query
+    /// time was three quarters of the inner loop.
+    pub folded: NameArena<'a>,
     pub cols: ColumnBlocks<'a>,
     pub dirs: DirTable<'a>,
     pub tri: TrigramIndex<'a>,
@@ -235,7 +240,14 @@ impl Needle {
         }
     }
 
-    fn found_in(&self, hay: &[u8], fold: &mut Folded) -> bool {
+    /// Is the needle in this **already folded** text?
+    fn found_in(&self, folded: &[u8]) -> bool {
+        self.finder.find(folded).is_some()
+    }
+
+    /// The same, on text that still has to be folded — for the path, which is
+    /// built at query time and so cannot have been folded in advance.
+    fn found_in_raw(&self, hay: &[u8], fold: &mut Folded) -> bool {
         self.finder.find(fold.fold_bytes(hay)).is_some()
     }
 
@@ -534,6 +546,7 @@ impl Plan {
     ///
     /// `name` is passed in because the caller already has it — the walk reads
     /// names sequentially, which is the whole reason the arena has no offsets.
+    /// `name` is the row's name **already folded** — what the walk yields.
     pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
         for clause in &self.clauses {
             let mut any = false;
@@ -616,6 +629,12 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
     })
 }
 
+/// Test one condition against one row.
+///
+/// `name` arrives **folded**, out of the second arena, so nothing here folds
+/// it again — that fold was three quarters of the inner loop and now happens
+/// once when the segment is written. `fold` survives for the one thing that
+/// cannot be prepared in advance: the path, which is built here.
 fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
     match test {
         Test::Never => false,
@@ -637,26 +656,24 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             (0..16).contains(&k) && mask & 1 << k != 0
         }
         Test::Ext(list) => {
-            // Folded into the buffer rather than into a fresh `String`. This
-            // runs once a row, so allocating here was measured as most of what
-            // an `ext:` filter costs on a query the walk cannot stop early.
-            let raw = ext_bytes(name);
-            if raw.is_empty() {
-                return false;
-            }
-            let folded = fold.fold_bytes(raw);
-            list.iter().any(|e| e.as_bytes() == folded)
+            // The extension of a folded name is a folded extension, so this
+            // is a comparison and nothing else.
+            let ext = ext_bytes(name);
+            !ext.is_empty() && list.iter().any(|e| e.as_bytes() == ext)
         }
-        Test::NameHas(n) => n.found_in(name, fold),
+        Test::NameHas(n) => n.found_in(name),
         Test::NameGlob(p) => match std::str::from_utf8(name) {
-            Ok(name) => scour_query::glob_matches(p, fold.fold(name)),
+            Ok(name) => scour_query::glob_matches(p, name),
             Err(_) => false,
         },
         Test::PathHas(n) => {
             // The dearest test, and the reason it is sorted last: it builds a
             // string. Everything else reads what is already there.
-            let path = seg.path(row, &String::from_utf8_lossy(name));
-            n.found_in(path.as_bytes(), fold)
+            // The *spelled* name, because a path is shown as well as matched,
+            // and folded here because it was built here.
+            let raw = seg.names.get(row).unwrap_or_default();
+            let path = seg.path(row, raw);
+            n.found_in_raw(path.as_bytes(), fold)
         }
     }
 }
@@ -793,7 +810,7 @@ pub fn run_with(
             // verifier missed it because the test asked for an uncapped count,
             // where the two happen to agree.
             keyed.push((
-                sort_value(seg, row, name, want.sort, &mut fold, &score_terms),
+                sort_value(seg, row, name, want.sort, &score_terms),
                 row as u32,
             ));
         }
@@ -845,7 +862,9 @@ pub fn run_with(
             }
         } else {
             let mut go = true;
-            seg.names.walk_range(from, to, |row, name| {
+            // The **folded** arena: a search matches folded text, and folding
+            // it here instead was 24.4 ns of the 40.5 a row used to cost.
+            seg.folded.walk_range(from, to, |row, name| {
                 go = visit(row, name);
                 go
             });
@@ -934,26 +953,25 @@ fn key_is_exact(key: SortKey) -> bool {
     key != SortKey::Name
 }
 
+/// `name` is the row's folded name, as the walk yields it.
 fn sort_value(
     seg: &Segment<'_>,
     row: usize,
     name: &[u8],
     key: SortKey,
-    fold: &mut Folded,
     terms: &[Vec<u8>],
 ) -> SortValue {
     match key {
-        // Scored on the folded name, because that is what the terms are, and
-        // on the directory's recorded distance, which costs one byte read.
-        SortKey::Relevance => SortValue::Num(relevance(
-            fold.fold_bytes(name),
-            terms,
-            seg.dirs.steps(seg.dir_id(row)),
-        )),
-        SortKey::Name => SortValue::Head(head(fold.fold_bytes(name))),
-        SortKey::Ext => SortValue::Head(head(fold.fold_bytes(ext_bytes(name)))),
+        // Already folded, which is what the terms are, plus the directory's
+        // recorded distance — one byte read.
+        SortKey::Relevance => {
+            SortValue::Num(relevance(name, terms, seg.dirs.steps(seg.dir_id(row))))
+        }
+        SortKey::Name => SortValue::Head(head(name)),
+        SortKey::Ext => SortValue::Head(head(ext_bytes(name))),
         SortKey::Path => {
-            SortValue::Text(seg.path(row, &String::from_utf8_lossy(name)).into_bytes())
+            let raw = seg.names.get(row).unwrap_or_default();
+            SortValue::Text(seg.path(row, raw).into_bytes())
         }
         SortKey::Size => SortValue::Num(seg.num(Field::Size, row)),
         SortKey::Modified => SortValue::Num(seg.num(Field::Mtime, row)),
@@ -1102,7 +1120,7 @@ mod tests {
             let n = Needle::new(needle);
             let want = name.to_ascii_lowercase().contains(needle);
             assert_eq!(
-                n.found_in(name.as_bytes(), &mut fold),
+                n.found_in_raw(name.as_bytes(), &mut fold),
                 want,
                 "{name:?} contains {needle:?}"
             );
@@ -1113,10 +1131,10 @@ mod tests {
     fn a_non_ascii_name_still_goes_through_the_real_folding() {
         let mut fold = Folded::new();
         // The Turkish rule: the query is folded by the parser, the name here.
-        assert!(Needle::new("istanbul").found_in("İSTANBUL.txt".as_bytes(), &mut fold));
-        assert!(Needle::new("isparta").found_in("ısparta.md".as_bytes(), &mut fold));
-        assert!(Needle::new("öğüt").found_in("Öğüt.docx".as_bytes(), &mut fold));
-        assert!(!Needle::new("zzz").found_in("Öğüt.docx".as_bytes(), &mut fold));
+        assert!(Needle::new("istanbul").found_in_raw("İSTANBUL.txt".as_bytes(), &mut fold));
+        assert!(Needle::new("isparta").found_in_raw("ısparta.md".as_bytes(), &mut fold));
+        assert!(Needle::new("öğüt").found_in_raw("Öğüt.docx".as_bytes(), &mut fold));
+        assert!(!Needle::new("zzz").found_in_raw("Öğüt.docx".as_bytes(), &mut fold));
     }
 
     #[test]
