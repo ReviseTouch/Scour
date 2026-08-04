@@ -17,6 +17,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
+/// How many matches an interactive search counts before it stops.
+///
+/// A thousand is more than a person reads and enough for a meter to say
+/// "at least this many". The exact figure follows once the query settles.
+pub const TYPING_CAP: u32 = 1_000;
+
 /// What the window asks for.
 pub enum Ask {
     /// A search and its facets, tagged with the keystroke that caused them.
@@ -36,6 +42,11 @@ pub enum Ask {
         generation: u64,
         query: String,
     },
+    /// How many match, exactly, once the typing has stopped.
+    Count {
+        generation: u64,
+        query: String,
+    },
     Stop,
 }
 
@@ -46,6 +57,10 @@ pub enum Got {
         reply: Box<Response>,
     },
     Facets {
+        generation: u64,
+        reply: Box<Response>,
+    },
+    Count {
         generation: u64,
         reply: Box<Response>,
     },
@@ -80,7 +95,7 @@ impl Link {
             for ask in rx {
                 let done = matches!(ask, Ask::Stop);
                 let to = match ask {
-                    Ask::Facets { .. } => &slow_tx,
+                    Ask::Facets { .. } | Ask::Count { .. } => &slow_tx,
                     _ => &fast_tx,
                 };
                 if to.send(ask).is_err() || done {
@@ -107,6 +122,14 @@ impl Drop for Link {
     fn drop(&mut self) {
         let _ = self.ask.send(Ask::Stop);
     }
+}
+
+/// Which kind of answer a request is going to produce.
+#[derive(Clone, Copy)]
+enum Lane {
+    Search,
+    Facets,
+    Count,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -157,14 +180,21 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                         page: scour_core::Page {
                             offset: 0,
                             limit,
-                            // Bounded, and the bound is honest: past this the
-                            // reply says `capped` and the meter shows a `+`.
-                            // Counting three million rows exactly to draw
-                            // forty is the cost the whole design avoids.
-                            count_cap: 100_000,
+                            // **Small, and this is the single largest thing a
+                            // keystroke used to cost.** The cap is how many
+                            // matches the walk counts before it stops, and
+                            // reaching 100,000 of them for `ra` meant visiting
+                            // 1,208,951 rows — 23.1 ms — against 35,743 and
+                            // 0.9 ms at a thousand. Twenty-five times, to
+                            // print a total nobody reads while still typing.
+                            //
+                            // The exact number arrives separately, after the
+                            // typing stops. Until then the meter says `1000+`,
+                            // which is true.
+                            count_cap: TYPING_CAP,
                         },
                     },
-                    false,
+                    Lane::Search,
                 ),
                 Ask::Facets { generation, query } => (
                     generation,
@@ -172,17 +202,25 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                         query,
                         by: scour_core::FacetBy::Kind,
                     },
-                    true,
+                    Lane::Facets,
+                ),
+                Ask::Count { generation, query } => (
+                    generation,
+                    Request::Count {
+                        query,
+                        cap: 10_000_000,
+                    },
+                    Lane::Count,
                 ),
                 Ask::Stop => break,
             };
             match c.call(request) {
                 Ok(reply) => {
                     let reply = Box::new(reply);
-                    sink(if facets {
-                        Got::Facets { generation, reply }
-                    } else {
-                        Got::Search { generation, reply }
+                    sink(match facets {
+                        Lane::Facets => Got::Facets { generation, reply },
+                        Lane::Count => Got::Count { generation, reply },
+                        Lane::Search => Got::Search { generation, reply },
                     });
                 }
                 Err(e) => {

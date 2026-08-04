@@ -2357,3 +2357,56 @@ and the swap re-checks which of those numbers are still there.
 **2.7 s is still not right**, and the remaining holder is `flush`: it builds and
 writes a segment for the staged rows with the write lock held. The same fix
 applies and is not done here.
+
+## 2026-08-04 — the count cap was the whole cost of a short query
+
+The tail was not where the median was. Ninety seconds of a realistic typing mix
+on a busy machine: p50 29.9 ms, p90 110, **p99 1,052, worst 6,674** — and the
+five slowest were `ra`, `fa`, `fa`, `bel`, `f`. Every one a prefix somebody was
+still typing.
+
+Splitting it by query separated two effects that had been read as one:
+
+| query alone, 45 s | p50 | p99 | max |
+|---|---|---|---|
+| `rapor` | 32.9 ms | 56.7 ms | 2,084 ms |
+| `ra` | 99.8 ms | 953 ms | 2,610 ms |
+| `f` | 320.9 ms | 11,336 ms | 11,336 ms |
+
+So short prefixes are slower *by construction*, and there is a contention tail
+on top of everything — `rapor`'s p99 is 57 ms and its worst is two seconds.
+
+### And the construction was the count, not the search
+
+| | rows visited | |
+|---|---|---|
+| `f`, cap 100,000 | 157,341 | 65.4 ms |
+| `f`, cap 1,000 | 2,674 | **1.3 ms** |
+| `ra`, cap 100,000 | 1,208,951 | 23.1 ms |
+| `ra`, cap 1,000 | 35,743 | **0.9 ms** |
+| `rapor`, either | 434,304 | 11.7 ms |
+
+The window asked the walk to count up to a hundred thousand matches so the
+meter could show an accurate total. For `ra` that meant visiting **1.2 million
+rows** — to print a number nobody reads while still typing.
+
+A thousand while typing, and the exact figure asked for separately once the
+list is already on screen, on the same lane as the facet count. The meter says
+`1000+` until then, which is true.
+
+Measured back to back, same machine, same typing sequence `f`→`fatura`:
+
+| | n | p50 | p99 | max |
+|---|---|---|---|---|
+| cap 100,000 | 1,586 | 3.0 ms | 86.6 ms | 4,995 ms |
+| **cap 1,000** | **6,639** | **1.8 ms** | **18.7 ms** | **1,127 ms** |
+
+Four times as many queries answered in the same thirty seconds, and the p99 is
+a quarter of what it was.
+
+### What is left, precisely
+
+The contention tail. `rapor`'s worst is still seconds while its p99 is tens of
+milliseconds, and the holder is `flush`: it builds and writes a segment for the
+staged rows with the write lock held. `fold` was fixed the same way in the
+previous commit and `flush` was named there as the next one.

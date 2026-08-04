@@ -477,10 +477,15 @@ fn apply(
             // This one belongs to a result already on screen.
             {
                 let s = state.borrow();
+                let query = full_query(&s);
                 link.send(Ask::Facets {
                     generation,
-                    query: full_query(&s),
+                    query: query.clone(),
                 });
+                // And the exact total, only if the fast answer was cut short.
+                if r.capped {
+                    link.send(Ask::Count { generation, query });
+                }
             }
             w.set_meter(
                 format!(
@@ -492,6 +497,25 @@ fn apply(
                 )
                 .into(),
             );
+        }
+        // The exact total, which the interactive search deliberately did not
+        // stop to compute. It arrives after the list is already on screen, so
+        // the meter tightens from `1000+` to a number rather than waiting for
+        // one.
+        Got::Count { generation, reply } => {
+            if generation != state.borrow().generation {
+                return;
+            }
+            if let Response::Count { total, capped } = *reply {
+                w.set_meter(
+                    format!(
+                        "{total}{} {}",
+                        if capped { "+" } else { "" },
+                        cat.get("matches")
+                    )
+                    .into(),
+                );
+            }
         }
         Got::Facets { generation, reply } => {
             if generation != state.borrow().generation {
