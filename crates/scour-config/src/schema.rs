@@ -62,9 +62,6 @@ pub enum EngineCfg {
     /// order, 44.5 bytes an entry.
     #[default]
     Native,
-    /// tantivy. Carries the machinery for document text, which is what it
-    /// costs and what it will be worth when there is document text.
-    Tantivy,
 }
 
 impl Default for IndexCfg {

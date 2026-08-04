@@ -1,7 +1,7 @@
 //! The service.
 //!
 //! This is the only file in the workspace that names a concrete
-//! implementation. `TantivyIndex` and `FsSource` appear in [`wire`] and
+//! implementation. `NativeIndex` and `FsSource` appear in [`wire`] and
 //! nowhere else; everything above them was written against traits and cannot
 //! tell what it was given. Replacing the search engine is a change to one
 //! line here.

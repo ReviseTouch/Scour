@@ -4,7 +4,6 @@ members = [
     "crates/scour-core",
     "crates/scour-query",
     "crates/scour-mock",
-    "crates/scour-index-tantivy",
     "crates/scour-source-fs",
     "crates/scour-config",
     "crates/scour-proto",
@@ -37,7 +36,6 @@ scour-core          = { path = "crates/scour-core" }
 scour-query         = { path = "crates/scour-query" }
 scour-proto         = { path = "crates/scour-proto" }
 scour-ipc           = { path = "crates/scour-ipc" }
-scour-index-tantivy = { path = "crates/scour-index-tantivy" }
 scour-index-native  = { path = "crates/scour-index-native" }
 scour-source-fs     = { path = "crates/scour-source-fs" }
 scour-config        = { path = "crates/scour-config" }
@@ -53,10 +51,6 @@ bitflags    = { version = "2", features = ["serde"] }
 anyhow      = "1"
 clap        = { version = "4", features = ["derive"] }
 
-# The search engine. Pinned to a minor version because the measured design
-# depends on internals that are not covered by semver: hand-driving a `DocSet`
-# for early termination, `alive_bitset` filtering, and `NoMergePolicy`.
-tantivy     = "0.26"
 
 # Filesystem traversal and watching. `ignore` is BurntSushi's parallel walker
 # from ripgrep; it is portable and already understands ignore files, which the

@@ -19,14 +19,16 @@ Everything else is an *implementation* and lives in its own crate:
 | Contract | `scour-core` | nothing |
 | Language | `scour-query` | the query syntax, no backend |
 | Wire | `scour-proto`, `scour-ipc` | the request/response shape, the socket |
-| Implementations | `scour-index-tantivy`, `scour-source-fs`, `scour-config`, `scour-i18n` | one concrete technology each |
+| Implementations | `scour-index-native`| one concrete technology each |
 | Orchestration | `scour-engine` | `Box<dyn Source>`, `Box<dyn Index>` — no concrete types |
 | Wiring | `apps/scourd` | **the only place concrete types are named** |
 | Frontends | `apps/scour`, `apps/scour-mcp`, later the GUI | `scour-proto` only |
 
 Consequences that are not negotiable:
 
-- `scour-engine` must never contain the word `tantivy`, `notify`, or `ignore`.
+- `scour-engine` must never contain the word `notify`, `ignore`, or the name
+  of any index implementation. It had a dead `scour-index-tantivy` dependency
+  in its manifest for a while, which nothing caught because nothing checked.
 - Swapping the search engine must be a one-line change in `apps/scourd/src/main.rs`.
 - If an implementation crate needs another implementation crate, the abstraction
   it actually needs is missing from `scour-core`. Add the trait; do not add the
@@ -61,7 +63,7 @@ Performance claims in this repository are measurements, not opinions. Numbers
 live in `docs/MEASUREMENTS.md` with the command that produced them. A change
 that claims to be faster cites a before and an after.
 
-The verifier is not optional: `scour-index-tantivy` checks its results against
+The verifier is not optional: `scour-index-native`
 `scour-mock::brute_force`. Three real bugs — a capped count that bounded the
 value but not the work, a segment tail cut at page size, and deleted documents
 reappearing — were invisible to timing and only caught by that comparison.

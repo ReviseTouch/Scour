@@ -17,8 +17,9 @@ use crate::types::{
 /// Implementations must be usable from several threads at once. In practice
 /// searches are concurrent and writes are not, which is why `apply` takes
 /// `&self` and is expected to serialise internally rather than force every
-/// caller to hold a lock. On Windows this is not optional: tantivy's
-/// `commit()` races with itself and fails with `PermissionDenied`.
+/// caller to hold a lock. The requirement is not theoretical: an index that
+/// lets two commits overlap corrupts itself, and on Windows the failure is
+/// noisier — an open handle makes a concurrent replace fail outright.
 ///
 /// [`Ast`]: crate::types::Ast
 pub trait Index: Send + Sync + Debug {

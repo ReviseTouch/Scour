@@ -11,7 +11,7 @@ use scour_core::{
     ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
 use scour_engine::{Engine, EngineOptions};
-use scour_index_tantivy::{IndexOptions, TantivyIndex};
+use scour_index_native::NativeIndex;
 use scour_mock::{MockOptions, generate};
 
 /// A source backed by a list that a test can change under the engine's feet.
@@ -132,16 +132,7 @@ struct Fixture {
 
 fn fixture(files: usize) -> Fixture {
     let dir = tempfile::tempdir().expect("temp");
-    let index = Arc::new(
-        TantivyIndex::create(
-            dir.path(),
-            IndexOptions {
-                writer_heap_mb: 32,
-                ..Default::default()
-            },
-        )
-        .expect("index"),
-    );
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
     let fs = generate(&MockOptions {
         files,
         ..Default::default()
@@ -358,14 +349,21 @@ fn maintenance_reports_and_the_rebuild_clears_the_tail() {
     settle(&f, |f| {
         !f.engine.status().scanning && f.engine.status().entries > 0
     });
-    assert!(
-        f.engine.status().unsorted > 0,
-        "everything is tail before a rebuild"
-    );
+    // `unsorted` means "rows outside the largest segment", so on this engine a
+    // scan small enough to land in one segment has none — the tail is a
+    // property of how many segments there are, not of how recent the rows are.
+    // The tantivy engine this test was written against counted every
+    // uncommitted document instead, which is why the assertion here used to be
+    // the opposite.
+    let before = f.engine.status().unsorted;
 
     f.engine.maintain(Maintenance::Rebuild).expect("maintain");
     settle(&f, |f| f.engine.status().unsorted == 0);
-    assert_eq!(f.engine.status().unsorted, 0);
+    assert_eq!(
+        f.engine.status().unsorted,
+        0,
+        "a rebuild folds everything into one segment, tail or no tail (was {before})"
+    );
     assert!(!f.engine.status().rebuild_advised);
 
     // Flush is answered directly, because callers want its result.
@@ -378,16 +376,7 @@ fn a_source_that_cannot_be_watched_is_not_an_error() {
     // Caps says so in advance; a cloud bucket has no change feed and is
     // reconciled by rescanning instead.
     let dir = tempfile::tempdir().expect("temp");
-    let index = Arc::new(
-        TantivyIndex::create(
-            dir.path(),
-            IndexOptions {
-                writer_heap_mb: 32,
-                ..Default::default()
-            },
-        )
-        .expect("index"),
-    );
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
     let source = MemSource::unwatchable(Vec::new());
     let engine = Engine::new(vec![source], index, EngineOptions::default());
     assert_eq!(engine.start_watching().expect("watch"), 0);

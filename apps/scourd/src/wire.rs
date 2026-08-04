@@ -2,40 +2,28 @@
 //!
 //! Every concrete type in Scour is named here and nowhere else. That is the
 //! architecture's one rule, made visible: if a second file ever needs to say
-//! `TantivyIndex`, something above has stopped being written against the
+//! `NativeIndex`, something above has stopped being written against the
 //! trait.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use scour_config::{Config, EngineCfg};
+use scour_config::Config;
 use scour_core::{Index, Source, SourceId};
 use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
-use scour_index_tantivy::{IndexOptions, TantivyIndex};
 use scour_source_fs::{FsSource, platform_defaults};
 
 pub fn build(config: &Config) -> Result<Engine> {
     let dir = index_dir(config);
-    let index: Arc<dyn Index> = match config.index.engine {
-        EngineCfg::Native => Arc::new(
-            NativeIndex::open_or_create(&dir)
-                .with_context(|| format!("opening the index at {}", dir.display()))?,
-        ),
-        EngineCfg::Tantivy => Arc::new(
-            TantivyIndex::open_or_create(
-                &dir,
-                IndexOptions {
-                    index_paths: config.index.paths,
-                    index_content: config.content.enabled,
-                    writer_heap_mb: config.index.heap_mb,
-                    rebuild_threshold: config.index.rebuild_threshold,
-                },
-            )
+    // One engine, so this is a single line rather than a match. The `Index`
+    // trait is what keeps it that way: adding a second one is a second arm
+    // here and nothing anywhere else.
+    let index: Arc<dyn Index> = Arc::new(
+        NativeIndex::open_or_create(&dir)
             .with_context(|| format!("opening the index at {}", dir.display()))?,
-        ),
-    };
+    );
 
     let sources: Vec<Arc<dyn Source>> = config
         .sources
@@ -63,18 +51,13 @@ pub fn build(config: &Config) -> Result<Engine> {
     ))
 }
 
-/// Where this engine's files go.
+/// Where the index files go.
 ///
-/// A subdirectory each, rather than the configured directory itself. The two
-/// formats have nothing in common, so sharing a directory would mean switching
-/// engines left the other one's files lying beside the new ones, counted by
-/// `bytes_on_disk` and never read. It also lets both exist at once, which is
-/// what makes the comparison a matter of one line in a file.
+/// A subdirectory rather than the configured directory itself, so that a
+/// second engine could exist beside this one without either counting the
+/// other's bytes in `bytes_on_disk`.
 fn index_dir(config: &Config) -> std::path::PathBuf {
-    match config.index.engine {
-        EngineCfg::Native => config.index.dir.join("native"),
-        EngineCfg::Tantivy => config.index.dir.join("tantivy"),
-    }
+    config.index.dir.join("native")
 }
 
 /// The configured exclusions, plus the platform's own.

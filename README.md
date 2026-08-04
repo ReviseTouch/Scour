@@ -12,7 +12,7 @@ around anything else.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
- 40.18 KiB  2026-08-02  /home/u/Projeler/Scour/crates/scour-index-tantivy/src/engine.rs
+ 40.18 KiB  2026-08-02  /home/u/Projeler/Scour/crates/scour-index-native/src/search.rs
  12.01 KiB  2026-08-02  /home/u/Projeler/Scour/crates/scour-config/src/schema.rs
 …
 40 / 43 · 1.74 ms
@@ -108,13 +108,13 @@ One rule: **nothing but `scour-core` is depended on by more than one layer.**
                              │
         ┌────────────── scour-core ──────────────┐
         │              types + traits            │
- scour-index-tantivy  scour-source-fs  scour-config  scour-query  scour-i18n
+ scour-index-native   scour-source-fs  scour-config  scour-query  scour-i18n
 ```
 
 `scour-core` holds the shared vocabulary and the interfaces and takes no
 dependency beyond `serde` and `bitflags`. `scour-engine` is handed a
 `Box<dyn Source>` and an `Arc<dyn Index>` and has no way of discovering that one
-is a filesystem and the other is tantivy — its manifest names neither. Replacing
+is a filesystem and the other an index — its manifest names neither. Replacing
 the search engine is one line in `scourd`.
 
 That is not architecture for its own sake. It is what made adding the MCP server

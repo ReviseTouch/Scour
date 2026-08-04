@@ -47,7 +47,7 @@ answer anyone can act on.
 
 **2.1 — CI has never run.** The workflow exists, the repository has no remote,
 and nothing has ever executed it. It would fail today. Every crate that does
-not pull tantivy already cross-checks against the Windows target locally, so
+crate already cross-checks against the Windows target locally, so
 the fix is small — but it has to actually run somewhere.
 
 *This needs a decision:* a GitHub repository puts the code outside this

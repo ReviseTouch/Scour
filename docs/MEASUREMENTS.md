@@ -1423,3 +1423,41 @@ has two NVMe drives and no network mount, so `Spinning => 1` and
 Network debounce is the one with an argument behind it: a remote mount reports
 changes late and in bursts, and each reaction costs a round trip, so batching
 harder is worth more there than promptness.
+
+## 2026-08-04 — real filesystems, built in RAM
+
+Every claim in `scour-source-fs/src/fs.rs` was written against what this
+machine has: two NVMe drives and one NTFS volume. The rest was reasoned about.
+`scripts/fstest.sh` makes the rest available — a file in `/dev/shm`, formatted,
+loop-mounted, filled with the awkward cases, and handed to the same code the
+scanner uses.
+
+```bash
+sudo scripts/fstest.sh
+```
+
+| fs | size | `STABLE_IDS` | hard links |
+|---|---|---|---|
+| vfat | 64M | **false** ✓ | **none** (`st_nlink=1`) |
+| exfat | 64M | **false** ✓ | **none** |
+| ext4 | 64M | true ✓ | yes (`st_nlink=2`) |
+| xfs | 320M | true ✓ | yes |
+| btrfs | 128M | true ✓ | yes |
+| f2fs | 128M | true ✓ | yes |
+
+Two things confirmed. Withholding `STABLE_IDS` from the FAT family is right.
+And they have no hard links at all — `ln` fails silently — which is what
+`REPORTS.md` predicts for the first tier of duplicate detection there.
+
+**And one test of mine was wrong.** The first version reported every
+filesystem as case-sensitive, including vfat, by checking that `README.md` and
+`readme.md` both existed. On a case-insensitive filesystem the second lookup
+finds the first file, so `-f` says yes everywhere. It now counts directory
+*entries* instead.
+
+`MEDIUM` cannot be tested this way at all: everything is a loop device over
+tmpfs, so `rotational` says nothing about the format. The script says so in its
+own output rather than letting the column look meaningful.
+
+Sizes differ by filesystem because the minimums do — XFS refuses under 300 MB,
+btrfs under about 110, and the FAT family is content with 64.
