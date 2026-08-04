@@ -1324,3 +1324,44 @@ third of `build` and roughly a quarter of the entire scan. `dirs.intern` is
 next: it hashes a parent path per entry, and after the sort those entries are
 in mtime order, so consecutive rows rarely share a directory and a
 last-directory cache would not help.
+
+## 2026-08-04 — building segments in parallel: tried, reverted
+
+The scan profile put 82% of the time in `Index::apply`, and inside it fifteen
+segments built one after another on a single thread while the walk used twenty.
+Segments are independent, so handing each to a background thread looks free.
+
+It is not, and it took two attempts to find out why.
+
+**First attempt: the count moved.** 1,442,476 entries on one run and 1,488,007
+on the next, against 1,401,271 for the serial build. The cause is hard links:
+two paths, one inode, one `EntryId`, so the second sighting must replace the
+first — and `flush` does that by killing the old row in the existing segments.
+A segment still on a builder thread is not in that list, so both rows survived.
+This home directory holds 288,070 hard links, so it was not a rare race.
+
+**Second attempt: correct, and 11% faster.** Collecting every outstanding build
+before the kill fixed the count (1,401,331 on every run). Measured properly —
+two binaries, interleaved, eight rounds, because the same code measured 1,834 ms
+in the morning and 2,918 ms in the afternoon:
+
+| | serial | parallel |
+|---|---|---|
+| mean | 2,719 ms | **2,428 ms** |
+| median | 2,816 ms | 2,409 ms |
+| best | 2,619 ms | 2,294 ms |
+| rounds won | 1 of 8 | **7 of 8** |
+
+**And then the tests failed.** Five integration tests in `whole.rs`: `flush`
+hands the new segment to a thread and writes the manifest immediately after, so
+the manifest does not name it. Some of that 11% was work not done.
+
+Fixing it properly means moving the manifest write out of `flush` and into
+`commit`, which changes `sweep`, `begin_generation` and `fold` as well. For 11%,
+in a measurement whose own noise is ±10%, that is not a trade worth making.
+Reverted.
+
+What the exercise did leave: the hard-link constraint is now written down, and
+the measuring method is. A single number taken at one time of day cannot be
+compared with one taken at another — from here on these decisions are made with
+interleaved A/B runs.
