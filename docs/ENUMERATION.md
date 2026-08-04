@@ -78,7 +78,7 @@ copies are stale by design; extension segments must be skipped.
 | **NTFS via ntfs3** | `$MFT` as a file | **none** | name, parent, size, 4 times, attrs |
 | NTFS on Windows | `$MFT` raw volume | Administrator | same |
 | NTFS on Windows | `FSCTL_ENUM_USN_DATA` | Administrator | names + parents only — no size, no mtime |
-| **btrfs** | `TREE_SEARCH_V2` | **CAP_SYS_ADMIN** | everything, plus `min_transid` deltas |
+| **btrfs** | `TREE_SEARCH_V2` | **CAP_SYS_ADMIN** | everything — but 31× slower than walking; see §7 |
 | **XFS** | `XFS_IOC_BULKSTAT` | **CAP_SYS_ADMIN** | metadata but **no names** |
 | ext4, F2FS | none exists | — | `getdents64` is the floor |
 | exFAT, FAT32 | none possible | — | directory entries *are* the metadata |
@@ -87,7 +87,7 @@ copies are stale by design; extension segments must be skipped.
 | ReFS | none | — | `GetFileInformationByHandleEx` only |
 | **Windows, any fs** | `GetFileInformationByHandleEx` | **none** | name, size, allocation, 4 times |
 
-### btrfs deserves a paragraph because it is the best design here and unusable
+### btrfs deserves a paragraph: the best design here, and not a scanner
 
 `TREE_SEARCH_V2` returns names, full metadata including birth time, parent
 links, *and* a `min_transid` cursor that prunes at node-pointer granularity
@@ -308,21 +308,48 @@ Two things the closed input does not cover, both about the output:
   segments are exactly that shape — but it means two directories, two
   manifests, two locks.
 
-### Unmeasured, and blocking
-
-`TREE_SEARCH_V2`'s speed is **not yet measured** — the probe that settled the
-privilege question does not time anything. Two numbers decide whether the btrfs
-half of this is worth writing:
+### Measured: it is not a faster scanner, it is a journal
 
 ```bash
 sudo /tmp/fsbulk/btrfs_bulk /home/hasan
 ```
 
-1. **Full tree time**, against 345 ms warm and 1,032 ms cold for a parallel
-   `getdents64` walk of the same subvolume. If it does not clearly beat that,
-   there is no speed argument on btrfs.
-2. **`min_transid` delta time.** This is the one that matters more. A cursor
-   that returns only what changed since a given generation, pruning unread
-   subtrees, is the USN journal's equivalent — and it turns "full rescan on
-   every daemon start" into nothing. That, not first-scan speed, is what
-   Everything's journal actually buys.
+| | time | items |
+|---|---|---|
+| **full tree** | **10,883 ms** | 11,113,801 items · 1,564,692 inodes · 1.35 GB read |
+| `getdents64`, 20 threads, same subvolume | **345 ms** | — |
+| **delta, `transid >= 7552`** (latest) | **0.3 ms** | 667 |
+| delta, `transid >= 7502` (50 generations back) | 32.6 ms | 444,303 |
+| delta, `transid >= 7452` (100 back) | 33.9 ms | 451,756 |
+
+**As a scanner it is 31× slower than walking the tree.** That was not the
+expectation and it is worth understanding: the metadata tree holds about
+**seven items per inode** — extents, xattrs, directory indices — so reading it
+whole means reading 1.35 GB to find 1.5 M files. `getdents64` reads only the
+directory entries. Filtering by key type would cut the *transfer* but not the
+traversal; the leaves still have to be read. There is no first-scan argument
+for `TREE_SEARCH_V2` on btrfs, and this survey expected there to be one.
+
+**As a journal it is extraordinary.** "What changed since the last commit"
+answers in **0.3 ms**, against 10,883 ms for the full tree — four orders of
+magnitude — and it stays cheap far back: a hundred generations of history costs
+34 ms. This is exactly what `min_transid` promises, pruning at node-pointer
+granularity without reading skipped subtrees, and it is what Everything's USN
+journal actually buys. Not a fast first scan: **never needing another one.**
+
+So the btrfs half of the privileged scanner inverts. It should not do the
+scanning:
+
+* **First scan** — the unprivileged daemon, `getdents64`, 345 ms, no service
+  involved.
+* **Every start after that, and every check while running** — the privileged
+  service asks `min_transid` and writes only what moved. 0.3 ms where there is
+  now a full rescan.
+
+That also makes it a much smaller thing to build than a scanner, and it is the
+first justification `Caps::JOURNAL` has ever had on Linux.
+
+One number worth keeping for its own sake: the `INODE_REF` items carry the name
+and the parent together — 1,743,173 of them against 1,564,692 inodes, the
+difference being hard links. That pairing is what ext4 and XFS cannot give from
+their inode tables, and it is why btrfs is the only real MFT equivalent here.
