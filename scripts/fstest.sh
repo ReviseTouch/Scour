@@ -28,10 +28,15 @@ EXAMPLE="$ROOT/target/release/examples/fstraits"
 # Minimum sizes, in MiB. XFS refuses under 300 MB and btrfs under ~110; the
 # FAT family and ext4 are happy in a tenth of that. Using one size for all of
 # them would mean either wasting a gigabyte of RAM or skipping half the list.
-declare -A SIZE=( [vfat]=64 [exfat]=64 [ext4]=64 [ext2]=64 [xfs]=320 [btrfs]=128 [f2fs]=128 )
+declare -A SIZE=( [fat16]=64 [fat32]=64 [exfat]=64 [ext4]=64 [ext2]=64 [xfs]=320 [btrfs]=128 [f2fs]=128 )
+# The command, where it is not simply `mkfs.<name>`. FAT is the reason this
+# map exists: `mkfs.vfat` on a 64 MB image produces **FAT16**, not FAT32 — the
+# first version of this script tested FAT16 and labelled it vfat. FAT32 needs
+# `-F 32` and, measured here, works from 33 MB up.
+declare -A MKFS=( [fat16]="mkfs.vfat -F 16" [fat32]="mkfs.vfat -F 32" )
 # Mount options that make a filesystem usable by the invoking user rather than
 # only by root, where the filesystem supports the idea at all.
-declare -A OPTS=( [vfat]="uid=SUDO_UID,gid=SUDO_GID" [exfat]="uid=SUDO_UID,gid=SUDO_GID" )
+declare -A OPTS=( [fat16]="uid=SUDO_UID,gid=SUDO_GID" [fat32]="uid=SUDO_UID,gid=SUDO_GID" [exfat]="uid=SUDO_UID,gid=SUDO_GID" )
 
 cleanup() {
     for m in "$WORK"/mnt-*; do
@@ -51,7 +56,7 @@ if [ ! -x "$EXAMPLE" ]; then
 fi
 
 WANT=("$@")
-[ ${#WANT[@]} -eq 0 ] && WANT=(vfat exfat ext4 xfs btrfs f2fs)
+[ ${#WANT[@]} -eq 0 ] && WANT=(fat16 fat32 exfat ext4 xfs btrfs f2fs)
 mkdir -p "$WORK"
 
 # A small tree with the awkward cases in it: a name that only differs by case,
@@ -74,15 +79,15 @@ echo
 printf '%-8s %-10s %-9s %-8s %-14s %-8s %s\n' \
     FS SIZE STABLE_IDS CASE MEDIUM THREADS "reality"
 for fs in "${WANT[@]}"; do
-    mk="mkfs.$fs"
-    command -v "$mk" >/dev/null || { printf '%-8s %s\n' "$fs" "no $mk on this machine"; continue; }
+    mk="${MKFS[$fs]:-mkfs.$fs}"
+    command -v "${mk%% *}" >/dev/null || { printf '%-8s %s\n' "$fs" "no ${mk%% *} on this machine"; continue; }
 
     mb="${SIZE[$fs]:-128}"
     img="$WORK/$fs.img"
     mnt="$WORK/mnt-$fs"
     mkdir -p "$mnt"
     truncate -s "${mb}M" "$img"
-    if ! "$mk" "$img" >/dev/null 2>&1; then
+    if ! $mk "$img" >/dev/null 2>&1; then
         printf '%-8s %s\n' "$fs" "mkfs failed at ${mb}M"
         continue
     fi
@@ -97,6 +102,7 @@ for fs in "${WANT[@]}"; do
         chown -R "${SUDO_UID:-0}:${SUDO_GID:-0}" "$mnt"
     fi
 
+    real=$(file -b "$img" | grep -oE 'FAT \([0-9]+ bit\)|exFAT|ext[234]|XFS|BTRFS|F2FS' | head -1)
     populate "$mnt"
     # How many *entries* the directory actually holds, not how many names
     # resolve. On a case-insensitive filesystem `readme.md` finds `README.md`,
@@ -113,5 +119,5 @@ for fs in "${WANT[@]}"; do
     printf '%-8s %-10s %-9s %-8s %-14s %-8s %s\n' \
         "$fs" "${mb}M" \
         "${ids#*=}" "${case#*=}" "${medium#*=}" "${threads#*=}" \
-        "links=$links readme=$both"
+        "links=$links readme=$both ${real:+is=$real}"
 done
