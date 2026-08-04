@@ -2410,3 +2410,40 @@ The contention tail. `rapor`'s worst is still seconds while its p99 is tens of
 milliseconds, and the holder is `flush`: it builds and writes a segment for the
 staged rows with the write lock held. `fold` was fixed the same way in the
 previous commit and `flush` was named there as the next one.
+
+## 2026-08-04 — key to pixels, which is the only latency anyone feels
+
+Every number before this one was measured inside the service. This is the one
+the hands see: from the keystroke to the row appearing. Measured by having the
+window type into itself a character at a time, because nothing outside it can
+see both ends.
+
+| | key → pixels, typical |
+|---|---|
+| 180 ms debounce, 200 rows | 31 ms |
+| 25 ms debounce, 200 rows | 9–14 ms |
+| **no debounce, 60 rows** | **3.2 ms** (median of 144, worst 99) |
+
+Two things were mine and both had stopped being true.
+
+**The debounce.** 180 ms was right when a query cost 90 and eight were in
+flight at once; at 2 ms a query costs less than the wait does, so waiting to
+avoid one spends more than it saves. Key to pixels was 31 ms and **25 of them
+were the timer**. Removed — the generation guard drops a stale reply whether or
+not a timer ran, which is what makes it safe.
+
+**Two hundred rows a keystroke.** The screen holds twenty. Each row costs a
+path rebuilt in the engine and six strings allocated in the window, for rows
+nobody scrolls to before typing the next letter. Sixty is three screens.
+
+### Start-up
+
+| | |
+|---|---|
+| window built | ~110 ms |
+| first search sent | ~120 ms |
+| first rows on screen | **204–248 ms** |
+
+The 110 ms is Slint creating a window and there is nothing here to shave off
+it. One sample of three took 1.8 s, which was the service being busy rather
+than the window being slow.

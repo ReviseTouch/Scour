@@ -48,6 +48,10 @@ mod ui {
 pub use ui::{Facet, MainWindow, Row, Theme};
 
 thread_local! {
+    /// When the process started, until the first rows are drawn.
+    static FIRST: std::cell::Cell<Option<std::time::Instant>> = const {
+        std::cell::Cell::new(None)
+    };
     /// Where an answer goes once it is back on the UI thread.
     ///
     /// A thread-local rather than a field, because the closure that crosses
@@ -97,20 +101,41 @@ fn t(cat: &Catalogue, msgid: &str) -> slint::SharedString {
 /// trace showed all eight going out and all eight coming back, seven of them
 /// to be thrown away *after* being paid for.
 ///
-/// A hundred and eighty is above a fast typist's gap and below what reads as
-/// waiting. What makes it safe to be this long is that the first keystroke's
-/// search still goes out at once — only a *burst* is collapsed.
-const DEBOUNCE_MS: u64 = 180;
+/// A hundred and eighty was right when a search cost ninety milliseconds and
+/// eight of them were in flight at once. It is wrong now that one costs two:
+/// **the wait became the whole of the latency.** A keystroke that could be
+/// answered in 2 ms was being answered in 182, and the 180 was mine.
+///
+/// Then twenty-five, and then measured again: key to pixels was 31 ms and
+/// **25 of them were this**. So it is zero, and the debounce is gone.
+///
+/// What a debounce buys is fewer wasted queries, and what it costs is every
+/// keystroke's latency. That was the right trade at ninety milliseconds a
+/// query and is a bad one at two: a search now costs less than the wait did,
+/// so waiting to avoid it is spending more than it saves. The generation guard
+/// is what makes it safe — a stale reply is dropped whether or not a timer
+/// existed.
+const DEBOUNCE_MS: u64 = 0;
 
 /// How many rows are fetched at a time.
 ///
-/// The addressable window is ten thousand rows — past that a deep page costs
-/// more than a frame, measured — but the screen holds twenty and nobody scrolls
-/// two hundred by hand. Paging beyond this is Phase 5.3.
-const PAGE: u32 = 200;
+/// The screen holds about twenty. Two hundred was the first number here and
+/// every one of them costs a path rebuilt in the engine and six strings
+/// allocated in the window, on every keystroke, for rows nobody scrolls to
+/// before typing the next letter.
+///
+/// Sixty is three screens of scrolling with the mouse already moving, which is
+/// as far as anyone gets before the list has been replaced anyway. Paging past
+/// it is Phase 5.3.
+const PAGE: u32 = 60;
 
 struct State {
     generation: u64,
+    /// When the keystroke behind the request in flight was typed.
+    ///
+    /// The only latency that matters is this one — engine time is a fraction
+    /// of it and was, for a while, the only part being measured.
+    typed_at: Option<std::time::Instant>,
     /// The generation whose search reply is currently on screen.
     shown: u64,
     query: String,
@@ -123,11 +148,17 @@ struct State {
 }
 
 fn main() -> Result<()> {
+    // From the process starting to the first row on screen. The one number a
+    // person sees before they have typed anything, and the only one the
+    // window's own start-up appears in.
+    let launched = std::time::Instant::now();
     let cat = Rc::new(Catalogue::for_language(&language()));
     let window = MainWindow::new().context("the window could not be created")?;
+    trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
         generation: 0,
+        typed_at: None,
         shown: 0,
         query: String::new(),
         sort: "relevance".into(),
@@ -192,14 +223,20 @@ fn main() -> Result<()> {
                 let mut s = state.borrow_mut();
                 s.query = text.to_string();
                 s.generation += 1;
+                s.typed_at = Some(std::time::Instant::now());
                 s.generation
             };
             if let Some(w) = weak.upgrade() {
                 w.set_busy(true);
             }
-            // Debounced by generation rather than by cancelling a timer: when
-            // the timer fires, it asks the state what the latest keystroke was
-            // and gives up if it is no longer the one that scheduled it.
+            // Straight out, no timer. At `DEBOUNCE_MS` of zero the wait is
+            // the only thing a timer would add, and a stale reply is dropped
+            // by generation whether or not one ran.
+            if DEBOUNCE_MS == 0 {
+                trace(&format!("dispatch {generation}"));
+                dispatch(&state, &link);
+                return;
+            }
             let state = state.clone();
             let link = link.clone();
             let weak = weak.clone();
@@ -319,18 +356,45 @@ fn main() -> Result<()> {
     // going in and nothing coming out — into the half above the callback and
     // the half below it.
     if let Ok(q) = std::env::var("SCOUR_SELFTEST") {
+        // Types the word one character at a time, on the clock, the way a
+        // person does — because the number that matters is key to pixels and
+        // nothing measurable from outside the window can see it.
         let weak = window.as_weak();
-        slint::Timer::single_shot(std::time::Duration::from_millis(1_500), move || {
-            if let Some(w) = weak.upgrade() {
-                trace(&format!("selftest: raising query-changed({q:?})"));
-                w.invoke_query_changed(q.clone().into());
-            }
-        });
+        let chars: Vec<String> = q
+            .char_indices()
+            .map(|(i, c)| q[..i + c.len_utf8()].to_owned())
+            .collect();
+        let step = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let timer = std::rc::Rc::new(slint::Timer::default());
+        let held = timer.clone();
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(150),
+            move || {
+                let i = step.get();
+                let Some(w) = weak.upgrade() else { return };
+                match chars.get(i) {
+                    Some(prefix) => {
+                        w.set_query(prefix.clone().into());
+                        w.invoke_query_changed(prefix.clone().into());
+                        step.set(i + 1);
+                    }
+                    None => {
+                        let _ = &held;
+                        step.set(0);
+                    }
+                }
+            },
+        );
+        // Kept alive for the life of the window; a dropped `Timer` stops.
+        std::mem::forget(timer);
     }
 
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
+    trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(&state, &link);
+    FIRST.with(|f| f.set(Some(launched)));
     window.run().context("the event loop failed")?;
     Ok(())
 }
@@ -462,8 +526,22 @@ fn apply(
                 .iter()
                 .map(|h| rows::row_of(h, &terms, now, cat))
                 .collect();
-            trace(&format!("drawing {} rows", fresh.len()));
+            let n = fresh.len();
             rows.set_vec(fresh);
+            if let Some(t) = FIRST.with(std::cell::Cell::take) {
+                trace(&format!(
+                    "first rows on screen {:.1?} after launch",
+                    t.elapsed()
+                ));
+            }
+            trace(&format!(
+                "drew {n} rows {:.1} ms after the key",
+                state
+                    .borrow()
+                    .typed_at
+                    .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0)
+            ));
             {
                 let mut s = state.borrow_mut();
                 s.shown = generation;
@@ -676,6 +754,7 @@ mod tests {
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             generation: 0,
+            typed_at: None,
             shown: 0,
             query: "rapor".into(),
             sort: "relevance".into(),
