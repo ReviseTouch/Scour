@@ -298,6 +298,14 @@ impl Engine {
         )
     }
 
+    /// What a subtree weighs.
+    ///
+    /// Straight through to the index: this is an aggregation over a layout,
+    /// and the engine has nothing to add to it but the request.
+    pub fn usage(&self, req: &scour_core::UsageRequest) -> Result<scour_core::UsageResponse> {
+        self.shared.index.usage(req)
+    }
+
     pub fn stats(&self) -> Result<IndexStats> {
         self.shared.index.stats()
     }

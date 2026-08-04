@@ -66,6 +66,7 @@ mod names;
 mod search;
 mod segment;
 mod trigram;
+mod usage;
 pub(crate) mod varint;
 
 pub use build::{SegmentBytes, build, build_sorted};

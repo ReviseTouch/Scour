@@ -44,6 +44,7 @@ use crate::lock::DirLock;
 use crate::names::Folded;
 use crate::search::{Plan, Segment, Wanted, run_with, sort_hits};
 use crate::segment::Live;
+use crate::usage::Rollup;
 
 /// How many entries may wait in memory before a segment is written.
 ///
@@ -832,6 +833,20 @@ impl Index for NativeIndex {
             capped: seen >= FACET_SCAN_CAP,
             took_us: started.elapsed().as_micros() as u64,
         })
+    }
+
+    fn usage(&self, req: &scour_core::UsageRequest) -> Result<scour_core::UsageResponse> {
+        let started = Instant::now();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let inner = self.inner.read();
+        let mut rollup = Rollup::new(req, now);
+        for live in &inner.segments {
+            rollup.add_segment(&live.view()?);
+        }
+        rollup.finish(started)
     }
 
     fn stats(&self) -> Result<IndexStats> {

@@ -3,8 +3,8 @@
 use std::fmt::Debug;
 
 use crate::types::{
-    ApplyReport, Change, FacetRequest, FacetResponse, IndexStats, MaintReport, Maintenance, Result,
-    SearchRequest, SearchResponse,
+    ApplyReport, Change, Error, FacetRequest, FacetResponse, IndexStats, MaintReport, Maintenance,
+    Result, SearchRequest, SearchResponse, UsageRequest, UsageResponse,
 };
 
 /// An index over entries.
@@ -58,4 +58,17 @@ pub trait Index: Send + Sync + Debug {
     fn stats(&self) -> Result<IndexStats>;
 
     fn maintain(&self, level: Maintenance) -> Result<MaintReport>;
+
+    /// What a subtree weighs, and what is inside it.
+    ///
+    /// Defaulted, and the default is a refusal rather than a walk: this is an
+    /// aggregation over a layout, not a query, and an index whose layout does
+    /// not support it should say so instead of quietly taking a minute to
+    /// answer what another one answers in milliseconds. [`Caps`] is how a
+    /// caller finds out before asking.
+    ///
+    /// [`Caps`]: crate::types::Caps
+    fn usage(&self, _req: &UsageRequest) -> Result<UsageResponse> {
+        Err(Error::unsupported("disk usage"))
+    }
 }

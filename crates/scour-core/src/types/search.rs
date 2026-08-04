@@ -299,3 +299,59 @@ mod tests {
         assert_eq!(h.name(), "c.txt");
     }
 }
+
+/// How old the bytes in a directory are.
+///
+/// Six bands: today, this week, this month, six months, this year, older. The
+/// thing no disk-usage tool shows and the one that decides what to delete —
+/// twenty-five gigabytes matters less than twenty-five gigabytes nothing has
+/// touched in a year.
+pub const AGE_BANDS: usize = 6;
+
+/// What one directory weighs, including everything below it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DirUsage {
+    pub path: String,
+    /// Logical size, in bytes.
+    pub bytes: u64,
+    /// Space actually allocated. Smaller for a sparse file, larger for a tiny
+    /// one. Reported beside `bytes` rather than instead of it, because showing
+    /// the logical size and calling it disk usage is the standard lie.
+    pub disk: u64,
+    pub files: u64,
+    /// `bytes` split by [`AGE_BANDS`].
+    pub age: [u64; AGE_BANDS],
+}
+
+/// What a subtree weighs.
+///
+/// **A hard-linked file is counted once**, the way `du` counts it and `du -l`
+/// does not — and that is not a choice made here, it is what the index holds.
+/// A source with stable identities gives every name of one inode the same
+/// [`EntryId`], so the index has one row for it however many names it has.
+/// 489,373 files on the corpus this was measured against have more than one.
+///
+/// The corollary is worth knowing: those bytes are attributed to *one* of the
+/// directories the file appears in, whichever name was written last. `du` is
+/// arbitrary here too — it credits whichever it reaches first — but the two
+/// can disagree about where the weight sits while agreeing about the total.
+///
+/// [`EntryId`]: crate::types::EntryId
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageRequest {
+    /// The subtree to weigh. Empty means every root the index holds.
+    pub path: String,
+    /// How many children to name.
+    pub top: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UsageResponse {
+    /// The scope itself.
+    pub root: DirUsage,
+    /// Its immediate children, heaviest first, at most `top` of them.
+    pub children: Vec<DirUsage>,
+    /// How many children there were before the list was cut.
+    pub child_count: u32,
+    pub took_us: u64,
+}

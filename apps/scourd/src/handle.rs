@@ -42,6 +42,9 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
             root: engine.tree(&path, depth, limit)?,
         },
         Request::Stat { path } => Response::Stat(engine.stat(&path)?),
+        Request::Usage { path, top } => {
+            Response::Usage(engine.usage(&scour_core::UsageRequest { path, top })?)
+        }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);
             Response::Explain {

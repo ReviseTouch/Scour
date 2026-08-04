@@ -181,3 +181,13 @@ msgstr "Önce `scourd` başlatın — MCP sunucusu, bunun gibi, onun istemcisidi
 
 msgid "counts are a lower bound: the scan hit its cap"
 msgstr "sayılar alt sınırdır: tarama üst sınırına ulaştı"
+
+# --- the disk-usage report ---
+msgid "files"
+msgstr "dosya"
+
+msgid "folders, largest first"
+msgstr "klasör, en büyükten"
+
+msgid "a hard-linked file is counted once, like du"
+msgstr "sabit bağlı dosya bir kez sayılır, du gibi"

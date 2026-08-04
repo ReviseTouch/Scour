@@ -23,9 +23,9 @@ pub mod types;
 pub use text::{Catalog, DefaultFolder, Folder};
 pub use traits::{ChangeSink, ContentSink, EntrySink, Extractor, Flow, Index, Source, WatchHandle};
 pub use types::{
-    ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, Entry, EntryId, Error, Facet,
-    FacetBy, FacetRequest, FacetResponse, Group, Hit, IndexStats, Key, Kind, MaintReport,
-    Maintenance, Match, Meta, Page, Result, Role, ScanOptions, ScanReport, SearchRequest,
-    SearchResponse, SortKey, SourceId, SourceInfo, SourceKind, Span, Status, TimeField, TreeNode,
-    ext_of, ext_str, kind_of, mode_string,
+    AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
+    EntryId, Error, Facet, FacetBy, FacetRequest, FacetResponse, Group, Hit, IndexStats, Key, Kind,
+    MaintReport, Maintenance, Match, Meta, Page, Result, Role, ScanOptions, ScanReport,
+    SearchRequest, SearchResponse, SortKey, SourceId, SourceInfo, SourceKind, Span, Status,
+    TimeField, TreeNode, UsageRequest, UsageResponse, ext_of, ext_str, kind_of, mode_string,
 };

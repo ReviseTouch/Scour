@@ -13,7 +13,7 @@
 
 use scour_core::{
     Completion, Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
-    SearchResponse, SortKey, SourceInfo, Span, Status, TreeNode,
+    SearchResponse, SortKey, SourceInfo, Span, Status, TreeNode, UsageResponse,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +84,17 @@ pub enum Request {
     Stat {
         path: String,
     },
+    /// What a directory weighs, and which of its children weigh the most.
+    ///
+    /// The question every disk-usage tool answers by walking the filesystem,
+    /// which takes minutes. Here it is two passes over data already in memory.
+    Usage {
+        /// Empty means every root the index holds.
+        #[serde(default)]
+        path: String,
+        #[serde(default = "default_usage_top")]
+        top: u32,
+    },
     /// Read a query back — as a sentence, as coloured pieces, and as what
     /// could be typed next. Nothing is run.
     ///
@@ -133,6 +144,9 @@ fn default_cap() -> u32 {
 fn default_tree_limit() -> u32 {
     200
 }
+fn default_usage_top() -> u32 {
+    20
+}
 
 /// Internally tagged, which constrains the shapes allowed here: a variant may
 /// hold a struct (its fields are flattened alongside the tag) or its own named
@@ -154,6 +168,7 @@ pub enum Response {
         root: TreeNode,
     },
     Stat(Entry),
+    Usage(UsageResponse),
     Explain {
         /// The query as it was understood.
         description: String,
@@ -205,6 +220,7 @@ impl Request {
             Request::Facets { .. } => "facets",
             Request::Tree { .. } => "tree",
             Request::Stat { .. } => "stat",
+            Request::Usage { .. } => "usage",
             Request::Explain { .. } => "explain",
             Request::Sources {} => "sources",
             Request::Status {} => "status",

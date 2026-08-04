@@ -280,13 +280,18 @@ with a single-instance guard, because a portal-less global hotkey is not
 something an application can claim under Wayland. Windows and macOS register
 one directly.
 
-## Phase 6 — Disk usage and the report tab
+## Phase 6 — Disk usage and the report tab — **§A done**
 
-`REPORTS.md` §A and §C, in that order, because §C is mostly §A plus facets that
-already exist. `trait Index` gains `usage()` defaulted to `Err(Unsupported)`,
-`scour-index-native` implements the two passes the `rollup` example already
-demonstrates (measured: ~45 ms for a 1.2 M-entry disk), the CLI gains `scour
-du`, and the MCP server gains `scour_disk_usage`.
+**§A is done.** `trait Index::usage()` is defaulted to `Err(Unsupported)`,
+`scour-index-native` implements the two passes, the CLI has `scour du` and the
+MCP server has `scour_disk_usage`. It agrees with `du` byte for byte — both
+apparent size and size on disk — and 163–183 ms for the whole index, 32 ms for
+one project. Four times the 45 ms the single-segment prototype predicted, for a
+reason worth knowing: totals have to be merged by *path* across segments before
+they can be rolled up. Numbers in `MEASUREMENTS.md`.
+
+**§C, the report tab, is what is left here**, and it is mostly assembling §A
+with facets that already exist.
 
 That last one is the strongest argument for the whole phase. *"What is eating
 my disk"* is a question an assistant is asked constantly and currently cannot

@@ -1793,3 +1793,58 @@ None is fixable by adding an extension to a table.
 The classification also moved from six linear scans of up to 300 strings to one
 binary search over 280 entries, which is why a scan that does strictly more
 work did not get slower.
+
+## 2026-08-04 — the disk-usage report, checked against `du`
+
+`REPORTS.md` §A argued that what TreeSize walks a filesystem for is already in
+the index, and predicted ~45 ms for a 1.2 M-entry disk from a single-segment
+prototype. Built, and measured against the tool it replaces.
+
+### It agrees with `du` exactly
+
+`/home/hasan/Projeler/Scour`, immediately after a rescan so that neither side
+is looking at a different tree:
+
+| | Scour | `du` |
+|---|---|---|
+| logical bytes | 16,691,298,419 | 16,691,298,419 (`du -sb --apparent-size`) |
+| bytes on disk | 16,776,974,336 | 16,776,974,336 (`du -sB1`) |
+| files | 34,292 | 43,170 (`find -type f`) |
+
+The two byte totals are exact. **The file count is deliberately different**, and
+checking why is what makes the byte totals believable: 43,170 names under that
+directory resolve to **34,292 distinct inodes**, which is exactly what Scour
+reports. Cargo hard-links inside `target/` heavily.
+
+That falls out of the layout rather than being implemented: a source with
+stable identities gives every name of one inode the same `EntryId`, so the
+index holds one row for it. A `HashSet` of seen identities was written first,
+measured, and **folded exactly zero rows** — there was never a second one to
+fold. It was removed, and so was the `count_links` request field, because an
+option that cannot change the answer is worse than no option at all.
+
+### Cost
+
+| scope | entries | time |
+|---|---|---|
+| whole index | 1,269,401 files | **163–183 ms** |
+| `~/Projeler` | 699,553 files | **91–99 ms** |
+| one project | 34,292 files | **32 ms** |
+
+Four times the predicted 45 ms, and the reason is in the prediction: the
+prototype rolled up **one** segment. A directory has a different number in every
+segment that holds rows in it, so per-segment rollups cannot simply be added —
+each segment's stack closes ancestors the others also close. The own-totals are
+merged by path first, which means reconstructing 166,452 directory paths and
+sorting them.
+
+Still two orders of magnitude under what it replaces, and scoped queries — the
+case a report screen actually issues, because clicking a folder is a new scope —
+are proportional to the subtree.
+
+### The one thing to know about the answer
+
+The bytes of a hard-linked file are credited to **one** of the directories it
+appears in, whichever name was written last. `du` is arbitrary here too — it
+credits whichever it reaches first — so the two can agree on a total and
+disagree about where the weight sits.

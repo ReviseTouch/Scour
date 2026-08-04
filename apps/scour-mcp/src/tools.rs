@@ -72,6 +72,15 @@ pub struct PathArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UsageArgs {
+    /// The folder to weigh. Empty means everything indexed.
+    #[serde(default)]
+    pub path: String,
+    /// How many child folders to name. Default 20.
+    pub top: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FacetArgs {
     /// Restrict the grouping to files matching this. Empty means everything.
     #[serde(default)]
@@ -168,6 +177,20 @@ impl Scour {
     #[tool(description = "Everything known about one path: size, dates, type, permissions.")]
     fn scour_stat(&self, Parameters(a): Parameters<PathArgs>) -> String {
         self.call(Request::Stat { path: a.path })
+    }
+
+    #[tool(
+        description = "What a folder weighs and which of its children weigh the most, with \
+                       how old the bytes are. Answers 'what is eating my disk' in \
+                       milliseconds, over the index — do not walk the filesystem or shell out \
+                       to du for this. Reports logical size and size on disk separately, and \
+                       counts a hard-linked file once."
+    )]
+    fn scour_disk_usage(&self, Parameters(a): Parameters<UsageArgs>) -> String {
+        self.call(Request::Usage {
+            path: a.path,
+            top: a.top.unwrap_or(20).min(200),
+        })
     }
 
     #[tool(

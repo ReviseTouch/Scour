@@ -72,6 +72,35 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        Response::Usage(u) => {
+            let mut out = String::new();
+            let row = |out: &mut String, d: &scour_core::DirUsage| {
+                out.push_str(&format!(
+                    "{:>10}  {:>10}  {:>9}  {}\n",
+                    format_size(d.bytes, BINARY),
+                    format_size(d.disk, BINARY),
+                    d.files,
+                    d.path
+                ));
+            };
+            out.push_str("      size    on disk      files  path\n");
+            row(&mut out, &u.root);
+            for c in &u.children {
+                row(&mut out, c);
+            }
+            if u.child_count as usize > u.children.len() {
+                out.push_str(&format!(
+                    "({} of {} child folders shown, largest first)\n",
+                    u.children.len(),
+                    u.child_count
+                ));
+            }
+            // Said rather than left to be discovered: a total that folds
+            // hard links while the shell's does not is how a report ends up
+            // disagreeing with `du -l` for no visible reason.
+            out.push_str("(a hard-linked file is counted once, as du counts it)\n");
+            out
+        }
         Response::Tree { root } => {
             let mut out = String::new();
             tree(root, 0, &mut out);

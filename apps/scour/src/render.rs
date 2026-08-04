@@ -104,6 +104,40 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{}", t("counts are a lower bound: the scan hit its cap"));
             }
         }
+        Response::Usage(u) => {
+            println!(
+                "{:>10}  {:>10}  {:>9}  {}",
+                t("size"),
+                t("on disk"),
+                t("files"),
+                u.root.path
+            );
+            let row = |d: &scour_core::DirUsage| {
+                println!(
+                    "{:>10}  {:>10}  {:>9}  {}  {}",
+                    format_size(d.bytes, BINARY),
+                    format_size(d.disk, BINARY),
+                    d.files,
+                    ages(d),
+                    d.path
+                );
+            };
+            row(&u.root);
+            for c in &u.children {
+                row(c);
+            }
+            if u.child_count as usize > u.children.len() {
+                println!(
+                    "{} / {} {}",
+                    u.children.len(),
+                    u.child_count,
+                    t("folders, largest first")
+                );
+            }
+            // Said rather than left to be found out: a total that disagrees
+            // with `du -l` for a reason nobody stated reads as a bug.
+            println!("{}", t("a hard-linked file is counted once, like du"));
+        }
         Response::Tree { root } => print_tree(root, ""),
         Response::Stat(e) => {
             println!("{}{}", label("path"), e.path);
@@ -259,6 +293,28 @@ fn print_tree(node: &TreeNode, prefix: &str) {
 /// vocabulary and every frontend has to name them the same way, or a filter
 /// called "Belge" in one place and "Document" in another is the same filter
 /// with two names.
+/// The age of a directory's bytes, as one compact bar.
+///
+/// Six bands — today, this week, this month, six months, this year, older —
+/// drawn as a share of the total rather than as numbers, because the question
+/// it answers is comparative: twenty-five gigabytes matters less than
+/// twenty-five gigabytes nothing has touched in a year.
+fn ages(d: &scour_core::DirUsage) -> String {
+    const BLOCKS: [char; 5] = ['\u{2581}', '\u{2583}', '\u{2585}', '\u{2587}', '\u{2588}'];
+    let total = d.bytes.max(1);
+    d.age
+        .iter()
+        .map(|b| {
+            if *b == 0 {
+                ' '
+            } else {
+                let share = (*b as f64 / total as f64 * BLOCKS.len() as f64).ceil() as usize;
+                BLOCKS[share.clamp(1, BLOCKS.len()) - 1]
+            }
+        })
+        .collect()
+}
+
 fn kind_tag(k: Kind) -> String {
     t(k.msgid())
 }

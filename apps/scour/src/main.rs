@@ -76,6 +76,14 @@ enum Command {
     },
     /// Everything known about one path.
     Stat { path: String },
+    /// What a folder weighs, and which of its children weigh the most.
+    Du {
+        /// Empty for everything indexed.
+        #[arg(default_value = "")]
+        path: String,
+        #[arg(long, short = 'n', default_value_t = 20)]
+        top: u32,
+    },
     /// Read a query back without running it.
     Explain { query: Vec<String> },
     /// The query language reference.
@@ -233,6 +241,10 @@ fn build(args: &Args) -> Result<Request> {
             limit: *limit,
         },
         Some(Command::Stat { path }) => Request::Stat { path: path.clone() },
+        Some(Command::Du { path, top }) => Request::Usage {
+            path: path.clone(),
+            top: *top,
+        },
         Some(Command::Explain { query }) => Request::Explain {
             query: join(query),
             // A command line has no caret, so there is nothing to complete.

@@ -84,6 +84,7 @@ carries the `id` of the call it answers. Requests:
 | `facets` | | `query`, `by`: `kind` / `ext{top}` / `dir{path,top}` |
 | `tree` | | `path`, `depth`, `limit` — bounded *per level* |
 | `stat` | | `path`; answered from the source, so a new file is never missing |
+| `usage` | | `path` (empty for everything), `top` → what a subtree weighs, its heaviest children, and the age of its bytes. Matches `du` byte for byte — including that a hard-linked file is counted once |
 | `explain` | | `query`, optional `cursor` → the sentence, the coloured `spans`, and `completions` at the caret — without running it |
 | `sources` | | what is indexed, and each source's `Caps` |
 | `status` | | numbers and flags only, never a sentence |
@@ -110,6 +111,7 @@ scour <query>                        search (the default)
 scour search <q> --sort --limit --offset --ascending
 scour count <q>                      scour facets <q> --by kind|ext|<dir>
 scour tree <path> --depth --limit    scour stat <path>
+scour du [path] --top
 scour explain <q>                    scour syntax
 scour sources                        scour status
 scour rescan [path]                  scour maintain flush|compact|rebuild
@@ -122,8 +124,9 @@ because both are what you reach for when the service is what is not working.
 
 ### MCP — `scour-mcp`
 
-Eight tools, all read-only: `scour_search`, `scour_count`, `scour_facets`,
-`scour_tree`, `scour_stat`, `scour_explain`, `scour_syntax`, `scour_sources`.
+Nine tools, all read-only: `scour_search`, `scour_count`, `scour_facets`,
+`scour_tree`, `scour_stat`, `scour_disk_usage`, `scour_explain`, `scour_syntax`,
+`scour_sources`.
 
 Two rules that are not negotiable:
 
