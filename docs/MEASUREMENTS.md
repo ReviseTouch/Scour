@@ -1461,3 +1461,41 @@ own output rather than letting the column look meaningful.
 
 Sizes differ by filesystem because the minimums do — XFS refuses under 300 MB,
 btrfs under about 110, and the FAT family is content with 64.
+
+## 2026-08-04 — Windows and macOS, written and cross-checked
+
+`fs.rs` answered `Unknown` on both, so every mount there got the conservative
+defaults regardless of what it was. Both are now implemented, and while neither
+can be *run* here, all three targets type-check:
+
+```bash
+cargo check --target x86_64-pc-windows-msvc --workspace   # clean
+cargo check --target x86_64-apple-darwin --workspace      # clean
+cargo check --target aarch64-apple-darwin --workspace     # clean
+```
+
+**Windows.** `GetVolumePathNameW` maps a path to its volume, then
+`GetVolumeInformationW` gives the filesystem name and the flags, and
+`GetDriveTypeW` separates a network drive from a local one. Two things this
+settles: `FILE_CASE_SENSITIVE_SEARCH` is **off by default even on NTFS**, which
+is the opposite of the same disk under Linux's ntfs3 — so case sensitivity
+belongs to the mount and not to the format, twice over. And stable ids are
+`NTFS | ReFS`, because the FAT family has no file id at all.
+
+Not done: telling NVMe from SATA needs `IOCTL_STORAGE_QUERY_PROPERTY`, and
+telling a spinning disk from an SSD needs `DEVICE_SEEK_PENALTY_DESCRIPTOR`.
+Both open a raw volume handle, which costs something on every call and is
+privileged on some systems. Left until there is a Windows machine to measure on.
+
+**macOS.** `statfs` gives `f_fstypename` as a string — easier than Linux's
+magic numbers — and `MNT_LOCAL` catches anything reached over a network
+whatever it calls itself. APFS and HFS+ are reported as **case-insensitive**,
+because they ship that way and can be formatted either way with nothing in
+`statfs` to tell them apart: claiming sensitivity that is not there would let
+two spellings of one file both be indexed. APFS is assumed solid-state, which
+is true of every Mac since 2016 and wrong for an external HFS+ spinning disk;
+IOKit is where the real answer lives.
+
+The Win32 constants (`DRIVE_REMOTE`, `FILE_CASE_SENSITIVE_SEARCH`) are written
+out rather than imported: `windows-sys` moves them between modules across
+versions, and these have not changed since Windows 95.

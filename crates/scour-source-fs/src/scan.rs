@@ -346,6 +346,10 @@ pub(crate) fn entry_of(
     is_dir: bool,
     stable_ids: bool,
 ) -> Entry {
+    // On Windows the identity is always the path: the file id there needs the
+    // file to be opened, which is the syscall a bulk scan exists to avoid.
+    #[cfg(not(unix))]
+    let _ = stable_ids;
     let id = match md {
         // `stable_ids` is the filesystem's answer, not the platform's. On FAT
         // and exFAT `st_ino` is invented by the driver and can change across a

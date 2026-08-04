@@ -151,14 +151,13 @@ const _: () = assert!(!FsTraits::UNKNOWN.stable_ids);
 /// hardware queues does that device have.
 pub fn medium_of(path: &Path) -> Medium {
     #[cfg(target_os = "linux")]
-    {
-        linux::medium_of(path)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = path;
-        Medium::Unknown
-    }
+    return linux::medium_of(path);
+    #[cfg(windows)]
+    return windows_impl::medium_of(path);
+    #[cfg(target_os = "macos")]
+    return macos::medium_of(path);
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+    return fallback::medium_of(path);
 }
 
 /// What the filesystem under `path` promises.
@@ -170,13 +169,13 @@ pub fn medium_of(path: &Path) -> Medium {
 /// case and taking the narrower promise for all of it is safe.
 pub fn traits_of(path: &Path) -> FsTraits {
     #[cfg(target_os = "linux")]
-    {
-        linux::traits_of(path)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        other::traits_of(path)
-    }
+    return linux::traits_of(path);
+    #[cfg(windows)]
+    return windows_impl::traits_of(path);
+    #[cfg(target_os = "macos")]
+    return macos::traits_of(path);
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+    return fallback::traits_of(path);
 }
 
 #[cfg(target_os = "linux")]
@@ -304,19 +303,185 @@ mod linux {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-mod other {
-    use super::FsTraits;
+#[cfg(windows)]
+mod windows_impl {
+    use super::{FsTraits, Medium};
+    use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
 
-    /// Everywhere else, for now, the conservative answer.
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetDriveTypeW, GetVolumeInformationW, GetVolumePathNameW,
+    };
+
+    // Win32's own values, written out rather than imported: `windows-sys`
+    // moves them between modules across versions, and these have not changed
+    // since Windows 95 and will not.
+    const DRIVE_REMOVABLE: u32 = 2;
+    const DRIVE_FIXED: u32 = 3;
+    const DRIVE_REMOTE: u32 = 4;
+    const FILE_CASE_SENSITIVE_SEARCH: u32 = 0x0000_0001;
+
+    /// The volume root a path lives on: `C:\` for `C:\Users\x`.
     ///
-    /// Windows can do better — `GetVolumeInformationW` reports the filesystem
-    /// name and `FILE_CASE_SENSITIVE_SEARCH` — and macOS's `statfs` carries
-    /// `f_fstypename`. Neither is written yet, and claiming a promise that has
-    /// not been checked is what this module exists to stop.
+    /// Everything Windows can say about a filesystem is keyed to the volume,
+    /// not to the path, and `GetVolumePathNameW` is the supported way to get
+    /// from one to the other — including for a path on a mounted volume with
+    /// no drive letter of its own.
+    fn volume_root(path: &Path) -> Option<Vec<u16>> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut root = vec![0u16; 260];
+        // SAFETY: both buffers are valid for the lengths passed, and the input
+        // is NUL-terminated.
+        let ok = unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
+        (ok != 0).then_some(root)
+    }
+
+    pub fn traits_of(path: &Path) -> FsTraits {
+        let Some(root) = volume_root(path) else {
+            return FsTraits::UNKNOWN;
+        };
+        let mut name = [0u16; 64];
+        let mut flags: u32 = 0;
+        // SAFETY: null is accepted for every output not wanted; the two
+        // buffers passed are valid for the lengths given.
+        let ok = unsafe {
+            GetVolumeInformationW(
+                root.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut flags,
+                name.as_mut_ptr(),
+                name.len() as u32,
+            )
+        };
+        if ok == 0 {
+            return FsTraits::UNKNOWN;
+        }
+        let fs = String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)]);
+
+        // Windows reports case sensitivity per volume, and it is off by
+        // default even on NTFS — the opposite of the same disk under Linux's
+        // ntfs3, which is where this ceased to be a property of the format.
+        let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
+
+        // NTFS and ReFS carry a file id that survives a rename; the FAT family
+        // does not have one at all. `GetFileInformationByHandle` would confirm
+        // it per file, at the cost of opening every file — which is the thing
+        // a bulk scan exists to avoid.
+        let stable_ids = matches!(fs.as_str(), "NTFS" | "ReFS");
+        FsTraits {
+            stable_ids,
+            case_sensitive,
+        }
+    }
+
+    pub fn medium_of(path: &Path) -> Medium {
+        let Some(root) = volume_root(path) else {
+            return Medium::Unknown;
+        };
+        // SAFETY: `root` is a NUL-terminated wide string from Windows itself.
+        match unsafe { GetDriveTypeW(root.as_ptr()) } {
+            DRIVE_REMOTE => Medium::Network,
+            // A removable volume is usually flash, and treating it as solid
+            // costs nothing if it is not: the alternative reading is "spinning",
+            // and a removable spinning disk is rare enough that assuming it
+            // would slow down every USB stick.
+            DRIVE_REMOVABLE | DRIVE_FIXED => Medium::Solid,
+            _ => Medium::Unknown,
+        }
+        // Telling NVMe from SATA needs `IOCTL_STORAGE_QUERY_PROPERTY` with
+        // `StorageAdapterProperty`, and telling a spinning disk from an SSD
+        // needs `DEVICE_SEEK_PENALTY_DESCRIPTOR`. Both open the raw volume
+        // handle, which is a privileged operation on some systems and a
+        // measurable cost on all of them — and neither can be tested from
+        // here. Left until there is a Windows machine to measure on.
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{FsTraits, Medium};
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    /// `statfs`'s own name for the filesystem: "apfs", "hfs", "exfat",
+    /// "msdos", "nfs", "smbfs", "webdav".
+    ///
+    /// A string rather than a magic number, which is the one place macOS is
+    /// easier than Linux here.
+    fn fstype(path: &Path) -> Option<(String, u32)> {
+        let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: a zeroed `statfs` is valid to write into and the path is a
+        // NUL-terminated C string that outlives the call.
+        let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut buf) } != 0 {
+            return None;
+        }
+        let name: Vec<u8> = buf
+            .f_fstypename
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        Some((String::from_utf8_lossy(&name).into_owned(), buf.f_flags))
+    }
+
+    pub fn traits_of(path: &Path) -> FsTraits {
+        let Some((fs, _)) = fstype(path) else {
+            return FsTraits::UNKNOWN;
+        };
+        match fs.as_str() {
+            // APFS and HFS+ are case-insensitive as shipped and can be
+            // formatted case-sensitive, and nothing in `statfs` says which.
+            // The safe reading is insensitive: claiming sensitivity that is
+            // not there would let two spellings of one file both be indexed.
+            "apfs" | "hfs" => FsTraits {
+                stable_ids: true,
+                case_sensitive: false,
+            },
+            "msdos" | "exfat" => FsTraits {
+                stable_ids: false,
+                case_sensitive: false,
+            },
+            _ => FsTraits::UNKNOWN,
+        }
+    }
+
+    pub fn medium_of(path: &Path) -> Medium {
+        let Some((fs, flags)) = fstype(path) else {
+            return Medium::Unknown;
+        };
+        // `MNT_LOCAL` is off for anything reached over a network, whatever it
+        // calls itself — which covers the mounts a name check would miss.
+        if flags & libc::MNT_LOCAL as u32 == 0 {
+            return Medium::Network;
+        }
+        match fs.as_str() {
+            "nfs" | "smbfs" | "afpfs" | "webdav" | "ftp" => Medium::Network,
+            // Every Mac since 2016 boots from NVMe, Intel and Apple Silicon
+            // alike, and APFS is not offered on rotational media. An external
+            // spinning disk formatted HFS+ is the case this gets wrong, and
+            // IOKit is where the real answer lives.
+            "apfs" => Medium::Solid,
+            _ => Medium::Unknown,
+        }
+    }
+}
+
+/// Platforms with no implementation yet.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+mod fallback {
+    use super::{FsTraits, Medium};
+    use std::path::Path;
+
     pub fn traits_of(_path: &Path) -> FsTraits {
         FsTraits::UNKNOWN
+    }
+    pub fn medium_of(_path: &Path) -> Medium {
+        Medium::Unknown
     }
 }
 
