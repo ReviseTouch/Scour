@@ -41,6 +41,19 @@ pub struct Live {
     maps: Vec<Mmap>,
     alive: Vec<u8>,
     rows: usize,
+    /// How many of those rows are directories.
+    ///
+    /// Counted once, here, because the alternative was counting it on every
+    /// call to `stats()` — which walks a column of every row, and which the
+    /// engine came to call once a second to decide whether to compact. On a
+    /// 2.1 M-entry index that was a whole core, every second, to answer a
+    /// question about the *segment count*.
+    ///
+    /// The number is the total, not the live one: rows die after this is
+    /// computed and `live_rows` is what says how many. A directory count that
+    /// drifts by the number of deleted folders is a status line being slightly
+    /// stale; recomputing it was a service being unusable.
+    dirs: usize,
 }
 
 impl Live {
@@ -83,12 +96,20 @@ impl Live {
                 detail: format!("seg-{number:08}.names is unreadable"),
             })?
             .rows();
+        let dirs = ColumnBlocks::open(&maps[1])
+            .map(|cols| {
+                (0..rows)
+                    .filter(|&r| cols.get(crate::columns::Field::IsDir, r).unwrap_or(0) != 0)
+                    .count()
+            })
+            .unwrap_or(0);
         Ok(Live {
             number,
             generation,
             maps,
             alive,
             rows,
+            dirs,
         })
     }
 
@@ -125,6 +146,11 @@ impl Live {
 
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    /// Directories among them, counted when the segment was opened.
+    pub fn dirs(&self) -> usize {
+        self.dirs
     }
 
     pub fn live_rows(&self) -> u64 {

@@ -2247,3 +2247,81 @@ stopped, the way counting already does.
 before and the folded arena makes a plain scan cheaper, so the case for it is
 weaker now, not stronger. Worth re-measuring against a scan with no filter at
 all before it is kept.
+
+## 2026-08-04 — four reasons the service burned a core, none of them the search
+
+The engine answers in tens of milliseconds and the window still felt laggy, so
+the question moved from "how fast is a query" to "what is the service doing
+when nobody asked it anything". Answer: 88% of a core, idle.
+
+### It was indexing itself
+
+Of the 247 files changed under the home directory in one minute on an idle
+machine, **171 were in `~/.local/share/scour`** — the index. A commit writes
+segment files, the watcher sees them, the engine turns them into entries, and
+committing those writes more segment files.
+
+`apps/scourd/src/wire.rs` excludes the index directory, and it belongs there
+rather than in the platform defaults because only that file knows where the
+index went. `the_index_never_indexes_itself` is the test.
+
+### `stats()` walked every row, once a second
+
+The compaction check added earlier asks `stats()` after each commit. `stats()`
+counted directories by visiting **every row of every segment** — 2.1 M rows a
+second, one whole core, and the read lock held against every search while it
+happened, to answer a question about the *segment count*.
+
+`Live` now counts its directories once when the segment is opened.
+
+### The watcher `stat`ed every event it was about to discard
+
+Filtering events by the scan's exclusions was right; doing it with `is_dir()`
+was not — one syscall for every file a compiler writes, to decide to throw the
+event away. `Rules::excludes_path` answers from the path alone.
+
+### A commit per second, for one file
+
+A browser cache touching one file a second produced one segment a second, for
+as long as the machine was on: 35 segments in 35 seconds on an idle desktop,
+each holding a row or two, each one more thing every future query has to open.
+
+A trickle now waits for a slower clock (`commit_idle`, 15 s) and a burst does
+not (`commit_batch`, 64 changes). Whichever comes first, so nothing waits
+indefinitely.
+
+### And `target/` was never excluded
+
+The exclusion list's own comment called it "the single loudest source of noise
+in a developer's home directory" and did not contain it. **852,437 of 2,986,545
+entries** — 28% of the index, none of it written by anyone, and while a compile
+runs the watcher turns it into a flood: 3,935 changes queued and the service at
+67% of a core. Excluded by name, and `exclude.allow` takes it back.
+
+`build`, `dist` and `out` are deliberately left in: another 249,445 entries, but
+they are plausible names for real work in a way `target` beside a `Cargo.toml`
+is not.
+
+### Where it landed
+
+| | before | after |
+|---|---|---|
+| entries | 2,986,545 | **2,133,356** |
+| index on disk | 253 MB | **162 MB** |
+| service, idle | 88% of a core | **16%** |
+
+| query | |
+|---|---|
+| `fatura` | 1.2 ms |
+| `toki` | 9.1 ms |
+| `main` | 11.2 ms |
+| `config` | 16.3 ms |
+| `belge` | 18.3 ms |
+| `rapor` | 34.6 ms |
+| `t` (stored order) | 68 ms |
+| `to` (stored order) | 129 ms |
+
+**Still not finished.** 16% of a core at rest is not zero, and the two-character
+case is the worst thing left on the list: `to` matches so much that the stored
+order walks two million rows before it has a page. Both are measured, neither
+is guessed at.

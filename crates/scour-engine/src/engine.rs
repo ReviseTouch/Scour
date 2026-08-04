@@ -39,6 +39,19 @@ pub struct EngineOptions {
     /// file handle. Merging them costs seconds and does not reduce how many
     /// documents the tail holds; only a rebuild does that.
     pub compact_segments: u32,
+    /// How many changes make a commit worth a segment of its own.
+    ///
+    /// Below this a change waits for [`EngineOptions::commit_idle`] instead.
+    /// The number is small because the cost it guards against is not the write
+    /// — it is that every segment is one more thing every future query has to
+    /// open and walk.
+    pub commit_batch: u64,
+    /// How long a handful of changes may wait before being written anyway.
+    ///
+    /// The bound on staleness. A file created now is findable within this at
+    /// worst, and within [`EngineOptions::commit_interval`] when anything else
+    /// is happening at the same time.
+    pub commit_idle: Duration,
     /// The point at which segments are merged **without** waiting for idle.
     ///
     /// Compaction normally waits for the machine to stop asking for things,
@@ -64,6 +77,8 @@ impl Default for EngineOptions {
             commit_interval: Duration::from_millis(1_000),
             rebuild_threshold: 200_000,
             result_limit: 1_000,
+            commit_batch: 64,
+            commit_idle: Duration::from_secs(15),
             compact_segments: 8,
             compact_urgent: 64,
             idle_after: Duration::from_secs(20),
@@ -469,7 +484,21 @@ fn run(
             recv(tick) -> _ => {}
         }
 
-        if dirty && last_commit.elapsed() >= shared.opts.commit_interval {
+        // A commit writes a segment, so committing two files costs a segment
+        // holding two rows — and a browser cache touching one file a second
+        // produced one segment a second for as long as the machine was on.
+        // Thirty-five of them in thirty-five seconds, on an idle desktop.
+        //
+        // So a trickle waits for the slower clock and a burst does not: enough
+        // changes, or enough time, whichever comes first. What must not happen
+        // is a change sitting unwritten indefinitely, which is why the second
+        // half of that sentence exists.
+        let waited = last_commit.elapsed();
+        let enough = shared.pending.load(Ordering::Relaxed) >= shared.opts.commit_batch;
+        if dirty
+            && waited >= shared.opts.commit_interval
+            && (enough || waited >= shared.opts.commit_idle)
+        {
             let _ = shared.index.commit();
             shared.pending.store(0, Ordering::Relaxed);
             dirty = false;

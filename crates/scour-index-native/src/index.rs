@@ -883,16 +883,15 @@ impl Index for NativeIndex {
         let mut entries = 0u64;
         let mut dirs = 0u64;
         let mut largest = 0u64;
+        // Read, not walked. This used to count directories by visiting every
+        // row of every segment, and the engine calls it once a second to
+        // decide whether to compact — 2.1 M rows a second, one whole core, and
+        // the read lock held against every search while it happened.
         for live in &inner.segments {
             let live_rows = live.live_rows();
             entries += live_rows;
             largest = largest.max(live_rows);
-            let seg = live.view()?;
-            for row in 0..live.rows() {
-                if live.is_alive(row) && seg.num_of(Field::IsDir, row) != 0 {
-                    dirs += 1;
-                }
-            }
+            dirs += live.dirs() as u64;
         }
         Ok(IndexStats {
             entries,

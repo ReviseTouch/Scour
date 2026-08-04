@@ -92,6 +92,24 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
     let (paths, dirs, files) = platform_defaults();
     let mut o = config.scan_options();
     o.skip_metadata = false;
+    // **The index does not index itself**, and the reason is not tidiness.
+    //
+    // A commit writes segment files; the watcher sees them; the engine turns
+    // them into entries; committing those writes more segment files. Measured
+    // on an idle machine: 171 of the 247 files changed in the last minute were
+    // in the index directory, the worker thread at 36% of a core and the
+    // inotify thread at 26%, feeding each other with nothing else happening.
+    //
+    // It belongs here rather than in the platform defaults because only this
+    // file knows where the index went — it is configuration, and a user who
+    // moves it must not have to know to exclude it.
+    merge(
+        &mut o.exclude_paths,
+        vec![
+            config.index.dir.to_string_lossy().into_owned(),
+            index_dir(config).to_string_lossy().into_owned(),
+        ],
+    );
     merge(&mut o.exclude_paths, paths);
     merge(&mut o.exclude_dirs, dirs);
     merge(&mut o.exclude_files, files);
@@ -122,6 +140,21 @@ mod tests {
         assert!(
             o.exclude_dirs.iter().any(|d| d == "node_modules"),
             "the platform's does too"
+        );
+    }
+
+    #[test]
+    fn the_index_never_indexes_itself() {
+        // A commit writes segments, the watcher sees them, the engine indexes
+        // them, and indexing them writes segments. On an idle machine that
+        // loop was 62% of a core and two thirds of every filesystem event.
+        let c = Config::default();
+        let o = scan_options(&c);
+        let dir = index_dir(&c).to_string_lossy().into_owned();
+        assert!(
+            o.exclude_paths.iter().any(|p| dir.starts_with(p.as_str())),
+            "the index directory {dir} is not excluded: {:?}",
+            o.exclude_paths
         );
     }
 

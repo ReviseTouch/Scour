@@ -173,12 +173,11 @@ fn translate(
     // What the walk would not have looked at, this does not report. Checked
     // once here rather than in each arm, because every arm has the same answer
     // and a path that slips through is an index entry nobody asked for.
-    let watched = |p: &std::path::Path| -> bool {
-        let path = path::from_path(p);
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let is_dir = p.is_dir();
-        !rules.excludes(&path, name, is_dir)
-    };
+    //
+    // From the **path alone**, with no `stat`. The first version asked
+    // `is_dir()`, which is a syscall for every file a compiler writes — 74% of
+    // a core while a build ran, spent deciding to discard the event.
+    let watched = |p: &std::path::Path| -> bool { !rules.excludes_path(&path::from_path(p)) };
     let upsert = |p: &std::path::Path| {
         let path = path::from_path(p);
         match std::fs::symlink_metadata(p) {
