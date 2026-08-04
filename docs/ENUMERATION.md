@@ -240,8 +240,89 @@ install watches is a separate problem worth its own look.
    rescan on every daemon start and none. Google Drive's `changes.list` token
    is the other durable cursor. On Linux there is nothing without root.
 
-**Not worth it:** anything requiring root. btrfs `TREE_SEARCH_V2` is the best
-interface in this survey and is `CAP_SYS_ADMIN`; XFS bulkstat is `CAP_SYS_ADMIN`
-*and* returns no names; Windows `$MFT` and `FSCTL_ENUM_USN_DATA` need
-Administrator — which is exactly why Everything ships a service, and why this
-does not.
+**Still not worth it:** XFS bulkstat, which is `CAP_SYS_ADMIN` *and* returns no
+names, so it could not feed a name index even with the capability. ext4, F2FS,
+exFAT and FAT have nothing to reach for. io_uring is slower. Unprivileged
+fanotify is inotify with a smaller budget.
+
+---
+
+## 7. The privileged scanner
+
+Everything ships a Windows service running as Administrator, because `$MFT`
+there needs raw volume access. The same shape answers btrfs, whose
+`TREE_SEARCH_V2` is the best interface in this survey and needs
+`CAP_SYS_ADMIN`. So the rule is not "which platform" but **"is there a bulk
+path behind a privilege"**:
+
+| | bulk path | service needed |
+|---|---|---|
+| Windows, NTFS/ReFS | `$MFT` + USN journal | **yes** — Administrator |
+| Linux, btrfs | `TREE_SEARCH_V2` + `min_transid` | **yes** — `CAP_SYS_ADMIN` |
+| Linux, NTFS via ntfs3 | `$MFT` as an ordinary file | **no** — already ours |
+| everything else | `getdents64` | no — nothing to gain |
+
+### It takes no commands, and that is the design
+
+The scanner is not a smaller daemon. It has **no socket, no pipe, no command
+of any kind**. Its entire input is a list of roots; its entire output is the
+index. There is no "delete", no "rescan this", no "stop" — not disabled, *not
+implemented*. A request that does not exist cannot be abused, and a feature
+added to Scour later cannot reach through it, because the scanner would have
+to be taught a verb it does not have.
+
+That is a stronger position than OpenSSH's privilege separation, where the
+privileged half still answers messages from the unprivileged one. Here nothing
+crosses upward at all.
+
+### The root list is root's
+
+The one remaining channel is the list of roots, and it is a real one: it says
+*"read this directory as root and write what is in it somewhere I can read"*.
+A user who could edit it could ask for `/root` and read back every filename in
+it. Filenames are not contents, but `/root/.ssh/id_ed25519_prod` is a map of a
+machine.
+
+So the file is **owned by root and not writable without `sudo`**. Adding a new
+root costs a `sudo`; that is the price, and it is paid once per disk.
+
+The threat model this settles: an attacker who can already obtain `sudo` is
+root, and does not need us to read `/root` for them. We are not a tool for
+that attacker. We are only a tool for the one who *cannot* get `sudo` — and
+for them the channel is closed.
+
+### What remains, and it is not the input side
+
+Two things the closed input does not cover, both about the output:
+
+* **The index is readable by whoever can read it.** Anything the scanner is
+  pointed at becomes visible to every reader of that index. On a single-user
+  desktop that is exactly what is wanted. On a shared machine, pointing it at
+  `/home` opens every user's filenames to every other user. This is a
+  deployment decision, and the file mode is where it is made.
+* **Two writers cannot share one index directory.** The lock added in
+  `db9c95c` allows exactly one, because segments are mmapped and a second
+  writer truncating a mapped file is undefined behaviour. The scanner writes a
+  **base layer**; the unprivileged daemon writes an **incremental layer** from
+  its watcher; a query merges the two. The engine is already built for this —
+  segments are exactly that shape — but it means two directories, two
+  manifests, two locks.
+
+### Unmeasured, and blocking
+
+`TREE_SEARCH_V2`'s speed is **not yet measured** — the probe that settled the
+privilege question does not time anything. Two numbers decide whether the btrfs
+half of this is worth writing:
+
+```bash
+sudo /tmp/fsbulk/btrfs_bulk /home/hasan
+```
+
+1. **Full tree time**, against 345 ms warm and 1,032 ms cold for a parallel
+   `getdents64` walk of the same subvolume. If it does not clearly beat that,
+   there is no speed argument on btrfs.
+2. **`min_transid` delta time.** This is the one that matters more. A cursor
+   that returns only what changed since a given generation, pruning unread
+   subtrees, is the USN journal's equivalent — and it turns "full rescan on
+   every daemon start" into nothing. That, not first-scan speed, is what
+   Everything's journal actually buys.
