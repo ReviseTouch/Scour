@@ -169,6 +169,12 @@ enum Test {
     /// The directory number falls in this scope: `under:` and `parent:`, both
     /// resolved once by the directory table.
     DirIn(DirScope),
+    /// The kind column is any one of these.
+    ///
+    /// A bitset over the discriminants rather than a list, because one word
+    /// can name four kinds and the test has to stay a shift and a mask however
+    /// many it named.
+    KindIn(u16),
     /// The name contains this, case-folded.
     ///
     /// A prebuilt searcher rather than the string, because `str::contains`
@@ -194,7 +200,7 @@ impl Test {
     fn cost(&self) -> u32 {
         match self {
             Test::Never => 0,
-            Test::Num { .. } | Test::DirIn(_) => 1,
+            Test::Num { .. } | Test::DirIn(_) | Test::KindIn(_) => 1,
             Test::Ext(_) => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::PathHas(_) => 30,
@@ -491,6 +497,15 @@ impl Plan {
                     Some((lo, hi)) if lo >= 0 => scope.intersects(lo as u32, hi as u32),
                     _ => true,
                 },
+                // The same zone map, read as a range of discriminants: a block
+                // holding only kinds 10 and 11 cannot answer `kind:image`.
+                Test::KindIn(mask) => match seg.cols.block_range(Field::Kind, block) {
+                    Some((lo, hi)) if (0..16).contains(&lo) && (0..16).contains(&hi) => {
+                        let span = ((1u32 << (hi - lo + 1)) - 1) << lo;
+                        u32::from(*mask) & span != 0
+                    }
+                    _ => true,
+                },
                 _ => true,
             };
             if !admits {
@@ -557,12 +572,7 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             value: i64::from(*want),
             span: 1,
         },
-        Match::Kind(k) => Test::Num {
-            field: Field::Kind,
-            cmp: Cmp::Eq,
-            value: k.as_u8() as i64,
-            span: 1,
-        },
+        Match::Kind(k) => Test::KindIn(k.iter().fold(0u16, |m, k| m | 1 << k.as_u8())),
         Match::Size(cmp, v) => Test::Num {
             field: Field::Size,
             cmp: *cmp,
@@ -622,6 +632,10 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             }
         }
         Test::DirIn(scope) => scope.contains(seg.num(Field::DirId, row) as u32),
+        Test::KindIn(mask) => {
+            let k = seg.num(Field::Kind, row);
+            (0..16).contains(&k) && mask & 1 << k != 0
+        }
         Test::Ext(list) => {
             // Folded into the buffer rather than into a fresh `String`. This
             // runs once a row, so allocating here was measured as most of what

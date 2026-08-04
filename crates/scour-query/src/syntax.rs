@@ -37,7 +37,7 @@ matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
 | `file:` | files only |
 | `folder:` | folders only |
 | `size:>1mb` | larger than a megabyte |
-| `kind:code` | one of: file, folder, code, image, archive, doc, exec, media |
+| `kind:code` | one of: folder, code, doc, image, data, config, archive, exec, audio, video, font, build, file |
 | `dm:7d` | modified in the last 7 days |
 | `dc:2026-01-31` | created on that day |
 | `da:>2026-01-01` | accessed after that day |

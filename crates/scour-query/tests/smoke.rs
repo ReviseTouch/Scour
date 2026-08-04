@@ -120,7 +120,7 @@ fn turkish_folding_is_applied_to_every_kind_of_term() {
         alts("path:BELGELER")[0].1,
         Match::PathContains("belgeler".into())
     );
-    assert_eq!(alts("kind:KLASÖR")[0].1, Match::Kind(Kind::Dir));
+    assert_eq!(alts("kind:KLASÖR")[0].1, Match::Kind(vec![Kind::Dir]));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn every_documented_example_still_works() {
         ("file:", Match::IsDir(false)),
         ("folder:", Match::IsDir(true)),
         ("size:>1mb", Match::Size(Cmp::Gt, 1_048_576)),
-        ("kind:code", Match::Kind(Kind::Code)),
+        ("kind:code", Match::Kind(vec![Kind::Code])),
         (
             "dm:7d",
             Match::Time(TimeField::Modified, Cmp::Ge, NOW - 7 * 86_400),

@@ -756,19 +756,21 @@ fn an_index_from_another_version_is_outdated_and_not_damaged() {
         assert_eq!(index.stats().expect("stats").entries, 50);
     }
 
+    // Rewritten to version zero rather than to "the previous one", so that
+    // this test does not have to be edited every time the format moves.
     let manifest = tmp.path().join("native-index.json");
-    let older = std::fs::read_to_string(&manifest)
-        .expect("manifest")
-        .replace("\"format\": 4", "\"format\": 3");
-    assert!(
-        older.contains("\"format\": 3"),
-        "the manifest changed shape"
-    );
+    let written = std::fs::read_to_string(&manifest).expect("manifest");
+    let at = written
+        .find("\"format\":")
+        .expect("the manifest changed shape");
+    let end = at + written[at..].find(',').expect("a field after format");
+    let older = format!("{}\"format\": 0{}", &written[..at], &written[end..]);
     std::fs::write(&manifest, older).expect("write");
 
     match NativeIndex::open_or_create(tmp.path()) {
         Err(scour_core::Error::IndexOutdated { found, expected }) => {
-            assert_eq!((found, expected), (3, 4));
+            assert_eq!(found, 0);
+            assert!(expected > 0, "the current format is not a version");
         }
         other => panic!("expected an outdated index, got {other:?}"),
     }

@@ -35,7 +35,7 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::Ext(list) => list.contains(&e.ext()),
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),
-        Match::Kind(k) => e.kind() == *k,
+        Match::Kind(k) => k.contains(&e.kind()),
         Match::Time(f, cmp, v) => {
             let got = match f {
                 TimeField::Modified => e.meta.mtime,

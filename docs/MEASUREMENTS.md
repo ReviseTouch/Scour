@@ -1712,3 +1712,84 @@ notice those two drifting apart —
 `relevance_puts_the_near_copy_first_however_many_segments_there_are` is the
 test that does, and it was checked by breaking the merge side on purpose and
 watching it fail.
+
+## 2026-08-04 — the taxonomy, applied
+
+`docs/TAXONOMY.md` designed fourteen kinds against a histogram. This is what
+happened when the shipped code produced them, on 1,434,900 indexed entries.
+
+### The distribution
+
+| kind | entries | share |
+|---|---|---|
+| **build** | **686,851** | **47.87%** |
+| code | 178,360 | 12.43% |
+| folder | 166,452 | 11.60% |
+| **file** (unknown) | **165,226** | **11.51%** |
+| data | 94,955 | 6.62% |
+| image | 57,598 | 4.01% |
+| doc | 40,114 | 2.80% |
+| exec | 25,911 | 1.81% |
+| config | 14,097 | 0.98% |
+| archive | 3,673 | 0.26% |
+| font | 1,537 | 0.11% |
+| audio | 107 | 0.01% |
+| video | 19 | 0.00% |
+
+The counts add to the total exactly, which is the only cheap proof that every
+row got one kind and no row got two.
+
+### What it replaced
+
+The previous classifier, run over the same filesystem — 1,927,541 entries —
+left **1,127,692 of them unknown: 58.50%**. It also produced exactly **124**
+`Media` rows, for a category that took a discriminant.
+
+The two denominators are not the same set: the walk sees everything, the index
+holds what survives the platform exclusions. So 58.50% against 11.51% is the
+right direction and not a subtraction. What is exact is that more than half of
+every file on this machine used to have no kind at all, and the reason is one
+line of the table: `build`.
+
+### The generated-documentation rule, measured before it was written
+
+Of 189,785 HTML files here, **161,115 — 84.9% — have a dot inside the stem**,
+and every one sampled was rustdoc (`struct.Foo.html`, `mod.rs.html`) or
+dartdoc. Nothing hand-written appeared among them; a page a person writes is
+`index.html`. javadoc's fixed names carry no dot and are listed separately.
+
+The first version of the rule was a list of rustdoc prefixes plus javadoc's
+names and caught 83.6% — the plain dot rule is simpler, more general and
+catches more, including the `*.rs.html` source pages the prefix list missed.
+
+It is still a heuristic and still an interim. When the scanner grows a
+`derived` bit, this becomes a property of location, which is what it was all
+along.
+
+### Measured and rejected
+
+**A rule for versioned shared libraries.** `libLLVM.so.22.1-rust-1.99.0-nightly`
+is machine code and lands in `File`, because the extension by the
+rightmost-dot rule is `0-nightly`. It looks like an obvious gap. It is 204
+files on this machine of which **21** are unclassified — 0.0015% — so the rule
+is not worth the surface it adds. Noted here so the next person to notice it
+does not have to measure it again.
+
+### What is left unknown, largest first
+
+Exactly the six categories `TAXONOMY.md` predicted, and nothing else: a
+content-addressed model blob, `.propcol` and `.mzz` (one vendor's private
+formats), `libLLVM.so.…-nightly`, and Gradle's hash-named zip cache. Every one
+of them is either private, content-addressed, or determined by where it sits.
+None is fixable by adding an extension to a table.
+
+### Cost
+
+| | |
+|---|---|
+| scan | 2,051 ms, against a 2,272–3,067 ms band — the table lookup is a binary search where six `contains` scans used to be |
+| index | 99.1 MB, from 87.3 MB — four bits a row instead of three, plus a corpus that grew between runs |
+
+The classification also moved from six linear scans of up to 300 strings to one
+binary search over 280 entries, which is why a scan that does strictly more
+work did not get slower.

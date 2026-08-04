@@ -34,8 +34,29 @@ msgstr "Belge"
 msgid "Executable"
 msgstr "Çalıştırılabilir"
 
+# Retired: never produced again, still decoded from an older index.
 msgid "Media"
 msgstr "Medya"
+
+msgid "Audio"
+msgstr "Ses"
+
+msgid "Video"
+msgstr "Video"
+
+# Half of every file on a developer's machine. "Derleme çıktısı" is two words
+# and that is fine — this is a label, not a query token.
+msgid "Build output"
+msgstr "Derleme çıktısı"
+
+msgid "Data"
+msgstr "Veri"
+
+msgid "Configuration"
+msgstr "Yapılandırma"
+
+msgid "Font"
+msgstr "Yazı tipi"
 
 # --- field labels ---
 msgid "path"
@@ -157,3 +178,6 @@ msgstr "belge içeriği gerekiyor, bu dizinde olmayabilir"
 
 msgid "Start `scourd` first — the MCP server is a client of it, like this one."
 msgstr "Önce `scourd` başlatın — MCP sunucusu, bunun gibi, onun istemcisidir."
+
+msgid "counts are a lower bound: the scan hit its cap"
+msgstr "sayılar alt sınırdır: tarama üst sınırına ulaştı"

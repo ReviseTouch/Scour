@@ -64,6 +64,12 @@ pub fn human(r: &Response) -> String {
                 };
                 out.push_str(&format!("{:>9}  {key}\n", x.count));
             }
+            // Left as the token rather than translated, because the caller is
+            // a model and the useful thing it can do with `build` is write
+            // `kind:build`.
+            if f.capped {
+                out.push_str("(counts are a lower bound: the scan hit its cap)\n");
+            }
             out
         }
         Response::Tree { root } => {
@@ -202,17 +208,13 @@ pub fn failure(e: &Error) -> String {
     format!("{e}.{advice}")
 }
 
-fn kind_word(k: Kind) -> &'static str {
-    match k {
-        Kind::Dir => "folder",
-        Kind::Code => "source code",
-        Kind::Image => "image",
-        Kind::Archive => "archive",
-        Kind::Doc => "document",
-        Kind::Exec => "program",
-        Kind::Media => "audio or video",
-        Kind::File => "file",
-    }
+/// The word for a kind, for a reader who is a model.
+///
+/// Straight from `Kind::msgid()` and not through the catalogue: this surface
+/// is English by design. A second table here is a second thing to forget when
+/// a kind is added, which is exactly what happened to the first version.
+fn kind_word(k: Kind) -> String {
+    k.msgid().to_lowercase()
 }
 
 /// `YYYY-MM-DD`. The time of day is rarely what is being asked and doubles the
@@ -318,6 +320,8 @@ mod tests {
                 key: "rs".into(),
                 count: 3,
             }],
+            by: scour_core::FacetBy::Ext { top: 10 },
+            capped: false,
             took_us: 0,
         };
         assert!(human(&Response::Facets(f)).contains("rs"));

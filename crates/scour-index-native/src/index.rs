@@ -65,11 +65,14 @@ const MAX_STAGED: usize = 100_000;
 const FACET_SCAN_CAP: usize = 200_000;
 
 const META_FILE: &str = "native-index.json";
-/// Bumped when the files change shape. Version 2 added the trigram filter,
-/// version 3 the per-block minimum and maximum, and version 4 a distance byte
-/// a directory; an index without them is refused rather than opened and
-/// quietly ranked as if every file were equally close to home.
-const FORMAT: u32 = 4;
+/// Bumped when the files change shape **or when a stored value changes what it
+/// means**. Version 2 added the trigram filter, version 3 the per-block minimum
+/// and maximum, version 4 a distance byte a directory, and version 5 the file
+/// kinds — where nothing changed shape at all and every row of an older index
+/// would still decode, into the wrong answer. `kind:build` would find nothing
+/// and half the sidebar would read `File`: nothing corrupt and everything
+/// wrong, which is the case this constant exists for.
+const FORMAT: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -790,7 +793,11 @@ impl Index for NativeIndex {
             match &req.by {
                 FacetBy::Kind => {
                     let k = Kind::from_u8(seg.num_of(Field::Kind, row) as u8).unwrap_or(Kind::File);
-                    *counts.entry(k.msgid().to_owned()).or_default() += 1;
+                    // The token, not the label: a rail turns a facet into a
+                    // `kind:` term, and a label can be two words and can be
+                    // translated. `by` in the reply is what tells the renderer
+                    // to translate it back for display.
+                    *counts.entry(k.token().to_owned()).or_default() += 1;
                 }
                 FacetBy::Ext { .. } => {
                     let ext = scour_core::ext_of(&String::from_utf8_lossy(name));
@@ -821,6 +828,8 @@ impl Index for NativeIndex {
         facets.truncate(top);
         Ok(FacetResponse {
             facets,
+            by: req.by.clone(),
+            capped: seen >= FACET_SCAN_CAP,
             took_us: started.elapsed().as_micros() as u64,
         })
     }

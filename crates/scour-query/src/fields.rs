@@ -149,12 +149,17 @@ pub const FIELDS: &[Field] = &[
 
 /// The values `kind:` accepts, in the order a list should show them.
 ///
-/// Spelled the way [`Kind::from_name`] wants them, which is not always the way
-/// [`Kind::msgid`] spells them — `Executable` folds to a word `from_name` does
-/// not take. Going through this list is what keeps a completion from producing
+/// Spelled the way [`Kind::from_name`] wants them, which is not the way
+/// [`Kind::msgid`] spells them: a label can be two words and can be
+/// translated, and `Build output` is both. [`Kind::token`] is the spelling
+/// that parses, and going through it is what keeps a completion from producing
 /// a term the parser then reads as plain text.
+///
+/// `media` is deliberately absent: it still parses, so an old query keeps
+/// working, but offering it would invite new ones.
 pub const KIND_VALUES: &[&str] = &[
-    "folder", "file", "code", "image", "doc", "media", "archive", "exec",
+    "folder", "code", "doc", "image", "data", "config", "archive", "exec", "audio", "video",
+    "font", "build", "file",
 ];
 
 /// Common time values, for the same reason.

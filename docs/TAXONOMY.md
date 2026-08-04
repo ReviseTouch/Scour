@@ -201,7 +201,7 @@ is correct by accident. Leave it — `ext_str`'s contract is "text after the las
 dot" and it is shared with the `ext:` term — but write the test, because a facet
 list reading `0: 2,031` will confuse someone.
 
-## Migration
+## Migration — **done**, and this is what it took
 
 Nothing crashes, and that is the problem. Ship the new binary against an old
 index and `from_u8` still resolves 0–7, so no row is unreadable — but every row
@@ -212,9 +212,9 @@ none, silently.
 
 **Nothing is corrupt and everything is wrong.** So:
 
-* **Bump `FORMAT` from 4 to 5.** `NativeIndex::open_or_create` already refuses a
-  mismatched index; the machinery exists. (This said 3 to 4 when it was
-  written — the per-directory distance byte took 4.)
+* **`FORMAT` is 5.** (This said 3 to 4 when it was written; the per-directory
+  distance byte took 4 first.) `NativeIndex::open_or_create` refuses a
+  mismatched index and `scourd` discards and rescans, which is 2 seconds here.
 * **`Error::IndexOutdated { found, expected }` already exists**, added with that
   bump, and `apps/scourd/src/wire.rs` acts on it by discarding and rescanning.
   A stale index is not a corrupt one, and the difference matters when the

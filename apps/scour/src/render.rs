@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use humansize::{BINARY, format_size};
-use scour_core::{Catalog, Kind, TreeNode};
+use scour_core::{Catalog, FacetBy, Kind, TreeNode};
 use scour_i18n::Catalogue;
 use scour_proto::Response;
 
@@ -83,14 +83,25 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             println!("{total}{}", if *capped { "+" } else { "" });
         }
         Response::Facets(f) => {
-            let width = f
+            // A kind facet is keyed by the token so that a rail can build
+            // `kind:build` from it; a person should see the word for it in
+            // their own language. `by` is what says which of the two this is —
+            // an extension can be spelled like a token (`ext:bin` against
+            // `kind:bin`) and translating it would be a plain mistake.
+            let shown: Vec<String> = f
                 .facets
                 .iter()
-                .map(|x| x.key.chars().count())
-                .max()
-                .unwrap_or(0);
-            for x in &f.facets {
-                println!("{:<width$}  {:>10}", x.key, x.count);
+                .map(|x| match f.by {
+                    FacetBy::Kind => facet_word(&x.key),
+                    _ => x.key.clone(),
+                })
+                .collect();
+            let width = shown.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+            for (key, x) in shown.iter().zip(&f.facets) {
+                println!("{key:<width$}  {:>10}", x.count);
+            }
+            if f.capped {
+                println!("{}", t("counts are a lower bound: the scan hit its cap"));
             }
         }
         Response::Tree { root } => print_tree(root, ""),
@@ -250,6 +261,18 @@ fn print_tree(node: &TreeNode, prefix: &str) {
 /// with two names.
 fn kind_tag(k: Kind) -> String {
     t(k.msgid())
+}
+
+/// The word for a `kind:` facet key.
+///
+/// An unknown token is printed as it arrived rather than dropped: a service
+/// newer than this client can send a kind this build has never heard of, and
+/// showing the token is a much better answer than showing nothing.
+fn facet_word(token: &str) -> String {
+    match Kind::from_name(token) {
+        Some([k]) => kind_tag(*k),
+        _ => token.to_owned(),
+    }
 }
 
 /// `YYYY-MM-DD HH:MM` in UTC.

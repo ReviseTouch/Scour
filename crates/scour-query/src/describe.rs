@@ -54,7 +54,14 @@ fn describe_match(m: &Match) -> String {
         Match::IsDir(true) => "is a folder".into(),
         Match::IsDir(false) => "is a file".into(),
         Match::Size(cmp, bytes) => format!("size {} {}", cmp.symbol(), human_size(*bytes)),
-        Match::Kind(k) => format!("type is {}", k.msgid().to_lowercase()),
+        Match::Kind(k) if k.len() == 1 => format!("type is {}", k[0].msgid().to_lowercase()),
+        Match::Kind(k) => format!(
+            "type is one of {}",
+            k.iter()
+                .map(|k| k.msgid().to_lowercase())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Match::Time(f, Cmp::Eq, secs) => format!("{} on {}", time_word(*f), iso_day(*secs)),
         Match::Time(f, cmp, secs) => {
             format!("{} {} {}", time_word(*f), cmp.symbol(), iso_day(*secs))

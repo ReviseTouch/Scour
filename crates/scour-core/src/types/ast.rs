@@ -87,7 +87,13 @@ pub enum Match {
     Ext(Vec<String>),
     IsDir(bool),
     Size(Cmp, i64),
-    Kind(Kind),
+    /// Any one of these kinds.
+    ///
+    /// A list rather than one kind, because a single word names several:
+    /// `kind:media` has to go on meaning audio *or* video *or* the retired
+    /// discriminant an older index still holds, and `kind:text` names four at
+    /// once. See [`Kind::from_name`].
+    Kind(Vec<Kind>),
     Time(TimeField, Cmp, i64),
     /// Substring of the *contents* of a document.
     ///

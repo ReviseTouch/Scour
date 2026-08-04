@@ -159,9 +159,10 @@ pub struct SearchResponse {
 }
 
 /// What to group a facet count by.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FacetBy {
+    #[default]
     Kind,
     Ext {
         top: u32,
@@ -188,6 +189,21 @@ pub struct Facet {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FacetResponse {
     pub facets: Vec<Facet>,
+    /// What the keys mean, echoed back.
+    ///
+    /// Without it a client has to remember what it asked in order to render
+    /// the answer, and the two things that need to know — is this key a
+    /// `kind:` token to be translated, or an extension to be printed as it is
+    /// — are exactly the ones that get out of step.
+    #[serde(default)]
+    pub by: FacetBy,
+    /// The scan stopped at its cap, so the counts are a lower bound.
+    ///
+    /// `SearchResponse` has said this from the start and a facet could not,
+    /// which meant the rail understated at scale with no way to tell. A count
+    /// that is quietly wrong is worse than one that says it is incomplete.
+    #[serde(default)]
+    pub capped: bool,
     pub took_us: u64,
 }
 

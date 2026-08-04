@@ -157,24 +157,30 @@ that — fine for a keystroke today at 1.4 M entries, worth revisiting at ten
 million. And the index format is now **4**; an older index is refused and
 rescanned rather than ranked as if every file were equally close to home.
 
-## Phase 4 — The taxonomy
+## Phase 4 — The taxonomy — **done**
 
-`Kind` has 8 variants; `TAXONOMY.md` designs 14 and the rail in the mockup
-assumes them. This is a `scour-core` change plus extension tables, and it is
-worth doing before the GUI's facet rail exists so that the rail is written
-against `facets(query, by: kind)` from the first line and never against a
-hardcoded list.
+Fourteen kinds, from eight. On this machine **more than half of every file used
+to have no kind at all** — 58.50% unknown, against 11.51% now — and one line of
+the table is most of that: `build`, which is 47.87% of what is indexed here.
+Numbers, the rules that were rejected, and what is deliberately left unknown
+are in `MEASUREMENTS.md`; the argument for each line is in `TAXONOMY.md`.
 
-Two defects to fix in the same commit:
+Four things came with it, each of which was a defect that would have surfaced
+through the GUI first:
 
-* **`Kind::Exec` does not round-trip.** `msgid()` returns `"Executable"`,
-  which folds to `"executable"`, which `from_name` does not accept — it takes
-  `exec`/`exe`/`bin`. A facet click on that one kind would produce a query term
-  that parses as literal text. The other seven are fine; this is one arm of one
-  match.
-* **`FacetResponse` cannot say it was capped.** `FACET_SCAN_CAP = 200_000`
-  truncates the scan silently. `SearchResponse` gets this right with `capped`;
-  facets should too, or the rail lies at scale without a way to tell.
+* **`from_name` returns a set.** `kind:media` has to keep matching rows in an
+  index written before the split, and `kind:text` names four kinds at once.
+  `Match::Kind` carries a list and the index compiles it to a bitset.
+* **`Kind::token()` is not `Kind::msgid()`.** The facet rail builds a query out
+  of a facet key, and `Executable` folds to a word the parser does not take —
+  so clicking that one row searched for literal text. A label can be two words
+  and can be translated; a token can be neither. The facet key is now the
+  token, `FacetResponse::by` says so, and the frontends translate for display.
+* **`FacetResponse::capped`.** `FACET_SCAN_CAP` truncated the scan silently.
+  It shows immediately at this size: a kind facet over 1.4 M entries reads the
+  first 200,000 and now says so.
+* **Format 5**, which is the first bump where *nothing changed shape*. Every
+  row of a version-4 index would still decode, into the wrong answer.
 
 ## Phase 5 — The window
 

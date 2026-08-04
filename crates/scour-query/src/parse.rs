@@ -200,7 +200,7 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             Some("folder") => Some(Match::IsDir(true)),
             Some("size") => parse_size(&folded),
             // Turkish spellings are aliases on purpose; see `Kind::from_name`.
-            Some("kind") => Kind::from_name(&folded).map(Match::Kind),
+            Some("kind") => Kind::from_name(&folded).map(|k| Match::Kind(k.to_vec())),
             Some("dm") => parse_time(TimeField::Modified, &folded, now),
             Some("dc") => parse_time(TimeField::Created, &folded, now),
             Some("da") => parse_time(TimeField::Accessed, &folded, now),
@@ -397,8 +397,11 @@ mod tests {
             m("size:2tb"),
             vec![(false, Match::Size(Cmp::Ge, 2 * 1024_i64.pow(4)))]
         );
-        assert_eq!(m("kind:kod"), vec![(false, Match::Kind(Kind::Code))]);
-        assert_eq!(m("kind:KLASÖR"), vec![(false, Match::Kind(Kind::Dir))]);
+        assert_eq!(m("kind:kod"), vec![(false, Match::Kind(vec![Kind::Code]))]);
+        assert_eq!(
+            m("kind:KLASÖR"),
+            vec![(false, Match::Kind(vec![Kind::Dir]))]
+        );
     }
 
     #[test]
@@ -428,8 +431,8 @@ mod tests {
         // `tür:` and `içerik:` were listed as aliases but could never match,
         // because the field-name rule demanded ASCII. They are the only two
         // fields whose Turkish spelling is not ASCII, so nothing else was hit.
-        assert_eq!(m("tür:kod"), vec![(false, Match::Kind(Kind::Code))]);
-        assert_eq!(m("TÜR:kod"), vec![(false, Match::Kind(Kind::Code))]);
+        assert_eq!(m("tür:kod"), vec![(false, Match::Kind(vec![Kind::Code]))]);
+        assert_eq!(m("TÜR:kod"), vec![(false, Match::Kind(vec![Kind::Code]))]);
         assert_eq!(
             m("içerik:x"),
             vec![(false, Match::ContentContains("x".into()))]
