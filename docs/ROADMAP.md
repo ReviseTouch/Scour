@@ -113,7 +113,7 @@ and this kernel has it; and the recorded reason for `watching 0` was wrong, so
 `Caps::RECURSIVE_WATCH = false` on Linux rests on a diagnosis that does not
 hold.
 
-## Phase 3 — Ranking — **started** (`99b4bf9`)
+## Phase 3 — Ranking — **done** (`99b4bf9`, and the distance byte)
 
 The largest quality gap in the product, and the one thing a user notices
 immediately without being able to name it. Today the orders are *modified*,
@@ -131,18 +131,31 @@ Do it before the GUI. The GUI's first screenful *is* this ordering, and
 building the list against the wrong default means rebuilding the impression it
 makes.
 
-**Done:** `SortKey::Relevance` scores a name against the query's terms, and the
-rung order was corrected twice by measurement — ranking an exact name highest
-filled the page with `.git/refs/heads/main`, and excluding `.git` replaced it
-with a hundred `android/src/main` directories.
+**The name half:** `SortKey::Relevance` scores a name against the query's
+terms, and the rung order was corrected twice by measurement — ranking an exact
+name highest filled the page with `.git/refs/heads/main`, and excluding `.git`
+replaced it with a hundred `android/src/main` directories.
 
-**Next, and measured as necessary:** a path penalty. Of the first 200 results
-for `main`, 88 are under package caches and SDKs against 48 of the user's own
-work; scoped to `~/Projeler` the first four are still `target/` and `build/`
-artefacts. A name says nothing about whether a file is yours. The cheap
-mechanism: directory numbers are handed out in sorted path order, so one pass
-over `DirTable` gives a penalty byte per directory — about 130 KB here — and
-the scorer reads it by `DirId` with no path reconstruction.
+**The path half:** one byte a directory, written when the segment is written
+and read by number at query time — 162 KB for 165,895 directories, and no path
+is rebuilt to rank a row. It holds **how far the directory is from being
+something the user wrote**: every component is a step and a hidden or
+build-output component is three. Bounded so that it can only order rows the
+name has already tied, which is what makes it safe to apply to every query.
+
+Measured against the right metric, which took a correction: of the 902 `main`
+matches under `~/Projeler`, 794 are under `target/`, `build/` or `.git/`, so
+the "48 of the first 200 are the user's own work" figure this document used to
+carry was counting generated files as authored ones. Of files actually written
+by the user, the first two hundred results held **none**. They now hold the
+whole first page. Numbers, refuted alternatives and the cost in
+`MEASUREMENTS.md`.
+
+**What ranking still has open**, none of it blocking: relevance walks every
+matching row, so it costs 4–9 ms where the stored order costs a fraction of
+that — fine for a keystroke today at 1.4 M entries, worth revisiting at ten
+million. And the index format is now **4**; an older index is refused and
+rescanned rather than ranked as if every file were equally close to home.
 
 ## Phase 4 — The taxonomy
 

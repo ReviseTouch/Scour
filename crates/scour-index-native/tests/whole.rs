@@ -740,3 +740,107 @@ fn deleted_rows_stop_being_walked_before_they_are_erased() {
         f.entries.len()
     );
 }
+
+#[test]
+fn an_index_from_another_version_is_outdated_and_not_damaged() {
+    // The difference matters to whoever is watching: nothing is lost, because
+    // an index is derived from the filesystem in its entirety. The service
+    // acts on it by discarding and rescanning, and this is the machinery that
+    // lets it — `IndexCorrupt` would be a lie and would look like one.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut it = (0..50).map(|i| Change::Upsert(entry(&format!("/a/f{i}.rs"), NOW, i)));
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+        assert_eq!(index.stats().expect("stats").entries, 50);
+    }
+
+    let manifest = tmp.path().join("native-index.json");
+    let older = std::fs::read_to_string(&manifest)
+        .expect("manifest")
+        .replace("\"format\": 4", "\"format\": 3");
+    assert!(
+        older.contains("\"format\": 3"),
+        "the manifest changed shape"
+    );
+    std::fs::write(&manifest, older).expect("write");
+
+    match NativeIndex::open_or_create(tmp.path()) {
+        Err(scour_core::Error::IndexOutdated { found, expected }) => {
+            assert_eq!((found, expected), (3, 4));
+        }
+        other => panic!("expected an outdated index, got {other:?}"),
+    }
+
+    NativeIndex::discard(tmp.path()).expect("discard");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(index.stats().expect("stats").entries, 0);
+    assert!(
+        std::fs::read_dir(tmp.path())
+            .expect("read_dir")
+            .flatten()
+            .all(|e| e.file_name() != "seg-00000001.names"),
+        "the old segments are still on disk"
+    );
+    // Discarding what is not there is the state being asked for, not an error.
+    NativeIndex::discard(&tmp.path().join("nothing-here")).expect("discard nothing");
+}
+
+#[test]
+fn relevance_puts_the_near_copy_first_however_many_segments_there_are() {
+    // Relevance is the one order `brute_force` does not model — scoring belongs
+    // to the index — so this is where the two halves of it are checked against
+    // each other. A segment reads a directory's distance from a table built
+    // when it was written; the merge across segments recomputes it from the
+    // path, because a `Hit` carries no directory number. Those are two
+    // implementations of one number, and nothing else would notice them
+    // drifting apart.
+    //
+    // Every one of these is named `main.rs`, so the name score is identical and
+    // the distance is the whole ordering.
+    let want = [
+        "/home/u/Projeler/app/main.rs",
+        "/home/u/Projeler/app/deeper/still/main.rs",
+        "/home/u/Projeler/app/target/debug/main.rs",
+        "/home/u/.cargo/registry/src/crates.io/lzma-0.1/main.rs",
+    ];
+    for chunk in [1, 2, 4] {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        // Written oldest-first in a shuffled order, so neither the stored order
+        // nor the insertion order can produce the expected answer by accident.
+        let written = [want[2], want[0], want[3], want[1]];
+        for (i, part) in written.chunks(chunk).enumerate() {
+            let base = i * chunk;
+            let mut it = part
+                .iter()
+                .enumerate()
+                .map(|(j, p)| {
+                    let n = (base + j) as u64;
+                    Change::Upsert(entry(p, NOW - n as i64, 900 + n))
+                })
+                .collect::<Vec<_>>()
+                .into_iter();
+            index.apply(&mut it).expect("apply");
+            index.commit().expect("commit");
+        }
+        let got: Vec<String> = index
+            .search(&SearchRequest {
+                query: parse_at("main", NOW),
+                sort: SortKey::Relevance,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 10,
+                    count_cap: 10_000,
+                },
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        assert_eq!(got, want, "with {chunk} entries a segment");
+    }
+}

@@ -20,10 +20,7 @@ pub fn build(config: &Config) -> Result<Engine> {
     // One engine, so this is a single line rather than a match. The `Index`
     // trait is what keeps it that way: adding a second one is a second arm
     // here and nothing anywhere else.
-    let index: Arc<dyn Index> = Arc::new(
-        NativeIndex::open_or_create(&dir)
-            .with_context(|| format!("opening the index at {}", dir.display()))?,
-    );
+    let index: Arc<dyn Index> = Arc::new(open_index(&dir)?);
 
     let sources: Vec<Arc<dyn Source>> = config
         .sources
@@ -49,6 +46,32 @@ pub fn build(config: &Config) -> Result<Engine> {
             ..EngineOptions::default()
         },
     ))
+}
+
+/// Open the index, rebuilding it from nothing if it was written by an older
+/// version of Scour.
+///
+/// The decision belongs here rather than in the index, because it rests on
+/// something only this file knows: every source configured here is a local
+/// filesystem that can be read again. A migration would have to be written
+/// once per format change and would produce, at best, exactly what a rescan
+/// produces. A cold index is scanned on start without being asked, so throwing
+/// it away is the whole of the repair.
+fn open_index(dir: &std::path::Path) -> Result<NativeIndex> {
+    match NativeIndex::open_or_create(dir) {
+        Err(scour_core::Error::IndexOutdated { found, expected }) => {
+            eprintln!(
+                "scourd: the index at {} is format {found} and this build writes {expected}; \
+                 building it again",
+                dir.display()
+            );
+            NativeIndex::discard(dir)
+                .with_context(|| format!("clearing the old index at {}", dir.display()))?;
+            NativeIndex::open_or_create(dir)
+                .with_context(|| format!("opening the index at {}", dir.display()))
+        }
+        other => other.with_context(|| format!("opening the index at {}", dir.display())),
+    }
 }
 
 /// Where the index files go.

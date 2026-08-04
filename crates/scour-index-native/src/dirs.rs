@@ -30,6 +30,82 @@ use crate::varint;
 /// table.
 const RESTART: usize = 16;
 
+/// A component that is not where anyone keeps their own work counts for this
+/// many ordinary ones.
+///
+/// Three, and the number was measured rather than picked. At one — plain depth
+/// — searching `index` puts a generated `build/index.js` bundle first. At six,
+/// `~/.config/fish/config.fish` falls off the first page of `config` entirely
+/// and a Flutter engine `.gni` file takes its place, which is worse: a dotfile
+/// under `~/.config` is the user's own writing, and only a *deep* one is not.
+/// Three sinks the caches and keeps the dotfiles.
+const AWAY: u32 = 3;
+
+/// The most steps that can count. Never reached in practice — the deepest
+/// directory on the machine this was measured on scores 32 out of 230,351 —
+/// so it is a guarantee rather than a policy: it is what keeps the whole
+/// penalty under one rung of the relevance score.
+const STEP_CAP: u32 = 60;
+
+/// Directories whose contents were generated rather than written.
+///
+/// Deliberately short and deliberately not a filter: this only changes the
+/// *order* of results, so a name on it that should not be costs a few places
+/// and never a missing file.
+const GENERATED: [&str; 11] = [
+    "target",
+    "build",
+    "out",
+    "dist",
+    "node_modules",
+    "vendor",
+    "__pycache__",
+    "site-packages",
+    "obj",
+    ".gradle",
+    "cmakefiles",
+];
+
+/// How far this directory is from being something the user wrote.
+///
+/// One number standing for what were originally three separate rules — depth,
+/// hidden, build output — because measurement showed they are the same idea
+/// counted in the same unit. Every path component is a step; a component that
+/// is hidden or is a build directory is [`AWAY`] steps. What the number means
+/// is *distance*, and the search uses it as exactly that: a tie-break within a
+/// rung of the name score, never enough to overturn one.
+///
+/// The alternative was a penalty per reason — so much for being hidden, so
+/// much for being generated, so much per level. It ranks the same results and
+/// takes three constants to explain instead of one.
+pub fn steps_of(dir: &str) -> u8 {
+    let mut steps = 0u32;
+    for part in dir.split('/').filter(|p| !p.is_empty()) {
+        steps += if part.starts_with('.') || GENERATED.iter().any(|g| part.eq_ignore_ascii_case(g))
+        {
+            AWAY
+        } else {
+            1
+        };
+        if steps >= STEP_CAP {
+            return STEP_CAP as u8;
+        }
+    }
+    steps as u8
+}
+
+/// The directory part of a full path — everything before the last separator.
+///
+/// For the merge across segments, which has the path and not the directory
+/// number, and must reach the same answer [`steps_of`] gave the table.
+pub fn dir_part(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(0) => "/",
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
 /// Builds the table. Paths are added in any order and sorted at the end.
 #[derive(Debug, Default)]
 pub struct DirWriter {
@@ -81,9 +157,14 @@ impl DirWriter {
 
         let mut rows = Vec::new();
         let mut restarts: Vec<u32> = Vec::new();
+        // One byte a directory, computed here because this is the only place
+        // the paths exist as strings. A search then reads it by number and
+        // never rebuilds a path to rank a row.
+        let mut pens: Vec<u8> = Vec::with_capacity(order.len());
         let mut previous = "";
         for (i, &provisional) in order.iter().enumerate() {
             let path = self.paths[provisional as usize].as_str();
+            pens.push(steps_of(path));
             let shared = if i % RESTART == 0 {
                 restarts.push(rows.len() as u32);
                 0
@@ -96,13 +177,17 @@ impl DirWriter {
             previous = path;
         }
 
-        // Layout: count, restart count, the restart offsets, then the rows.
-        let mut out = Vec::with_capacity(rows.len() + restarts.len() * 4 + 16);
+        // Layout: count, restart count, the restart offsets, one distance byte
+        // a directory, then the rows. The distances come before the rows
+        // because the rows run to the end of the buffer and nothing records
+        // where they stop.
+        let mut out = Vec::with_capacity(rows.len() + restarts.len() * 4 + pens.len() + 16);
         out.extend_from_slice(&(order.len() as u32).to_le_bytes());
         out.extend_from_slice(&(restarts.len() as u32).to_le_bytes());
         for r in &restarts {
             out.extend_from_slice(&r.to_le_bytes());
         }
+        out.extend_from_slice(&pens);
         out.extend_from_slice(&rows);
         (out, remap)
     }
@@ -113,6 +198,8 @@ impl DirWriter {
 pub struct DirTable<'a> {
     count: usize,
     restarts: &'a [u8],
+    /// One [`steps_of`] byte a directory, in the same order as the rows.
+    pens: &'a [u8],
     rows: &'a [u8],
 }
 
@@ -124,14 +211,25 @@ impl<'a> DirTable<'a> {
         let count = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
         let n_restarts = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
         let end = 8 + n_restarts * 4;
-        if bytes.len() < end {
+        let rows_at = end.checked_add(count)?;
+        if bytes.len() < rows_at {
             return None;
         }
         Some(DirTable {
             count,
             restarts: &bytes[8..end],
-            rows: &bytes[end..],
+            pens: &bytes[end..rows_at],
+            rows: &bytes[rows_at..],
         })
+    }
+
+    /// How far this directory is from being something the user wrote.
+    ///
+    /// Read, not computed: [`steps_of`] ran once when the table was built.
+    /// Zero for a number the table does not hold, which is the same thing as
+    /// no opinion.
+    pub fn steps(&self, id: u32) -> u8 {
+        self.pens.get(id as usize).copied().unwrap_or(0)
     }
 
     pub fn len(&self) -> usize {
@@ -418,6 +516,45 @@ mod tests {
         for (i, p) in paths.iter().enumerate() {
             assert_eq!(table.get(remap[i]).as_deref(), Some(*p));
         }
+    }
+
+    #[test]
+    fn distance_counts_a_cache_as_further_than_a_project() {
+        assert!(steps_of("/home/u/Projeler/Scour/crates") < steps_of("/home/u/.cargo/registry"));
+        // A build directory is as far as a hidden one, and both count once
+        // each time they appear.
+        assert_eq!(steps_of("/home/u/p/target"), steps_of("/home/u/p/.git"));
+        assert!(steps_of("/home/u/p/target/debug") > steps_of("/home/u/p/src/debug"));
+        // Shallow and hidden is still close: a dotfile in `~/.config` is the
+        // user's own writing and only a deep one is not.
+        assert!(steps_of("/home/u/.config/fish") < steps_of("/home/u/.cargo/registry/src/crates"));
+        // Case does not save a build directory, and the cap holds.
+        assert_eq!(steps_of("/a/Target"), steps_of("/a/target"));
+        assert_eq!(steps_of(&"/.x".repeat(100)), STEP_CAP as u8);
+    }
+
+    #[test]
+    fn the_distance_of_every_directory_comes_back_from_the_table() {
+        let paths = [
+            "/home/u",
+            "/home/u/Projeler/Scour/src",
+            "/home/u/.cargo/registry/src/crates.io/lzma-sys-0.1.20",
+            "/home/u/Projeler/Scour/target/debug/build",
+        ];
+        let (bytes, remap) = build(&paths);
+        let table = DirTable::open(&bytes).expect("open");
+        for (i, p) in paths.iter().enumerate() {
+            assert_eq!(table.steps(remap[i]), steps_of(p), "{p}");
+        }
+        // A number the table does not hold is no opinion, not a panic.
+        assert_eq!(table.steps(9_999), 0);
+    }
+
+    #[test]
+    fn a_path_gives_up_its_directory() {
+        assert_eq!(dir_part("/home/u/a.txt"), "/home/u");
+        assert_eq!(dir_part("/a.txt"), "/");
+        assert_eq!(dir_part("a.txt"), "");
     }
 
     #[test]

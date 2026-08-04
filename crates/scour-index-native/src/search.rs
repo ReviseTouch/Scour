@@ -267,8 +267,21 @@ impl Needle {
 /// signal than a directory happening to carry the word.
 ///
 /// Then shorter names first, because a name that is mostly the term is more
-/// about the term. Ties fall through to the stored order, which is by date.
-fn relevance(name: &[u8], terms: &[Vec<u8>]) -> i64 {
+/// about the term, and further from home last. Ties fall through to the stored
+/// order, which is by date.
+///
+/// `steps` is [`crate::dirs::steps_of`] for the row's directory — how far it is
+/// from being something the user wrote. It is what a name cannot say. Ranking
+/// `main` by name alone put a CMake test file under `target/debug/build` first
+/// and filled the page from `~/.pub-cache` and `~/.rustup`; of the first two
+/// hundred results, 88 were package caches and SDKs against 48 of the user's
+/// own work.
+///
+/// It is bounded so that it can only ever order rows that the name already
+/// ties: sixty steps at [`STEP`] each is 480, a long name can cost 255, and
+/// the narrowest gap between two rungs is 900. A file in a cache still beats a
+/// file whose name answers the query better, every time.
+fn relevance(name: &[u8], terms: &[Vec<u8>], steps: u8) -> i64 {
     if terms.is_empty() {
         return 0;
     }
@@ -297,10 +310,18 @@ fn relevance(name: &[u8], terms: &[Vec<u8>]) -> i64 {
         };
         best = best.max(score);
     }
-    // Up to 255 characters of name work against it, which can never overturn a
-    // rung: the gap between rungs is 900 at its narrowest.
-    best - (name.len().min(255) as i64)
+    // Up to 255 characters of name and 480 of distance work against it, and
+    // neither can overturn a rung: the gap between rungs is 900 at its
+    // narrowest and 255 + 480 is 735.
+    best - (name.len().min(255) as i64) - i64::from(steps) * STEP
 }
+
+/// What one step away from home costs.
+///
+/// Eight, so that sixty steps — the most the table records — stay under the
+/// gap between two rungs of the name score even after a long name has taken
+/// its 255.
+const STEP: i64 = 8;
 
 /// Where `needle` first appears in `haystack`.
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -900,8 +921,13 @@ fn sort_value(
     terms: &[Vec<u8>],
 ) -> SortValue {
     match key {
-        // Scored on the folded name, because that is what the terms are.
-        SortKey::Relevance => SortValue::Num(relevance(fold.fold_bytes(name), terms)),
+        // Scored on the folded name, because that is what the terms are, and
+        // on the directory's recorded distance, which costs one byte read.
+        SortKey::Relevance => SortValue::Num(relevance(
+            fold.fold_bytes(name),
+            terms,
+            seg.dirs.steps(seg.dir_id(row)),
+        )),
         SortKey::Name => SortValue::Head(head(fold.fold_bytes(name))),
         SortKey::Ext => SortValue::Head(head(fold.fold_bytes(ext_bytes(name)))),
         SortKey::Path => {
@@ -990,7 +1016,12 @@ pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&st
                     .iter()
                     .map(|t| DefaultFolder.fold(t).into_bytes())
                     .collect();
-                relevance(DefaultFolder.fold(h.name()).as_bytes(), &folded)
+                // The distance is recomputed from the path rather than read
+                // from a table, because this merges rows from several segments
+                // and a `Hit` carries no directory number. Same function, same
+                // answer.
+                let steps = crate::dirs::steps_of(crate::dirs::dir_part(&h.path));
+                relevance(DefaultFolder.fold(h.name()).as_bytes(), &folded, steps)
             } else {
                 0
             };
@@ -1092,7 +1123,12 @@ mod relevance_tests {
     use super::relevance;
 
     fn score(name: &str, term: &str) -> i64 {
-        relevance(name.as_bytes(), &[term.as_bytes().to_vec()])
+        at(name, term, 0)
+    }
+
+    /// The same, for a name that many steps from home.
+    fn at(name: &str, term: &str, steps: u8) -> i64 {
+        relevance(name.as_bytes(), &[term.as_bytes().to_vec()], steps)
     }
 
     #[test]
@@ -1125,6 +1161,23 @@ mod relevance_tests {
 
     #[test]
     fn a_query_with_no_terms_scores_everything_alike() {
-        assert_eq!(relevance(b"anything.txt", &[]), 0);
+        assert_eq!(relevance(b"anything.txt", &[], 40), 0);
+    }
+
+    #[test]
+    fn the_nearer_of_two_equal_names_wins() {
+        // `~/Projeler/x/src/main.rs` against the same name buried in a cache.
+        assert!(at("main.rs", "main", 5) > at("main.rs", "main", 12));
+    }
+
+    #[test]
+    fn distance_never_overturns_a_rung() {
+        // The whole point of the bound, tested at the narrowest gap there is:
+        // a word boundary is 1000 and the middle of a word is 100. A match on
+        // the boundary, as far away as the table can record and with a name
+        // long enough to take the whole length penalty, still wins.
+        let far_and_long = format!("my-main{}.rs", "x".repeat(250));
+        assert!(at("my-main.rs", "main", 60) > at("domain.rs", "main", 0));
+        assert!(at(&far_and_long, "main", 60) > at("domain.rs", "main", 0));
     }
 }

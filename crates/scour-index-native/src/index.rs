@@ -65,10 +65,11 @@ const MAX_STAGED: usize = 100_000;
 const FACET_SCAN_CAP: usize = 200_000;
 
 const META_FILE: &str = "native-index.json";
-/// Bumped when the files change shape. Version 2 added the trigram filter and
-/// version 3 the per-block minimum and maximum; an index without them is
-/// refused rather than opened and quietly walked in full.
-const FORMAT: u32 = 3;
+/// Bumped when the files change shape. Version 2 added the trigram filter,
+/// version 3 the per-block minimum and maximum, and version 4 a distance byte
+/// a directory; an index without them is refused rather than opened and
+/// quietly ranked as if every file were equally close to home.
+const FORMAT: u32 = 4;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -136,8 +137,13 @@ impl NativeIndex {
             Err(_) => Meta::default(),
         };
         if meta.format != FORMAT {
-            return Err(Error::IndexCorrupt {
-                detail: format!("index format {}, expected {FORMAT}", meta.format),
+            // Not damaged — written by another version. Nothing here is worth
+            // recovering and nothing here is lost: every row came from the
+            // filesystem and can come from it again. Saying so is the caller's
+            // decision, and `discard` is how they act on it.
+            return Err(Error::IndexOutdated {
+                found: meta.format,
+                expected: FORMAT,
             });
         }
         let mut segments = Vec::with_capacity(meta.segments.len());
@@ -154,6 +160,33 @@ impl NativeIndex {
             }),
             _lock: lock,
         })
+    }
+
+    /// Throw away an index so the next `open_or_create` starts empty.
+    ///
+    /// For [`Error::IndexOutdated`] and nothing else: the caller has decided
+    /// that a rebuild is cheaper than a migration, which it is whenever the
+    /// index is derived from something still there to be read.
+    ///
+    /// Removes the manifest and the segment files and leaves everything else,
+    /// including the lock, alone. Deliberately not `remove_dir_all`: the
+    /// directory comes from configuration, and a wrong one there should cost a
+    /// confusing error rather than somebody's files.
+    pub fn discard(dir: &Path) -> Result<()> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            // Nothing to throw away is the state being asked for.
+            Err(_) => return Ok(()),
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("seg-") || name == META_FILE {
+                let p = entry.path();
+                std::fs::remove_file(&p).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
+            }
+        }
+        Ok(())
     }
 
     fn save_meta(&self, inner: &Inner) -> Result<()> {

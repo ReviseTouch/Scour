@@ -1610,3 +1610,105 @@ a penalty for `target/`, `build/`, `.pub-cache`, `Android/Sdk`, `.git`. The
 cheap way to get it is a per-directory table computed once — the directory
 numbers are already handed out in sorted path order, so a penalty is one pass
 over `DirTable` and one byte per directory, about 130 KB here. Not done yet.
+
+## 2026-08-04 — the distance byte, and the metric that was wrong
+
+The path rung, built as the note above predicted — one pass over `DirTable`,
+one byte a directory — but carrying a different number than expected, and
+correcting the way the previous section measured success.
+
+### The metric was wrong
+
+That section counted, of the first 200 results for `main`, 48 under
+`~/Projeler` against 88 in caches and SDKs, and treated the first number as the
+thing to raise. It is not: of the 902 `main` matches under `~/Projeler`, **794
+are under `target/`, `build/` or `.git/`**. Counting them as the user's own
+work counts generated files as authored ones.
+
+The honest metric is *own work that was written rather than generated* — under
+`~/Projeler`, outside those three directories, of which there are 108 in the
+whole index. Against that:
+
+| ranked by | in the first 20 | first 40 | first 200 |
+|---|---|---|---|
+| name alone | **0** | **0** | **0** |
+| name + depth | 17 | 29 | 31 |
+| name + distance | **20** | 29 | 34 |
+
+Zero, not 48. Not one of the first two hundred results was a file the user
+wrote. The first page is now entirely theirs, and the first-200 column stops
+rising because there are only 108 such files in existence — the rest of that
+page is third-party code with no way to tell it apart by name.
+
+### One number, not three
+
+The first design was a penalty per reason: so much for being hidden, so much
+for being under a build directory, so much per level of depth. Measured against
+the whole match set for a query — every match, not a page, so that a rule is
+judged on how it reorders rather than on what the previous rule left behind —
+the three turned out to be the same idea counted in the same unit.
+
+So: **every path component is a step, and a component that is hidden or is a
+build directory is three steps.** One byte a directory holds the total.
+
+Three, and each of the alternatives is refuted by a query:
+
+| weight | what it does |
+|---|---|
+| 1 (plain depth) | `index` returns a generated `build/index.js` bundle first |
+| **3** | — |
+| 6 | `config` loses `~/.config/fish/config.fish` from the first page entirely, to a Flutter engine `.gni` file |
+
+The middle one is the point of the whole scheme: a dotfile in `~/.config` **is**
+the user's own writing. Hidden does not mean generated — only *deep and hidden*
+does, and depth already says that. Six overcorrects into treating every dotfile
+as a cache.
+
+The build-directory list earns its place separately. Without it, `index` is
+`~/Projeler/sezi-server/build/index.js` first and `~/Projeler/Sezi/worker-rs/
+build/index.js` sixth: bundles, in ordinary directories, at ordinary depths.
+
+### What it changed
+
+First result, before and after, on the same index:
+
+| query | by name alone | with distance |
+|---|---|---|
+| `main` | `…/target/debug/build/xberg-tesseract-…/CMakeFiles/_CMakeLTOTest-C/src/main.c` | `~/Projeler/SnipperSlint/src/main.rs` |
+| `config` | `~/.cargo/registry/src/…/liblzma-sys-0.4.6/config.h` | `~/Projeler/RustPdfCompressor/src/config.rs` |
+| `readme` | `~/.AffinityLinux/Patch/return-affinity-colors/README.md` | `~/Projeler/Scour/README.md` |
+
+### What it costs
+
+**Nothing measurable.** The byte is computed in `DirWriter::finish`, where the
+paths already exist as strings, and read by number at query time.
+
+| | |
+|---|---|
+| index size | 165,895 directories → **162 KB**, of 87.3 MB |
+| scan | 2,718 ms, inside the 2,272–3,067 ms band the same scan has always measured |
+| query | relevance costs 0.02–0.38 ms more than sorting the same result set by name, and that gap is the *whole* scorer, not the byte |
+
+### The bound, which is the design
+
+A step is 8, the table records at most 60, so the whole distance is at most
+480. A long name already costs up to 255. The narrowest gap between two rungs
+of the name score is 900, and 255 + 480 is 735.
+
+**So distance can only order rows that the name has already tied.** A file
+whose name answers the query better always wins, however deep it is buried.
+That is what makes the byte safe to apply to every query rather than something
+the user has to know about and switch on.
+
+The cap is a guarantee rather than a policy: walking 230,351 directories on
+this machine, the deepest scores **32**.
+
+### Two implementations of one number
+
+A segment reads the distance from its table; the merge across segments
+recomputes it from the path, because a `Hit` carries no directory number.
+`brute_force` deliberately does not model relevance, so nothing else would
+notice those two drifting apart —
+`relevance_puts_the_near_copy_first_however_many_segments_there_are` is the
+test that does, and it was checked by breaking the merge side on purpose and
+watching it fail.

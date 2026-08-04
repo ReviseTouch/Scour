@@ -49,6 +49,17 @@ pub enum Error {
     IndexCorrupt {
         detail: String,
     },
+    /// The index was written by an older version and has to be built again.
+    ///
+    /// Separate from [`Error::IndexCorrupt`] because nothing is damaged and
+    /// nothing was lost: an index is derived from the filesystem in its
+    /// entirety, so this is a wait, not a loss. The two read the same to a
+    /// program and could not be more different to a person watching a rebuild
+    /// that takes minutes.
+    IndexOutdated {
+        found: u32,
+        expected: u32,
+    },
     /// A source is configured but not reachable — an unmounted drive, an
     /// expired cloud token.
     SourceUnavailable {
@@ -109,6 +120,7 @@ impl Error {
             Error::NotIndexed => "not_indexed",
             Error::IndexBusy { .. } => "index_busy",
             Error::IndexCorrupt { .. } => "index_corrupt",
+            Error::IndexOutdated { .. } => "index_outdated",
             Error::SourceUnavailable { .. } => "source_unavailable",
             Error::Unsupported { .. } => "unsupported",
             Error::NotFound { .. } => "not_found",
@@ -150,6 +162,10 @@ impl fmt::Display for Error {
             Error::IndexBusy { detail } if detail.is_empty() => f.write_str("The index is busy"),
             Error::IndexBusy { detail } => write!(f, "The index is busy: {detail}"),
             Error::IndexCorrupt { detail } => write!(f, "The index is damaged: {detail}"),
+            Error::IndexOutdated { found, expected } => write!(
+                f,
+                "The index was written in format {found} and this is format {expected}; it has to be built again"
+            ),
             Error::SourceUnavailable { source } => {
                 write!(f, "Source {} is not available", source.0)
             }
@@ -184,6 +200,10 @@ mod tests {
             },
             Error::IndexCorrupt {
                 detail: String::new(),
+            },
+            Error::IndexOutdated {
+                found: 3,
+                expected: 4,
             },
             Error::SourceUnavailable {
                 source: SourceId(0),

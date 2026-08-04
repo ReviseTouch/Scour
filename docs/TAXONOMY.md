@@ -212,12 +212,15 @@ none, silently.
 
 **Nothing is corrupt and everything is wrong.** So:
 
-* **Bump `FORMAT` from 3 to 4.** `NativeIndex::open_or_create` already refuses a
-  mismatched index; the machinery exists.
-* **Add `Error::IndexOutdated { found, expected }`.** A stale index is not a
-  corrupt one, and the difference matters when the rebuild is unattended and
-  takes minutes: the frontend should say "reindexing", not "your index is
-  damaged".
+* **Bump `FORMAT` from 4 to 5.** `NativeIndex::open_or_create` already refuses a
+  mismatched index; the machinery exists. (This said 3 to 4 when it was
+  written — the per-directory distance byte took 4.)
+* **`Error::IndexOutdated { found, expected }` already exists**, added with that
+  bump, and `apps/scourd/src/wire.rs` acts on it by discarding and rescanning.
+  A stale index is not a corrupt one, and the difference matters when the
+  rebuild is unattended and takes minutes: the frontend should say
+  "reindexing", not "your index is damaged". Nothing is needed here but the
+  bump itself.
 * A lazy migration is not possible — recomputing `Kind` needs the name *and* a
   rewrite of the block-packed column for every segment, which costs what a
   rebuild costs without picking up everything else that changed on disk.
