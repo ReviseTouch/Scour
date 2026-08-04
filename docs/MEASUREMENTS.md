@@ -1281,3 +1281,46 @@ for all of them, and major 0 means an **anonymous** block device: a number the
 kernel hands out at mount time rather than one stored on disk. If it can differ
 between boots, every identity in a persisted index changes with it and the next
 scan sees a filesystem full of new files. Not yet tested — it needs a reboot.
+
+## 2026-08-04 — where the scan time actually goes
+
+The whole-system survey said the kernel was not the slow part. This is where
+the rest of it is, measured by instrumenting the scan path and then removing
+the instrumentation.
+
+A home directory, 1,396,476 entries, btrfs:
+
+| stage | time | share |
+|---|---|---|
+| walking the tree | ~271 ms | 12% |
+| **`Index::apply`** | **1,862 ms** | **82%** |
+| sweep + commit | 132 ms | 6% |
+| **total** | **2,133 ms** | |
+
+For comparison, a bare parallel `getdents64` walk of the same directory takes
+760 ms and sees *more* — 1.85 M entries against 1.40 M, the difference being
+the exclusion rules. So the walk is not merely a minority of the cost, it is a
+small one.
+
+Inside `apply`, fifteen segments of 100,000 rows each, ~95 ms per segment:
+
+| stage of `build()` | per 100k rows | share of build |
+|---|---|---|
+| **trigram extraction** | **~36 ms** | **~33%** |
+| `dirs.intern` — parent path → id | ~19 ms | ~17% |
+| sort by mtime, path as tie-break | ~18 ms | ~16% |
+| pass 2 — filling 16 columns | ~13 ms | ~12% |
+| name arena, id table, finishes | ~4 ms | ~4% |
+| unaccounted | ~5 ms | — |
+
+Two caveats worth stating. The per-stage figures come from a run that called
+`Instant::now()` three times per entry, which inflates the absolute numbers —
+the proportions hold, the milliseconds are an upper bound. And `write` is 1 ms
+per segment: the segment files are not what costs, which is why the fsync work
+in `db9c95c` was affordable.
+
+**The single largest item in the whole scan is trigram extraction**, at about a
+third of `build` and roughly a quarter of the entire scan. `dirs.intern` is
+next: it hashes a parent path per entry, and after the sort those entries are
+in mtime order, so consecutive rows rarely share a directory and a
+last-directory cache would not help.
