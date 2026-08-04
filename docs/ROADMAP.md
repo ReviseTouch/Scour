@@ -357,6 +357,25 @@ TUI is a third client of the same socket rather than a new subsystem. It shares
 the query line's behaviour with the GUI — the roles, the two warning colours,
 the completions — because those come from `explain` over the wire.
 
+## The MCP surface is the point, not a side door
+
+Worth stating because it changes what "good enough" means. A model asking
+"where is the config that sets the socket path" is doing what `grep -r` does,
+and paying for it: a recursive walk, every file opened, every byte read, and
+a context window filled with false positives.
+
+Scour already answers the path half of that instantly and over a protocol
+designed for it — bounded replies that say when they were cut, `explain` so a
+caller can check how its query was read, `scour://syntax` so it can learn the
+language first. What is missing is the content half: `content:` parses today
+and every index refuses it.
+
+That is the case for document indexing, and it is a stronger one than "users
+might want to search inside files". `trait Extractor` and the reserved schema
+field were put there for it. The measurement that would decide it: how much of
+a repository's text can be indexed, at what bytes per entry, against how long
+`rg` takes on the same tree cold.
+
 ## Deliberately later
 
 * **Duplicate detection by content** (`REPORTS.md` §B tier four). The first
