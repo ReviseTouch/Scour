@@ -100,10 +100,15 @@ After the fix, the same query on the same index: **232 ms → 80 ms.**
   background all day this is the most important number on this page, and it is
   the one thing here that is clearly wrong.
 * **Watching a home directory did not start** (`watching 0`): 112,148
-  directories against the inotify per-user limit. `Caps::RECURSIVE_WATCH` is
-  false on Linux for exactly this reason, and the honest fix is `fanotify`,
-  which needs privileges — or falling back to periodic rescans, which nothing
-  currently does.
+  directories against the inotify per-user limit.
+
+  **Corrected 2026-08-04 — this diagnosis was wrong.** The limit on this
+  machine is 524,288, and a raw loop installs 227,806 watches in 311 ms using
+  28 MB with no `ENOSPC`. What actually happens is that `notify` 8.2 hits one
+  `EACCES` on one unreadable directory and abandons the entire recursive
+  watch. `fanotify` would not have helped: its whole-filesystem mark needs
+  `CAP_SYS_ADMIN`, and unprivileged it has a *smaller* budget than inotify.
+  See `docs/ENUMERATION.md`.
 * 5M and 10M entries, a subtree rename, and the rebuild threshold: still
   unmeasured on this engine.
 

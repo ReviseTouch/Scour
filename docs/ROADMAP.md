@@ -79,6 +79,27 @@ before `SearchResponse`; it is the one number that makes 2.2 diagnosable from a
 client rather than only from a benchmark, and the CLI prints it when it
 dominates.
 
+## Phase 2.5 — The sink, before any platform-specific enumeration
+
+Measured 2026-08-04, and it reorders everything that follows. A bare parallel
+`getdents64` walk reads this machine's 1.5 M-entry NTFS volume in **292 ms**
+warm; with full `statx` metadata, 348 ms; through the `ignore` crate and a
+channel — Scour's own walker shape — 593 ms. Scour end to end takes
+**2,272–3,067 ms**.
+
+So roughly **1.7 seconds is downstream of the walk**: building the index, not
+reading the filesystem. That is the largest single number on the table and it
+needs no platform-specific code, no new dependency and no privilege.
+
+`docs/ENUMERATION.md` is the whole survey — what every filesystem offers, what
+each costs in privilege, and what was measured and rejected (io_uring is
+*slower*; narrowing the `statx` mask buys nothing). Two things it found that
+belong to other phases: btrfs `st_dev` is anonymous and changes across reboots,
+so a persisted `EntryId` does not survive one — `stx_subvol` is the durable key
+and this kernel has it; and the recorded reason for `watching 0` was wrong, so
+`Caps::RECURSIVE_WATCH = false` on Linux rests on a diagnosis that does not
+hold.
+
 ## Phase 3 — Ranking
 
 The largest quality gap in the product, and the one thing a user notices
