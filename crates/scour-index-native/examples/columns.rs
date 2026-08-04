@@ -58,9 +58,9 @@ fn main() {
     let mut total = 0usize;
     for (i, &f) in Field::ALL.iter().enumerate() {
         let mut w = ColumnWriter::new();
-        for r in 0..rows {
+        for &v in &all[i] {
             let mut row = [0i64; 16];
-            row[f as usize] = all[i][r];
+            row[f as usize] = v;
             w.push(row);
         }
         // The empty writer is the floor: headers and the per-block bookkeeping
