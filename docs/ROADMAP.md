@@ -79,7 +79,7 @@ before `SearchResponse`; it is the one number that makes 2.2 diagnosable from a
 client rather than only from a benchmark, and the CLI prints it when it
 dominates.
 
-## Phase 2.5 — The sink, before any platform-specific enumeration
+## Phase 2.5 — The sink — **partly done** (`f758fa2`)
 
 Measured 2026-08-04, and it reorders everything that follows. A bare parallel
 `getdents64` walk reads this machine's 1.5 M-entry NTFS volume in **292 ms**
@@ -91,6 +91,19 @@ So roughly **1.7 seconds is downstream of the walk**: building the index, not
 reading the filesystem. That is the largest single number on the table and it
 needs no platform-specific code, no new dependency and no privilege.
 
+**Done so far.** Trigram extraction was a third of `build`; replacing its
+`HashSet<u32>` with a bitmap over the 24-bit key space cut its share of a scan
+from 1,010 ms to 616 ms. Building segments on background threads was tried,
+measured at 11% and reverted — it broke the manifest and the hard-link rule,
+and 11% against ±10% noise is not worth reworking `flush`, `sweep`,
+`begin_generation` and `fold` for. Both are written up in `MEASUREMENTS.md`,
+including the reasons.
+
+**Still open.** Of the remaining `build` time: `dirs.intern` ~19 ms per 100k
+rows, the sort ~18 ms, filling sixteen columns ~13 ms. And trigrams could be
+built *after* the scan rather than during it, which is worth 616 ms — but that
+number was 1,010 ms before the bitmap, so the case is weaker than it was.
+
 `docs/ENUMERATION.md` is the whole survey — what every filesystem offers, what
 each costs in privilege, and what was measured and rejected (io_uring is
 *slower*; narrowing the `statx` mask buys nothing). Two things it found that
@@ -100,7 +113,7 @@ and this kernel has it; and the recorded reason for `watching 0` was wrong, so
 `Caps::RECURSIVE_WATCH = false` on Linux rests on a diagnosis that does not
 hold.
 
-## Phase 3 — Ranking
+## Phase 3 — Ranking — **started** (`99b4bf9`)
 
 The largest quality gap in the product, and the one thing a user notices
 immediately without being able to name it. Today the orders are *modified*,
@@ -117,6 +130,19 @@ and everything else is in the name arena.
 Do it before the GUI. The GUI's first screenful *is* this ordering, and
 building the list against the wrong default means rebuilding the impression it
 makes.
+
+**Done:** `SortKey::Relevance` scores a name against the query's terms, and the
+rung order was corrected twice by measurement — ranking an exact name highest
+filled the page with `.git/refs/heads/main`, and excluding `.git` replaced it
+with a hundred `android/src/main` directories.
+
+**Next, and measured as necessary:** a path penalty. Of the first 200 results
+for `main`, 88 are under package caches and SDKs against 48 of the user's own
+work; scoped to `~/Projeler` the first four are still `target/` and `build/`
+artefacts. A name says nothing about whether a file is yours. The cheap
+mechanism: directory numbers are handed out in sorted path order, so one pass
+over `DirTable` gives a penalty byte per directory — about 130 KB here — and
+the scorer reads it by `DirId` with no path reconstruction.
 
 ## Phase 4 — The taxonomy
 
