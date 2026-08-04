@@ -179,6 +179,14 @@ fn common_prefix(paths: &[String]) -> String {
 }
 
 fn wait_for_scan(engine: &scour_engine::Engine) {
+    // Wait for it to *begin* before waiting for it to end. `rescan` queues a
+    // job and returns, so a loop that starts by asking "still scanning?" is
+    // told no and leaves with a third of an index — which is exactly what a
+    // block-size measurement got, three times, before anyone noticed.
+    let began = std::time::Instant::now();
+    while !engine.status().scanning && began.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
     let mut idle = 0;
     loop {
         std::thread::sleep(std::time::Duration::from_millis(200));

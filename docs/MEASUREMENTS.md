@@ -2580,3 +2580,49 @@ index. `BLOCK` is 128 and it is shared with the columns and the name arena, so
 it is a format change and a real experiment rather than a tweak. **Not done**,
 and it is the next real lever: it is the number that decides how a bigger index
 behaves, which is exactly what this is being optimised for.
+
+## 2026-08-04 — the block was sized for packing and decides selectivity
+
+`BLOCK` had been 128 since the layout was designed, chosen because a larger
+block amortises the per-block minimum and width further and because 128 is the
+width SIMD bit-packers use. Both true, and both about *packing*.
+
+What nobody had measured is that the block is the unit the trigram filter and
+the zone map can skip, and a block survives if **anything** in it might match.
+128 names to a block hands a term 128 rows for every one that could be right.
+
+Over 750,717 real entries and six real terms, one full scan and one measurement
+per size:
+
+| rows a block | index | candidates | query |
+|---|---|---|---|
+| 128 | 51 MB | 267,296 | 5.76 ms |
+| 64 | 53 MB | 169,248 | 3.86 ms |
+| **32** | **57 MB** | **104,192** | **2.99 ms** |
+| 16 | 65 MB | 60,352 | 2.16 ms |
+
+Per megabyte spent: 128→64 buys 0.95 ms, 64→32 buys 0.22, 32→16 buys 0.10.
+**Thirty-two is the knee.** Format 7 — every offset in every file is relative
+to the block, so an older index decodes into noise rather than into an answer.
+
+### On the live index, 2,137,224 entries
+
+| | before | after |
+|---|---|---|
+| `rapor` | 43,726 µs | **24,498 µs** |
+| `değişiklik` | 2,706 µs | **821 µs** |
+| `fatura` | 743 µs | **416 µs** |
+| `belge` | 7,861 µs | **10,058 µs** |
+| index on disk | 162 MB | 183 MB |
+
+This is the lever that decides how a *bigger* corpus behaves, which is what it
+was chosen for: the per-row cost has been measured flat at about 25 ns whatever
+the sort, so what grows with the index is the number of candidates a term walks
+and nothing else.
+
+One test had to change with it, and it is worth saying which way. The synthetic
+column test asserted under 9.6 bytes an entry and now measures 23.30, because
+fifteen of its sixteen columns are constant and the per-block overhead *is* the
+file at that shape. The real corpus went from 51 MB to 57 for the same rows.
+The bound was raised to 26 and the reason written beside it rather than the
+figure quietly adjusted.

@@ -73,8 +73,10 @@ const META_FILE: &str = "native-index.json";
 /// would still decode, into the wrong answer. `kind:build` would find nothing
 /// and half the sidebar would read `File`: nothing corrupt and everything
 /// wrong, which is the case this constant exists for. Version 6 added the
-/// folded name arena, without which a search has nothing to walk.
-const FORMAT: u32 = 6;
+/// folded name arena, without which a search has nothing to walk. Version 7
+/// took the block from 128 rows to 32 — every offset in every file is relative
+/// to it, so an older index decodes into noise rather than into an answer.
+const FORMAT: u32 = 7;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {

@@ -25,11 +25,32 @@ use crate::varint;
 
 /// Rows per block.
 ///
-/// The tension: a larger block packs better, because the per-block minimum and
-/// width are amortised further; a smaller one packs *tighter*, because a
-/// narrow range needs fewer bits. 128 is where the measurement settled, and it
-/// is also the width SIMD bit-packers use, which leaves the door open.
-pub const BLOCK: usize = 128;
+/// Two tensions, and the second one decides it.
+///
+/// **Packing.** A larger block amortises the per-block minimum and width
+/// further; a smaller one packs tighter, because a narrow range needs fewer
+/// bits. On its own that argued for 128, which is also the width SIMD
+/// bit-packers use.
+///
+/// **Selectivity**, which was not measured until much later and matters more.
+/// A block is the unit the trigram filter and the zone map can skip, and it
+/// survives if *anything* in it might match — so 128 names to a block hands a
+/// term 128 rows for every one that could be right. Measured over 750,717 real
+/// entries and six real terms:
+///
+/// | rows a block | index | candidates | query |
+/// |---|---|---|---|
+/// | 128 | 51 MB | 267,296 | 5.76 ms |
+/// | 64 | 53 MB | 169,248 | 3.86 ms |
+/// | **32** | **57 MB** | **104,192** | **2.99 ms** |
+/// | 16 | 65 MB | 60,352 | 2.16 ms |
+///
+/// Thirty-two is the knee: 48% off the query for 11% more on disk, where the
+/// next halving buys a fifth as much per megabyte. It is also the number that
+/// decides how a *larger* index behaves, because what grows with the corpus is
+/// how many candidates a term must walk, not what each one costs — that has
+/// been measured flat at about 25 ns whatever the sort.
+pub const BLOCK: usize = 32;
 
 /// The columns, in a fixed order. The numeric values are part of the on-disk
 /// format: reordering them reinterprets every existing index.
@@ -340,15 +361,20 @@ mod tests {
         let bytes = w.finish();
         let cols = ColumnBlocks::open(&bytes).expect("open");
 
-        // Sixteen i64 stored plainly would be 128 bytes an entry. The real
-        // corpus measured 8.85 for eleven of them; this synthetic block has
-        // more constant columns and fewer rows, so it lands lower. What the
-        // test asserts is the order of magnitude, not a figure it invented:
-        // at least ten times better than storing them.
+        // Sixteen i64 stored plainly would be 128 bytes an entry. What the
+        // test asserts is the order of magnitude, not a figure it invented.
+        //
+        // The bound was 9.6 when a block held 128 rows and this measured 23.30
+        // the day it became 32 — because the per-block minimum and width are
+        // paid four times as often, and this synthetic corpus is the worst
+        // case for that: fifteen of its sixteen columns are constant, so the
+        // overhead *is* the file. On the real corpus the same change took the
+        // whole index from 51 MB to 57 for 750,717 entries, and bought 48% off
+        // every query. That is the trade, and it is recorded in `BLOCK`.
         let per_entry = bytes.len() as f64 / 4_096.0;
         assert!(
-            per_entry < 9.6,
-            "twelve columns should cost a few bytes, got {per_entry:.2}"
+            per_entry < 26.0,
+            "sixteen columns should still beat storing them, got {per_entry:.2}"
         );
         assert_eq!(
             cols.get(Field::Mtime, 4_095),
