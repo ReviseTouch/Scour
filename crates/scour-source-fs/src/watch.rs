@@ -66,17 +66,19 @@ pub fn start(
     // **The watcher has to follow the same links the walk does, and by default
     // it does not.** `notify`'s `follow_symlinks` is on, so a recursive watch
     // descends through every symlink it meets while `WalkBuilder::follow_links`
-    // here is off — and the two disagreeing is not a matter of taste. Measured
-    // on this machine, where `~/.wine-hukuk/dosdevices/z:` points at `/`: the
-    // watcher walked out of the home directory and held **242,643 inotify
-    // watches** on the whole root filesystem, including a volume the
-    // configuration deliberately does not watch.
+    // here is off — and the two disagreeing is not a matter of taste.
     //
-    // The rows are worse than the cost. Every file created anywhere on the
-    // machine arrived as `/home/u/.wine-hukuk/dosdevices/z:/…` — a path that
-    // does not exist, that no walk will ever produce, and that *is* textually
-    // under the root, so every sweep killed those rows and the watcher put
-    // them straight back.
+    // What it costs is not watches, it is **rows**. On this machine
+    // `~/.wine-hukuk/dosdevices/z:` points at `/`, and a file created in the
+    // home directory arrived as `/home/u/.wine-hukuk/dosdevices/z:/home/u/…`:
+    // a path that does not exist, that no walk will ever produce, and that
+    // *is* textually under the root — so every sweep killed those rows and the
+    // watcher put them straight back. Reproduced by creating a directory and
+    // finding its contents in the index under the alias and nowhere else.
+    //
+    // The watch *count* is not evidence of this, and was briefly taken for it:
+    // 242,643 watches sounds like the whole filesystem and is what a home
+    // directory of 242,242 directories costs on its own.
     let mut watcher = notify::RecommendedWatcher::new(
         handler,
         notify::Config::default().with_follow_symlinks(opts.follow_symlinks),

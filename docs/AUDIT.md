@@ -2,10 +2,26 @@
 
 An end-to-end read of what enters the index, what leaves it, and what never
 arrives. Everything below was reproduced against the live service on this
-machine (2,138,153 entries, 183 MB, two sources). Nothing here is fixed yet;
-this file is the list.
+machine (2,138,153 entries, 183 MB, two sources).
 
 The order is by what it costs a user, not by where it sits in the code.
+
+| | | |
+|---|---|---|
+| §1 | a directory in a split parent is never watched | fixed |
+| §2 | a file written into a brand-new directory is lost | fixed |
+| §3 | the watcher follows symlinks the walk does not | fixed — with a correction, below |
+| §4 | `Rebuild` does not terminate under churn | fixed, and found a second race |
+| §5 | `.alive` files outlive their segments | fixed |
+| §6 | fragmentation costs nothing measurable | acted on: no more automatic rebuild |
+| §7 | idle housekeeping never runs | fixed |
+| §8 | a pending `rm -rf` may make commits quadratic | **open, and unmeasured** |
+| §9 | smaller things | partly |
+
+Verified afterwards on the live index rather than only in tests: a directory
+created in `~` with three files written into it in the same instant is now
+found at its real path, files added to it later are found too, and a restart
+took the index directory from 1,454 orphan segments to none.
 
 ---
 
@@ -82,21 +98,23 @@ not, and this machine has:
 ~/.wine-hukuk/dosdevices/z: -> /
 ```
 
-So the watcher walked out of the home directory and is watching the whole root
-filesystem through an alias:
+**Correction, and it is worth keeping rather than editing away.** The first
+reading of this was that the watcher had walked out onto the whole root
+filesystem, on the strength of the watch count:
 
 ```bash
 grep -c '^inotify' /proc/$(pgrep -f 'bin/scourd$')/fdinfo/*
 # 242643
 ```
 
-242,643 watches for one home directory. It includes `/mnt/depo`, which the
-configuration deliberately does **not** watch — the comment there says inotify
-over 172,363 directories on that volume costs a minute of set-up. That decision
-was silently defeated by one symlink.
+That number is not evidence of anything. `find /home/hasan -xdev -type d`
+returns **242,242** — the home directory costs essentially all of it on its
+own, and there was never room for `/mnt/depo` in there. The inference was
+wrong and the arithmetic that would have caught it took one command.
 
-The rows it produces are worse than the cost. Every file created anywhere on
-the machine is indexed under a path that does not exist:
+What *is* real is the rows, which were reproduced directly. Every file created
+in the home directory is indexed a second time under a path that does not
+exist:
 
 ```
 /home/hasan/.wine-hukuk/dosdevices/z:/home/hasan/kacaktest-a/alt/derin/zzqq1.txt
