@@ -118,6 +118,15 @@ pub enum Match {
     /// so it is case-insensitive like everything else — including for Turkish
     /// dotted and dotless i, which no `(?i)` flag gets right.
     Regex(String),
+    /// How many characters the name has. Everything spells it `len:`.
+    NameLen(Cmp, i64),
+    /// The name contains this, **spelled exactly like this**.
+    ///
+    /// Everything's `case:`. The index keeps both the name as written and the
+    /// folded one, so this is a comparison against the first rather than a
+    /// second index — the only cost is that it reads the arena the folded
+    /// search would have skipped.
+    NameContainsCased(String),
     /// A stored number compared to a value: `uid:1000`, `gid:>100`.
     ///
     /// The index has held these columns since the first version and nothing

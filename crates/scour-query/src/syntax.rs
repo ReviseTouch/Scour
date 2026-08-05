@@ -100,6 +100,32 @@ between words alike. `ext:rs;toml` is "extension is rs or toml" and
 `opus;sonnet` is "named opus or sonnet"; one mark, one meaning. Inside quotes
 it is an ordinary character: `"a ; b"` looks for that text.
 
+## Coming from Everything
+
+Its spellings work here, so a decade of muscle memory does not have to be
+unlearned. Most are shorthand the language could already say, and `explain`
+reads the expansion back — nothing happens that cannot be seen.
+
+| Everything | means |
+|---|---|
+| `size:1mb..2mb` | `size:>=1mb size:<=2mb` — open at either end too: `size:1mb..` |
+| `dm:2026-01-01..2026-02-01` | the same, for dates |
+| `<a\|b> c` | grouping, as `(a\|b) c` |
+| `pic:` `audio:` `video:` `doc:` `exe:` `zip:` | `kind:image`, `kind:audio`, … |
+| `empty:` | a file of no bytes |
+| `startwith:IMG_` | `IMG_*` |
+| `endwith:.pdf` | `*.pdf` |
+| `len:>40` | the name is longer than forty characters |
+| `case:README` | contains that, **spelled exactly so** |
+
+`empty:` is files only, and deliberately: a folder's size is stored as zero and
+its child count is not stored at all, so a folder rule would match every
+folder. Saying less is better than that.
+
+Absent rather than approximated: `dupe:` and `child:` ask for a grouping this
+index does not do, and the Windows `attrib:` letters name something a
+filesystem here does not have.
+
 ## Sizes
 
 Binary units: `b`, `kb`, `mb`, `gb`, `tb`. Operators `>`, `>=`, `<`, `<=`, `=`.

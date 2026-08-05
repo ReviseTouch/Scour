@@ -197,6 +197,16 @@ enum Test {
         cmp: Cmp,
         value: i64,
     },
+    /// The name is this many characters long.
+    NameLen { cmp: Cmp, value: i64 },
+    /// The name contains this, spelled exactly.
+    ///
+    /// The **written** arena, not the folded one — which is why it is priced
+    /// above `NameHas`: the walk is already carrying the folded name, so this
+    /// is the one name test that costs a second lookup. A plain `String`
+    /// rather than a `Needle`, because a `Needle` folds what it is given and
+    /// folding is the thing this test exists to avoid.
+    NameHasCased(String),
     /// The name matches this pattern.
     ///
     /// The most expensive test there is, and priced that way: it runs an
@@ -239,6 +249,8 @@ impl Test {
             Test::Depth { .. } => 2,
             Test::Ext(_) => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
+            Test::NameLen { .. } => 4,
+            Test::NameHasCased(_) => 20,
             Test::PathHas(_) => 30,
             Test::Regex(_) => 60,
         }
@@ -597,6 +609,8 @@ impl Plan {
                     | Test::Ext(_)
                     | Test::PathHas(_)
                     | Test::Regex(_)
+                    | Test::NameLen { .. }
+                    | Test::NameHasCased(_)
             )
         })
     }
@@ -666,6 +680,11 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
         // Straight onto the generic column test — these columns have been in
         // every index since the first version and only the language was
         // missing.
+        Match::NameLen(cmp, v) => Test::NameLen {
+            cmp: *cmp,
+            value: *v,
+        },
+        Match::NameContainsCased(t) => Test::NameHasCased(t.clone()),
         Match::Depth(cmp, v) => Test::Depth {
             depths: seg.dirs.depths().into(),
             cmp: *cmp,
@@ -764,6 +783,18 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             let d = depths.get(dir).map_or(0, |&d| i64::from(d) + 1);
             cmp.holds(d, *value)
         }
+        Test::NameLen { cmp, value } => {
+            // Characters, not bytes: `kütüphane.pdf` is thirteen to a person
+            // and fifteen to a byte counter, and the person is asking.
+            let n = std::str::from_utf8(name).map_or(name.len(), |s| s.chars().count());
+            cmp.holds(n as i64, *value)
+        }
+        // The written spelling, compared as written.  is
+        // for folded text; this is the one test that is not about folding.
+        Test::NameHasCased(want) => seg
+            .names
+            .get(row)
+            .is_some_and(|written| written.contains(want.as_str())),
         Test::Regex(re) => match std::str::from_utf8(name) {
             Ok(name) => re.is_match(name),
             Err(_) => false,

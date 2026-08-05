@@ -233,6 +233,94 @@ pub const FIELDS: &[Field] = &[
         about: "the name matches this regular expression",
         example: "regex:^[0-9]{4}-",
     },
+    // ---- Everything's spellings ------------------------------------------
+    //
+    // Somebody arriving from Everything has a decade of muscle memory and no
+    // reason to relearn it. These are its documented names for questions this
+    // index can already answer, so the query they would have typed there is
+    // the query that works here.
+    //
+    // Not everything it has: `dupe:` and `child:` ask for a grouping this
+    // index does not do, and the Windows `attrib:` letters name a thing a
+    // filesystem here does not have. Those are absent rather than approximated.
+    Field {
+        name: "empty",
+        aliases: &["bos"],
+        takes: Takes::Nothing,
+        about: "nothing in it: a file of no bytes, or a folder with no entries",
+        example: "",
+    },
+    Field {
+        name: "startwith",
+        aliases: &["startswith", "prefix"],
+        takes: Takes::Text,
+        about: "the name begins with this",
+        example: "startwith:IMG_",
+    },
+    Field {
+        name: "endwith",
+        aliases: &["endswith", "suffix"],
+        takes: Takes::Text,
+        about: "the name ends with this",
+        example: "endwith:.pdf",
+    },
+    Field {
+        name: "len",
+        aliases: &["namelen"],
+        takes: Takes::Size,
+        about: "how many characters the name has",
+        example: "len:>40",
+    },
+    Field {
+        name: "case",
+        aliases: &["cased"],
+        takes: Takes::Text,
+        about: "the name contains this, spelled exactly like this",
+        example: "case:README",
+    },
+    // The type macros, which are `kind:` under other names.
+    Field {
+        name: "audio",
+        aliases: &["ses"],
+        takes: Takes::Nothing,
+        about: "sound files",
+        example: "",
+    },
+    Field {
+        name: "video",
+        aliases: &[],
+        takes: Takes::Nothing,
+        about: "video files",
+        example: "",
+    },
+    Field {
+        name: "pic",
+        aliases: &["image", "gorsel"],
+        takes: Takes::Nothing,
+        about: "pictures",
+        example: "",
+    },
+    Field {
+        name: "doc",
+        aliases: &["belge"],
+        takes: Takes::Nothing,
+        about: "documents",
+        example: "",
+    },
+    Field {
+        name: "exe",
+        aliases: &[],
+        takes: Takes::Nothing,
+        about: "programs",
+        example: "",
+    },
+    Field {
+        name: "zip",
+        aliases: &["archive", "arsiv"],
+        takes: Takes::Nothing,
+        about: "archives",
+        example: "",
+    },
 ];
 
 /// The values `kind:` accepts, in the order a list should show them.

@@ -25,7 +25,10 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in join_parens(join_operators(join_lists(tokenize(input)))) {
+    for token in join_parens(join_operators(join_lists(tokenize(input))))
+        .into_iter()
+        .flat_map(|t| expand(&t))
+    {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
         // **`;` is `|` outside a field's value**, and that is one rule rather
@@ -55,6 +58,77 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
     Ast { groups }
 }
 
+/// Rewrite the spellings that are shorthand for something the language can
+/// already say.
+///
+/// **Text in, text out, and that is the point.** A term like `size:1mb..2mb`
+/// is two comparisons AND-ed, and `empty:` is a file of no bytes; both are
+/// sentences this parser already understands, so the honest way to add them
+/// is to write those sentences rather than to grow the tree. Everything a
+/// rewrite produces can be typed by hand, which is also what makes it
+/// explainable — `explain` reads back the expansion, so nothing is happening
+/// that the user cannot see.
+///
+/// The spellings are Everything's, because somebody arriving from it has a
+/// decade of muscle memory and no reason to relearn any of this.
+fn expand(token: &str) -> Vec<String> {
+    // A quoted run is literal all the way through.
+    if token.starts_with('"') {
+        return vec![token.to_owned()];
+    }
+    let (neg, body) = match token.strip_prefix('!') {
+        Some(rest) => ("!", rest),
+        None => ("", token),
+    };
+    let with =
+        |parts: &[&str]| -> Vec<String> { parts.iter().map(|p| format!("{neg}{p}")).collect() };
+    let Some((field, value)) = split_field(body) else {
+        return vec![token.to_owned()];
+    };
+    let canonical = match crate::fields::lookup(&field) {
+        Some(f) => f.name,
+        None => return vec![token.to_owned()],
+    };
+    // The type macros: `kind:` under the names Everything gives them.
+    let kind = match canonical {
+        "audio" => Some("audio"),
+        "video" => Some("video"),
+        "pic" => Some("image"),
+        "doc" => Some("doc"),
+        "exe" => Some("exec"),
+        "zip" => Some("archive"),
+        _ => None,
+    };
+    if let Some(k) = kind {
+        return with(&[&format!("kind:{k}")]);
+    }
+    match canonical {
+        // A folder's size is stored as zero and its child count is not stored
+        // at all, so "empty" can only honestly mean a file of no bytes. Saying
+        // that is better than a folder rule that would match every folder.
+        "empty" => return with(&["file:", "size:=0"]),
+        "startwith" if !value.is_empty() => return with(&[&format!("{value}*")]),
+        "endwith" if !value.is_empty() => return with(&[&format!("*{value}")]),
+        _ => {}
+    }
+    // `a..b`, Everything's range. Two comparisons, which is what it means.
+    if let Some((lo, hi)) = value.split_once("..")
+        && matches!(
+            crate::fields::lookup(&field).map(|f| f.takes),
+            Some(crate::fields::Takes::Size | crate::fields::Takes::Time)
+        )
+    {
+        return match (lo.is_empty(), hi.is_empty()) {
+            (false, false) => with(&[&format!("{field}:>={lo}"), &format!("{field}:<={hi}")]),
+            // Open at one end, which Everything also allows.
+            (true, false) => with(&[&format!("{field}:<={hi}")]),
+            (false, true) => with(&[&format!("{field}:>={lo}")]),
+            (true, true) => vec![token.to_owned()],
+        };
+    }
+    vec![token.to_owned()]
+}
+
 /// Glue `( a | b )` into one token, so an alternation may be spelled with
 /// spaces in it the way every shell and `find` allows.
 ///
@@ -73,7 +147,11 @@ fn join_parens(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
-        let open = tokens[i].starts_with('(') && !tokens[i].starts_with("(\"");
+        // `<a|b>` as well as `(a|b)`: Everything groups with angle brackets,
+        // and the same rule applies to both — they are syntax only when they
+        // hold an alternation, because both are ordinary characters in names.
+        let angle = tokens[i].starts_with('<');
+        let open = (tokens[i].starts_with('(') || angle) && !tokens[i].starts_with("(\"");
         if !open {
             out.push(tokens[i].clone());
             i += 1;
@@ -81,14 +159,15 @@ fn join_parens(tokens: Vec<String>) -> Vec<String> {
         }
         // How far does it reach, and is there an alternation inside?
         let mut j = i;
-        while j < tokens.len() && !tokens[j].ends_with(')') {
+        let closer = if angle { '>' } else { ')' };
+        while j < tokens.len() && !tokens[j].ends_with(closer) {
             j += 1;
         }
         let run = tokens.get(i..=j.min(tokens.len() - 1)).unwrap_or_default();
         let joined = run.join(" ");
         let inner = joined
-            .trim_start_matches('(')
-            .trim_end_matches(')')
+            .trim_start_matches(['(', '<'])
+            .trim_end_matches([')', '>'])
             .trim()
             .to_owned();
         if j >= tokens.len() || !inner.contains('|') {
@@ -303,6 +382,16 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             // as "three deep" to everyone, and taking the size convention made
             // it match almost the whole index while `depth:<=3` matched 77.
             // Both were working as written; one of them was written wrong.
+            Some("len") => {
+                let (cmp, rest) = split_cmp(&folded);
+                rest.trim()
+                    .parse::<i64>()
+                    .ok()
+                    .map(|n| Match::NameLen(cmp, n))
+            }
+            // The raw text, not the folded one: the whole point is the
+            // spelling, so folding it first would be folding the question away.
+            Some("case") => (!raw.is_empty()).then(|| Match::NameContainsCased(raw.clone())),
             Some("depth") => {
                 let (cmp, rest) = match split_cmp(&folded) {
                     (Cmp::Ge, r) if r == folded => (Cmp::Eq, r),

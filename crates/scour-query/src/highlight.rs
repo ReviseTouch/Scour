@@ -582,9 +582,12 @@ mod tests {
 
     #[test]
     fn completions_offer_fields_by_prefix() {
+        // Offered, not offered *alone*: `exe:` begins with the same two
+        // letters, and asserting a count here was asserting that no field
+        // would ever be added.
         let c = complete("ex", 2);
-        assert_eq!(c.len(), 1);
-        assert_eq!(c[0].insert, "ext:");
+        assert!(c.iter().any(|x| x.insert == "ext:"), "{c:?}");
+        assert!(c.iter().all(|x| x.insert.starts_with("ex")), "{c:?}");
         assert!(
             complete("", 0).len() >= 10,
             "everything, when nothing typed"
@@ -608,8 +611,10 @@ mod tests {
     #[test]
     fn completions_are_for_the_word_under_the_cursor() {
         let c = complete("rapor ex", 8);
-        assert_eq!(c.len(), 1, "the earlier word is not what is being typed");
-        assert_eq!(c[0].insert, "ext:");
+        assert!(
+            c.iter().any(|x| x.insert == "ext:") && c.iter().all(|x| x.insert.starts_with("ex")),
+            "the earlier word is not what is being typed: {c:?}"
+        );
         assert!(
             complete("rapor ex", 5).iter().all(|c| c.insert != "ext:"),
             "a cursor inside the first word does not complete the second"

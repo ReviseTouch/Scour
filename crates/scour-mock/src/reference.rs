@@ -49,6 +49,8 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),
         Match::Num(f, cmp, v) => cmp.holds(num_of(e, *f), *v),
+        Match::NameLen(cmp, v) => cmp.holds(e.name().chars().count() as i64, *v),
+        Match::NameContainsCased(t) => e.name().contains(t.as_str()),
         Match::Depth(cmp, v) => cmp.holds(e.path.bytes().filter(|&b| b == b'/').count() as i64, *v),
         // Compiled per call, which is exactly what the index must not do and
         // exactly what a reference should: the slow, obvious version is the
