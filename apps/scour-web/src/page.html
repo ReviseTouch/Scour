@@ -685,6 +685,42 @@
   .panel .line em { font-style: normal; color: var(--ink-3); }
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
 
+  /* ---------------- terim çipleri ---------------- */
+  .chips {
+    display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.5);
+    margin-top: calc(var(--u) * 2);
+    min-height: 22px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: calc(var(--u) * 1.5);
+    font: 500 12px/1 var(--mono);
+    padding: calc(var(--u) * 1.25) calc(var(--u) * 2);
+    border-radius: 11px;
+    border: 1px solid var(--line);
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+    /* The term keeps the colour it has in the line above it, so the eye can
+       carry one to the other without being told they are the same thing. */
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .chip i { font-style: normal; color: var(--ink-3); font-size: 13px; line-height: 1; }
+  .chip:hover  { border-color: var(--ink-3); color: var(--ink); }
+  .chip:hover i { color: var(--q-not); }
+  .chip:focus-visible { outline: 2px solid var(--q-key); outline-offset: 1px; }
+  .chip.key  { color: var(--q-key);  border-color: color-mix(in srgb, var(--q-key) 40%, var(--line)); }
+  .chip.val  { color: var(--q-val);  border-color: color-mix(in srgb, var(--q-val) 40%, var(--line)); }
+  .chip.glob { color: var(--q-glob); border-color: color-mix(in srgb, var(--q-glob) 40%, var(--line)); }
+  .chip.not  { color: var(--q-not);  border-color: color-mix(in srgb, var(--q-not) 40%, var(--line)); }
+  .chip.bad  {
+    color: var(--q-bad);
+    border-color: color-mix(in srgb, var(--q-bad) 55%, var(--line));
+    /* The same wavy underline the line above gives an unreadable term: this is
+       the one thing a query can be wrong about silently. */
+    text-decoration: underline wavy var(--q-bad);
+    text-underline-offset: 3px;
+  }
+
   /* ---------------- satır menüsü ---------------- */
   tbody tr { cursor: default; }
   /* The rows that are not drawn, standing in for their own height. */
@@ -779,6 +815,10 @@
         </div>
       </div>
       <p class="qread" id="qread"></p>
+      <!-- One pill a term. Clicking one takes it out of the text, which is
+           where the query lives — there is no hidden state to get out of step
+           with what is written. -->
+      <div class="chips" id="chips" aria-label="Terimler"></div>
     </div>
 
     <div class="meter">
@@ -942,6 +982,8 @@
       SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }),
     /* Every question about the matching set, in one request. The index
        answers them from one walk of it — see `FacetResponse::groups`. */
+    explain: (q, cursor) =>
+      SERVICE.get("explain", cursor === null ? { q } : { q, cursor }),
     sidebar: (q, edges) =>
       SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
     status: () => SERVICE.get("status", {}),
@@ -1404,6 +1446,102 @@
   const SYNTAX = new Set(["colon", "sep", "quote", "cmp", "not", "or"]);
 
   // --- the shadow layer: roles to colours. The frontend's ONLY job here.
+  /* ---------------- what the query means ----------------
+   *
+   * **The engine says, the page draws.** This used to hold its own copy of the
+   * field table and its own tokeniser, which is a second parser — and it had
+   * already drifted: `node:`, `perm:`, `user:`, `depth:` and `regex:` all
+   * existed in the language and were coloured here as plain text, because this
+   * table had never heard of them. `Request::Explain` exists precisely so that
+   * there is one parser, and the doc comment on it says why: the day the two
+   * disagree, the box is confidently colouring a lie.
+   *
+   * So the spans, the readable sentence and the completions all come from one
+   * call, on the same keystroke, and this file maps role to colour and nothing
+   * else. A term added to the engine tomorrow is coloured correctly here with
+   * no change at all. */
+  let readGeneration = 0;
+  let LAST_SPANS = [];
+
+  function refreshReading(text) {
+    const mine = ++readGeneration;
+    const caret = document.activeElement === q ? (q.selectionStart ?? null) : null;
+    SERVICE.explain(text, caret)
+      .then((res) => {
+        if (mine !== readGeneration) return;
+        LAST_SPANS = res.spans || [];
+        paint(text);
+        qread.textContent = res.description || "";
+        qread.classList.toggle(
+          "warn",
+          LAST_SPANS.some((s) => s.role === "unknown_field" || s.role === "bad_value")
+        );
+        paintChips(text);
+      })
+      .catch(() => {});
+  }
+
+  /* The engine's role names, as the palette spells them. Anything unknown is
+     drawn as text, which is what an older page should do with a newer role. */
+  const ROLE_CLASS = {
+    field: "key", colon: "key", cmp: "key", sep: "key",
+    value: "val", phrase: "val", quote: "val",
+    glob: "glob", regex: "glob",
+    // `|` is structure, not exclusion: it says how terms combine, which is
+    // what the key colour is for. Painting it in the exclusion colour would
+    // say "this removes things", and it does the opposite.
+    not: "not", or: "key",
+    unknown_field: "bad", bad_value: "bad",
+  };
+
+  function paintSpans(text) {
+    if (!LAST_SPANS.length) return [["text", text]];
+    const out = [];
+    let at = 0;
+    for (const s of LAST_SPANS) {
+      if (s.start > at) out.push(["text", text.slice(at, s.start)]);
+      out.push([s.role, text.slice(s.start, s.start + s.len)]);
+      at = s.start + s.len;
+    }
+    if (at < text.length) out.push(["text", text.slice(at)]);
+    return out;
+  }
+
+  /* One pill a term: what it says, in its own colour, with a way to take it
+     off. Terms are the spans between spaces — the engine has already decided
+     where a term begins and ends, and splitting the text again here would be
+     the second parser walking back in through a different door. */
+  function paintChips(text) {
+    const chips = [];
+    let cur = null;
+    for (const s of LAST_SPANS) {
+      if (s.role === "space") {
+        if (cur) chips.push(cur);
+        cur = null;
+        continue;
+      }
+      if (!cur) cur = { start: s.start, end: s.start + s.len, roles: [] };
+      cur.end = s.start + s.len;
+      cur.roles.push(s.role);
+    }
+    if (cur) chips.push(cur);
+
+    const rail = document.getElementById("chips");
+    if (!rail) return;
+    rail.innerHTML = chips
+      .map((c) => {
+        const body = text.slice(c.start, c.end);
+        /* The colour of a term is the colour of what makes it what it is: a
+           field name before its value, a mistake before anything. */
+        const rank = ["bad_value", "unknown_field", "not", "field", "or", "glob", "regex", "phrase"];
+        const role = rank.find((r) => c.roles.includes(r)) || "text";
+        return `<button type="button" class="chip ${ROLE_CLASS[role] || ""}"
+                  data-start="${c.start}" data-end="${c.end}"
+                  title="çıkarmak için tıkla">${escape_(body)}<i aria-hidden="true">×</i></button>`;
+      })
+      .join("");
+  }
+
   function paint(text) {
     // A caret sits *between* characters, so both neighbours are candidates:
     // backspace takes the one behind, Delete the one ahead.
@@ -1415,8 +1553,9 @@
     }
     let at = 0;
     let html = "";
-    for (const [role, t] of spans(text)) {
+    for (const [role, t] of paintSpans(text)) {
       const plain = role === "text" || role === "space";
+      const cls = ROLE_CLASS[role] || "";
       const marked = SYNTAX.has(role) && [...t].some((_, k) => touch.has(at + k));
       if (marked) {
         // Only the touched character is marked, not the whole run: `<=` is one
@@ -1672,9 +1811,9 @@
        The list catches up when the service answers, and the two being
        separate is why the caret never waits for a search. */
     paint(text);
-    const r = reading(text);
-    qread.innerHTML = r.html;
-    qread.classList.toggle("warn", r.warn);
+    // The colouring and the sentence both arrive from the engine, a moment
+    // behind the keystroke; the caret never waits for them.
+    refreshReading(text);
     showHints();
     syncHeads();
 
@@ -1984,6 +2123,22 @@
       delete el.dataset.was;
     }, 4000);
   }
+
+  /* Taking a term off. The text is the query — there is no hidden state — so
+     removing a chip is a substring removal and a re-render, and the result is
+     exactly what the user would have typed. */
+  document.getElementById("chips").addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    const from = Number(chip.dataset.start);
+    const to = Number(chip.dataset.end);
+    const before = q.value.slice(0, from).replace(/\s+$/, "");
+    const after = q.value.slice(to).replace(/^\s+/, "");
+    q.value = before && after ? before + " " + after : before + after;
+    q.focus();
+    q.setSelectionRange(q.value.length, q.value.length);
+    render();
+  });
 
   const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
 

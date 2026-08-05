@@ -452,7 +452,13 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     serde_json::json!({
                         "start": s.start,
                         "len": s.len,
-                        "role": format!("{:?}", s.role).to_lowercase(),
+                        // Serde's name, not `Debug`'s. `Role::UnknownField`
+                        // debug-prints as `UnknownField`, which lowercases to
+                        // `unknownfield` — and the page, matching the
+                        // `snake_case` the protocol actually uses, quietly
+                        // matched none of them. The one role that must never
+                        // be missed is exactly the one this broke.
+                        "role": s.role,
                     })
                 })
                 .collect();
@@ -463,7 +469,7 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         "insert": c.insert,
                         "label": c.label,
                         "about": c.about,
-                        "kind": format!("{:?}", c.kind).to_lowercase(),
+                        "kind": c.kind,
                     })
                 })
                 .collect();
