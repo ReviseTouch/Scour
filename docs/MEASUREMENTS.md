@@ -2772,3 +2772,44 @@ does not put an ancestor beside its descendant: with `/pkg/lib` and
 — `-` is 0x2D and `/` is 0x2F — so the single comparison lands on the member
 that does not match. Caught by `the_fast_answer_agrees_with_the_slow_one`,
 which asks both ways about 768 probes.
+
+## 2026-08-05 — does live updating work on ntfs3?
+
+The configuration had `watch = false` for the NTFS volume, on two grounds
+written into the comment beside it. Both were wrong.
+
+```bash
+cargo run --release -p scour-source-fs --example canwatch -- /mnt/depo
+# /mnt/depo: watched, 6.3s to install
+#    events arrive — live updates will work here
+```
+
+"A minute of setup" is 6.3 seconds for 177,915 directories. "The volume only
+changes when Windows is running" is not true of a volume mounted `rw` and
+written to from both sides.
+
+`canwatch` grew the second line for this. A watch being *accepted* and a watch
+*reporting* are different questions — network mounts and FUSE accept one and
+report nothing — so it now writes a file under the path, waits to be told, and
+removes it.
+
+With `watch = true`, against the live service, each step checked in the index:
+
+| from Linux, on the NTFS volume | result |
+|---|---|
+| `cp` a file in | indexed, size 100,000 correct |
+| rewrite it in place, 100 KB → 300 KB | size **and** mtime updated |
+| `mv` to a new name | old name gone, new name present |
+| `cp -r` a tree in | all three nested files indexed |
+| `mv` a directory **within** the volume | contents follow to the new path |
+| `rm -rf` | gone |
+
+The directory move is the one worth naming: renaming a populated directory
+produces no event for anything inside it, so the contents keep their old paths
+unless the rename is treated as "walk this". It is — `Modify(Name(_))` counts
+as fresh, exactly like a create.
+
+What a watch still cannot see is a change made while Linux is not running.
+That is what `scan.on_start` is for, and the two together are the whole
+picture. Cost of both: **419,574 inotify watches of 524,288**, 80% of the
+per-user limit.
