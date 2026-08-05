@@ -2961,3 +2961,60 @@ index on the second scan. The comment there said "can change"; it changes.
 
 (The control row read `49/50` the first time. That was the harness, not ext4 —
 the file it moves was inside the compared set. It has its own file now.)
+
+## 2026-08-05 — the sidebar cost more than the list beside it
+
+The design's claim is that a facet count can be recomputed on every keystroke.
+It could not, and the reason was not the counting.
+
+`run_with` narrows before it walks: the trigram index says which blocks could
+hold the text and the zone map which could satisfy the numbers, and only what
+survives is opened. `for_each_match` — behind every facet and every exact
+count — did none of that. It walked every row of every segment.
+
+It also handed `accepts` the **spelled** name where a search hands it the
+folded one, so `RAPOR.pdf` did not match `rapor` in a facet while it did in
+the list. A wrong answer rather than a slow one, and invisible: the sidebar
+just counted low.
+
+Both fixed by giving them one walk to share, `search::walk_matches`.
+
+| query | facet before | after |
+|---|---|---|
+| `rapor`, by kind | 37 ms | 26 ms |
+| `rapor`, by age | 39 ms | 24 ms |
+| `ext:rs`, by kind | 38 ms | 43 ms |
+| empty, by kind | 22 ms | 70 ms |
+
+Warm, fourth run of each, 2.1 M entries. The gain is where there is text to
+narrow **by** — `rapor` is a third cheaper. `ext:rs` and the empty query have
+no text term, so the trigram filter has nothing to say and the walk is the
+walk; the numbers move with the cap, not with the narrowing.
+
+And the totals now agree, which is the part that matters more than the
+milliseconds:
+
+| query | search | facets |
+|---|---|---|
+| `rapor` | 15,349 | 15,349 |
+| `RAPOR` | 15,349 | 15,349 |
+| `kind:doc rapor` | 9,453 | 9,453 |
+
+### What is still slow, stated rather than left to be found
+
+The empty query's age chart is **782 ms**. It is the one place where nothing
+can narrow — no text to filter blocks by — and the scan is deliberately
+uncapped because a sampled distribution of a date-ordered index is a picture
+of its recent end (see the previous section). It runs once when the page opens
+and again if a query is deleted back to empty, not per keystroke.
+
+Two ways out, neither taken yet:
+
+* **One walk for three questions.** The exact count, the kind rail and the age
+  chart each walk the same matching set separately. Answering them together is
+  three times less work for every query, not just this one.
+* **Read the distribution off the zone maps.** Rows are stored in date order,
+  so the count newer than a given day is a binary search over the per-block
+  minima rather than a walk — for the empty query, exact and effectively free.
+  It stops being that simple the moment a query filters, so it would be a fast
+  path rather than the answer.

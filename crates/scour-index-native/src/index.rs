@@ -589,25 +589,35 @@ impl NativeIndex {
     ///
     /// The shared walk behind counting and faceting. Stops when `f` returns
     /// `false`.
+    /// Run `f` for every live row the query accepts, across all segments.
+    ///
+    /// The shared walk behind counting and faceting. Stops when `f` returns
+    /// `false`.
+    ///
+    /// **Narrowed the same way a search is**, which it was not: this used to
+    /// walk every row of every segment while `run_with` skipped whole blocks
+    /// on the trigram filter and the zone map. So the sidebar cost more than
+    /// the list beside it, on a design whose whole claim is that a sidebar can
+    /// be recomputed on every keystroke. It also handed `accepts` the spelled
+    /// name where a search hands it the folded one, which is a quiet wrong
+    /// answer rather than a slow one.
     fn for_each_match(
         &self,
         inner: &Inner,
         query: &scour_core::Ast,
-        mut f: impl FnMut(&Segment<'_>, usize, &[u8]) -> bool,
+        mut f: impl FnMut(&Segment<'_>, usize) -> bool,
     ) -> Result<()> {
-        let mut fold = Folded::new();
         for live in &inner.segments {
             let seg = live.view()?;
             let plan = Plan::compile(query, &seg)?;
-            let mut go = true;
-            seg.names.walk(0, |row, name| {
-                if seg.is_alive(row)
-                    && plan.accepts(&seg, row, name, &mut fold)
-                    && !conceals(inner, &seg, row, name)
-                {
-                    go = f(&seg, row, name);
+            let go = crate::search::walk_matches(&seg, &plan, |row| {
+                // The overlay is consulted here rather than inside the walk,
+                // because it costs nothing when nothing is pending — which is
+                // every moment except the second after a delete.
+                if conceals(inner, &seg, row, b"") {
+                    return true;
                 }
-                go
+                f(&seg, row)
             });
             if !go {
                 break;
@@ -1170,7 +1180,7 @@ impl Index for NativeIndex {
             _ => String::new(),
         };
 
-        self.for_each_match(&inner, &req.query, |seg, row, name| {
+        self.for_each_match(&inner, &req.query, |seg, row| {
             match &req.by {
                 FacetBy::Kind => {
                     let k = Kind::from_u8(seg.num_of(Field::Kind, row) as u8).unwrap_or(Kind::File);
@@ -1181,13 +1191,13 @@ impl Index for NativeIndex {
                     *counts.entry(k.token().to_owned()).or_default() += 1;
                 }
                 FacetBy::Ext { .. } => {
-                    let ext = scour_core::ext_of(&String::from_utf8_lossy(name));
+                    let ext = scour_core::ext_of(seg.names.get(row).unwrap_or_default());
                     if !ext.is_empty() {
                         *counts.entry(ext).or_default() += 1;
                     }
                 }
                 FacetBy::Dir { .. } => {
-                    let path = seg.path(row, &String::from_utf8_lossy(name));
+                    let path = seg.path(row, seg.names.get(row).unwrap_or_default());
                     if let Some(rest) = path
                         .strip_prefix(parent.as_str())
                         .and_then(|r| r.strip_prefix('/'))

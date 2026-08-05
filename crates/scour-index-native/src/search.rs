@@ -844,17 +844,7 @@ pub fn run_with(
     // remove: the trigram index says which blocks could contain the text, and
     // the zone map says which could satisfy the numbers. What survives is
     // walked exactly as it always was.
-    let n_blocks = seg.rows().div_ceil(BLOCK);
-    let blocks: Vec<u32> = match &plan.candidates {
-        Some(c) => c
-            .iter()
-            .copied()
-            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
-            .collect(),
-        None => (0..n_blocks as u32)
-            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
-            .collect(),
-    };
+    let blocks = blocks_worth_opening(seg, plan);
 
     // Nothing here reads a name, so nothing here reads the arena.
     //
@@ -1056,6 +1046,75 @@ fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool, exact: bool) 
 /// Timestamps tie constantly — a package install stamps thousands of files at
 /// one instant — so without a second key the same query returns a different
 /// page each time.
+/// Which blocks are worth opening at all.
+///
+/// Two filters, and both can only remove: the trigram index says which blocks
+/// could contain the text, and the zone map which could satisfy the numbers.
+///
+/// **Shared, because the two callers diverging is what went wrong.** A search
+/// narrowed and a facet did not — it walked every row of every segment, so the
+/// sidebar cost more than the list it describes, and the whole point of the
+/// design is that a sidebar is recomputed on every keystroke.
+pub(crate) fn blocks_worth_opening(seg: &Segment<'_>, plan: &Plan) -> Vec<u32> {
+    let n_blocks = seg.rows().div_ceil(BLOCK);
+    match &plan.candidates {
+        Some(c) => c
+            .iter()
+            .copied()
+            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
+            .collect(),
+        None => (0..n_blocks as u32)
+            .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
+            .collect(),
+    }
+}
+
+/// Every matching row of one segment, narrowed the same way a search is.
+///
+/// For the questions that are about the whole matching set rather than about a
+/// page of it — how many, of what kind, how old. `f` is given the row; a
+/// caller that wants the name reads it, because most of them do not and the
+/// arena is the expensive part.
+///
+/// Returns false if `f` asked it to stop.
+pub fn walk_matches(seg: &Segment<'_>, plan: &Plan, mut f: impl FnMut(usize) -> bool) -> bool {
+    let mut fold = Folded::new();
+    let blocks = blocks_worth_opening(seg, plan);
+    let by_row = !plan.needs_name();
+    let mut i = 0usize;
+    while i < blocks.len() {
+        let mut j = i;
+        while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
+            j += 1;
+        }
+        let from = blocks[i] as usize * BLOCK;
+        let to = ((blocks[j] as usize + 1) * BLOCK).min(seg.rows());
+        if by_row {
+            for row in from..to {
+                if seg.is_alive(row) && plan.accepts(seg, row, b"", &mut fold) && !f(row) {
+                    return false;
+                }
+            }
+        } else {
+            let mut go = true;
+            // The **folded** arena, exactly as a search walks it: `accepts`
+            // compares against folded needles, and handing it the spelled name
+            // means `RAPOR.pdf` quietly does not match `rapor`.
+            seg.folded.walk_range(from, to, |row, name| {
+                if seg.is_alive(row) && plan.accepts(seg, row, name, &mut fold) {
+                    go = f(row);
+                }
+                go
+            });
+            if !go {
+                return false;
+            }
+        }
+        i = j + 1;
+    }
+    true
+}
+
 pub(crate) fn sort_hits(hits: &mut [Hit], key: SortKey, desc: bool, terms: &[&str]) {
     use scour_core::text::{DefaultFolder, Folder};
 
