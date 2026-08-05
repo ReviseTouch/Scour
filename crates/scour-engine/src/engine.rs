@@ -285,7 +285,8 @@ impl Engine {
         })
     }
 
-    pub fn facets(&self, query: &str, by: scour_core::FacetBy) -> Result<FacetResponse> {
+    /// Every facet question about one query, answered from one walk.
+    pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
         self.shared.index.facets(&FacetRequest {
             query: scour_query::parse(query),
             by,

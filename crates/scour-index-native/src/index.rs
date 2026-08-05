@@ -1153,84 +1153,127 @@ impl Index for NativeIndex {
         })
     }
 
+    /// Every question about the matching set, from **one** walk of it.
+    ///
+    /// The sidebar wants a count, a breakdown by kind and a distribution by
+    /// age, and each of those used to be its own request — three walks of the
+    /// same rows to produce three views of them, 100 to 200 ms behind a
+    /// keystroke on 2.1 M entries. They are answered together now, which is a
+    /// third of the work by construction and needs no cleverness at all: the
+    /// walk was always the cost and the counting never was.
     fn facets(&self, req: &FacetRequest) -> Result<FacetResponse> {
         let started = Instant::now();
         let inner = self.inner.read();
-        let mut counts: HashMap<String, u64> = HashMap::new();
+        let mut counts: Vec<HashMap<String, u64>> = vec![HashMap::new(); req.by.len()];
         let mut seen = 0usize;
-        let top = match &req.by {
-            FacetBy::Kind => 16,
-            FacetBy::Ext { top } | FacetBy::Dir { top, .. } => (*top).max(1) as usize,
-            // Every band, or the chart has holes in it.
-            FacetBy::Age { edges } => edges.len() + 1,
-        };
         // `now` once, not per row: a walk of two hundred thousand rows that
         // asks the clock each time is asking it two hundred thousand times.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
-        let cap = match &req.by {
-            FacetBy::Age { .. } => AGE_SCAN_CAP,
-            _ => FACET_SCAN_CAP,
+        // The most demanding question decides, because they share the walk: a
+        // distribution cannot be sampled (see `AGE_SCAN_CAP`), so asking for
+        // one alongside a top-ten makes the top-ten exact as a side effect.
+        let cap = if req.by.iter().any(|b| matches!(b, FacetBy::Age { .. })) {
+            AGE_SCAN_CAP
+        } else {
+            FACET_SCAN_CAP
         };
-        let parent = match &req.by {
-            FacetBy::Dir { path, .. } => path.trim_end_matches('/').to_owned(),
-            _ => String::new(),
-        };
+        let parents: Vec<String> = req
+            .by
+            .iter()
+            .map(|b| match b {
+                FacetBy::Dir { path, .. } => path.trim_end_matches('/').to_owned(),
+                _ => String::new(),
+            })
+            .collect();
+        // Read once per row however many questions want it, and not at all
+        // when none does — which is the common case, since kind and age are
+        // both columns.
+        let wants_name = req
+            .by
+            .iter()
+            .any(|b| matches!(b, FacetBy::Ext { .. } | FacetBy::Dir { .. }));
 
         self.for_each_match(&inner, &req.query, |seg, row| {
-            match &req.by {
-                FacetBy::Kind => {
-                    let k = Kind::from_u8(seg.num_of(Field::Kind, row) as u8).unwrap_or(Kind::File);
-                    // The token, not the label: a rail turns a facet into a
-                    // `kind:` term, and a label can be two words and can be
-                    // translated. `by` in the reply is what tells the renderer
-                    // to translate it back for display.
-                    *counts.entry(k.token().to_owned()).or_default() += 1;
-                }
-                FacetBy::Ext { .. } => {
-                    let ext = scour_core::ext_of(seg.names.get(row).unwrap_or_default());
-                    if !ext.is_empty() {
-                        *counts.entry(ext).or_default() += 1;
+            let name = wants_name.then(|| seg.names.get(row).unwrap_or_default());
+            for (i, by) in req.by.iter().enumerate() {
+                match by {
+                    FacetBy::Kind => {
+                        let k =
+                            Kind::from_u8(seg.num_of(Field::Kind, row) as u8).unwrap_or(Kind::File);
+                        // The token, not the label: a rail turns a facet into
+                        // a `kind:` term, and a label can be two words and can
+                        // be translated. `by` in the reply is what tells the
+                        // renderer to translate it back for display.
+                        *counts[i].entry(k.token().to_owned()).or_default() += 1;
                     }
-                }
-                FacetBy::Dir { .. } => {
-                    let path = seg.path(row, seg.names.get(row).unwrap_or_default());
-                    if let Some(rest) = path
-                        .strip_prefix(parent.as_str())
-                        .and_then(|r| r.strip_prefix('/'))
-                    {
-                        let child = rest.split('/').next().unwrap_or(rest);
-                        *counts.entry(child.to_owned()).or_default() += 1;
+                    FacetBy::Ext { .. } => {
+                        let ext = scour_core::ext_of(name.unwrap_or_default());
+                        if !ext.is_empty() {
+                            *counts[i].entry(ext).or_default() += 1;
+                        }
                     }
-                }
-                FacetBy::Age { edges } => {
-                    let days = (now - seg.num_of(Field::Mtime, row)).max(0) / 86_400;
-                    // The bands are ascending, so the first one it fits is its
-                    // own. Linear because there are a couple of dozen of them
-                    // and a binary search over that is not worth the branch.
-                    let key = edges
-                        .iter()
-                        .find(|&&e| days <= e as i64)
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "older".to_owned());
-                    *counts.entry(key).or_default() += 1;
+                    FacetBy::Dir { .. } => {
+                        let path = seg.path(row, name.unwrap_or_default());
+                        if let Some(rest) = path
+                            .strip_prefix(parents[i].as_str())
+                            .and_then(|r| r.strip_prefix('/'))
+                        {
+                            let child = rest.split('/').next().unwrap_or(rest);
+                            *counts[i].entry(child.to_owned()).or_default() += 1;
+                        }
+                    }
+                    FacetBy::Age { edges } => {
+                        let days = (now - seg.num_of(Field::Mtime, row)).max(0) / 86_400;
+                        // Ascending, so the first band it fits is its own.
+                        // Linear because there are a couple of dozen and a
+                        // binary search over that is not worth the branch.
+                        let key = edges
+                            .iter()
+                            .find(|&&e| days <= e as i64)
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| "older".to_owned());
+                        *counts[i].entry(key).or_default() += 1;
+                    }
                 }
             }
             seen += 1;
             seen < cap
         })?;
 
-        let mut facets: Vec<Facet> = counts
-            .into_iter()
-            .map(|(key, count)| Facet { key, count })
+        let groups: Vec<scour_core::FacetGroup> = req
+            .by
+            .iter()
+            .zip(counts)
+            .map(|(by, map)| {
+                let top = match by {
+                    FacetBy::Kind => 16,
+                    FacetBy::Ext { top } | FacetBy::Dir { top, .. } => (*top).max(1) as usize,
+                    // Every band, or the chart has holes in it.
+                    FacetBy::Age { edges } => edges.len() + 1,
+                };
+                let mut facets: Vec<Facet> = map
+                    .into_iter()
+                    .map(|(key, count)| Facet { key, count })
+                    .collect();
+                facets.sort_unstable_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
+                facets.truncate(top);
+                scour_core::FacetGroup {
+                    by: by.clone(),
+                    facets,
+                }
+            })
             .collect();
-        facets.sort_unstable_by(|a, b| b.count.cmp(&a.count).then(a.key.cmp(&b.key)));
-        facets.truncate(top);
+
         Ok(FacetResponse {
-            facets,
-            by: req.by.clone(),
+            // The first group, flat, so a caller that asked one question does
+            // not have to unwrap a list to read its answer.
+            facets: groups.first().map(|g| g.facets.clone()).unwrap_or_default(),
+            by: groups.first().map(|g| g.by.clone()).unwrap_or_default(),
+            total: seen as u64,
+            groups,
             capped: seen >= cap,
             took_us: started.elapsed().as_micros() as u64,
         })

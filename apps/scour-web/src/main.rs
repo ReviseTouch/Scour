@@ -347,33 +347,63 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
+/// Everything the sidebar needs, from one walk.
+///
+/// `by=kind,age` asks both; the reply carries a group per question in the
+/// order asked, plus the exact total, which the walk produces for free. The
+/// page used to make three requests for this — a count, a rail and a chart —
+/// and each of them walked the matching set again.
 fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    // `by=age&edges=1,2,4,…` for the histogram, kind for the rail.
-    let by = match req.param("by") {
-        Some("age") => FacetBy::Age {
-            edges: req
-                .param("edges")
-                .unwrap_or_default()
-                .split(',')
-                .filter_map(|s| s.parse().ok())
-                .collect(),
-        },
-        _ => FacetBy::Kind,
-    };
+    let edges: Vec<u32> = req
+        .param("edges")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let by: Vec<FacetBy> = req
+        .param("by")
+        .unwrap_or("kind")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|name| match name {
+            "age" => FacetBy::Age {
+                edges: edges.clone(),
+            },
+            "ext" => FacetBy::Ext { top: 24 },
+            _ => FacetBy::Kind,
+        })
+        .collect();
     let request = Request::Facets {
         query: req.param("q").unwrap_or_default().to_owned(),
         by,
     };
     match call(client, request) {
         Ok(Response::Facets(r)) => {
-            let facets: Vec<serde_json::Value> = r
-                .facets
+            let groups: Vec<serde_json::Value> = r
+                .groups
                 .iter()
-                .map(|f| serde_json::json!({ "key": f.key, "count": f.count }))
+                .map(|g| {
+                    serde_json::json!({
+                        "by": match &g.by {
+                            FacetBy::Kind => "kind",
+                            FacetBy::Ext { .. } => "ext",
+                            FacetBy::Dir { .. } => "dir",
+                            FacetBy::Age { .. } => "age",
+                        },
+                        "facets": g.facets.iter()
+                            .map(|f| serde_json::json!({ "key": f.key, "count": f.count }))
+                            .collect::<Vec<_>>(),
+                    })
+                })
                 .collect();
             http::json(
                 stream,
-                &serde_json::json!({ "facets": facets, "capped": r.capped }),
+                &serde_json::json!({
+                    "groups": groups,
+                    "total": r.total,
+                    "capped": r.capped,
+                    "took_us": r.took_us,
+                }),
             );
         }
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),

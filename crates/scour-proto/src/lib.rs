@@ -62,10 +62,14 @@ pub enum Request {
         #[serde(default = "default_cap")]
         cap: u32,
     },
-    /// Group the matching set — by kind, by extension, or by folder.
+    /// Group the matching set — by kind, by extension, by folder, by age.
+    ///
+    /// A **list**, because they are all questions about the same rows and the
+    /// index answers them from one walk of it. A sidebar asking for three
+    /// separately walked the matching set three times.
     Facets {
         query: String,
-        by: FacetBy,
+        by: Vec<FacetBy>,
     },
     /// List a directory from the index.
     ///
@@ -275,7 +279,7 @@ mod tests {
             },
             Request::Facets {
                 query: String::new(),
-                by: FacetBy::Ext { top: 5 },
+                by: vec![FacetBy::Ext { top: 5 }],
             },
             Request::Tree {
                 path: "/a".into(),

@@ -14,9 +14,9 @@ pub use entry::{Entry, EntryId, Key, Kind, Meta, SourceId, ext_of, ext_str, kind
 pub use error::{Error, Result};
 pub use prefix::{PrefixSet, under};
 pub use search::{
-    AGE_BANDS, ApplyReport, DirUsage, Facet, FacetBy, FacetRequest, FacetResponse, Hit, IndexStats,
-    MaintReport, Maintenance, Page, SearchRequest, SearchResponse, SortKey, UsageRequest,
-    UsageResponse,
+    AGE_BANDS, ApplyReport, DirUsage, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Hit,
+    IndexStats, MaintReport, Maintenance, Page, SearchRequest, SearchResponse, SortKey,
+    UsageRequest, UsageResponse,
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};
 pub use status::{Status, TreeNode};

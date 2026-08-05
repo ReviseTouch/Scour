@@ -187,10 +187,22 @@ pub enum FacetBy {
     },
 }
 
+/// One question's answer, beside the question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FacetGroup {
+    /// What the keys mean. Echoed back for the same reason `FacetResponse::by`
+    /// is: a renderer that has to remember what it asked in order to draw the
+    /// answer is a renderer that will get the two out of step.
+    pub by: FacetBy,
+    pub facets: Vec<Facet>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FacetRequest {
     pub query: Ast,
-    pub by: FacetBy,
+    /// The questions, all of them about the same rows. See
+    /// [`FacetResponse::groups`] for why this is a list.
+    pub by: Vec<FacetBy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +213,23 @@ pub struct Facet {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FacetResponse {
+    /// One per question asked, in the order they were asked.
+    ///
+    /// **Several, because they are all answers about the same rows.** The
+    /// sidebar wants a count, a breakdown by kind and a distribution by age,
+    /// and asking for them one at a time walks the matching set three times to
+    /// produce three views of it. Measured on 2.1 M entries, the three
+    /// together were 100–200 ms behind a keystroke; one walk is one third of
+    /// that by construction.
+    #[serde(default)]
+    pub groups: Vec<FacetGroup>,
+    /// How many rows matched, from the same walk.
+    ///
+    /// Exact unless `capped`. The count is free here — the walk has to visit
+    /// every matching row anyway — where asking for it separately is a second
+    /// pass over the whole set.
+    #[serde(default)]
+    pub total: u64,
     pub facets: Vec<Facet>,
     /// What the keys mean, echoed back.
     ///

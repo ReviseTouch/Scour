@@ -3059,3 +3059,53 @@ that is the cheaper mistake by five orders of magnitude.
 The `filesystems` example probes it, and reports what it can honestly measure
 — whether a `chmod` sticks, which on ntfs3 is `yes` even though the flag is
 `no`. The two are different questions and the table says both.
+
+## 2026-08-05 — three questions, one walk
+
+The sidebar asks three things about the same rows: how many matched, what
+kinds they are, how old they are. Each was a request, and each walked the
+matching set again.
+
+`FacetRequest.by` is a list now, `FacetResponse` carries a group per question
+and the total, and the index answers them all from one `for_each_match`. No
+cleverness: the walk was always the cost and the counting never was.
+
+Warm, fourth run of each, 2.1 M entries, the whole sidebar:
+
+| query | three requests | one |
+|---|---|---|
+| `rapor` | 26 + 24 + 28 = 78 ms | **25 ms** |
+| `ext:rs` | 43 + 42 + 39 = 124 ms | **42 ms** |
+| `kind:image` | 86 + 90 + ~40 = 216 ms | **48 ms** |
+| empty | 70 + 782 + ~40 = 892 ms | **119 ms** |
+
+The page makes two requests per settled query now — the rows, then everything
+else — where it made four.
+
+### The third idea is no longer worth doing
+
+The plan after this was to read the age distribution off the block zone maps,
+because rows are stored in date order and a count newer than a given day is a
+binary search rather than a walk. It was aimed at the empty query's 782 ms.
+
+That number is 119 ms and it now also carries the count and the kind rail, all
+of it behind the rows rather than in front of them. What is left to win is a
+fraction of a background request, against a fast path that stops being valid
+the moment a query filters. Not built, and this is why.
+
+### What is left, and it is not speed
+
+**A browser will not make an element taller than about 33.5 M pixels.** At
+31px a row that is 1.08 M rows, and the empty query is 2.14 M. Past the ceiling
+the scroll position stops mapping to a row.
+
+So above it the rows are packed at whatever pitch does fit — the bar still
+spans the whole set and dragging it still lands where it points; what is lost
+is that a wheel notch covers more rows than it looks like it should. The
+alternative is a scrollbar that lies about how much is left.
+
+Verified exactly for `ext:rs` (89,702 rows, uncompressed): jumping to row
+20,000 shows what the service returns for that offset. **Not verified for the
+compressed path** — the browser harness could not be made to hold a synthetic
+scroll position steady long enough to read it back, and a claim without a
+measurement is an opinion.

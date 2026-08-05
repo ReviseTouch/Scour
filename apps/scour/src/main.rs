@@ -241,14 +241,14 @@ fn build(args: &Args) -> Result<Request> {
         },
         Some(Command::Facets { query, by, top }) => Request::Facets {
             query: join(query),
-            by: match by.as_str() {
+            by: vec![match by.as_str() {
                 "kind" => FacetBy::Kind,
                 "ext" => FacetBy::Ext { top: *top },
                 dir => FacetBy::Dir {
                     path: dir.to_owned(),
                     top: *top,
                 },
-            },
+            }],
         },
         Some(Command::Tree { path, depth, limit }) => Request::Tree {
             path: path.clone(),

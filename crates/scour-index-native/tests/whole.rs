@@ -966,7 +966,7 @@ fn facets_count_what_a_search_would_have_returned() {
         .index
         .facets(&FacetRequest {
             query: parse_at("kind:code", NOW),
-            by: FacetBy::Ext { top: 5 },
+            by: vec![FacetBy::Ext { top: 5 }],
         })
         .expect("facets");
     assert!(!by_ext.facets.is_empty());
@@ -995,10 +995,10 @@ fn facets_count_what_a_search_would_have_returned() {
         .index
         .facets(&FacetRequest {
             query: parse_at("", NOW),
-            by: FacetBy::Dir {
+            by: vec![FacetBy::Dir {
                 path: "/home/u".into(),
                 top: 10,
-            },
+            }],
         })
         .expect("facets");
     assert!(children.facets.iter().any(|c| c.key == "Projeler"));

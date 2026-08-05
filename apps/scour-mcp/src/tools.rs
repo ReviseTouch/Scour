@@ -202,14 +202,14 @@ impl Scour {
         let top = a.top.unwrap_or(15).min(100);
         self.call(Request::Facets {
             query: a.query,
-            by: match a.by.as_str() {
+            by: vec![match a.by.as_str() {
                 "kind" => FacetBy::Kind,
                 "ext" => FacetBy::Ext { top },
                 dir => FacetBy::Dir {
                     path: dir.to_owned(),
                     top,
                 },
-            },
+            }],
         })
     }
 

@@ -345,6 +345,8 @@ mod tests {
             "Nothing matched."
         );
         let f = FacetResponse {
+            groups: Vec::new(),
+            total: 0,
             facets: vec![Facet {
                 key: "rs".into(),
                 count: 3,

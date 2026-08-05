@@ -200,7 +200,7 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                     generation,
                     Request::Facets {
                         query,
-                        by: scour_core::FacetBy::Kind,
+                        by: vec![scour_core::FacetBy::Kind],
                     },
                     Lane::Facets,
                 ),

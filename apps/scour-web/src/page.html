@@ -940,7 +940,10 @@
     },
     search: (q, sort, desc, limit, offset) =>
       SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }),
-    facets: (q) => SERVICE.get("facets", { q }),
+    /* Every question about the matching set, in one request. The index
+       answers them from one walk of it — see `FacetResponse::groups`. */
+    sidebar: (q, edges) =>
+      SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
     status: () => SERVICE.get("status", {}),
   };
 
@@ -1580,6 +1583,15 @@
    *     A window is 200 rows and lands in single-digit milliseconds.
    */
   const ROW_H = 31;          /* one row, and it must match the CSS */
+  /* **A browser will not make an element taller than about 33.5 million
+     pixels**, and 2.1 M rows at 31px want 66 M. Past the ceiling the scroll
+     position stops mapping to a row and the list jumps.
+     So above it the rows are packed at whatever height does fit — the bar
+     still spans the whole set and dragging it still lands where it points,
+     and what is lost is that one wheel notch covers more rows than it looks
+     like it should. The alternative is a scrollbar that lies about how much
+     is left, which is the thing this design refuses to do. */
+  const MAX_PX = 33_000_000;
   const WINDOW = 200;        /* rows fetched at a time */
   const MARGIN = 60;         /* extra rows kept either side of the viewport */
 
@@ -1597,9 +1609,15 @@
 
   /* Which rows the viewport is over, plus a margin so a flick does not show
      blank space before the fetch lands. */
+  /* Pixels per row: the real height until the set is too tall to draw, then
+     whatever fits. */
+  const pitch = () =>
+    LIST.total * ROW_H > MAX_PX ? MAX_PX / LIST.total : ROW_H;
+
   function visibleRange() {
-    const first = Math.max(0, Math.floor(scrollEl.scrollTop / ROW_H) - MARGIN);
-    const count = Math.ceil(scrollEl.clientHeight / ROW_H) + MARGIN * 2;
+    const p = pitch();
+    const first = Math.max(0, Math.floor(scrollEl.scrollTop / p) - MARGIN);
+    const count = Math.ceil(scrollEl.clientHeight / p) + MARGIN * 2;
     return [first, Math.min(LIST.total, first + count)];
   }
 
@@ -1609,13 +1627,14 @@
   function paintWindow() {
     const [from, to] = visibleRange();
     const parts = [];
-    if (from > 0) parts.push(`<tr class="spacer" style="height:${from * ROW_H}px"><td colspan="6"></td></tr>`);
+    const p = pitch();
+    if (from > 0) parts.push(`<tr class="spacer" style="height:${Math.round(from * p)}px"><td colspan="6"></td></tr>`);
     for (let i = from; i < to; i++) {
       const f = LIST.rows.get(i);
       parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="6"></td></tr>`);
     }
     const rest = LIST.total - to;
-    if (rest > 0) parts.push(`<tr class="spacer" style="height:${rest * ROW_H}px"><td colspan="6"></td></tr>`);
+    if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="6"></td></tr>`);
     body.innerHTML = parts.join("");
   }
 
@@ -1673,9 +1692,8 @@
         FILES = res.rows.map(fromService);
         lastMeter = res;
         draw(text, parse(text), FILES, res);
-        /* And the exact count, which the bar settles on. Only when the fast
-           answer hit its cap — otherwise it is already exact. */
-        if (res.capped) exactCount(text, mine);
+        /* And everything else about this result set, in one request. */
+        sidebar(text, mine);
       })
       .catch((e) => {
         if (mine !== generation) return;
@@ -1711,23 +1729,44 @@
       (res.took_us / 1000).toFixed(2).replace(".", ",") + " ms";
     document.getElementById("rows").textContent = fmt(res.rows_visited) + " satır okundu";
 
-    drawBars();
     syncFacets(p);
-    refreshFacetCounts(text);
   }
 
-  /* The number the scrollbar is really sized by.
-     A second question with a later deadline: the rows are already on screen
-     while this is in flight. */
-  function exactCount(text, mine) {
-    SERVICE.get("count", { q: text }).then((res) => {
-      if (mine !== generation) return;
-      LIST.total = res.total;
-      LIST.exact = !res.capped;
-      paintWindow();
-      const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
-      document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
-    }).catch(() => {});
+  /* The rest of the answer: the exact total, the rail and the chart, from
+     one walk of the matching set.
+     A later deadline than the rows, which are already on screen — and one
+     request rather than three, because they are three views of the same rows
+     and asking separately walked them three times. */
+  let sidebarGeneration = 0;
+  function sidebar(text, mine) {
+    const ours = ++sidebarGeneration;
+    SERVICE.sidebar(text, BAR_EDGES)
+      .then((res) => {
+        if (ours !== sidebarGeneration || mine !== generation) return;
+
+        /* The scrollbar's real size. */
+        LIST.total = res.total;
+        LIST.exact = !res.capped;
+        paintWindow();
+        const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
+        document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+
+        for (const g of res.groups) {
+          const by = Object.fromEntries(g.facets.map((f) => [f.key, f.count]));
+          if (g.by === "kind") {
+            KIND_COUNTS = by;
+            syncFacets(parse(q.value));
+          } else if (g.by === "age") {
+            const counts = BAR_EDGES.map((e) => by[String(e)] || 0).reverse();
+            /* Anything older than the last edge belongs to the last bar rather
+               than to nothing. Two years is where the scale ends, not where
+               the files do. */
+            counts[0] += by.older || 0;
+            paintBars(counts, res.capped);
+          }
+        }
+      })
+      .catch(() => {});
   }
 
   /* The service could not be reached. Say which, rather than showing an empty
@@ -1743,17 +1782,6 @@
         : "servise ulaşılamıyor — scourd çalışıyor mu?";
   }
 
-  /* The rail's counts, from the service, for the query as it stands. Fired
-     after the list so it never delays the rows. */
-  let facetGeneration = 0;
-  function refreshFacetCounts(text) {
-    const mine = ++facetGeneration;
-    SERVICE.facets(text).then((res) => {
-      if (mine !== facetGeneration) return;
-      KIND_COUNTS = Object.fromEntries(res.facets.map((f) => [f.key, f.count]));
-      syncFacets(parse(q.value));
-    }).catch(() => {});
-  }
 
   /* ---------------- the time distribution ----------------
    *
@@ -1778,27 +1806,6 @@
   const BAR_EDGES = Array.from({ length: BAR_COUNT }, (_, i) =>
     Math.max(1, Math.round(((10 ** (1 - i / BAR_COUNT) - 1) / 9) * BAR_SPAN_DAYS))
   ).reverse();
-
-  let barsGeneration = 0;
-  function drawBars() {
-    const mine = ++barsGeneration;
-    SERVICE.get("facets", { q: LIST.query || "", by: "age", edges: BAR_EDGES.join(",") })
-      .then((res) => {
-        if (mine !== barsGeneration) return;
-        const by = Object.fromEntries(res.facets.map((f) => [f.key, f.count]));
-        /* Newest on the right, which is the order the edges were built in and
-           the reverse of the order they are drawn. */
-        const counts = BAR_EDGES.map((e) => by[String(e)] || 0).reverse();
-        /* Anything older than the last edge belongs to the last bar rather
-           than to nothing. Two years is where the scale ends, not where the
-           files do: `ext:rs` has 89,702 matches and only 11,396 of them are
-           inside 730 days, so a chart that dropped the rest was drawing an
-           eighth of the answer and saying nothing about it. */
-        counts[0] += by.older || 0;
-        paintBars(counts, res.capped);
-      })
-      .catch(() => paintBars(new Array(BAR_COUNT).fill(0), false));
-  }
 
   function paintBars(counts, capped) {
     const max = Math.max(1, ...counts);
@@ -2048,8 +2055,12 @@
           note.textContent = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
             + (s.scanning ? " · taranıyor" : "");
         }
-        if (lastMeter) {
-          const shown = lastMeter.capped ? fmt(lastMeter.total) + "+" : fmt(lastMeter.total);
+        /* `LIST`, not the search reply. The search answers under a cap so it
+           can keep up with typing; the exact number arrives with the sidebar a
+           moment later, and a heartbeat that rewrote the line from the capped
+           one put `1.000+` back over it every ten seconds. */
+        if (LIST.total) {
+          const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
           document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
         }
       })
