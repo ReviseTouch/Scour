@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!--
+    Scour.
+
+    Not a magnifying glass. Everything's icon is one, half the utilities on a
+    desktop are one, and a lens says "look closely at one thing", which is the
+    opposite of what this does: it reads the whole disk at once.
+
+    So the mark is a list of rows with a scan passing across them — lit where
+    it has been, dark where it has not. The bar is upright rather than
+    diagonal on purpose: a diagonal over horizontal lines reads as a strike
+    through them, which is the one thing this must not say. The palette is the
+    application's own, the amber it dates files with over the ground it draws
+    them on, and the whole thing is four shapes so that it still says this at
+    sixteen pixels.
+  -->
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2=".35" y2="1">
+      <stop offset="0" stop-color="#243346"/>
+      <stop offset="1" stop-color="#0a0e14"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3d6"/>
+      <stop offset=".45" stop-color="#ffc247"/>
+      <stop offset="1" stop-color="#ff8f1f"/>
+    </linearGradient>
+    <!-- Everything the scan has already crossed. The edge is soft, so the
+         rows fade rather than ending on a cut. -->
+    <linearGradient id="passed" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset=".42" stop-color="#fff"/>
+      <stop offset=".58" stop-color="#000"/>
+    </linearGradient>
+    <mask id="behind">
+      <rect width="128" height="128" fill="url(#passed)"/>
+    </mask>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="url(#ground)"/>
+
+  <!-- The rows: a result list, uneven the way names are. -->
+  <g fill="#3b4d63">
+    <rect x="20" y="30" width="74" height="14" rx="7"/>
+    <rect x="20" y="57" width="90" height="14" rx="7"/>
+    <rect x="20" y="84" width="58" height="14" rx="7"/>
+  </g>
+  <g fill="#f4f8fd" mask="url(#behind)">
+    <rect x="20" y="30" width="74" height="14" rx="7"/>
+    <rect x="20" y="57" width="90" height="14" rx="7"/>
+    <rect x="20" y="84" width="58" height="14" rx="7"/>
+  </g>
+
+  <!-- The scan itself, leaning the way it is travelling. The wider shape
+       behind it is what makes it read as light rather than as a stick. -->
+  <g transform="rotate(8 68 64)">
+    <rect x="56" y="10" width="24" height="108" rx="12" fill="#ffb02033"/>
+    <rect x="62" y="12" width="12" height="104" rx="6" fill="url(#beam)"/>
+  </g>
+</svg>

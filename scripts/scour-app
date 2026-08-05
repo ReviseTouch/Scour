@@ -25,11 +25,17 @@
 
 set -euo pipefail
 
-# **Zero, so the system picks.** A fixed port means the second launch cannot
-# bind and dies with the first one still holding it — which happened, and is
-# not the user's problem to diagnose. The URL is read back anyway, because the
-# token changes with every start, so the port never had to be known.
-PORT="${SCOUR_APP_PORT:-0}"
+# **A fixed port, and it is not a preference.** `localStorage` is scoped to an
+# origin, and the port is part of one — so a bridge on a port the system picked
+# handed the page a fresh, empty store on every launch. The column widths, the
+# chosen columns, the notes toggle and the last query all live there, which is
+# to say: everything the window was asked to remember was being thrown away
+# every time it opened, and nothing said so.
+#
+# What the random port was avoiding — a second launch failing to bind — is
+# handled below instead, by clearing what is holding the port. There is one
+# window and one bridge; `scour-show` is what makes sure of it.
+PORT="${SCOUR_APP_PORT:-7621}"
 PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/scour/app"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release"
 WEB="$(command -v scour-web || echo "$BIN_DIR/scour-web")"
@@ -39,9 +45,13 @@ if [[ ! -x $WEB ]]; then
     exit 1
 fi
 
-# One bridge, however many times this is run. The token changes with every
-# start, so an old window's link stops working — which is the point of the
-# token and also why the URL is read back rather than assumed.
+# A bridge from a window that has since closed. Common, because a browser that
+# is killed does not tell its launcher.
+pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
+
+# The token changes with every start, so an old window's link stops working —
+# which is the point of the token and also why the URL is read back rather than
+# assumed.
 log=$(mktemp -t scour-app.XXXXXX)
 "$WEB" --port "$PORT" --no-open >"$log" 2>&1 &
 bridge=$!
@@ -74,7 +84,11 @@ if [[ -z $browser ]]; then
 fi
 
 mkdir -p "$PROFILE"
-exec "$browser" \
+# **Not `exec`.** Replacing this shell with the browser takes the trap above
+# with it, so the bridge outlived every window that ever closed — one abandoned
+# process a launch, holding a socket, for as long as the session lasted.
+# Waiting here instead costs a sleeping shell and cleans up after itself.
+"$browser" \
     --app="$url" \
     --class=Scour \
     --user-data-dir="$PROFILE" \

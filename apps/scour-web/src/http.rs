@@ -162,10 +162,21 @@ pub fn json(stream: &mut TcpStream, value: &serde_json::Value) {
     );
 }
 
+/// A refusal, in the status line as well as in the body.
+///
+/// It used to go out through [`json`], which answered a request carrying the
+/// wrong token with `200 OK` and the refusal buried in the body. Nothing
+/// leaked — the answer was still a refusal — but a status line that says the
+/// opposite of what happened is a lie to everything that reads one, and here
+/// it was the fence around the index doing the lying.
 pub fn fail(stream: &mut TcpStream, status: &str, detail: &str) {
-    json(
+    respond(
         stream,
-        &serde_json::json!({ "error": detail, "status": status }),
+        status,
+        "application/json; charset=utf-8",
+        serde_json::json!({ "error": detail, "status": status })
+            .to_string()
+            .as_bytes(),
     );
 }
 

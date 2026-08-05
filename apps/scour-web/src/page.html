@@ -1904,6 +1904,7 @@
 
   function render() {
     const text = q.value;
+    try { localStorage.setItem(Q_KEY, text); } catch {}
     /* Everything that depends only on the text happens now, at typing speed.
        The list catches up when the service answers, and the two being
        separate is why the caret never waits for a search. */
@@ -2726,6 +2727,22 @@
     applySide();
   });
   applySide();
+
+  /* The query survives the window.
+   *
+   * A search box opened by a hotkey should come back with what was last typed,
+   * selected, so the next keystroke replaces it — which is what every launcher
+   * does and what makes "press the key, type" work without thinking. It also
+   * covers the case the window is closed and opened again to bring it forward,
+   * which is what happens on a desktop that will not let anything raise a
+   * window it does not own. */
+  const Q_KEY = "scour.q.v1";
+  try {
+    const saved = localStorage.getItem(Q_KEY);
+    if (saved !== null) q.value = saved;
+  } catch {}
+  q.focus();
+  q.select();
 
   buildHeads();
   /* One status to start from — the revision in it is what the wait is

@@ -1,0 +1,8 @@
+{
+  "uuid": "scour@scour.local",
+  "name": "Scour",
+  "description": "Brings the Scour window to the front. GNOME will not let any other program do it: on Wayland only the compositor can move focus, so a hotkey that is meant to raise a window has to ask the shell, and this is the smallest thing that can be asked. It adds no UI and no settings; it exports one method on the session bus.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "session-modes": ["user"],
+  "url": "https://github.com/hasantr/scour"
+}
