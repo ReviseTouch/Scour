@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Scour in a window of its own, without a browser around it.
+#
+#   scripts/scour-app
+#
+# **Temporary, and shaped by that.** The interface is being designed in HTML
+# and will be rebuilt in Slint once it settles; what is wanted until then is a
+# window rather than a tab, with no address bar, no tabs, and its own entry in
+# the task bar. That is a flag on a browser that is already installed, not a
+# new stack:
+#
+#   --app=URL          no chrome at all: no tabs, no address bar, no menu
+#   --class=Scour      the window manager treats it as its own application
+#   --user-data-dir    its own profile, so it is a separate window group and
+#                      shares nothing with the browser being used for browsing
+#
+# The alternative is a webview binding — `wry`, which is what Tauri is built on
+# and is about forty lines for exactly this. It needs `webkit2gtk-4.1`, which
+# is not installed here:
+#
+#   sudo pacman -S webkit2gtk-4.1
+#
+# That is worth doing when the window has to be shipped to somebody else. It is
+# not worth doing to look at a design, which is what this is for.
+
+set -euo pipefail
+
+PORT="${SCOUR_APP_PORT:-7621}"
+PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/scour/app"
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release"
+WEB="$(command -v scour-web || echo "$BIN_DIR/scour-web")"
+
+if [[ ! -x $WEB ]]; then
+    echo "scour-web is not built. cargo build --release -p scour-web" >&2
+    exit 1
+fi
+
+# One bridge, however many times this is run. The token changes with every
+# start, so an old window's link stops working — which is the point of the
+# token and also why the URL is read back rather than assumed.
+log=$(mktemp -t scour-app.XXXXXX)
+"$WEB" --port "$PORT" --no-open >"$log" 2>&1 &
+bridge=$!
+trap 'kill $bridge 2>/dev/null || true; rm -f "$log"' EXIT
+
+url=""
+for _ in $(seq 1 50); do
+    url=$(grep -oE 'http://[^ ]+' "$log" | head -1 || true)
+    [[ -n $url ]] && break
+    sleep 0.1
+done
+if [[ -z $url ]]; then
+    echo "the bridge did not come up:" >&2
+    cat "$log" >&2
+    exit 1
+fi
+
+browser=""
+for b in chromium google-chrome-stable google-chrome brave vivaldi; do
+    if command -v "$b" >/dev/null; then browser=$b; break; fi
+done
+if [[ -z $browser ]]; then
+    # Firefox has no `--app`; `--kiosk` is the nearest thing and takes the
+    # whole screen, which is worse but is still not a browser window.
+    if command -v firefox >/dev/null; then
+        exec firefox --kiosk --new-instance --profile "$PROFILE" "$url"
+    fi
+    echo "no browser found to host the window; the bridge is at $url" >&2
+    exit 1
+fi
+
+mkdir -p "$PROFILE"
+exec "$browser" \
+    --app="$url" \
+    --class=Scour \
+    --user-data-dir="$PROFILE" \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-features=TranslateUI \
+    >/dev/null 2>&1
