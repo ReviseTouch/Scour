@@ -172,6 +172,19 @@ pub enum FacetBy {
         path: String,
         top: u32,
     },
+    /// How old the matching files are, counted into caller-chosen bands.
+    ///
+    /// `edges` are ages in **days**, ascending; a file lands in the first band
+    /// whose edge it is not older than, and anything older than the last edge
+    /// lands in an overflow band keyed `older`. The bands are the caller's
+    /// because the shape of a histogram is a presentation choice — a chart of
+    /// twenty-four logarithmic bars and a list of six named periods want
+    /// different edges out of the same rows, and neither belongs in here.
+    ///
+    /// The keys are the edges as text, so a reply is self-describing.
+    Age {
+        edges: Vec<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

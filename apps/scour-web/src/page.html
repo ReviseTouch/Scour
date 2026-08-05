@@ -1718,7 +1718,7 @@
       (res.took_us / 1000).toFixed(2).replace(".", ",") + " ms";
     document.getElementById("rows").textContent = fmt(res.rows_visited) + " satır okundu";
 
-    drawBars(hits);
+    drawBars();
     syncFacets(p);
     refreshFacetCounts(text);
   }
@@ -1762,23 +1762,64 @@
     }).catch(() => {});
   }
 
-  function drawBars(hits) {
-    const buckets = new Array(24).fill(0);
-    const span = 730 * DAY;
-    for (const f of hits) {
-      const a = Math.min(now - f.mtime, span - 1);
-      // Logarithmic, so the last day, the last week and the last year are all readable on one screen.
-      const t = 1 - Math.log10(1 + (a / span) * 9);
-      buckets[Math.min(23, Math.max(0, Math.floor(t * 24)))]++;
-    }
-    const max = Math.max(1, ...buckets);
-    bars.innerHTML = buckets.map((v, i) => {
+  /* ---------------- the time distribution ----------------
+   *
+   * **This must not be drawn from the loaded rows**, and it was — which is
+   * exactly as wrong as it sounds. The list is virtual, the first window is
+   * two hundred rows, and the default sort is newest first, so the chart was
+   * a picture of the two hundred newest matches and said "today" whatever was
+   * typed. A chart that answers the same regardless of the question is not a
+   * chart.
+   *
+   * So the engine is asked instead, over the whole matching set, with the
+   * bands this chart happens to want. The bands are sent rather than assumed
+   * because the shape of a histogram is a presentation choice — the report tab
+   * wants six named periods out of the same rows.
+   */
+  const BAR_COUNT = 24;
+  const BAR_SPAN_DAYS = 730;
+
+  /* The upper edge of each bar, in days, on the same logarithmic scale the
+     bars are drawn on: the last day, the last week and the last year all have
+     room on one screen. */
+  const BAR_EDGES = Array.from({ length: BAR_COUNT }, (_, i) =>
+    Math.max(1, Math.round(((10 ** (1 - i / BAR_COUNT) - 1) / 9) * BAR_SPAN_DAYS))
+  ).reverse();
+
+  let barsGeneration = 0;
+  function drawBars() {
+    const mine = ++barsGeneration;
+    SERVICE.get("facets", { q: LIST.query || "", by: "age", edges: BAR_EDGES.join(",") })
+      .then((res) => {
+        if (mine !== barsGeneration) return;
+        const by = Object.fromEntries(res.facets.map((f) => [f.key, f.count]));
+        /* Newest on the right, which is the order the edges were built in and
+           the reverse of the order they are drawn. */
+        const counts = BAR_EDGES.map((e) => by[String(e)] || 0).reverse();
+        /* Anything older than the last edge belongs to the last bar rather
+           than to nothing. Two years is where the scale ends, not where the
+           files do: `ext:rs` has 89,702 matches and only 11,396 of them are
+           inside 730 days, so a chart that dropped the rest was drawing an
+           eighth of the answer and saying nothing about it. */
+        counts[0] += by.older || 0;
+        paintBars(counts, res.capped);
+      })
+      .catch(() => paintBars(new Array(BAR_COUNT).fill(0), false));
+  }
+
+  function paintBars(counts, capped) {
+    const max = Math.max(1, ...counts);
+    const edges = [...BAR_EDGES].reverse();
+    bars.innerHTML = counts.map((v, i) => {
       const h = v === 0 ? 2 : Math.max(4, Math.round((v / max) * 46));
-      const days = Math.round(((10 ** (1 - i / 24) - 1) / 9) * 730);
+      const days = edges[i];
+      const oldest = i === 0;
       const c = v === 0 ? "--line" : bandOf(now - days * DAY);
-      return `<button type="button" data-days="${Math.max(1, days)}"
-                title="${v} sonuç · ${Math.max(1, days)} güne kadar"
-                aria-label="${v} sonuç, son ${Math.max(1, days)} gün">
+      /* The oldest bar has no upper bound, so clicking it cannot mean
+         `dm:730d` — it would select everything. It selects nothing instead. */
+      return `<button type="button" ${oldest ? "" : `data-days="${days}"`}
+                title="${fmt(v)} sonuç · ${oldest ? days + " günden eski" : days + " güne kadar"}${capped ? " (örneklenmiş)" : ""}"
+                aria-label="${v} sonuç, ${oldest ? days + " günden eski" : "son " + days + " gün"}">
                 <i style="height:${h}px;background:var(${c})"></i></button>`;
     }).join("");
   }

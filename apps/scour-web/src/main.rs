@@ -75,7 +75,7 @@ fn main() -> Result<()> {
     let client = Client::connect(&addr).with_context(|| {
         format!("no Scour service is listening on {addr}. Start one with `scourd`.")
     })?;
-    let client = Arc::new(Mutex::new(client));
+    let client = Arc::new(Mutex::new(Link(Some(client), addr.clone())));
 
     let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, args.port)))
         .with_context(|| format!("cannot listen on 127.0.0.1:{}", args.port))?;
@@ -133,7 +133,7 @@ fn open(url: &str) {
         .spawn();
 }
 
-fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str, launch: bool) {
+fn serve(mut stream: TcpStream, client: &Mutex<Link>, token: &str, launch: bool) {
     let Some(req) = http::read_request(&stream) else {
         return;
     };
@@ -196,12 +196,38 @@ fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str, launch: boo
 }
 
 /// One call to the service, with the lock held only for as long as it takes.
-fn call(client: &Mutex<Client>, request: Request) -> Result<Response, String> {
+///
+/// **Reconnects once on failure**, because the service is restarted far more
+/// often than this is — a rebuild, a config change, a `systemctl restart` —
+/// and a bridge that dies with it means every open page has to be reloaded
+/// with a new token. The connection is one socket held for the process's life,
+/// so losing it is a broken pipe on the next call and nothing more.
+fn call(client: &Mutex<Link>, request: Request) -> Result<Response, String> {
     let mut guard = client.lock().map_err(|_| "the bridge lost its client")?;
-    guard.call(request).map_err(|e| e.to_string())
+    match guard.0.as_mut().map(|c| c.call(request.clone())) {
+        Some(Ok(r)) => return Ok(r),
+        // Keep the failure to report if the retry does not help.
+        Some(Err(_)) | None => guard.0 = None,
+    }
+    let fresh = Client::connect(&guard.1).map_err(|e| e.to_string())?;
+    guard.0 = Some(fresh);
+    let out = guard
+        .0
+        .as_mut()
+        .expect("just connected")
+        .call(request)
+        .map_err(|e| e.to_string());
+    if out.is_err() {
+        guard.0 = None;
+    }
+    out
 }
 
-fn api_search(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+/// The connection, and where to open another one.
+#[derive(Debug)]
+struct Link(Option<Client>, String);
+
+fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let query = req.param("q").unwrap_or_default().to_owned();
     let limit: u32 = req
         .param("limit")
@@ -276,7 +302,7 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
 ///
 /// Separate from the search because the two have different deadlines: the rows
 /// have to be on screen before the next keystroke and this does not.
-fn api_count(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Count {
         query: req.param("q").unwrap_or_default().to_owned(),
         cap: req
@@ -294,10 +320,22 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
     }
 }
 
-fn api_facets(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    // `by=age&edges=1,2,4,…` for the histogram, kind for the rail.
+    let by = match req.param("by") {
+        Some("age") => FacetBy::Age {
+            edges: req
+                .param("edges")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|s| s.parse().ok())
+                .collect(),
+        },
+        _ => FacetBy::Kind,
+    };
     let request = Request::Facets {
         query: req.param("q").unwrap_or_default().to_owned(),
-        by: FacetBy::Kind,
+        by,
     };
     match call(client, request) {
         Ok(Response::Facets(r)) => {
@@ -316,7 +354,7 @@ fn api_facets(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
     }
 }
 
-fn api_status(stream: &mut TcpStream, client: &Mutex<Client>) {
+fn api_status(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Status {}) {
         Ok(Response::Status(s)) => http::json(
             stream,
@@ -339,7 +377,7 @@ fn api_status(stream: &mut TcpStream, client: &Mutex<Client>) {
 /// The colouring lives in the service on purpose — a frontend that tokenised
 /// for itself would be a second parser, and the day the two disagreed the box
 /// would be confidently colouring a lie.
-fn api_explain(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Explain {
         query: req.param("q").unwrap_or_default().to_owned(),
         cursor: req.param("cursor").and_then(|s| s.parse().ok()),
@@ -399,7 +437,7 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) 
 /// executes it; on an executable a file manager offers to run it. Those get
 /// their folder revealed instead, which is what someone searching for them
 /// wanted. There is no flag to override it.
-fn api_open(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
         return;

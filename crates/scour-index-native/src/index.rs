@@ -65,6 +65,16 @@ const MAX_STAGED: usize = 100_000;
 /// A facet is a sidebar, not a result. Nobody waits for it.
 const FACET_SCAN_CAP: usize = 200_000;
 
+/// …except a distribution, which has to see everything or it is a wrong
+/// picture rather than a rough one.
+///
+/// **Rows are stored newest first**, so a cap does not sample — it takes a
+/// prefix, and a prefix of a date-ordered index is the recent end of it. A
+/// histogram of ages built that way says "today" no matter what was asked,
+/// which is how this was noticed. A top-ten list can be approximate because
+/// the tenth item being wrong changes little; a shape cannot.
+const AGE_SCAN_CAP: usize = usize::MAX;
+
 const META_FILE: &str = "native-index.json";
 /// Bumped when the files change shape **or when a stored value changes what it
 /// means**. Version 2 added the trigram filter, version 3 the per-block minimum
@@ -1142,6 +1152,18 @@ impl Index for NativeIndex {
         let top = match &req.by {
             FacetBy::Kind => 16,
             FacetBy::Ext { top } | FacetBy::Dir { top, .. } => (*top).max(1) as usize,
+            // Every band, or the chart has holes in it.
+            FacetBy::Age { edges } => edges.len() + 1,
+        };
+        // `now` once, not per row: a walk of two hundred thousand rows that
+        // asks the clock each time is asking it two hundred thousand times.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let cap = match &req.by {
+            FacetBy::Age { .. } => AGE_SCAN_CAP,
+            _ => FACET_SCAN_CAP,
         };
         let parent = match &req.by {
             FacetBy::Dir { path, .. } => path.trim_end_matches('/').to_owned(),
@@ -1174,9 +1196,21 @@ impl Index for NativeIndex {
                         *counts.entry(child.to_owned()).or_default() += 1;
                     }
                 }
+                FacetBy::Age { edges } => {
+                    let days = (now - seg.num_of(Field::Mtime, row)).max(0) / 86_400;
+                    // The bands are ascending, so the first one it fits is its
+                    // own. Linear because there are a couple of dozen of them
+                    // and a binary search over that is not worth the branch.
+                    let key = edges
+                        .iter()
+                        .find(|&&e| days <= e as i64)
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "older".to_owned());
+                    *counts.entry(key).or_default() += 1;
+                }
             }
             seen += 1;
-            seen < FACET_SCAN_CAP
+            seen < cap
         })?;
 
         let mut facets: Vec<Facet> = counts
@@ -1188,7 +1222,7 @@ impl Index for NativeIndex {
         Ok(FacetResponse {
             facets,
             by: req.by.clone(),
-            capped: seen >= FACET_SCAN_CAP,
+            capped: seen >= cap,
             took_us: started.elapsed().as_micros() as u64,
         })
     }
