@@ -10,7 +10,9 @@ mod syntax;
 
 pub use ast::{Ast, Cmp, Group, Match, NumField, TimeField};
 pub use change::Change;
-pub use entry::{Entry, EntryId, Key, Kind, Meta, SourceId, ext_of, ext_str, kind_of, mode_string};
+pub use entry::{
+    Entry, EntryId, Key, Kind, Meta, SourceId, ext_of, ext_str, kind_of, mode_string, path_digest,
+};
 pub use error::{Error, Result};
 pub use prefix::{PrefixSet, under};
 pub use search::{

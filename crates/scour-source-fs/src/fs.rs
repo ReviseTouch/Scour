@@ -2,13 +2,13 @@
 //!
 //! [`Caps`] used to be a constant: every Unix build declared `STABLE_IDS |
 //! CASE_SENSITIVE` at compile time, whatever it was pointed at. Both halves of
-//! that are wrong on filesystems people really use.
+//! that were wrong on filesystems people really use.
 //!
-//! * **Identity.** `st_ino` on FAT and exFAT is invented by the driver, not
-//!   stored on disk, and it can differ after a remount. Building an [`EntryId`]
-//!   from it means a rescan can decide every file is new — the index doubles,
-//!   the sweep removes the originals, and nothing says why. A path hash is
-//!   worse at renames and honest about it.
+//! * **Identity** is no longer asked about at all — a row is identified by its
+//!   path, so nothing here has to decide whether `st_ino` can be trusted. The
+//!   measurement that made the question interesting is kept in
+//!   `examples/filesystems.rs`: on vfat and exfat `st_ino` is invented by the
+//!   driver and 0 of 50 files kept theirs across a remount.
 //! * **Case.** This machine's NTFS volume answers `PROJELER` and refuses
 //!   `projeler`, because Linux's ntfs3 is case-sensitive by default. The same
 //!   disk under Windows is not. So the answer belongs to the mounted
@@ -107,9 +107,6 @@ impl Medium {
 /// What one mounted filesystem promises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FsTraits {
-    /// `st_ino` is stored on disk and survives a remount, so it can be an
-    /// identity. False on FAT-family filesystems and whenever unknown.
-    pub stable_ids: bool,
     /// Two names differing only in case are two files.
     pub case_sensitive: bool,
     /// The executable bit means something here.
@@ -135,12 +132,9 @@ pub struct FsTraits {
 impl FsTraits {
     /// What to assume when the filesystem cannot be identified.
     ///
-    /// Not "no idea, allow everything". A wrongly claimed stable id costs a
-    /// full re-index and a silent one; a wrongly withheld one costs renames
-    /// being seen as delete-plus-add, which is visible and survivable. So the
-    /// unknown case takes the cheaper mistake.
+    /// Not "no idea, allow everything": every field here takes the cheaper
+    /// mistake.
     pub const UNKNOWN: FsTraits = FsTraits {
-        stable_ids: false,
         case_sensitive: cfg!(unix),
         // The cheaper mistake again. Withholding it loses `kind:exec` on a
         // filesystem nobody recognised; claiming it wrongly fills the category
@@ -151,20 +145,11 @@ impl FsTraits {
     /// The narrower of two, for a source spanning more than one filesystem.
     pub fn and(self, other: FsTraits) -> FsTraits {
         FsTraits {
-            stable_ids: self.stable_ids && other.stable_ids,
             case_sensitive: self.case_sensitive && other.case_sensitive,
             real_modes: self.real_modes && other.real_modes,
         }
     }
 }
-
-/// The unknown case must never claim a stable identity.
-///
-/// A compile-time assertion rather than a test, because it is a statement
-/// about a constant: claiming one that was never verified costs a silent full
-/// re-index, and the default is the one thing here that could be changed
-/// without anybody noticing.
-const _: () = assert!(!FsTraits::UNKNOWN.stable_ids);
 
 /// What the mount under `path` is like to read.
 ///
@@ -245,7 +230,6 @@ mod linux {
         };
         match magic {
             EXT | BTRFS | XFS | F2FS | TMPFS | ZFS | OVERLAY => FsTraits {
-                stable_ids: true,
                 case_sensitive: true,
                 real_modes: true,
             },
@@ -255,7 +239,6 @@ mod linux {
             // claiming sensitivity when the mount is insensitive only means a
             // duplicate is ruled out that would have been ruled out anyway.
             NTFS_3G | NTFS3 => FsTraits {
-                stable_ids: true,
                 case_sensitive: true,
                 // NTFS has an access-control model and neither Linux driver
                 // maps it onto `st_mode`; what `stat` returns is `fmask` and
@@ -263,7 +246,6 @@ mod linux {
                 real_modes: false,
             },
             MSDOS | EXFAT => FsTraits {
-                stable_ids: false,
                 case_sensitive: false,
                 real_modes: false,
             },
@@ -395,15 +377,7 @@ mod windows_impl {
         // ntfs3, which is where this ceased to be a property of the format.
         let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
 
-        // NTFS and ReFS carry a file id that survives a rename; the FAT family
-        // does not have one at all. `GetFileInformationByHandle` would confirm
-        // it per file, at the cost of opening every file — which is the thing
-        // a bulk scan exists to avoid.
-        let stable_ids = matches!(fs.as_str(), "NTFS" | "ReFS");
-        FsTraits {
-            stable_ids,
-            case_sensitive,
-        }
+        FsTraits { case_sensitive }
     }
 
     pub fn medium_of(path: &Path) -> Medium {
@@ -468,12 +442,10 @@ mod macos {
             // The safe reading is insensitive: claiming sensitivity that is
             // not there would let two spellings of one file both be indexed.
             "apfs" | "hfs" => FsTraits {
-                stable_ids: true,
                 case_sensitive: false,
                 real_modes: true,
             },
             "msdos" | "exfat" => FsTraits {
-                stable_ids: false,
                 case_sensitive: false,
                 real_modes: false,
             },
@@ -523,12 +495,10 @@ mod tests {
     #[test]
     fn spanning_two_filesystems_takes_the_narrower_promise() {
         let good = FsTraits {
-            stable_ids: true,
             case_sensitive: true,
             real_modes: true,
         };
         let fat = FsTraits {
-            stable_ids: false,
             case_sensitive: false,
             real_modes: false,
         };
@@ -542,7 +512,7 @@ mod tests {
         // Whatever this machine's filesystem is, a temp directory is on one of
         // the recognised ones and must not fall through to UNKNOWN.
         let t = traits_of(&std::env::temp_dir());
-        assert!(t.stable_ids, "{t:?}");
+        assert!(t.case_sensitive, "{t:?}");
     }
 
     #[test]

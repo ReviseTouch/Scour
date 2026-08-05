@@ -169,22 +169,68 @@ fn paging_across_segments_reconstructs_the_list() {
 }
 
 #[test]
+fn saving_over_a_file_leaves_one_row_however_the_source_names_it() {
+    // **The duplicate bug, pinned.** Everything that saves carefully writes a
+    // temporary file and renames it over the target: the path survives and
+    // whatever the filesystem called the object does not. When the index keyed
+    // rows on the source's identity, each save added a row and nothing removed
+    // the old one — 267 rows at one path on the live index, growing for as
+    // long as the service ran.
+    //
+    // So each round here hands over a *different* identity for the same path,
+    // which is precisely what a rename-over produces, and the index has to
+    // answer with one row every time.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let path = "/home/u/Belgeler/rapor-2026.md";
+
+    for round in 1..=8u64 {
+        let e = Entry {
+            // A new inode every save, as the filesystem would report it.
+            id: EntryId::inode(SourceId(0), 66_310, round),
+            path: path.into(),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW + round as i64,
+                size: round as i64 * 100,
+                ..Meta::UNKNOWN
+            },
+        };
+        index
+            .apply(&mut std::iter::once(Change::Upsert(e)))
+            .expect("apply");
+        index.commit().expect("commit");
+
+        let hits = index
+            .search(&SearchRequest {
+                query: parse_at("rapor-2026", NOW),
+                page: Page::new(0, 50),
+                ..Default::default()
+            })
+            .expect("search");
+        assert_eq!(
+            hits.total, 1,
+            "after {round} saves the index holds {} rows for one path",
+            hits.total
+        );
+        // And it is the newest one that survived, not the first.
+        assert_eq!(hits.hits[0].meta.size, round as i64 * 100);
+        assert_eq!(index.stats().expect("stats").entries, 1);
+    }
+}
+
+#[test]
 fn a_removal_is_invisible_before_it_is_written() {
     // The one thing that may not wait for a commit. Deleting a file and still
     // seeing it reads as a broken program, so the removal takes effect in the
     // overlay first and in the files afterwards.
     let f = Fixture::new(2_000, 2_000);
     let victim = f.search("", SortKey::Modified, true, 1)[0].clone();
-    let id = f
-        .entries
-        .iter()
-        .find(|e| e.path == victim)
-        .expect("victim")
-        .id
-        .clone();
 
     f.index
-        .apply(&mut std::iter::once(Change::Remove(id)))
+        .apply(&mut std::iter::once(Change::RemoveSubtree {
+            path: victim.clone(),
+        }))
         .expect("apply");
     let after = f.search("", SortKey::Modified, true, 5);
     assert!(!after.contains(&victim), "{victim} is still visible");
@@ -842,9 +888,21 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
 #[test]
 fn a_rebuild_drops_the_rows_nobody_can_see() {
     let f = Fixture::new(4_000, 1_000);
-    let doomed: Vec<EntryId> = f.entries.iter().take(500).map(|e| e.id.clone()).collect();
+    // Files, not directories: a removal takes everything under the path, and
+    // the generated tree lists its directories first.
+    let doomed: Vec<String> = f
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .take(500)
+        .map(|e| e.path.clone())
+        .collect();
     f.index
-        .apply(&mut doomed.into_iter().map(Change::Remove))
+        .apply(
+            &mut doomed
+                .into_iter()
+                .map(|path| Change::RemoveSubtree { path }),
+        )
         .expect("apply");
     f.index.commit().expect("commit");
     let before = f.index.stats().expect("stats");
@@ -878,10 +936,15 @@ fn an_index_reopened_from_disk_answers_the_same_way() {
             index.commit().expect("commit");
         }
         // A removal, so the liveness bits have something to remember.
+        let victim = fs
+            .entries
+            .iter()
+            .find(|e| !e.is_dir)
+            .expect("a file")
+            .path
+            .clone();
         index
-            .apply(&mut std::iter::once(Change::Remove(
-                fs.entries[0].id.clone(),
-            )))
+            .apply(&mut std::iter::once(Change::RemoveSubtree { path: victim }))
             .expect("apply");
         index.commit().expect("commit");
         index
@@ -1094,14 +1157,19 @@ fn deleted_rows_stop_being_walked_before_they_are_erased() {
     // strength of sixteen bytes of the bitmap, whether or not the segment as a
     // whole still has something in it.
     let f = Fixture::new(8_000, 8_000);
-    let doomed: Vec<EntryId> = f
+    let doomed: Vec<String> = f
         .entries
         .iter()
+        .filter(|e| !e.is_dir)
         .take(f.entries.len() / 2)
-        .map(|e| e.id.clone())
+        .map(|e| e.path.clone())
         .collect();
     f.index
-        .apply(&mut doomed.into_iter().map(Change::Remove))
+        .apply(
+            &mut doomed
+                .into_iter()
+                .map(|path| Change::RemoveSubtree { path }),
+        )
         .expect("apply");
     f.index.commit().expect("commit");
 

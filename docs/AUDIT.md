@@ -17,7 +17,7 @@ The order is by what it costs a user, not by where it sits in the code.
 | §7 | idle housekeeping never runs | fixed |
 | §8 | a pending `rm -rf` made commits quadratic | measured, then fixed — 29× |
 | §9 | smaller things | fixed, except two left alone on purpose |
-| §11 | an atomic save leaves a ghost row at the same path | **found 2026-08-05, not fixed** |
+| §11 | an atomic save leaves a ghost row at the same path | fixed — a row's identity is now its path |
 
 Verified afterwards on the live index rather than only in tests. Five thousand
 files written into two hundred freshly created directories, as fast as a shell
@@ -391,8 +391,8 @@ files, not two million.
 
 ## 11. A path rewritten atomically leaves a row behind — every time
 
-Found on 2026-08-05 while verifying live results, and **not fixed**: the shape
-of the fix is a decision about identity, not a patch.
+Found on 2026-08-05 while verifying live results, and fixed the same day by
+answering the question underneath it: **what identifies a row?**
 
 Identity is the inode where the filesystem promises stable ids. An editor, a
 browser and every other careful writer save by writing a temporary file and
@@ -418,18 +418,36 @@ It is unbounded: one row per save, for as long as the service runs. A file
 modified **in place** is fine — eight writes to the same inode stay one row —
 so this is specifically the write-and-rename pattern, which is most of them.
 
-Three ways out, and they are not equivalent:
+### What it turned out to be
 
-* **Kill by path on upsert.** Correct and expensive: the index dedupes staged
-  rows by id digest, and this would need a second lookup by parent and name
-  against every segment. `Doomed` already knows how to name a row that way,
-  so the machinery exists; the cost per commit does not.
-* **Hash the path instead of the inode.** One row per path by construction and
-  cheap. It gives up move detection — a renamed file becomes a removal and an
-  addition, which is what a watcher usually reports anyway — and it makes
-  hard-linked files distinct rows, which is arguably right.
-* **Sweep on a schedule.** Cheapest to write and the least honest: the
-  duplicates are visible in between.
+Not a missing removal — a **second notion of identity**. The index keyed rows
+on whatever the source called an entry; the source called it an inode; and the
+only thing a watcher can name when something disappears is a path. Two
+vocabularies, and the one that could not express a removal was the one rows
+were filed under.
 
-The measurement that decides it is what "kill by path" costs a commit on this
-index. Until then the ghosts are real and visible in any live list.
+So the path is the identity now, everywhere:
+
+* the row table is keyed on a digest of source and path, and a candidate is
+  confirmed against the directory number and name the row actually carries —
+  exact, so a digest collision cannot kill the wrong row;
+* `KeyKind`, `KeyA` and `KeyB` are gone from the columns, which is where the
+  second identity was stored;
+* `Change::Remove(EntryId)` is gone from the vocabulary. Nothing ever emitted
+  it, and `Change::path()` had to answer `None` for it — the type saying out
+  loud that the variant could not describe itself;
+* `Caps::STABLE_IDS` and the filesystem trait behind it are gone with it. The
+  measurement that produced them still stands (vfat and exfat invent `st_ino`;
+  0 of 50 files kept theirs across a remount) and is kept in
+  `examples/filesystems.rs` — it is simply no longer load bearing, because
+  nothing asks a filesystem for an identity.
+
+Measured after: ten atomic saves over one path leave **one row**, the same file
+that had 267. Costs and gains in `docs/MEASUREMENTS.md` — the index is 11.6%
+smaller and a rescan writes 26% slower, which is the price of confirming every
+kill against the real name.
+
+The mock filesystem was generating duplicate paths — five in 8,667 — and the
+old identity hid it, because two rows at one path looked like two files. A
+generator that produces what a filesystem cannot is worse than a missing case:
+every count taken from it disagrees with a correct index.

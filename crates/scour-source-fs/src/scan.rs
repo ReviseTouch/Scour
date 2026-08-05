@@ -91,12 +91,6 @@ impl FsSource {
         self.id
     }
 
-    /// Whether this source's filesystems offer an identity that survives a
-    /// remount. The watcher needs it for the same reason the scan does.
-    pub fn stable_ids(&self) -> bool {
-        self.traits.stable_ids
-    }
-
     /// Whether `st_mode` is the file's own rather than the mount's.
     pub fn real_modes(&self) -> bool {
         self.traits.real_modes
@@ -130,12 +124,8 @@ impl Source for FsSource {
             c |= Caps::RECURSIVE_WATCH;
         }
         // Measured, not assumed. This used to be `cfg!(unix)`, which told a
-        // caller that an exFAT stick had stable identities and that an NTFS
-        // volume was case-sensitive — the second of which is true for Linux's
-        // ntfs3 and false for the same disk under Windows.
-        if self.traits.stable_ids {
-            c |= Caps::STABLE_IDS;
-        }
+        // caller that an NTFS volume was case-insensitive — true for the disk
+        // under Windows and false for the same disk under Linux's ntfs3.
         if self.traits.case_sensitive {
             c |= Caps::CASE_SENSITIVE;
         }
@@ -215,7 +205,6 @@ impl Source for FsSource {
         let dirs = AtomicU64::new(0);
         let cancelled = AtomicBool::new(false);
         let want_meta = !opts.skip_metadata;
-        let stable_ids = self.traits.stable_ids;
         let real_modes = self.traits.real_modes;
 
         // The walker runs on its own threads and the sink is drained on this
@@ -285,7 +274,6 @@ impl Source for FsSource {
                                 &normalised,
                                 md.as_ref(),
                                 is_dir,
-                                stable_ids,
                                 real_modes,
                             )))
                             .is_err()
@@ -350,7 +338,6 @@ impl Source for FsSource {
             &path::from_path(&native),
             Some(&md),
             md.is_dir(),
-            self.traits.stable_ids,
             self.traits.real_modes,
         ))
     }
@@ -369,34 +356,22 @@ pub(crate) fn entry_of(
     path: &str,
     md: Option<&std::fs::Metadata>,
     is_dir: bool,
-    stable_ids: bool,
     real_modes: bool,
 ) -> Entry {
-    // On Windows the identity is always the path: the file id there needs the
-    // file to be opened, which is the syscall a bulk scan exists to avoid.
-    #[cfg(not(unix))]
-    let _ = stable_ids;
-    let id = match md {
-        // `stable_ids` is the filesystem's answer, not the platform's. On FAT
-        // and exFAT `st_ino` is invented by the driver and can change across a
-        // remount; an identity built from it makes a rescan decide every file
-        // is new, which doubles the index and then sweeps the originals away.
-        //
-        // Measured rather than assumed, by `scripts/fsmatrix.sh` — fifty files,
-        // their numbers taken, the filesystem unmounted and mounted again:
-        //
-        //   vfat    0/50 survive a remount, and a move changes the number too
-        //   exfat   0/50
-        //   ext4    all of them, move included
-        //
-        // Not "can change". Does change, every one of them.
-        #[cfg(unix)]
-        Some(m) if stable_ids => {
-            use std::os::unix::fs::MetadataExt;
-            EntryId::inode(source, m.dev(), m.ino())
-        }
-        _ => EntryId::path_hash(source, path),
-    };
+    // **The path, always.** The inode was the identity here wherever the
+    // filesystem promised a stable one, and that promise is about the *object*
+    // while a row is a *name*. Everything that saves carefully — an editor, a
+    // browser — writes a temporary file and renames it over the target, so the
+    // path survives and the inode does not: the row for the new inode was
+    // added and the row for the old one was never removed, because nothing can
+    // say "the inode that used to be at this path is gone". Measured on the
+    // live index: 267 rows at one path, one per save.
+    //
+    // The FAT-family measurement that used to be quoted here — `st_ino`
+    // invented by the driver, 0 of 50 surviving a remount, from
+    // `scripts/fsmatrix.sh` — still stands; it is simply no longer load
+    // bearing, because nothing asks the filesystem for an identity any more.
+    let id = EntryId::path_hash(source, path);
     let mut meta = md
         .map(|m| Meta::from_std(m, is_dir))
         .unwrap_or(Meta::UNKNOWN);

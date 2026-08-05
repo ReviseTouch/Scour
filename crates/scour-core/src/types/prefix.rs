@@ -94,6 +94,23 @@ impl PrefixSet {
         }
     }
 
+    /// Drop one path, if it is a member in its own right.
+    ///
+    /// What a file coming back needs: it was reported gone, it has been
+    /// reported again, and the pending removal must stop applying to it before
+    /// anyone searches. Only an exact member goes — a path that is merely
+    /// *under* a removed directory stays covered, because the directory is
+    /// still pending removal and the walk that follows is what re-establishes
+    /// what is inside it.
+    pub fn forget(&mut self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        if !self.lookup.remove(path) {
+            return false;
+        }
+        self.paths.retain(|p| p != path);
+        true
+    }
+
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
     }

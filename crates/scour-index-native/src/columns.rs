@@ -70,24 +70,20 @@ pub enum Field {
     Kind = 10,
     IsDir = 11,
     /// Which source produced the entry.
+    ///
+    /// The last of the identity, and the only part of it that is not already
+    /// in the directory table and the name arena. Three columns used to sit
+    /// beside it holding whatever the source called the entry — an inode, a
+    /// hash — and they are gone: a row is identified by its source and its
+    /// path, so storing a second identity beside the first meant carrying
+    /// eight incompressible bytes a row to answer a question the path already
+    /// answers. **19 MB of a 200 MB index**, spent on the thing that was
+    /// producing duplicate rows.
     Source = 12,
-    /// Which shape of [`Key`] the two below hold: 1 inode, 2 path hash.
-    ///
-    /// Identity lives in columns rather than in a side arena because it is
-    /// read for the forty rows that make a page and for every row a removal
-    /// touches, and because it packs almost to nothing — `dev` is one value
-    /// per filesystem and `source` is usually one value in total.
-    ///
-    /// [`Key`]: scour_core::Key
-    KeyKind = 13,
-    /// `dev` for an inode, the hash for a path hash.
-    KeyA = 14,
-    /// `ino` for an inode, zero otherwise.
-    KeyB = 15,
 }
 
 impl Field {
-    pub const ALL: [Field; 16] = [
+    pub const ALL: [Field; 13] = [
         Field::DirId,
         Field::Size,
         Field::Mtime,
@@ -101,9 +97,6 @@ impl Field {
         Field::Kind,
         Field::IsDir,
         Field::Source,
-        Field::KeyKind,
-        Field::KeyA,
-        Field::KeyB,
     ];
 
     pub fn index(self) -> usize {
@@ -310,8 +303,8 @@ impl<'a> ColumnBlocks<'a> {
 mod tests {
     use super::*;
 
-    fn row(dir: i64, size: i64, mtime: i64) -> [i64; 16] {
-        let mut r = [0i64; 16];
+    fn row(dir: i64, size: i64, mtime: i64) -> [i64; Field::ALL.len()] {
+        let mut r = [0i64; Field::ALL.len()];
         r[Field::DirId.index()] = dir;
         r[Field::Size.index()] = size;
         r[Field::Mtime.index()] = mtime;
@@ -324,9 +317,7 @@ mod tests {
         r[Field::Items.index()] = -1;
         r[Field::Kind.index()] = 2;
         r[Field::IsDir.index()] = 0;
-        r[Field::KeyKind.index()] = 1;
-        r[Field::KeyA.index()] = 66_310;
-        r[Field::KeyB.index()] = dir * 1000 + size;
+        r[Field::Source.index()] = 0;
         r
     }
 
@@ -423,7 +414,7 @@ mod tests {
         assert_eq!(Field::DirId.index(), 0);
         assert_eq!(Field::Mtime.index(), 2);
         assert_eq!(Field::IsDir.index(), 11);
-        assert_eq!(Field::KeyB.index(), 15);
-        assert_eq!(Field::ALL.len(), 16);
+        assert_eq!(Field::Source.index(), 12);
+        assert_eq!(Field::ALL.len(), 13);
     }
 }

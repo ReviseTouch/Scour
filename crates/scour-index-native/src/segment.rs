@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::durable::{replace_synced, write_synced};
 use memmap2::Mmap;
-use scour_core::{Entry, EntryId, Error, Result};
+use scour_core::{Entry, Error, Result, SourceId};
 
 use crate::build::SegmentBytes;
 use crate::columns::ColumnBlocks;
@@ -178,12 +178,12 @@ impl Live {
         was
     }
 
-    /// The row holding this identity, if the segment has it and it is live.
+    /// The row holding this path, if the segment has it and it is live.
     ///
-    /// The candidate list from the id table is confirmed against the identity
-    /// actually stored in the columns, so a digest collision costs one extra
-    /// column read and cannot produce a wrong answer.
-    pub fn find(&self, id: &EntryId) -> Result<Option<usize>> {
+    /// The candidate list from the id table is confirmed against the directory
+    /// and name the row actually carries, so a digest collision costs one extra
+    /// comparison and cannot produce a wrong answer.
+    pub fn find(&self, source: SourceId, path: &str) -> Result<Option<usize>> {
         // The identity table first, and the segment view only if it says there
         // is something to confirm.
         //
@@ -192,9 +192,10 @@ impl Live {
         // probe costs *when it finds nothing* is the whole cost. Opening the
         // view parses four headers; doing that before the binary search made
         // indexing ten million entries quadratic in the segment count.
+        let mut dirs = std::collections::HashMap::new();
         let rows: Vec<usize> = self
             .ids()?
-            .candidates(id)
+            .candidates(source, path)
             .map(|r| r as usize)
             .filter(|&r| self.is_alive(r))
             .collect();
@@ -202,10 +203,12 @@ impl Live {
             return Ok(None);
         }
         let seg = self.view()?;
-        Ok(rows.into_iter().find(|&row| seg.entry_id(row) == *id))
+        Ok(rows
+            .into_iter()
+            .find(|&row| seg.is_at(&mut dirs, row, source, path)))
     }
 
-    /// Kill the rows holding any of these identities. Returns how many died.
+    /// Kill the rows holding any of these paths. Returns how many died.
     ///
     /// `wanted` must be sorted by [`IdMap::key_of`].
     ///
@@ -226,14 +229,14 @@ impl Live {
     /// what the table is sorted for. The crossover is where `wanted × log
     /// rows` stops being cheaper than `rows`, and `log2` of a two-million-row
     /// table is about 21.
-    pub fn kill_ids(&mut self, wanted: &[(u32, EntryId)]) -> Result<u64> {
+    pub fn kill_paths(&mut self, wanted: &[(u32, SourceId, &str)]) -> Result<u64> {
         if wanted.is_empty() || self.rows == 0 {
             return Ok(0);
         }
         let victims: Vec<usize> = {
             let ids = self.ids()?;
             let mut pairs: Vec<(usize, usize)> = Vec::new();
-            // The small case: probe for each identity rather than sweep the
+            // The small case: probe for each path rather than sweep the
             // table. `ids.len().ilog2()` is the cost of one probe, so this is
             // the point where probing everything stops being cheaper than
             // walking everything.
@@ -243,8 +246,8 @@ impl Live {
                     .saturating_mul(ids.len().ilog2().max(1) as usize)
                     < ids.len()
             {
-                for (w, (_, id)) in wanted.iter().enumerate() {
-                    for row in ids.candidates(id) {
+                for (w, (key, _, _)) in wanted.iter().enumerate() {
+                    for row in ids.rows_for(*key) {
                         pairs.push((row as usize, w));
                     }
                 }
@@ -255,11 +258,17 @@ impl Live {
                 };
                 let victims: Vec<usize> = match seg {
                     None => Vec::new(),
-                    Some(seg) => pairs
-                        .into_iter()
-                        .filter(|&(row, w)| self.is_alive(row) && seg.entry_id(row) == wanted[w].1)
-                        .map(|(row, _)| row)
-                        .collect(),
+                    Some(seg) => {
+                        let mut dirs = std::collections::HashMap::new();
+                        pairs
+                            .into_iter()
+                            .filter(|&(row, w)| {
+                                self.is_alive(row)
+                                    && seg.is_at(&mut dirs, row, wanted[w].1, wanted[w].2)
+                            })
+                            .map(|(row, _)| row)
+                            .collect()
+                    }
                 };
                 let mut gone = 0;
                 for row in victims {
@@ -304,9 +313,12 @@ impl Live {
                 // Only now is the segment opened, and only to confirm that the
                 // half-digest was not a collision.
                 let seg = self.view()?;
+                let mut dirs = std::collections::HashMap::new();
                 pairs
                     .into_iter()
-                    .filter(|&(row, w)| self.is_alive(row) && seg.entry_id(row) == wanted[w].1)
+                    .filter(|&(row, w)| {
+                        self.is_alive(row) && seg.is_at(&mut dirs, row, wanted[w].1, wanted[w].2)
+                    })
                     .map(|(row, _)| row)
                     .collect()
             }
@@ -364,11 +376,11 @@ impl Live {
 mod tests {
     use super::*;
     use crate::build::build;
-    use scour_core::{Meta, SourceId};
+    use scour_core::{EntryId, Meta};
 
-    fn entry(path: &str, mtime: i64, ino: u64) -> Entry {
+    fn entry(path: &str, mtime: i64, _ino: u64) -> Entry {
         Entry {
-            id: EntryId::inode(SourceId(0), 66_310, ino),
+            id: EntryId::path_hash(SourceId(0), path),
             path: path.into(),
             is_dir: false,
             meta: Meta {
@@ -401,24 +413,23 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_is_found_by_its_identity_and_not_by_luck() {
+    fn an_entry_is_found_by_its_path_and_not_by_luck() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let entries: Vec<Entry> = (0..500)
             .map(|i| entry(&format!("/a/f{i}.rs"), 1000 - i, i as u64))
             .collect();
         let seg = Live::write(tmp.path(), 1, 0, &build(&entries)).expect("write");
         for e in &entries {
-            let row = seg.find(&e.id).expect("find").expect("present");
+            let row = seg
+                .find(SourceId(0), &e.path)
+                .expect("find")
+                .expect("present");
             assert_eq!(
                 seg.view().expect("view").entry(row).expect("row").path,
                 e.path
             );
         }
-        assert_eq!(
-            seg.find(&EntryId::inode(SourceId(0), 66_310, 99_999))
-                .expect("find"),
-            None
-        );
+        assert_eq!(seg.find(SourceId(0), "/a/yok.rs").expect("find"), None);
     }
 
     #[test]
@@ -426,10 +437,13 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let entries = vec![entry("/a/one.rs", 300, 1), entry("/a/two.rs", 200, 2)];
         let mut seg = Live::write(tmp.path(), 1, 0, &build(&entries)).expect("write");
-        let row = seg.find(&entries[1].id).expect("find").expect("present");
+        let row = seg
+            .find(SourceId(0), &entries[1].path)
+            .expect("find")
+            .expect("present");
         assert!(seg.kill(row));
         assert!(!seg.kill(row), "killing twice is not two removals");
-        assert_eq!(seg.find(&entries[1].id).expect("find"), None);
+        assert_eq!(seg.find(SourceId(0), &entries[1].path).expect("find"), None);
         assert_eq!(seg.live_rows(), 1);
         seg.save_alive(tmp.path()).expect("save");
         drop(seg);

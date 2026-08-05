@@ -59,17 +59,17 @@ fn main() {
     for (i, &f) in Field::ALL.iter().enumerate() {
         let mut w = ColumnWriter::new();
         for &v in &all[i] {
-            let mut row = [0i64; 16];
+            let mut row = [0i64; Field::ALL.len()];
             row[f as usize] = v;
             w.push(row);
         }
         // The empty writer is the floor: headers and the per-block bookkeeping
-        // of the fifteen columns held at zero. Subtracting it leaves what this
+        // of the other columns held at zero. Subtracting it leaves what this
         // column actually costs.
         let with = w.finish().len();
         let mut e = ColumnWriter::new();
         for _ in 0..rows {
-            e.push([0i64; 16]);
+            e.push([0i64; Field::ALL.len()]);
         }
         let floor = e.finish().len();
         let cost = with.saturating_sub(floor);

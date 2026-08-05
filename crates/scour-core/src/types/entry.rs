@@ -56,24 +56,36 @@ impl EntryId {
         }
     }
 
-    /// Identity derived from the path, for sources that offer nothing better.
-    ///
-    /// FxHash's finaliser, inlined rather than depended on — this crate takes
-    /// no dependencies, and the hash only has to be stable and well spread
-    /// within one index, not cryptographic.
+    /// Identity derived from the path, which is what a filesystem entry has.
     pub fn path_hash(source: SourceId, path: &str) -> Self {
-        const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
-        let mut h: u64 = 0;
-        for chunk in path.as_bytes().chunks(8) {
-            let mut buf = [0u8; 8];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            h = (h.rotate_left(5) ^ u64::from_le_bytes(buf)).wrapping_mul(SEED);
-        }
         Self {
             source,
-            key: Key::PathHash(h),
+            key: Key::PathHash(path_digest(source, path)),
         }
     }
+}
+
+/// A stable 64-bit digest of a source and a path.
+///
+/// FxHash's finaliser, inlined rather than depended on — this crate takes no
+/// dependencies, and the hash only has to be stable and well spread within one
+/// index, not cryptographic. **Eight bytes at a time**, which is not a detail:
+/// an index keyed on the path hashes every path it writes, and a
+/// byte-at-a-time loop is a chain of dependent multiplies as long as the path.
+///
+/// One definition, used by the identity above and by the index's row table, so
+/// that "the same path" means the same thing in both. It is written into a
+/// file, so changing it invalidates every index on disk — which is what the
+/// format version is for.
+pub fn path_digest(source: SourceId, path: &str) -> u64 {
+    const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+    let mut h: u64 = u64::from(source.0);
+    for chunk in path.as_bytes().chunks(8) {
+        let mut buf = [0u8; 8];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        h = (h.rotate_left(5) ^ u64::from_le_bytes(buf)).wrapping_mul(SEED);
+    }
+    h
 }
 
 /// Everything measurable about an entry. All of it comes from one `stat`,

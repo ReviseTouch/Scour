@@ -31,8 +31,8 @@ use std::time::Instant;
 
 use parking_lot::RwLock;
 use scour_core::{
-    ApplyReport, Change, Entry, EntryId, Error, Facet, FacetBy, FacetRequest, FacetResponse, Hit,
-    Index, IndexStats, Kind, MaintReport, Maintenance, Result, SearchRequest, SearchResponse,
+    ApplyReport, Change, Entry, Error, Facet, FacetBy, FacetRequest, FacetResponse, Hit, Index,
+    IndexStats, Kind, MaintReport, Maintenance, Result, SearchRequest, SearchResponse, SourceId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +85,10 @@ const META_FILE: &str = "native-index.json";
 /// folded name arena, without which a search has nothing to walk. Version 7
 /// took the block from 128 rows to 32 — every offset in every file is relative
 /// to it, so an older index decodes into noise rather than into an answer.
-const FORMAT: u32 = 7;
+/// Version 8 made a row's identity its path: three identity columns went, and
+/// the lookup table is keyed on the path rather than on whatever the source
+/// called the entry, so an older table answers about nothing.
+const FORMAT: u32 = 8;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -135,12 +138,17 @@ struct Inner {
     segments: Vec<Live>,
     /// Upserts not yet written. Searchable only after a commit.
     staged: Vec<Entry>,
-    /// Where each staged identity sits, so a second upsert of the same file
+    /// Where each staged path sits, so a second upsert of the same file
     /// replaces the first instead of adding a second row for it.
     staged_at: HashMap<u64, usize>,
-    /// Removals that have taken effect for searches but not yet for the files.
-    hidden: HashMap<u64, EntryId>,
-    /// Subtrees in the same state.
+    /// Paths whose removal has taken effect for searches but not yet for the
+    /// files.
+    ///
+    /// One structure rather than two. There used to be a map of identities
+    /// beside it for removing a single entry, and nothing ever filled it: a
+    /// watcher reporting a deletion has a path and nothing else, so every real
+    /// removal arrived here. A prefix set holding one path removes exactly
+    /// that path, because nothing is under a file.
     hidden_prefixes: scour_core::PrefixSet,
     generation: u64,
     /// A generation that has been handed out and not yet reconciled.
@@ -309,7 +317,7 @@ impl NativeIndex {
     /// are read *from* the staged entries, and taking them out first meant a
     /// re-indexed file kept its old row. Two tests said so immediately.
     fn flush_prepare(&self, inner: &mut Inner) -> Result<Pending> {
-        if inner.staged.is_empty() && inner.hidden.is_empty() && inner.hidden_prefixes.is_empty() {
+        if inner.staged.is_empty() && inner.hidden_prefixes.is_empty() {
             return Ok(Pending::default());
         }
         let mut touched = vec![false; inner.segments.len()];
@@ -348,38 +356,54 @@ impl NativeIndex {
             inner.hidden_prefixes = prefixes;
         }
 
-        // Named removals, and the old row of everything being re-upserted.
+        // The old row of everything being re-upserted.
+        //
+        // **By path**, which is the whole of the duplicate problem: the row a
+        // save replaces is the one with the same name, whatever identity the
+        // filesystem gave the new file. Keying this on an inode meant every
+        // write-and-rename left the previous row in place — 267 of them at one
+        // path, measured on the live index.
         //
         // One sorted list, one merge a segment. The obvious shape — look each
-        // identity up in each segment — is a binary search per identity per
-        // segment, and a bulk scan makes both numbers large at once: indexing
-        // ten million entries spent most of a hundred seconds in probes that
-        // found nothing. Sorting the identities once puts them in the same
-        // order the segment's table is already in, and the whole check becomes
-        // one sequential pass.
+        // path up in each segment — is a binary search per path per segment,
+        // and a bulk scan makes both numbers large at once: indexing ten
+        // million entries spent most of a hundred seconds in probes that found
+        // nothing. Sorting once puts them in the order the segment's table is
+        // already in, and the whole check becomes one sequential pass.
         //
         // The old rows are killed *always*, not only when a generation says
         // they might exist. A cheaper rule exists — during a bulk pass every
         // existing row carries an older generation and `sweep` will take it —
         // but it is wrong the moment the engine skips a sweep, and the failure
         // is a duplicated row rather than an error.
-        let mut wanted: Vec<(u32, EntryId)> = inner
-            .hidden
-            .values()
-            .chain(inner.staged.iter().map(|e| &e.id))
-            .map(|id| (crate::ids::IdMap::key_of(id), id.clone()))
-            .collect();
-        wanted.sort_unstable_by_key(|(h, _)| *h);
-        for (i, live) in inner.segments.iter_mut().enumerate() {
-            if live.kill_ids(&wanted)? > 0 {
-                touched[i] = true;
+        //
+        // The two fields are borrowed apart rather than the paths copied. A
+        // bulk flush stages a hundred thousand entries, and cloning a path for
+        // each of them to satisfy the borrow checker was **0.32 µs an entry**
+        // — a third of what writing an entry costs in total, spent on strings
+        // that are three lines away from the originals.
+        {
+            let Inner {
+                staged, segments, ..
+            } = &mut *inner;
+            let mut wanted: Vec<(u32, SourceId, &str)> = staged
+                .iter()
+                .map(|e| {
+                    (
+                        crate::ids::IdMap::key_of(e.id.source, &e.path),
+                        e.id.source,
+                        e.path.as_str(),
+                    )
+                })
+                .collect();
+            wanted.sort_unstable_by_key(|(h, _, _)| *h);
+            for (i, live) in segments.iter_mut().enumerate() {
+                if live.kill_paths(&wanted)? > 0 {
+                    touched[i] = true;
+                }
             }
         }
         let t_kill = Instant::now();
-        let hidden_digests: Vec<u64> = inner.hidden.keys().copied().collect();
-        inner
-            .staged
-            .retain(|e| !hidden_digests.contains(&digest(&e.id)));
 
         let pending = Self::take_staged(inner);
         let _ = t_kill;
@@ -393,7 +417,6 @@ impl NativeIndex {
             .filter(|(i, _)| touched.get(*i).copied().unwrap_or(false))
             .map(|(_, live)| live.alive_snapshot())
             .collect();
-        inner.hidden.clear();
         inner.hidden_prefixes.clear();
         // Order, and it is the difference between a crash costing a commit and
         // a crash costing the index: the manifest stops naming these segments
@@ -728,16 +751,6 @@ impl<'a> Doomed<'a> {
 /// name is read from the other arena, which costs one lookup on a path that
 /// already runs only for rows a query has accepted.
 fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, _name: &[u8]) -> bool {
-    if !inner.hidden.is_empty() {
-        let id = seg.entry_id(row);
-        if inner
-            .hidden
-            .get(&digest(&id))
-            .is_some_and(|hidden| *hidden == id)
-        {
-            return true;
-        }
-    }
     if !inner.hidden_prefixes.is_empty() {
         let path = seg.path(row, seg.names.get(row).unwrap_or_default());
         if inner.hidden_prefixes.covers(&path) {
@@ -883,17 +896,24 @@ impl Index for NativeIndex {
         for c in changes {
             match c {
                 Change::Upsert(e) => {
-                    let d = digest(&e.id);
                     // A file that was removed and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
-                    inner.hidden.remove(&d);
+                    //
+                    // Behind the emptiness test because the common case by far
+                    // is a bulk pass with nothing hidden at all, and asking a
+                    // `HashSet<String>` about a path it does not hold still
+                    // costs hashing that path.
+                    if !inner.hidden_prefixes.is_empty() {
+                        inner.hidden_prefixes.forget(&e.path);
+                    }
+                    let d = digest(e.id.source, &e.path);
                     // `get`, not `[]`. The two collections are cleared
                     // together in `flush` and I could not construct a case
                     // where the position outlives the buffer — but the cost of
                     // being sure is nothing, and the cost of being wrong is a
                     // panic inside a write lock in a long-lived service.
                     match inner.staged_at.get(&d).copied() {
-                        Some(i) if inner.staged.get(i).is_some_and(|s| s.id == e.id) => {
+                        Some(i) if inner.staged.get(i).is_some_and(|s| s.path == e.path) => {
                             inner.staged[i] = e
                         }
                         _ => {
@@ -906,10 +926,6 @@ impl Index for NativeIndex {
                     if inner.staged.len() >= MAX_STAGED {
                         self.flush(&mut inner)?;
                     }
-                }
-                Change::Remove(id) => {
-                    inner.hidden.insert(digest(&id), id);
-                    report.removed += 1;
                 }
                 Change::RemoveSubtree { path } => {
                     inner.hidden_prefixes.extend([path]);
@@ -1083,7 +1099,7 @@ impl Index for NativeIndex {
 
         // Only when something is hidden. With no veto and no test that reads
         // names, the walk never touches the name arena at all.
-        let hiding = !inner.hidden.is_empty() || !inner.hidden_prefixes.is_empty();
+        let hiding = !inner.hidden_prefixes.is_empty();
 
         let mut all: Vec<Hit> = Vec::new();
         let mut counted = 0u64;
@@ -1317,7 +1333,7 @@ impl Index for NativeIndex {
             // nothing; it grows with every commit, and it is what a search pays
             // for twice — once per segment that cannot stop early.
             unsorted_entries: entries - largest,
-            pending_removals: inner.hidden.len() as u64,
+            pending_removals: inner.hidden_prefixes.len() as u64,
             // No extractor is registered yet. The column is reserved, not used.
             has_content: false,
         })

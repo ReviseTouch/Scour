@@ -84,7 +84,7 @@ impl Source for MemSource {
     }
 
     fn caps(&self) -> Caps {
-        let mut c = Caps::STABLE_IDS;
+        let mut c = Caps::CONTENT;
         if self.watchable {
             c |= Caps::WATCH;
         }

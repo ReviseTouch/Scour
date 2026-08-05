@@ -1,61 +1,55 @@
-//! Finding a row by identity.
+//! Finding a row by the only thing that identifies it: its path.
 //!
 //! Everything else in a segment is arranged for *searching*, which walks rows
-//! in order and never asks "where is this particular file?". Writing does ask,
-//! twice: a removal names an entry and nothing else, and an upsert of a file
-//! that already exists has to hide the old row or the same path appears twice.
+//! in order and never asks "where is this particular file?". Writing does ask:
+//! an upsert of a path that is already indexed has to kill the old row, or the
+//! same path appears twice.
 //!
 //! So one more file, and it is deliberately the smallest thing that answers
-//! that question: the top half of a digest of the identity, paired with a row
+//! that question: the top half of a digest of the path, paired with a row
 //! number, sorted. Eight bytes an entry against the thirty-six the rest of the
 //! segment costs.
+//!
+//! ## Why the path, and not an id the source handed over
+//!
+//! It used to be an id, and on Linux that id was the inode. An inode is a
+//! promise about the *object*, and a row is not an object — it is a name.
+//! Everything that saves carefully writes a temporary file and renames it over
+//! the target, so the path survives and the inode does not: the upsert arrives
+//! under a new identity, nothing ever says the old one is gone, and both rows
+//! stay. Measured on the live index before this changed: **267 rows for one
+//! cache file**, one per save, growing for as long as the service ran. A file
+//! modified *in place* stayed a single row, which is exactly why it took so
+//! long to notice.
+//!
+//! The path is also the only thing a removal can name — a deleted file cannot
+//! be stat-ed — so keying on it is what makes an upsert and a removal talk
+//! about the same thing.
 //!
 //! ## Why half a digest
 //!
 //! Thirty-two bits over a million rows collide about once in five thousand
 //! probes, which would be unacceptable if a collision were an error. It is not:
 //! a probe returns *candidates*, and the caller confirms each against the
-//! identity actually stored in the columns. So the narrow key costs a rare
-//! extra column read and saves four bytes on every entry, and there is no
-//! accuracy argument on the other side — the confirmation is exact.
+//! directory number and name the row actually carries. So the narrow key costs
+//! a rare extra comparison and saves four bytes on every entry, and the
+//! confirmation is exact — a hash is never the last word on whether two rows
+//! are the same file.
 
-use scour_core::{EntryId, Key};
+use scour_core::SourceId;
 
-/// A stable 64-bit digest of an entry's identity.
+/// A stable 64-bit digest of a source and a path.
 ///
-/// Hand-written, and spelled out rather than delegated, because it is written
-/// into a file: `DefaultHasher` and the fast hashers are all explicitly allowed
-/// to change their output between releases, which would turn every existing
-/// index into one that silently cannot find anything. This is FNV-1a, which is
-/// fixed by its definition.
-pub fn digest(id: &EntryId) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = OFFSET;
-    let mut eat = |bytes: &[u8]| {
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(PRIME);
-        }
-    };
-    eat(&id.source.0.to_le_bytes());
-    match &id.key {
-        Key::Inode { dev, ino } => {
-            eat(&[1]);
-            eat(&dev.to_le_bytes());
-            eat(&ino.to_le_bytes());
-        }
-        Key::PathHash(h) => {
-            eat(&[2]);
-            eat(&h.to_le_bytes());
-        }
-        Key::Opaque(bytes) => {
-            eat(&[3]);
-            eat(bytes);
-        }
-    }
-    h
-}
+/// [`scour_core::path_digest`], and deliberately not a second one: the same
+/// number is what an [`EntryId`] carries for a path, so a row's identity and
+/// the key it is filed under cannot drift apart. It is written into a file, so
+/// it is spelled out there rather than delegated to a standard hasher —
+/// `DefaultHasher` and the fast hashers are all explicitly allowed to change
+/// their output between releases, which would turn every existing index into
+/// one that silently cannot find anything.
+///
+/// [`EntryId`]: scour_core::EntryId
+pub use scour_core::path_digest as digest;
 
 /// The half of the digest that goes in the file.
 fn narrow(d: u64) -> u32 {
@@ -72,8 +66,8 @@ impl IdWriter {
         IdWriter::default()
     }
 
-    pub fn push(&mut self, id: &EntryId, row: u32) {
-        self.pairs.push((narrow(digest(id)), row));
+    pub fn push(&mut self, source: SourceId, path: &str, row: u32) {
+        self.pairs.push((narrow(digest(source, path)), row));
     }
 
     pub fn finish(mut self) -> Vec<u8> {
@@ -122,9 +116,9 @@ impl<'a> IdMap<'a> {
     }
 
     /// The half-digest a lookup is keyed on. Public so a caller holding many
-    /// identities can sort them the same way and merge rather than search.
-    pub fn key_of(id: &EntryId) -> u32 {
-        narrow(digest(id))
+    /// paths can sort them the same way and merge rather than search.
+    pub fn key_of(source: SourceId, path: &str) -> u32 {
+        narrow(digest(source, path))
     }
 
     fn hash_at(&self, i: usize) -> u32 {
@@ -137,12 +131,16 @@ impl<'a> IdMap<'a> {
         u32::from_le_bytes(self.pairs[at..at + 4].try_into().expect("4 bytes"))
     }
 
-    /// Rows whose identity *might* be `id`.
+    /// Rows that *might* hold this path.
     ///
-    /// Might, not does: the caller confirms against the stored identity. Almost
-    /// always empty or exactly one.
-    pub fn candidates(&self, id: &EntryId) -> impl Iterator<Item = u32> + '_ {
-        let want = narrow(digest(id));
+    /// Might, not do: the caller confirms against the directory and name the
+    /// row carries. Almost always empty or exactly one.
+    pub fn candidates(&self, source: SourceId, path: &str) -> impl Iterator<Item = u32> + '_ {
+        self.rows_for(narrow(digest(source, path)))
+    }
+
+    /// The same, for a caller that has already computed the key.
+    pub fn rows_for(&self, want: u32) -> impl Iterator<Item = u32> + '_ {
         let mut lo = 0usize;
         let mut hi = self.len;
         while lo < hi {
@@ -153,8 +151,7 @@ impl<'a> IdMap<'a> {
                 hi = mid;
             }
         }
-        let start = lo;
-        (start..self.len)
+        (lo..self.len)
             .take_while(move |&i| self.hash_at(i) == want)
             .map(move |i| self.row_at(i))
     }
@@ -163,40 +160,41 @@ impl<'a> IdMap<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scour_core::SourceId;
 
-    fn id(n: u64) -> EntryId {
-        EntryId::inode(SourceId(0), 66_310, n)
+    const S: SourceId = SourceId(0);
+
+    fn path(n: u64) -> String {
+        format!("/home/u/dosya-{n}.txt")
     }
 
     #[test]
-    fn every_id_finds_its_own_row() {
+    fn every_path_finds_its_own_row() {
         let mut w = IdWriter::new();
         for n in 0..1000u64 {
-            w.push(&id(n), n as u32);
+            w.push(S, &path(n), n as u32);
         }
         let bytes = w.finish();
         let map = IdMap::open(&bytes).expect("open");
         assert_eq!(map.len(), 1000);
         for n in 0..1000u64 {
-            let rows: Vec<u32> = map.candidates(&id(n)).collect();
+            let rows: Vec<u32> = map.candidates(S, &path(n)).collect();
             assert!(rows.contains(&(n as u32)), "row for {n} not among {rows:?}");
         }
     }
 
     #[test]
-    fn an_absent_id_returns_almost_nothing() {
+    fn an_absent_path_returns_almost_nothing() {
         // Almost: a collision is allowed, a wrong answer is not. What this
         // asserts is that the caller is never handed *every* row.
         let mut w = IdWriter::new();
         for n in 0..1000u64 {
-            w.push(&id(n), n as u32);
+            w.push(S, &path(n), n as u32);
         }
         let bytes = w.finish();
         let map = IdMap::open(&bytes).expect("open");
         let mut worst = 0;
         for n in 5000..6000u64 {
-            worst = worst.max(map.candidates(&id(n)).count());
+            worst = worst.max(map.candidates(S, &path(n)).count());
         }
         assert!(worst <= 2, "a probe returned {worst} candidates");
     }
@@ -204,19 +202,17 @@ mod tests {
     #[test]
     fn the_digest_is_pinned_to_these_numbers() {
         // If this changes, every index on disk stops finding anything, and
-        // nothing reports an error. The numbers are the format.
-        assert_eq!(
-            digest(&EntryId::inode(SourceId(0), 1, 2)),
-            0xd6cf_1123_4a9c_1b1f
-        );
-        assert_eq!(
-            digest(&EntryId::path_hash(SourceId(0), "/a/b")),
-            digest(&EntryId::path_hash(SourceId(0), "/a/b")),
+        // nothing reports an error. The number is the format.
+        assert_eq!(digest(SourceId(0), "/a/b"), 0xe8e9_2dc1_109d_665b);
+        assert_ne!(
+            digest(SourceId(0), "/a/b"),
+            digest(SourceId(1), "/a/b"),
+            "the source is part of the identity"
         );
         assert_ne!(
-            digest(&EntryId::inode(SourceId(0), 1, 2)),
-            digest(&EntryId::inode(SourceId(1), 1, 2)),
-            "the source is part of the identity"
+            digest(SourceId(0), "/a/b"),
+            digest(SourceId(0), "/a/B"),
+            "case belongs to the path, whatever the filesystem thinks of it"
         );
     }
 
@@ -225,10 +221,10 @@ mod tests {
         let mut a = IdWriter::new();
         let mut b = IdWriter::new();
         for n in 0..100u64 {
-            a.push(&id(n), n as u32);
+            a.push(S, &path(n), n as u32);
         }
         for n in (0..100u64).rev() {
-            b.push(&id(n), n as u32);
+            b.push(S, &path(n), n as u32);
         }
         assert_eq!(a.finish(), b.finish());
     }
@@ -238,7 +234,7 @@ mod tests {
         let bytes = IdWriter::new().finish();
         let map = IdMap::open(&bytes).expect("open");
         assert!(map.is_empty());
-        assert_eq!(map.candidates(&id(1)).count(), 0);
+        assert_eq!(map.candidates(S, "/a").count(), 0);
         assert!(IdMap::open(&[]).is_none());
     }
 }

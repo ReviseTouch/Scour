@@ -28,7 +28,7 @@
 //! would fix, and it can be added without changing any of these files.
 
 use memchr::memmem::Finder;
-use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Key, Kind, Match, Meta, SortKey, SourceId};
+use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Kind, Match, Meta, SortKey, SourceId};
 
 use crate::columns::{BLOCK, ColumnBlocks, Field};
 use crate::dirs::{DirScope, DirTable};
@@ -108,29 +108,70 @@ impl<'a> Segment<'a> {
         }
     }
 
-    pub fn entry_id(&self, row: usize) -> EntryId {
-        let source = SourceId(self.num(Field::Source, row) as u32);
-        let a = self.num(Field::KeyA, row);
-        let b = self.num(Field::KeyB, row);
-        match self.num(Field::KeyKind, row) {
-            1 => EntryId {
-                source,
-                key: Key::Inode {
-                    dev: a as u64,
-                    ino: b as u64,
-                },
-            },
-            _ => EntryId {
-                source,
-                key: Key::PathHash(a as u64),
-            },
+    pub fn source_of(&self, row: usize) -> SourceId {
+        SourceId(self.num(Field::Source, row) as u32)
+    }
+
+    /// The identity of a row, which is its source and its path.
+    ///
+    /// Derived rather than stored: three columns used to hold whatever the
+    /// source called the entry, and a row that is a *name* cannot be
+    /// identified by anything else without the two disagreeing — which is
+    /// precisely what left 267 rows at one path. See [`crate::ids`].
+    pub fn entry_id(&self, row: usize, name: &str) -> EntryId {
+        EntryId::path_hash(self.source_of(row), &self.path(row, name))
+    }
+
+    /// A path split the way a row stores it: the directory, then the name.
+    pub fn split_path(path: &str) -> (&str, &str) {
+        match path.rsplit_once('/') {
+            Some(("", name)) => ("/", name),
+            Some((parent, name)) => (parent, name),
+            None => ("", path),
         }
+    }
+
+    /// Is this row the entry at `path`, exactly?
+    ///
+    /// The confirmation behind every probe of the id table. The table's key is
+    /// half a digest, so a probe answers with candidates; this is what makes a
+    /// collision unable to do any harm.
+    ///
+    /// `dirs` is a cache and not an optimisation to be skipped. Reconstructing
+    /// a directory from the front-coded table means decoding up to a whole
+    /// restart block into a fresh `String`, and a rescan confirms *every* entry
+    /// it re-indexes — which measured at **2.7 µs an entry** against 1.1 before
+    /// any of this. The same few thousand directories answer all of it, so they
+    /// are decoded once each per pass.
+    pub fn is_at(
+        &self,
+        dirs: &mut std::collections::HashMap<u32, String>,
+        row: usize,
+        source: SourceId,
+        path: &str,
+    ) -> bool {
+        if self.source_of(row) != source {
+            return false;
+        }
+        let (parent, name) = Segment::split_path(path);
+        // The name first: a byte comparison against the arena, and it rejects
+        // almost every candidate a digest collision produces.
+        if self.names.get(row) != Some(name) {
+            return false;
+        }
+        let dir = self.num(Field::DirId, row) as u32;
+        let known = dirs
+            .entry(dir)
+            .or_insert_with(|| self.dirs.get(dir).unwrap_or_default());
+        known == parent
     }
 
     fn hit(&self, row: usize, name: &str) -> Hit {
         let path = self.path(row, name);
         Hit {
-            id: self.entry_id(row),
+            // From the path that has just been built, rather than by building
+            // it a second time.
+            id: EntryId::path_hash(self.source_of(row), &path),
             is_dir: self.num(Field::IsDir, row) != 0,
             kind: Kind::from_u8(self.num(Field::Kind, row) as u8).unwrap_or(Kind::File),
             meta: Meta {

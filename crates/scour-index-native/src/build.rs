@@ -5,7 +5,7 @@
 //! out newest-first, and everything downstream — early exit, the narrow `mtime`
 //! blocks — is a consequence of it.
 
-use scour_core::{Entry, Key};
+use scour_core::Entry;
 
 use crate::columns::{ColumnWriter, Field};
 use crate::dirs::DirWriter;
@@ -87,7 +87,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     pass(&mut |e: &Entry| {
         let i = rows;
         rows += 1;
-        ids.push(&e.id, i as u32);
+        ids.push(e.id.source, &e.path, i as u32);
         let mut r = [0i64; Field::ALL.len()];
         r[Field::DirId.index()] = remap[provisional[i] as usize] as i64;
         r[Field::Size.index()] = e.meta.size;
@@ -102,21 +102,6 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         r[Field::Kind.index()] = e.kind().as_u8() as i64;
         r[Field::IsDir.index()] = i64::from(e.is_dir);
         r[Field::Source.index()] = e.id.source.0 as i64;
-        match &e.id.key {
-            Key::Inode { dev, ino } => {
-                r[Field::KeyKind.index()] = 1;
-                r[Field::KeyA.index()] = *dev as i64;
-                r[Field::KeyB.index()] = *ino as i64;
-            }
-            Key::PathHash(h) => {
-                r[Field::KeyKind.index()] = 2;
-                r[Field::KeyA.index()] = *h as i64;
-            }
-            // An opaque key cannot live in two numbers. Nothing produces one
-            // yet; when a cloud source does, it gets its own side arena rather
-            // than a silently truncated column.
-            Key::Opaque(_) => r[Field::KeyKind.index()] = 0,
-        }
         cols.push(r);
     });
 
@@ -162,7 +147,7 @@ mod tests {
 
     fn entry(path: &str, mtime: i64) -> Entry {
         Entry {
-            id: EntryId::inode(SourceId(0), 66_310, mtime as u64),
+            id: EntryId::path_hash(SourceId(0), path),
             path: path.into(),
             is_dir: false,
             meta: Meta {
@@ -220,7 +205,7 @@ mod tests {
         assert_eq!(got.path, "/home/u/Projeler/main.rs");
         assert_eq!(
             got.id, entries[0].id,
-            "identity has to survive the round trip"
+            "identity survives the round trip by being rebuilt from the path"
         );
         assert_eq!(got.meta.mtime, 42);
     }

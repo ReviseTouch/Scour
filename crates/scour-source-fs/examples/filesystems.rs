@@ -82,10 +82,14 @@ impl Measured {
         // offers is the deliberate conservative choice `FsTraits::UNKNOWN`
         // documents; claiming more is the silent wrong index.
         !(claimed.case_sensitive && !self.case_sensitive)
-            && !(claimed.stable_ids && !(self.distinct_ids && self.id_survives_rename))
             && !(claimed.real_modes && !self.real_modes)
     }
 
+    /// `ids` and `rename` are reported and nothing is claimed against them:
+    /// since a row is identified by its path, no code asks the filesystem for
+    /// an identity. The numbers stay because the finding they produced —
+    /// vfat and exfat inventing `st_ino`, 0 of 50 surviving a remount — is
+    /// what makes that decision look obvious in hindsight.
     fn show(&self) -> String {
         format!(
             "case={} ids={} rename={} chmod={}",
@@ -102,12 +106,7 @@ fn yes(b: bool) -> &'static str {
 }
 
 fn describe(t: &FsTraits) -> String {
-    format!(
-        "case={} ids={} exec={}",
-        yes(t.case_sensitive),
-        yes(t.stable_ids),
-        yes(t.real_modes)
-    )
+    format!("case={} exec={}", yes(t.case_sensitive), yes(t.real_modes))
 }
 
 fn probe(dir: &Path) -> Option<Measured> {

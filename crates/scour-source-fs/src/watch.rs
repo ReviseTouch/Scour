@@ -32,7 +32,6 @@ pub fn start(
     let sink: Arc<dyn ChangeSink> = Arc::from(sink);
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
-    let stable_ids = source.stable_ids();
     let real_modes = source.real_modes();
     // The same rules the walk uses. Without them the watcher reports changes
     // for files the walk skips, and every one is an entry that exists until
@@ -44,7 +43,7 @@ pub fn start(
         let sink = Arc::clone(&sink);
         let rules = Arc::clone(&rules);
         move |res: notify::Result<Event>| match res {
-            Ok(event) => translate(id, stable_ids, real_modes, &rules, &event, sink.as_ref()),
+            Ok(event) => translate(id, real_modes, &rules, &event, sink.as_ref()),
             Err(e) => {
                 // The interesting failures are the ones that mean "I stopped
                 // seeing things": inotify running out of watches, a Windows
@@ -211,7 +210,6 @@ fn cover(
 /// been changed again, or removed, and the event says only where to look.
 fn translate(
     id: scour_core::SourceId,
-    stable_ids: bool,
     real_modes: bool,
     rules: &Rules,
     event: &Event,
@@ -238,7 +236,6 @@ fn translate(
                     &path,
                     Some(&md),
                     md.is_dir(),
-                    stable_ids,
                     real_modes,
                 )));
                 // **A directory that has just appeared is a subtree, not a

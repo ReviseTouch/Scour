@@ -185,10 +185,20 @@ pub fn generate(opt: &MockOptions) -> MockFs {
         .collect();
 
     let mut entries: Vec<Entry> = Vec::with_capacity(opt.files + dirs.len());
-    let mut inode: u64 = 1;
-    let mut push = |path: String, is_dir: bool, size: i64, mtime: i64, inode: u64| {
+    // **No path twice.** A filesystem cannot hold two entries with the same
+    // name in the same directory, and a generator that does hands the index a
+    // case it will never see — which is worse than a missing case, because
+    // every count computed from `MockFs::entries` then disagrees with what a
+    // correct index reports. Names are random, so collisions happen: five in
+    // 8,667 entries, and they went unnoticed for as long as identity was the
+    // inode, which made two files at one path look like two files.
+    let mut taken: HashSet<String> = HashSet::with_capacity(opt.files + dirs.len());
+    let mut push = |path: String, is_dir: bool, size: i64, mtime: i64| {
+        if !taken.insert(path.clone()) {
+            return false;
+        }
         entries.push(Entry {
-            id: EntryId::inode(opt.source, 66_310, inode),
+            id: EntryId::path_hash(opt.source, &path),
             path,
             is_dir,
             meta: Meta {
@@ -202,12 +212,12 @@ pub fn generate(opt: &MockOptions) -> MockFs {
                 disk: (size + 4095) / 4096 * 4096,
                 items: if is_dir { 0 } else { -1 },
             },
-        })
+        });
+        true
     };
 
     for d in &dirs {
-        push(d.clone(), true, 0, events[rng.below(events.len())], inode);
-        inode += 1;
+        push(d.clone(), true, 0, events[rng.below(events.len())]);
     }
 
     let ancient_share = opt.files / 12; // ~8% of the tree is old and clustered
@@ -253,8 +263,7 @@ pub fn generate(opt: &MockOptions) -> MockFs {
         } else {
             events[rng.below(events.len())]
         };
-        push(format!("{dir}/{name}"), false, size, mtime, inode);
-        inode += 1;
+        push(format!("{dir}/{name}"), false, size, mtime);
     }
 
     MockFs { entries, dirs }

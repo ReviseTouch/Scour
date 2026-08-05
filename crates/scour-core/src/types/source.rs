@@ -27,9 +27,6 @@ bitflags! {
         /// position after a restart: NTFS's USN journal, macOS's FSEvents
         /// history. A source with this can catch up without a full rescan.
         const JOURNAL = 1 << 2;
-        /// Entry ids survive a rename or a move, so a move can be an update
-        /// rather than a delete plus an add.
-        const STABLE_IDS = 1 << 3;
         /// `open` works, so content can be extracted.
         const CONTENT = 1 << 4;
         /// Paths differ by case. Affects deduplication, not matching — search

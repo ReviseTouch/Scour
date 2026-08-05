@@ -58,7 +58,9 @@ fn an_ast_round_trips_through_json() {
 fn changes_round_trip_through_json() {
     for c in [
         Change::Upsert(entry("/a/b.txt", false)),
-        Change::Remove(EntryId::path_hash(SourceId(1), "/a/b.txt")),
+        Change::RemoveSubtree {
+            path: "/a/b.txt".into(),
+        },
         Change::RemoveSubtree { path: "/a".into() },
         Change::Rescan { path: "/a".into() },
     ] {

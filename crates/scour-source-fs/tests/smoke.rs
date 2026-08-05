@@ -253,10 +253,6 @@ fn capabilities_describe_this_platform_honestly() {
     #[cfg(unix)]
     {
         assert!(
-            caps.contains(Caps::STABLE_IDS),
-            "an inode survives a rename"
-        );
-        assert!(
             !caps.contains(Caps::RECURSIVE_WATCH),
             "inotify is one watch per directory"
         );
@@ -456,7 +452,6 @@ fn a_watch_does_not_walk_out_through_a_symlink() {
         .filter(|c| match c {
             Change::Upsert(e) => e.path.contains("beyond.txt"),
             Change::Rescan { path } | Change::RemoveSubtree { path } => path.contains("beyond.txt"),
-            Change::Remove(_) => false,
         })
         .collect();
     assert!(

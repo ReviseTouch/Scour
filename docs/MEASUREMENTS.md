@@ -3290,3 +3290,69 @@ measurements to last 1.6 s.
 Aged out at the top of each refresh *and* on the timer: **2.05 s**, which is
 the 1.8 s intent plus one throttle interval. The fade carries across redraws
 through a negative `animation-delay`, so a row redrawn four times fades once.
+
+## 2026-08-05 — a row's identity is its path, and what that cost
+
+The duplicate rows in AUDIT §11 were not a missing removal. They were a second
+notion of identity: rows were filed under whatever the source called an entry —
+an inode on ext4 — while the only thing a watcher can name when a file
+disappears is a path. Every atomic save (write a temporary file, rename it over
+the target) produced a new inode at the same path, so the upsert filed a new row
+and nothing could say the old one was gone.
+
+Live, before and after, on a cache file the browser rewrites every few seconds:
+
+```
+scour search alt-svc-cache
+# before:  10 of 267        ten identical paths, four different inodes
+# after:    1 of 1
+```
+
+Ten atomic saves over one path, watched, on the live index: **one row**, and the
+size is the last version's.
+
+### The write path pays, the index gets smaller
+
+Interleaved, alternating, three rounds each, 300,000 mock files, **the same
+generator on both sides** — which matters more than it sounds: the first
+attempt at this table compared the new code against the old *mock*, whose
+allocation pattern differs, and it read as a 25% regression on the bulk path
+that reversed once both sides generated the same way.
+
+| | before | after |
+|---|---|---|
+| first index | 1.37–1.42 µs/entry | 1.45–1.50 |
+| re-indexing the same paths | 1.37–1.43 | 1.71–1.83 |
+| index on disk | 27.6 MB | **24.4 MB** |
+
+The 11.6% on disk is three columns that no longer exist — `KeyKind`, `KeyA`,
+`KeyB` held the source's identity, and `KeyA` was an incompressible 64-bit
+value wherever a source hashed paths. On the live index: 89.0 → 84.8 bytes an
+entry.
+
+The 26% on a rescan is confirmation. A probe of the row table answers with
+candidates — the key is half a digest — and each one is confirmed against the
+directory number and name the row really carries, so a collision cannot kill
+the wrong row. Where the old code compared four columns, this reads the name
+arena. Measured by turning the confirmation off: **1.87 µs against 1.62**, so
+exactness is a quarter of a microsecond an entry and the rest is elsewhere.
+
+Two things were fixed while measuring, and both were found by measuring:
+
+* Reconstructing the directory from the front-coded table decodes a whole
+  restart block into a fresh `String`. Done per confirmation it cost **2.7
+  µs/entry**; cached by directory number for the length of one pass, 1.8.
+* `wanted` — the list of paths whose old rows are to be killed — cloned a path
+  per staged entry to satisfy the borrow checker. Borrowing the two fields of
+  `Inner` apart instead: **0.32 µs an entry**, a third of what writing an entry
+  costs in total, spent on strings three lines from the originals.
+
+The digest is now `scour_core::path_digest`, eight bytes at a time, shared with
+`EntryId::path_hash` so that "the same path" means one thing. Byte-at-a-time
+FNV over a 70-byte path measured 26.6 ns against 6.7 for the 21-byte identity
+struct it replaced — three hashes an entry, so about 60 ns, and the three
+dropped columns more than pay for it.
+
+Query latency, after, on 2.39 M entries: `rapor` 27.5 ms, `ext:rs` 8.7,
+`kind:image` 19.7, the empty query 6.1 — unchanged within noise, and this index
+had 22 segments rather than the 8–10 it settles at.

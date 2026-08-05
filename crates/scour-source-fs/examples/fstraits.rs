@@ -10,8 +10,7 @@ fn main() {
         let t = scour_source_fs::fs::traits_of(std::path::Path::new(&p));
         let m = scour_source_fs::fs::medium_of(std::path::Path::new(&p));
         println!(
-            "{p:14} stable_ids={:<5} case_sensitive={:<5} medium={:<12} threads={} debounce={}ms",
-            t.stable_ids,
+            "{p:14} case_sensitive={:<5} medium={:<12} threads={} debounce={}ms",
             t.case_sensitive,
             m.label(),
             m.threads(
