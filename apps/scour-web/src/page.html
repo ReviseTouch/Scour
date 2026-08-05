@@ -704,10 +704,33 @@
        carry one to the other without being told they are the same thing. */
     transition: background .12s, border-color .12s, color .12s;
   }
-  .chip i { font-style: normal; color: var(--ink-3); font-size: 13px; line-height: 1; }
-  .chip:hover  { border-color: var(--ink-3); color: var(--ink); }
-  .chip:hover i { color: var(--q-not); }
-  .chip:focus-visible { outline: 2px solid var(--q-key); outline-offset: 1px; }
+  /* The pill itself is no longer a button — the two things you can do to a
+     term are, and each gets a target a finger can find. */
+  .chip { padding: 0 0 0 calc(var(--u) * 0.5); cursor: default; }
+  .chip .nm { padding: 0 calc(var(--u) * 0.5); }
+  .chip .neg, .chip .rm {
+    background: none; border: 0; cursor: pointer;
+    color: var(--ink-3);
+    font: inherit; line-height: 1;
+    min-width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 11px;
+  }
+  .chip .rm { font-size: 14px; }
+  .chip .neg { font-weight: 700; opacity: .45; }
+  .chip:hover .neg { opacity: .8; }
+  .chip .neg:hover, .chip .rm:hover {
+    background: color-mix(in srgb, var(--q-not) 18%, transparent);
+    color: var(--q-not);
+    opacity: 1;
+  }
+  .chip .neg:focus-visible, .chip .rm:focus-visible {
+    outline: 2px solid var(--q-key); outline-offset: -2px;
+  }
+  .chip:hover { border-color: var(--ink-3); }
+  /* An excluded term reads as excluded: struck through, and the `!` lit. */
+  .chip.off .nm { text-decoration: line-through; opacity: .65; }
+  .chip.off .neg { opacity: 1; color: var(--q-not); }
   .chip.key  { color: var(--q-key);  border-color: color-mix(in srgb, var(--q-key) 40%, var(--line)); }
   .chip.val  { color: var(--q-val);  border-color: color-mix(in srgb, var(--q-val) 40%, var(--line)); }
   .chip.glob { color: var(--q-glob); border-color: color-mix(in srgb, var(--q-glob) 40%, var(--line)); }
@@ -1535,9 +1558,22 @@
            field name before its value, a mistake before anything. */
         const rank = ["bad_value", "unknown_field", "not", "field", "or", "glob", "regex", "phrase"];
         const role = rank.find((r) => c.roles.includes(r)) || "text";
-        return `<button type="button" class="chip ${ROLE_CLASS[role] || ""}"
-                  data-start="${c.start}" data-end="${c.end}"
-                  title="çıkarmak için tıkla">${escape_(body)}<i aria-hidden="true">×</i></button>`;
+        /* Three parts, and two of them are hit targets rather than
+           decoration. The first version made the whole pill one button with
+           an 8×13 pixel `×` inside it, which is a target no hand aims at —
+           and it offered no way to say "not this", which is the thing a
+           filter is most often wrong about. */
+        const negated = body.startsWith("!");
+        const label = negated ? body.slice(1) : body;
+        return `<span class="chip ${ROLE_CLASS[role] || ""}${negated ? " off" : ""}"
+                  data-start="${c.start}" data-end="${c.end}">
+          <button type="button" class="neg" data-act="neg"
+                  title="${negated ? "geri al" : "bunu dışla"}"
+                  aria-label="${negated ? "dışlamayı kaldır" : "dışla"}">!</button>
+          <span class="nm">${escape_(label)}</span>
+          <button type="button" class="rm" data-act="rm"
+                  title="çıkar" aria-label="terimi çıkar">×</button>
+        </span>`;
       })
       .join("");
   }
@@ -1585,37 +1621,10 @@
            escape_(name.slice(best[0] + best[1]));
   }
 
-  /* The query as a sentence. In the product this is the engine's `describe`;
-     here it is the same reading. Its job differs from the colour's: the
-     colour says WHAT, this line says WHY. */
-  function reading(text) {
-    const parts = [];
-    let warned = null;
-    for (const [role, t] of spans(text)) {
-      if (role === "space" || role === "colon" || role === "sep") continue;
-      if (role === "unknown" || role === "bad") warned = t;
-    }
-    // Terimleri tek tek oku.
-    for (const tok of text.trim().split(/\s+/).filter(Boolean)) {
-      const neg = tok.startsWith("!");
-      const body = neg ? tok.slice(1) : tok;
-      const sp = fieldSplit(body);
-      const f = sp && field(sp[0]);
-      let phrase;
-      if (f && sp[1] && accepts(f, sp[1]))      phrase = f.about.replace(/bunu|bu\b/, "<b>" + escape_(sp[1]) + "</b>");
-      else if (f && !sp[1])                     phrase = f.about + " (değer bekleniyor)";
-      else if (/^".*"?$/.test(body))            phrase = "adında <b>" + escape_(body.replace(/"/g, "")) + "</b> geçiyor";
-      else if (/[*?]/.test(body))               phrase = "adı <b>" + escape_(body) + "</b> desenine uçtan uca uyuyor";
-      else                                      phrase = "adında <b>" + escape_(body) + "</b> geçiyor";
-      parts.push(neg ? "<b>değil:</b> " + phrase : phrase);
-    }
-    if (!parts.length) return { html: "her şey", warn: false };
-    let html = parts.join(" · ");
-    if (warned) {
-      html = "<b>" + escape_(warned) + "</b> bir alan değil — düz metin olarak aranıyor. · " + html;
-    }
-    return { html, warn: !!warned };
-  }
+  /* The sentence under the line used to be built here, from the page's own
+     reading of the query. It is the engine's now — one parser, one opinion —
+     and what is left of that machinery below serves the completion hints,
+     which have not been moved yet. */
 
   /* Completions for the word the caret is in. Field names come from the
      table, so a field that does not exist cannot be offered; values likewise
@@ -2029,54 +2038,20 @@
     else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "mtime" || th.dataset.sort === "size"; }
     render();
   });
-  /* Separators get one space on each side, always.
-
-     Two things at once, and they only look contradictory. The spacing is for
-     reading: `ext:rs;toml;md;pdf` is a wall, `ext:rs ; toml ; md ; pdf` is a
-     list. The *number* of spaces is not the user's business — one is right,
-     none is cramped, three is an accident — so whatever is typed is normalised
-     to one. The engine reads every one of those spellings as the same query,
-     which is what makes tidying safe rather than a change of meaning.
-
-     Which runs are separators is not guessed here: `spans()` already knows,
-     because the parser's list rule is what produces the `sep` role. A `;` that
-     is ordinary text — `rapor ; pdf`, or one inside quotes — never gets that
-     role and is left exactly as written. Deciding it a second time by looking
-     at the characters was tried first and got both of those wrong. */
-  function tidySeparators() {
-    const text = q.value;
-    if (!text.includes(";")) return false;
-    const caret = q.selectionStart ?? text.length;
-    let out = "", at = 0, moved = caret;
-    const parts = spans(text);
-    for (let i = 0; i < parts.length; i++) {
-      if (parts[i][0] !== "sep") {
-        out += parts[i][1];
-        at += parts[i][1].length;
-        continue;
-      }
-      // One separator and the whitespace on both sides of it is one run.
-      let run = "", j = i;
-      while (j < parts.length && parts[j][0] === "sep") { run += parts[j][1]; j++; }
-      const want = run.split(";").length > 2 ? run.replace(/\s+/g, "") : " ; ";
-      if (caret > at) moved += Math.min(caret - at, run.length) === run.length
-        ? want.length - run.length            // caret is past the whole run
-        : want.length - (caret - at);         // caret sat inside it
-      out += want;
-      at += run.length;
-      i = j - 1;
-    }
-    if (out === text) return false;
-    q.value = out;
-    const to = Math.max(0, Math.min(moved, out.length));
-    q.setSelectionRange(to, to);
-    return true;
-  }
-
-  q.addEventListener("input", () => {
-    tidySeparators();
-    render();
-  });
+  /* **The box does not edit what is being typed, and it used to.**
+   *
+   * A `;` was rewritten to ` ; ` as it was entered. The reasoning was about
+   * reading — `ext:rs;toml;md` is a wall and `ext:rs ; toml ; md` is a list —
+   * and it is a fair thing to notice and not the box's call to act on. Typing
+   * a semicolon and watching two spaces appear around it, with the caret
+   * moving, reads as a fault whatever the intent; the first person to try it
+   * reported it as one. Both spellings are already the same query to the
+   * engine — the syntax reference says so — so there was nothing here to fix
+   * and something to break.
+   *
+   * It was also the last thing in this file still calling the page's own
+   * tokeniser, which is the second parser everything else has been moved off. */
+  q.addEventListener("input", render);
   // Moving the caret to another term with an arrow key changes the offer
   // too — it depends on where you are, not on what you last typed.
   q.addEventListener("click", () => { paint(q.value); showHints(); });
@@ -2128,15 +2103,29 @@
      removing a chip is a substring removal and a re-render, and the result is
      exactly what the user would have typed. */
   document.getElementById("chips").addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]");
     const chip = e.target.closest(".chip");
-    if (!chip) return;
+    if (!act || !chip) return;
     const from = Number(chip.dataset.start);
     const to = Number(chip.dataset.end);
-    const before = q.value.slice(0, from).replace(/\s+$/, "");
-    const after = q.value.slice(to).replace(/^\s+/, "");
-    q.value = before && after ? before + " " + after : before + after;
+    const body = q.value.slice(from, to);
+    /* Both edit the text, because the text is the query. What comes out is
+       exactly what the user would have typed, which is the whole reason there
+       is no hidden filter state to drift away from what is written. */
+    const replacement =
+      act.dataset.act === "neg"
+        ? (body.startsWith("!") ? body.slice(1) : "!" + body)
+        : "";
+    const before = q.value.slice(0, from);
+    const after = q.value.slice(to);
+    q.value = replacement
+      ? before + replacement + after
+      : (before.replace(/\s+$/, "") && after.replace(/^\s+/, "")
+          ? before.replace(/\s+$/, "") + " " + after.replace(/^\s+/, "")
+          : before.replace(/\s+$/, "") + after.replace(/^\s+/, ""));
     q.focus();
-    q.setSelectionRange(q.value.length, q.value.length);
+    const caret = replacement ? from + replacement.length : from;
+    q.setSelectionRange(caret, caret);
     render();
   });
 
