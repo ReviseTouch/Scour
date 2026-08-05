@@ -513,14 +513,18 @@
     user-select: none;
   }
   thead th { position: sticky; }
+  /* The grip straddles the line, because the line is what a hand aims at.
+     Nine pixels centred on it, not a one-pixel border — the chip's × taught
+     that lesson earlier today and this is the same one again.
+     `z-index` here only ranks it inside its own heading; what puts it above
+     the heading to its right is that headings are numbered downwards as they
+     go across. See `buildHeads`. */
   thead th .grip {
-    position: absolute; top: 0; right: -3px; bottom: 0;
-    width: 7px; cursor: col-resize; z-index: 4;
-    /* Wider than it looks. A one-pixel border is a one-pixel target, which is
-       the mistake the chip's × already taught. */
+    position: absolute; top: 0; right: -4px; bottom: 0;
+    width: 9px; cursor: col-resize; z-index: 4;
   }
   thead th .grip::after {
-    content: ""; position: absolute; top: 25%; bottom: 25%; left: 3px;
+    content: ""; position: absolute; top: 25%; bottom: 25%; left: 4px;
     width: 1px; background: var(--line);
   }
   thead th .grip:hover::after,
@@ -2150,6 +2154,22 @@
       // already is when the question "why is this column here" comes up.
       `<th class="pick"><button type="button" id="pick" title="kolonlar"
          aria-label="kolonları seç">⋮</button></th>`;
+    /* **Numbered downwards, left to right, and that is not decoration.**
+     *
+     * Each sticky heading is its own stacking context, so a grip's `z-index`
+     * ranks it against its siblings inside one cell and against nothing
+     * outside. The grip hangs four pixels into the next column — it has to,
+     * because the divider is what a hand aims at — and the next heading was
+     * painting over exactly that half. Measured: the cell's edge sits at 334,
+     * the grip spans 330 to 337, and every pixel from 334 on answered as the
+     * *next* heading. So aiming at the line sorted instead of dragging, which
+     * is what was reported.
+     *
+     * Giving each heading a lower number than the one before it puts every
+     * grip above its right-hand neighbour, whatever the column count. */
+    [...row.querySelectorAll("th")].forEach((th, i) => {
+      th.style.zIndex = String(40 - i);
+    });
     fitGrips();
     applyWidths();
     syncHeads();
