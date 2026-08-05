@@ -105,6 +105,14 @@ struct Shared {
     pending: AtomicU64,
     scanning: AtomicBool,
     stop: AtomicBool,
+    /// The live watches, each beside the source it belongs to.
+    ///
+    /// Shared rather than held by the `Engine` because the worker needs them:
+    /// a walk of a subtree is the moment to tell the watcher that the subtree
+    /// exists, and the worker is what runs the walk. Paired with the source
+    /// index so that a second source's watcher is not asked to cover a path
+    /// that is not its business.
+    watches: Mutex<Vec<(usize, Box<dyn WatchHandle>)>>,
 }
 
 pub struct Engine {
@@ -112,7 +120,6 @@ pub struct Engine {
     jobs: Sender<Job>,
     changes: Sender<Change>,
     worker: Mutex<Option<JoinHandle<()>>>,
-    watches: Mutex<Vec<Box<dyn WatchHandle>>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -141,6 +148,7 @@ impl Engine {
             pending: AtomicU64::new(0),
             scanning: AtomicBool::new(false),
             stop: AtomicBool::new(false),
+            watches: Mutex::new(Vec::new()),
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
         // Bounded: a burst of filesystem events must slow the watcher down
@@ -159,7 +167,6 @@ impl Engine {
             jobs: jobs_tx,
             changes: changes_tx,
             worker: Mutex::new(worker),
-            watches: Mutex::new(Vec::new()),
         }
     }
 
@@ -174,8 +181,8 @@ impl Engine {
     /// nothing here has to know what it is talking to.
     pub fn start_watching(&self) -> Result<u32> {
         let mut started = 0;
-        let mut handles = self.watches.lock();
-        for src in &self.shared.sources {
+        let mut handles = self.shared.watches.lock();
+        for (i, src) in self.shared.sources.iter().enumerate() {
             if !src.caps().contains(scour_core::Caps::WATCH) {
                 continue;
             }
@@ -184,7 +191,7 @@ impl Engine {
                 Box::new(Forward(self.changes.clone())),
             ) {
                 Ok(h) => {
-                    handles.push(h);
+                    handles.push((i, h));
                     started += 1;
                 }
                 // One source that will not watch does not stop the others.
@@ -202,10 +209,11 @@ impl Engine {
     /// under a home directory is a thing a person can look at, and "watching
     /// 0" is not.
     pub fn unwatched(&self) -> Vec<String> {
-        self.watches
+        self.shared
+            .watches
             .lock()
             .iter()
-            .flat_map(|h| h.unwatched())
+            .flat_map(|(_, h)| h.unwatched())
             .collect()
     }
 
@@ -235,12 +243,7 @@ impl Engine {
 
     /// Which source owns this path?
     fn owner_of(&self, path: &str) -> Option<usize> {
-        self.shared.sources.iter().position(|s| {
-            s.describe().roots.iter().any(|r| {
-                let r = r.trim_end_matches('/');
-                path == r || (path.starts_with(r) && path.as_bytes().get(r.len()) == Some(&b'/'))
-            })
-        })
+        owner_of(&self.shared, path)
     }
 
     pub fn maintain(&self, level: Maintenance) -> Result<MaintReport> {
@@ -372,7 +375,7 @@ impl Engine {
 
     /// Stop watching, finish what is queued, and commit.
     pub fn shutdown(&self) {
-        for h in self.watches.lock().drain(..) {
+        for (_, h) in self.shared.watches.lock().drain(..) {
             h.stop();
         }
         self.shared.stop.store(true, Ordering::Relaxed);
@@ -418,6 +421,9 @@ fn run(
     // was not already being paid.
     let mut dirty_settled = false;
     let mut last_commit = Instant::now();
+    // When something last arrived, as opposed to when this loop last wrote.
+    let mut last_busy = Instant::now();
+    let mut last_compact = Instant::now();
     let tick = crossbeam_channel::tick(Duration::from_millis(100));
 
     loop {
@@ -428,6 +434,7 @@ fn run(
                     scan(&shared, &changes_tx, source, subtree);
                     dirty = true;
                     idle_done = false;
+                    last_busy = Instant::now();
                 }
                 Ok(Job::Maintain(level)) => {
                     let _ = shared.index.maintain(level);
@@ -437,10 +444,41 @@ fn run(
             },
             recv(changes) -> change => match change {
                 Ok(c) => {
+                    last_busy = Instant::now();
+                    // Drain what is already queued so a burst becomes one
+                    // batch: applying a hundred changes together costs barely
+                    // more than applying one.
+                    let mut batch = vec![c];
+                    while let Ok(more) = changes.try_recv() {
+                        batch.push(more);
+                        if batch.len() >= 4_096 {
+                            break;
+                        }
+                    }
+                    // The walks come out of the batch first, because they are
+                    // the expensive kind and because they overlap. Every
+                    // directory a `git clone` creates asks for one — see
+                    // `translate` — and unwound, that is one walk per
+                    // directory, each of which flushes a segment and sweeps.
+                    // Coalesced, a thousand of them are one walk of the top.
+                    let mut walks: Vec<String> = Vec::new();
+                    batch.retain(|c| match c {
+                        Change::Rescan { path } => {
+                            walks.push(path.clone());
+                            false
+                        }
+                        _ => true,
+                    });
+                    if !batch.is_empty() {
+                        shared.pending.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                        let _ = shared.index.apply(&mut batch.into_iter());
+                        dirty = true;
+                        idle_done = false;
+                    }
                     // A watcher that lost track becomes a walk of the subtree
                     // it lost. Every platform loses track differently; this is
                     // the one place that has to care.
-                    if let Change::Rescan { path } = &c {
+                    for path in coalesce(walks) {
                         // An empty path means "I lost track and cannot say
                         // where" — inotify exhausting its watches, a kernel
                         // buffer overflowing. It used to match no source and be
@@ -452,32 +490,21 @@ fn run(
                             for i in 0..shared.sources.len() {
                                 scan(&shared, &changes_tx, i, None);
                             }
-                            dirty = true;
-                            continue;
-                        }
-                        let owner = shared.sources.iter().position(|s| {
-                            s.describe().roots.iter().any(|r| path.starts_with(r.as_str()))
-                        });
-                        if let Some(i) = owner {
+                        } else if let Some(i) = owner_of(&shared, &path) {
                             scan(&shared, &changes_tx, i, Some(path.clone()));
-                            dirty = true;
+                            // The walk succeeded, so the path is real and worth
+                            // watching. Where the cover was rebuilt shallow it
+                            // is the only way anything below here is ever seen
+                            // again; everywhere else it is a no-op.
+                            for (src, h) in shared.watches.lock().iter() {
+                                if *src == i {
+                                    h.cover(&path);
+                                }
+                            }
                         }
-                        continue;
+                        dirty = true;
+                        idle_done = false;
                     }
-                    // Drain what is already queued so a burst becomes one
-                    // batch: applying a hundred changes together costs barely
-                    // more than applying one.
-                    let mut batch = vec![c];
-                    while let Ok(more) = changes.try_recv() {
-                        batch.push(more);
-                        if batch.len() >= 4_096 {
-                            break;
-                        }
-                    }
-                    shared.pending.fetch_add(batch.len() as u64, Ordering::Relaxed);
-                    let _ = shared.index.apply(&mut batch.into_iter());
-                    dirty = true;
-                    idle_done = false;
                 }
                 Err(_) => break,
             },
@@ -507,15 +534,31 @@ fn run(
             idle_done = false;
         }
 
-        // Too many to wait for a quiet moment that may never come.
+        // Merging does not wait for a quiet moment, because the quiet moment
+        // does not come.
         //
-        // Checked on the commit rather than on every event, so this costs one
-        // `stats()` a second at most, and only while something is writing.
+        // The old rule was `compact_segments` while idle, with `compact_urgent`
+        // as an escape hatch for a machine that never goes idle. Both failed
+        // together, and measurably: idleness was counted from the last
+        // *commit*, and a desktop produces a filesystem change every few
+        // seconds, so the window never opened — while `compact_urgent` at 64
+        // was above where the index actually sat. Measured over a whole
+        // session: **56 segments**, `compact_segments` at 8, and neither path
+        // ran once.
+        //
+        // It does not need quiet any more. Since a fold builds under the read
+        // lock and only swaps the list under the write one, merging costs a
+        // search the time it takes to swap a `Vec` — the thing that made this
+        // wait was removed and the waiting was left behind. What remains is a
+        // floor on how often it is worth doing at all.
         if dirty_settled && !dirty {
             if let Ok(stats) = shared.index.stats()
-                && stats.segments > shared.opts.compact_urgent
+                && (stats.segments > shared.opts.compact_urgent
+                    || (stats.segments > shared.opts.compact_segments
+                        && last_compact.elapsed() >= COMPACT_EVERY))
             {
                 let _ = shared.index.maintain(Maintenance::Compact);
+                last_compact = Instant::now();
                 last_commit = Instant::now();
             }
             dirty_settled = false;
@@ -523,19 +566,21 @@ fn run(
 
         // Housekeeping, once the machine has stopped asking for anything.
         //
-        // Both of these were reported and acted on by nobody: an index would
-        // advise a rebuild forever and accumulate segments forever, waiting for
-        // someone to type a command. Doing it while idle is the whole point —
-        // neither is something to run while the user is waiting on a search.
-        if !dirty && !idle_done && last_commit.elapsed() >= shared.opts.idle_after {
-            if let Ok(stats) = shared.index.stats() {
-                if stats.segments > shared.opts.compact_segments {
-                    let _ = shared.index.maintain(Maintenance::Compact);
-                } else if stats.unsorted_entries >= shared.opts.rebuild_threshold {
-                    let _ = shared.index.maintain(Maintenance::Rebuild);
-                }
-            }
-            // Whatever happened, stop holding a write buffer. On an idle
+        // Counted from the last change rather than the last commit: a commit is
+        // this loop's own footprint, and measuring quiet by it meant every
+        // commit reset the clock that was waiting for commits to stop.
+        //
+        // **No automatic rebuild here any more**, and that is a measurement
+        // rather than a simplification. The index had drifted to 851,471
+        // unsorted entries — four times `rebuild_threshold` — and rebuilding it
+        // to a single segment moved `rapor` from 26 ms to 34 and `ext:pdf` from
+        // 50 to 55, with `rows_visited` unchanged at 288,000. What a broad
+        // query pays for is the number of candidate rows, not the number of
+        // segments holding them. `scour maintain rebuild` still exists for
+        // anyone who wants the space back; spending minutes of a core on it
+        // unasked, for nothing, does not.
+        if !dirty && !idle_done && last_busy.elapsed() >= shared.opts.idle_after {
+            // Whatever else happened, stop holding a write buffer. On an idle
             // machine this is the difference between a service that costs
             // hundreds of megabytes to leave running and one that does not.
             let _ = shared.index.maintain(Maintenance::Idle);
@@ -547,6 +592,49 @@ fn run(
     }
     let _ = shared.index.commit();
     shared.pending.store(0, Ordering::Relaxed);
+}
+
+/// Which source owns this path?
+///
+/// A prefix **and a separator**, not a prefix. `/home/hasan` does not own
+/// `/home/hasanX`, and the version of this that lived in the change loop
+/// thought it did.
+fn owner_of(shared: &Shared, path: &str) -> Option<usize> {
+    shared.sources.iter().position(|s| {
+        s.describe().roots.iter().any(|r| {
+            let r = r.trim_end_matches('/');
+            path == r || (path.starts_with(r) && path.as_bytes().get(r.len()) == Some(&b'/'))
+        })
+    })
+}
+
+/// Reduce a set of requested walks to the ones that are not already covered.
+///
+/// Walking `/a` walks `/a/b`, so asking for both is asking twice. This matters
+/// because the requests arrive in the thousands and each one costs far more
+/// than the directory it names: a walk flushes a segment, takes a generation
+/// and sweeps every older segment afterwards.
+///
+/// An empty path means "everything", which subsumes the rest by definition.
+fn coalesce(mut paths: Vec<String>) -> Vec<String> {
+    if paths.iter().any(String::is_empty) {
+        return vec![String::new()];
+    }
+    // Sorted, so a parent always comes immediately before its children and one
+    // comparison against the last kept path is enough.
+    paths.sort_unstable();
+    paths.dedup();
+    let mut out: Vec<String> = Vec::new();
+    for p in paths {
+        let covered = out.last().is_some_and(|k| {
+            let k = k.trim_end_matches('/');
+            p.len() > k.len() && p.starts_with(k) && p.as_bytes()[k.len()] == b'/'
+        });
+        if !covered {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// Walk one source and reconcile what it holds.
@@ -608,6 +696,14 @@ fn scan(shared: &Arc<Shared>, changes: &Sender<Change>, source: usize, subtree: 
     st.last_scan_ms = report.map(|r| r.took_ms).unwrap_or(0);
 }
 
+/// The floor on how often segments are merged without being asked.
+///
+/// Not a cost of merging — a fold no longer holds anything a search needs —
+/// but a cost of *deciding*: `stats()` reads every segment's live count, and
+/// there is no point paying it on a machine whose segment count moves by one
+/// every few seconds.
+const COMPACT_EVERY: Duration = Duration::from_secs(60);
+
 const BATCH: usize = 4_096;
 
 /// Turns a walk into index updates, in batches.
@@ -640,5 +736,48 @@ impl EntrySink for ToIndex {
         } else {
             Flow::Continue
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coalesce;
+
+    fn c(v: &[&str]) -> Vec<String> {
+        coalesce(v.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_walk_of_a_parent_absorbs_every_walk_below_it() {
+        // What makes this worth doing: a `git clone` creates a directory per
+        // package and each one asks for a walk, and a walk is not cheap —
+        // it flushes a segment, takes a generation and sweeps afterwards.
+        assert_eq!(c(&["/a", "/a/b", "/a/b/c", "/a/d"]), vec!["/a"]);
+        assert_eq!(c(&["/a/b/c", "/a/b", "/a"]), vec!["/a"]);
+    }
+
+    #[test]
+    fn siblings_are_not_absorbed_and_neither_is_a_longer_name() {
+        assert_eq!(c(&["/a/b", "/a/c"]), vec!["/a/b", "/a/c"]);
+        // The trap `under` has too: a sibling whose name starts with the
+        // prefix is not inside it.
+        assert_eq!(c(&["/a/b", "/a/bc"]), vec!["/a/b", "/a/bc"]);
+    }
+
+    #[test]
+    fn the_same_walk_asked_for_twice_is_one_walk() {
+        assert_eq!(c(&["/a/b", "/a/b", "/a/b"]), vec!["/a/b"]);
+    }
+
+    #[test]
+    fn an_empty_path_means_everything_and_subsumes_the_rest() {
+        // The one message that says "I lost track and cannot say where".
+        // Walking everything covers every other request by definition.
+        assert_eq!(c(&["/a", "", "/b"]), vec![String::new()]);
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_hide_a_child() {
+        assert_eq!(c(&["/a/", "/a/b"]), vec!["/a/"]);
     }
 }
