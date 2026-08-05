@@ -1,4 +1,17 @@
+<!doctype html>
+<!-- This page began as an artifact, where the surrounding document was
+     supplied for it. Served on its own it has to bring its own, and the
+     doctype is not a formality: without it the browser is in quirks mode,
+     where the `height: 100%` chain from `html` down to the results list
+     does not connect and the window collapses to the height of its content. -->
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <title>Scour</title>
+</head>
+<body>
 
 <style>
   /* ------------------------------------------------------------------
@@ -100,22 +113,59 @@
 
   * { box-sizing: border-box; }
 
+  /* The window is the window. Nothing outside the results list scrolls —
+     the search box, the meter, the rail and the column headings are all
+     fixed furniture, and a list of two million things is the only thing long
+     enough to need moving. A page that scrolls as a whole would take the
+     query line off the screen, which is the one element that must never
+     leave it. */
+  html, body { height: 100%; overflow: hidden; margin: 0; }
+
   .wrap {
     background: var(--ground);
     color: var(--ink);
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.45;
-    padding: calc(var(--u) * 6);
-    min-height: 100%;
+    padding: calc(var(--u) * 5);
+    height: 100%;
+    box-sizing: border-box;
+    display: grid;
+    /* The prose beside the tool rather than above it: it is read once and the
+       tool is used every day, so it must not cost the tool any height. */
+    grid-template-columns: minmax(0, 1fr) 34ch;
+    grid-template-rows: minmax(0, 1fr);
+    gap: calc(var(--u) * 5);
+    align-items: stretch;
   }
 
-  .note {
-    max-width: 70ch;
-    margin: 0 auto calc(var(--u) * 7);
-    color: var(--ink-2);
-    font-size: 13.5px;
+  /* Placed rather than ordered. The note comes first in the markup — it is
+     the page's introduction and a reader without CSS should meet it first —
+     and it belongs in the second column on screen. */
+  .app  { grid-column: 1; grid-row: 1; }
+  /* Everything that explains, in one column that scrolls by itself: the note
+     and the legend are both prose about the tool rather than part of it. */
+  .side {
+    grid-column: 2; grid-row: 1;
+    overflow-y: auto;
+    min-height: 0;
+    border-left: 1px solid var(--line);
+    padding-left: calc(var(--u) * 4);
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--u) * 5);
   }
+
+  /* Narrow enough that the note has nowhere to go: it goes back on top, and
+     keeps its own scrollbar so it still cannot push the tool off screen. */
+  @media (max-width: 1040px) {
+    .wrap { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .side { grid-column: 1; grid-row: 1; max-height: 22vh;
+            border-left: 0; padding-left: 0; }
+    .app  { grid-column: 1; grid-row: 2; }
+  }
+
+  .note { color: var(--ink-2); font-size: 13px; line-height: 1.55; }
   .note h1 {
     font-size: 15px;
     letter-spacing: .16em;
@@ -129,13 +179,17 @@
 
   /* ---------------- uygulama penceresi ---------------- */
   .app {
-    max-width: 1180px;
-    margin: 0 auto;
     background: var(--panel);
     border: 1px solid var(--line);
     border-radius: 3px;
     overflow: hidden;
     box-shadow: 0 18px 50px -28px rgba(0,0,0,.7);
+    /* Fills the column, and every child that is not the list is `auto` —
+       so whatever height is left over lands on the one thing that can use it. */
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    min-height: 0;
+    height: 100%;
   }
 
   /* --- the query line: not a box, the page itself --- */
@@ -376,7 +430,11 @@
   .meter .sep { color: var(--line); }
 
   /* ---------------- body ---------------- */
-  .body { display: grid; grid-template-columns: 186px 1fr; min-height: 430px; }
+  .body { display: grid; grid-template-columns: 186px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
+  .body[hidden], .report[hidden] { display: none; }
+  #view-search, #view-report { grid-row: 4; }
+  .rail { overflow-y: auto; min-height: 0; }
   @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }
 
   .rail {
@@ -432,7 +490,7 @@
   }
 
   /* ---------------- results ---------------- */
-  .results { display: flex; flex-direction: column; min-width: 0; }
+  .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .scroll { flex: 1; overflow: auto; }
   table { width: 100%; border-collapse: collapse; }
   thead th {
@@ -551,7 +609,13 @@
   .tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
   /* ---------------- rapor ---------------- */
-  .report { padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5); }
+  /* The other tab occupies the same last row, so it scrolls inside too rather
+     than growing the window. */
+  .report {
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    overflow-y: auto;
+    min-height: 0;
+  }
   .crumb { font: 500 12.5px/1 var(--mono); color: var(--ink-3); margin-bottom: calc(var(--u) * 3); }
   .crumb button {
     background: none; border: 0; padding: 0 2px; font: inherit;
@@ -626,14 +690,51 @@
 
 <div class="wrap">
 
-  <div class="note">
-    <h1>Scour · arayüz</h1>
-    <p id="blurb">Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor,
-      aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz
-    için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman
-    dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu.</p>
-    <p>Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın.</p>
-  </div>
+  <aside class="side">
+    <div class="note">
+      <h1>Scour · arayüz</h1>
+      <p id="blurb">Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor,
+        aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz
+      için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman
+      dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu.</p>
+      <p>Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın.</p>
+    </div>
+    <div class="legend">
+      <section>
+        <h3>Tazelik cetveli</h3>
+        <p>Her satırın solundaki üç piksel, dosyanın ne zaman değiştiğini renkle söylüyor.
+        Motor satırları zaten tarih sırasında sakladığı için liste boyunca kesintisiz bir
+        tayf çıkıyor: sıcak sarı az önce, soğuk arduvaz yıllar önce. Kolona bakmadan
+        "burası taze bölge" görünüyor.</p>
+      </section>
+      <section>
+        <h3>Sorgu arayüzün kendisi</h3>
+        <p>Kutucuk yok. Metin yazıldığı gibi duruyor — kopyalanabilir, MCP'ye
+        yapıştırılabilir — ama tanınan terimler renkleniyor: <code>kind:</code>
+        <code>under:</code> <code>dm:</code>. Süzgeçe tıklamak terimi <em>yazıya</em>
+        ekliyor, gizli bir duruma değil.</p>
+      </section>
+      <section>
+        <h3>Ölçüm gizlenmiyor</h3>
+        <p><code>0,29 ms · 4.864 satır okundu</code> — motorun raporladığı gerçek sayılar.
+        Hızlı olduğunu söylemek yerine ne kadar iş yaptığını gösteriyor; bir gün
+        yavaşlarsa bunu ilk arayüz söyler.</p>
+      </section>
+      <section>
+        <h3>Rapor: yaşa göre dağılım</h3>
+        <p>Her klasörün çubuğu, baytlarının ne kadarının taze ne kadarının bayat
+        olduğunu gösteriyor. Boyut tek başına ne sileceğini söylemiyor;
+        <b>bir yıldır kimsenin dokunmadığı 25 GB</b> söylüyor. TreeSize dâhil
+        hiçbir araçta yok, çünkü hiçbirinde satır başına tarih elde değil.</p>
+      </section>
+      <section>
+        <h3>Zaman şeridi</h3>
+        <p>Sonuç kümesinin tarih dağılımı, her tuşta yeniden çiziliyor. Bir çubuğa
+        tıklamak sorguya <code>dm:</code> terimi ekliyor. Yalnızca süzgeç sayıları
+        mikrosaniye sürdüğü için mümkün.</p>
+      </section>
+    </div>
+  </aside>
 
   <div class="app">
     <div class="query">
@@ -764,41 +865,6 @@
     </div>
   </div>
 
-  <div class="legend">
-    <section>
-      <h3>Tazelik cetveli</h3>
-      <p>Her satırın solundaki üç piksel, dosyanın ne zaman değiştiğini renkle söylüyor.
-      Motor satırları zaten tarih sırasında sakladığı için liste boyunca kesintisiz bir
-      tayf çıkıyor: sıcak sarı az önce, soğuk arduvaz yıllar önce. Kolona bakmadan
-      "burası taze bölge" görünüyor.</p>
-    </section>
-    <section>
-      <h3>Sorgu arayüzün kendisi</h3>
-      <p>Kutucuk yok. Metin yazıldığı gibi duruyor — kopyalanabilir, MCP'ye
-      yapıştırılabilir — ama tanınan terimler renkleniyor: <code>kind:</code>
-      <code>under:</code> <code>dm:</code>. Süzgeçe tıklamak terimi <em>yazıya</em>
-      ekliyor, gizli bir duruma değil.</p>
-    </section>
-    <section>
-      <h3>Ölçüm gizlenmiyor</h3>
-      <p><code>0,29 ms · 4.864 satır okundu</code> — motorun raporladığı gerçek sayılar.
-      Hızlı olduğunu söylemek yerine ne kadar iş yaptığını gösteriyor; bir gün
-      yavaşlarsa bunu ilk arayüz söyler.</p>
-    </section>
-    <section>
-      <h3>Rapor: yaşa göre dağılım</h3>
-      <p>Her klasörün çubuğu, baytlarının ne kadarının taze ne kadarının bayat
-      olduğunu gösteriyor. Boyut tek başına ne sileceğini söylemiyor;
-      <b>bir yıldır kimsenin dokunmadığı 25 GB</b> söylüyor. TreeSize dâhil
-      hiçbir araçta yok, çünkü hiçbirinde satır başına tarih elde değil.</p>
-    </section>
-    <section>
-      <h3>Zaman şeridi</h3>
-      <p>Sonuç kümesinin tarih dağılımı, her tuşta yeniden çiziliyor. Bir çubuğa
-      tıklamak sorguya <code>dm:</code> terimi ekliyor. Yalnızca süzgeç sayıları
-      mikrosaniye sürdüğü için mümkün.</p>
-    </section>
-  </div>
 </div>
 
 <script>
@@ -1927,3 +1993,5 @@
 })();
 
 </script>
+</body>
+</html>
