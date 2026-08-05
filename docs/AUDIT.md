@@ -18,10 +18,17 @@ The order is by what it costs a user, not by where it sits in the code.
 | §8 | a pending `rm -rf` made commits quadratic | measured, then fixed — 29× |
 | §9 | smaller things | fixed, except two left alone on purpose |
 
-Verified afterwards on the live index rather than only in tests: a directory
-created in `~` with three files written into it in the same instant is now
-found at its real path, files added to it later are found too, and a restart
-took the index directory from 1,454 orphan segments to none.
+Verified afterwards on the live index rather than only in tests. Five thousand
+files written into two hundred freshly created directories, as fast as a shell
+loop can do it: **5,000 of 5,000** found, at their real paths. Deleting the
+same tree: gone from the index within forty seconds, and five commits over
+20 ms, the worst 166. A restart took the index directory from 1,454 orphan
+segments to none.
+
+The first attempt at §1 got 3,740 of those 5,000, and the 1,260 it lost were
+not scattered — packages 32 to 82, one unbroken run. The walk was being run
+before the watch was extended, so the window between them was covered by
+neither: the same race, moved rather than removed. **Watch first, then walk.**
 
 ---
 

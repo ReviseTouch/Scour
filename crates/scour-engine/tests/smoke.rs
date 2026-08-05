@@ -26,6 +26,13 @@ struct MemSource {
     watchable: bool,
     /// Where the engine asked to be told about changes.
     sink: RwLock<Option<Box<dyn ChangeSink>>>,
+    /// Every `cover` and every `scan`, in the order they happened.
+    ///
+    /// The order is the thing being tested and nothing else can see it: a walk
+    /// is a snapshot and a watch is everything after it, so anything that
+    /// happens between them is covered by whichever came second — and by
+    /// neither if the walk did.
+    order: Arc<RwLock<Vec<&'static str>>>,
 }
 
 impl MemSource {
@@ -35,6 +42,7 @@ impl MemSource {
             scans: AtomicU64::new(0),
             watchable: true,
             sink: RwLock::new(None),
+            order: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -44,6 +52,7 @@ impl MemSource {
             scans: AtomicU64::new(0),
             watchable: false,
             sink: RwLock::new(None),
+            order: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -80,6 +89,9 @@ impl Source for MemSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
         self.scans.fetch_add(1, Ordering::Relaxed);
+        if opts.subtree.is_some() {
+            self.order.write().push("scan");
+        }
         let mut n = 0;
         for e in self.entries.read().iter() {
             if let Some(sub) = &opts.subtree
@@ -111,7 +123,9 @@ impl Source for MemSource {
             return Err(Error::unsupported("watch"));
         }
         *self.sink.write() = Some(s);
-        Ok(Box::new(NoopWatch))
+        Ok(Box::new(NoopWatch {
+            order: Arc::clone(&self.order),
+        }))
     }
 
     fn open(&self, _id: &EntryId) -> scour_core::Result<Box<dyn Read + Send>> {
@@ -446,10 +460,48 @@ fn a_watcher_that_lost_track_causes_a_walk_rather_than_a_guess() {
     );
 }
 
+#[test]
+fn a_subtree_is_watched_before_it_is_walked() {
+    // A walk is a snapshot; a watch is everything after it. Between them there
+    // must be no gap, and the obvious order — walk it, then watch it, because
+    // now we know it is real — leaves exactly one: whatever is created while
+    // the walk is running is reported by nothing and found by nothing.
+    //
+    // That is the same race a walk exists to close, moved rather than removed,
+    // and it was measured on the live index before this test existed. Five
+    // thousand files written into two hundred fresh directories left **1,260 of
+    // them missing** — and not scattered: packages 32 to 82, one unbroken run,
+    // which is the window in which the shell loop writing them was fastest.
+    //
+    // Watching something that is about to be walked costs a duplicate upsert
+    // at worst, and an upsert is by identity.
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    f.source.order.write().clear();
+
+    f.source.changed(Change::Rescan {
+        path: "/home/u/Projeler".into(),
+    });
+    settle(&f, |f| f.source.order.read().contains(&"scan"));
+
+    let order = f.source.order.read().clone();
+    assert_eq!(
+        order.first(),
+        Some(&"cover"),
+        "the watch has to be in place before the walk starts: {order:?}"
+    );
+}
+
 #[derive(Debug)]
-struct NoopWatch;
+struct NoopWatch {
+    order: Arc<RwLock<Vec<&'static str>>>,
+}
 
 impl WatchHandle for NoopWatch {
+    fn cover(&self, _path: &str) {
+        self.order.write().push("cover");
+    }
+
     fn stop(self: Box<Self>) {}
 }
 
