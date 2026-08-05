@@ -352,6 +352,233 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
 }
 
 #[test]
+fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
+    // The sweep used to answer this by rebuilding a path for every row that the
+    // directory scope did not already accept and comparing strings. That is a
+    // `String` per row per sweep — bearable when a sweep followed a full
+    // rescan, and not bearable now that creating a folder queues a walk. What
+    // replaces it has to give the same two answers:
+    //
+    //   * the swept directory's **own** row goes, even though it lives in its
+    //     parent and carries the parent's number, so the range check misses it;
+    //   * a sibling whose name merely starts with the same letters stays.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let dir = |path: &str, ino: u64| {
+        let mut e = entry(path, 100, ino);
+        e.is_dir = true;
+        e
+    };
+    let originals = vec![
+        dir("/w/proj", 1),
+        entry("/w/proj/inside.rs", 200, 2),
+        entry("/w/proj/deep/deeper.rs", 210, 3),
+        dir("/w/proj-414", 4),
+        entry("/w/proj-414/other.rs", 220, 5),
+        entry("/w/loose.rs", 230, 6),
+    ];
+    index
+        .apply(&mut originals.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    // A walk of `/w/proj` that finds nothing: the directory was removed.
+    let g = index.begin_generation().expect("generation");
+    let gone = index.sweep("/w/proj", g).expect("sweep");
+    assert_eq!(gone, 3, "the directory, its file and the one below it");
+
+    let mut paths: Vec<String> = index
+        .search(&SearchRequest {
+            page: Page::new(0, 20),
+            ..Default::default()
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec![
+            "/w/loose.rs".to_owned(),
+            "/w/proj-414".to_owned(),
+            "/w/proj-414/other.rs".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
+    // A segment swept empty is both *touched* — its bitmap changed — and
+    // *gone*, and the commit that erases it writes the bitmaps after releasing
+    // the lock. So the file came back, for a segment nothing would ever open
+    // and nothing would ever remove. Counted on the live index: **182 orphan
+    // segments against 55 real ones**, almost all a lone `.alive`, and because
+    // `bytes_on_disk` is the size of the directory the status line counted
+    // them.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let first: Vec<Entry> = (0..200)
+        .map(|i| entry(&format!("/w/old{i}.rs"), 1_000 + i, i as u64))
+        .collect();
+    index
+        .apply(&mut first.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    // Remove every one of them, so the commit both *touches* that segment —
+    // its bitmap changed — and *empties* it. `commit` is the path that matters:
+    // it erases the files under the lock and writes the bitmaps after
+    // releasing it.
+    index
+        .apply(
+            &mut [
+                Change::RemoveSubtree { path: "/w".into() },
+                Change::Upsert(entry("/elsewhere/kept.rs", 9_000, 9_999)),
+            ]
+            .into_iter(),
+        )
+        .expect("apply");
+    index.commit().expect("commit");
+    assert_eq!(index.stats().expect("stats").entries, 1);
+
+    // Checked against the files rather than the manifest, because `.names` is
+    // what `Live::open` reads first: a segment number with any other part but
+    // no `.names` is a number nothing can open.
+    let files = segment_files(tmp.path());
+    let real: std::collections::HashSet<&str> = files
+        .iter()
+        .filter(|n| n.ends_with(".names"))
+        .map(|n| &n[..12])
+        .collect();
+    let strays: Vec<&String> = files.iter().filter(|n| !real.contains(&n[..12])).collect();
+    assert!(
+        strays.is_empty(),
+        "files left for a segment nothing can open: {strays:?}"
+    );
+}
+
+/// Every `seg-*` file in an index directory.
+fn segment_files(dir: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("seg-"))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn an_index_forgets_files_the_manifest_never_named() {
+    // The other way orphans appear, and the one no ordering fixes: a segment is
+    // eight files written one at a time, and a kill in the middle leaves a
+    // partial set. Safe to remove because the manifest is written before
+    // anything is unlinked and rewritten before anything is added, so a file it
+    // does not name is a file nothing can reach.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    for (path, ino) in [("/w/a.rs", 1u64), ("/w/b.rs", 2)] {
+        index
+            .apply(&mut [Change::Upsert(entry(path, ino as i64, ino))].into_iter())
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    // Folds 1 and 2 away, so those two numbers are behind `next_segment` and
+    // belong to nothing.
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    assert_eq!(index.stats().expect("stats").segments, 1);
+    drop(index);
+
+    // A crash partway through writing a segment leaves exactly this: the first
+    // files of the eight, and no manifest entry.
+    std::fs::write(tmp.path().join("seg-00000001.names"), b"junk").expect("write");
+    std::fs::write(tmp.path().join("seg-00000002.cols"), b"junk").expect("write");
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(index.stats().expect("stats").entries, 2);
+    let left = segment_files(tmp.path());
+    assert!(
+        !left
+            .iter()
+            .any(|n| n.starts_with("seg-00000001.") || n.starts_with("seg-00000002.")),
+        "files the manifest does not name should not survive an open: {left:?}"
+    );
+}
+
+#[test]
+fn a_rebuild_finishes_even_while_the_index_is_being_written_to() {
+    // A fold releases the lock while it builds — that is what makes it safe
+    // against searches — so a commit lands during it and appends a segment to
+    // the very generation just folded. The rebuild loop saw a group of two
+    // again and folded the whole index a second time, and a third. Measured on
+    // 2.1 M entries: `scour maintain rebuild` ran for **over ten minutes** and
+    // was still at 38 segments when it was given up on.
+    //
+    // The work is decided once now, so this has to finish while a writer is
+    // going as hard as it can.
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Large enough that a fold takes long enough for a commit to land inside
+    // it, which is the whole mechanism.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = Arc::new(NativeIndex::open_or_create(tmp.path()).expect("create"));
+    for chunk in 0..8 {
+        let part: Vec<Entry> = (0..20_000)
+            .map(|i| {
+                let n = chunk * 20_000 + i;
+                entry(&format!("/w/some/where/file{n}.rs"), 1_000 + n, n as u64)
+            })
+            .collect();
+        index
+            .apply(&mut part.into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let writer = {
+        let (index, stop) = (Arc::clone(&index), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            let mut n = 100_000u64;
+            while !stop.load(Ordering::Relaxed) {
+                let _ = index.apply(
+                    &mut [Change::Upsert(entry(
+                        &format!("/w/churn{n}.rs"),
+                        n as i64,
+                        n,
+                    ))]
+                    .into_iter(),
+                );
+                let _ = index.commit();
+                n += 1;
+            }
+        })
+    };
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let rebuilder = {
+        let index = Arc::clone(&index);
+        std::thread::spawn(move || {
+            let r = index.maintain(Maintenance::Rebuild);
+            let _ = tx.send(r.is_ok());
+        })
+    };
+    let finished = rx.recv_timeout(std::time::Duration::from_secs(60));
+    stop.store(true, Ordering::Relaxed);
+    writer.join().expect("writer");
+    rebuilder.join().expect("rebuilder");
+    assert_eq!(
+        finished,
+        Ok(true),
+        "a rebuild has to stop chasing the commits that arrive during it"
+    );
+}
+
+#[test]
 fn a_compaction_folds_the_head_and_leaves_the_body() {
     // What a search pays for is the number of segments, so a compaction only
     // has to get that number down — and rewriting the body to do it would cost

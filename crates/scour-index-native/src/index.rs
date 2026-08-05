@@ -188,6 +188,7 @@ impl NativeIndex {
         for s in &meta.segments {
             segments.push(Live::open(dir, s.number, s.generation)?);
         }
+        sweep_orphans(dir, &meta);
         Ok(NativeIndex {
             dir: dir.to_owned(),
             inner: RwLock::new(Inner {
@@ -403,7 +404,7 @@ impl NativeIndex {
         // Copied, not written. The write is an `fsync` a segment and it happens
         // once a second; doing it here held the index for 33 to 56 ms while
         // every search waited.
-        let alive: Vec<(u64, Vec<u8>)> = inner
+        let mut alive: Vec<(u64, Vec<u8>)> = inner
             .segments
             .iter()
             .enumerate()
@@ -419,9 +420,18 @@ impl NativeIndex {
         // are no longer there, and the index does not open again.
         let gone = self.forget_empty(inner);
         self.save_meta(inner)?;
-        for n in gone {
-            Live::erase(&self.dir, n);
+        for n in &gone {
+            Live::erase(&self.dir, *n);
         }
+        // **A segment that was swept empty is both touched and gone**, so its
+        // bitmap is in the snapshot above *and* its files have just been
+        // unlinked — and the caller writes the snapshot after releasing the
+        // lock, which puts the file back. Nothing ever opens it and nothing
+        // ever removes it. Found by counting: 182 orphan segments on the live
+        // index against 55 in the manifest, almost all of them a lone `.alive`,
+        // one of them 160 KB. They also inflate `bytes_on_disk`, which is the
+        // size of the whole directory.
+        alive.retain(|(n, _)| !gone.contains(n));
         Ok(Pending {
             staged: pending,
             alive,
@@ -470,7 +480,23 @@ impl NativeIndex {
     /// that does otherwise gets a slow commit rather than a wrong answer: the
     /// numbers folded are checked against the list again before the swap.
     fn fold(&self, which_numbers: &[u64]) -> Result<()> {
-        let (number, generation, bytes) = {
+        // **The number is claimed under the write lock, before anything is
+        // built.** Reading `next_segment` under the read lock is not reserving
+        // it: a commit takes the write lock meanwhile, claims the same number
+        // in `take_staged`, and writes its eight files over the ones this fold
+        // is about to write — or has already written and mapped.
+        //
+        // Found by the test below rather than reasoned about. With a writer
+        // committing throughout, a rebuild came back `IndexCorrupt {
+        // "seg-00000009.fnames is unreadable" }`: a segment whose files had
+        // been replaced underneath a live mapping.
+        let number = {
+            let mut inner = self.inner.write();
+            let n = inner.next_segment;
+            inner.next_segment += 1;
+            n
+        };
+        let (generation, bytes) = {
             let inner = self.inner.read();
             let segs: Vec<&Live> = inner
                 .segments
@@ -487,7 +513,7 @@ impl NativeIndex {
             let views: Vec<Segment<'_>> = segs.iter().map(|s| s.view()).collect::<Result<_>>()?;
             let bytes =
                 build_sorted(&mut |emit: &mut dyn FnMut(&Entry)| merge_rows(&segs, &views, emit));
-            (inner.next_segment, generation, bytes)
+            (generation, bytes)
         };
 
         // The segment is written before the lock is taken: it is a new file
@@ -730,6 +756,43 @@ fn trim_allocator() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn trim_allocator() {}
 
+/// Remove segment files the manifest does not name.
+///
+/// Two things leave them behind, and the manifest is the answer to both: a
+/// crash between the first of a segment's eight files and the last leaves a
+/// partial set nothing will ever open, and a bug — since fixed — wrote back the
+/// bitmap of a segment that had just been erased. On the live index that was
+/// **182 orphan segments against 55 real ones**, and because `bytes_on_disk` is
+/// the size of the whole directory, the status line counted them.
+///
+/// Safe by construction: the manifest is written before any file is unlinked
+/// and rewritten before any is added, so a file it does not name is a file
+/// nothing can reach. Failures are ignored — this is housekeeping, and an index
+/// that opens with a stray file is better than one that refuses to open.
+fn sweep_orphans(dir: &Path, meta: &Meta) {
+    let named: std::collections::HashSet<u64> = meta.segments.iter().map(|s| s.number).collect();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(number) = name
+            .strip_prefix("seg-")
+            .and_then(|r| r.split('.').next())
+            .and_then(|n| n.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        // Only what is already behind the manifest's next number. A segment
+        // being written right now by nobody-should-be-there is still not worth
+        // racing, and `next_segment` is exactly the line between the two.
+        if !named.contains(&number) && number < meta.next_segment {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn dir_size(dir: &Path) -> u64 {
     std::fs::read_dir(dir)
         .map(|rd| {
@@ -818,21 +881,54 @@ impl Index for NativeIndex {
             }
             let victims: Vec<usize> = {
                 let seg = live.view()?;
-                let scope = seg.dirs.subtree(under_path);
                 let whole = under_path.is_empty() || under_path == "/";
-                let mut out = Vec::new();
-                seg.names.walk(0, |row, name| {
-                    if live.is_alive(row) {
-                        let in_scope = whole
-                            || scope.contains(seg.dir_id(row))
-                            || under(&seg.path(row, &String::from_utf8_lossy(name)), under_path);
-                        if in_scope {
-                            out.push(row);
-                        }
-                    }
-                    true
-                });
-                out
+                let scope = seg.dirs.subtree(under_path);
+                // The swept directory's **own** row is not under itself: it
+                // lives in its parent and carries the parent's number, so the
+                // range check walks straight past it. Same trap as in
+                // `flush_prepare`, same answer — the parent's number and the
+                // last component, and the name is read only for the handful of
+                // rows that sit there.
+                let own: Option<(u32, &str)> = (!whole)
+                    .then(|| {
+                        let p = under_path.trim_end_matches('/');
+                        let (parent, name) = p.rsplit_once('/')?;
+                        let parent = if parent.is_empty() { "/" } else { parent };
+                        Some((seg.dirs.exact(parent)?, name))
+                    })
+                    .flatten();
+                // **No path is built per row, and that is the whole cost of
+                // this loop.** It used to fall back to
+                // `under(&seg.path(row, …), under_path)` for every row the
+                // directory scope did not already accept — which, for a walk of
+                // one subtree, is every row of the index. Now that a created
+                // directory queues a walk, this runs whenever anyone makes a
+                // folder, and a string per row two million times over is not a
+                // thing to do under the write lock.
+                //
+                // Nothing is lost by dropping it: a row's directory number *is*
+                // its parent, so a descendant is in `scope.below` and a child is
+                // `scope.own`. An empty scope with no `own` means the segment
+                // holds nothing under the path at all.
+                if !whole && scope.is_empty() && own.is_none() {
+                    Vec::new()
+                } else {
+                    (0..live.rows())
+                        .filter(|&row| {
+                            if !live.is_alive(row) {
+                                return false;
+                            }
+                            if whole {
+                                return true;
+                            }
+                            let d = seg.dir_id(row);
+                            scope.contains(d)
+                                || own.is_some_and(|(pd, name)| {
+                                    pd == d && seg.names.get(row) == Some(name)
+                                })
+                        })
+                        .collect()
+                }
             };
             for row in victims {
                 if live.kill(row) {
@@ -1135,31 +1231,40 @@ impl Index for NativeIndex {
             // pinned the index at two segments forever: each source's scan
             // takes its own generation. Measured at 2,951,074 entries, two
             // segments, 1,441,890 of them unsorted, `rapor` at 125 ms.
+            //
+            // **The work is decided once, before the first fold.** This used
+            // to be a loop that re-read the list and folded again while
+            // anything was left to fold, which cannot finish on a machine that
+            // is being used: a fold releases the lock while it builds — that is
+            // what makes it safe against searches — so a commit lands during
+            // it and appends a segment to the very generation just folded, and
+            // the loop folds the whole index again. Measured: `scour maintain
+            // rebuild` ran for **over ten minutes** on 2.1 M entries and was
+            // still at 38 segments when it was given up on.
+            //
+            // `fold` re-checks which of the numbers it was given still exist,
+            // so a group that a previous round already absorbed costs nothing.
             Maintenance::Rebuild => {
                 self.flush(&mut self.inner.write())?;
-                let all: Option<Vec<u64>> = {
+                let work: Vec<Vec<u64>> = {
                     let inner = self.inner.read();
-                    (inner.open.is_none() && inner.segments.len() > 1)
-                        .then(|| inner.segments.iter().map(|s| s.number).collect())
-                };
-                if let Some(all) = all {
-                    self.fold(&all)?;
-                }
-                loop {
-                    let group = {
-                        let inner = self.inner.read();
-                        Self::groups(&inner).into_iter().find(|g| {
-                            g.len() > 1
-                                || inner
-                                    .segments
-                                    .iter()
-                                    .any(|s| s.number == g[0] && s.dead_rows() > 0)
-                        })
-                    };
-                    match group {
-                        Some(g) => self.fold(&g)?,
-                        None => break,
+                    if inner.open.is_none() && inner.segments.len() > 1 {
+                        vec![inner.segments.iter().map(|s| s.number).collect()]
+                    } else {
+                        Self::groups(&inner)
+                            .into_iter()
+                            .filter(|g| {
+                                g.len() > 1
+                                    || inner
+                                        .segments
+                                        .iter()
+                                        .any(|s| s.number == g[0] && s.dead_rows() > 0)
+                            })
+                            .collect()
                     }
+                };
+                for group in work {
+                    self.fold(&group)?;
                 }
             }
         }
