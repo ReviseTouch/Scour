@@ -346,6 +346,126 @@ fn a_watch_reports_creations_and_removals() {
     handle.stop();
 }
 
+/// The `ChangeSink` boilerplate every watch test needs.
+#[derive(Debug)]
+struct Fwd(Arc<Seen>);
+
+impl ChangeSink for Fwd {
+    fn emit(&self, c: Change) {
+        self.0.emit(c);
+    }
+}
+
+#[test]
+fn a_new_directory_is_reported_as_a_subtree_to_walk() {
+    // The gap this closes cost a file permanently on the live index. Between
+    // `mkdir a/b` and the moment the backend has a watch on `a/b`, anything
+    // created inside it produces no event at all — there is nothing to report
+    // it against. Reproduced there: `mkdir d && echo > d/f` left `f` on disk
+    // and out of the index for the rest of the session, while the same two
+    // commands eight seconds apart worked.
+    //
+    // So the watcher does not try to win the race. A directory that has just
+    // appeared is reported as a place to walk, and a walk reads what is there
+    // instead of waiting to be told about it.
+    let (dir, src) = tree();
+    let seen = Arc::new(Seen::default());
+    let handle = src
+        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
+        .expect("watch");
+
+    let made = dir.path().join("src/brand-new");
+    std::fs::create_dir(&made).expect("mkdir");
+    std::fs::write(made.join("inside.rs"), "fn x() {}").expect("write");
+    let want = made.to_string_lossy().replace('\\', "/");
+
+    let changes = wait_for(&seen, |v| {
+        v.iter()
+            .any(|c| matches!(c, Change::Rescan { path } if *path == want))
+    });
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, Change::Rescan { path } if *path == want)),
+        "a created directory has to become a walk, not a row: {changes:?}"
+    );
+    handle.stop();
+}
+
+#[test]
+fn writing_to_a_file_does_not_ask_for_a_walk() {
+    // The other half of the rule, and the reason it is not simply "rescan on
+    // every modify": a directory's mtime moves whenever a file inside it is
+    // written, so a build would queue a walk per object file.
+    let (dir, src) = tree();
+    let seen = Arc::new(Seen::default());
+    let handle = src
+        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
+        .expect("watch");
+
+    let existing = dir.path().join("src/main.rs");
+    std::fs::write(&existing, "fn main() { /* changed */ }").expect("write");
+    let want = existing.to_string_lossy().replace('\\', "/");
+    let changes = wait_for(&seen, |v| {
+        v.iter()
+            .any(|c| matches!(c, Change::Upsert(e) if e.path == want))
+    });
+    assert!(
+        !changes.iter().any(|c| matches!(c, Change::Rescan { .. })),
+        "touching a file must not queue a walk: {changes:?}"
+    );
+    handle.stop();
+}
+
+#[test]
+#[cfg(unix)]
+fn a_watch_does_not_walk_out_through_a_symlink() {
+    // On the live index `~/.wine-hukuk/dosdevices/z:` points at `/`, and
+    // `notify`'s `follow_symlinks` is on by default while the walk's is off.
+    // The watcher left the home directory through it and held 242,643 inotify
+    // watches on the whole root filesystem — and reported every file created
+    // anywhere on the machine under a path that does not exist.
+    let (dir, src) = tree();
+    let outside = tempfile::tempdir().expect("temp dir");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("keep/elsewhere")).expect("symlink");
+
+    let seen = Arc::new(Seen::default());
+    let handle = src
+        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
+        .expect("watch");
+
+    // Something happening on the far side of the link, and something on this
+    // side to prove the watch is alive at all.
+    std::fs::write(outside.path().join("beyond.txt"), "x").expect("write");
+    let here = dir.path().join("keep/here.txt");
+    std::fs::write(&here, "x").expect("write");
+    let want = here.to_string_lossy().replace('\\', "/");
+    let changes = wait_for(&seen, |v| {
+        v.iter()
+            .any(|c| matches!(c, Change::Upsert(e) if e.path == want))
+    });
+
+    assert!(
+        changes
+            .iter()
+            .any(|c| matches!(c, Change::Upsert(e) if e.path == want)),
+        "the watch has to be working for this test to mean anything: {changes:?}"
+    );
+    let leaked: Vec<&Change> = changes
+        .iter()
+        .filter(|c| match c {
+            Change::Upsert(e) => e.path.contains("beyond.txt"),
+            Change::Rescan { path } | Change::RemoveSubtree { path } => path.contains("beyond.txt"),
+            Change::Remove(_) => false,
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "the watcher followed a link the walk does not: {leaked:?}"
+    );
+    handle.stop();
+}
+
 #[test]
 fn identities_are_stable_across_two_scans() {
     // Whatever a platform can offer, it has to offer the same answer twice, or

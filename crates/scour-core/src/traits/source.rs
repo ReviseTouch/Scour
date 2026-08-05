@@ -55,6 +55,21 @@ pub trait WatchHandle: Send + Debug {
         Vec::new()
     }
 
+    /// Start watching a subtree that appeared after the watcher did.
+    ///
+    /// A default that does nothing, because only some mechanisms need it: a
+    /// recursive watch covers whatever is created below it, so Windows and
+    /// macOS have nothing to do here. Linux does. When inotify refuses a whole
+    /// tree — one unreadable directory is enough — the cover is rebuilt as a
+    /// shallow watch on the parent and a recursive watch on each child that
+    /// existed *then*. A directory created in that parent afterwards is
+    /// reported once and never watched, and everything inside it stays
+    /// invisible until somebody rescans by hand.
+    ///
+    /// The engine calls this after walking a subtree, which is the moment it
+    /// already knows the path is real and worth the syscalls.
+    fn cover(&self, _path: &str) {}
+
     /// Stop watching. Dropping does the same; this exists so a caller can wait
     /// for the watcher's threads to finish.
     fn stop(self: Box<Self>);

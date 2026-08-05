@@ -63,14 +63,39 @@ pub fn start(
         }
     };
 
-    let mut watcher = notify::recommended_watcher(handler).map_err(|e| Error::Io {
+    // **The watcher has to follow the same links the walk does, and by default
+    // it does not.** `notify`'s `follow_symlinks` is on, so a recursive watch
+    // descends through every symlink it meets while `WalkBuilder::follow_links`
+    // here is off — and the two disagreeing is not a matter of taste. Measured
+    // on this machine, where `~/.wine-hukuk/dosdevices/z:` points at `/`: the
+    // watcher walked out of the home directory and held **242,643 inotify
+    // watches** on the whole root filesystem, including a volume the
+    // configuration deliberately does not watch.
+    //
+    // The rows are worse than the cost. Every file created anywhere on the
+    // machine arrived as `/home/u/.wine-hukuk/dosdevices/z:/…` — a path that
+    // does not exist, that no walk will ever produce, and that *is* textually
+    // under the root, so every sweep killed those rows and the watcher put
+    // them straight back.
+    let mut watcher = notify::RecommendedWatcher::new(
+        handler,
+        notify::Config::default().with_follow_symlinks(opts.follow_symlinks),
+    )
+    .map_err(|e| Error::Io {
         detail: format!("cannot start a watcher: {e}"),
     })?;
 
     let mut watched = 0usize;
     let mut skipped = Vec::new();
     for r in &roots {
-        if cover(&mut watcher, r, sink.as_ref(), &mut skipped, 0) {
+        if cover(
+            &mut watcher,
+            r,
+            sink.as_ref(),
+            &mut skipped,
+            0,
+            opts.follow_symlinks,
+        ) {
             watched += 1;
         }
     }
@@ -80,9 +105,10 @@ pub fn start(
         });
     }
     Ok(Box::new(FsWatch {
-        watcher,
+        watcher: std::sync::Mutex::new(watcher),
         stopped: AtomicBool::new(false),
         skipped,
+        follow_symlinks: opts.follow_symlinks,
     }))
 }
 
@@ -116,7 +142,17 @@ fn cover(
     sink: &dyn ChangeSink,
     skipped: &mut Vec<String>,
     depth: u32,
+    follow_symlinks: bool,
 ) -> bool {
+    // A link is covered by whoever owns its target, exactly as in the walk.
+    // Descending here would index the same files a second time under a path
+    // nothing else in the system produces.
+    if !follow_symlinks
+        && depth > 0
+        && std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return false;
+    }
     if watcher.watch(dir, RecursiveMode::Recursive).is_ok() {
         return true;
     }
@@ -150,7 +186,14 @@ fn cover(
         // Only directories: a file is covered by the watch on its parent, and
         // a symlink is followed by whoever owns the target.
         if child.file_type().is_ok_and(|t| t.is_dir())
-            && cover(watcher, &child.path(), sink, skipped, depth + 1)
+            && cover(
+                watcher,
+                &child.path(),
+                sink,
+                skipped,
+                depth + 1,
+                follow_symlinks,
+            )
         {
             any = true;
         }
@@ -178,16 +221,44 @@ fn translate(
     // `is_dir()`, which is a syscall for every file a compiler writes — 74% of
     // a core while a build ran, spent deciding to discard the event.
     let watched = |p: &std::path::Path| -> bool { !rules.excludes_path(&path::from_path(p)) };
-    let upsert = |p: &std::path::Path| {
+    // `fresh` means the path was not there a moment ago — a create, or the
+    // destination of a rename. It is the only case that needs the extra
+    // sentence below, and separating it is what keeps a compile from queueing a
+    // walk for every directory whose mtime moved.
+    let upsert = |p: &std::path::Path, fresh: bool| {
         let path = path::from_path(p);
         match std::fs::symlink_metadata(p) {
-            Ok(md) => sink.emit(Change::Upsert(crate::scan::entry_of(
-                id,
-                &path,
-                Some(&md),
-                md.is_dir(),
-                stable_ids,
-            ))),
+            Ok(md) => {
+                sink.emit(Change::Upsert(crate::scan::entry_of(
+                    id,
+                    &path,
+                    Some(&md),
+                    md.is_dir(),
+                    stable_ids,
+                )));
+                // **A directory that has just appeared is a subtree, not a
+                // row.** Two different things are lost by treating it as one,
+                // and both were reproduced on this machine:
+                //
+                // * Between `mkdir a/b` and the moment the backend has added a
+                //   watch for `a/b`, anything created inside it produces no
+                //   event at all — there is nothing to report it against.
+                //   `mkdir d && echo > d/f` left `f` on disk and out of the
+                //   index permanently; the same two commands eight seconds
+                //   apart worked. That is `git clone`, `cargo new`, `unzip`
+                //   and every installer.
+                // * Where the recursive watch was refused and rebuilt shallow
+                //   (see `cover`), a directory created in the shallow parent
+                //   never gets a watch at all, so *nothing* inside it is ever
+                //   seen.
+                //
+                // A walk covers both, because it reads what is there instead of
+                // waiting to be told. `symlink_metadata` rather than
+                // `metadata`, so a link to a directory is not descended.
+                if fresh && md.is_dir() {
+                    sink.emit(Change::Rescan { path });
+                }
+            }
             // Gone between the event and the look. That is a removal, and it is
             // the common case under any kind of churn.
             Err(_) => sink.emit(Change::RemoveSubtree { path }),
@@ -197,15 +268,27 @@ fn translate(
     match event.kind {
         EventKind::Create(_) => {
             for p in event.paths.iter().filter(|p| watched(p)) {
-                upsert(p);
+                upsert(p, true);
             }
         }
         // A rename arrives as one event with two paths, or as two events. Both
         // are handled by looking at every path mentioned: the one that no
         // longer exists is removed, the one that does is upserted.
+        //
+        // A rename is also how a whole populated directory appears at once —
+        // `mv ~/Downloads/project ~/src` produces no events for anything inside
+        // it — so its destination counts as fresh for the same reason a create
+        // does. Every other kind of modify does not: a directory's mtime moves
+        // whenever a file in it is written, and treating that as fresh would
+        // queue a walk per file during a build.
+        EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
+            for p in event.paths.iter().filter(|p| watched(p)) {
+                upsert(p, true);
+            }
+        }
         EventKind::Modify(_) => {
             for p in event.paths.iter().filter(|p| watched(p)) {
-                upsert(p);
+                upsert(p, false);
             }
         }
         EventKind::Remove(_) => {
@@ -238,13 +321,17 @@ fn translate(
 }
 
 struct FsWatch {
-    watcher: notify::RecommendedWatcher,
+    /// Behind a lock because the cover can be extended after the fact — see
+    /// [`WatchHandle::cover`]. Uncontended in practice: the engine's one worker
+    /// thread is the only caller and it takes it after a walk, not during one.
+    watcher: std::sync::Mutex<notify::RecommendedWatcher>,
     stopped: AtomicBool,
     /// Subtrees nothing is watching, because they could not be read.
     ///
     /// Kept rather than counted: "live updates are off somewhere" is not
     /// something a user can act on, and `~/.local/share/waydroid/data` is.
     skipped: Vec<String>,
+    follow_symlinks: bool,
 }
 
 impl std::fmt::Debug for FsWatch {
@@ -261,8 +348,45 @@ impl WatchHandle for FsWatch {
         self.skipped.clone()
     }
 
+    fn cover(&self, path: &str) {
+        if self.stopped.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(mut watcher) = self.watcher.lock() else {
+            return;
+        };
+        // Asking for a watch that is already there is not an error and not a
+        // second watch — inotify keys them by inode, and `notify` replaces the
+        // entry. So this does not have to know whether the recursive watch
+        // above already covers the path, which it cannot know cheaply.
+        //
+        // Failures are silent on purpose: this runs after a walk that already
+        // succeeded, so the only ways to get here are a race with a removal or
+        // a watch limit, and neither is news the caller can act on.
+        let mut skipped = Vec::new();
+        cover(
+            &mut watcher,
+            std::path::Path::new(path),
+            &Discard,
+            &mut skipped,
+            0,
+            self.follow_symlinks,
+        );
+    }
+
     fn stop(self: Box<Self>) {
         self.stopped.store(true, Ordering::Relaxed);
         drop(self.watcher);
     }
+}
+
+/// A sink for the one `cover` call that must not queue more work.
+///
+/// Extending the cover happens *because* a walk just ran; asking for another
+/// one from inside it is how a walk becomes a loop.
+#[derive(Debug)]
+struct Discard;
+
+impl ChangeSink for Discard {
+    fn emit(&self, _change: Change) {}
 }
