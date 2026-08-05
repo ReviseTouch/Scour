@@ -28,8 +28,23 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
     for token in join_parens(join_operators(join_lists(tokenize(input)))) {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
+        // **`;` is `|` outside a field's value**, and that is one rule rather
+        // than two. `ext:rs;toml` already means "extension is rs *or* toml";
+        // a mark that means "any of these" inside a value and something else
+        // between words is the inconsistency, not the fix. Reported as
+        // `OPUS ; SONNET` finding neither, which is what three AND-ed terms —
+        // one of them a literal semicolon — correctly finds.
+        //
+        // A field's value keeps its own semicolons: `join_lists` has already
+        // glued them on, and splitting here would take `ext:rs;toml` apart.
+        // A quoted run is literal all the way through — `"a ; b"` is one
+        // phrase and the semicolon in it is a character. The same guard every
+        // other stage here uses, and forgetting it took the phrase apart.
+        let owns_list = token.starts_with('"')
+            || split_field(&token).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
         let alts: Vec<(bool, Match)> = token
-            .split('|')
+            .split(if owns_list { '|' } else { ';' })
+            .flat_map(|part| part.split('|'))
             .filter(|a| !a.is_empty())
             .filter_map(|a| parse_alt(a, now))
             .collect();
@@ -183,16 +198,22 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
     for t in tokens {
         // A quoted run is literal all the way through.
         let quoted = t.starts_with('"');
-        if !quoted && t == "|" {
+        // `;` joins the same way `|` does — see `parse_at`. A field's value
+        // keeps its own, and `join_lists` has already glued those on, so what
+        // reaches here standing on its own is an operator.
+        let owns_list = split_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
+        if !quoted && (t == "|" || t == ";") {
             want_alt = true;
             continue;
         }
         let mut t = t;
-        if !quoted && t.starts_with('|') && !out.is_empty() {
+        if !quoted && (t.starts_with('|') || (t.starts_with(';') && !owns_list)) && !out.is_empty()
+        {
             want_alt = true;
             t.remove(0);
         }
-        let trailing_alt = !quoted && t.len() > 1 && t.ends_with('|');
+        let trailing_alt =
+            !quoted && t.len() > 1 && (t.ends_with('|') || (t.ends_with(';') && !owns_list));
         if trailing_alt {
             t.pop();
         }
@@ -770,16 +791,30 @@ mod list_separator_tests {
     }
 
     #[test]
-    fn a_semicolon_that_continues_nothing_is_still_text() {
-        // There is no list in front of it, so joining would invent one.
-        assert_eq!(
-            one("rapor ; pdf"),
-            vec![
-                (false, Match::NameContains("rapor".into())),
-                (false, Match::NameContains(";".into())),
-                (false, Match::NameContains("pdf".into())),
-            ]
-        );
+    fn a_semicolon_between_words_is_or() {
+        // **The rule this test used to assert was the wrong one**, and a user
+        // found it: `OPUS ; SONNET` found neither, because it was three terms
+        // AND-ed together and one of them was a literal semicolon.
+        //
+        // `ext:rs;toml` already means "extension is rs *or* toml". A mark that
+        // means "any of these" inside a value and something else between words
+        // is the inconsistency; one rule everywhere is the fix. Written or
+        // not written with spaces, and the same as `|`.
+        let want = vec![vec![
+            (false, Match::NameContains("rapor".into())),
+            (false, Match::NameContains("pdf".into())),
+        ]];
+        for q in ["rapor ; pdf", "rapor;pdf", "rapor|pdf"] {
+            assert_eq!(
+                parse_at(q, 0)
+                    .groups
+                    .iter()
+                    .map(|g| g.alts.clone())
+                    .collect::<Vec<_>>(),
+                want,
+                "{q:?}"
+            );
+        }
     }
 
     #[test]

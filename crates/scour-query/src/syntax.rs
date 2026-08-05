@@ -16,6 +16,7 @@ A query is a list of terms separated by spaces. Every term must match.
 |---|---|
 | `a b` | both must match (AND) |
 | `a|b` | either may match (OR) |
+| `a;b` | the same thing — `;` and `|` are one operator |
 | `!a` | must not match (NOT) |
 | `"two words"` | exact phrase; wildcards inside are literal characters |
 | `*` | any run of characters |
@@ -93,6 +94,11 @@ Names are resolved on the machine holding the index, from `/etc/passwd` and
 supplies them — NTFS, the FAT family — has them withheld at index time rather
 than stored, so `perm:` and `suid:` find nothing on such a volume instead of
 finding everything. `node:` is unaffected.
+
+`;` means "any of these" wherever it appears — inside a field's value and
+between words alike. `ext:rs;toml` is "extension is rs or toml" and
+`opus;sonnet` is "named opus or sonnet"; one mark, one meaning. Inside quotes
+it is an ordinary character: `"a ; b"` looks for that text.
 
 ## Sizes
 
