@@ -504,6 +504,42 @@ fn a_source_told_not_to_watch_says_it_cannot() {
 }
 
 #[test]
+fn an_empty_root_is_reported_as_one_that_could_not_be_looked_at() {
+    // **A mount that is not mounted is a readable, empty directory.** That is
+    // the case a machine meets every time it boots: the service starts with the
+    // session, and `/mnt/depo` opens fine and lists nothing until something
+    // mounts it. The `read_dir` check alone says the root is fine, the walk
+    // reports zero entries, and the engine reconciles on that — which deletes
+    // everything the index held for that volume.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let src = FsSource::new(SourceId(9), "empty", vec![dir.path().to_path_buf()]);
+    let (_paths, report) = scan(&src, &ScanOptions::default());
+    assert!(
+        report.root_unreadable,
+        "an empty source root is 'could not look', not 'there is nothing'"
+    );
+}
+
+#[test]
+fn an_emptied_subtree_is_still_reconciled() {
+    // The other half, and the reason the rule is about source roots only:
+    // emptying a folder is an ordinary thing a person does, and the walk of it
+    // has to be believed or the folder's contents never leave the index.
+    let (dir, src) = tree();
+    let empty = dir.path().join("emptied");
+    std::fs::create_dir(&empty).expect("mkdir");
+    let opts = ScanOptions {
+        subtree: Some(empty.to_string_lossy().replace('\\', "/")),
+        ..ScanOptions::default()
+    };
+    let (_paths, report) = scan(&src, &opts);
+    assert!(
+        !report.root_unreadable,
+        "a walked subtree that is empty is an answer, not a failure"
+    );
+}
+
+#[test]
 fn a_root_that_cannot_be_read_is_reported_as_such() {
     // The difference between "found nothing" and "could not look". The engine
     // reconciles on a scan report, and reconciling the second deletes the whole

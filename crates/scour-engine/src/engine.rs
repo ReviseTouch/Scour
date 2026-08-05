@@ -424,6 +424,15 @@ fn run(
     // When something last arrived, as opposed to when this loop last wrote.
     let mut last_busy = Instant::now();
     let mut last_compact = Instant::now();
+    // Sources whose roots were not there to be read, and when to look again.
+    //
+    // A service that starts with the session starts before the volumes it is
+    // configured to index: `/mnt/depo` is a readable, empty directory until
+    // something mounts it. Without this, the first walk finds nothing, refuses
+    // to reconcile — which is the right refusal — and then nobody ever asks
+    // again, so the volume stays as stale as it was until a person types
+    // `scour rescan`.
+    let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
     let tick = crossbeam_channel::tick(Duration::from_millis(100));
 
     loop {
@@ -431,7 +440,10 @@ fn run(
             recv(jobs) -> job => match job {
                 Ok(Job::Stop) | Err(_) => break,
                 Ok(Job::Scan { source, subtree }) => {
-                    scan(&shared, &changes_tx, source, subtree);
+                    let whole = subtree.is_none();
+                    if !scan(&shared, &changes_tx, source, subtree) && whole {
+                        schedule_retry(&mut retries, source);
+                    }
                     dirty = true;
                     idle_done = false;
                     last_busy = Instant::now();
@@ -488,7 +500,9 @@ fn run(
                         // continued silently until someone rescanned by hand.
                         if path.is_empty() {
                             for i in 0..shared.sources.len() {
-                                scan(&shared, &changes_tx, i, None);
+                                if !scan(&shared, &changes_tx, i, None) {
+                                    schedule_retry(&mut retries, i);
+                                }
                             }
                         } else if let Some(i) = owner_of(&shared, &path) {
                             // **Watched before it is walked, and the order is
@@ -549,6 +563,30 @@ fn run(
             dirty_settled = true;
             last_commit = Instant::now();
             idle_done = false;
+        }
+
+        // Volumes that were not there when they were last asked about.
+        if !retries.is_empty() {
+            let now = Instant::now();
+            let due: Vec<(usize, usize)> = retries
+                .iter()
+                .filter(|(_, at, _)| *at <= now)
+                .map(|(source, _, attempt)| (*source, *attempt))
+                .collect();
+            retries.retain(|(_, at, _)| *at > now);
+            for (source, attempt) in due {
+                if scan(&shared, &changes_tx, source, None) {
+                    eprintln!(
+                        "scourd: {} is readable again",
+                        shared.sources[source].describe().name
+                    );
+                    dirty = true;
+                    last_busy = Instant::now();
+                    idle_done = false;
+                } else {
+                    retries.push((source, now + retry_delay(attempt + 1), attempt + 1));
+                }
+            }
         }
 
         // Merging does not wait for a quiet moment, because the quiet moment
@@ -640,12 +678,22 @@ fn coalesce(paths: Vec<String>) -> Vec<String> {
 }
 
 /// Walk one source and reconcile what it holds.
-fn scan(shared: &Arc<Shared>, changes: &Sender<Change>, source: usize, subtree: Option<String>) {
+/// Walk one source, and say whether the walk could see what it came for.
+///
+/// `false` means the roots were not there to be read — a volume that has not
+/// been mounted yet, a drive pulled out, a share that dropped. The caller is
+/// expected to come back later rather than to treat it as an answer.
+fn scan(
+    shared: &Arc<Shared>,
+    changes: &Sender<Change>,
+    source: usize,
+    subtree: Option<String>,
+) -> bool {
     let Some(src) = shared.sources.get(source).cloned() else {
-        return;
+        return true;
     };
     let Ok(generation) = shared.index.begin_generation() else {
-        return;
+        return true;
     };
     shared.scanning.store(true, Ordering::Relaxed);
     {
@@ -677,9 +725,8 @@ fn scan(shared: &Arc<Shared>, changes: &Sender<Change>, source: usize, subtree: 
     // all; sweeping on either deletes what is merely out of reach. The failure
     // is silent and total — the index empties, `rescan` reports success, and
     // the files come back only when the root does.
-    let trustworthy = report
-        .as_ref()
-        .is_ok_and(|r| !r.cancelled && !r.root_unreadable);
+    let could_look = report.as_ref().is_ok_and(|r| !r.root_unreadable);
+    let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look;
     if trustworthy {
         let roots: Vec<String> = match &subtree {
             Some(s) => vec![s.clone()],
@@ -696,6 +743,35 @@ fn scan(shared: &Arc<Shared>, changes: &Sender<Change>, source: usize, subtree: 
     st.scanning_source = None;
     st.scanned = seen;
     st.last_scan_ms = report.map(|r| r.took_ms).unwrap_or(0);
+    // Only a whole-source walk is worth coming back for. A subtree that is not
+    // there is a subtree that was deleted, and something has already said so.
+    could_look || subtree.is_some()
+}
+
+/// How long to wait before looking again at a source whose roots were not there.
+///
+/// The case this exists for is a machine that has just started: the service is
+/// up before the volumes are, so the first walk of an external disk finds an
+/// empty mount point. Short enough that a disk appearing a moment later is
+/// picked up while the user is still logging in, long enough that a drive left
+/// unplugged for a week costs one directory listing an hour.
+const RETRY_AFTER: [Duration; 5] = [
+    Duration::from_secs(10),
+    Duration::from_secs(30),
+    Duration::from_secs(120),
+    Duration::from_secs(600),
+    Duration::from_secs(3_600),
+];
+
+fn retry_delay(attempt: usize) -> Duration {
+    RETRY_AFTER[attempt.min(RETRY_AFTER.len() - 1)]
+}
+
+/// Note that a source has to be looked at again, without queueing a second one.
+fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, source: usize) {
+    if !retries.iter().any(|(s, _, _)| *s == source) {
+        retries.push((source, Instant::now() + retry_delay(0), 0));
+    }
 }
 
 /// The floor on how often segments are merged without being asked.

@@ -26,6 +26,8 @@ struct MemSource {
     watchable: bool,
     /// Where the engine asked to be told about changes.
     sink: RwLock<Option<Box<dyn ChangeSink>>>,
+    /// Pretend the roots are not there — an unmounted volume, a pulled drive.
+    offline: std::sync::atomic::AtomicBool,
     /// Every `cover` and every `scan`, in the order they happened.
     ///
     /// The order is the thing being tested and nothing else can see it: a walk
@@ -42,6 +44,7 @@ impl MemSource {
             scans: AtomicU64::new(0),
             watchable: true,
             sink: RwLock::new(None),
+            offline: std::sync::atomic::AtomicBool::new(false),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -52,6 +55,7 @@ impl MemSource {
             scans: AtomicU64::new(0),
             watchable: false,
             sink: RwLock::new(None),
+            offline: std::sync::atomic::AtomicBool::new(false),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -91,6 +95,15 @@ impl Source for MemSource {
         self.scans.fetch_add(1, Ordering::Relaxed);
         if opts.subtree.is_some() {
             self.order.write().push("scan");
+        }
+        // A root that is not there yet: nothing found, and the report says the
+        // walk could not look rather than that there was nothing to find.
+        if self.offline.load(Ordering::Relaxed) {
+            return Ok(ScanReport {
+                root_unreadable: true,
+                took_ms: 0,
+                ..Default::default()
+            });
         }
         let mut n = 0;
         for e in self.entries.read().iter() {
@@ -458,6 +471,48 @@ fn a_watcher_that_lost_track_causes_a_walk_rather_than_a_guess() {
         f.engine.status().entries,
         f.source.entries.read().len() as u64
     );
+}
+
+#[test]
+fn a_volume_that_was_not_mounted_yet_is_picked_up_without_being_asked() {
+    // The service starts with the session, and the session starts before the
+    // volumes: `/mnt/depo` is a readable, empty directory until something
+    // mounts it. So the first walk of an external disk finds nothing.
+    //
+    // Two things have to be true, and only the first of them was.
+    //
+    // Refusing to reconcile is right — sweeping on a walk that could not look
+    // deletes everything the index held for that volume. But refusing and then
+    // never asking again means the disk stays as stale as it was until a person
+    // types `scour rescan`, which is the thing nobody remembers to do.
+    let f = fixture(400);
+    let held = f.source.entries.read().len() as u64;
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries == held);
+    assert_eq!(f.engine.status().entries, held);
+
+    // The drive goes away, and something asks for a walk.
+    f.source.offline.store(true, Ordering::Relaxed);
+    let before = f.source.scans.load(Ordering::Relaxed);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > before);
+    settle(&f, |f| !f.engine.status().scanning);
+    assert_eq!(
+        f.engine.status().entries,
+        held,
+        "a walk that could not look must not empty the index"
+    );
+
+    // It comes back. Nobody types anything.
+    let tries = f.source.scans.load(Ordering::Relaxed);
+    f.source.offline.store(false, Ordering::Relaxed);
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > tries);
+    assert!(
+        f.source.scans.load(Ordering::Relaxed) > tries,
+        "the engine has to come back on its own"
+    );
+    settle(&f, |f| f.engine.status().entries == held);
+    assert_eq!(f.engine.status().entries, held);
 }
 
 #[test]

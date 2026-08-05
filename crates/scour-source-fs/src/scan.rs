@@ -148,7 +148,7 @@ impl Source for FsSource {
             return Ok(ScanReport::default());
         };
 
-        // Can every root be read at all?
+        // Can every root be read, and is there anything in it?
         //
         // The walker reports an unreadable root as one error among many and
         // then finishes normally, so a scan of a root that is not there and a
@@ -157,7 +157,24 @@ impl Source for FsSource {
         // while reconciling the first deletes the whole index for that source.
         // Unplug a drive, let a share drop, boot before an encrypted home is
         // mounted — measured: five entries became zero.
-        let root_unreadable = roots.iter().any(|r| std::fs::read_dir(r).is_err());
+        //
+        // **A mount that is not mounted is a readable, empty directory**, which
+        // the `read_dir` check above does not catch — the doc comment on
+        // `root_unreadable` claimed it did, and was wrong. `/mnt/depo`
+        // unmounted opens fine and lists nothing, and a machine that has just
+        // booted is precisely where a scan-on-start meets a volume that is not
+        // up yet. So an empty root counts as "could not look".
+        //
+        // Only for a **whole source**, never for a subtree. Emptying a folder
+        // is an ordinary thing a person does and the walk of it has to be
+        // reconciled, or the folder's contents never leave the index. A source
+        // root that is empty is either a mistake or nothing to index, and both
+        // are better answered by keeping what is there and saying so.
+        let whole_source = opts.subtree.is_none();
+        let root_unreadable = roots.iter().any(|r| match std::fs::read_dir(r) {
+            Err(_) => true,
+            Ok(mut entries) => whole_source && entries.next().is_none(),
+        });
 
         // `ignore`'s parallel walker, with every one of its opinions turned
         // off. It is used here purely as a fast concurrent directory walk: a
