@@ -41,7 +41,6 @@ use crate::columns::Field;
 use crate::durable::replace_synced;
 use crate::ids::digest;
 use crate::lock::DirLock;
-use crate::names::Folded;
 use crate::search::{Plan, Segment, Wanted, run_with, sort_hits};
 use crate::segment::Live;
 use crate::usage::Rollup;
