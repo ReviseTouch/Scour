@@ -789,6 +789,25 @@
     padding: calc(var(--u) * 1.5) calc(var(--u) * 2.5);
     border-radius: 2px; cursor: pointer;
   }
+  .rowmenu.cols { max-height: 60vh; overflow-y: auto; }
+  .rowmenu.cols .tick {
+    display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
+  }
+  .rowmenu.cols button[disabled] { opacity: .4; cursor: default; }
+  .rowmenu.cols .reset {
+    border-top: 1px solid var(--line); margin-top: 3px; padding-top: 6px;
+    color: var(--ink-3);
+  }
+  thead th.pick { width: 30px; padding: 0; }
+  thead th.pick button {
+    background: none; border: 0; cursor: pointer; color: var(--ink-3);
+    width: 28px; height: 100%; font-size: 15px; line-height: 1;
+  }
+  thead th.pick button:hover { color: var(--ink); }
+  thead th[data-sort] { cursor: pointer; }
+  thead th:not([data-sort]):not(.pick) { cursor: default; }
+  tbody td.mono { font: 400 11.5px/1 var(--mono); color: var(--ink-2); }
+
   .rowmenu button:hover, .rowmenu button:focus-visible {
     background: var(--line-soft); color: var(--ink); outline: none;
   }
@@ -895,14 +914,9 @@
         <div class="scroll">
           <table>
             <thead>
-              <tr>
-                <th style="width:3px" aria-hidden="true"></th>
-                <th data-sort="name">Ad</th>
-                <th data-sort="path">Konum</th>
-                <th data-sort="size" class="num">Boyut</th>
-                <th data-sort="mtime" aria-sort="descending">Değişme <span class="arrow">▾</span></th>
-                <th data-sort="kind">Tür</th>
-              </tr>
+              <!-- Built from `COLUMNS`; the markup carries only the age
+                   ruler, which is not a column but a three-pixel edge. -->
+              <tr id="heads"><th style="width:3px" aria-hidden="true"></th></tr>
             </thead>
             <tbody id="rows-body"></tbody>
           </table>
@@ -1041,11 +1055,14 @@
   /* The service answers in its own vocabulary: a full path, and a kind as the
      token the query language uses. The page wants a folder, a name and the
      Turkish label. One place converts. */
+  /* Everything the service sent, with the two fields the page names
+     differently laid over it. Listing the fields here instead was how a
+     column switched on in the picker rendered blank: the value had arrived
+     and this had thrown it away, which is the kind of bug that looks like the
+     column is broken rather than like the mapping is. */
   const fromService = (row) => ({
+    ...row,
     path: row.dir,
-    name: row.name,
-    size: row.size,
-    mtime: row.mtime,
     kind: row.is_dir ? "Klasör" : (KIND_KEY[row.kind] || "Diğer"),
   });
 
@@ -1798,13 +1815,13 @@
     const [from, to] = visibleRange();
     const parts = [];
     const p = pitch();
-    if (from > 0) parts.push(`<tr class="spacer" style="height:${Math.round(from * p)}px"><td colspan="6"></td></tr>`);
+    if (from > 0) parts.push(`<tr class="spacer" style="height:${Math.round(from * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
     for (let i = from; i < to; i++) {
       const f = LIST.rows.get(i);
-      parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="6"></td></tr>`);
+      parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="${SHOWN.length + 1}"></td></tr>`);
     }
     const rest = LIST.total - to;
-    if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="6"></td></tr>`);
+    if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
     body.innerHTML = parts.join("");
   }
 
@@ -1878,14 +1895,11 @@
 
     /* The row's markup, kept as a function because the list is virtual:
        which rows exist on screen is decided by `paintWindow`, not here. */
+    const cols = shownColumns();
     rowHtml = (f) => `
       <tr tabindex="0" data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
         <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
-        <td class="name">${markName(f.name, p.text)}</td>
-        <td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>
-        <td class="n">${bytes(f.size)}</td>
-        <td class="n" style="text-align:left;color:var(${bandOf(f.mtime)})">${ago(f.mtime)}</td>
-        <td class="kind">${f.kind}</td>
+        ${cols.map((c) => c.cell(f, p)).join("")}
       </tr>`;
     paintWindow();
     empty.hidden = LIST.total === 0;
@@ -2039,6 +2053,58 @@
    * `table-layout: fixed` is what makes a width mean anything — under `auto`
    * the browser re-decides on every render and a dragged column springs back
    * the moment a longer path arrives. */
+  /* ---------------- which columns ----------------
+   *
+   * The table used to be five headings in the markup. It is a list now,
+   * because the index holds more than a list of files: who owns a row, what
+   * it is allowed to do, when it was made as against when it was touched.
+   * Which of those matter is the user's question, not the page's — a person
+   * looking for a photo wants none of them and somebody auditing a home
+   * directory wants little else.
+   *
+   * `key` is what the engine sorts by, so a column that cannot be sorted
+   * says so by leaving it out. `cell` renders one row's value and is given
+   * the whole row, because a column is sometimes two fields — the age ruler
+   * reads the date and paints with it. */
+  const COLUMNS = [
+    { id: "name",  label: "Ad",       key: "name",  w: 240,
+      cell: (f, p) => `<td class="name">${markName(f.name, p.text)}</td>` },
+    { id: "path",  label: "Konum",    key: "path",  w: 320,
+      cell: (f) => `<td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>` },
+    { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
+      cell: (f) => `<td class="n">${f.is_dir ? "" : bytes(f.size)}</td>` },
+    { id: "mtime", label: "Değişme",  key: "mtime", w: 120,
+      cell: (f) => `<td class="n" style="text-align:left;color:var(${bandOf(f.mtime)})">${ago(f.mtime)}</td>` },
+    { id: "kind",  label: "Tür",      key: "kind",  w: 110,
+      cell: (f) => `<td class="kind">${escape_(f.kind)}</td>` },
+    { id: "ext",   label: "Uzantı",   key: "ext",   w: 80,
+      cell: (f) => `<td class="kind">${escape_(f.ext || "")}</td>` },
+    { id: "ctime", label: "Oluşturma", key: "created", w: 120,
+      cell: (f) => `<td class="n" style="text-align:left">${f.ctime ? ago(f.ctime) : ""}</td>` },
+    { id: "atime", label: "Erişim",   key: null,    w: 120,
+      cell: (f) => `<td class="n" style="text-align:left">${f.atime ? ago(f.atime) : ""}</td>` },
+    { id: "perm",  label: "İzinler",  key: null,    w: 108,
+      cell: (f) => `<td class="mono">${escape_(f.perm || "")}</td>` },
+    { id: "user",  label: "Sahip",    key: null,    w: 100,
+      cell: (f) => `<td class="mono">${escape_(f.user || "")}</td>` },
+    { id: "group", label: "Grup",     key: null,    w: 100,
+      cell: (f) => `<td class="mono">${escape_(f.group || "")}</td>` },
+    { id: "disk",  label: "Diskte",   key: null,    w: 90, num: true,
+      cell: (f) => `<td class="n">${f.disk > 0 ? bytes(f.disk) : ""}</td>` },
+  ];
+  const COL_DEFAULT = ["name", "path", "size", "mtime", "kind"];
+  const SHOWN_KEY = "scour.columns.shown.v1";
+
+  function loadShown() {
+    try {
+      const v = JSON.parse(localStorage.getItem(SHOWN_KEY) || "null");
+      const ok = Array.isArray(v) && v.every((id) => COLUMNS.some((c) => c.id === id));
+      return ok && v.length ? v : COL_DEFAULT.slice();
+    } catch { return COL_DEFAULT.slice(); }
+  }
+  let SHOWN = loadShown();
+  const shownColumns = () => SHOWN.map((id) => COLUMNS.find((c) => c.id === id)).filter(Boolean);
+
   const WIDTH_KEY = "scour.columns.v1";
   const MIN_COL = 56;
 
@@ -2064,6 +2130,45 @@
   /* One grip a heading, on its trailing edge. The last column has none: there
      is nothing to its right to give the space to, so dragging it would only
      be a way to make the table narrower than its own container. */
+  /* The heading row, rebuilt whenever the column list changes. The sort
+     arrow and the drag grip are put on afterwards by the two functions that
+     own them, so this stays the one place that knows what a heading *is*. */
+  function buildHeads() {
+    const row = document.getElementById("heads");
+    const cols = shownColumns();
+    row.innerHTML =
+      `<th style="width:3px" aria-hidden="true"></th>` +
+      cols
+        .map(
+          (c) =>
+            `<th data-col="${c.id}"${c.key ? ` data-sort="${c.key}"` : ""}` +
+            `${c.num ? ' class="num"' : ""}` +
+            `${c.key ? "" : ' title="bu kolona göre sıralanamıyor"'}>${c.label}</th>`
+        )
+        .join("") +
+      // The picker lives where a column would be, so it is where the eye
+      // already is when the question "why is this column here" comes up.
+      `<th class="pick"><button type="button" id="pick" title="kolonlar"
+         aria-label="kolonları seç">⋮</button></th>`;
+    fitGrips();
+    applyWidths();
+    syncHeads();
+  }
+
+  function columnMenu() {
+    const menu = document.createElement("div");
+    menu.className = "rowmenu cols";
+    menu.innerHTML = COLUMNS.map((c) => {
+      const on = SHOWN.includes(c.id);
+      // The last one standing cannot be turned off: a table of no columns is
+      // not a smaller table, it is a broken one.
+      const locked = on && SHOWN.length === 1;
+      return `<button type="button" data-col="${c.id}"${locked ? " disabled" : ""}>
+        <span class="tick">${on ? "✓" : ""}</span>${escape_(c.label)}</button>`;
+    }).join("") + `<button type="button" data-col="" class="reset">Varsayılana dön</button>`;
+    return menu;
+  }
+
   function fitGrips() {
     const heads = [...document.querySelectorAll("thead th[data-sort]")];
     heads.forEach((th, i) => {
@@ -2248,6 +2353,44 @@
     render();
   });
 
+  /* Choosing columns. The list is stored beside the widths and for the same
+     reason and with the same shelf life — see `WIDTH_KEY`. */
+  let colMenu = null;
+  document.addEventListener("click", (e) => {
+    const opener = e.target.closest("#pick");
+    if (colMenu && !e.target.closest(".cols")) {
+      colMenu.remove();
+      colMenu = null;
+      if (!opener) return;
+    }
+    if (!opener) return;
+    colMenu = columnMenu();
+    document.body.appendChild(colMenu);
+    const r = opener.getBoundingClientRect();
+    const m = colMenu.getBoundingClientRect();
+    colMenu.style.left = Math.max(8, Math.min(r.left, innerWidth - m.width - 8)) + "px";
+    colMenu.style.top = Math.min(r.bottom + 4, innerHeight - m.height - 8) + "px";
+    colMenu.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-col]");
+      if (!b || b.disabled) return;
+      const id = b.dataset.col;
+      if (id === "") {
+        SHOWN = COL_DEFAULT.slice();
+      } else if (SHOWN.includes(id)) {
+        SHOWN = SHOWN.filter((x) => x !== id);
+      } else {
+        // Added in the order the table lists them, not the order they were
+        // clicked: a column belongs where its neighbours expect it.
+        SHOWN = COLUMNS.filter((c) => SHOWN.includes(c.id) || c.id === id).map((c) => c.id);
+      }
+      try { localStorage.setItem(SHOWN_KEY, JSON.stringify(SHOWN)); } catch {}
+      buildHeads();
+      render();
+      colMenu.remove();
+      colMenu = null;
+    });
+  });
+
   const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
 
   body.addEventListener("dblclick", (e) => {
@@ -2329,8 +2472,7 @@
       })
       .catch(() => {});
   }
-  fitGrips();
-  applyWidths();
+  buildHeads();
   refreshStatus();
   setInterval(refreshStatus, 10000);
 

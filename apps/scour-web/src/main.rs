@@ -272,14 +272,26 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 .hits
                 .iter()
                 .map(|h| {
+                    // Everything the index holds about the row, because the
+                    // page decides which of it to show and asking again for a
+                    // column that was switched on would be a second request
+                    // for rows already sent.
                     serde_json::json!({
                         "path": h.path,
                         "name": h.name(),
                         "dir": parent_of(&h.path),
+                        "ext": scour_core::ext_of(h.name()),
                         "size": h.meta.size,
+                        "disk": h.meta.disk,
                         "mtime": h.meta.mtime,
+                        "ctime": h.meta.ctime,
+                        "atime": h.meta.atime,
                         "is_dir": h.is_dir,
                         "kind": h.kind.token(),
+                        "perm": scour_core::mode_string(h.meta.mode),
+                        "user": owner_name(Owner::User, h.meta.uid),
+                        "group": owner_name(Owner::Group, h.meta.gid),
+                        "items": h.meta.items,
                     })
                 })
                 .collect();
@@ -550,6 +562,42 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         ),
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owner {
+    User,
+    Group,
+}
+
+/// The name behind a numeric id, from this machine.
+///
+/// Read once and kept: a page of two hundred rows asks two hundred times, and
+/// `/etc/passwd` does not change between them. The number is the answer when
+/// there is no name for it — a file owned by a user who was deleted still has
+/// to say something, and `1000` is truer than a blank.
+fn owner_name(which: Owner, id: i64) -> String {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static USERS: OnceLock<HashMap<i64, String>> = OnceLock::new();
+    static GROUPS: OnceLock<HashMap<i64, String>> = OnceLock::new();
+    let table = |file: &str| -> HashMap<i64, String> {
+        std::fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                let mut f = line.split(':');
+                let name = f.next()?.to_owned();
+                let id = f.nth(1)?.parse::<i64>().ok()?;
+                Some((id, name))
+            })
+            .collect()
+    };
+    let map = match which {
+        Owner::User => USERS.get_or_init(|| table("/etc/passwd")),
+        Owner::Group => GROUPS.get_or_init(|| table("/etc/group")),
+    };
+    map.get(&id).cloned().unwrap_or_else(|| id.to_string())
 }
 
 fn sort_of(s: Option<&str>) -> SortKey {
