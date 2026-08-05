@@ -25,7 +25,11 @@
 
 set -euo pipefail
 
-PORT="${SCOUR_APP_PORT:-7621}"
+# **Zero, so the system picks.** A fixed port means the second launch cannot
+# bind and dies with the first one still holding it — which happened, and is
+# not the user's problem to diagnose. The URL is read back anyway, because the
+# token changes with every start, so the port never had to be known.
+PORT="${SCOUR_APP_PORT:-0}"
 PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/scour/app"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release"
 WEB="$(command -v scour-web || echo "$BIN_DIR/scour-web")"

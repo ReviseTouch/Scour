@@ -711,6 +711,19 @@
   .panel .line em { font-style: normal; color: var(--ink-3); }
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
 
+  /* The prose is read once and the tool is used every day, so the tool gets
+     the width and the prose gets a button. Hidden by default now that this is
+     a window rather than a page being shown off. */
+  body.no-side .side { display: none; }
+  body.no-side .wrap { grid-template-columns: minmax(0, 1fr); }
+  .about {
+    background: none; border: 1px solid var(--line); color: var(--ink-3);
+    width: 18px; height: 18px; border-radius: 9px; cursor: pointer;
+    font: 600 11px/1 var(--sans); padding: 0; margin-left: auto;
+  }
+  .about:hover { color: var(--ink); border-color: var(--ink-3); }
+  .about[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
+
   /* ---------------- terim çipleri ---------------- */
   .chips {
     display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.5);
@@ -897,6 +910,8 @@
       <span id="rows">4.864 satır okundu</span>
       <span class="sep">·</span>
       <span id="path-note">bağlanıyor…</span>
+      <button type="button" id="about" class="about" aria-pressed="false"
+              title="tasarım notları" aria-label="tasarım notlarını göster">?</button>
     </div>
 
     <div class="tabs" role="tablist">
@@ -2492,6 +2507,25 @@
       })
       .catch(() => {});
   }
+  /* The notes, behind a button and remembered. */
+  const SIDE_KEY = "scour.side.v1";
+  const aboutBtn = document.getElementById("about");
+  function applySide() {
+    const on = localStorage.getItem(SIDE_KEY) === "1";
+    document.body.classList.toggle("no-side", !on);
+    aboutBtn.setAttribute("aria-pressed", String(on));
+    // The list's height changed with the layout, so what is drawn has to be
+    // decided again — otherwise the window is right and the rows are stale.
+    paintWindow();
+    fillWindow();
+  }
+  aboutBtn.addEventListener("click", () => {
+    const on = localStorage.getItem(SIDE_KEY) === "1";
+    try { localStorage.setItem(SIDE_KEY, on ? "0" : "1"); } catch {}
+    applySide();
+  });
+  applySide();
+
   buildHeads();
   refreshStatus();
   setInterval(refreshStatus, 10000);
