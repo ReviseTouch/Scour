@@ -257,6 +257,32 @@ should encourage anyway. `ListView` is virtualised already, so the work is
 paging: LRU pages, a generation token per query so a stale reply is dropped
 rather than shown, and skeleton rows rather than the previous query's rows.
 
+### The list keeps up with the filesystem — **done in the web client**
+
+`Request::Await` holds a request open until the index's revision moves; the
+client hands back the last one it saw and re-runs its own query when told.
+Everything's list does this and a search box that does not is one that lies
+about the file you just saved.
+
+Three things make it work, and each is load-bearing:
+
+* **No polling and no push channel.** The protocol stays one request one
+  answer; the request just takes its time. An idle machine costs one round trip
+  every twenty-five seconds.
+* **The revision says *that* something changed, never *what*.** Re-running the
+  query is a few milliseconds and is always right; patching visible rows
+  client-side would be a second implementation of sorting, filtering and paging
+  that could disagree with the first. It is also why "a new file goes to the
+  top when sorted by date" needs no rule anywhere — the sort already says so.
+* **Waiting is what buys the freshness.** While anyone waits, the engine
+  commits on the burst clock instead of batching for fifteen seconds. A hidden
+  window stops waiting, so a minimised search box stops making the machine
+  write. Measured both ways in `docs/MEASUREMENTS.md`.
+
+The Slint client should do the same and the shape carries over unchanged: one
+lane blocked in `await`, and the reply is a `Status` so the meter line comes
+with it.
+
 ### Two connections, not one
 
 `scour-ipc` is one call at a time with no cancellation, but `scourd` is

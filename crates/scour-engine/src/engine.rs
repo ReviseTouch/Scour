@@ -1,12 +1,12 @@
 //! The orchestrator.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 use scour_core::{
     Change, Completion, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Index,
     IndexStats, MaintReport, Maintenance, Page, Result, ScanOptions, SearchRequest, SearchResponse,
@@ -52,6 +52,19 @@ pub struct EngineOptions {
     /// worst, and within [`EngineOptions::commit_interval`] when anything else
     /// is happening at the same time.
     pub commit_idle: Duration,
+    /// The same bound, while somebody is waiting to be told about changes.
+    ///
+    /// A search window with live results open is watching, and what it is
+    /// watching for is a file that was just created. Fifteen seconds is the
+    /// right answer for nobody-is-looking and the wrong one for somebody-is:
+    /// the point of this whole path is that a file saved a moment ago is
+    /// findable, and a bound the user can count out loud is not that.
+    ///
+    /// It costs a segment per commit on a machine that would otherwise have
+    /// batched, which is exactly what [`EngineOptions::commit_idle`] exists to
+    /// avoid — so it is paid only while a window is open and waiting, and stops
+    /// being paid the moment that window closes or is hidden.
+    pub commit_watched: Duration,
     /// The point at which segments are merged **without** waiting for idle.
     ///
     /// Compaction normally waits for the machine to stop asking for things,
@@ -79,6 +92,11 @@ impl Default for EngineOptions {
             result_limit: 1_000,
             commit_batch: 64,
             commit_idle: Duration::from_secs(15),
+            // The burst clock, exactly. Below it nothing would happen sooner —
+            // `commit_interval` is a floor on how often a segment is written at
+            // all — so anything smaller would be a number that reads faster
+            // than it behaves.
+            commit_watched: Duration::from_millis(1_000),
             compact_segments: 8,
             compact_urgent: 64,
             idle_after: Duration::from_secs(20),
@@ -113,6 +131,36 @@ struct Shared {
     /// index so that a second source's watcher is not asked to cover a path
     /// that is not its business.
     watches: Mutex<Vec<(usize, Box<dyn WatchHandle>)>>,
+    /// See [`Status::revision`].
+    revision: AtomicU64,
+    /// Whoever is blocked in [`Engine::await_change`].
+    ///
+    /// A mutex and a condition variable rather than a channel per client: every
+    /// waiter wants the same wake-up, and the mutex is what closes the gap
+    /// between a client reading the revision and going to sleep on it. A change
+    /// landing in that gap without it is a change nobody hears about until the
+    /// timeout, which is the one failure a live list must not have.
+    waiters: (Mutex<()>, Condvar),
+    /// How many of them there are.
+    ///
+    /// Read by the commit clock, and that is the whole reason it is counted: a
+    /// change is worth writing sooner when something is waiting to be told
+    /// about it. Zero means nobody is looking and the batching stands.
+    watchers: AtomicU32,
+}
+
+impl Shared {
+    /// A search run again could now answer differently.
+    ///
+    /// Bumped under the waiters' lock, so a client that has read the revision
+    /// and not yet gone to sleep on it is not overtaken.
+    fn touched(&self) {
+        {
+            let _held = self.waiters.0.lock();
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+        self.waiters.1.notify_all();
+    }
 }
 
 pub struct Engine {
@@ -149,6 +197,9 @@ impl Engine {
             scanning: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             watches: Mutex::new(Vec::new()),
+            revision: AtomicU64::new(0),
+            waiters: (Mutex::new(()), Condvar::new()),
+            watchers: AtomicU32::new(0),
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
         // Bounded: a burst of filesystem events must slow the watcher down
@@ -360,10 +411,45 @@ impl Engine {
         self.shared.index.stats()
     }
 
+    /// Wait until the index would answer differently, then say where things
+    /// stand.
+    ///
+    /// `since` is the [`Status::revision`] the caller last saw. It returns at
+    /// once when that is already stale, and otherwise sleeps until something
+    /// changes or `timeout` passes — so a client that calls this in a loop
+    /// costs one blocked thread and no requests at all while nothing happens.
+    /// Polling every second instead would be 86,400 searches a day to discover
+    /// that a desktop was idle.
+    ///
+    /// A [`Status`] rather than the number, because every caller wants the
+    /// counts beside it and asking twice would be two answers from two moments.
+    ///
+    /// **Waiting is what makes changes commit sooner**: while anyone is in
+    /// here, the engine writes on [`EngineOptions::commit_watched`] rather than
+    /// letting a trickle wait out [`EngineOptions::commit_idle`]. So the
+    /// answer to "why is a file I just saved not in the list" is not "wait
+    /// fifteen seconds" for as long as a window is open.
+    pub fn await_change(&self, since: u64, timeout: Duration) -> Status {
+        let deadline = Instant::now() + timeout;
+        self.shared.watchers.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut held = self.shared.waiters.0.lock();
+            while self.shared.revision.load(Ordering::Acquire) == since {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() || self.shared.waiters.1.wait_for(&mut held, left).timed_out() {
+                    break;
+                }
+            }
+        }
+        self.shared.watchers.fetch_sub(1, Ordering::Relaxed);
+        self.status()
+    }
+
     pub fn status(&self) -> Status {
         let mut s = self.shared.status.read().clone();
         s.pending = self.shared.pending.load(Ordering::Relaxed);
         s.scanning = self.shared.scanning.load(Ordering::Relaxed);
+        s.revision = self.shared.revision.load(Ordering::Acquire);
         if let Ok(stats) = self.shared.index.stats() {
             s.entries = stats.entries;
             s.index_bytes = stats.bytes_on_disk;
@@ -484,7 +570,20 @@ fn run(
                     });
                     if !batch.is_empty() {
                         shared.pending.fetch_add(batch.len() as u64, Ordering::Relaxed);
-                        let _ = shared.index.apply(&mut batch.into_iter());
+                        let report = shared.index.apply(&mut batch.into_iter());
+                        // **Removals count now, upserts at the commit.** An
+                        // `apply` hides what was deleted from every search
+                        // immediately — that is a promise the `Index` trait
+                        // makes — while what was created is staged and invisible
+                        // until it is written. Announcing both here would wake
+                        // every open window to show it exactly what it already
+                        // had, once per batch, on a desktop that produces
+                        // thirty to fifty changes a second.
+                        if let Ok(r) = report
+                            && r.removed + r.subtrees_removed > 0
+                        {
+                            shared.touched();
+                        }
                         dirty = true;
                         idle_done = false;
                     }
@@ -554,11 +653,27 @@ fn run(
         // half of that sentence exists.
         let waited = last_commit.elapsed();
         let enough = shared.pending.load(Ordering::Relaxed) >= shared.opts.commit_batch;
-        if dirty
-            && waited >= shared.opts.commit_interval
-            && (enough || waited >= shared.opts.commit_idle)
-        {
+        // How long a trickle may wait, and it depends on whether anyone is
+        // watching. Nobody is: fifteen seconds, and the machine writes one
+        // segment a minute instead of one a second. Somebody is: as soon as the
+        // burst clock allows, because what they are waiting for is a file they
+        // just saved.
+        //
+        // This is not a small difference by luck. Measured here, a file created
+        // in a watched directory became findable in **0.90 s** — which looked
+        // like the design working and was not: this desktop happens to produce
+        // 30–50 filesystem changes a second, so `commit_batch` was reached
+        // before the trickle clock ever mattered. On a quiet machine the same
+        // file waits the full fifteen.
+        let patience = if shared.watchers.load(Ordering::Relaxed) > 0 {
+            shared.opts.commit_watched
+        } else {
+            shared.opts.commit_idle
+        };
+        if dirty && waited >= shared.opts.commit_interval && (enough || waited >= patience) {
             let _ = shared.index.commit();
+            // Whatever was staged is now in a segment and therefore findable.
+            shared.touched();
             shared.pending.store(0, Ordering::Relaxed);
             dirty = false;
             dirty_settled = true;
@@ -733,8 +848,15 @@ fn scan(
             Some(s) => vec![s.clone()],
             None => src.describe().roots,
         };
+        let mut gone = 0;
         for r in roots {
-            let _ = shared.index.sweep(&r, generation);
+            gone += shared.index.sweep(&r, generation).unwrap_or(0);
+        }
+        // A sweep takes effect at once, like any other removal, so anyone
+        // watching should hear about it now rather than at the next commit.
+        // The walk's own upserts are staged and announce themselves then.
+        if gone > 0 {
+            shared.touched();
         }
     }
     let _ = changes;

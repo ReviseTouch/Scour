@@ -446,6 +446,65 @@ fn watched_changes_are_batched_and_committed() {
 }
 
 #[test]
+fn waiting_returns_when_something_changes_and_not_before() {
+    // What a live list rests on: the client hands back the revision it is
+    // showing and hears nothing until that is no longer what the index would
+    // answer.
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries > 0
+    });
+    let seen = f.engine.status().revision;
+
+    // Nothing is happening, so this costs the whole timeout and comes back
+    // saying so. A client that treats the unchanged number as "nothing to do"
+    // then simply asks again.
+    let started = Instant::now();
+    let quiet = f.engine.await_change(seen, Duration::from_millis(300));
+    assert_eq!(
+        quiet.revision, seen,
+        "nothing changed, so nothing to report"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(250),
+        "it returned early from a change that did not happen"
+    );
+
+    // And now something does. The wait is on another thread because the point
+    // is that it is *asleep* until the change lands, not that it polls.
+    let (after, took) = std::thread::scope(|s| {
+        let waiter = s.spawn(|| {
+            let at = Instant::now();
+            (f.engine.await_change(seen, Duration::from_secs(20)), at)
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        let path = "/home/u/canli.rs";
+        f.source.changed(Change::Upsert(Entry {
+            id: EntryId::path_hash(SourceId(0), path),
+            path: path.into(),
+            is_dir: false,
+            meta: scour_core::Meta {
+                mtime: 2_000_000_000,
+                size: 7,
+                ..scour_core::Meta::UNKNOWN
+            },
+        }));
+        let (status, at) = waiter.join().expect("the waiter");
+        (status, at.elapsed())
+    });
+    assert_ne!(after.revision, seen, "a commit landed and nobody was told");
+    // The bound the whole feature is about: a file created while somebody is
+    // watching is announced on the burst clock, not after `commit_idle`.
+    assert!(
+        took < Duration::from_secs(5),
+        "waited {took:?} for a change a watched index should announce in about a second"
+    );
+    assert_eq!(count(&f, "canli"), 1, "and it is findable when announced");
+}
+
+#[test]
 fn a_watcher_that_lost_track_causes_a_walk_rather_than_a_guess() {
     // Every platform loses track differently — inotify out of watches, a
     // Windows buffer overflow, a missed cloud poll — and all of them say the

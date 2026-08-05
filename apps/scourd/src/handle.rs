@@ -58,6 +58,14 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
             sources: engine.sources(),
         },
         Request::Status {} => Response::Status(engine.status()),
+        // The only request that blocks, and the ceiling is here rather than in
+        // the engine: a caller asking to sleep for a day would hold a
+        // connection thread for a day, and the client that wants to wait longer
+        // than a minute can ask again.
+        Request::Await { since, timeout_ms } => Response::Status(engine.await_change(
+            since,
+            std::time::Duration::from_millis(timeout_ms.min(60_000) as u64),
+        )),
         Request::Stats {} => Response::Stats(engine.stats()?),
         Request::Rescan { path } => {
             engine.rescan(path)?;

@@ -89,14 +89,20 @@ fn main() -> Result<()> {
         open(&url);
     }
 
+    // Kept beside the shared connection because `/api/wait` may not use that
+    // one: it blocks for half a minute at a time, and the lock it would be
+    // holding is the lock every keystroke needs.
+    let addr: Arc<str> = Arc::from(addr.as_str());
+
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let client = Arc::clone(&client);
+        let addr = Arc::clone(&addr);
         let token = token.clone();
         let launch = !args.no_launch;
         // A thread a connection, and the connection closes after one exchange.
         // A browser opens a handful; there is nothing here to pool.
-        std::thread::spawn(move || serve(stream, &client, &token, launch));
+        std::thread::spawn(move || serve(stream, &client, &addr, &token, launch));
     }
     Ok(())
 }
@@ -133,7 +139,7 @@ fn open(url: &str) {
         .spawn();
 }
 
-fn serve(mut stream: TcpStream, client: &Mutex<Link>, token: &str, launch: bool) {
+fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, launch: bool) {
     let Some(req) = http::read_request(&stream) else {
         return;
     };
@@ -189,6 +195,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, token: &str, launch: bool)
         "/api/kinds" => api_kinds(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
+        "/api/wait" => api_wait(&mut stream, addr, &req),
         "/api/explain" => api_explain(&mut stream, client, &req),
         "/api/open" if launch => api_open(&mut stream, client, &req),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
@@ -425,19 +432,56 @@ fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 fn api_status(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Status {}) {
-        Ok(Response::Status(s)) => http::json(
-            stream,
-            &serde_json::json!({
-                "entries": s.entries,
-                "scanning": s.scanning,
-                "watching": s.watching,
-                "sources": s.sources,
-                "pending": s.pending,
-                "index_bytes": s.index_bytes,
-            }),
-        ),
+        Ok(Response::Status(s)) => http::json(stream, &status_json(&s)),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
+/// The same answer either route produces, so a page that has been told to wait
+/// gets everything the one that asked outright would have.
+fn status_json(s: &scour_core::Status) -> serde_json::Value {
+    serde_json::json!({
+        "entries": s.entries,
+        "scanning": s.scanning,
+        "watching": s.watching,
+        "sources": s.sources,
+        "pending": s.pending,
+        "index_bytes": s.index_bytes,
+        "revision": s.revision,
+    })
+}
+
+/// Hold the request open until the index changes.
+///
+/// **Its own connection, deliberately.** Every other route shares one socket
+/// behind a mutex, which is right when a call takes a millisecond and wrong
+/// when it takes half a minute: a page waiting here would be holding the lock
+/// that the next keystroke needs. A connect costs tens of microseconds and
+/// happens once per wait, which on a quiet machine is twice a minute.
+///
+/// The page's side of this is a `fetch` with no timeout of its own, so the
+/// reply arriving *is* the notification. What comes back is a status either
+/// way — the revision in it says whether anything actually happened, and a
+/// timeout is not an error.
+fn api_wait(stream: &mut TcpStream, addr: &str, req: &http::Req) {
+    let since: u64 = req.param("rev").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let timeout_ms: u32 = req
+        .param("ms")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(25_000)
+        .min(60_000);
+    let mut client = match Client::connect(addr) {
+        Ok(c) => c,
+        Err(e) => {
+            http::fail(stream, "502 Bad Gateway", &e.to_string());
+            return;
+        }
+    };
+    match client.call(Request::Await { since, timeout_ms }) {
+        Ok(Response::Status(s)) => http::json(stream, &status_json(&s)),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e.to_string()),
     }
 }
 

@@ -38,6 +38,18 @@ pub struct Status {
     pub rebuild_advised: bool,
     /// The index has never been built.
     pub cold: bool,
+    /// What the index would answer, as a number.
+    ///
+    /// It changes whenever a search run again could come back different — a
+    /// commit landing, a delete taking effect, a scan sweeping. It is not a
+    /// count of anything and the arithmetic on it is `!=`: a restarted service
+    /// starts from zero, and a client holding a larger number has to notice
+    /// that too.
+    ///
+    /// This is what makes live results possible without polling. A client
+    /// holds the last one it saw and hands it back to `Await`, which does not
+    /// answer until the number is different.
+    pub revision: u64,
 }
 
 /// One node of a directory listing.

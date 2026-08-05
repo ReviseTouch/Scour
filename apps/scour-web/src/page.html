@@ -792,6 +792,21 @@
   tbody tr.spacer:hover, tbody tr.ghost:hover { background: none; }
   tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
 
+  /* A row that was not in the list a moment ago.
+     The list updates itself while it is open, and a list that changes under
+     you without saying so is one you stop trusting — so what arrived is shown
+     arriving. It fades rather than staying: this marks the event, not the row,
+     and a permanent badge would still be there tomorrow. */
+  tbody tr.fresh { animation: arrived 1.6s ease-out; }
+  tbody tr.fresh td:first-child { box-shadow: inset 2px 0 0 var(--t0); }
+  @keyframes arrived {
+    from { background: color-mix(in srgb, var(--t0) 22%, transparent); }
+    to   { background: transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    tbody tr.fresh { animation: none; }
+  }
+
   .rowmenu {
     position: fixed; z-index: 60;
     background: var(--panel); border: 1px solid var(--line);
@@ -1065,6 +1080,10 @@
     sidebar: (q, edges) =>
       SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
     status: () => SERVICE.get("status", {}),
+    /* The one request that is meant to take a long time: it does not answer
+       until the index would answer differently. See the live section at the
+       bottom of this file. */
+    wait: (rev, ms) => SERVICE.get("wait", { rev, ms }),
   };
 
   /* The rows the last search returned. Filled by `render`, read by the table
@@ -1841,7 +1860,18 @@
     }
     const rest = LIST.total - to;
     if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
+    /* Whatever was selected keeps being selected. Replacing the body throws
+       away the focused element, which was survivable when this only ran on
+       scroll — you were moving anyway — and is not now that the list redraws
+       itself under a still cursor every time a file changes. Found by path,
+       because the index a row sits at is exactly what a change moves. */
+    const had = document.activeElement;
+    const keep = had && body.contains(had) ? had.dataset.path : null;
     body.innerHTML = parts.join("");
+    if (keep) {
+      const back = body.querySelector(`tr[data-path="${CSS.escape(keep)}"]`);
+      if (back) back.focus({ preventScroll: true });
+    }
   }
 
   /* Fetch whatever the visible range is missing, one window at a time. */
@@ -1916,12 +1946,14 @@
        which rows exist on screen is decided by `paintWindow`, not here. */
     const cols = shownColumns();
     rowHtml = (f) => `
-      <tr tabindex="0" data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
+      <tr tabindex="0"${f.fresh ? ` class="fresh" style="animation-delay:-${Date.now() - f.fresh}ms"` : ""} data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
         <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
         ${cols.map((c) => c.cell(f, p)).join("")}
       </tr>`;
     paintWindow();
-    empty.hidden = LIST.total === 0;
+    /* Shown when nothing matched — and it was the wrong way round, so the one
+       case the message exists for was the one case it was hidden in. */
+    empty.hidden = LIST.total !== 0;
 
     /* The meter, and it is the service's own arithmetic rather than the
        page's. `total` is capped by the count cap, which is why a large one
@@ -2483,29 +2515,198 @@
   document.addEventListener("scroll", hideMenu, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
 
-  /* The index's size, for the "x / y" meter, and a heartbeat so it follows a
-     scan that is still running. Ten seconds is slow enough to cost nothing and
-     quick enough that a first index visibly fills up while it is watched. */
-  function refreshStatus() {
-    SERVICE.status()
-      .then((s) => {
-        TOTAL = s.entries;
-        const note = document.getElementById("path-note");
-        if (note) {
-          const mb = (s.index_bytes / 1048576).toFixed(1).replace(".", ",");
-          note.textContent = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
-            + (s.scanning ? " · taranıyor" : "");
+  /* The index's size, for the "x / y" meter. */
+  function applyStatus(s) {
+    TOTAL = s.entries;
+    const note = document.getElementById("path-note");
+    if (note) {
+      const mb = (s.index_bytes / 1048576).toFixed(1).replace(".", ",");
+      note.textContent = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
+        + (s.scanning ? " · taranıyor" : "");
+    }
+    /* `LIST`, not the search reply. The search answers under a cap so it can
+       keep up with typing; the exact number arrives with the sidebar a moment
+       later, and a heartbeat that rewrote the line from the capped one put
+       `1.000+` back over it every ten seconds. */
+    if (LIST.total) {
+      const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
+      document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The list keeps up with the filesystem.
+   *
+   * A search box over an index that is one second stale is a search box that
+   * lies about the file you just saved, and this one did: the rows were
+   * whatever the last keystroke asked for and stayed that way until the next
+   * one. Everything's list updates itself, and so does this.
+   *
+   * **Nothing polls.** `/api/wait` does not answer until the index would
+   * answer differently — the service holds the request and wakes it on the
+   * commit — so an idle desktop costs one round trip every twenty-five
+   * seconds, not one a second. It is also what tells the service that
+   * somebody is looking, which is what makes it write a change out promptly
+   * instead of batching it for fifteen seconds; stop waiting and the batching
+   * comes back.
+   *
+   * What arrives is a revision number and nothing about *what* changed, which
+   * is on purpose: re-running the query is a few milliseconds and always
+   * right, while a client-side patch of the visible rows would be a second
+   * implementation of sorting, filtering and paging that could disagree with
+   * the first. So the answer to "a file appeared" is "ask again" — and asking
+   * again puts it wherever the current sort says it belongs, which for the
+   * default one is the top, with no rule here that says so.
+   * ------------------------------------------------------------------ */
+  let REV = 0;                 /* the revision the rows on screen reflect */
+  let missedWhileAway = false; /* something changed while the window was hidden */
+  let freshTimer = null;
+  /* Paths that were not in the list a moment ago, and when they turned up.
+     Bounded by the highlight's own length: nothing stays in here longer than
+     it is drawn for. */
+  const arrivals = new Map();
+  const FRESH_MS = 1800;       /* and it must outlast the CSS animation */
+
+  /* At most one call per `ms`, and never dropped: the last one always runs.
+     A scan commits continuously and every commit is a wake-up; without this
+     the list would refetch itself as fast as the network allows for as long
+     as the scan lasts. */
+  function atMostEvery(fn, ms) {
+    let last = 0, timer = null;
+    return () => {
+      if (timer) return;
+      const wait = Math.max(0, ms - (Date.now() - last));
+      if (!wait) { last = Date.now(); fn(); return; }
+      timer = setTimeout(() => { timer = null; last = Date.now(); fn(); }, wait);
+    };
+  }
+
+  const fullPath = (f) => f.path + "/" + f.name;
+
+  /* The rows, and only the rows that are on screen.
+     Everything cached outside the viewport is dropped rather than kept: it is
+     stale by definition, and `fillWindow` fetches it again the moment it is
+     scrolled to. */
+  function reviseRows() {
+    if (LIST.query === null) return;          /* the first search has not landed */
+    const mine = generation;
+    const [from, to] = visibleRange();
+    const starts = [];
+    for (let s = Math.floor(from / WINDOW) * WINDOW; s < to; s += WINDOW) starts.push(s);
+    if (!starts.length) starts.push(0);
+    const before = new Set([...LIST.rows.values()].map(fullPath));
+
+    Promise.all(starts.map((s) =>
+      SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, s).then((res) => [s, res])
+    ))
+      .then((pairs) => {
+        if (mine !== generation) return;      /* a keystroke overtook this */
+        const rows = new Map();
+        for (const [s, res] of pairs) {
+          res.rows.forEach((r, i) => rows.set(s + i, fromService(r)));
+          /* The total, but only when it is the real one. A search answers
+             under a count cap so that it can keep up with typing, and taking
+             the capped number here would snap the scrollbar back to 1.000
+             every time a file changed. The exact one comes with the sidebar. */
+          if (s === starts[0] && !res.capped) { LIST.total = res.total; LIST.exact = true; }
         }
-        /* `LIST`, not the search reply. The search answers under a cap so it
-           can keep up with typing; the exact number arrives with the sidebar a
-           moment later, and a heartbeat that rewrote the line from the capped
-           one put `1.000+` back over it every ten seconds. */
-        if (LIST.total) {
-          const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
-          document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+        /* What arrived, remembered by path and by wall clock rather than by
+           "was it in the last batch". A busy machine refreshes this several
+           times a second, and marking against the previous batch meant the
+           highlight lived until the next refresh — measured at 400 ms against
+           a 1.6 s animation, so it flickered instead of fading. */
+        const at = Date.now();
+        /* Aged out here as well as on the timer below, because the timer only
+           gets to run when the refreshes stop. On a busy machine they do not:
+           rescheduling it on every refresh kept rows highlighted for **7.8 s**
+           against a 1.8 s intent, which is the same mistake as the flicker
+           and the other way round. */
+        for (const [p, when] of arrivals) if (when <= at - FRESH_MS) arrivals.delete(p);
+        for (const f of rows.values()) {
+          const p = fullPath(f);
+          if (!before.has(p) && !arrivals.has(p)) arrivals.set(p, at);
+          /* The moment it arrived, not a flag: the row is redrawn several
+             times while it is highlighted and the fade has to carry on from
+             where it was rather than start again. */
+          if (arrivals.has(p)) f.fresh = arrivals.get(p);
         }
+        LIST.rows = rows;
+        LIST.pending.clear();
+        now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
+        paintWindow();
+        empty.hidden = LIST.total !== 0;
+        /* The highlight marks the arrival, not the row, so it is taken off on
+           its own clock. */
+        clearTimeout(freshTimer);
+        freshTimer = setTimeout(() => {
+          const cut = Date.now() - FRESH_MS;
+          let any = false;
+          for (const [p, when] of arrivals) if (when <= cut) { arrivals.delete(p); any = true; }
+          for (const f of LIST.rows.values()) {
+            if (f.fresh && !arrivals.has(fullPath(f))) { delete f.fresh; any = true; }
+          }
+          if (any) paintWindow();
+        }, FRESH_MS);
       })
       .catch(() => {});
+  }
+
+  /* The exact count, the kind rail and the histogram.
+     On a longer leash than the rows, and that is measured rather than
+     cautious: this walks the whole matching set and cost 119 ms on the empty
+     query, against single-digit milliseconds for a window of rows. Worth
+     paying every few seconds, not several times a second. */
+  function reviseCounts() {
+    if (LIST.query === null) return;
+    sidebar(LIST.query, generation);
+  }
+
+  const rowsSoon = atMostEvery(reviseRows, 400);
+  const countsSoon = atMostEvery(reviseCounts, 3000);
+
+  function indexMoved() {
+    /* A hidden window is a window nobody is reading. Refetching for it costs
+       the same as refetching for a visible one and shows nobody anything, so
+       it is remembered instead and done once, when it comes back. */
+    if (document.hidden) { missedWhileAway = true; return; }
+    rowsSoon();
+    countsSoon();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (missedWhileAway) { missedWhileAway = false; indexMoved(); }
+    watch();                                  /* and start waiting again */
+  });
+
+  let waiting = false;
+  async function watch() {
+    if (waiting) return;
+    waiting = true;
+    try {
+      /* A hidden window stops waiting altogether. That is not only the
+         browser's saving: while anyone is waiting the service commits on the
+         burst clock instead of batching, and a minimised window has no
+         business making a laptop write a segment a second. */
+      while (!document.hidden) {
+        let s;
+        try {
+          s = await SERVICE.wait(REV, 25000);
+        } catch {
+          /* The bridge or the service went away. Try again, slowly, rather
+             than in a tight loop against something that is not there. */
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        applyStatus(s);
+        if (s.revision !== REV) {             /* `!=`: a restart counts back from zero */
+          REV = s.revision;
+          indexMoved();
+        }
+      }
+    } finally {
+      waiting = false;
+    }
   }
   /* The notes, behind a button and remembered. */
   const SIDE_KEY = "scour.side.v1";
@@ -2527,8 +2728,15 @@
   applySide();
 
   buildHeads();
-  refreshStatus();
-  setInterval(refreshStatus, 10000);
+  /* One status to start from — the revision in it is what the wait is
+     measured against — and after that the waiting loop is the heartbeat.
+     There is no interval any more: a reply arrives whenever the index moves
+     and at worst every twenty-five seconds, which is what the interval was
+     for. */
+  SERVICE.status()
+    .then((s) => { applyStatus(s); REV = s.revision; })
+    .catch(() => {})
+    .finally(watch);
 
   /* The taxonomy, then the first search. The rail cannot be drawn before the
      engine has said what is in it. */

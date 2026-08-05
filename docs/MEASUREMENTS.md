@@ -3212,3 +3212,81 @@ Nesting is not supported and the AST is why: a query is groups AND-ed together
 and a group is alternatives OR-ed, which is one level by construction.
 `(a|b) (c|d)` works. `(a (b|c))` would need a tree, and the day something needs
 one it should get a tree rather than a parser pretending to have one.
+
+## 2026-08-05 — how long a saved file takes to appear, and who pays for it
+
+The list did not update itself: rows were whatever the last keystroke asked
+for and stayed that way. Fixing the window was the small half. The measurement
+that mattered was underneath it.
+
+**The first reading said there was nothing to fix.** A file created in a
+watched directory, timed until a search found it:
+
+```
+round 1: created -> findable   0.90s
+round 2: created -> findable   0.95s
+round 3: created -> findable   0.76s
+```
+
+Which looked like the commit clock working and was not. The commit rule is
+`waited >= commit_interval && (pending >= commit_batch || waited >=
+commit_idle)` — one second, sixty-four changes, fifteen seconds. One created
+file is one change, so it should have waited the full fifteen. It did not,
+because **this desktop produces 30–50 filesystem changes a second on its own**:
+
+```
+pending 36 · 50 · 17 · 18 · 32 · 32        (0.4 s apart, nothing running)
+```
+
+The sixty-four was reached by other people's churn every second or two, and
+the file rode along. On a quiet machine — a laptop with nothing open — the same
+file waits fifteen seconds, and no measurement taken here would ever have
+shown it.
+
+So the clock now depends on whether anybody is waiting to be told. Measured
+with the two conditions interleaved, because this machine's own churn moves the
+answer and two runs an hour apart would not be comparable:
+
+| | median | worst |
+|---|---|---|
+| a window open and waiting | **0.82 s** | 0.99 s |
+| nobody waiting | 7.41 s | 9.24 s |
+
+The floor is `commit_interval`, and that is the honest bound: a commit writes a
+segment, and this index cannot make a write visible without one.
+
+**What the open window costs.** A segment per commit is exactly what the
+batching exists to avoid, so it is worth knowing what is being spent. Sixty
+seconds in each condition, twice, alternating:
+
+| | segments | revisions | `rapor` | `ext:rs` | `kind:image` |
+|---|---|---|---|---|---|
+| watched | 9 → 10 | +93 | 1.7 ms | 0.6 ms | 1.8 ms |
+| idle | 10 → 9 | +55 | 1.5 ms | 1.1 ms | 1.9 ms |
+| watched | 9 → 9 | +106 | 1.4 ms | 0.4 ms | 1.4 ms |
+| idle | 10 → 8 | +106 | 1.4 ms | 0.9 ms | 1.8 ms |
+
+Nothing. The segment count is held at 8–10 by the merge that already runs, and
+the query times are indistinguishable. Which follows from the finding above:
+on a machine with churn the commits were already happening, and what changed is
+that a single file no longer has to wait for company.
+
+**Nothing polls.** `await` returns when the revision moves and not before, so
+an idle desktop costs one round trip every twenty-five seconds instead of the
+86,400 searches a day that asking once a second would be.
+
+### Two client-side clocks, both wrong first
+
+The highlight on a row that has just arrived is a 1.6 s fade, and it took two
+measurements to last 1.6 s.
+
+* Marking "not in the previous batch" made it live until the next refresh —
+  **400 ms** on this machine, because a busy desktop refreshes the list several
+  times a second. It flickered rather than faded.
+* Remembering arrivals by wall clock and clearing them on a timer that was
+  rescheduled by every refresh made it last **7.8 s**, because on a busy
+  machine the timer never got to run. The same mistake inverted.
+
+Aged out at the top of each refresh *and* on the timer: **2.05 s**, which is
+the 1.8 s intent plus one throttle interval. The fade carries across redraws
+through a negative `animation-delay`, so a row redrawn four times fades once.

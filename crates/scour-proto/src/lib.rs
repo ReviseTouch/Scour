@@ -121,6 +121,28 @@ pub enum Request {
     Sources {},
     Status {},
     Stats {},
+    /// Do not answer until the index would answer differently.
+    ///
+    /// The one request that is allowed to take its time. `since` is the
+    /// [`Status::revision`] the caller last saw; the reply is a [`Status`],
+    /// either because something changed or because `timeout_ms` ran out — and
+    /// the revision in it says which.
+    ///
+    /// This is how a list stays live without polling. The alternative, a client
+    /// asking every second whether anything happened, is 86,400 searches a day
+    /// to discover that a desktop was idle; this is one blocked thread and no
+    /// requests at all until something moves. It is also what tells the service
+    /// that somebody is looking, which is what makes a change worth committing
+    /// sooner than it would be for nobody.
+    ///
+    /// [`Status`]: scour_core::Status
+    /// [`Status::revision`]: scour_core::Status::revision
+    Await {
+        #[serde(default)]
+        since: u64,
+        #[serde(default = "default_wait_ms")]
+        timeout_ms: u32,
+    },
     /// Walk a source again. `path` narrows it to one subtree.
     Rescan {
         #[serde(default)]
@@ -150,6 +172,14 @@ fn default_tree_limit() -> u32 {
 }
 fn default_usage_top() -> u32 {
     20
+}
+/// How long an unqualified [`Request::Await`] waits.
+///
+/// Long enough that a quiet machine costs one round trip a minute, short
+/// enough that a client which has lost its connection finds out without
+/// anybody restarting anything.
+fn default_wait_ms() -> u32 {
+    25_000
 }
 
 /// Internally tagged, which constrains the shapes allowed here: a variant may
@@ -229,6 +259,7 @@ impl Request {
             Request::Sources {} => "sources",
             Request::Status {} => "status",
             Request::Stats {} => "stats",
+            Request::Await { .. } => "await",
             Request::Rescan { .. } => "rescan",
             Request::Maintain { .. } => "maintain",
             Request::Syntax {} => "syntax",
@@ -296,6 +327,10 @@ mod tests {
             Request::Sources {},
             Request::Status {},
             Request::Stats {},
+            Request::Await {
+                since: 9,
+                timeout_ms: 1_000,
+            },
             Request::Rescan {
                 path: Some("/a".into()),
             },
@@ -398,6 +433,20 @@ mod tests {
         };
         // The code is what a caller matches on; the English is a fallback.
         assert_eq!(e.code(), "query_too_short");
+    }
+
+    /// The two fields a live client leaves out most of the time.
+    #[test]
+    fn waiting_needs_nothing_spelled_out() {
+        let call: Call = serde_json::from_str(r#"{"id":3,"op":"await"}"#).expect("parse");
+        let Request::Await { since, timeout_ms } = call.request else {
+            panic!("expected a wait");
+        };
+        // Zero is "I have seen nothing", so a service that has already applied
+        // anything answers at once rather than making a new client wait out a
+        // timeout to learn what it could have been told immediately.
+        assert_eq!(since, 0);
+        assert_eq!(timeout_ms, 25_000);
     }
 
     #[test]

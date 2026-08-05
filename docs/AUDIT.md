@@ -17,6 +17,7 @@ The order is by what it costs a user, not by where it sits in the code.
 | §7 | idle housekeeping never runs | fixed |
 | §8 | a pending `rm -rf` made commits quadratic | measured, then fixed — 29× |
 | §9 | smaller things | fixed, except two left alone on purpose |
+| §11 | an atomic save leaves a ghost row at the same path | **found 2026-08-05, not fixed** |
 
 Verified afterwards on the live index rather than only in tests. Five thousand
 files written into two hundred freshly created directories, as fast as a shell
@@ -385,3 +386,50 @@ What does not port is not a crate, it is the shape of the program:
 
 Scale is the one thing that gets easier: a phone holds a few hundred thousand
 files, not two million.
+
+---
+
+## 11. A path rewritten atomically leaves a row behind — every time
+
+Found on 2026-08-05 while verifying live results, and **not fixed**: the shape
+of the fix is a decision about identity, not a patch.
+
+Identity is the inode where the filesystem promises stable ids. An editor, a
+browser and every other careful writer save by writing a temporary file and
+renaming it over the target — so the path survives and the inode does not. The
+upsert that follows carries a *new* id, nothing ever says the old one is gone,
+and both rows stay in the index at the same path.
+
+Reproduced against the live service, on a file Ladybird rewrites every few
+seconds:
+
+```
+scour search alt-svc-cache
+# 10 of 267 …   ten identical paths, sizes alternating 1.24 KiB / 0 B
+
+# and the ids differ, which is the whole story:
+#   ino 3680329  1269 B  20:26:25
+#   ino 3680323     0 B  20:26:25
+#   ino 3680303     0 B  20:26:25
+#   ino 3680280     0 B  20:26:22
+```
+
+It is unbounded: one row per save, for as long as the service runs. A file
+modified **in place** is fine — eight writes to the same inode stay one row —
+so this is specifically the write-and-rename pattern, which is most of them.
+
+Three ways out, and they are not equivalent:
+
+* **Kill by path on upsert.** Correct and expensive: the index dedupes staged
+  rows by id digest, and this would need a second lookup by parent and name
+  against every segment. `Doomed` already knows how to name a row that way,
+  so the machinery exists; the cost per commit does not.
+* **Hash the path instead of the inode.** One row per path by construction and
+  cheap. It gives up move detection — a renamed file becomes a removal and an
+  addition, which is what a watcher usually reports anyway — and it makes
+  hard-linked files distinct rows, which is arguably right.
+* **Sweep on a schedule.** Cheapest to write and the least honest: the
+  duplicates are visible in between.
+
+The measurement that decides it is what "kill by path" costs a commit on this
+index. Until then the ghosts are real and visible in any live list.
