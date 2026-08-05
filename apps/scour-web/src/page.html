@@ -961,24 +961,17 @@
 
 
   // Real numbers, derived from this machine's 1,564,335 entries.
-  // The order is real too — the most crowded first. The counts are replaced
-  // by the service's own on the first render; these are what shows for the
-  // instant before the first reply arrives.
-  const KINDS = [
-    ["Derleme çıktısı", "build",  675457],
-    ["İşaretleme/veri", "data",   284055],
-    ["Kod",             "code",   174027],
-    ["Klasör",          "folder", 140863],
-    ["Görsel",          "image",   57982],
-    ["Belge",           "doc",     17420],
-    ["Kurulum",         "package",  6496],
-    ["Yazı tipi",       "font",     1266],
-    ["Arşiv",           "archive",   330],
-    ["Veritabanı",      "db",        143],
-    ["Ses",             "audio",     105],
-    ["Video",           "video",      19],
-    ["Diğer",           "other",  346975]
-  ];
+  /* The kinds the rail offers, and the engine is what says which those are.
+     They used to be a list in this file, from the mockup, and it did not match
+     the taxonomy: it had `package`, `db` and `other`, which are not tokens the
+     engine has, and it was missing `exec`, `config` and `file`, which are. So
+     three rows read zero forever and executables — every extensionless binary
+     in ~/.local/bin, found perfectly well by `kind:exec` — had no row to
+     appear in at all.
+
+     Filled from `/api/kinds` on load. Empty until then, which is a few
+     milliseconds and honest. */
+  let KINDS = [];
   /* Counts deliberately absent. The kind rail's come from `/api/facets`,
      which answers for the query as it stands; there is no equivalent for these
      two, and the mockup's numbers were about a different index on a different
@@ -1066,7 +1059,7 @@
     return out;
   }
 
-  const KIND_KEY = Object.fromEntries(KINDS.map(([tr, key]) => [key, tr]));
+  let KIND_KEY = {};
   /* Turkish spellings match too: `tür:görsel` and `kind:image` are one thing.
      In the engine that is `Kind::from_name`'s job. */
   const KIND_TR = { klasör: "dir", klasor: "dir", kod: "code", görsel: "image",
@@ -1839,13 +1832,13 @@
   let KIND_COUNTS = null;
 
   function syncFacets(p) {
-    const count = ([, key, n]) => (KIND_COUNTS ? (KIND_COUNTS[key] || 0) : n);
-    const top = Math.max(1, ...KINDS.map(count));
+    const count = ([, key]) => (KIND_COUNTS ? (KIND_COUNTS[key] || 0) : null);
+    const top = Math.max(1, ...KINDS.map((r) => count(r) || 0));
     document.getElementById("kinds").innerHTML =
       KINDS.map((row) => {
         const [tr, key] = row;
         const n = count(row);
-        return facetRow(tr, "kind:" + key, n, n / top, p.kind === key);
+        return facetRow(tr, "kind:" + key, n, n === null ? 0 : n / top, p.kind === key);
       }).join("");
     document.getElementById("scopes").innerHTML =
       SCOPES.map(([tr, path, n]) => facetRow(tr, "under:" + path, n, 0, p.under === path)).join("");
@@ -2064,7 +2057,16 @@
   }
   refreshStatus();
   setInterval(refreshStatus, 10000);
-  render();
+
+  /* The taxonomy, then the first search. The rail cannot be drawn before the
+     engine has said what is in it. */
+  SERVICE.get("kinds", {})
+    .then((res) => {
+      KINDS = res.kinds.map((k) => [k.label, k.token]);
+      KIND_KEY = Object.fromEntries(res.kinds.map((k) => [k.token, k.label]));
+    })
+    .catch(() => {})
+    .finally(render);
 })();
 
 // ---------------------------------------------------------------- RAPOR

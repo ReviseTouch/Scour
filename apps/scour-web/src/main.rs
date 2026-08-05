@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use scour_core::{FacetBy, Page, SortKey};
+use scour_core::{Catalog, FacetBy, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
@@ -186,6 +186,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, token: &str, launch: bool)
         ),
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
+        "/api/kinds" => api_kinds(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/explain" => api_explain(&mut stream, client, &req),
@@ -296,6 +297,32 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }
+}
+
+/// The kinds a frontend should offer, in the order to show them, in the
+/// user's language.
+///
+/// Sent rather than hard-coded, and the page had hard-coded them: its rail
+/// came from the mockup and listed `package`, `db` and `other`, which are not
+/// tokens the engine has, while omitting `exec`, `config` and `file`, which
+/// are. So executables — every extensionless binary in `~/.local/bin`, found
+/// perfectly well by `kind:exec` — had no row to appear in, and three rows
+/// were permanently zero.
+///
+/// `Kind::OFFERED` exists for exactly this and says so in its own doc comment.
+fn api_kinds(stream: &mut TcpStream) {
+    static CAT: std::sync::OnceLock<scour_i18n::Catalogue> = std::sync::OnceLock::new();
+    let cat = CAT.get_or_init(scour_i18n::Catalogue::from_environment);
+    let kinds: Vec<serde_json::Value> = scour_core::Kind::OFFERED
+        .iter()
+        .map(|k| {
+            serde_json::json!({
+                "token": k.token(),
+                "label": cat.get(k.msgid()).into_owned(),
+            })
+        })
+        .collect();
+    http::json(stream, &serde_json::json!({ "kinds": kinds }));
 }
 
 /// How many match, exactly, however long that takes.
