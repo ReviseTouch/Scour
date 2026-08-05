@@ -3109,3 +3109,47 @@ Verified exactly for `ext:rs` (89,702 rows, uncompressed): jumping to row
 compressed path** — the browser harness could not be made to hold a synthetic
 scroll position steady long enough to read it back, and a claim without a
 measurement is an opinion.
+
+## 2026-08-05 — the columns nothing could ask about
+
+Every index since the first version has stored `mode`, `uid`, `gid` and
+`items`, and no query could name any of them. They cost nothing to keep — a
+column that barely varies packs to almost zero, which the column measurement
+above says in numbers — so what was missing was only a way to say it.
+
+Which matters for the two callers that are not a search box. A sysadmin asks
+`find` for the world-writable file and the setuid binary; a model driving MCP
+asks the same questions in the same words. Both were being answered by walking
+the filesystem when the answer was already in the index.
+
+Nine fields, one new `Match` variant and one new `Test`, because the whole
+family is *a column, masked, compared*:
+
+| query | mask | want | any |
+|---|---|---|---|
+| `perm:644` | `0o7777` | `0o644` | no |
+| `perm:-200` | `0o200` | `0o200` | no |
+| `perm:/222` | `0o222` | — | yes |
+| `node:l` | `0o170000` | `0o120000` | no |
+| `suid:` | `0o4000` | `0o4000` | no |
+
+Checked against `find` on the live index:
+
+| | `find` | `scour` |
+|---|---|---|
+| symlinks under `/home/hasan` | 7,869 | 7,854 |
+| owned by uid 0 | 45 | **45** |
+| sockets | 320 | **320** |
+
+The fifteen missing symlinks are all under `target/` and `node_modules/`,
+which the index excludes and `find` does not — verified by counting them.
+
+Two things the language had to be told rather than guessing:
+
+* **`type:` was already taken**, and rightly — it has meant `kind:` since the
+  language was written. `kind:` is what a file *is*; `node:` is what the
+  filesystem *made* it, and only the second tells a symlink from its target.
+  The test that refuses a duplicate spelling is what caught it.
+* **Permission bits are only as true as the filesystem.** The NTFS work above
+  withholds an invented mode at index time, so `perm:` and `suid:` find
+  nothing on such a volume rather than everything. `node:` is unaffected.

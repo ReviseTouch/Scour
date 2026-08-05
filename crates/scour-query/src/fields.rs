@@ -145,6 +145,80 @@ pub const FIELDS: &[Field] = &[
         about: "the document's contents contain this, if contents are indexed",
         example: "content:invoice",
     },
+    // ---- what a filesystem knows and nothing else does --------------------
+    //
+    // The index has carried these columns from the first version and no query
+    // could name them. They are what `find` gets reached for: the
+    // world-writable file, the setuid binary nobody remembers installing,
+    // everything owned by a user who was deleted last year.
+    // `type:` is taken, and rightly — it has meant `kind:` since the language
+    // was written. The two are different questions and both deserve a word:
+    // `kind:` is what a file *is* (a document, an image), `node:` is what the
+    // filesystem *made* it (a file, a symlink, a socket). Only the second can
+    // tell you a symlink from what it points at.
+    Field {
+        name: "node",
+        aliases: &["dugum"],
+        takes: Takes::Text,
+        about: "what the filesystem made it: f file, d folder, l symlink, s socket, p fifo, b block, c char",
+        example: "node:l",
+    },
+    Field {
+        name: "perm",
+        aliases: &["mode", "izin"],
+        takes: Takes::Text,
+        about: "permission bits: 644 exactly, -200 all of these, /222 any of these",
+        example: "perm:644",
+    },
+    Field {
+        name: "suid",
+        aliases: &[],
+        takes: Takes::Nothing,
+        about: "runs as its owner",
+        example: "",
+    },
+    Field {
+        name: "sgid",
+        aliases: &[],
+        takes: Takes::Nothing,
+        about: "runs as its group",
+        example: "",
+    },
+    Field {
+        name: "sticky",
+        aliases: &[],
+        takes: Takes::Nothing,
+        about: "only the owner may delete what is inside",
+        example: "",
+    },
+    Field {
+        name: "ww",
+        aliases: &["writable"],
+        takes: Takes::Nothing,
+        about: "anyone may write to it",
+        example: "",
+    },
+    Field {
+        name: "user",
+        aliases: &["owner"],
+        takes: Takes::Text,
+        about: "owned by this user, by name or by number",
+        example: "user:root",
+    },
+    Field {
+        name: "group",
+        aliases: &[],
+        takes: Takes::Text,
+        about: "owned by this group, by name or by number",
+        example: "group:wheel",
+    },
+    Field {
+        name: "items",
+        aliases: &["count"],
+        takes: Takes::Size,
+        about: "how many entries a folder holds, with an optional comparison",
+        example: "items:=0",
+    },
 ];
 
 /// The values `kind:` accepts, in the order a list should show them.

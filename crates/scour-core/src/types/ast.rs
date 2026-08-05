@@ -105,6 +105,51 @@ pub enum Match {
     ///
     /// [`Error::ContentNotIndexed`]: crate::types::Error::ContentNotIndexed
     ContentContains(String),
+    /// A stored number compared to a value: `uid:1000`, `gid:>100`.
+    ///
+    /// The index has held these columns since the first version and nothing
+    /// could ask about them. They cost nothing to keep — a column that barely
+    /// varies packs to almost zero — so the only thing missing was a way to
+    /// say it.
+    Num(NumField, Cmp, i64),
+    /// A stored number masked and compared: permissions, and the type bits.
+    ///
+    /// One variant for the whole family because that is what it is. `find`
+    /// spells the three cases `-perm 644`, `-perm -200` and `-perm /222`, and
+    /// they are exactly *equal after masking*, *all of these bits*, and *any
+    /// of these bits*:
+    ///
+    /// | query | mask | want | any |
+    /// |---|---|---|---|
+    /// | `perm:644` | `0o7777` | `0o644` | false |
+    /// | `perm:-200` | `0o200` | `0o200` | false |
+    /// | `perm:/222` | `0o222` | — | true |
+    /// | `type:l` | `0o170000` | `0o120000` | false |
+    /// | `suid:` | `0o4000` | `0o4000` | false |
+    Bits {
+        field: NumField,
+        mask: i64,
+        want: i64,
+        /// `mask & value != 0` rather than `mask & value == want`.
+        any: bool,
+    },
+}
+
+/// A column a query can ask a number about.
+///
+/// Deliberately not every column. `DirId` is an implementation detail and
+/// `Source` is one the user did not choose; these are the ones a person or a
+/// script has a reason to name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumField {
+    Mode,
+    Uid,
+    Gid,
+    /// Children, for a directory. `-1` where it was never counted.
+    Items,
+    /// Blocks on disk, which is not the size for a sparse or compressed file.
+    Disk,
 }
 
 /// Alternatives that are OR-ed together. `bool` is negation, per alternative.

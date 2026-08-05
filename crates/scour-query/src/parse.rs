@@ -209,6 +209,17 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             // without contents rejects it explicitly rather than silently
             // finding nothing.
             Some("content") => (!folded.is_empty()).then(|| Match::ContentContains(folded.clone())),
+            Some("node") => parse_node(&folded),
+            Some("perm") => parse_perm(&folded),
+            // The four that are one bit each, spelled the way a person says
+            // them rather than in octal.
+            Some("suid") => Some(bits(0o4000, 0o4000, false)),
+            Some("sgid") => Some(bits(0o2000, 0o2000, false)),
+            Some("sticky") => Some(bits(0o1000, 0o1000, false)),
+            Some("ww") => Some(bits(0o0002, 0, true)),
+            Some("user") => resolve_owner(scour_core::NumField::Uid, &raw),
+            Some("group") => resolve_owner(scour_core::NumField::Gid, &raw),
+            Some("items") => parse_count(scour_core::NumField::Items, &folded),
             _ => None,
         };
         // An unknown field, or a value that will not parse, becomes a search
@@ -234,6 +245,97 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             name_match(&text)
         },
     ))
+}
+
+/// `mode & mask` against `want`, or against zero when `any`.
+fn bits(mask: i64, want: i64, any: bool) -> Match {
+    Match::Bits {
+        field: scour_core::NumField::Mode,
+        mask,
+        want,
+        any,
+    }
+}
+
+/// `node:` — the `S_IFMT` bits, named the way `find -type` names them.
+fn parse_node(v: &str) -> Option<Match> {
+    let want = match v {
+        "f" | "file" | "dosya" => 0o100000,
+        "d" | "dir" | "folder" | "klasor" => 0o040000,
+        "l" | "link" | "symlink" | "bag" => 0o120000,
+        "s" | "socket" | "soket" => 0o140000,
+        "p" | "fifo" | "pipe" | "boru" => 0o010000,
+        "b" | "block" | "blok" => 0o060000,
+        "c" | "char" | "karakter" => 0o020000,
+        _ => return None,
+    };
+    Some(bits(0o170000, want, false))
+}
+
+/// `perm:` — the three shapes `find` has, and for the same reasons.
+///
+/// `644` is *exactly these bits*, `-200` is *all of these*, `/222` is *any of
+/// these*. The last is the one an audit actually wants: "anything a stranger
+/// can write to" is `perm:/222`, not a list of the modes that would allow it.
+fn parse_perm(v: &str) -> Option<Match> {
+    let (rest, all_of, any_of) = match v.as_bytes().first() {
+        Some(b'-') => (&v[1..], true, false),
+        Some(b'/') | Some(b'+') => (&v[1..], false, true),
+        _ => (v, false, false),
+    };
+    let n = i64::from_str_radix(rest, 8).ok()?;
+    if any_of {
+        Some(bits(n, 0, true))
+    } else if all_of {
+        Some(bits(n, n, false))
+    } else {
+        // Exact, and only over the permission bits — the type bits are
+        // `type:`'s business and nobody writes `perm:100644`.
+        Some(bits(0o7777, n, false))
+    }
+}
+
+/// A number with an optional comparison, for the columns that hold one.
+fn parse_count(field: scour_core::NumField, v: &str) -> Option<Match> {
+    let (cmp, rest) = split_cmp(v);
+    rest.trim()
+        .parse::<i64>()
+        .ok()
+        .map(|n| Match::Num(field, cmp, n))
+}
+
+/// `user:` and `group:` — a number, or a name looked up on this machine.
+///
+/// Resolved here because here is where the index is: the service runs on the
+/// machine that owns the files, so `/etc/passwd` is the right answer to "who
+/// is `root`". A client on another machine asking by name would be asking
+/// about its own users, which is not what it means.
+fn resolve_owner(field: scour_core::NumField, raw: &str) -> Option<Match> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return None;
+    }
+    if let Ok(n) = name.parse::<i64>() {
+        return Some(Match::Num(field, Cmp::Eq, n));
+    }
+    #[cfg(unix)]
+    {
+        let file = if field == scour_core::NumField::Uid {
+            "/etc/passwd"
+        } else {
+            "/etc/group"
+        };
+        let text = std::fs::read_to_string(file).ok()?;
+        for line in text.lines() {
+            let mut parts = line.split(':');
+            if parts.next() == Some(name)
+                && let Some(id) = parts.nth(1).and_then(|s| s.parse::<i64>().ok())
+            {
+                return Some(Match::Num(field, Cmp::Eq, id));
+            }
+        }
+    }
+    None
 }
 
 fn name_match(text: &str) -> Match {

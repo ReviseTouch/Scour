@@ -17,6 +17,19 @@ pub fn matches(e: &Entry, ast: &Ast) -> bool {
         .all(|g| g.alts.iter().any(|(neg, m)| matches_one(e, m) != *neg))
 }
 
+/// The stored number a query names. The brute-force twin of the index's own
+/// `num_field`, and it exists so the two can be compared row for row.
+fn num_of(e: &Entry, f: scour_core::NumField) -> i64 {
+    use scour_core::NumField as N;
+    match f {
+        N::Mode => e.meta.mode,
+        N::Uid => e.meta.uid,
+        N::Gid => e.meta.gid,
+        N::Items => e.meta.items,
+        N::Disk => e.meta.disk,
+    }
+}
+
 fn matches_one(e: &Entry, m: &Match) -> bool {
     let name = DefaultFolder.fold(e.name());
     match m {
@@ -35,6 +48,16 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::Ext(list) => list.contains(&e.ext()),
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),
+        Match::Num(f, cmp, v) => cmp.holds(num_of(e, *f), *v),
+        Match::Bits {
+            field,
+            mask,
+            want,
+            any,
+        } => {
+            let got = num_of(e, *field) & mask;
+            if *any { got != 0 } else { got == *want }
+        }
         Match::Kind(k) => k.contains(&e.kind()),
         Match::Time(f, cmp, v) => {
             let got = match f {

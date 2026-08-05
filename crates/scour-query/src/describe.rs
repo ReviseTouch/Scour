@@ -42,6 +42,45 @@ pub fn describe(ast: &Ast) -> String {
     groups.join(" and ")
 }
 
+/// The word for a column a query can name.
+fn num_field_word(f: scour_core::NumField) -> &'static str {
+    use scour_core::NumField as N;
+    match f {
+        N::Mode => "mode",
+        N::Uid => "owner id",
+        N::Gid => "group id",
+        N::Items => "entries inside",
+        N::Disk => "disk use",
+    }
+}
+
+/// Say a masked test the way it was asked.
+fn describe_bits(mask: i64, want: i64, any: bool) -> String {
+    match (mask, want, any) {
+        (0o170000, w, false) => format!("is {}", node_word(w)),
+        (0o4000, _, false) => "runs as its owner".into(),
+        (0o2000, _, false) => "runs as its group".into(),
+        (0o1000, _, false) => "only its owner may delete what is inside".into(),
+        (0o0002, _, true) => "anyone may write to it".into(),
+        (0o7777, w, false) => format!("permissions are exactly {w:o}"),
+        (m, _, true) => format!("has any of the permission bits {m:o}"),
+        (m, _, false) => format!("has all of the permission bits {m:o}"),
+    }
+}
+
+fn node_word(want: i64) -> &'static str {
+    match want {
+        0o100000 => "a file",
+        0o040000 => "a folder",
+        0o120000 => "a symlink",
+        0o140000 => "a socket",
+        0o010000 => "a fifo",
+        0o060000 => "a block device",
+        0o020000 => "a character device",
+        _ => "of an unknown node type",
+    }
+}
+
 fn describe_match(m: &Match) -> String {
     match m {
         Match::NameContains(t) => format!("name contains \"{t}\""),
@@ -54,6 +93,13 @@ fn describe_match(m: &Match) -> String {
         Match::IsDir(true) => "is a folder".into(),
         Match::IsDir(false) => "is a file".into(),
         Match::Size(cmp, bytes) => format!("size {} {}", cmp.symbol(), human_size(*bytes)),
+        Match::Num(field, cmp, n) => format!("{} {} {n}", num_field_word(*field), cmp.symbol()),
+        // Read back in the words the query was typed in, not in octal: the
+        // point of `explain` is to say what was understood, and "0o4000" says
+        // nothing to the person who typed `suid:`.
+        Match::Bits {
+            mask, want, any, ..
+        } => describe_bits(*mask, *want, *any),
         Match::Kind(k) if k.len() == 1 => format!("type is {}", k[0].msgid().to_lowercase()),
         Match::Kind(k) => format!(
             "type is one of {}",

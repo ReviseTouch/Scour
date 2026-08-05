@@ -174,6 +174,19 @@ enum Test {
     /// The directory number falls in this scope: `under:` and `parent:`, both
     /// resolved once by the directory table.
     DirIn(DirScope),
+    /// A column masked and compared: permissions, and the type bits.
+    ///
+    /// Its own test rather than a `Num` with arithmetic around it, because the
+    /// zone map cannot help here — a block whose modes run from 0o100644 to
+    /// 0o100755 could hold a setuid file or not, and the minimum and maximum
+    /// say nothing about a bit in the middle. So this one always looks at the
+    /// row, and saying that in the type is better than discovering it.
+    Bits {
+        field: Field,
+        mask: i64,
+        want: i64,
+        any: bool,
+    },
     /// The kind column is any one of these.
     ///
     /// A bitset over the discriminants rather than a list, because one word
@@ -205,7 +218,7 @@ impl Test {
     fn cost(&self) -> u32 {
         match self {
             Test::Never => 0,
-            Test::Num { .. } | Test::DirIn(_) | Test::KindIn(_) => 1,
+            Test::Num { .. } | Test::DirIn(_) | Test::KindIn(_) | Test::Bits { .. } => 1,
             Test::Ext(_) => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::PathHas(_) => 30,
@@ -587,6 +600,18 @@ impl Plan {
     }
 }
 
+/// The column a query names.
+fn num_field(f: scour_core::NumField) -> Field {
+    use scour_core::NumField as N;
+    match f {
+        N::Mode => Field::Mode,
+        N::Uid => Field::Uid,
+        N::Gid => Field::Gid,
+        N::Items => Field::Items,
+        N::Disk => Field::Disk,
+    }
+}
+
 fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error> {
     use scour_core::TimeField;
     Ok(match m {
@@ -614,6 +639,26 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             cmp: *cmp,
             value: *v,
             span: 1,
+        },
+        // Straight onto the generic column test — these columns have been in
+        // every index since the first version and only the language was
+        // missing.
+        Match::Num(f, cmp, v) => Test::Num {
+            field: num_field(*f),
+            cmp: *cmp,
+            value: *v,
+            span: 1,
+        },
+        Match::Bits {
+            field,
+            mask,
+            want,
+            any,
+        } => Test::Bits {
+            field: num_field(*field),
+            mask: *mask,
+            want: *want,
+            any: *any,
         },
         Match::Time(f, cmp, v) => Test::Num {
             field: match f {
@@ -674,6 +719,15 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             }
         }
         Test::DirIn(scope) => scope.contains(seg.num(Field::DirId, row) as u32),
+        Test::Bits {
+            field,
+            mask,
+            want,
+            any,
+        } => {
+            let got = seg.num(*field, row) & mask;
+            if *any { got != 0 } else { got == *want }
+        }
         Test::KindIn(mask) => {
             let k = seg.num(Field::Kind, row);
             (0..16).contains(&k) && mask & 1 << k != 0

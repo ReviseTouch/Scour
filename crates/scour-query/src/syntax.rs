@@ -43,6 +43,36 @@ matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
 | `da:>2026-01-01` | accessed after that day |
 | `content:invoice` | document contents contain this (only if content indexing is on) |
 
+## What the filesystem knows
+
+The columns an index has always held and no query could name. This is what
+`find` gets reached for, and it answers from the index instead of from a walk.
+
+| Syntax | Meaning |
+|---|---|
+| `node:l` | what the filesystem made it: `f` file, `d` folder, `l` symlink, `s` socket, `p` fifo, `b` block, `c` char |
+| `perm:644` | permissions are exactly these |
+| `perm:-200` | has **all** of these bits |
+| `perm:/222` | has **any** of these bits |
+| `suid:` `sgid:` `sticky:` | the three special bits, by name |
+| `ww:` | world-writable — `perm:/002`, spelled the way it is asked about |
+| `user:root` `user:1000` | owned by this user, by name or number |
+| `group:wheel` `group:0` | owned by this group |
+| `items:=0` | how many entries a folder holds |
+
+`kind:` and `node:` are different questions and both are worth asking.
+`kind:` is what a file **is** — a document, an image, code. `node:` is what
+the filesystem **made** it, and it is the only one that can tell a symlink
+from what it points at.
+
+Names are resolved on the machine holding the index, from `/etc/passwd` and
+`/etc/group`, because that is where the answer to "who is `root`" lives.
+
+**The permission bits are only as true as the filesystem.** A mount that
+supplies them — NTFS, the FAT family — has them withheld at index time rather
+than stored, so `perm:` and `suid:` find nothing on such a volume instead of
+finding everything. `node:` is unaffected.
+
 ## Sizes
 
 Binary units: `b`, `kb`, `mb`, `gb`, `tb`. Operators `>`, `>=`, `<`, `<=`, `=`.
