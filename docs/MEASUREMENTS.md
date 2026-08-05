@@ -2864,10 +2864,40 @@ exchange for:
   while the table hands over all 2,161,664 records including the 303,658
   entries under excluded directories, to be thrown away afterwards.
 
-What would change the answer is a cold measurement — a spinning disk, or a
-volume several times this size, where the walk's random metadata access is the
-whole cost and the sequential read is not. `Caps::JOURNAL` exists in the trait
-for exactly this shape of source; nothing has to be redesigned to add it later.
+### The cold measurement, which was supposed to change the answer
+
+It does not. Caches dropped, then the same walk:
+
+```bash
+sync && echo 3 | sudo tee /proc/sys/vm/drop_caches
+time find /mnt/depo -xdev -printf '%s\n' > /dev/null
+# 11.98 s wall — usr 0.39, sys 3.86
+```
+
+**11.98 s cold against 12.18 s warm**, which is the same number. The walk on
+this volume is not waiting for the disk; it is paying for syscalls — 3.86 s of
+system time for roughly 1.5 M `getdents` and `stat` pairs. Scour's walk is
+faster than `find` for exactly that reason and no other: it spreads the same
+syscalls across every core.
+
+The MFT read, measured the same way:
+
+| | |
+|---|---|
+| first pass, off the disk | 1.24 s (1.79 GB/s) |
+| second pass, out of the page cache | 0.27 s (8.22 GB/s) |
+
+So the ratio is what it was warm, and the argument that a cold boot would widen
+it is simply wrong here. It was the one thing offered as able to reverse the
+decision, it was tested, and it did not.
+
+What is left of the case is narrower and worth stating exactly: the walk's cost
+is CPU across cores, so the fewer cores a machine has, the better the table
+looks — and on a disk where seeks are real rather than an NVMe, the 1.24 s
+would hold while the 12 s would not. Neither describes this machine.
+
+`Caps::JOURNAL` exists in the trait for exactly this shape of source; nothing
+has to be redesigned to add it later.
 
 **The USN journal is the more interesting half and is out of reach here.** It
 is a change log, so it answers "what happened while Linux was not running" —
