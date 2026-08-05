@@ -64,10 +64,9 @@ fn main() -> Result<()> {
     // A cold index is scanned without being asked. The alternative is a
     // freshly installed service that answers every question with nothing until
     // someone discovers there is a command for it.
-    if config.scan.on_start || engine.status().cold {
-        engine.rescan(None)?;
-    }
+    let want_scan = config.scan.on_start || engine.status().cold;
     if args.scan_only {
+        engine.rescan(None)?;
         // Nothing is watching in this mode and nothing should be: the process
         // exists to finish a walk and leave.
         wait_for_scan(&engine);
@@ -92,6 +91,14 @@ fn main() -> Result<()> {
     // on demand — sat waiting for a service that was already running. Nothing
     // about answering a query needs the watches to be in place, so nothing
     // waits for them. `scour status` reports the count when it lands.
+    //
+    // **And the baseline walk goes after them, on the same thread.** A walk is
+    // a snapshot and a watch is everything after it; running the walk first
+    // leaves the window between them covered by neither, which is exactly the
+    // race that was found and fixed for subtrees a watcher discovers — and it
+    // was still here, on the biggest walk of all. Anything that changes during
+    // the walk now arrives as a queued event and is replayed after the sweep.
+    // The cost is that a cold index fills a few seconds later than it used to.
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
@@ -111,6 +118,12 @@ fn main() -> Result<()> {
                         common_prefix(&skipped)
                     );
                 }
+            }
+            // Now that anything happening is being reported, find out what is
+            // there. A change during this walk is queued behind it and applied
+            // when it finishes.
+            if want_scan && let Err(e) = engine.rescan(None) {
+                eprintln!("scourd: the first walk could not start: {e}");
             }
         });
     }

@@ -17,12 +17,31 @@
 use scour_core::ScanOptions;
 
 /// Compiled exclusion rules. Built once per scan, then asked per entry.
+///
+/// Directory rules are compiled into **component sequences**, and that is the
+/// whole of a bug this file carried for as long as it has existed: the
+/// defaults contain `.git/objects` and `.cargo/registry`, and both sides
+/// compared a rule containing a `/` against a single file name, which can
+/// never contain one. The two highest-churn directories on a developer's disk
+/// were named in the defaults, shown in the settings, and indexed anyway.
 #[derive(Debug, Default, Clone)]
 pub struct Rules {
     paths: Vec<String>,
+    /// Rules naming one directory, wherever it appears. The common case, and
+    /// the one that has to stay a hash lookup on the entry's own name.
     dirs: Vec<String>,
+    /// Rules naming a sequence — `.git/objects`. Matched at any component
+    /// boundary, and everything below the match goes with it.
+    dir_seqs: Vec<Vec<String>>,
     files: Vec<String>,
     allow: Vec<String>,
+    /// Exclusions an allow rule may not overrule.
+    ///
+    /// The index's own directory is the whole reason this exists: a user's
+    /// `allow` that happens to cover it turns the service into a thing that
+    /// indexes what it writes while writing it — measured, before it was
+    /// excluded, at 36% and 26% of two cores feeding each other.
+    deny: Vec<String>,
 }
 
 impl Rules {
@@ -33,26 +52,80 @@ impl Rules {
                 .filter(|s| !s.is_empty())
                 .collect()
         };
+        let lower: Vec<String> = opts.exclude_dirs.iter().map(|s| s.to_lowercase()).collect();
         Self {
             paths: norm(&opts.exclude_paths),
-            dirs: opts.exclude_dirs.iter().map(|s| s.to_lowercase()).collect(),
+            dirs: lower.iter().filter(|d| !d.contains('/')).cloned().collect(),
+            dir_seqs: lower
+                .iter()
+                .filter(|d| d.contains('/'))
+                .map(|d| {
+                    d.split('/')
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .collect(),
             files: opts
                 .exclude_files
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
             allow: norm(&opts.allow),
+            deny: norm(&opts.deny),
         }
     }
 
+    /// Does a directory-sequence rule match, ending at this path?
+    ///
+    /// For the scan, where the entry being judged is the directory itself: the
+    /// walker prunes it, so its children never arrive to be asked about.
+    fn seq_ends_at(&self, path: &str, name: &str) -> bool {
+        let lower = name.to_lowercase();
+        let comps: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+        self.dir_seqs.iter().any(|rule| {
+            rule.last().is_some_and(|last| *last == lower)
+                && comps.len() >= rule.len()
+                && comps[comps.len() - rule.len()..]
+                    .iter()
+                    .zip(rule)
+                    .all(|(c, r)| c.to_lowercase() == *r)
+        })
+    }
+
+    /// Does a directory-sequence rule match anywhere in this path?
+    ///
+    /// For the watcher, which is handed a path with no walk behind it and has
+    /// to decide about descendants on its own.
+    fn seq_within(&self, path: &str) -> bool {
+        if self.dir_seqs.is_empty() {
+            return false;
+        }
+        let comps: Vec<String> = path
+            .split('/')
+            .filter(|c| !c.is_empty())
+            .map(str::to_lowercase)
+            .collect();
+        self.dir_seqs.iter().any(|rule| {
+            comps.len() >= rule.len() && comps.windows(rule.len()).any(|w| w == rule.as_slice())
+        })
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.paths.is_empty() && self.dirs.is_empty() && self.files.is_empty()
+        self.paths.is_empty()
+            && self.dirs.is_empty()
+            && self.dir_seqs.is_empty()
+            && self.files.is_empty()
+            && self.deny.is_empty()
     }
 
     /// Should this entry be skipped?
     ///
     /// `path` is already `/`-normalised.
     pub fn excludes(&self, path: &str, name: &str, is_dir: bool) -> bool {
+        if self.deny.iter().any(|d| under(path, d)) {
+            return true;
+        }
         if self.allow.iter().any(|a| under(path, a)) {
             return false;
         }
@@ -60,8 +133,10 @@ impl Rules {
             return true;
         }
         let lower = name.to_lowercase();
-        let list = if is_dir { &self.dirs } else { &self.files };
-        list.contains(&lower)
+        if is_dir {
+            return self.dirs.contains(&lower) || self.seq_ends_at(path, name);
+        }
+        self.files.contains(&lower)
     }
 
     /// Should this path be skipped, judged from the path alone?
@@ -77,6 +152,9 @@ impl Rules {
     /// writes — measured at 74% of a core while a build ran, for events that
     /// were then thrown away.
     pub fn excludes_path(&self, path: &str) -> bool {
+        if self.deny.iter().any(|d| under(path, d)) {
+            return true;
+        }
         if self.allow.iter().any(|a| under(path, a)) {
             return false;
         }
@@ -86,21 +164,11 @@ impl Rules {
         let mut last = "";
         for part in path.split('/').filter(|p| !p.is_empty()) {
             last = part;
-            let lower = part.to_lowercase();
-            if self.dirs.contains(&lower) {
-                return true;
-            }
-            // A rule like `.git/objects` is two components; check the tail of
-            // the path against it rather than one name at a time.
-            if self
-                .dirs
-                .iter()
-                .any(|d| d.contains('/') && under(path, d) || path.ends_with(d.as_str()))
-            {
+            if self.dirs.contains(&part.to_lowercase()) {
                 return true;
             }
         }
-        self.files.contains(&last.to_lowercase())
+        self.seq_within(path) || self.files.contains(&last.to_lowercase())
     }
 
     /// Could anything under this directory still be wanted?
@@ -241,6 +309,37 @@ mod tests {
         // A *file* called node_modules is not the directory rule's business.
         assert!(!r.excludes("/a/b/node_modules", "node_modules", false));
         assert!(r.excludes("/a/.DS_Store", ".DS_Store", false));
+    }
+
+    #[test]
+    fn a_rule_naming_two_components_excludes_the_tree_under_it() {
+        // `.git/objects` and `.cargo/registry` are in the defaults, are shown
+        // in the settings, and were indexed anyway: the scan compared a rule
+        // containing a `/` against a file name, which never contains one, and
+        // the watcher's version matched the directory itself but nothing below
+        // it. The two busiest directories on a developer's disk.
+        let rules = Rules::from_options(&ScanOptions {
+            exclude_dirs: vec![".git/objects".into(), "node_modules".into()],
+            ..Default::default()
+        });
+
+        // The scan is asked about the directory, and prunes it.
+        assert!(rules.excludes("/p/.git/objects", "objects", true));
+        // The watcher is asked about anything, with no walk behind it.
+        assert!(rules.excludes_path("/p/.git/objects/aa/3f2b1c"));
+        assert!(rules.excludes_path("/p/.git/objects"));
+
+        // What must not be caught: the same last component under a different
+        // parent, and the parent itself.
+        assert!(!rules.excludes("/p/build/objects", "objects", true));
+        assert!(!rules.excludes_path("/p/build/objects/aa"));
+        assert!(!rules.excludes_path("/p/.git/config"));
+        // A misleading suffix is not a component boundary.
+        assert!(!rules.excludes_path("/p/not.git/objects-old/x"));
+
+        // And the one-component rules still work the cheap way.
+        assert!(rules.excludes("/p/node_modules", "node_modules", true));
+        assert!(rules.excludes_path("/p/node_modules/react/index.js"));
     }
 
     #[test]

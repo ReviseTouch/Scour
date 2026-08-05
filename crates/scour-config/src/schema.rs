@@ -136,6 +136,17 @@ pub struct ScanCfg {
     /// Worker threads; zero decides from the hardware.
     pub threads: usize,
     /// Rescan every source when the service starts.
+    ///
+    /// **On by default, and it has to be until there is a journal.** Nothing
+    /// watches a filesystem while the service is stopped, and no source here
+    /// advertises `Caps::JOURNAL`, so a file created, deleted or renamed
+    /// between one run and the next has no way into the index at all. Off, an
+    /// ordinary restart left those changes wrong for as long as the machine
+    /// lived, and nothing anywhere said so.
+    ///
+    /// A walk costs a few seconds of background work on a warm cache. That is
+    /// the price of the index being about the disk rather than about the last
+    /// time somebody remembered to rescan.
     pub on_start: bool,
 }
 
@@ -146,7 +157,7 @@ impl Default for ScanCfg {
             follow_symlinks: false,
             fast: true,
             threads: 0,
-            on_start: false,
+            on_start: true,
         }
     }
 }
@@ -302,6 +313,9 @@ impl Config {
             exclude_dirs: self.exclude.dirs.clone(),
             exclude_files: self.exclude.files.clone(),
             allow: self.exclude.allow.clone(),
+            // Filled by the wiring, which is the only place that knows where
+            // the index went.
+            deny: Vec::new(),
             subtree: None,
         }
     }

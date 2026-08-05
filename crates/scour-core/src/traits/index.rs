@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use crate::types::{
     ApplyReport, Change, Error, FacetRequest, FacetResponse, IndexStats, MaintReport, Maintenance,
-    Result, SearchRequest, SearchResponse, UsageRequest, UsageResponse,
+    Result, SearchRequest, SearchResponse, SourceId, UsageRequest, UsageResponse,
 };
 
 /// An index over entries.
@@ -39,11 +39,19 @@ pub trait Index: Send + Sync + Debug {
     /// a large tree; a stamp costs one column.
     fn begin_generation(&self) -> Result<u64>;
 
-    /// Remove everything under `under` that is not stamped with `generation`.
+    /// Remove everything **this source** has under `under` that is not stamped
+    /// with `generation`.
     ///
     /// Called once a scan of that subtree has finished. Returns how many
     /// entries went.
-    fn sweep(&self, under: &str, generation: u64) -> Result<u64>;
+    ///
+    /// The source is not decoration. A sweep says "I walked this subtree and
+    /// did not find these rows", and that is a statement one source can only
+    /// make about its own: where two sources' roots overlap, sweeping by path
+    /// alone deletes the other's rows on the strength of a walk that never
+    /// looked at them. Reproduced before this argument existed — a rescan of
+    /// source 0 took source 1's row.
+    fn sweep(&self, source: SourceId, under: &str, generation: u64) -> Result<u64>;
 
     /// Make everything applied so far durable and visible to new readers.
     ///

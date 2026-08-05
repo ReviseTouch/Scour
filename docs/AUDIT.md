@@ -451,3 +451,68 @@ The mock filesystem was generating duplicate paths — five in 8,667 — and the
 old identity hid it, because two rows at one path looked like two files. A
 generator that produces what a filesystem cannot is worse than a missing case:
 every count taken from it disagrees with a correct index.
+
+---
+
+## 12. An outside review, and the four things underneath it
+
+On 2026-08-05 the tree was handed to a second model with one instruction: be
+adversarial, measure, and criticise. Its report is kept verbatim in
+[`REVIEW-2026-08-05.md`](REVIEW-2026-08-05.md) — twenty findings with
+reproductions, a scratch program that produces them, and its own interleaved
+measurements of the walk, the builder and the removal path.
+
+The findings are not twenty separate mistakes. They are four, each of which
+this codebase had made in several places at once:
+
+| | the mistake | what it produced |
+|---|---|---|
+| **A** | a failure is a value that can be ignored | a full disk silently discarded everything written since the last commit, and announced a revision |
+| **B** | the watcher's "I do not know" was rendered as "nothing happened" or "it is gone" | an overflowed queue drifted for ever; an unreadable directory was deleted |
+| **C** | a path was a string to compare, not a location to resolve | `stat` walked out of its source with `..`; `.git/objects` was never excluded; one source swept another's rows |
+| **D** | a restart was assumed to be a continuation | changes made while the service was stopped never arrived, and the first walk ran before anything was watching |
+
+### Fixed here
+
+* **A.** `Pending` carries the only copy of the staged rows and every failure
+  path hands it back (`NativeIndex::restore`). The engine keeps `dirty`, does
+  not clear `pending`, does not announce a revision, and counts the failures in
+  `Status::unwritten`. A scan whose batches did not all land does not sweep —
+  the sweep's evidence is the walk, and a batch that failed is a file that
+  exists and is unstamped. An unreadable manifest is `IndexCorrupt` rather than
+  "this index is empty", and a `.alive` file of the wrong length is damage
+  rather than "every row is dead".
+* **B.** `event.need_rescan()` is honoured before anything else, which is how
+  every backend says it lost track — inotify sends it with **no paths**, so the
+  arm that looped over paths did nothing with the one message that matters. A
+  `stat` that fails with anything other than `NotFound` queues a walk instead
+  of a removal. Cover failures after the fact join the reported set instead of
+  being dropped on the next line.
+* **C.** `FsSource::stat` resolves the parent and compares it against resolved
+  roots, so `..` and intermediate symlinks cannot leave the source; the final
+  component is joined back unresolved, because a symlink is a row of its own.
+  Directory rules compile to component sequences matched at a boundary, so
+  `.git/objects` excludes its tree — on this machine `.cargo/registry` alone
+  was **133,152 indexed files** that the defaults had always claimed to skip.
+  `Index::sweep` takes the `SourceId` whose walk it is.
+* **D.** `scan.on_start` defaults to **true**: with no journal, a change made
+  while the service is stopped has no other way in. The baseline walk is queued
+  *after* the watches are installed, which is the rule this codebase already
+  worked out for subtrees and had not applied to the biggest walk of all.
+
+### Not fixed, and deliberately
+
+* **Non-UTF-8 names collapse.** `to_string_lossy` gives two distinct byte names
+  the same path, and path identity then makes them one row. This is the
+  expensive one: a native key means a format revision, a wire-vocabulary change
+  and every frontend. It should be done together with source qualification of
+  `Change`, stable source ids and object identity, in one revision rather than
+  four lossy ones.
+* **Hard links are counted twice by `usage`.** `usage.rs` still says inode
+  identity makes one row per object; that premise went when identity became the
+  path. Search returning both names is right; `du` semantics need an object
+  identity captured at scan time.
+* **Mount identity is never checked**, so an unmount mid-scan can still
+  authorise a sweep, and an emptied source cannot be reconciled at all.
+* **Windows does not compile** (three errors), and nothing tests any target but
+  Linux.

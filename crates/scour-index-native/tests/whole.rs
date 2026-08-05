@@ -11,6 +11,8 @@
 //! never erased, a re-upsert that leaves the old row alive — each of those
 //! returns a fast, plausible answer.
 
+use std::os::unix::fs::PermissionsExt;
+
 use scour_core::{
     Change, Entry, EntryId, FacetBy, FacetRequest, Index, Maintenance, Meta, Page, SearchRequest,
     SortKey, SourceId,
@@ -220,6 +222,101 @@ fn saving_over_a_file_leaves_one_row_however_the_source_names_it() {
 }
 
 #[test]
+fn a_commit_that_cannot_be_written_keeps_what_it_was_carrying() {
+    // **The failure that used to be silent and total.** The staged rows are
+    // lifted out of the buffer before anything is written and are the only
+    // copy; a full disk, a permission change or a volume going away used to
+    // drop them on the floor while the engine was told the commit had
+    // succeeded. Everything written since the last commit, gone, with a status
+    // line saying all was well.
+    //
+    // A directory nothing may write to is the deterministic way to produce an
+    // I/O failure; `ENOSPC` and `EIO` take the same path.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    index
+        .apply(&mut std::iter::once(Change::Upsert(entry(
+            "/home/u/hayatta-kalmali.md",
+            NOW,
+            1,
+        ))))
+        .expect("apply");
+
+    let mut mode = std::fs::metadata(tmp.path()).expect("stat").permissions();
+    let was = mode.mode();
+    mode.set_mode(0o500);
+    std::fs::set_permissions(tmp.path(), mode.clone()).expect("chmod");
+    let refused = index.commit();
+    mode.set_mode(was);
+    std::fs::set_permissions(tmp.path(), mode).expect("chmod back");
+
+    assert!(refused.is_err(), "a read-only directory took a write");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        0,
+        "nothing is indexed yet, which is the honest state"
+    );
+
+    // And now that it can be written, the row is still there to write.
+    index.commit().expect("the retry");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        1,
+        "the entry was lost by the commit that failed"
+    );
+    let hits = index
+        .search(&SearchRequest {
+            query: parse_at("hayatta-kalmali", NOW),
+            page: Page::new(0, 5),
+            ..Default::default()
+        })
+        .expect("search");
+    assert_eq!(hits.total, 1);
+}
+
+#[test]
+fn one_source_cannot_sweep_away_another_source_rows() {
+    // Two sources whose roots overlap — a home directory and a project
+    // directory inside it, which is a configuration people really write. A
+    // scan of one says "I walked here and did not find these rows"; that is a
+    // statement about its own rows, and it was being applied to everyone's.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let at = |source: u32, path: &str| Entry {
+        id: EntryId::path_hash(SourceId(source), path),
+        path: path.into(),
+        is_dir: false,
+        meta: Meta {
+            mtime: NOW,
+            size: 1,
+            ..Meta::UNKNOWN
+        },
+    };
+    index
+        .apply(
+            &mut [
+                Change::Upsert(at(0, "/ortak/dosya.txt")),
+                Change::Upsert(at(1, "/ortak/dosya.txt")),
+            ]
+            .into_iter(),
+        )
+        .expect("apply");
+    index.commit().expect("commit");
+    assert_eq!(index.stats().expect("stats").entries, 2);
+
+    // Source 0 walks and finds nothing, so it sweeps its own row away.
+    let g = index.begin_generation().expect("generation");
+    let gone = index.sweep(SourceId(0), "/ortak", g).expect("sweep");
+    index.commit().expect("commit");
+    assert_eq!(gone, 1, "a source swept more than its own rows");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        1,
+        "source 1's row was taken by source 0's walk"
+    );
+}
+
+#[test]
 fn a_removal_is_invisible_before_it_is_written() {
     // The one thing that may not wait for a commit. Deleting a file and still
     // seeing it reads as a broken program, so the removal takes effect in the
@@ -373,7 +470,7 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
             .into_iter(),
         )
         .expect("apply");
-    let gone = index.sweep("/w", g).expect("sweep");
+    let gone = index.sweep(SourceId(0), "/w", g).expect("sweep");
     assert_eq!(gone, 1, "exactly the file the rescan did not see");
 
     let paths: Vec<String> = index
@@ -430,7 +527,7 @@ fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
 
     // A walk of `/w/proj` that finds nothing: the directory was removed.
     let g = index.begin_generation().expect("generation");
-    let gone = index.sweep("/w/proj", g).expect("sweep");
+    let gone = index.sweep(SourceId(0), "/w/proj", g).expect("sweep");
     assert_eq!(gone, 3, "the directory, its file and the one below it");
 
     let mut paths: Vec<String> = index
@@ -780,7 +877,7 @@ fn a_generation_is_never_folded_into_another_one() {
     );
 
     // The sweep still finds the older pass.
-    assert_eq!(index.sweep("/w", g).expect("sweep"), 4);
+    assert_eq!(index.sweep(SourceId(0), "/w", g).expect("sweep"), 4);
     let left: Vec<String> = index
         .search(&SearchRequest {
             page: Page::new(0, 20),
@@ -845,7 +942,7 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
         }
         // What ends a scan, and what makes the next fold safe: after this,
         // nothing is waiting to judge these rows.
-        index.sweep(root, g).expect("sweep");
+        index.sweep(SourceId(0), root, g).expect("sweep");
     }
     assert!(index.stats().expect("stats").segments > 2);
 
@@ -880,7 +977,7 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
         ))))
         .expect("apply");
     index.commit().expect("commit");
-    assert_eq!(index.sweep("/mnt/depo", g).expect("sweep"), 3);
+    assert_eq!(index.sweep(SourceId(0), "/mnt/depo", g).expect("sweep"), 3);
     let left = index.stats().expect("stats").entries;
     assert_eq!(left, 5, "four from home and the one depo file that remains");
 }
@@ -1131,7 +1228,7 @@ fn a_segment_a_sweep_emptied_stops_costing_anything() {
     index
         .apply(&mut second.into_iter().map(Change::Upsert))
         .expect("apply");
-    index.sweep("/w", g).expect("sweep");
+    index.sweep(SourceId(0), "/w", g).expect("sweep");
 
     let s = index.stats().expect("stats");
     assert_eq!(s.entries, 10);

@@ -96,6 +96,20 @@ impl Live {
                 detail: format!("seg-{number:08}.names is unreadable"),
             })?
             .rows();
+        // **A short bitmap is not "these rows are dead".** It reopened as a
+        // segment whose every row was gone — a truncated write, a full disk, a
+        // half-copied index directory, all of them silently answering "nothing
+        // matched" for as long as the segment lived. The bitmap is one bit a
+        // row and is written whole; a length that does not say so is damage.
+        let want = rows.div_ceil(8);
+        if alive.len() != want {
+            return Err(Error::IndexCorrupt {
+                detail: format!(
+                    "seg-{number:08}.alive is {} bytes for {rows} rows, expected {want}",
+                    alive.len()
+                ),
+            });
+        }
         let dirs = ColumnBlocks::open(&maps[1])
             .map(|cols| {
                 (0..rows)

@@ -600,3 +600,42 @@ fn a_real_mount_is_classified() {
         "temp dir came out as {m:?}"
     );
 }
+
+#[test]
+fn stat_cannot_be_walked_out_of_the_source() {
+    // **The fence that was not one.** `stat` is what the web bridge calls the
+    // index fence around opening a file, and what the MCP server hands to a
+    // model. The check in front of it compared strings: a path starting with a
+    // configured root was inside it, whatever the kernel would make of the
+    // path. Both of these returned `/etc/passwd` against the running service.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let root = tmp.path().join("kok");
+    std::fs::create_dir(&root).expect("mkdir");
+    std::fs::write(root.join("icerde.txt"), b"benim").expect("write");
+    // A link out of the tree, which is a thing home directories are full of.
+    std::os::unix::fs::symlink("/etc", root.join("disari")).expect("symlink");
+
+    let src = FsSource::new(SourceId(0), "kok", vec![root.clone()]);
+
+    assert!(
+        src.stat(&format!("{}/icerde.txt", root.display())).is_ok(),
+        "a path that really is inside has to work"
+    );
+    assert!(
+        src.stat(&format!("{}/../../etc/passwd", root.display()))
+            .is_err(),
+        "climbing out with .. was answered"
+    );
+    assert!(
+        src.stat(&format!("{}/disari/passwd", root.display()))
+            .is_err(),
+        "a symlink out of the tree was followed"
+    );
+
+    // And the link itself is still a row of its own: `stat` of a symlink
+    // describes the link, not what it points at.
+    let link = src
+        .stat(&format!("{}/disari", root.display()))
+        .expect("the link is inside the source");
+    assert!(!link.is_dir, "the final symlink must not be followed");
+}

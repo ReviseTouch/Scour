@@ -103,8 +103,12 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
     // It belongs here rather than in the platform defaults because only this
     // file knows where the index went — it is configuration, and a user who
     // moves it must not have to know to exclude it.
+    // **Denied rather than excluded**, which is the difference between a rule
+    // and a rule a user can switch off by accident: an `allow` covering the
+    // index directory used to win, because allow is tested first and returns
+    // before the exclusions are read.
     merge(
-        &mut o.exclude_paths,
+        &mut o.deny,
         vec![
             config.index.dir.to_string_lossy().into_owned(),
             index_dir(config).to_string_lossy().into_owned(),
@@ -152,9 +156,19 @@ mod tests {
         let o = scan_options(&c);
         let dir = index_dir(&c).to_string_lossy().into_owned();
         assert!(
-            o.exclude_paths.iter().any(|p| dir.starts_with(p.as_str())),
+            o.deny.iter().any(|p| dir.starts_with(p.as_str())),
             "the index directory {dir} is not excluded: {:?}",
-            o.exclude_paths
+            o.deny
+        );
+        // And an allow rule cannot take it back. This is what the separate
+        // list is for: the feedback loop it prevents cost two cores.
+        let mut c2 = Config::default();
+        c2.exclude.allow = vec!["/".into()];
+        let o2 = scan_options(&c2);
+        let rules = scour_source_fs::Rules::from_options(&o2);
+        assert!(
+            rules.excludes_path(&format!("{dir}/seg-00000001.cols")),
+            "an allow rule reopened the index to itself"
         );
     }
 

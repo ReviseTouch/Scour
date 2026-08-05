@@ -109,7 +109,7 @@ pub fn start(
     Ok(Box::new(FsWatch {
         watcher: std::sync::Mutex::new(watcher),
         stopped: AtomicBool::new(false),
-        skipped,
+        skipped: std::sync::Mutex::new(skipped),
         follow_symlinks: opts.follow_symlinks,
     }))
 }
@@ -261,11 +261,47 @@ fn translate(
                     sink.emit(Change::Rescan { path });
                 }
             }
-            // Gone between the event and the look. That is a removal, and it is
-            // the common case under any kind of churn.
-            Err(_) => sink.emit(Change::RemoveSubtree { path }),
+            // Gone between the event and the look. That is a removal, and it
+            // is the common case under any kind of churn.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                sink.emit(Change::RemoveSubtree { path })
+            }
+            // **Everything else is "I could not look", and that is not a
+            // deletion.** Out of file descriptors, permission withdrawn, a
+            // network mount gone stale, a transient read error: treating any
+            // of them as a removal hides a tree that is still there, and the
+            // next commit makes it durable. Ask for the path to be walked
+            // again instead — it is the same message the backend sends when it
+            // loses track, and the engine already knows what to do with it.
+            Err(_) => sink.emit(Change::Rescan { path }),
         }
     };
+
+    // **The backend has lost track.** inotify's queue overflowed, a watch was
+    // dropped, a poll missed a window — every backend has its own way of
+    // saying it and `notify` normalises all of them onto this flag. It arrives
+    // as `EventKind::Other` **with no paths at all**, so the arm below that
+    // loops over `event.paths` did exactly nothing with the one message whose
+    // whole purpose is to say the index is drifting.
+    //
+    // An empty path is how the engine is told "and I cannot say where", which
+    // it answers with a walk of everything. Expensive, and cheap next to an
+    // index nobody knows is wrong.
+    if event.need_rescan() {
+        let mut any = false;
+        for p in event.paths.iter().filter(|p| watched(p)) {
+            sink.emit(Change::Rescan {
+                path: path::from_path(p),
+            });
+            any = true;
+        }
+        if !any {
+            sink.emit(Change::Rescan {
+                path: String::new(),
+            });
+        }
+        return;
+    }
 
     match event.kind {
         EventKind::Create(_) => {
@@ -332,7 +368,14 @@ struct FsWatch {
     ///
     /// Kept rather than counted: "live updates are off somewhere" is not
     /// something a user can act on, and `~/.local/share/waydroid/data` is.
-    skipped: Vec<String>,
+    ///
+    /// **Behind a lock because it grows after the fact.** A subtree that fails
+    /// to be covered later — a watch limit reached while a `git clone` is
+    /// running, a directory whose permissions changed — is exactly as
+    /// uncovered as one that failed at the start, and used to be pushed into a
+    /// local vector that was dropped on the next line. The one message saying
+    /// "nothing below here will be seen again" was thrown away.
+    skipped: std::sync::Mutex<Vec<String>>,
     follow_symlinks: bool,
 }
 
@@ -347,7 +390,7 @@ impl std::fmt::Debug for FsWatch {
 
 impl WatchHandle for FsWatch {
     fn unwatched(&self) -> Vec<String> {
-        self.skipped.clone()
+        self.skipped.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     fn cover(&self, path: &str) {
@@ -362,9 +405,10 @@ impl WatchHandle for FsWatch {
         // entry. So this does not have to know whether the recursive watch
         // above already covers the path, which it cannot know cheaply.
         //
-        // Failures are silent on purpose: this runs after a walk that already
-        // succeeded, so the only ways to get here are a race with a removal or
-        // a watch limit, and neither is news the caller can act on.
+        // A failure here is a hole in the live cover: everything below the
+        // path will change without anyone hearing about it until the next full
+        // scan. It joins the list the source reports rather than being
+        // discarded, which is what used to happen.
         let mut skipped = Vec::new();
         cover(
             &mut watcher,
@@ -374,6 +418,13 @@ impl WatchHandle for FsWatch {
             0,
             self.follow_symlinks,
         );
+        if !skipped.is_empty()
+            && let Ok(mut held) = self.skipped.lock()
+        {
+            held.extend(skipped);
+            held.sort_unstable();
+            held.dedup();
+        }
     }
 
     fn stop(self: Box<Self>) {
@@ -391,4 +442,111 @@ struct Discard;
 
 impl ChangeSink for Discard {
     fn emit(&self, _change: Change) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as PlMutex;
+
+    /// Everything a translation emitted, in order.
+    #[derive(Debug, Default)]
+    struct Collect(PlMutex<Vec<Change>>);
+
+    impl ChangeSink for Collect {
+        fn emit(&self, change: Change) {
+            self.0.lock().expect("the collector").push(change);
+        }
+    }
+
+    fn translated(event: Event) -> Vec<Change> {
+        let sink = Collect::default();
+        translate(
+            scour_core::SourceId(0),
+            true,
+            &Rules::from_options(&ScanOptions::default()),
+            &event,
+            &sink,
+        );
+        sink.0.into_inner().expect("the collector")
+    }
+
+    #[test]
+    fn losing_track_asks_for_a_walk_even_when_it_cannot_say_where() {
+        // **The message that used to be dropped.** inotify's queue overflowing
+        // arrives as `EventKind::Other` carrying the rescan flag and *no
+        // paths*; the arm that handled that kind looped over the paths, so the
+        // one event whose entire purpose is to say "the index is drifting"
+        // produced nothing at all. A `git clone` or an `rm -rf` large enough to
+        // overflow the queue left permanent holes and permanent ghosts.
+        //
+        // Built the way the backend builds it — see `notify`'s inotify
+        // backend, which sends exactly this before any path is attached.
+        let overflow = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        assert_eq!(
+            translated(overflow),
+            vec![Change::Rescan {
+                path: String::new()
+            }],
+            "an empty path is how the engine is told to walk everything"
+        );
+
+        // And when the backend can name the subtree it lost, that is what is
+        // walked rather than the whole filesystem.
+        let somewhere = Event::new(EventKind::Other)
+            .set_flag(notify::event::Flag::Rescan)
+            .add_path("/home/u/Projeler".into());
+        assert_eq!(
+            translated(somewhere),
+            vec![Change::Rescan {
+                path: "/home/u/Projeler".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_read_is_not_a_path_that_is_gone() {
+        // A stat that fails with anything other than "it is not there" means
+        // the watcher could not look: out of descriptors, permission
+        // withdrawn, a stale network mount. Removing on that evidence hides a
+        // tree that still exists, and the next commit makes it durable.
+        //
+        // A directory with no execute bit is the deterministic way to get
+        // `EACCES` from `symlink_metadata` on a path inside it.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let dir = tmp.path().join("kapali");
+        std::fs::create_dir(&dir).expect("mkdir");
+        std::fs::write(dir.join("dosya.txt"), b"x").expect("write");
+        let mut mode = std::fs::metadata(&dir).expect("stat").permissions();
+        let was = std::os::unix::fs::PermissionsExt::mode(&mode);
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o600);
+        std::fs::set_permissions(&dir, mode.clone()).expect("chmod");
+
+        let inside = dir.join("dosya.txt");
+        let got = translated(
+            Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(inside.clone()),
+        );
+
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, was);
+        std::fs::set_permissions(&dir, mode).expect("chmod back");
+
+        let path = crate::path::from_path(&inside);
+        assert_eq!(
+            got,
+            vec![Change::Rescan { path: path.clone() }],
+            "an unreadable path was reported as deleted"
+        );
+
+        // Gone is still gone.
+        let missing = tmp.path().join("yok.txt");
+        assert_eq!(
+            translated(
+                Event::new(EventKind::Remove(notify::event::RemoveKind::Any))
+                    .add_path(missing.clone())
+            ),
+            vec![Change::RemoveSubtree {
+                path: crate::path::from_path(&missing)
+            }]
+        );
+    }
 }

@@ -116,12 +116,21 @@ impl Default for Meta {
 }
 
 /// What a flush left for the caller to write once it has let go of the index.
+///
+/// **It also holds the only copy of those rows**, which is what makes losing it
+/// unacceptable: the entries have been lifted out of the staging buffer and
+/// exist nowhere else until the segment is on disk. Every path that can fail
+/// after this point hands it back to [`NativeIndex::restore`] instead of
+/// dropping it — a write that could not happen has to leave the index where it
+/// was, not quietly poorer.
 #[derive(Debug, Default)]
 struct Pending {
     /// The new segment's number, generation and rows.
     staged: Option<(u64, u64, Vec<Entry>)>,
     /// Live bits to replace, by segment number.
     alive: Vec<(u64, Vec<u8>)>,
+    /// The removals this flush was going to make durable.
+    prefixes: scour_core::PrefixSet,
 }
 
 impl Pending {
@@ -185,11 +194,20 @@ impl NativeIndex {
         // second writer here does not merely lose an update, it calls
         // `File::create` on a file the first one has mmapped.
         let lock = DirLock::acquire(dir)?;
+        // **Only a missing manifest means a new index.** Every other error —
+        // a permission change, a bad block, a directory that is not readable
+        // right now — used to land here as `Meta::default()`, which says "this
+        // index holds nothing". `sweep_orphans` then reads that as a directory
+        // full of segments nothing refers to and erases them. One unreadable
+        // JSON file was enough to destroy an intact index; failing closed costs
+        // a service that will not start until the cause is dealt with, which is
+        // the cheaper of the two by a distance.
         let meta: Meta = match std::fs::read_to_string(dir.join(META_FILE)) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| Error::IndexCorrupt {
                 detail: format!("{META_FILE}: {e}"),
             })?,
-            Err(_) => Meta::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Meta::default(),
+            Err(e) => return Err(Error::io(&e, &dir.join(META_FILE).to_string_lossy())),
         };
         if meta.format != FORMAT {
             // Not damaged — written by another version. Nothing here is worth
@@ -278,16 +296,61 @@ impl NativeIndex {
     /// afterwards would find — and kill — the row that was just added.
     /// Flush with the lock held throughout. For callers already inside it.
     fn flush(&self, inner: &mut Inner) -> Result<()> {
-        let pending = self.flush_prepare(inner)?;
-        pending.write_alive(&self.dir)?;
-        if let Some((number, generation, staged)) = pending.staged {
-            let bytes = build(&staged);
-            let live = Live::write(&self.dir, number, generation, &bytes)?;
-            inner.segments.push(live);
-            inner.segments.sort_by_key(|s| s.number);
-            self.save_meta(inner)?;
+        let mut pending = self.flush_prepare(inner)?;
+        if let Err(e) = pending.write_alive(&self.dir) {
+            Self::restore(inner, pending);
+            return Err(e);
         }
-        Ok(())
+        let Some((number, generation, staged)) = pending.staged.take() else {
+            return Ok(());
+        };
+        let bytes = build(&staged);
+        let live = match Live::write(&self.dir, number, generation, &bytes) {
+            Ok(live) => live,
+            Err(e) => {
+                pending.staged = Some((number, generation, staged));
+                Self::restore(inner, pending);
+                return Err(e);
+            }
+        };
+        inner.segments.push(live);
+        inner.segments.sort_by_key(|s| s.number);
+        // Past here the rows are on disk. A manifest that will not save is a
+        // real failure and is reported, but the segment is named by the next
+        // successful save and swept as an orphan if there never is one — so
+        // the entries are not put back, which would duplicate them.
+        self.save_meta(inner)
+    }
+
+    /// Put back what a failed publication was carrying.
+    ///
+    /// The staged rows go in **behind** whatever arrived while the write was
+    /// happening, and only where that has not already replaced them: an upsert
+    /// that landed in the meantime is newer than the one being restored, and
+    /// the whole point of the staging map is that a path appears once.
+    fn restore(inner: &mut Inner, pending: Pending) {
+        let prefixes = std::mem::take(&mut inner.hidden_prefixes);
+        inner.hidden_prefixes = pending.prefixes;
+        inner.hidden_prefixes.extend(prefixes.into_paths());
+        let Some((_, _, staged)) = pending.staged else {
+            return;
+        };
+        let newer = std::mem::take(&mut inner.staged);
+        inner.staged = staged;
+        inner.staged_at.clear();
+        for (i, e) in inner.staged.iter().enumerate() {
+            inner.staged_at.insert(digest(e.id.source, &e.path), i);
+        }
+        for e in newer {
+            let d = digest(e.id.source, &e.path);
+            match inner.staged_at.get(&d).copied() {
+                Some(i) if inner.staged[i].path == e.path => inner.staged[i] = e,
+                _ => {
+                    inner.staged_at.insert(d, inner.staged.len());
+                    inner.staged.push(e);
+                }
+            }
+        }
     }
 
     /// Lift the staged entries out, leaving the index consistent without them.
@@ -417,14 +480,24 @@ impl NativeIndex {
             .filter(|(i, _)| touched.get(*i).copied().unwrap_or(false))
             .map(|(_, live)| live.alive_snapshot())
             .collect();
-        inner.hidden_prefixes.clear();
+        let prefixes = std::mem::take(&mut inner.hidden_prefixes);
         // Order, and it is the difference between a crash costing a commit and
         // a crash costing the index: the manifest stops naming these segments
         // *before* their files go. The other way round — which is how this was
         // written — leaves a window in which the manifest points at files that
         // are no longer there, and the index does not open again.
         let gone = self.forget_empty(inner);
-        self.save_meta(inner)?;
+        if let Err(e) = self.save_meta(inner) {
+            Self::restore(
+                inner,
+                Pending {
+                    staged: pending,
+                    alive: Vec::new(),
+                    prefixes,
+                },
+            );
+            return Err(e);
+        }
         for n in &gone {
             Live::erase(&self.dir, *n);
         }
@@ -440,6 +513,7 @@ impl NativeIndex {
         Ok(Pending {
             staged: pending,
             alive,
+            prefixes,
         })
     }
 
@@ -955,7 +1029,7 @@ impl Index for NativeIndex {
         Ok(g)
     }
 
-    fn sweep(&self, under_path: &str, generation: u64) -> Result<u64> {
+    fn sweep(&self, source: SourceId, under_path: &str, generation: u64) -> Result<u64> {
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
         if inner.open == Some(generation) {
@@ -1004,6 +1078,14 @@ impl Index for NativeIndex {
                     (0..live.rows())
                         .filter(|&row| {
                             if !live.is_alive(row) {
+                                return false;
+                            }
+                            // **Another source's rows are not this walk's to
+                            // judge.** A sweep says "I looked under here and
+                            // did not find these"; where two sources' roots
+                            // overlap, that is a statement about one of them
+                            // and was being applied to both.
+                            if seg.source_of(row) != source {
                                 return false;
                             }
                             if whole {
@@ -1060,7 +1142,7 @@ impl Index for NativeIndex {
         // it is cheap now that a subtree is a range check rather than 2.1 M
         // paths.
         let held = Instant::now();
-        let pending = self.flush_prepare(&mut self.inner.write())?;
+        let mut pending = self.flush_prepare(&mut self.inner.write())?;
         // How long a search could have been waiting. Printed rather than
         // guessed at, because the last three things blamed for this tail were
         // each the wrong one.
@@ -1073,13 +1155,28 @@ impl Index for NativeIndex {
         }
         // Both of the expensive halves, now that the lock is gone: the bits
         // that say which rows are dead, and the segment holding the new ones.
-        pending.write_alive(&self.dir)?;
-        let Some((number, generation, staged)) = pending.staged else {
+        //
+        // **Every failure from here hands the rows back.** They are out of the
+        // staging buffer and this is the only copy; dropping it on an `ENOSPC`
+        // or a permission change loses whatever was written since the last
+        // commit, and the engine used to be told the commit had succeeded.
+        if let Err(e) = pending.write_alive(&self.dir) {
+            Self::restore(&mut self.inner.write(), pending);
+            return Err(e);
+        }
+        let Some((number, generation, staged)) = pending.staged.take() else {
             return Ok(());
         };
         let bytes = build(&staged);
+        let live = match Live::write(&self.dir, number, generation, &bytes) {
+            Ok(live) => live,
+            Err(e) => {
+                pending.staged = Some((number, generation, staged));
+                Self::restore(&mut self.inner.write(), pending);
+                return Err(e);
+            }
+        };
         drop(staged);
-        let live = Live::write(&self.dir, number, generation, &bytes)?;
         drop(bytes);
 
         let mut inner = self.inner.write();

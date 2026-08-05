@@ -38,6 +38,14 @@ pub struct Status {
     pub rebuild_advised: bool,
     /// The index has never been built.
     pub cold: bool,
+    /// Commits that have failed in a row.
+    ///
+    /// Zero is the only good value. Non-zero means the changes are still held
+    /// in memory and the index on disk is behind — a full disk, a permission
+    /// change, a volume that went away underneath it. It is a count rather than
+    /// a message because three frontends have to describe the same state, and
+    /// because the number is what says whether it is a blip or a wall.
+    pub unwritten: u32,
     /// What the index would answer, as a number.
     ///
     /// It changes whenever a search run again could come back different — a

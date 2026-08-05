@@ -671,14 +671,37 @@ fn run(
             shared.opts.commit_idle
         };
         if dirty && waited >= shared.opts.commit_interval && (enough || waited >= patience) {
-            let _ = shared.index.commit();
-            // Whatever was staged is now in a segment and therefore findable.
-            shared.touched();
-            shared.pending.store(0, Ordering::Relaxed);
-            dirty = false;
-            dirty_settled = true;
+            match shared.index.commit() {
+                Ok(()) => {
+                    // Whatever was staged is now in a segment and findable.
+                    shared.touched();
+                    shared.pending.store(0, Ordering::Relaxed);
+                    shared.status.write().unwritten = 0;
+                    dirty = false;
+                    dirty_settled = true;
+                    idle_done = false;
+                }
+                // **Still dirty, and nobody is told it changed.** The rows are
+                // back in the staging buffer; clearing `dirty` here would mean
+                // nothing ever tried to write them again, and announcing a
+                // revision would send every open window to re-read an index
+                // that did not move. The clock is reset either way so a disk
+                // that is full is retried on the same cadence rather than in a
+                // loop.
+                Err(e) => {
+                    let n = {
+                        let mut st = shared.status.write();
+                        st.unwritten += 1;
+                        st.unwritten
+                    };
+                    // Once, then every thirty tries: a service whose disk is
+                    // full should say so, not fill the log with saying so.
+                    if n == 1 || n % 30 == 0 {
+                        eprintln!("scourd: the index could not be written ({n} attempts): {e}");
+                    }
+                }
+            }
             last_commit = Instant::now();
-            idle_done = false;
         }
 
         // Volumes that were not there when they were last asked about.
@@ -808,8 +831,18 @@ fn scan(
     let Some(src) = shared.sources.get(source).cloned() else {
         return true;
     };
-    let Ok(generation) = shared.index.begin_generation() else {
-        return true;
+    // A generation the index could not open is a scan that cannot reconcile:
+    // its rows would be stamped with the previous one and the sweep would then
+    // judge them by it. Reported and retried rather than run blind.
+    let generation = match shared.index.begin_generation() {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!(
+                "scourd: a scan of {} could not start: {e}",
+                src.describe().name
+            );
+            return false;
+        }
     };
     shared.scanning.store(true, Ordering::Relaxed);
     {
@@ -823,6 +856,7 @@ fn scan(
         seen: 0,
         buffer: Vec::with_capacity(BATCH),
         stop: Arc::clone(shared),
+        failed: false,
     };
     let opts = ScanOptions {
         subtree: subtree.clone(),
@@ -841,8 +875,13 @@ fn scan(
     // all; sweeping on either deletes what is merely out of reach. The failure
     // is silent and total — the index empties, `rescan` reports success, and
     // the files come back only when the root does.
+    //
+    // And it must not run when the *index* could not take what the walk found,
+    // for the same reason from the other end: a batch that failed to apply is
+    // a set of files that exist and are unstamped, so a sweep would delete
+    // exactly the rows the walk was there to keep.
     let could_look = report.as_ref().is_ok_and(|r| !r.root_unreadable);
-    let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look;
+    let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
     if trustworthy {
         let roots: Vec<String> = match &subtree {
             Some(s) => vec![s.clone()],
@@ -850,7 +889,13 @@ fn scan(
         };
         let mut gone = 0;
         for r in roots {
-            gone += shared.index.sweep(&r, generation).unwrap_or(0);
+            match shared.index.sweep(src.id(), &r, generation) {
+                Ok(n) => gone += n,
+                // Half a reconciliation. Saying so is all that can be done
+                // here; the retry is the caller's, and the rows that should
+                // have gone are found again by the next full scan.
+                Err(e) => eprintln!("scourd: {r} could not be reconciled: {e}"),
+            }
         }
         // A sweep takes effect at once, like any other removal, so anyone
         // watching should hear about it now rather than at the next commit.
@@ -868,7 +913,8 @@ fn scan(
     st.last_scan_ms = report.map(|r| r.took_ms).unwrap_or(0);
     // Only a whole-source walk is worth coming back for. A subtree that is not
     // there is a subtree that was deleted, and something has already said so.
-    could_look || subtree.is_some()
+    // A failed write is worth coming back for whatever was walked.
+    !sink.failed && (could_look || subtree.is_some())
 }
 
 /// How long to wait before looking again at a source whose roots were not there.
@@ -913,6 +959,14 @@ struct ToIndex {
     seen: u64,
     buffer: Vec<Change>,
     stop: Arc<Shared>,
+    /// A batch the index refused.
+    ///
+    /// **The reason a scan has to know**: what makes a walk a reconciliation is
+    /// the sweep at the end, which removes everything the walk did not stamp.
+    /// A batch that never landed is a set of files the walk *did* find and the
+    /// index does not have — so sweeping on that evidence deletes them. One
+    /// failed write would turn a scan into a deletion.
+    failed: bool,
 }
 
 impl ToIndex {
@@ -921,7 +975,10 @@ impl ToIndex {
             return;
         }
         let batch = std::mem::replace(&mut self.buffer, Vec::with_capacity(BATCH));
-        let _ = self.index.apply(&mut batch.into_iter());
+        if let Err(e) = self.index.apply(&mut batch.into_iter()) {
+            eprintln!("scourd: a batch of the scan was not indexed: {e}");
+            self.failed = true;
+        }
     }
 }
 

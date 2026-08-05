@@ -64,6 +64,60 @@ impl FsSource {
         }
     }
 
+    /// The path, resolved, and refused if it is not really under a root.
+    ///
+    /// **A prefix comparison is not a containment check**, and this is the one
+    /// place it was being used as one. `stat` is what stands between a caller
+    /// and the filesystem — the web bridge documents it as the fence around
+    /// `/api/open`, and the MCP server offers it to a model — while the check
+    /// in front of it only asked whether the *string* started with a root.
+    /// The kernel does not read strings: `~/../../etc/shadow` starts with the
+    /// home directory and resolves to `/etc/shadow`, and so does any path
+    /// through a symlink that points out of the tree. Both were confirmed
+    /// against the running service.
+    ///
+    /// So the parent is resolved — which is what follows the symlinks — and
+    /// only then compared against the resolved roots. The **last** component is
+    /// joined back on unresolved, deliberately: a symlink is a row of its own
+    /// and `stat` of it must describe the link, not what it points at.
+    ///
+    /// This closes the escape, not the race: between the check and the open,
+    /// a component can be replaced. Closing that needs `openat2` with
+    /// `RESOLVE_BENEATH` on Linux and its equivalents elsewhere, which is worth
+    /// doing when this is asked on someone else's behalf across a boundary.
+    fn inside(&self, p: &str) -> Result<PathBuf> {
+        let native = path::to_path(p);
+        let missing = || Error::NotFound { path: p.to_owned() };
+        // Lexically first, so the refusal is cheap and says what it means. A
+        // `.` or `..` in an indexed path is not a thing the index produces.
+        if native.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        }) {
+            return Err(missing());
+        }
+        let (parent, name) = match (native.parent(), native.file_name()) {
+            (Some(parent), Some(name)) => (parent, name),
+            // A root itself has no name to join back on.
+            _ => (native.as_path(), std::ffi::OsStr::new("")),
+        };
+        let real_parent = parent.canonicalize().map_err(|_| missing())?;
+        let under = self.roots.iter().any(|root| {
+            let root = root.canonicalize().unwrap_or_else(|_| root.clone());
+            real_parent == root || real_parent.starts_with(&root)
+        });
+        if !under {
+            return Err(missing());
+        }
+        Ok(if name.is_empty() {
+            real_parent
+        } else {
+            real_parent.join(name)
+        })
+    }
+
     /// Whether this source should be watched for changes.
     ///
     /// Expressed by *withholding the capability* rather than by a flag the
@@ -331,7 +385,7 @@ impl Source for FsSource {
     }
 
     fn stat(&self, p: &str) -> Result<Entry> {
-        let native = path::to_path(p);
+        let native = self.inside(p)?;
         let md = std::fs::symlink_metadata(&native).map_err(|e| Error::io(&e, p))?;
         Ok(entry_of(
             self.id,
