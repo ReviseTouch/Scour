@@ -185,6 +185,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str, launch: boo
             PAGE.as_bytes(),
         ),
         "/api/search" => api_search(&mut stream, client, &req),
+        "/api/count" => api_count(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/explain" => api_explain(&mut stream, client, &req),
@@ -211,6 +212,23 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
         .param("offset")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    // **A keystroke does not pay for an exact count.**
+    //
+    // The scrollbar needs the real total — a bar sized by what has loaded so
+    // far grows a thumb that shrinks as you scroll, which is the one thing a
+    // scrollbar must not do. But counting to the end is not free, and the
+    // first reading of this was wrong: measured on 2.1 M entries, warm,
+    // exact against a cap of 10,000, `rapor` is 47.9 ms against 6.6 and
+    // `ext:rs` is 96.8 against 12.7. Four to eight times, on the path that
+    // runs once per keypress.
+    //
+    // So the rows come back at typing speed under a cap, and `/api/count`
+    // fetches the exact one afterwards for the bar to settle on. Two
+    // questions, asked separately, because they have different deadlines.
+    let cap: u32 = req
+        .param("cap")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1_000);
     let request = Request::Search {
         query,
         sort: sort_of(req.param("sort")),
@@ -218,7 +236,7 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
         page: Page {
             offset,
             limit,
-            ..Page::default()
+            count_cap: cap,
         },
     };
     match call(client, request) {
@@ -249,6 +267,28 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
                 }),
             );
         }
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
+/// How many match, exactly, however long that takes.
+///
+/// Separate from the search because the two have different deadlines: the rows
+/// have to be on screen before the next keystroke and this does not.
+fn api_count(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+    let request = Request::Count {
+        query: req.param("q").unwrap_or_default().to_owned(),
+        cap: req
+            .param("cap")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(u32::MAX),
+    };
+    match call(client, request) {
+        Ok(Response::Count { total, capped }) => http::json(
+            stream,
+            &serde_json::json!({ "total": total, "capped": capped }),
+        ),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }

@@ -687,6 +687,11 @@
 
   /* ---------------- satır menüsü ---------------- */
   tbody tr { cursor: default; }
+  /* The rows that are not drawn, standing in for their own height. */
+  tbody tr.spacer, tbody tr.ghost { pointer-events: none; }
+  tbody tr.spacer td, tbody tr.ghost td { padding: 0; border: 0; }
+  tbody tr.ghost { height: 31px; }
+  tbody tr.spacer:hover, tbody tr.ghost:hover { background: none; }
   tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
 
   .rowmenu {
@@ -933,8 +938,8 @@
       if (j.error) throw new Error(j.error);
       return j;
     },
-    search: (q, sort, desc, limit) =>
-      SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit }),
+    search: (q, sort, desc, limit, offset) =>
+      SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }),
     facets: (q) => SERVICE.get("facets", { q }),
     status: () => SERVICE.get("status", {}),
   };
@@ -1564,6 +1569,84 @@
   });
   q.addEventListener("blur", hideHints);
 
+  /* ---------------- the list, which is virtual ----------------
+   *
+   * Two million rows do not go in a table. Everything's answer, and this one,
+   * is to draw only what is on screen and to lie convincingly about the rest:
+   * a spacer row above and below, sized in pixels, so the table is exactly as
+   * tall as the whole result set would be and the scrollbar is right from the
+   * first frame rather than growing while you use it.
+   *
+   * Which needs three things to be true, and they are:
+   *
+   *   * every row is the same height — 31px, measured, because the path is one
+   *     line with `text-overflow: ellipsis` and nothing wraps;
+   *   * the engine can be asked for an arbitrary window rather than only the
+   *     next page, which `Page { offset, limit }` already is;
+   *   * and it answers fast enough that dragging the thumb does not stutter.
+   *     A window is 200 rows and lands in single-digit milliseconds.
+   */
+  const ROW_H = 31;          /* one row, and it must match the CSS */
+  const WINDOW = 200;        /* rows fetched at a time */
+  const MARGIN = 60;         /* extra rows kept either side of the viewport */
+
+  const LIST = {
+    query: null, sort: null, desc: null,
+    total: 0,                /* what the scrollbar is sized by */
+    rows: new Map(),         /* index -> row, only what has been fetched */
+    pending: new Set(),      /* windows in flight, so none is asked for twice */
+    exact: false,            /* has the exact count landed yet */
+  };
+
+  let rowHtml = () => "";
+
+  const scrollEl = document.querySelector(".scroll");
+
+  /* Which rows the viewport is over, plus a margin so a flick does not show
+     blank space before the fetch lands. */
+  function visibleRange() {
+    const first = Math.max(0, Math.floor(scrollEl.scrollTop / ROW_H) - MARGIN);
+    const count = Math.ceil(scrollEl.clientHeight / ROW_H) + MARGIN * 2;
+    return [first, Math.min(LIST.total, first + count)];
+  }
+
+  /* Draw the window that is on screen, between two spacers.
+     The spacers are what make the scrollbar honest: their heights are the rows
+     that exist and are not drawn. */
+  function paintWindow() {
+    const [from, to] = visibleRange();
+    const parts = [];
+    if (from > 0) parts.push(`<tr class="spacer" style="height:${from * ROW_H}px"><td colspan="6"></td></tr>`);
+    for (let i = from; i < to; i++) {
+      const f = LIST.rows.get(i);
+      parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="6"></td></tr>`);
+    }
+    const rest = LIST.total - to;
+    if (rest > 0) parts.push(`<tr class="spacer" style="height:${rest * ROW_H}px"><td colspan="6"></td></tr>`);
+    body.innerHTML = parts.join("");
+  }
+
+  /* Fetch whatever the visible range is missing, one window at a time. */
+  function fillWindow() {
+    const [from, to] = visibleRange();
+    for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
+      if (LIST.pending.has(start) || LIST.rows.has(start)) continue;
+      LIST.pending.add(start);
+      const mine = generation;
+      SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, start)
+        .then((res) => {
+          LIST.pending.delete(start);
+          if (mine !== generation) return;   /* the query moved on */
+          res.rows.forEach((r, i) => LIST.rows.set(start + i, fromService(r)));
+          paintWindow();
+        })
+        .catch(() => { LIST.pending.delete(start); });
+    }
+  }
+
+  scrollEl.addEventListener("scroll", () => { paintWindow(); fillWindow(); }, { passive: true });
+  addEventListener("resize", () => { paintWindow(); fillWindow(); });
+
   /* Only the newest answer is allowed to draw.
      Typing produces one request a keystroke and they do not come back in the
      order they were sent; without this, pausing after "rapor" can leave the
@@ -1584,12 +1667,22 @@
     syncHeads();
 
     const mine = ++generation;
-    SERVICE.search(text, sortKey, sortDesc, 200)
+    SERVICE.search(text, sortKey, sortDesc, WINDOW, 0)
       .then((res) => {
         if (mine !== generation) return;   // a newer keystroke won
+        /* A new result set: everything cached belonged to the old one. */
+        LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
+        LIST.rows.clear(); LIST.pending.clear();
+        LIST.exact = !res.capped;
+        LIST.total = res.total;
+        res.rows.forEach((r, i) => LIST.rows.set(i, fromService(r)));
+        scrollEl.scrollTop = 0;
         FILES = res.rows.map(fromService);
         lastMeter = res;
         draw(text, parse(text), FILES, res);
+        /* And the exact count, which the bar settles on. Only when the fast
+           answer hit its cap — otherwise it is already exact. */
+        if (res.capped) exactCount(text, mine);
       })
       .catch((e) => {
         if (mine !== generation) return;
@@ -1602,7 +1695,9 @@
   function draw(text, p, hits, res) {
     now = Math.floor(Date.now() / 1000);
 
-    body.innerHTML = hits.map((f) => `
+    /* The row's markup, kept as a function because the list is virtual:
+       which rows exist on screen is decided by `paintWindow`, not here. */
+    rowHtml = (f) => `
       <tr tabindex="0" data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
         <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
         <td class="name">${markName(f.name, p.text)}</td>
@@ -1610,8 +1705,9 @@
         <td class="n">${bytes(f.size)}</td>
         <td class="n" style="text-align:left;color:var(${bandOf(f.mtime)})">${ago(f.mtime)}</td>
         <td class="kind">${f.kind}</td>
-      </tr>`).join("");
-    empty.hidden = hits.length > 0;
+      </tr>`;
+    paintWindow();
+    empty.hidden = LIST.total === 0;
 
     /* The meter, and it is the service's own arithmetic rather than the
        page's. `total` is capped by the count cap, which is why a large one
@@ -1625,6 +1721,20 @@
     drawBars(hits);
     syncFacets(p);
     refreshFacetCounts(text);
+  }
+
+  /* The number the scrollbar is really sized by.
+     A second question with a later deadline: the rows are already on screen
+     while this is in flight. */
+  function exactCount(text, mine) {
+    SERVICE.get("count", { q: text }).then((res) => {
+      if (mine !== generation) return;
+      LIST.total = res.total;
+      LIST.exact = !res.capped;
+      paintWindow();
+      const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
+      document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+    }).catch(() => {});
   }
 
   /* The service could not be reached. Say which, rather than showing an empty
