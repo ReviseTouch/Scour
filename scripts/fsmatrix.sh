@@ -96,3 +96,46 @@ sudo -u "#$UID_" env HOME="$HOME_" \
     "$REPO/target/release/examples/filesystems" "${BUILT[@]}" \
     || cargo run --release -q --manifest-path "$REPO/Cargo.toml" \
          -p scour-source-fs --example filesystems -- "${BUILT[@]}"
+
+# --- what the example cannot ask -------------------------------------------
+#
+# `stable_ids` says `st_ino` "is stored on disk and survives a remount". The
+# example runs as an ordinary user against something already mounted, so it can
+# only see one mount session: it answers "are the numbers distinct, and do they
+# survive a rename", which is a weaker question with the same shape. FAT
+# synthesises `st_ino` from the directory entry's position on disk, and whether
+# *that* survives being unmounted and mounted again is the whole of the claim.
+#
+# Only root can unmount, so it is asked here.
+echo
+printf '%-8s %-22s %s\n' "format" "ids survive a remount" "ids survive a move"
+
+for mnt in "${BUILT[@]}"; do
+    fs="${mnt##*/mnt-}"
+    img="$BASE/$fs.img"
+    opts="$(mount_opts_for "$fs")"
+    d="$mnt/.scour-remount"
+    sub="$d/moved"
+    mkdir -p "$sub"
+    for i in $(seq 0 49); do : > "$d/f$i"; done
+    sync
+
+    before="$(cd "$d" && stat -c '%n %i' f* | sort)"
+
+    # A move within the same filesystem, which on FAT rewrites the directory
+    # entry the number is derived from.
+    mv "$d/f0" "$sub/f0"
+    moved_before="$(stat -c '%i' "$sub/f0")"
+
+    umount "$mnt"
+    mount -o "loop${opts:+,$opts}" "$img" "$mnt"
+
+    after="$(cd "$d" && stat -c '%n %i' f* 2>/dev/null | sort)"
+    same="$(comm -12 <(echo "$before") <(echo "$after") | wc -l)"
+    total="$(echo "$before" | wc -l)"
+    moved_after="$(stat -c '%i' "$sub/f0" 2>/dev/null || echo "-")"
+    if [[ "$moved_before" == "$moved_after" ]]; then move="yes"; else move="NO"; fi
+
+    printf '%-8s %-22s %s\n' "$fs" "$same/$total" "$move"
+    rm -rf "$d"
+done
