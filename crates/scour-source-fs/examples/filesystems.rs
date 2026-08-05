@@ -73,6 +73,7 @@ struct Measured {
     case_sensitive: bool,
     distinct_ids: bool,
     id_survives_rename: bool,
+    real_modes: bool,
 }
 
 impl Measured {
@@ -82,14 +83,16 @@ impl Measured {
         // documents; claiming more is the silent wrong index.
         !(claimed.case_sensitive && !self.case_sensitive)
             && !(claimed.stable_ids && !(self.distinct_ids && self.id_survives_rename))
+            && !(claimed.real_modes && !self.real_modes)
     }
 
     fn show(&self) -> String {
         format!(
-            "case={} ids={} rename={}",
+            "case={} ids={} rename={} chmod={}",
             yes(self.case_sensitive),
             yes(self.distinct_ids),
-            yes(self.id_survives_rename)
+            yes(self.id_survives_rename),
+            yes(self.real_modes)
         )
     }
 }
@@ -99,11 +102,17 @@ fn yes(b: bool) -> &'static str {
 }
 
 fn describe(t: &FsTraits) -> String {
-    format!("case={} ids={}", yes(t.case_sensitive), yes(t.stable_ids))
+    format!(
+        "case={} ids={} exec={}",
+        yes(t.case_sensitive),
+        yes(t.stable_ids),
+        yes(t.real_modes)
+    )
 }
 
 fn probe(dir: &Path) -> Option<Measured> {
     use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
 
     let root = dir.join(".scour-fs-probe");
     std::fs::create_dir_all(&root).ok()?;
@@ -142,11 +151,21 @@ fn probe(dir: &Path) -> Option<Measured> {
             .map(|m| Some((m.dev(), m.ino())) == was)
             .unwrap_or(false);
 
+    // Modes. A filesystem with none of its own takes what the mount says and
+    // ignores a chmod, so asking for one and reading it back is the whole test.
+    let m = root.join("mode.probe");
+    let _ = std::fs::write(&m, b"x");
+    let real_modes = std::fs::set_permissions(&m, std::fs::Permissions::from_mode(0o600)).is_ok()
+        && std::fs::metadata(&m)
+            .map(|md| md.permissions().mode() & 0o777 == 0o600)
+            .unwrap_or(false);
+
     cleanup();
     Some(Measured {
         case_sensitive,
         distinct_ids,
         id_survives_rename,
+        real_modes,
     })
 }
 

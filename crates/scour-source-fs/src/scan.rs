@@ -96,6 +96,11 @@ impl FsSource {
     pub fn stable_ids(&self) -> bool {
         self.traits.stable_ids
     }
+
+    /// Whether `st_mode` is the file's own rather than the mount's.
+    pub fn real_modes(&self) -> bool {
+        self.traits.real_modes
+    }
 }
 
 impl Source for FsSource {
@@ -211,6 +216,7 @@ impl Source for FsSource {
         let cancelled = AtomicBool::new(false);
         let want_meta = !opts.skip_metadata;
         let stable_ids = self.traits.stable_ids;
+        let real_modes = self.traits.real_modes;
 
         // The walker runs on its own threads and the sink is drained on this
         // one, over a bounded channel.
@@ -280,6 +286,7 @@ impl Source for FsSource {
                                 md.as_ref(),
                                 is_dir,
                                 stable_ids,
+                                real_modes,
                             )))
                             .is_err()
                         {
@@ -344,6 +351,7 @@ impl Source for FsSource {
             Some(&md),
             md.is_dir(),
             self.traits.stable_ids,
+            self.traits.real_modes,
         ))
     }
 }
@@ -362,6 +370,7 @@ pub(crate) fn entry_of(
     md: Option<&std::fs::Metadata>,
     is_dir: bool,
     stable_ids: bool,
+    real_modes: bool,
 ) -> Entry {
     // On Windows the identity is always the path: the file id there needs the
     // file to be opened, which is the syscall a bulk scan exists to avoid.
@@ -388,12 +397,27 @@ pub(crate) fn entry_of(
         }
         _ => EntryId::path_hash(source, path),
     };
+    let mut meta = md
+        .map(|m| Meta::from_std(m, is_dir))
+        .unwrap_or(Meta::UNKNOWN);
+    // **A mode the mount invented is not a mode.** NTFS and the FAT family
+    // have no permissions of their own; what `stat` returns there is `fmask`
+    // and `dmask` off the mount line, the same value for every file. Storing
+    // it makes `kind_of` read an executable bit that says nothing: on this
+    // machine `/mnt/depo` is mounted 0022, so 293,811 of its files were
+    // classified `exec` against 21,342 on the real filesystem beside it, and
+    // `kind:exec` was useless for finding a program.
+    //
+    // Replaced rather than zeroed, so `mode_string` still prints something a
+    // person recognises — and what it prints is true: no permissions of its
+    // own, readable, and executable only if it is a directory.
+    if !real_modes && meta != Meta::UNKNOWN {
+        meta.mode = if is_dir { 0o040755 } else { 0o100644 };
+    }
     Entry {
         id,
         is_dir,
-        meta: md
-            .map(|m| Meta::from_std(m, is_dir))
-            .unwrap_or(Meta::UNKNOWN),
+        meta,
         path: path.to_owned(),
     }
 }

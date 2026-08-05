@@ -3018,3 +3018,44 @@ Two ways out, neither taken yet:
   minima rather than a walk — for the empty query, exact and effectively free.
   It stops being that simple the moment a query filters, so it would be a fast
   path rather than the answer.
+
+## 2026-08-05 — an executable bit the mount invented
+
+`kind_of` calls a file executable when `st_mode & 0o111` is set, which is right
+where the mode is the file's own. On the NTFS volume it is not, for almost
+everything on it:
+
+| | `kind:exec` |
+|---|---|
+| `under:/home/hasan` (btrfs) | 21,342 |
+| `under:/mnt/depo` (ntfs3) | **293,811** |
+| `under:/mnt/depo` after | **6,897** |
+
+A whole volume in the wrong category, and `kind:exec` useless for finding a
+program.
+
+The reason is finer than "NTFS has no modes", and worth writing down because
+the obvious version is wrong. Measured:
+
+```bash
+echo x > /mnt/depo/probe && stat -c %a /mnt/depo/probe   # 644
+chmod 600 /mnt/depo/probe && stat -c %a /mnt/depo/probe  # 600
+```
+
+`ntfs3` **does** keep a mode for a file created under Linux. What it cannot do
+is invent one for the files Windows wrote, and those fall back to `fmask` off
+the mount line — `/mnt/depo` is mounted `fmask=0022`, so everything Windows put
+there reads 0755.
+
+So `FsTraits` gains `real_modes`, alongside `stable_ids` and `case_sensitive`
+and for the same reason: the filesystem's promise decides, not the platform's.
+`entry_of` replaces the invented mode with `0o100644` (`0o040755` for a
+directory), which is also what it means — no permissions of its own.
+
+The cost is a genuinely `chmod +x` script on such a volume not being called
+executable. Against 286,914 files that are not executable and said they were,
+that is the cheaper mistake by five orders of magnitude.
+
+The `filesystems` example probes it, and reports what it can honestly measure
+— whether a `chmod` sticks, which on ntfs3 is `yes` even though the flag is
+`no`. The two are different questions and the table says both.

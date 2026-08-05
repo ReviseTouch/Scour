@@ -112,6 +112,24 @@ pub struct FsTraits {
     pub stable_ids: bool,
     /// Two names differing only in case are two files.
     pub case_sensitive: bool,
+    /// The executable bit means something here.
+    ///
+    /// Not quite "the filesystem has modes" — measured, `ntfs3` does store one
+    /// for a file created under Linux, and a `chmod 600` on it sticks. What it
+    /// cannot do is invent one for the files Windows wrote, and those take
+    /// `fmask` off the mount line instead: `/mnt/depo` is mounted `fmask=0022`,
+    /// so **everything Windows put there reads 0755**.
+    ///
+    /// Which makes the bit noise for almost every file on such a volume, and
+    /// `kind_of` classifies on it: 293,811 files under `/mnt/depo` came back
+    /// `exec` against 21,342 under the real filesystem beside it. Not a
+    /// rounding error — a whole volume in the wrong category, and `kind:exec`
+    /// useless for finding a program.
+    ///
+    /// So it is withheld wherever a mount supplies the mode for anything, and
+    /// the cost is a genuinely `chmod +x` script on such a volume not being
+    /// called executable. That is the cheaper mistake by five orders.
+    pub real_modes: bool,
 }
 
 impl FsTraits {
@@ -124,6 +142,10 @@ impl FsTraits {
     pub const UNKNOWN: FsTraits = FsTraits {
         stable_ids: false,
         case_sensitive: cfg!(unix),
+        // The cheaper mistake again. Withholding it loses `kind:exec` on a
+        // filesystem nobody recognised; claiming it wrongly fills the category
+        // with every file on the volume.
+        real_modes: false,
     };
 
     /// The narrower of two, for a source spanning more than one filesystem.
@@ -131,6 +153,7 @@ impl FsTraits {
         FsTraits {
             stable_ids: self.stable_ids && other.stable_ids,
             case_sensitive: self.case_sensitive && other.case_sensitive,
+            real_modes: self.real_modes && other.real_modes,
         }
     }
 }
@@ -224,6 +247,7 @@ mod linux {
             EXT | BTRFS | XFS | F2FS | TMPFS | ZFS | OVERLAY => FsTraits {
                 stable_ids: true,
                 case_sensitive: true,
+                real_modes: true,
             },
             // Linux's NTFS drivers keep the on-disk MFT record number, so the
             // identity is real. Case is the driver's: ntfs3 is sensitive
@@ -233,10 +257,15 @@ mod linux {
             NTFS_3G | NTFS3 => FsTraits {
                 stable_ids: true,
                 case_sensitive: true,
+                // NTFS has an access-control model and neither Linux driver
+                // maps it onto `st_mode`; what `stat` returns is `fmask` and
+                // `dmask` from the mount line, the same value for every file.
+                real_modes: false,
             },
             MSDOS | EXFAT => FsTraits {
                 stable_ids: false,
                 case_sensitive: false,
+                real_modes: false,
             },
             _ => FsTraits::UNKNOWN,
         }
@@ -441,10 +470,12 @@ mod macos {
             "apfs" | "hfs" => FsTraits {
                 stable_ids: true,
                 case_sensitive: false,
+                real_modes: true,
             },
             "msdos" | "exfat" => FsTraits {
                 stable_ids: false,
                 case_sensitive: false,
+                real_modes: false,
             },
             _ => FsTraits::UNKNOWN,
         }
@@ -494,10 +525,12 @@ mod tests {
         let good = FsTraits {
             stable_ids: true,
             case_sensitive: true,
+            real_modes: true,
         };
         let fat = FsTraits {
             stable_ids: false,
             case_sensitive: false,
+            real_modes: false,
         };
         assert_eq!(good.and(fat), fat);
         assert_eq!(good.and(good), good);
