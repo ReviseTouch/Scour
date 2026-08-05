@@ -82,6 +82,30 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
     })
 }
 
+/// Does the desktop treat this as something to **run** rather than to view?
+///
+/// `xdg-open` is not a viewer. Handed a `.desktop` file it executes what the
+/// file says, and handed an executable a file manager will offer to run it —
+/// so "open" on those two is not opening, it is launching, and a search box
+/// must not be a way to launch things. They get their folder revealed instead,
+/// which is what somebody looking for them wanted anyway.
+pub fn is_runnable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if matches!(
+        ext.as_str(),
+        "desktop" | "sh" | "bash" | "appimage" | "run" | "bin"
+    ) {
+        return true;
+    }
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
 /// `%XX` and `+`, which is all a query string can carry.
 fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
@@ -148,6 +172,25 @@ pub fn fail(stream: &mut TcpStream, status: &str, detail: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn what_the_desktop_would_run_is_not_something_to_open() {
+        use std::path::Path;
+        assert!(is_runnable(Path::new("/x/thing.desktop")));
+        assert!(is_runnable(Path::new("/x/install.sh")));
+        assert!(is_runnable(Path::new("/x/Some.AppImage")));
+        // Not by name, and not by luck: an ordinary document stays openable.
+        assert!(!is_runnable(Path::new("/x/rapor.pdf")));
+        assert!(!is_runnable(Path::new("/x/notes")));
+        // And by mode, for the ones with no telling extension.
+        let tmp = std::env::temp_dir().join("scour-web-runnable-probe");
+        std::fs::write(&tmp, b"#!/bin/sh\n").expect("write");
+        assert!(!is_runnable(&tmp), "not executable yet");
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(is_runnable(&tmp), "executable now");
+        let _ = std::fs::remove_file(&tmp);
+    }
 
     #[test]
     fn a_query_string_decodes_the_way_a_browser_wrote_it() {

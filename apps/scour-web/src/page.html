@@ -685,6 +685,28 @@
   .panel .line em { font-style: normal; color: var(--ink-3); }
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
 
+  /* ---------------- satır menüsü ---------------- */
+  tbody tr { cursor: default; }
+  tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
+
+  .rowmenu {
+    position: fixed; z-index: 60;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 3px; padding: 3px;
+    box-shadow: 0 14px 36px -18px rgba(0,0,0,.8);
+    display: flex; flex-direction: column; min-width: 168px;
+  }
+  .rowmenu[hidden] { display: none; }
+  .rowmenu button {
+    background: none; border: 0; text-align: left;
+    font: inherit; font-size: 12.5px; color: var(--ink-2);
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 2.5);
+    border-radius: 2px; cursor: pointer;
+  }
+  .rowmenu button:hover, .rowmenu button:focus-visible {
+    background: var(--line-soft); color: var(--ink); outline: none;
+  }
+
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -1581,7 +1603,7 @@
     now = Math.floor(Date.now() / 1000);
 
     body.innerHTML = hits.map((f) => `
-      <tr>
+      <tr tabindex="0" data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
         <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
         <td class="name">${markName(f.name, p.text)}</td>
         <td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>
@@ -1777,6 +1799,97 @@
     if (e.key.startsWith("Arrow") && hintBox.hidden) showHints();
   });
   q.addEventListener("scroll", () => { shadow.scrollLeft = q.scrollLeft; });
+
+  /* ---------------- opening things ----------------
+   *
+   * A browser cannot open a local file, and that is the sandbox working
+   * rather than something to route around: the request goes to the bridge and
+   * the bridge asks the desktop. Two fences are on the other side — the path
+   * must be one the *index* holds, and anything the desktop would run rather
+   * than view has its folder revealed instead. Neither is enforced here,
+   * because a check that lives in the page is a check an attacker skips. */
+  async function launch(path, what) {
+    try {
+      const q = new URLSearchParams({ path, what: what || "file", t: TOKEN });
+      const r = await fetch(`/api/open?${q}`, { method: "POST" });
+      const j = await r.json();
+      if (j.error) { flash(j.error); return; }
+      if (j.instead) flash(j.instead);
+    } catch (e) { flash("açılamadı: " + (e.message || e)); }
+  }
+
+  /* One line, under the meter, that says what just happened and then stops.
+     A double-click that silently does something else is worse than one that
+     explains. */
+  let flashTimer = null;
+  function flash(text) {
+    const el = document.getElementById("rows");
+    if (!el) return;
+    el.dataset.was = el.dataset.was || el.textContent;
+    el.textContent = text;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      el.textContent = el.dataset.was || "";
+      delete el.dataset.was;
+    }, 4000);
+  }
+
+  const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
+
+  body.addEventListener("dblclick", (e) => {
+    const p = pathOf(e.target.closest("tr"));
+    if (p) launch(p, "file");
+  });
+  /* Enter opens, because a list you can arrow through is a list you should be
+     able to open from. */
+  body.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const p = pathOf(e.target.closest("tr"));
+    if (p) { e.preventDefault(); launch(p, e.shiftKey ? "folder" : "file"); }
+  });
+
+  /* The menu. Three things, which is all there is to do with a found file:
+     open it, open where it lives, or take its path somewhere else. */
+  const menu = document.createElement("div");
+  menu.className = "rowmenu";
+  menu.hidden = true;
+  document.body.appendChild(menu);
+
+  body.addEventListener("contextmenu", (e) => {
+    const tr = e.target.closest("tr");
+    const p = pathOf(tr);
+    if (!p) return;
+    e.preventDefault();
+    menu.innerHTML = [
+      ["Aç", "file"],
+      ["Klasörünü aç", "folder"],
+      ["Yolu kopyala", "copy"],
+    ].map(([label, act]) => `<button type="button" data-act="${act}">${label}</button>`).join("");
+    menu.dataset.path = p;
+    menu.hidden = false;
+    /* Kept on screen: near the pointer, but never past the edge. */
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + "px";
+    menu.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + "px";
+    menu.querySelector("button").focus();
+  });
+
+  menu.addEventListener("click", (e) => {
+    const act = e.target.dataset && e.target.dataset.act;
+    if (!act) return;
+    const p = menu.dataset.path;
+    menu.hidden = true;
+    if (act === "copy") {
+      navigator.clipboard.writeText(p).then(() => flash("yol kopyalandı"),
+                                            () => flash("kopyalanamadı"));
+    } else {
+      launch(p, act);
+    }
+  });
+  const hideMenu = () => { menu.hidden = true; };
+  document.addEventListener("click", hideMenu);
+  document.addEventListener("scroll", hideMenu, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
 
   /* The index's size, for the "x / y" meter, and a heartbeat so it follows a
      scan that is still running. Ten seconds is slow enough to cost nothing and

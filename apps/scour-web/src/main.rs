@@ -20,8 +20,13 @@
 //!   and any web page that guesses the port — from reading the index.
 //! * **Origin checked** on every request, because a page on the internet can
 //!   make a browser send one here. Same-origin or nothing.
-//! * **Read-only.** `rescan` and `maintain` exist in the protocol and are not
-//!   routed. A page in a browser does not get to make the service work.
+//! * **Read-only, with one exception, and the exception is the careful part.**
+//!   `rescan` and `maintain` are not routed — a page in a browser does not get
+//!   to make the service work. `/api/open` is the exception, because a file
+//!   search that cannot open a file is half a tool, and it is fenced:
+//!   `POST` only, the path must be one the *index* holds, and anything the
+//!   desktop would **run** rather than view is refused and its folder offered
+//!   instead. `--no-open` removes it altogether.
 
 mod http;
 
@@ -50,9 +55,12 @@ struct Args {
     /// Talk to a service listening here.
     #[arg(long)]
     socket: Option<String>,
-    /// Print the address and exit without opening anything.
+    /// Print the address and do not launch a browser.
     #[arg(long)]
     no_open: bool,
+    /// Refuse `/api/open` entirely, so the page can only look.
+    #[arg(long)]
+    no_launch: bool,
 }
 
 fn main() -> Result<()> {
@@ -85,9 +93,10 @@ fn main() -> Result<()> {
         let Ok(stream) = stream else { continue };
         let client = Arc::clone(&client);
         let token = token.clone();
+        let launch = !args.no_launch;
         // A thread a connection, and the connection closes after one exchange.
         // A browser opens a handful; there is nothing here to pool.
-        std::thread::spawn(move || serve(stream, &client, &token));
+        std::thread::spawn(move || serve(stream, &client, &token, launch));
     }
     Ok(())
 }
@@ -124,7 +133,7 @@ fn open(url: &str) {
         .spawn();
 }
 
-fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str) {
+fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str, launch: bool) {
     let Some(req) = http::read_request(&stream) else {
         return;
     };
@@ -142,8 +151,15 @@ fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str) {
         http::fail(&mut stream, "403 Forbidden", "cross-origin");
         return;
     }
-    if req.method != "GET" {
-        http::fail(&mut stream, "405 Method Not Allowed", "GET only");
+    // Reading is `GET`, doing is `POST`, and the split is not decoration: it
+    // is what keeps a link, a prefetch or a history entry from opening a file.
+    let acting = req.path == "/api/open";
+    if req.method != if acting { "POST" } else { "GET" } {
+        http::fail(
+            &mut stream,
+            "405 Method Not Allowed",
+            "wrong method for this route",
+        );
         return;
     }
     // Constant work regardless of how much of the token is right. The
@@ -172,6 +188,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Client>, token: &str) {
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/explain" => api_explain(&mut stream, client, &req),
+        "/api/open" if launch => api_open(&mut stream, client, &req),
+        "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }
@@ -326,6 +344,70 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) 
         }
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
+/// Open a path, or the folder holding it.
+///
+/// **The index is the fence.** The path is looked up through the service
+/// first, and a path the index does not hold is refused — so this cannot be
+/// pointed at `/etc/shadow`, at a path assembled by a page, or at anything
+/// outside the roots the user configured. `stat` already refuses a path no
+/// source owns, and that refusal is the whole check.
+///
+/// The second fence is what "open" means. `xdg-open` on a `.desktop` file
+/// executes it; on an executable a file manager offers to run it. Those get
+/// their folder revealed instead, which is what someone searching for them
+/// wanted. There is no flag to override it.
+fn api_open(stream: &mut TcpStream, client: &Mutex<Client>, req: &http::Req) {
+    let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no path");
+        return;
+    };
+    let entry = match call(
+        client,
+        Request::Stat {
+            path: path.to_owned(),
+        },
+    ) {
+        Ok(Response::Stat(e)) => e,
+        Ok(_) => {
+            http::fail(stream, "502 Bad Gateway", "unexpected reply");
+            return;
+        }
+        // Not in the index, or under no configured root. Either way, not ours
+        // to open.
+        Err(e) => {
+            http::fail(stream, "404 Not Found", &e);
+            return;
+        }
+    };
+
+    let p = std::path::Path::new(&entry.path);
+    let want_folder = req.param("what") == Some("folder") || entry.is_dir;
+    let runnable = !want_folder && http::is_runnable(p);
+    let target = if want_folder || runnable {
+        p.parent().unwrap_or(p).to_path_buf()
+    } else {
+        p.to_path_buf()
+    };
+
+    match std::process::Command::new("xdg-open")
+        .arg(&target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => http::json(
+            stream,
+            &serde_json::json!({
+                "opened": target.to_string_lossy(),
+                // Said rather than done silently: a double-click that quietly
+                // does something else is worse than one that explains.
+                "instead": runnable.then_some("bu dosya çalıştırılabilir — klasörü açıldı"),
+            }),
+        ),
+        Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
     }
 }
 
