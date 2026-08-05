@@ -2813,3 +2813,65 @@ What a watch still cannot see is a change made while Linux is not running.
 That is what `scan.on_start` is for, and the two together are the whole
 picture. Cost of both: **419,574 inotify watches of 524,288**, 80% of the
 per-user limit.
+
+## 2026-08-05 — could the NTFS volume be read from `$MFT` instead of walked?
+
+Everything's speed on Windows comes from not walking directories at all: it
+reads the Master File Table, which is one sequential structure holding every
+name and every piece of metadata on the volume. The question is whether that
+is worth doing here.
+
+**It is possible, and it does not need root.** `ntfs3` exposes the table as an
+ordinary file:
+
+```bash
+ls -la '/mnt/depo/$MFT'
+# -rwxr-xr-x 1 hasan hasan 2213543936 ... /mnt/depo/$MFT
+```
+
+2.06 GiB, first four bytes `FILE`, 2,161,664 records of 1,024 bytes.
+
+| | |
+|---|---|
+| `find /mnt/depo -xdev`, no `stat` | 2,722 ms |
+| `find /mnt/depo -xdev -printf '%s %T@'` | 12,177 ms |
+| **Scour's parallel walk, with metadata** | **6,089 ms** — 1,387,173 entries |
+| **reading all of `$MFT`** | **1,210 ms** — 1.83 GB/s |
+
+All warm. The middle rows are the point: the metadata is nine and a half
+seconds of single-threaded `stat`, and the walk is fast because it does that on
+every core at once. An MFT record already *contains* the size, all three
+timestamps, the attributes, the name and the parent reference — so the whole
+`stat` storm goes away rather than being parallelised.
+
+A realistic MFT scan is the 1.2 s read plus parsing 2.16 M records and
+assembling paths from parent references. Call it **~2 s against 6.1 s**, and
+wider than that cold, because one sequential 2 GB read is the access pattern a
+disk likes and random metadata across a volume is the one it does not.
+
+**Not built, and the reason is the size of the prize rather than the
+difficulty.** The walk runs once, at start-up; inotify covers everything after
+it, on ntfs3 as well as ext4. So this buys about four seconds a boot, in
+exchange for:
+
+* an NTFS parser, which is one filesystem out of the ones a `Source` may face;
+* a *second* implementation for Windows, where `C:\$MFT` cannot be opened this
+  way — it needs `FSCTL_GET_NTFS_FILE_RECORD` and Administrator;
+* a dependency on the mount exposing system files, which these options do and
+  others do not;
+* a torn snapshot, since the volume is mounted `rw` while it is read;
+* **more** filtering, not less: the walk prunes `target/` and never descends,
+  while the table hands over all 2,161,664 records including the 303,658
+  entries under excluded directories, to be thrown away afterwards.
+
+What would change the answer is a cold measurement — a spinning disk, or a
+volume several times this size, where the walk's random metadata access is the
+whole cost and the sequential read is not. `Caps::JOURNAL` exists in the trait
+for exactly this shape of source; nothing has to be redesigned to add it later.
+
+**The USN journal is the more interesting half and is out of reach here.** It
+is a change log, so it answers "what happened while Linux was not running" —
+which is the only thing the boot walk exists for — in a fraction of the data.
+But `$Extend/$UsnJrnl` reads back as zero bytes and its `$J` stream is not
+exposed under these mount options, and reaching it another way means the raw
+partition, which means root.
