@@ -49,6 +49,11 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::IsDir(want) => e.is_dir == *want,
         Match::Size(cmp, v) => cmp.holds(e.meta.size, *v),
         Match::Num(f, cmp, v) => cmp.holds(num_of(e, *f), *v),
+        Match::Depth(cmp, v) => cmp.holds(e.path.bytes().filter(|&b| b == b'/').count() as i64, *v),
+        // Compiled per call, which is exactly what the index must not do and
+        // exactly what a reference should: the slow, obvious version is the
+        // thing the fast one is checked against.
+        Match::Regex(p) => regex::Regex::new(p).is_ok_and(|re| re.is_match(&name)),
         Match::Bits {
             field,
             mask,

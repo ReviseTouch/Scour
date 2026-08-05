@@ -4580,6 +4580,7 @@ dependencies = [
  "memchr",
  "memmap2",
  "parking_lot",
+ "regex",
  "scour-core",
  "scour-mock",
  "scour-query",
@@ -4621,6 +4622,7 @@ dependencies = [
 name = "scour-mock"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "scour-core",
  "scour-query",
 ]

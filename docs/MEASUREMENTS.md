@@ -3153,3 +3153,62 @@ Two things the language had to be told rather than guessing:
 * **Permission bits are only as true as the filesystem.** The NTFS work above
   withholds an invented mode at index time, so `perm:` and `suid:` find
   nothing on such a volume rather than everything. `node:` is unaffected.
+
+## 2026-08-05 — three more, and what each cost
+
+Aimed at the two callers that are not a search box: a model driving MCP and a
+person who knows `find`. Familiar spellings, because the point is that neither
+has to learn anything.
+
+**`depth:`** — `/` counted from the root. The directory table is front-coded,
+so every depth comes from one sequential pass: a row is its predecessor
+truncated and extended, and carrying the slash positions along means a row
+costs its own suffix and nothing else. 145,593 directories, checked against
+counting the slashes in `DirTable::get` for every one of them:
+
+```bash
+cargo run --release -p scour-index-native --example depthcheck -- <index>
+# 145593 dizin
+# uyuşmayan: 0
+```
+
+Built when a query asks and never otherwise — half a megabyte is cheap once
+and wasteful always.
+
+**A bare number means *equals* here**, and the first version got it wrong by
+inheriting the size convention. `size:1mb` meaning "at least" is right; nobody
+looks for a file of exactly a megabyte. `depth:3` reads as "three deep" to
+everyone, and taking the size rule made it match 1,000,000 rows where
+`depth:<=3` matched 78. Both were working as written; one was written wrong.
+
+| | |
+|---|---|
+| `depth:2` | 2 — `/home/hasan` and `/mnt/depo`, which is exactly right |
+| `depth:3` | 76 |
+| `depth:<=3` | 78 |
+
+**`regex:`** — costs no new compilation: `regex-automata` and `regex-syntax`
+are already in the tree through `globset`, so the crate is a façade. Priced at
+60 against `NameHas`'s 10 in the plan, because nothing narrows it — a pattern
+says nothing a trigram index can read.
+
+The first version returned zero for everything, and the reason is worth
+keeping: `Plan::needs_name` decides whether the walk reads the name arena at
+all, and a test it does not know about is handed an empty name. It said yes
+for `NameHas`, `NameGlob`, `Ext` and `PathHas`. Not for a regex. Silent, and
+the kind of silent that looks like "nothing matched".
+
+| | |
+|---|---|
+| `regex:\.rs$` | 89,883, against `ext:rs` at 89,702 |
+| `regex:^[0-9]{4}-[0-9]{2}` | 9,622 |
+
+**Parentheses** group only when there is a `|` inside them, and that is the
+whole design. `rapor (1).pdf` and `IMG (2)` are files everybody has, so
+treating every parenthesis as syntax would break searching for them. Tested
+both ways round.
+
+Nesting is not supported and the AST is why: a query is groups AND-ed together
+and a group is alternatives OR-ed, which is one level by construction.
+`(a|b) (c|d)` works. `(a (b|c))` would need a tree, and the day something needs
+one it should get a tree rather than a parser pretending to have one.

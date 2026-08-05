@@ -20,6 +20,13 @@ A query is a list of terms separated by spaces. Every term must match.
 | `"two words"` | exact phrase; wildcards inside are literal characters |
 | `*` | any run of characters |
 | `?` | exactly one character |
+| `(a | b) c` | the same as `a|b c`, written with room to breathe |
+
+Parentheses group **only when there is a `|` inside them**. A parenthesis is an
+ordinary character in a filename and a common one — `rapor (1).pdf` — so
+anywhere else they are text. Nesting is not supported: a query is groups
+AND-ed together and a group is alternatives OR-ed, which is one level by
+construction. `(a|b) (c|d)` works; `(a (b|c))` would need a tree.
 
 A bare word matches any part of the file name. A pattern containing `*` or `?`
 matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
@@ -59,6 +66,20 @@ The columns an index has always held and no query could name. This is what
 | `user:root` `user:1000` | owned by this user, by name or number |
 | `group:wheel` `group:0` | owned by this group |
 | `items:=0` | how many entries a folder holds |
+| `depth:3` | the path has exactly three components; `depth:<=4`, `depth:>8` |
+| `regex:^[0-9]{4}-` | the name matches this regular expression |
+
+`depth:` counts `/` from the root: `/home` is 1 and `/home/u/a.rs` is 3. A bare
+number means **exactly** — unlike `size:`, where a bare number means "at
+least", because nobody looks for a file of exactly one megabyte and everybody
+means "three deep" by `depth:3`.
+
+`regex:` is anchored nowhere, exactly as `grep -E` is: `^main` and `\.rs$` both
+say what they look like. It runs against the folded name, so it is
+case-insensitive like everything else — including Turkish dotted and dotless
+i, which no `(?i)` flag gets right. **Nothing narrows it**: a pattern says
+nothing a trigram index can read, so put a cheaper term beside it when the set
+is large.
 
 `kind:` and `node:` are different questions and both are worth asking.
 `kind:` is what a file **is** — a document, an image, code. `node:` is what

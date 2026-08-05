@@ -12,5 +12,6 @@ publish.workspace      = true
 workspace = true
 
 [dependencies]
+regex       = { workspace = true }
 scour-core  = { workspace = true }
 scour-query = { workspace = true }

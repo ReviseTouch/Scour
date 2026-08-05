@@ -270,6 +270,58 @@ impl<'a> DirTable<'a> {
         Some(path)
     }
 
+    /// How deep every directory is, by number: the count of `/` in its path.
+    ///
+    /// One sequential pass, which is what front coding is for — a row is its
+    /// predecessor truncated and extended, so the total work is the length of
+    /// the suffixes rather than of the paths. Slash positions are carried
+    /// along instead of being recounted, so a row costs its own suffix and
+    /// nothing else.
+    ///
+    /// Built when a query asks about depth and not otherwise: 255,089
+    /// directories is half a megabyte, which is cheap once and wasteful always.
+    pub fn depths(&self) -> Vec<u16> {
+        let mut out = Vec::with_capacity(self.count);
+        let mut path = String::new();
+        // Byte offsets of the `/` in `path`, which is its depth by length.
+        let mut slashes: Vec<usize> = Vec::new();
+        let mut at = match self.restart_at(0) {
+            Some(a) => a,
+            None => return out,
+        };
+        for _ in 0..self.count {
+            let Some((shared, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let Some((rest, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let shared = shared as usize;
+            let rest = rest as usize;
+            while slashes.last().is_some_and(|&p| p >= shared) {
+                slashes.pop();
+            }
+            path.truncate(shared);
+            let Some(bytes) = self.rows.get(at..at + rest) else {
+                break;
+            };
+            let Ok(suffix) = std::str::from_utf8(bytes) else {
+                break;
+            };
+            for (i, b) in suffix.bytes().enumerate() {
+                if b == b'/' {
+                    slashes.push(shared + i);
+                }
+            }
+            path.push_str(suffix);
+            at += rest;
+            out.push(slashes.len().min(u16::MAX as usize) as u16);
+        }
+        out
+    }
+
     /// Every directory number at or beneath `prefix`.
     ///
     /// **Not one range**, and the reason is a mistake worth recording. A

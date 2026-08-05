@@ -76,6 +76,10 @@ rustc-hash  = "2"
 memmap2     = "0.9"
 memchr      = "2"
 
+# The engine behind it — regex-automata and regex-syntax — is already in the
+# tree through globset, so this is a facade rather than a dependency.
+regex       = "1"
+
 # One writer per index directory. The lock has to be released by the *kernel*
 # when a process dies — a pid file leaves a stale claim after exactly the crash
 # it exists to survive — so this is `flock` and `LockFileEx` directly rather

@@ -25,7 +25,7 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in join_operators(join_lists(tokenize(input))) {
+    for token in join_parens(join_operators(join_lists(tokenize(input)))) {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
         let alts: Vec<(bool, Match)> = token
@@ -38,6 +38,61 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
         }
     }
     Ast { groups }
+}
+
+/// Glue `( a | b )` into one token, so an alternation may be spelled with
+/// spaces in it the way every shell and `find` allows.
+///
+/// **Only when the run contains a `|`.** A parenthesis is an ordinary
+/// character in a filename and a very common one — `rapor (1).pdf`, `IMG (2)`
+/// — so treating every one of them as syntax would break searching for the
+/// files people actually have. Grouping is what parentheses are *for* here;
+/// anywhere else they are text, and this is the rule that keeps both true.
+///
+/// Nesting is not supported and the shape of the AST is why: a query is
+/// groups AND-ed together and a group is alternatives OR-ed, which is one
+/// level by construction. `(a|b) (c|d)` works and says a great deal;
+/// `(a (b|c))` would need a tree, and the day something needs one it should
+/// get a tree rather than a parser that pretends.
+fn join_parens(tokens: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        let open = tokens[i].starts_with('(') && !tokens[i].starts_with("(\"");
+        if !open {
+            out.push(tokens[i].clone());
+            i += 1;
+            continue;
+        }
+        // How far does it reach, and is there an alternation inside?
+        let mut j = i;
+        while j < tokens.len() && !tokens[j].ends_with(')') {
+            j += 1;
+        }
+        let run = tokens.get(i..=j.min(tokens.len() - 1)).unwrap_or_default();
+        let joined = run.join(" ");
+        let inner = joined
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim()
+            .to_owned();
+        if j >= tokens.len() || !inner.contains('|') {
+            // Not a group: ordinary characters in a name.
+            out.push(tokens[i].clone());
+            i += 1;
+            continue;
+        }
+        // `a | b` inside the parentheses is the same as `a|b`.
+        out.push(
+            inner
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("|"),
+        );
+        i = j + 1;
+    }
+    out
 }
 
 /// Split on whitespace, keeping quoted runs together.
@@ -220,6 +275,27 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             Some("user") => resolve_owner(scour_core::NumField::Uid, &raw),
             Some("group") => resolve_owner(scour_core::NumField::Gid, &raw),
             Some("items") => parse_count(scour_core::NumField::Items, &folded),
+            // **A bare number means *equals* here, not "at least".**
+            //
+            // `size:1mb` meaning "at least" is right — nobody looks for a file
+            // of exactly one megabyte. Depth is the opposite: `depth:3` reads
+            // as "three deep" to everyone, and taking the size convention made
+            // it match almost the whole index while `depth:<=3` matched 77.
+            // Both were working as written; one of them was written wrong.
+            Some("depth") => {
+                let (cmp, rest) = match split_cmp(&folded) {
+                    (Cmp::Ge, r) if r == folded => (Cmp::Eq, r),
+                    other => other,
+                };
+                rest.trim()
+                    .parse::<i64>()
+                    .ok()
+                    .map(|n| Match::Depth(cmp, n))
+            }
+            // The pattern is folded, not the raw text: it is matched against a
+            // folded name, so `[A-Z]` would never fire and `İ` has to reach
+            // the same letter `i` does.
+            Some("regex") => (!folded.is_empty()).then(|| Match::Regex(folded.clone())),
             _ => None,
         };
         // An unknown field, or a value that will not parse, becomes a search
@@ -423,6 +499,54 @@ fn parse_size(v: &str) -> Option<Match> {
     };
     let value: f64 = num.trim().parse().ok()?;
     Some(Match::Size(cmp, (value * mult as f64) as i64))
+}
+
+#[cfg(test)]
+mod paren_tests {
+    use super::*;
+    use scour_core::Match;
+
+    fn parse_(q: &str) -> Ast {
+        parse_at(q, 1_785_000_000)
+    }
+
+    #[test]
+    fn parentheses_group_an_alternation_written_with_spaces() {
+        let a = parse_("(rapor | belge) ext:pdf");
+        assert_eq!(a.groups.len(), 2, "two things AND-ed: {a:?}");
+        assert_eq!(a.groups[0].alts.len(), 2, "two alternatives");
+        assert!(matches!(a.groups[1].alts[0].1, Match::Ext(_)));
+        // And the same thing without the spaces still means the same thing.
+        assert_eq!(parse_("(rapor|belge) ext:pdf"), a);
+        assert_eq!(parse_("rapor|belge ext:pdf"), a);
+    }
+
+    #[test]
+    fn a_parenthesis_in_a_filename_is_a_parenthesis() {
+        // The case that made the rule: these files exist on every machine.
+        for q in ["rapor (1).pdf", "IMG (2)", "(kopya)"] {
+            let a = parse_(q);
+            let text: Vec<&Match> = a.matches().collect();
+            assert!(
+                text.iter().any(|m| matches!(
+                    m,
+                    Match::NameContains(t) | Match::NameGlob(t) if t.contains('(')
+                )),
+                "{q:?} lost its parenthesis: {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unclosed_parenthesis_is_text_too() {
+        let a = parse_("(rapor|belge");
+        assert!(
+            a.matches().any(
+                |m| matches!(m, Match::NameContains(t) | Match::NameGlob(t) if t.starts_with('('))
+            ),
+            "{a:?}"
+        );
+    }
 }
 
 #[cfg(test)]

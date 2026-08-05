@@ -94,6 +94,8 @@ fn describe_match(m: &Match) -> String {
         Match::IsDir(false) => "is a file".into(),
         Match::Size(cmp, bytes) => format!("size {} {}", cmp.symbol(), human_size(*bytes)),
         Match::Num(field, cmp, n) => format!("{} {} {n}", num_field_word(*field), cmp.symbol()),
+        Match::Depth(cmp, n) => format!("path depth {} {n}", cmp.symbol()),
+        Match::Regex(p) => format!("name matches the pattern /{p}/"),
         // Read back in the words the query was typed in, not in octal: the
         // point of `explain` is to say what was understood, and "0o4000" says
         // nothing to the person who typed `suid:`.

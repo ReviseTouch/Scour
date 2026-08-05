@@ -219,6 +219,20 @@ pub const FIELDS: &[Field] = &[
         about: "how many entries a folder holds, with an optional comparison",
         example: "items:=0",
     },
+    Field {
+        name: "depth",
+        aliases: &["derinlik"],
+        takes: Takes::Size,
+        about: "how many components the path has, counted from the root; a bare number means exactly",
+        example: "depth:<=4",
+    },
+    Field {
+        name: "regex",
+        aliases: &["re"],
+        takes: Takes::Text,
+        about: "the name matches this regular expression",
+        example: "regex:^[0-9]{4}-",
+    },
 ];
 
 /// The values `kind:` accepts, in the order a list should show them.

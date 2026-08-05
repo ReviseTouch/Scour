@@ -187,6 +187,23 @@ enum Test {
         want: i64,
         any: bool,
     },
+    /// The path is this deep, counting components from the root.
+    ///
+    /// Carries the depth of every directory, built once per segment when a
+    /// query asks and never otherwise — half a megabyte at 255,089
+    /// directories. A row's depth is its directory's plus one.
+    Depth {
+        depths: std::sync::Arc<[u16]>,
+        cmp: Cmp,
+        value: i64,
+    },
+    /// The name matches this pattern.
+    ///
+    /// The most expensive test there is, and priced that way: it runs an
+    /// automaton over every name that reaches it, where `NameHas` is a
+    /// substring search that skips. Nothing narrows it — a regular expression
+    /// says nothing a trigram index can read — so it is the test to put last.
+    Regex(Box<regex::Regex>),
     /// The kind column is any one of these.
     ///
     /// A bitset over the discriminants rather than a list, because one word
@@ -219,9 +236,11 @@ impl Test {
         match self {
             Test::Never => 0,
             Test::Num { .. } | Test::DirIn(_) | Test::KindIn(_) | Test::Bits { .. } => 1,
+            Test::Depth { .. } => 2,
             Test::Ext(_) => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::PathHas(_) => 30,
+            Test::Regex(_) => 60,
         }
     }
 }
@@ -573,7 +592,11 @@ impl Plan {
         self.clauses.iter().flat_map(|c| &c.alts).any(|(_, t)| {
             matches!(
                 t,
-                Test::NameHas(_) | Test::NameGlob(_) | Test::Ext(_) | Test::PathHas(_)
+                Test::NameHas(_)
+                    | Test::NameGlob(_)
+                    | Test::Ext(_)
+                    | Test::PathHas(_)
+                    | Test::Regex(_)
             )
         })
     }
@@ -643,6 +666,22 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
         // Straight onto the generic column test — these columns have been in
         // every index since the first version and only the language was
         // missing.
+        Match::Depth(cmp, v) => Test::Depth {
+            depths: seg.dirs.depths().into(),
+            cmp: *cmp,
+            value: *v,
+        },
+        // A pattern that will not compile is not a query that matches
+        // everything: it is a query the user has to be told about.
+        Match::Regex(p) => match regex::Regex::new(p) {
+            Ok(re) => Test::Regex(Box::new(re)),
+            Err(e) => {
+                return Err(scour_core::Error::QuerySyntax {
+                    at: 0,
+                    expected: format!("a regular expression: {e}"),
+                });
+            }
+        },
         Match::Num(f, cmp, v) => Test::Num {
             field: num_field(*f),
             cmp: *cmp,
@@ -719,6 +758,16 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             }
         }
         Test::DirIn(scope) => scope.contains(seg.num(Field::DirId, row) as u32),
+        Test::Depth { depths, cmp, value } => {
+            let dir = seg.num(Field::DirId, row) as usize;
+            // A row sits one level below the directory holding it.
+            let d = depths.get(dir).map_or(0, |&d| i64::from(d) + 1);
+            cmp.holds(d, *value)
+        }
+        Test::Regex(re) => match std::str::from_utf8(name) {
+            Ok(name) => re.is_match(name),
+            Err(_) => false,
+        },
         Test::Bits {
             field,
             mask,

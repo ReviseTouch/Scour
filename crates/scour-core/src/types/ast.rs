@@ -105,6 +105,19 @@ pub enum Match {
     ///
     /// [`Error::ContentNotIndexed`]: crate::types::Error::ContentNotIndexed
     ContentContains(String),
+    /// How many components the path has, counted from the root.
+    ///
+    /// `find -maxdepth` counts from where the walk started; an index has no
+    /// start, so this counts `/`. `/home` is 1 and `/home/u/a.rs` is 3, which
+    /// makes `under:/home/u depth:<=3` the way to say "not below this folder".
+    Depth(Cmp, i64),
+    /// The name matches this regular expression.
+    ///
+    /// Anchored nowhere: `regex:^main` and `regex:rs$` both say what they look
+    /// like, exactly as `grep -E` does. Matched against the **folded** name,
+    /// so it is case-insensitive like everything else — including for Turkish
+    /// dotted and dotless i, which no `(?i)` flag gets right.
+    Regex(String),
     /// A stored number compared to a value: `uid:1000`, `gid:>100`.
     ///
     /// The index has held these columns since the first version and nothing

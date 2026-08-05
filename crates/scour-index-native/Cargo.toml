@@ -16,6 +16,8 @@ scour-core  = { workspace = true }
 scour-query = { workspace = true }
 memmap2     = { workspace = true }
 memchr      = { workspace = true }
+# Already in the tree through globset, so the facade costs no new compilation.
+regex       = { workspace = true }
 parking_lot = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
