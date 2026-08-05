@@ -1,0 +1,1929 @@
+<title>Scour</title>
+
+<style>
+  /* ------------------------------------------------------------------
+     The palette. One loud voice: FRESHNESS. The thin rule down the left of
+     each row says in colour when the file last changed — warm yellow for "a
+     moment ago", cold slate for "years ago". Not decoration but data: the
+     engine already stores rows in date order, so an unbroken spectrum runs
+     the length of the list.
+     The neutrals lean blue; chosen, not inherited.
+  ------------------------------------------------------------------ */
+  :root {
+    --ground:      #0d1117;
+    --panel:       #131920;
+    --panel-2:     #171e26;
+    --line:        #212a35;
+    --line-soft:   #1a222c;
+    --ink:         #e7eaee;
+    --ink-2:       #9aa5b1;
+    --ink-3:       #63707e;
+    --mark:        #ffd24a;
+    --mark-ink:    #1a1200;
+    --focus:       #4a9eff;
+
+    --t0: #ffb020;  /* dakikalar */
+    --t1: #ff7a45;  /* days      */
+    --t2: #c2688f;  /* haftalar  */
+    --t3: #7a6fc4;  /* aylar     */
+    --t4: #4a7fb5;  /* last year */
+    --t5: #3b4a58;  /* daha eski */
+
+    /* The query line's own palette. Deliberately SEPARATE from the time
+       spectrum: the spectrum uses all of the saturation there is, and reusing
+       `--t1` here would give "changed yesterday" and "field value" the same
+       colour. Four roles are enough — structure, content, pattern, and the
+       term that falls back to plain text. */
+    --q-key:  #7fa9e0;   /* field name, comparison — structure */
+    --q-val:  #6fc2a0;   /* value, inside quotes — content */
+    --q-glob: #b48ce0;   /* wildcard — an end-to-end pattern */
+    --q-not:  #e8825a;   /* exclusion — deliberate, not a mistake */
+    --q-bad:  #ff5f56;   /* looks like a field, searched for as text */
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+
+    --u: 4px;
+    --row: 30px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ground:    #f7f5f0;
+      --panel:     #fffefb;
+      --panel-2:   #f1efe9;
+      --line:      #ddd8cd;
+      --line-soft: #e8e4db;
+      --ink:       #1c1e21;
+      --ink-2:     #5c636c;
+      --ink-3:     #8a9198;
+      --mark:      #ffdf6b;
+      --mark-ink:  #2a1f00;
+      --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
+      --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
+      --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
+      --q-not: #b8531f; --q-bad: #c0392b;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground:    #f7f5f0;
+    --panel:     #fffefb;
+    --panel-2:   #f1efe9;
+    --line:      #ddd8cd;
+    --line-soft: #e8e4db;
+    --ink:       #1c1e21;
+    --ink-2:     #5c636c;
+    --ink-3:     #8a9198;
+    --mark:      #ffdf6b;
+    --mark-ink:  #2a1f00;
+    --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
+    --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
+    --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
+    --q-not: #b8531f; --q-bad: #c0392b;
+  }
+  :root[data-theme="dark"] {
+    --ground:    #0d1117;
+    --panel:     #131920;
+    --panel-2:   #171e26;
+    --line:      #212a35;
+    --line-soft: #1a222c;
+    --ink:       #e7eaee;
+    --ink-2:     #9aa5b1;
+    --ink-3:     #63707e;
+    --mark:      #ffd24a;
+    --mark-ink:  #1a1200;
+    --t0: #ffb020; --t1: #ff7a45; --t2: #c2688f;
+    --t3: #7a6fc4; --t4: #4a7fb5; --t5: #3b4a58;
+    --q-key: #7fa9e0; --q-val: #6fc2a0; --q-glob: #b48ce0;
+    --q-not: #e8825a; --q-bad: #ff5f56;
+  }
+
+  * { box-sizing: border-box; }
+
+  .wrap {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.45;
+    padding: calc(var(--u) * 6);
+    min-height: 100%;
+  }
+
+  .note {
+    max-width: 70ch;
+    margin: 0 auto calc(var(--u) * 7);
+    color: var(--ink-2);
+    font-size: 13.5px;
+  }
+  .note h1 {
+    font-size: 15px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--ink);
+    margin: 0 0 calc(var(--u) * 2);
+  }
+  .note p { margin: 0 0 calc(var(--u) * 2); }
+  .note b { color: var(--ink); font-weight: 620; }
+
+  /* ---------------- uygulama penceresi ---------------- */
+  .app {
+    max-width: 1180px;
+    margin: 0 auto;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow: 0 18px 50px -28px rgba(0,0,0,.7);
+  }
+
+  /* --- the query line: not a box, the page itself --- */
+  .query {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--u) * 3);
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 3);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .brand {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .28em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    flex: none;
+    padding-top: 3px;
+  }
+  /* Something to take hold of.
+     The first version had no box and no border, and the result was this: with
+     an empty query the strip was blank — no text, no frame, just a caret. The
+     "no box" idea is right; erasing every affordance is not. Three marks are
+     left: a prompt glyph, an underline, and a colour that lights on focus. */
+  .qline {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--u) * 3);
+    flex: 1;
+    min-width: 0;
+    border-bottom: 2px solid var(--line);
+    padding-bottom: calc(var(--u) * 1.5);
+  }
+  .qline:focus-within { border-bottom-color: var(--t1); }
+  .prompt {
+    flex: none;
+    font: 600 17px/1.35 var(--mono);
+    color: var(--ink-3);
+    user-select: none;
+  }
+  .qline:focus-within .prompt { color: var(--t1); }
+
+  .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; }
+  .qfield input {
+    width: 100%;
+    background: none;
+    border: 0;
+    outline: 0;
+    color: transparent;
+    caret-color: var(--ink);
+    font: 600 20px/1.3 var(--mono);
+    letter-spacing: -.01em;
+    padding: 0;
+    position: relative;
+    z-index: 2;
+  }
+  /* The query stays exactly as typed — selectable, copyable — while the terms
+     it recognises are coloured. Real text, structured presentation. */
+  .qshadow {
+    position: absolute;
+    inset: 0;
+    font: 600 20px/1.3 var(--mono);
+    letter-spacing: -.01em;
+    white-space: pre;
+    overflow: hidden;
+    pointer-events: none;
+    color: var(--ink);
+    z-index: 1;
+  }
+  /* Role → colour. That mapping is the frontend's ONLY job here: the engine
+     sends the pieces (`explain` → `spans`), because a frontend that tokenised
+     the query itself would be a second parser, and the day the two disagree
+     the box colours a lie with complete confidence. */
+  .qshadow .r-field { color: var(--q-key); font-weight: 700; }
+  .qshadow .r-value { color: var(--q-val); }
+  .qshadow .r-cmp   { color: var(--q-key); }
+  .qshadow .r-colon,
+  .qshadow .r-sep,
+  .qshadow .r-quote { color: var(--ink-3); }
+  .qshadow .r-phrase{ color: var(--q-val); }
+  .qshadow .r-glob  { color: var(--q-glob); }
+  .qshadow .r-not   { color: var(--q-not); font-weight: 700; }
+  .qshadow .r-or    { color: var(--q-not); font-weight: 700; }
+
+  /* The two warning roles. The parser never fails — a term it cannot read is
+     searched for as ITS OWN TEXT — and that is what keeps a half-typed query
+     usable. It is also the one place the engine can quietly answer the wrong
+     question: `kind:zurna` looks for files *named* "kind:zurna". The wavy
+     underline says so while it is being typed, not in the results. */
+  .qshadow .r-bad,
+  .qshadow .r-unknown {
+    color: var(--q-bad);
+    text-decoration: underline wavy var(--q-bad);
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1px;
+  }
+
+  /* The syntax character the caret is touching.
+
+     What backspace is about to remove, said before the key is pressed rather
+     than after. Deleting a piece of syntax changes what the query *means*
+     rather than how it is worded — take the `:` out of `ext:pdf` and it stops
+     being a filter and becomes a search for the text "extpdf" — so the one
+     character that is about to go says so. Both sides count: a caret is
+     between two characters, and backspace takes the one behind it while
+     Delete takes the one ahead. */
+  .qshadow .caret-touch {
+    border-radius: 2px;
+    background: var(--q-not);
+    color: var(--panel);
+    box-shadow: 0 0 0 1px var(--q-not);
+  }
+
+  .qfield input::placeholder { color: var(--ink-3); font-weight: 500; }
+
+  /* Term actions — the layer that makes the query line something you can
+     operate rather than only read.
+
+     The text stays one real `<input>`: a query is a sentence and has to be
+     selectable, copyable and typable end to end. So the hover target is not a
+     DOM node per term — there is no node — it is arithmetic. The face is
+     monospace, so the caret index under the pointer is `x / charWidth`, and
+     from that the term under it is a lookup in the same spans the colouring
+     uses. Slint will get this for free later: there the terms really are
+     separate elements. */
+  /* No z-index on the layer itself, so its two children can sit on opposite
+     sides of the text. Putting the whole layer above it — which is what this
+     did first — hid the very term it was pointing at. */
+  .qacts {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  /* The soft ground goes BEHIND the shadow layer (z-index 1) and the input
+     (2). It is a highlight, and a highlight that covers what it highlights is
+     not one. */
+  .qacts .band {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    z-index: 0;
+    border-radius: 4px;
+    background: var(--line-soft);
+  }
+  /* The buttons go above everything, and entirely clear of the glyphs: the
+     line box is 26 px and the text sits centred in it, so -19px puts them in
+     the air above the query rather than over its last two characters. */
+  .qacts button {
+    position: absolute;
+    z-index: 4;
+    top: -19px;
+    width: 17px;
+    height: 17px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--line);
+    color: var(--ink-2);
+    font: 600 10px/1 var(--sans);
+    cursor: pointer;
+    pointer-events: auto;
+    display: grid;
+    place-items: center;
+  }
+  .qacts button:hover { background: var(--ink-3); color: var(--panel); }
+  /* Removing is destructive, so it says so on hover and nowhere else. */
+  .qacts button.drop:hover { background: var(--q-bad); color: #fff; }
+  /* Negation is not destructive — it is the same term, asked the other way. */
+  .qacts button.neg:hover { background: var(--q-not); color: #fff; }
+  .qacts button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* The query as a sentence. In the product this is `explain`'s `description`;
+     here it is the mockup's stand-in for the same rules. A misread term turns
+     it red — the colour says WHAT, this line says WHY. */
+  .qread {
+    margin: calc(var(--u) * 2) 0 0;
+    min-height: 15px;
+    font: 500 11.5px/1.3 var(--sans);
+    color: var(--ink-3);
+    letter-spacing: .01em;
+  }
+  .qread b { color: var(--ink-2); font-weight: 600; }
+  .qread.warn { color: var(--q-bad); }
+
+  /* Completions. Field names come from one source — the engine's field table —
+     so a field that exists is offered and a field that does not cannot be. */
+  .hints {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    min-width: 280px;
+    max-height: 232px;
+    overflow-y: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: 0 20px 44px -24px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 1);
+    z-index: 30;
+  }
+  .hints[hidden] { display: none; }
+  .hints button {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--u) * 3);
+    width: 100%;
+    background: none;
+    border: 0;
+    border-radius: 5px;
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 2);
+    text-align: left;
+    cursor: pointer;
+    color: var(--ink-2);
+    font: 500 12px/1.3 var(--sans);
+  }
+  .hints button code {
+    font: 700 12.5px/1.3 var(--mono);
+    color: var(--q-key);
+    flex: none;
+  }
+  .hints button[aria-selected="true"] { background: var(--line-soft); color: var(--ink); }
+  .hints button:hover { background: var(--line-soft); }
+
+  /* --- the meter line: the engine's work is not hidden --- */
+  .meter {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 4);
+    padding: 0 calc(var(--u) * 5) calc(var(--u) * 3);
+    font: 500 11.5px/1 var(--mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-3);
+    letter-spacing: .02em;
+    flex-wrap: wrap;
+  }
+  .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
+  .meter .ms  { color: var(--t0); font-weight: 650; }
+  .meter .sep { color: var(--line); }
+
+  /* ---------------- body ---------------- */
+  .body { display: grid; grid-template-columns: 186px 1fr; min-height: 430px; }
+  @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }
+
+  .rail {
+    border-right: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 3) 0;
+    background: var(--panel-2);
+  }
+  .rail h2 {
+    margin: calc(var(--u) * 3) calc(var(--u) * 4) calc(var(--u) * 1.5);
+    font-size: 10px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 650;
+  }
+  .rail h2:first-child { margin-top: 0; }
+  .facet {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u) * 2);
+    width: 100%;
+    background: none;
+    border: 0;
+    text-align: left;
+    padding: 3px calc(var(--u) * 4);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .facet:hover { background: var(--panel); color: var(--ink); }
+  .facet:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .facet[aria-pressed="true"] { color: var(--ink); border-left-color: var(--t1); background: var(--panel); }
+  .facet .dot { width: 7px; height: 7px; border-radius: 1px; flex: none; }
+  /* Kinds get no colour. In this design colour means *time*, and giving kinds
+     a colour too would dilute that. A bar proportional to the count instead:
+     which kind is crowded reads at a glance, and the palette stays single-
+     voiced. */
+  .facet.bar { position: relative; }
+  .facet.bar > .fill {
+    position: absolute; left: 0; top: 2px; bottom: 2px;
+    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+  }
+  .facet.bar > .nm, .facet.bar > .ct { position: relative; z-index: 1; }
+  .facet.bar[aria-pressed="true"] > .fill { background: var(--line); opacity: 1; }
+  .facet .nm { flex: 1; min-width: 0; }
+  .facet .ct {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: var(--ink-3);
+  }
+
+  /* ---------------- results ---------------- */
+  .results { display: flex; flex-direction: column; min-width: 0; }
+  .scroll { flex: 1; overflow: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    text-align: left;
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th:hover { color: var(--ink); }
+  thead th.num { text-align: right; }
+  thead th[aria-sort]:not([aria-sort="none"]) { color: var(--ink); }
+  thead th .arrow { color: var(--t1); }
+
+  tbody tr { border-bottom: 1px solid var(--line-soft); }
+  tbody tr:hover { background: var(--panel-2); }
+  tbody td { padding: 0 calc(var(--u) * 3); height: var(--row); vertical-align: middle; }
+
+  /* The freshness rule — three pixels down the left of each row. The list is
+     in date order, so an unbroken spectrum runs the length of the page. */
+  td.age { padding: 0; width: 3px; }
+  td.age i { display: block; width: 3px; height: var(--row); }
+
+  .name { font: 500 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
+  .name mark { background: var(--mark); color: var(--mark-ink); padding: 1px 0; border-radius: 1px; }
+  .path {
+    font: 400 11.5px/1 var(--mono);
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 34ch;
+  }
+  .path b { color: var(--ink-2); font-weight: 400; }
+  td.n {
+    font: 400 12px/1 var(--mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+  td.kind { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  .empty { padding: calc(var(--u) * 12); text-align: center; color: var(--ink-3); font-size: 13px; }
+  .empty code { font-family: var(--mono); color: var(--ink-2); }
+
+  /* ---------------- the time ribbon ---------------- */
+  .ribbon {
+    border-top: 1px solid var(--line);
+    background: var(--panel-2);
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 5) calc(var(--u) * 3);
+  }
+  .ribbon-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 650; margin-bottom: calc(var(--u) * 2);
+  }
+  .ribbon-head span { letter-spacing: .02em; text-transform: none; font-weight: 500;
+                      font-family: var(--mono); font-size: 10.5px; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 46px; }
+  .bars button {
+    flex: 1; border: 0; padding: 0; background: none; cursor: pointer;
+    display: flex; align-items: flex-end; height: 100%;
+    border-radius: 1px;
+  }
+  .bars button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .bars i { display: block; width: 100%; border-radius: 1px 1px 0 0; opacity: .9; }
+  .bars button:hover i { opacity: 1; }
+  .bars button[aria-pressed="true"] i { opacity: 1; box-shadow: 0 0 0 1px var(--ink) inset; }
+  .scale {
+    display: flex; justify-content: space-between;
+    margin-top: 5px;
+    font: 500 9.5px/1 var(--mono);
+    letter-spacing: .04em;
+    color: var(--ink-3);
+  }
+
+  /* ---------------- notlar ---------------- */
+  .legend {
+    max-width: 1180px;
+    margin: calc(var(--u) * 7) auto 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: calc(var(--u) * 5);
+  }
+  .legend section { border-top: 2px solid var(--line); padding-top: calc(var(--u) * 3); }
+  .legend h3 {
+    margin: 0 0 calc(var(--u) * 1.5);
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink); font-weight: 650;
+  }
+  .legend p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+  .legend code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); background: var(--panel-2);
+    padding: 1px 4px; border-radius: 2px;
+  }
+
+  /* ---------------- theme switch ---------------- */
+  .tabs { display: flex; gap: 1px; padding: 0 calc(var(--u) * 5); background: var(--panel); }
+  .tabs button {
+    background: none; border: 0; border-bottom: 2px solid transparent;
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    font: 650 10.5px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); cursor: pointer;
+  }
+  .tabs button:hover { color: var(--ink-2); }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--t1); }
+  .tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+  /* ---------------- rapor ---------------- */
+  .report { padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5); }
+  .crumb { font: 500 12.5px/1 var(--mono); color: var(--ink-3); margin-bottom: calc(var(--u) * 3); }
+  .crumb button {
+    background: none; border: 0; padding: 0 2px; font: inherit;
+    color: var(--ink-2); cursor: pointer; border-radius: 2px;
+  }
+  .crumb button:hover { color: var(--ink); text-decoration: underline; }
+  .crumb button:last-child { color: var(--ink); font-weight: 650; }
+  .crumb .s { color: var(--line); padding: 0 1px; }
+
+  .headline { display: flex; align-items: baseline; gap: calc(var(--u) * 5); flex-wrap: wrap;
+              margin-bottom: calc(var(--u) * 4); }
+  .headline .b {
+    font: 700 34px/1 var(--mono); letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .headline .m { font: 500 12px/1.4 var(--mono); color: var(--ink-3); }
+  .headline .m b { color: var(--ink-2); font-weight: 500; }
+
+  .kids { width: 100%; border-collapse: collapse; }
+  .kids th {
+    text-align: left; padding: 0 calc(var(--u) * 2) calc(var(--u) * 1.5);
+    font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 650; border-bottom: 1px solid var(--line);
+  }
+  .kids th.r { text-align: right; }
+  .kids td { padding: calc(var(--u) * 1.5) calc(var(--u) * 2); border-bottom: 1px solid var(--line-soft); }
+  .kids tr:hover td { background: var(--panel-2); }
+  .kids .nmcell button {
+    background: none; border: 0; padding: 0; cursor: pointer;
+    font: 500 12.5px/1 var(--mono); color: var(--ink); text-align: left;
+  }
+  .kids .nmcell button:hover { text-decoration: underline; }
+  .kids .nmcell button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .kids .leaf { font: 500 12.5px/1 var(--mono); color: var(--ink-2); }
+  .kids td.r {
+    text-align: right; font: 400 12px/1 var(--mono);
+    font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap;
+  }
+  .kids td.r.big { color: var(--ink); font-weight: 600; }
+
+  /* The stacked age bar — the report's central idea. */
+  .stack { display: flex; height: 13px; border-radius: 2px; overflow: hidden; background: var(--line-soft); }
+  .stack i { display: block; height: 100%; }
+  .stack-wrap { min-width: 120px; }
+
+  .agekey { display: flex; gap: calc(var(--u) * 3); flex-wrap: wrap;
+            margin: calc(var(--u) * 3) 0 calc(var(--u) * 5);
+            font: 500 10px/1 var(--mono); color: var(--ink-3); }
+  .agekey span { display: inline-flex; align-items: center; gap: 5px; }
+  .agekey i { width: 9px; height: 9px; border-radius: 1px; display: block; }
+
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+            gap: calc(var(--u) * 4); margin-top: calc(var(--u) * 5); }
+  .panel {
+    border: 1px solid var(--line-soft); border-radius: 3px;
+    background: var(--panel-2); padding: calc(var(--u) * 3);
+  }
+  .panel h4 {
+    margin: 0 0 calc(var(--u) * 2); font-size: 9.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 650;
+  }
+  .panel .line {
+    display: flex; justify-content: space-between; gap: calc(var(--u) * 2);
+    font: 400 11.5px/1.7 var(--mono); color: var(--ink-2);
+  }
+  .panel .line span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .panel .line em { font-style: normal; color: var(--ink-3); }
+  .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <div class="note">
+    <h1>Scour · arayüz</h1>
+    <p id="blurb">Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor,
+      aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz
+    için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman
+    dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu.</p>
+    <p>Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın.</p>
+  </div>
+
+  <div class="app">
+    <div class="query">
+      <div class="brand">Scour</div>
+      <div class="qline">
+        <span class="prompt" aria-hidden="true">⌕</span>
+        <div class="qfield">
+          <div class="qshadow" id="shadow"></div>
+          <input id="q" value="rapor" spellcheck="false" autocomplete="off"
+                 aria-label="Sorgu" role="combobox" aria-expanded="false"
+                 aria-autocomplete="list" aria-controls="hints"
+                 placeholder="dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:&gt;10mb">
+          <div class="qacts" id="qacts" aria-hidden="true"></div>
+          <div class="hints" id="hints" role="listbox" aria-label="Öneriler" hidden></div>
+        </div>
+      </div>
+      <p class="qread" id="qread"></p>
+    </div>
+
+    <div class="meter">
+      <span class="big" id="count">—</span>
+      <span class="sep">·</span>
+      <span class="ms" id="ms">0,29 ms</span>
+      <span class="sep">·</span>
+      <span id="rows">4.864 satır okundu</span>
+      <span class="sep">·</span>
+      <span id="path-note">bağlanıyor…</span>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search">Ara</button>
+      <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report">Rapor</button>
+    </div>
+
+    <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
+      <nav class="rail" aria-label="Süzgeçler">
+        <h2>Tür</h2>
+        <div id="kinds"></div>
+        <h2>Kapsam</h2>
+        <div id="scopes"></div>
+        <h2>Boyut</h2>
+        <div id="sizes"></div>
+      </nav>
+
+      <div class="results">
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:3px" aria-hidden="true"></th>
+                <th data-sort="name">Ad</th>
+                <th data-sort="path">Konum</th>
+                <th data-sort="size" class="num">Boyut</th>
+                <th data-sort="mtime" aria-sort="descending">Değişme <span class="arrow">▾</span></th>
+                <th data-sort="kind">Tür</th>
+              </tr>
+            </thead>
+            <tbody id="rows-body"></tbody>
+          </table>
+          <div class="empty" id="empty" hidden>
+            Eşleşme yok. <code>ab</code> gibi iki harf de çalışır — trigram indeksi
+            reddetmez, tarama yapar.
+          </div>
+        </div>
+
+        <div class="ribbon">
+          <div class="ribbon-head">
+            <span style="letter-spacing:.14em;text-transform:uppercase;font-weight:650">Zaman dağılımı</span>
+            <span id="ribbon-note">sonuçların değişme tarihine göre — tıklayın, aralık süzgeci olur</span>
+          </div>
+          <div class="bars" id="bars"></div>
+          <div class="scale">
+            <span>2 yıl önce</span><span>1 yıl</span><span>6 ay</span>
+            <span>1 ay</span><span>1 hafta</span><span>bugün</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ------------------------------ RAPOR ------------------------------ -->
+    <div class="report" id="view-report" role="tabpanel" aria-labelledby="tab-report" hidden>
+      <div class="crumb" id="crumb"></div>
+
+      <div class="headline">
+        <div class="b" id="r-bytes">—</div>
+        <div class="m" id="r-meta"></div>
+      </div>
+
+      <table class="kids">
+        <thead>
+          <tr>
+            <th>Klasör</th>
+            <th style="width:34%">Yaşa göre dağılım</th>
+            <th class="r">Boyut</th>
+            <th class="r">Pay</th>
+            <th class="r">Dosya</th>
+          </tr>
+        </thead>
+        <tbody id="r-kids"></tbody>
+      </table>
+
+      <div class="agekey" id="agekey"></div>
+
+      <div class="panels">
+        <div class="panel">
+          <h4>Türe göre</h4>
+          <div id="p-kind"></div>
+        </div>
+        <div class="panel">
+          <h4>Aynı dosya</h4>
+          <div id="p-dupe"></div>
+          <p class="hint">İlk üçü indeksten, bedava. Boyut süzgeci dosya sayısına
+          göre yalnızca %6 eliyor — ama 1 MB üstü adayların baş+son 4 KB'ını okumak
+          <b>140 MB</b>'a mal olup <b>141,8 GB</b>'ı kapsıyor. Bu yüzden büyükten
+          küçüğe inilir, adet değil kazanç raporlanır.</p>
+        </div>
+        <div class="panel">
+          <h4>En büyük dosyalar</h4>
+          <div id="p-big"></div>
+        </div>
+        <div class="panel">
+          <h4>Bu klasörde ara</h4>
+          <div id="p-jump"></div>
+          <p class="hint">Rapordan aramaya geçiş: sorguya <code>under:</code> terimi
+          eklenir, arama sekmesi aynı kapsamla açılır.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <section>
+      <h3>Tazelik cetveli</h3>
+      <p>Her satırın solundaki üç piksel, dosyanın ne zaman değiştiğini renkle söylüyor.
+      Motor satırları zaten tarih sırasında sakladığı için liste boyunca kesintisiz bir
+      tayf çıkıyor: sıcak sarı az önce, soğuk arduvaz yıllar önce. Kolona bakmadan
+      "burası taze bölge" görünüyor.</p>
+    </section>
+    <section>
+      <h3>Sorgu arayüzün kendisi</h3>
+      <p>Kutucuk yok. Metin yazıldığı gibi duruyor — kopyalanabilir, MCP'ye
+      yapıştırılabilir — ama tanınan terimler renkleniyor: <code>kind:</code>
+      <code>under:</code> <code>dm:</code>. Süzgeçe tıklamak terimi <em>yazıya</em>
+      ekliyor, gizli bir duruma değil.</p>
+    </section>
+    <section>
+      <h3>Ölçüm gizlenmiyor</h3>
+      <p><code>0,29 ms · 4.864 satır okundu</code> — motorun raporladığı gerçek sayılar.
+      Hızlı olduğunu söylemek yerine ne kadar iş yaptığını gösteriyor; bir gün
+      yavaşlarsa bunu ilk arayüz söyler.</p>
+    </section>
+    <section>
+      <h3>Rapor: yaşa göre dağılım</h3>
+      <p>Her klasörün çubuğu, baytlarının ne kadarının taze ne kadarının bayat
+      olduğunu gösteriyor. Boyut tek başına ne sileceğini söylemiyor;
+      <b>bir yıldır kimsenin dokunmadığı 25 GB</b> söylüyor. TreeSize dâhil
+      hiçbir araçta yok, çünkü hiçbirinde satır başına tarih elde değil.</p>
+    </section>
+    <section>
+      <h3>Zaman şeridi</h3>
+      <p>Sonuç kümesinin tarih dağılımı, her tuşta yeniden çiziliyor. Bir çubuğa
+      tıklamak sorguya <code>dm:</code> terimi ekliyor. Yalnızca süzgeç sayıları
+      mikrosaniye sürdüğü için mümkün.</p>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  let TOTAL = 0;   /* from /api/status, once the page is up */
+
+  // Real measurements (docs/MEASUREMENTS.md, 1,217,362 entries, 40 rows, count cap 500).
+  const MEASURED = {
+    "": [0.11, 500], "r": [0.16, 3965], "ra": [0.29, 25272], "rap": [0.59, 39028],
+    "rapo": [0.54, 11264], "rapor": [0.29, 4864], "ab": [0.59, 16850],
+    "main": [0.71, 21468], "ext:rs": [0.34, 9723], "*.pdf": [0.55, 24192],
+    "kind:image": [2.38, 102460], "size:>10mb": [0.71, 15798],
+    "kind:code dm:7d": [0.60, 5510]
+  };
+
+  const DAY = 86400;
+  /* The mockup froze the clock so its twenty invented files would always read
+     the same. Real rows carry real mtimes, and against a fixed `now` a file
+     modified yesterday came out as "1 dk önce" — the age was negative and the
+     ruler clamped it. Recomputed on every draw, because a search box stays
+     open for hours and "5 dk önce" has to stop being true. */
+  let now = Math.floor(Date.now() / 1000);
+  const F = (p, name, size, ago, kind) =>
+    ({ path: p, name, size, mtime: now - ago, kind });
+
+  /* ------------------------------------------------------------------ *
+   * The service.
+   *
+   * Everything below this object is the same page it was as a mockup; this
+   * is the only thing that knows there is a daemon. A browser cannot open a
+   * Unix socket and neither can an extension — an extension's way in is a
+   * native-messaging host, which is a local process talking to the socket,
+   * which is `scour-web` with a different mouth. So swapping HTTP for that
+   * later is this object and nothing else.
+   * ------------------------------------------------------------------ */
+  const TOKEN = new URLSearchParams(location.search).get("t") || "";
+
+  const SERVICE = {
+    async get(route, params) {
+      const q = new URLSearchParams({ ...params, t: TOKEN });
+      const r = await fetch(`/api/${route}?${q}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`${route}: ${r.status}`);
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    },
+    search: (q, sort, desc, limit) =>
+      SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit }),
+    facets: (q) => SERVICE.get("facets", { q }),
+    status: () => SERVICE.get("status", {}),
+  };
+
+  /* The rows the last search returned. Filled by `render`, read by the table
+     and the histogram — nothing else keeps a copy. */
+  let FILES = [];
+
+  /* The service answers in its own vocabulary: a full path, and a kind as the
+     token the query language uses. The page wants a folder, a name and the
+     Turkish label. One place converts. */
+  const fromService = (row) => ({
+    path: row.dir,
+    name: row.name,
+    size: row.size,
+    mtime: row.mtime,
+    kind: row.is_dir ? "Klasör" : (KIND_KEY[row.kind] || "Diğer"),
+  });
+
+
+  // Real numbers, derived from this machine's 1,564,335 entries.
+  // The order is real too — the most crowded first. The counts are replaced
+  // by the service's own on the first render; these are what shows for the
+  // instant before the first reply arrives.
+  const KINDS = [
+    ["Derleme çıktısı", "build",  675457],
+    ["İşaretleme/veri", "data",   284055],
+    ["Kod",             "code",   174027],
+    ["Klasör",          "folder", 140863],
+    ["Görsel",          "image",   57982],
+    ["Belge",           "doc",     17420],
+    ["Kurulum",         "package",  6496],
+    ["Yazı tipi",       "font",     1266],
+    ["Arşiv",           "archive",   330],
+    ["Veritabanı",      "db",        143],
+    ["Ses",             "audio",     105],
+    ["Video",           "video",      19],
+    ["Diğer",           "other",  346975]
+  ];
+  /* Counts deliberately absent. The kind rail's come from `/api/facets`,
+     which answers for the query as it stands; there is no equivalent for these
+     two, and the mockup's numbers were about a different index on a different
+     day. A label with no number is honest, a stale number is not. */
+  const SCOPES = [
+    ["Projeler", "/home/hasan/Projeler", null],
+    ["Belgeler", "/home/hasan/Belgeler", null],
+    ["Resimler", "/home/hasan/Resimler", null],
+    ["İndirilenler", "/home/hasan/İndirilenler", null]
+  ];
+  const SIZES = [[">10 MB", ">10mb", null], [">1 MB", ">1mb", null], ["= 0", "=0", null]];
+
+  const BANDS = [
+    [0,        3600,       "--t0"],
+    [3600,     DAY,        "--t0"],
+    [DAY,      7 * DAY,    "--t1"],
+    [7 * DAY,  30 * DAY,   "--t2"],
+    [30 * DAY, 180 * DAY,  "--t3"],
+    [180 * DAY, 365 * DAY, "--t4"],
+    [365 * DAY, Infinity,  "--t5"]
+  ];
+  const bandOf = (mtime) => {
+    const ago = now - mtime;
+    for (const b of BANDS) if (ago < b[1]) return b[2];
+    return "--t5";
+  };
+
+  const fmt = (n) => n.toLocaleString("tr-TR");
+  const bytes = (n) => {
+    const u = ["B", "KB", "MB", "GB"];
+    let i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + " " + u[i];
+  };
+  const ago = (mtime) => {
+    const s = now - mtime;
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + " dk önce";
+    if (s < DAY) return Math.round(s / 3600) + " sa önce";
+    if (s < 30 * DAY) return Math.round(s / DAY) + " gün önce";
+    if (s < 365 * DAY) return Math.round(s / (30 * DAY)) + " ay önce";
+    return Math.round(s / (365 * DAY)) + " yıl önce";
+  };
+
+  const q      = document.getElementById("q");
+  const shadow = document.getElementById("shadow");
+  const body   = document.getElementById("rows-body");
+  const empty  = document.getElementById("empty");
+  const bars   = document.getElementById("bars");
+
+  let sortKey = "mtime", sortDesc = true;
+
+  // --- query parsing (mockup level; the real grammar is in scour-query)
+  function parse(text) {
+    const terms = text.trim().split(/\s+/).filter(Boolean);
+    const out = { text: [], not: [], kind: null, under: null, parent: null,
+                  size: null, band: null, ext: null, path: null, isDir: null };
+    for (const raw of terms) {
+      const neg = raw.startsWith("!");
+      const t = neg ? raw.slice(1) : raw;
+      if (!t) continue;
+      const sp = fieldSplit(t);
+      const f = sp && field(sp[0]);
+      // A field that cannot be read is PLAIN TEXT — the parser's own rule,
+      // and the highlighter's wavy red is exactly what announces it.
+      if (!f || (f.takes !== "none" && !accepts(f, sp[1]))) {
+        (neg ? out.not : out.text).push(fold(t).replace(/"/g, ""));
+        continue;
+      }
+      const v = sp[1];
+      switch (f.name) {
+        case "kind":   out.kind   = fold(v); break;
+        case "under":  out.under  = v;       break;
+        case "parent": out.parent = v.replace(/\/$/, ""); break;
+        case "size":   out.size   = fold(v); break;
+        case "ext":    out.ext    = fold(v); break;
+        case "path":   out.path   = fold(v); break;
+        case "dm": case "dc": case "da": out.band = fold(v); break;
+        case "file":   out.isDir  = false;   break;
+        case "folder": out.isDir  = true;    break;
+        // `content:` is the one field the mockup's data cannot answer; in
+        // the product it works when contents are indexed, here nothing matches.
+        case "content": out.text.push("\u0000"); break;
+      }
+    }
+    return out;
+  }
+
+  const KIND_KEY = Object.fromEntries(KINDS.map(([tr, key]) => [key, tr]));
+  /* Turkish spellings match too: `tür:görsel` and `kind:image` are one thing.
+     In the engine that is `Kind::from_name`'s job. */
+  const KIND_TR = { klasör: "dir", klasor: "dir", kod: "code", görsel: "image",
+                    gorsel: "image", belge: "doc", medya: "media", ses: "media",
+                    video: "media", arşiv: "archive", arsiv: "archive",
+                    dosya: "file", zip: "archive", img: "image", pic: "image" };
+
+  function matches(f, p) {
+    const n = fold(f.name);
+    for (const t of p.text) if (!n.includes(t)) return false;
+    for (const t of p.not) if (n.includes(t)) return false;
+    if (p.kind && KIND_KEY[p.kind] !== f.kind && KIND_TR[p.kind] !== f.kind) return false;
+    if (p.under && !f.path.startsWith(p.under)) return false;
+    if (p.parent && f.path.slice(0, f.path.lastIndexOf("/")) !== p.parent) return false;
+    if (p.path && !fold(f.path).includes(p.path)) return false;
+    if (p.isDir !== null && (f.kind === "dir") !== p.isDir) return false;
+    if (p.ext && !p.ext.split(";").some((e) => n.endsWith("." + e.replace(/^\./, "")))) return false;
+    if (p.size) {
+      const v = p.size.startsWith(">") ? parseFloat(p.size.slice(1)) : parseFloat(p.size.replace("=", ""));
+      const mb = p.size.includes("mb") ? 1048576 : 1;
+      if (p.size.startsWith(">") && !(f.size > v * mb)) return false;
+      if (p.size.startsWith("=") && f.size !== 0) return false;
+    }
+    if (p.band) {
+      const d = parseInt(p.band, 10) || 0;
+      if (now - f.mtime > d * DAY) return false;
+    }
+    return true;
+  }
+
+  const escape_ = (s) => s.replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  /* ------------------------------------------------------------------
+     The query language — the field table.
+
+     In the product this table is NOT HERE: it lives in `scour-query`'s
+     `fields.rs`, and the parser, the highlighter, the completions and the
+     syntax reference all read it. The frontend calls `explain` and gets the
+     pieces already cut. The mockup has no engine behind it, so it rebuilds
+     the same rules here — and the cost of rebuilding them is exactly this:
+     the day the two tables drift, the box says something the engine never
+     said. That is why the product takes this over the wire.
+  ------------------------------------------------------------------ */
+  const FIELDS = [
+    { name: "ext",     alias: [],                          takes: "ext",   about: "uzantı bu, ya da ; ile ayrılmış bunlardan biri", eg: "ext:pdf" },
+    { name: "path",    alias: [],                          takes: "text",  about: "tam yol bunu içeriyor",                          eg: "path:src/api" },
+    { name: "under",   alias: ["in", "altinda"],           takes: "path",  about: "bu klasörün altında, herhangi bir derinlikte",   eg: "under:/home" },
+    { name: "parent",  alias: ["child", "children"],       takes: "path",  about: "doğrudan bu klasörün içinde, bir seviye",        eg: "parent:/etc" },
+    { name: "file",    alias: ["files"],                   takes: "none",  about: "yalnız dosyalar",                                eg: "" },
+    { name: "folder",  alias: ["folders", "dir"],          takes: "none",  about: "yalnız klasörler",                               eg: "" },
+    { name: "size",    alias: [],                          takes: "size",  about: "boyut, ikili birimlerle, karşılaştırma isteğe bağlı", eg: "size:>1mb" },
+    { name: "kind",    alias: ["type", "tur", "tür"],      takes: "kind",  about: "kaba dosya türü",                                eg: "kind:image" },
+    { name: "dm",      alias: ["modified"],                takes: "time",  about: "en son ne zaman değişti",                        eg: "dm:7d" },
+    { name: "dc",      alias: ["created"],                 takes: "time",  about: "ne zaman oluşturuldu",                           eg: "dc:2026-01-31" },
+    { name: "da",      alias: ["accessed"],                takes: "time",  about: "en son ne zaman okundu",                         eg: "da:>2026-01-01" },
+    { name: "content", alias: ["text", "icerik", "içerik"],takes: "text",  about: "belge içeriği bunu içeriyor (içerik indeksliyse)", eg: "content:invoice" },
+  ];
+  const KIND_VALUES = ["folder", "file", "code", "image", "doc", "media", "archive", "exec"];
+  const TIME_VALUES = ["today", "yesterday", "7d", "30d", "1y"];
+
+  /* Turkish folding — the same rule as the engine's `DefaultFolder`: dotted
+     and dotless i are ONE letter. That is why the table lists `altinda` and
+     not `altında`: folding sends both to the same place. */
+  const fold = (t) => t.replace(/[İIı]/g, "i").toLocaleLowerCase("tr");
+  const field = (name) => {
+    const f = fold(name);
+    return FIELDS.find((x) => x.name === f || x.alias.includes(f)) || null;
+  };
+
+  const SIZE_RE = /^(?:[<>]=?|=)?\s*\d+(?:[.,]\d+)?\s*(?:b|kb|mb|gb|tb)?$/;
+  const TIME_RE = /^(?:[<>]=?|=)?\s*(?:\d+(?:h|s|saat|d|g|gun|gün|w|hafta|m|ay|y|yil|yıl)|today|yesterday|week|month|year|bugun|bugün|dun|dün|hafta|ay|yil|yıl|\d{4}-\d{2}-\d{2})$/;
+
+  /* CAN the field read this value? In the engine the parser's own value
+     parsers answer this — there is no second opinion. */
+  function accepts(f, value) {
+    const v = fold(value);
+    switch (f.takes) {
+      case "none": return true;
+      case "text": case "path": return v.length > 0;
+      case "ext":  return v.split(";").some((e) => e.replace(/^\./, "").length > 0);
+      case "size": return SIZE_RE.test(v);
+      case "time": return TIME_RE.test(v);
+      case "kind": return KIND_VALUES.includes(v) ||
+                          ["klasor", "klasör", "kod", "gorsel", "görsel", "arsiv", "arşiv",
+                           "belge", "dosya", "medya", "video", "ses", "img", "pic",
+                           "exe", "bin", "zip"].includes(v);
+    }
+    return false;
+  }
+
+  /* `field:value` — the parser's rule: two or more LETTERS and nothing else.
+     `C:/Users` is therefore not a field, which is what keeps every absolute
+     path on Windows from being painted as a mistake. */
+  function fieldSplit(t) {
+    const i = t.indexOf(":");
+    if (i < 0) return null;
+    const name = t.slice(0, i);
+    if ([...name].length < 2 || !/^\p{L}+$/u.test(name)) return null;
+    return [name, t.slice(i + 1)];
+  }
+
+  /* Split into terms and the whitespace between them — WITHOUT SPLITTING A
+     QUOTED RUN. This was a regex (`split(/(\s+)/)`) and it cut the query
+     `"iki kelime"` in two: the mockup read the first half as a quote and the
+     second as plain text. Colouring the same queries with the engine caught
+     it — 27 of 28 agreed. This kind of silent drift is exactly why the
+     product takes its spans over the wire. */
+  function tokenise(text) {
+    const out = [];
+    let i = 0;
+    while (i < text.length) {
+      const start = i;
+      const space = /\s/.test(text[i]);
+      let quoted = false;
+      while (i < text.length) {
+        const c = text[i];
+        if (c === '"') quoted = !quoted;
+        else if (!quoted && /\s/.test(c) !== space) break;
+        i++;
+      }
+      out.push(text.slice(start, i));
+    }
+    return out;
+  }
+
+  /* Cut the query into roles. The pieces cover it BYTE FOR BYTE — concatenate
+     them and the query comes back. A highlighter that quietly lost a
+     character would put every colour after it in the wrong place. */
+  function spans(text) {
+    const out = [];
+    const toks = tokenise(text).filter(Boolean);
+    /* A list is a context, not a character. `ext:rs ; toml` is one filter, so
+       the spaces in it are separators and the word after one is a value — not
+       a new search term. The engine closes these spaces up; colouring them as
+       boundaries would show a query it does not see. */
+    let list = null, expectValue = false;
+    toks.forEach((tok, i) => {
+      if (/^\s+$/.test(tok)) {
+        const next = toks.slice(i + 1).find((t) => !/^\s+$/.test(t));
+        const joins = list && (expectValue || (next && next.startsWith(";")));
+        out.push([joins ? "sep" : "space", tok]);
+        if (!joins) { list = null; expectValue = false; }
+        return;
+      }
+      if (list && (expectValue || tok.startsWith(";"))) {
+        let rest = tok;
+        if (rest.startsWith(";")) { out.push(["sep", ";"]); rest = rest.slice(1); expectValue = true; }
+        if (rest) expectValue = rest.endsWith(";");
+        valueSpans(out, rest, list);
+        return;
+      }
+      if (tok === "|") { out.push(["or", tok]); list = null; expectValue = false; return; }
+      if (tok === "!") { out.push(["not", tok]); list = null; expectValue = false; return; }
+      const quoted = tok.startsWith('"');
+      tok.split("|").forEach((alt, j) => {
+        if (j > 0) out.push([quoted ? "phrase" : "or", "|"]);
+        alternative(out, alt);
+      });
+      list = fieldOf(tok);
+      expectValue = !!list && tok.endsWith(";");
+    });
+    return out;
+  }
+
+  /* The field a token filters on, if it is a field term at all. */
+  function fieldOf(tok) {
+    if (tok.startsWith('"')) return null;
+    const sp = fieldSplit(tok.startsWith("!") ? tok.slice(1) : tok);
+    return sp ? field(sp[0]) : null;
+  }
+
+  function alternative(out, text) {
+    let rest = text;
+    if (rest.startsWith("!")) { out.push(["not", "!"]); rest = rest.slice(1); }
+    if (!rest) return;
+    const split = fieldSplit(rest);
+    if (!split) return plain(out, rest);
+    const [name, value] = split;
+    const f = field(name);
+    if (!f) { out.push(["unknown", rest]); return; }
+    out.push(["field", name]);
+    out.push(["colon", ":"]);
+    valueSpans(out, value, f);
+  }
+
+  /* The value after a field's colon, or a later item in its list. */
+  function valueSpans(out, value, f) {
+    if (!value) return;                       // being typed — not yet wrong
+    if (!accepts(f, value)) { out.push(["bad", value]); return; }
+    let v = value;
+    if (f.takes === "size" || f.takes === "time") {
+      const m = /^(<=|>=|<|>|=)/.exec(v);
+      if (m) { out.push(["cmp", m[1]]); v = v.slice(m[1].length); }
+    }
+    if (f.takes === "ext") {
+      v.split(";").forEach((part, i) => {
+        if (i > 0) out.push(["sep", ";"]);
+        if (part) out.push(["value", part]);
+      });
+      return;
+    }
+    if (v) out.push(["value", v]);
+  }
+
+  function plain(out, text) {
+    if (text.startsWith('"')) {
+      out.push(["quote", '"']);
+      const closed = text.length > 1 && text.endsWith('"');
+      const inner = text.slice(1, closed ? -1 : undefined);
+      if (inner) out.push(["phrase", inner]);
+      if (closed) out.push(["quote", '"']);
+      return;
+    }
+    out.push([/[*?]/.test(text) ? "glob" : "text", text]);
+  }
+
+  /* Term boundaries, from the same spans the colouring uses.
+     A term is a run between whitespace, so this is the span list with the
+     spaces taken out and the rest coalesced — never a second tokenisation,
+     which would be the same mistake at one remove. */
+  function terms(text) {
+    const out = [];
+    let at = 0, start = null;
+    for (const [role, t] of spans(text)) {
+      if (role === "space") {
+        if (start !== null) { out.push([start, at]); start = null; }
+      } else if (start === null) {
+        start = at;
+      }
+      at += t.length;
+    }
+    if (start !== null) out.push([start, at]);
+    return out;
+  }
+
+  /* One character's width, measured rather than assumed.
+     The face is monospace, so this is the whole of the geometry: the caret
+     index under the pointer is `x / charWidth`. Measured once on a hundred
+     characters, because measuring one rounds badly at fractional widths. */
+  let charW = 0;
+  function charWidth() {
+    if (charW) return charW;
+    const probe = document.createElement("span");
+    probe.style.cssText =
+      "position:absolute;visibility:hidden;white-space:pre;font:600 20px/1.3 " +
+      getComputedStyle(q).fontFamily + ";letter-spacing:-.01em";
+    probe.textContent = "0".repeat(100);
+    document.body.appendChild(probe);
+    charW = probe.getBoundingClientRect().width / 100;
+    probe.remove();
+    return charW;
+  }
+
+  const acts = document.getElementById("qacts");
+  let hoverTerm = null;
+
+  /* Which term is under the pointer, if any. */
+  function termAt(clientX) {
+    const box = q.getBoundingClientRect();
+    const i = Math.floor((clientX - box.left + q.scrollLeft) / charWidth());
+    // Byte offsets on the wire, character offsets here. They agree for
+    // everything but non-ASCII, and the terms are found by scanning the same
+    // string either way, so this stays a character index throughout.
+    const text = q.value;
+    for (const [a, b] of terms(text)) {
+      if (i >= a && i < b) return [a, b];
+    }
+    return null;
+  }
+
+  /* Draw the band and its two buttons over the hovered term. */
+  function drawActs(term) {
+    hoverTerm = term;
+    if (!term) { acts.innerHTML = ""; return; }
+    const [a, b] = term;
+    const w = charWidth();
+    const left = a * w - q.scrollLeft;
+    const width = (b - a) * w;
+    const negated = q.value[a] === "!";
+    // The pair is 38 px wide and sits at the term's right edge, pulled back
+    // inside the field when the term ends at it — a button half off the edge
+    // is a button nobody can press.
+    const pair = 38;
+    const room = q.clientWidth - pair - 2;
+    const x = Math.max(0, Math.min(left + width - pair + 18, room));
+    acts.innerHTML =
+      `<div class="band" style="left:${left - 3}px;width:${width + 6}px"></div>` +
+      `<button class="neg" style="left:${x}px" ` +
+      `title="${negated ? "Dışlamayı kaldır" : "Bu terimi dışla"}">` +
+      `${negated ? "+" : "!"}</button>` +
+      `<button class="drop" style="left:${x + 20}px" title="Terimi kaldır">✕</button>`;
+  }
+
+  /* Replace one term, keeping the spaces around it tidy. */
+  function editTerm(term, replacement) {
+    const [a, b] = term;
+    let before = q.value.slice(0, a), after = q.value.slice(b);
+    if (!replacement) {
+      // Removing a term must not leave a double space behind, and must not
+      // leave a leading one either — both would show up as a stray gap in a
+      // line whose whole job is to be read.
+      if (before.endsWith(" ") && after.startsWith(" ")) after = after.slice(1);
+      else if (before.endsWith(" ") && !after) before = before.slice(0, -1);
+    }
+    q.value = before + replacement + after;
+    const caret = (before + replacement).length;
+    q.setSelectionRange(caret, caret);
+    drawActs(null);
+    render();
+    q.focus();
+  }
+
+  q.addEventListener("mousemove", (e) => {
+    const t = termAt(e.clientX);
+    const same = t && hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
+    if (!same) drawActs(t);
+  });
+  // The buttons live inside the layer, so leaving the input for them must not
+  // clear them — only leaving the whole field does.
+  document.querySelector(".qfield").addEventListener("mouseleave", () => drawActs(null));
+  q.addEventListener("scroll", () => drawActs(hoverTerm));
+
+  acts.addEventListener("mousedown", (e) => {
+    const b = e.target.closest("button");
+    if (!b || !hoverTerm) return;
+    e.preventDefault();
+    const [a, end] = hoverTerm;
+    const term = q.value.slice(a, end);
+    if (b.classList.contains("drop")) return editTerm(hoverTerm, "");
+    // Negation toggles rather than accumulating: `!!a` is not a thing anyone
+    // means, and the button that added the `!` is the one that takes it away.
+    editTerm(hoverTerm, term.startsWith("!") ? term.slice(1) : "!" + term);
+  });
+
+  /* Which roles are punctuation rather than something typed to search for.
+     In the product this is `Role::is_syntax` and comes over the wire with the
+     spans; the mockup keeps the same list so the two agree. */
+  const SYNTAX = new Set(["colon", "sep", "quote", "cmp", "not", "or"]);
+
+  // --- the shadow layer: roles to colours. The frontend's ONLY job here.
+  function paint(text) {
+    // A caret sits *between* characters, so both neighbours are candidates:
+    // backspace takes the one behind, Delete the one ahead.
+    const caret = document.activeElement === q ? (q.selectionStart ?? -1) : -1;
+    const touch = new Set();
+    if (caret >= 0 && q.selectionEnd === caret) {
+      if (caret > 0) touch.add(caret - 1);
+      if (caret < text.length) touch.add(caret);
+    }
+    let at = 0;
+    let html = "";
+    for (const [role, t] of spans(text)) {
+      const plain = role === "text" || role === "space";
+      const marked = SYNTAX.has(role) && [...t].some((_, k) => touch.has(at + k));
+      if (marked) {
+        // Only the touched character is marked, not the whole run: `<=` is one
+        // span and backspace takes one of its two characters.
+        html += [...t].map((ch, k) =>
+          touch.has(at + k)
+            ? '<span class="r-' + role + ' caret-touch">' + escape_(ch) + "</span>"
+            : '<span class="r-' + role + '">' + escape_(ch) + "</span>").join("");
+      } else {
+        html += plain ? escape_(t) : '<span class="r-' + role + '">' + escape_(t) + "</span>";
+      }
+      at += t.length;
+    }
+    shadow.innerHTML = html;
+  }
+
+  function markName(name, terms) {
+    if (!terms.length) return escape_(name);
+    let best = null;
+    for (const t of terms) {
+      const i = name.toLowerCase().indexOf(t);
+      if (i >= 0 && (!best || i < best[0])) best = [i, t.length];
+    }
+    if (!best) return escape_(name);
+    return escape_(name.slice(0, best[0])) +
+           "<mark>" + escape_(name.slice(best[0], best[0] + best[1])) + "</mark>" +
+           escape_(name.slice(best[0] + best[1]));
+  }
+
+  /* The query as a sentence. In the product this is the engine's `describe`;
+     here it is the same reading. Its job differs from the colour's: the
+     colour says WHAT, this line says WHY. */
+  function reading(text) {
+    const parts = [];
+    let warned = null;
+    for (const [role, t] of spans(text)) {
+      if (role === "space" || role === "colon" || role === "sep") continue;
+      if (role === "unknown" || role === "bad") warned = t;
+    }
+    // Terimleri tek tek oku.
+    for (const tok of text.trim().split(/\s+/).filter(Boolean)) {
+      const neg = tok.startsWith("!");
+      const body = neg ? tok.slice(1) : tok;
+      const sp = fieldSplit(body);
+      const f = sp && field(sp[0]);
+      let phrase;
+      if (f && sp[1] && accepts(f, sp[1]))      phrase = f.about.replace(/bunu|bu\b/, "<b>" + escape_(sp[1]) + "</b>");
+      else if (f && !sp[1])                     phrase = f.about + " (değer bekleniyor)";
+      else if (/^".*"?$/.test(body))            phrase = "adında <b>" + escape_(body.replace(/"/g, "")) + "</b> geçiyor";
+      else if (/[*?]/.test(body))               phrase = "adı <b>" + escape_(body) + "</b> desenine uçtan uca uyuyor";
+      else                                      phrase = "adında <b>" + escape_(body) + "</b> geçiyor";
+      parts.push(neg ? "<b>değil:</b> " + phrase : phrase);
+    }
+    if (!parts.length) return { html: "her şey", warn: false };
+    let html = parts.join(" · ");
+    if (warned) {
+      html = "<b>" + escape_(warned) + "</b> bir alan değil — düz metin olarak aranıyor. · " + html;
+    }
+    return { html, warn: !!warned };
+  }
+
+  /* Completions for the word the caret is in. Field names come from the
+     table, so a field that does not exist cannot be offered; values likewise
+     — a completion the parser would read as plain text is worse than none. */
+  function completions(text, cursor) {
+    let a = cursor, b = cursor;
+    while (a > 0 && !/\s/.test(text[a - 1])) a--;
+    while (b < text.length && !/\s/.test(text[b])) b++;
+    const typed = text.slice(a, cursor).replace(/^!/, "");
+    const sp = fieldSplit(typed);
+    if (sp) {
+      const f = field(sp[0]);
+      if (!f) return [];
+      const list = f.takes === "kind" ? KIND_VALUES : f.takes === "time" ? TIME_VALUES : [];
+      const pre = fold(sp[1]);
+      return list.filter((v) => v.startsWith(pre)).map((v) => ({
+        insert: sp[0] + ":" + v, label: f.name + ":" + v, about: f.about, at: [a, b],
+      }));
+    }
+    const pre = fold(typed);
+    return FIELDS
+      .filter((f) => f.name.startsWith(pre) || f.alias.some((x) => x.startsWith(pre)))
+      .map((f) => ({ insert: f.name + ":", label: f.eg || f.name + ":", about: f.about, at: [a, b] }));
+  }
+
+  const hintBox = document.getElementById("hints");
+  const qread   = document.getElementById("qread");
+  let hints = [], hintSel = 0;
+
+  function showHints() {
+    // Two conditions, both learned by trying. Opening the list while the box
+    // is NOT focused — `render()` also runs on page load — started the
+    // interface by answering a question nobody had asked. And listing twelve
+    // fields while the word under the caret is EMPTY means a list covering
+    // the screen after every space; it opens once typing starts.
+    if (document.activeElement !== q) { hideHints(); return; }
+    const cur = q.selectionStart ?? q.value.length;
+    let a = cur;
+    while (a > 0 && !/\s/.test(q.value[a - 1])) a--;
+    if (cur === a) { hideHints(); return; }
+    hints = completions(q.value, cur);
+    if (hints.length === 0) { hideHints(); return; }
+    hintSel = Math.min(hintSel, hints.length - 1);
+    hintBox.innerHTML = hints.map((h, i) =>
+      '<button role="option" data-i="' + i + '" aria-selected="' + (i === hintSel) + '">' +
+      "<code>" + escape_(h.label) + "</code><span>" + escape_(h.about) + "</span></button>").join("");
+    hintBox.hidden = false;
+    q.setAttribute("aria-expanded", "true");
+  }
+  function hideHints() {
+    hintBox.hidden = true;
+    hints = [];
+    hintSel = 0;
+    q.setAttribute("aria-expanded", "false");
+  }
+  function acceptHint(i) {
+    const h = hints[i];
+    if (!h) return;
+    q.value = q.value.slice(0, h.at[0]) + h.insert + q.value.slice(h.at[1]);
+    const caret = h.at[0] + h.insert.length;
+    q.setSelectionRange(caret, caret);
+    hideHints();
+    render();
+    q.focus();
+  }
+
+  hintBox.addEventListener("mousedown", (e) => {
+    // `mousedown`, not `click`: by the time `click` arrives the input has
+    // lost focus and the list has closed itself — the click never landed.
+    const b = e.target.closest("button");
+    if (!b) return;
+    e.preventDefault();
+    acceptHint(+b.dataset.i);
+  });
+
+  q.addEventListener("keydown", (e) => {
+    if (hintBox.hidden) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      hintSel = (hintSel + (e.key === "ArrowDown" ? 1 : hints.length - 1)) % hints.length;
+      [...hintBox.children].forEach((b, i) => b.setAttribute("aria-selected", i === hintSel));
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); acceptHint(hintSel); return; }
+    if (e.key === "Escape") { e.preventDefault(); hideHints(); }
+  });
+  q.addEventListener("blur", hideHints);
+
+  /* Only the newest answer is allowed to draw.
+     Typing produces one request a keystroke and they do not come back in the
+     order they were sent; without this, pausing after "rapor" can leave the
+     screen showing what "rapo" matched. */
+  let generation = 0;
+  let lastMeter = null;
+
+  function render() {
+    const text = q.value;
+    /* Everything that depends only on the text happens now, at typing speed.
+       The list catches up when the service answers, and the two being
+       separate is why the caret never waits for a search. */
+    paint(text);
+    const r = reading(text);
+    qread.innerHTML = r.html;
+    qread.classList.toggle("warn", r.warn);
+    showHints();
+    syncHeads();
+
+    const mine = ++generation;
+    SERVICE.search(text, sortKey, sortDesc, 200)
+      .then((res) => {
+        if (mine !== generation) return;   // a newer keystroke won
+        FILES = res.rows.map(fromService);
+        lastMeter = res;
+        draw(text, parse(text), FILES, res);
+      })
+      .catch((e) => {
+        if (mine !== generation) return;
+        offline(e);
+      });
+  }
+
+  /* The service has answered. Everything from here down is the page the mockup
+     already was — it never learns where the rows came from. */
+  function draw(text, p, hits, res) {
+    now = Math.floor(Date.now() / 1000);
+
+    body.innerHTML = hits.map((f) => `
+      <tr>
+        <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
+        <td class="name">${markName(f.name, p.text)}</td>
+        <td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>
+        <td class="n">${bytes(f.size)}</td>
+        <td class="n" style="text-align:left;color:var(${bandOf(f.mtime)})">${ago(f.mtime)}</td>
+        <td class="kind">${f.kind}</td>
+      </tr>`).join("");
+    empty.hidden = hits.length > 0;
+
+    /* The meter, and it is the service's own arithmetic rather than the
+       page's. `total` is capped by the count cap, which is why a large one
+       reads `10000+` instead of a number the engine did not actually reach. */
+    const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
+    document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+    document.getElementById("ms").textContent =
+      (res.took_us / 1000).toFixed(2).replace(".", ",") + " ms";
+    document.getElementById("rows").textContent = fmt(res.rows_visited) + " satır okundu";
+
+    drawBars(hits);
+    syncFacets(p);
+    refreshFacetCounts(text);
+  }
+
+  /* The service could not be reached. Say which, rather than showing an empty
+     list that looks like "nothing matched". */
+  function offline(err) {
+    body.innerHTML = "";
+    empty.hidden = false;
+    document.getElementById("count").textContent = "—";
+    document.getElementById("ms").textContent = "—";
+    document.getElementById("rows").textContent =
+      String(err.message || err).includes("403")
+        ? "bağlantı reddedildi — bağlantıdaki anahtar bu koşuya ait değil"
+        : "servise ulaşılamıyor — scourd çalışıyor mu?";
+  }
+
+  /* The rail's counts, from the service, for the query as it stands. Fired
+     after the list so it never delays the rows. */
+  let facetGeneration = 0;
+  function refreshFacetCounts(text) {
+    const mine = ++facetGeneration;
+    SERVICE.facets(text).then((res) => {
+      if (mine !== facetGeneration) return;
+      KIND_COUNTS = Object.fromEntries(res.facets.map((f) => [f.key, f.count]));
+      syncFacets(parse(q.value));
+    }).catch(() => {});
+  }
+
+  function drawBars(hits) {
+    const buckets = new Array(24).fill(0);
+    const span = 730 * DAY;
+    for (const f of hits) {
+      const a = Math.min(now - f.mtime, span - 1);
+      // Logarithmic, so the last day, the last week and the last year are all readable on one screen.
+      const t = 1 - Math.log10(1 + (a / span) * 9);
+      buckets[Math.min(23, Math.max(0, Math.floor(t * 24)))]++;
+    }
+    const max = Math.max(1, ...buckets);
+    bars.innerHTML = buckets.map((v, i) => {
+      const h = v === 0 ? 2 : Math.max(4, Math.round((v / max) * 46));
+      const days = Math.round(((10 ** (1 - i / 24) - 1) / 9) * 730);
+      const c = v === 0 ? "--line" : bandOf(now - days * DAY);
+      return `<button type="button" data-days="${Math.max(1, days)}"
+                title="${v} sonuç · ${Math.max(1, days)} güne kadar"
+                aria-label="${v} sonuç, son ${Math.max(1, days)} gün">
+                <i style="height:${h}px;background:var(${c})"></i></button>`;
+    }).join("");
+  }
+
+  function facetRow(label, term, count, share, on) {
+    const fill = share > 0
+      ? `<span class="fill" style="width:${(share * 100).toFixed(1)}%"></span>` : "";
+    return `<button class="facet${share > 0 ? " bar" : ""}" type="button"
+        data-term="${term}" aria-pressed="${on}">${fill}
+      ${share > 0 ? "" : `<span class="dot"></span>`}
+      <span class="nm">${label}</span><span class="ct">${count === null || count === undefined ? "" : fmt(count)}</span></button>`;
+  }
+
+  /* What the service last counted, by kind token. Null until the first reply,
+     and then it wins over the numbers baked in above — those exist only so the
+     rail is not blank for the instant before it arrives. */
+  let KIND_COUNTS = null;
+
+  function syncFacets(p) {
+    const count = ([, key, n]) => (KIND_COUNTS ? (KIND_COUNTS[key] || 0) : n);
+    const top = Math.max(1, ...KINDS.map(count));
+    document.getElementById("kinds").innerHTML =
+      KINDS.map((row) => {
+        const [tr, key] = row;
+        const n = count(row);
+        return facetRow(tr, "kind:" + key, n, n / top, p.kind === key);
+      }).join("");
+    document.getElementById("scopes").innerHTML =
+      SCOPES.map(([tr, path, n]) => facetRow(tr, "under:" + path, n, 0, p.under === path)).join("");
+    document.getElementById("sizes").innerHTML =
+      SIZES.map(([tr, v, n]) => facetRow(tr, "size:" + v, n, 0, p.size === v)).join("");
+  }
+
+  function syncHeads() {
+    document.querySelectorAll("thead th[data-sort]").forEach((th) => {
+      const on = th.dataset.sort === sortKey;
+      th.setAttribute("aria-sort", on ? (sortDesc ? "descending" : "ascending") : "none");
+      const label = th.textContent.replace(/[▾▴]\s*$/, "").trim();
+      th.innerHTML = label + (on ? ` <span class="arrow">${sortDesc ? "▾" : "▴"}</span>` : "");
+    });
+  }
+
+  // Clicking a filter adds the term to the *text*, not to hidden state.
+  function toggleTerm(term) {
+    const parts = q.value.trim().split(/\s+/).filter(Boolean);
+    const key = term.split(":")[0] + ":";
+    const at = parts.findIndex((t) => t.startsWith(key));
+    if (at >= 0 && parts[at] === term) parts.splice(at, 1);
+    else if (at >= 0) parts[at] = term;
+    else parts.push(term);
+    q.value = parts.join(" ");
+    render();
+    q.focus();
+  }
+
+  document.querySelector(".rail").addEventListener("click", (e) => {
+    const b = e.target.closest(".facet");
+    if (b) toggleTerm(b.dataset.term);
+  });
+  bars.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b) toggleTerm("dm:" + b.dataset.days + "d");
+  });
+  document.querySelector("thead").addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
+    else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "mtime" || th.dataset.sort === "size"; }
+    render();
+  });
+  /* Separators get one space on each side, always.
+
+     Two things at once, and they only look contradictory. The spacing is for
+     reading: `ext:rs;toml;md;pdf` is a wall, `ext:rs ; toml ; md ; pdf` is a
+     list. The *number* of spaces is not the user's business — one is right,
+     none is cramped, three is an accident — so whatever is typed is normalised
+     to one. The engine reads every one of those spellings as the same query,
+     which is what makes tidying safe rather than a change of meaning.
+
+     Which runs are separators is not guessed here: `spans()` already knows,
+     because the parser's list rule is what produces the `sep` role. A `;` that
+     is ordinary text — `rapor ; pdf`, or one inside quotes — never gets that
+     role and is left exactly as written. Deciding it a second time by looking
+     at the characters was tried first and got both of those wrong. */
+  function tidySeparators() {
+    const text = q.value;
+    if (!text.includes(";")) return false;
+    const caret = q.selectionStart ?? text.length;
+    let out = "", at = 0, moved = caret;
+    const parts = spans(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i][0] !== "sep") {
+        out += parts[i][1];
+        at += parts[i][1].length;
+        continue;
+      }
+      // One separator and the whitespace on both sides of it is one run.
+      let run = "", j = i;
+      while (j < parts.length && parts[j][0] === "sep") { run += parts[j][1]; j++; }
+      const want = run.split(";").length > 2 ? run.replace(/\s+/g, "") : " ; ";
+      if (caret > at) moved += Math.min(caret - at, run.length) === run.length
+        ? want.length - run.length            // caret is past the whole run
+        : want.length - (caret - at);         // caret sat inside it
+      out += want;
+      at += run.length;
+      i = j - 1;
+    }
+    if (out === text) return false;
+    q.value = out;
+    const to = Math.max(0, Math.min(moved, out.length));
+    q.setSelectionRange(to, to);
+    return true;
+  }
+
+  q.addEventListener("input", () => {
+    tidySeparators();
+    render();
+  });
+  // Moving the caret to another term with an arrow key changes the offer
+  // too — it depends on where you are, not on what you last typed.
+  q.addEventListener("click", () => { paint(q.value); showHints(); });
+  q.addEventListener("focus", () => paint(q.value));
+  q.addEventListener("blur", () => paint(q.value));
+  document.addEventListener("selectionchange", () => {
+    if (document.activeElement === q) paint(q.value);
+  });
+  q.addEventListener("keyup", (e) => {
+    if (e.key.startsWith("Arrow") && hintBox.hidden) showHints();
+  });
+  q.addEventListener("scroll", () => { shadow.scrollLeft = q.scrollLeft; });
+
+  /* The index's size, for the "x / y" meter, and a heartbeat so it follows a
+     scan that is still running. Ten seconds is slow enough to cost nothing and
+     quick enough that a first index visibly fills up while it is watched. */
+  function refreshStatus() {
+    SERVICE.status()
+      .then((s) => {
+        TOTAL = s.entries;
+        const note = document.getElementById("path-note");
+        if (note) {
+          const mb = (s.index_bytes / 1048576).toFixed(1).replace(".", ",");
+          note.textContent = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
+            + (s.scanning ? " · taranıyor" : "");
+        }
+        if (lastMeter) {
+          const shown = lastMeter.capped ? fmt(lastMeter.total) + "+" : fmt(lastMeter.total);
+          document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+        }
+      })
+      .catch(() => {});
+  }
+  refreshStatus();
+  setInterval(refreshStatus, 10000);
+  render();
+})();
+
+// ---------------------------------------------------------------- RAPOR
+// The numbers are real: `cargo run --example rollup` over a home directory
+// of 1,225,711 entries. The age percentages were measured too, not invented.
+(function () {
+  const AGE = [
+    ["bugün",    "--t0"], ["bu hafta", "--t1"], ["bu ay",   "--t2"],
+    ["6 ay",     "--t3"], ["bu yıl",   "--t4"], ["daha eski","--t5"]
+  ];
+  const GB = 1073741824;
+
+  // path -> { bytes, files, age[6], kids:[path], leaf? }
+  const T = {
+    "/home/hasan": {
+      bytes: 374.6 * GB, files: 1225710, age: [58, 38, 1, 0, 0, 1],
+      kids: ["/home/hasan/Projeler", "/home/hasan/.AffinityLinux", "/home/hasan/Android",
+             "/home/hasan/.cache", "/home/hasan/.local", "/home/hasan/.rustup",
+             "/home/hasan/.cargo", "/home/hasan/(diğer 34 klasör)"]
+    },
+    "/home/hasan/Projeler": {
+      bytes: 325.8 * GB, files: 612292, age: [62, 38, 0, 0, 0, 0],
+      kids: ["/home/hasan/Projeler/ColpanRust", "/home/hasan/Projeler/Sezi",
+             "/home/hasan/Projeler/RustWailsChat", "/home/hasan/Projeler/SnipperSlint",
+             "/home/hasan/Projeler/RustEverything", "/home/hasan/Projeler/Scour",
+             "/home/hasan/Projeler/RustPrinter", "/home/hasan/Projeler/(diğer 15)"]
+    },
+    "/home/hasan/Projeler/ColpanRust": {
+      bytes: 165.1 * GB, files: 344789, age: [66, 34, 0, 0, 0, 0],
+      kids: ["/home/hasan/Projeler/ColpanRust/target", "/home/hasan/Projeler/ColpanRust/src",
+             "/home/hasan/Projeler/ColpanRust/(diğer)"]
+    },
+    "/home/hasan/Projeler/ColpanRust/target": {
+      bytes: 164.4 * GB, files: 327854, age: [66, 34, 0, 0, 0, 0],
+      kids: ["/home/hasan/Projeler/ColpanRust/target/debug",
+             "/home/hasan/Projeler/ColpanRust/target/release"]
+    },
+    "/home/hasan/Projeler/ColpanRust/target/debug": {
+      bytes: 115.3 * GB, files: 192493, age: [63, 37, 0, 0, 0, 0],
+      kids: ["/home/hasan/Projeler/ColpanRust/target/debug/deps",
+             "/home/hasan/Projeler/ColpanRust/target/debug/incremental",
+             "/home/hasan/Projeler/ColpanRust/target/debug/(diğer)"]
+    },
+    "/home/hasan/Projeler/ColpanRust/target/debug/deps":        { bytes: 61.6*GB, files: 89375,  age:[59,41,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/ColpanRust/target/debug/incremental": { bytes: 48.6*GB, files: 69423,  age:[71,29,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/ColpanRust/target/debug/(diğer)":     { bytes:  5.1*GB, files: 33695,  age:[60,40,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/ColpanRust/target/release":           { bytes: 45.5*GB, files:110259,  age:[78,21,0,0,1,0], leaf:1 },
+    "/home/hasan/Projeler/ColpanRust/src":                      { bytes:  0.4*GB, files:  6210,  age:[41,52,4,2,1,0], leaf:1 },
+    "/home/hasan/Projeler/ColpanRust/(diğer)":                  { bytes:  0.3*GB, files: 10725,  age:[38,50,6,3,2,1], leaf:1 },
+    "/home/hasan/Projeler/Sezi": {
+      bytes: 62.9 * GB, files: 155444, age: [69, 31, 0, 0, 0, 0],
+      kids: ["/home/hasan/Projeler/Sezi/core", "/home/hasan/Projeler/Sezi/mobile",
+             "/home/hasan/Projeler/Sezi/(diğer)"]
+    },
+    "/home/hasan/Projeler/Sezi/core":     { bytes: 49.1*GB, files: 71324, age:[79,21,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/Sezi/mobile":   { bytes:  6.3*GB, files: 17496, age:[44,50,4,1,1,0], leaf:1 },
+    "/home/hasan/Projeler/Sezi/(diğer)":  { bytes:  7.5*GB, files: 66624, age:[52,42,3,2,1,0], leaf:1 },
+    "/home/hasan/Projeler/RustWailsChat": { bytes: 28.1*GB, files: 23499, age:[99, 0,0,0,1,0], leaf:1 },
+    "/home/hasan/Projeler/SnipperSlint":  { bytes: 24.7*GB, files: 16919, age:[ 0,100,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/RustEverything":{ bytes: 23.3*GB, files: 31819, age:[34, 64,1,0,1,0], leaf:1 },
+    "/home/hasan/Projeler/Scour":         { bytes:  9.1*GB, files: 17126, age:[96,  4,0,0,0,0], leaf:1 },
+    "/home/hasan/Projeler/RustPrinter":   { bytes:  8.7*GB, files:  9873, age:[ 2, 12,9,7,58,12], leaf:1 },
+    "/home/hasan/Projeler/(diğer 15)":    { bytes:  3.9*GB, files:242743, age:[18, 31,9,8,21,13], leaf:1 },
+    "/home/hasan/.AffinityLinux":         { bytes:  8.8*GB, files: 24163, age:[ 1,  3,4,9,44,39], leaf:1 },
+    "/home/hasan/Android":                { bytes:  5.2*GB, files:  6943, age:[ 0,  1,2,5,31,61], leaf:1 },
+    "/home/hasan/.cache":                 { bytes:  4.3*GB, files: 16496, age:[22, 41,17,12,6,2], leaf:1 },
+    "/home/hasan/.local":                 { bytes:  3.1*GB, files:  6113, age:[11, 24,18,21,19,7], leaf:1 },
+    "/home/hasan/.rustup":                { bytes:  1.5*GB, files: 27679, age:[ 0,  2,7,26,49,16], leaf:1 },
+    "/home/hasan/.cargo":                 { bytes:  1.4*GB, files: 25312, age:[ 3,  9,12,28,36,12], leaf:1 },
+    "/home/hasan/(diğer 34 klasör)":      { bytes: 24.5*GB, files:266073, age:[ 6, 14,11,16,34,19], leaf:1 }
+  };
+
+  const KIND = [["Derleme çıktısı", 675457, "291,0 GB"], ["İşaretleme/veri", 284055, "9,4 GB"],
+                ["Kod", 174027, "3,0 GB"], ["Görsel", 57982, "18,7 GB"],
+                ["Belge", 17420, "4,1 GB"], ["Kurulum", 6496, "31,2 GB"],
+                ["Diğer", 346975, "17,2 GB"]];
+  const BIG = [["colpan-ner.onnx","1,9 GB"],["libui_shell.rlib","1,2 GB"],
+               ["qdrant-storage.dat","667 MB"],["rust-docs.tar.xz","604 MB"],
+               ["flutter36.avd.img","3,7 GB"]];
+
+  const nodes = Object.keys(T);
+  const bytes = (n) => {
+    const u = ["B","KB","MB","GB","TB"]; let v = n, i = 0;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i ? v.toFixed(1) : v) + " " + u[i];
+  };
+  const fmt = (n) => n.toLocaleString("tr-TR");
+  const leafOf = (p) => p.slice(p.lastIndexOf("/") + 1);
+
+  let scope = "/home/hasan/Projeler";
+
+  const crumb = document.getElementById("crumb");
+  const kidsEl = document.getElementById("r-kids");
+
+  function stack(age) {
+    return `<div class="stack">` + age.map((v, i) =>
+      v > 0 ? `<i style="width:${v}%;background:var(${AGE[i][1]})" title="${AGE[i][0]} · %${v}"></i>` : ""
+    ).join("") + `</div>`;
+  }
+
+  function drawReport() {
+    const n = T[scope];
+    if (!n) return;
+
+    const parts = scope.split("/").filter(Boolean);
+    crumb.innerHTML = parts.map((seg, i) => {
+      const path = "/" + parts.slice(0, i + 1).join("/");
+      const label = i === 1 ? "~" : seg;
+      const known = T[path] ? `<button data-path="${path}">${label}</button>`
+                            : `<span>${label}</span>`;
+      return (i === 0 ? "" : `<span class="s">/</span>`) + (i === 0 ? "" : known);
+    }).join("") || "<span>/</span>";
+
+    document.getElementById("r-bytes").textContent = bytes(n.bytes);
+    const stale = n.age[4] + n.age[5];
+    document.getElementById("r-meta").innerHTML =
+      `${fmt(n.files)} dosya<br><b>%${stale}</b>'i bir yıldan eski` +
+      `<br>130.796 dizin · <b>72,9 ms</b> (51,7 satır + 21,1 toparlama)`;
+
+    const kids = (n.kids || []).map((k) => [k, T[k]]).filter(([, v]) => v)
+      .sort((a, b) => b[1].bytes - a[1].bytes);
+    kidsEl.innerHTML = kids.map(([path, v]) => `
+      <tr>
+        <td class="nmcell">${v.leaf
+          ? `<span class="leaf">${leafOf(path)}</span>`
+          : `<button data-path="${path}">${leafOf(path)} <span style="color:var(--ink-3)">›</span></button>`}</td>
+        <td class="stack-wrap">${stack(v.age)}</td>
+        <td class="r big">${bytes(v.bytes)}</td>
+        <td class="r">%${((v.bytes / n.bytes) * 100).toFixed(1)}</td>
+        <td class="r">${fmt(v.files)}</td>
+      </tr>`).join("") ||
+      `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">
+        Bu klasörün alt klasörü indekste ayrıca gösterilmiyor.</td></tr>`;
+
+    document.getElementById("agekey").innerHTML = AGE.map(([lbl, c]) =>
+      `<span><i style="background:var(${c})"></i>${lbl}</span>`).join("");
+
+    const kmax = Math.max(...KIND.map((k) => k[1]));
+    document.getElementById("p-kind").innerHTML = KIND.map(([nm, ct, sz]) =>
+      `<div class="line" style="position:relative">
+         <span style="position:absolute;left:-4px;top:3px;bottom:3px;width:${(ct / kmax * 100).toFixed(1)}%;background:var(--line);border-radius:0 2px 2px 0"></span>
+         <span style="position:relative">${nm} <em>${fmt(ct)}</em></span>
+         <span style="position:relative">${sz}</span></div>`).join("");
+
+    // Measured: 1,474,650 files, 493.6 GB. The size gate is useless by file
+    // count (it eliminates 6.2%) and excellent by bytes — so this panel
+    // shows *space that could be reclaimed*, not a tally.
+    document.getElementById("p-dupe").innerHTML =
+      `<div class="line"><span>Sabit bağ <em>fazladan</em></span><span>227.552</span></div>` +
+      `<div class="line"><span>Aynı ad</span><span>1.005.407</span></div>` +
+      `<div class="line"><span>Aynı boyut <em>&gt;1 MB</em></span><span>18.723</span></div>` +
+      `<div class="line"><span><em>en fazla kazanç</em></span><span>141,8 GB</span></div>` +
+      `<div class="line"><span>İçerik doğrulandı</span><span style="color:var(--ink-3)">—</span></div>`;
+
+    document.getElementById("p-big").innerHTML = BIG.map(([nm, sz]) =>
+      `<div class="line"><span>${nm}</span><span>${sz}</span></div>`).join("");
+
+    document.getElementById("p-jump").innerHTML =
+      `<div class="line"><span>under:</span><span style="font-size:10.5px">${scope.replace("/home/hasan", "~")}</span></div>` +
+      `<button class="facet" style="padding-left:0;margin-top:6px" id="jump">
+         <span class="dot" style="background:var(--t1)"></span>
+         <span class="nm">Bu kapsamda ara</span></button>`;
+    document.getElementById("jump").onclick = () => {
+      const q = document.getElementById("q");
+      q.value = ("under:" + scope + " " + q.value.replace(/under:\S+\s*/g, "")).trim();
+      q.dispatchEvent(new Event("input"));
+      show("search");
+    };
+  }
+
+  document.querySelector(".report").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-path]");
+    if (b) { scope = b.dataset.path; drawReport(); }
+  });
+
+  function show(which) {
+    const s = which === "search";
+    document.getElementById("view-search").hidden = !s;
+    document.getElementById("view-report").hidden = s;
+    document.getElementById("tab-search").setAttribute("aria-selected", String(s));
+    document.getElementById("tab-report").setAttribute("aria-selected", String(!s));
+    document.querySelector(".meter").style.display = s ? "" : "none";
+    if (!s) drawReport();
+  }
+  document.getElementById("tab-search").onclick = () => show("search");
+  document.getElementById("tab-report").onclick = () => show("report");
+
+  drawReport();
+  const _ = nodes;
+})();
+
+</script>

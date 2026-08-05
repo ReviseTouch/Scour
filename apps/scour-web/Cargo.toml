@@ -1,0 +1,35 @@
+[package]
+name        = "scour-web"
+description = "Scour in a browser."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour-web"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# A frontend, exactly like `apps/scour` and `apps/scour-gui`: it holds no
+# index, walks no filesystem, and does not link the engine. Everything it
+# knows it learned over a socket.
+#
+# **No HTTP framework, and no async runtime.** What this serves is one page and
+# four JSON routes to a browser on the same machine; axum would bring tokio,
+# hyper, tower and about a hundred crates to do what two hundred lines of
+# `std::net` do here. The daemon and the CLI are deliberately free of an async
+# runtime — `scour-mcp` is a separate binary for that reason alone — and there
+# is no reason for this one to be the exception.
+[dependencies]
+scour-core   = { workspace = true }
+scour-proto  = { workspace = true }
+scour-ipc    = { workspace = true }
+scour-config = { workspace = true }
+anyhow       = { workspace = true }
+serde_json   = { workspace = true }
+clap         = { workspace = true }

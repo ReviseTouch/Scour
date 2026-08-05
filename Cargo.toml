@@ -14,6 +14,7 @@ members = [
     "apps/scourd",
     "apps/scour",
     "apps/scour-mcp",
+    "apps/scour-web",
     "apps/scour-gui",
 ]
 

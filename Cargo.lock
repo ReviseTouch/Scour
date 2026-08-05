@@ -4656,6 +4656,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "scour-config",
+ "scour-core",
+ "scour-ipc",
+ "scour-proto",
+ "serde_json",
+]
+
+[[package]]
 name = "scourd"
 version = "0.1.0"
 dependencies = [
