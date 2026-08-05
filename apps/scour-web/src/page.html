@@ -492,7 +492,11 @@
   /* ---------------- results ---------------- */
   .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   .scroll { flex: 1; overflow: auto; }
-  table { width: 100%; border-collapse: collapse; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  /* Every cell keeps to its column: a long path is cut, not allowed to widen
+     the table. Without this a fixed layout still lets an unbreakable word
+     push the row out. */
+  tbody td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   thead th {
     position: sticky; top: 0; z-index: 3;
     background: var(--panel);
@@ -508,6 +512,24 @@
     cursor: pointer;
     user-select: none;
   }
+  thead th { position: sticky; }
+  thead th .grip {
+    position: absolute; top: 0; right: -3px; bottom: 0;
+    width: 7px; cursor: col-resize; z-index: 4;
+    /* Wider than it looks. A one-pixel border is a one-pixel target, which is
+       the mistake the chip's × already taught. */
+  }
+  thead th .grip::after {
+    content: ""; position: absolute; top: 25%; bottom: 25%; left: 3px;
+    width: 1px; background: var(--line);
+  }
+  thead th .grip:hover::after,
+  thead th .grip.dragging::after { background: var(--q-key); top: 0; bottom: 0; }
+  /* While a column is being dragged, nothing else reacts to the pointer —
+     otherwise crossing a row selects text and crossing a header sorts. */
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing * { cursor: col-resize !important; }
+
   thead th:hover { color: var(--ink); }
   thead th.num { text-align: right; }
   thead th[aria-sort]:not([aria-sort="none"]) { color: var(--ink); }
@@ -2001,12 +2023,109 @@
       SIZES.map(([tr, v, n]) => facetRow(tr, "size:" + v, n, 0, p.size === v)).join("");
   }
 
+  /* ---------------- column widths ----------------
+   *
+   * Dragged from the edge of a heading, and remembered.
+   *
+   * **Stored in the browser, and that is a decision with a shelf life.** This
+   * window is where the interface is being designed; the one that ships is
+   * Slint, and it will keep widths in `scour-config` beside `ui.columns`,
+   * which already exists. Writing them there now would mean a config-writing
+   * route in a bridge that is deliberately read-only, for a preference that
+   * will be re-read from somewhere else in a month. So: `localStorage`, under
+   * a profile that has a fixed path, and this comment saying where it goes
+   * when the window becomes the real one.
+   *
+   * `table-layout: fixed` is what makes a width mean anything — under `auto`
+   * the browser re-decides on every render and a dragged column springs back
+   * the moment a longer path arrives. */
+  const WIDTH_KEY = "scour.columns.v1";
+  const MIN_COL = 56;
+
+  function loadWidths() {
+    try {
+      const v = JSON.parse(localStorage.getItem(WIDTH_KEY) || "{}");
+      return v && typeof v === "object" ? v : {};
+    } catch { return {}; }
+  }
+  let WIDTHS = loadWidths();
+
+  function applyWidths() {
+    for (const th of document.querySelectorAll("thead th[data-sort]")) {
+      const w = WIDTHS[th.dataset.sort];
+      th.style.width = w ? w + "px" : "";
+    }
+  }
+
+  function saveWidths() {
+    try { localStorage.setItem(WIDTH_KEY, JSON.stringify(WIDTHS)); } catch {}
+  }
+
+  /* One grip a heading, on its trailing edge. The last column has none: there
+     is nothing to its right to give the space to, so dragging it would only
+     be a way to make the table narrower than its own container. */
+  function fitGrips() {
+    const heads = [...document.querySelectorAll("thead th[data-sort]")];
+    heads.forEach((th, i) => {
+      const last = i === heads.length - 1;
+      const has = th.querySelector(".grip");
+      if (last) { if (has) has.remove(); return; }
+      if (has) return;
+      const g = document.createElement("span");
+      g.className = "grip";
+      g.title = "sürükle · çift tıkla sıfırla";
+      th.appendChild(g);
+    });
+  }
+
+  document.querySelector("thead").addEventListener("pointerdown", (e) => {
+    const grip = e.target.closest(".grip");
+    if (!grip) return;
+    e.preventDefault();
+    e.stopPropagation();          // not a click on the heading, so no sort
+    const th = grip.closest("th");
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    grip.classList.add("dragging");
+    document.body.classList.add("resizing");
+    grip.setPointerCapture(e.pointerId);
+
+    const move = (ev) => {
+      const w = Math.max(MIN_COL, Math.round(startW + ev.clientX - startX));
+      WIDTHS[th.dataset.sort] = w;
+      th.style.width = w + "px";
+    };
+    const up = () => {
+      grip.classList.remove("dragging");
+      document.body.classList.remove("resizing");
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      saveWidths();
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+  });
+
+  // Double-click a grip: that column goes back to deciding for itself.
+  document.querySelector("thead").addEventListener("dblclick", (e) => {
+    const grip = e.target.closest(".grip");
+    if (!grip) return;
+    e.preventDefault();
+    e.stopPropagation();
+    delete WIDTHS[grip.closest("th").dataset.sort];
+    applyWidths();
+    saveWidths();
+  });
+
   function syncHeads() {
     document.querySelectorAll("thead th[data-sort]").forEach((th) => {
       const on = th.dataset.sort === sortKey;
       th.setAttribute("aria-sort", on ? (sortDesc ? "descending" : "ascending") : "none");
-      const label = th.textContent.replace(/[▾▴]\s*$/, "").trim();
+      // The grip is not part of the label and must survive being relabelled.
+      const grip = th.querySelector(".grip");
+      const label = (th.dataset.label ||= th.textContent.replace(/[▾▴]\s*$/, "").trim());
       th.innerHTML = label + (on ? ` <span class="arrow">${sortDesc ? "▾" : "▴"}</span>` : "");
+      if (grip) th.appendChild(grip);
     });
   }
 
@@ -2210,6 +2329,8 @@
       })
       .catch(() => {});
   }
+  fitGrips();
+  applyWidths();
   refreshStatus();
   setInterval(refreshStatus, 10000);
 
