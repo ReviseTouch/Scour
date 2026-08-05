@@ -6,10 +6,25 @@
 # `bash` explicitly, and from the repository: sudo resolves a bare relative
 # path against secure_path rather than the working directory.
 #
-# Needs root, and there is no way around that: mounting a loopback image needs
-# real CAP_SYS_ADMIN. A user namespace does not help — ext4, btrfs, xfs, vfat
-# and exfat are not marked FS_USERNS_MOUNT, so `unshare -r -m mount -o loop`
-# fails with EPERM. (Tested; it does.)
+# Needs root, and there is no way around that. Two were tried:
+#
+#   * A user namespace does not help. ext4, btrfs, xfs, vfat and exfat are not
+#     marked FS_USERNS_MOUNT, so `unshare -r -m mount -o loop` fails with
+#     EPERM whatever capabilities the namespace hands out. (Tested; it does.)
+#
+#   * FUSE would mount rootless — fuse2fs and ntfs-3g exist and FUSE *is*
+#     FS_USERNS_MOUNT — but it would measure the wrong thing. `statfs` on a
+#     FUSE mount returns FUSE's magic, not the magic of whatever is underneath,
+#     so `traits_of` lands in its UNKNOWN branch and answers about FUSE. Live
+#     proof, from mounts this machine already has:
+#
+#       /run/user/1000/gvfs   fuse.gvfsd-fuse   Network   case=yes ids=NO
+#
+#     An ext4 image behind fuse2fs would read exactly the same. The sudo is
+#     not an oversight; it is what the question requires.
+#
+# RAM is not the part that needs privilege — the images live in /dev/shm and
+# no disk is touched. `mount(2)` is.
 #
 # The images live in /dev/shm, so this touches no disk and leaves nothing
 # behind. Each is mounted with the invoking user as owner, the `filesystems`
