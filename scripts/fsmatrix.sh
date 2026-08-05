@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build a filesystem of each format in RAM and check what Scour believes about it.
 #
-#   sudo scripts/fsmatrix.sh [format...]
+#   sudo bash scripts/fsmatrix.sh [format...]
+#
+# `bash` explicitly, and from the repository: sudo resolves a bare relative
+# path against secure_path rather than the working directory.
 #
 # Needs root, and there is no way around that: mounting a loopback image needs
 # real CAP_SYS_ADMIN. A user namespace does not help — ext4, btrfs, xfs, vfat
@@ -22,7 +25,7 @@
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
-    echo "needs root: sudo $0 $*" >&2
+    echo "needs root: sudo bash $0 $*" >&2
     exit 1
 fi
 
@@ -56,7 +59,8 @@ mount_opts_for() {
     esac
 }
 
-echo "building in RAM, $(nproc) cores, $(free -h | awk '/Mem:/{print $7}') available"
+# LC_ALL, because `free` translates its headings and this parses one.
+echo "building in RAM, $(LC_ALL=C free -h | awk '/^Mem:/{print $7}') available in /dev/shm"
 echo
 
 BUILT=()
@@ -69,8 +73,10 @@ for fs in "${FORMATS[@]}"; do
     mnt="$BASE/mnt-$fs"
     mkdir -p "$mnt"
     truncate -s "$(size_for "$fs")M" "$img"
+    # `-q` is not universal — vfat and exfat have no such flag — so the quiet
+    # form is tried first and the plain one is the fallback.
     if ! mkfs."$fs" -q "$img" >/dev/null 2>&1 && ! mkfs."$fs" "$img" >/dev/null 2>&1; then
-        echo "skip $fs: mkfs failed"
+        echo "skip $fs: mkfs.$fs would not make a filesystem in $(size_for "$fs") MB"
         continue
     fi
     opts="$(mount_opts_for "$fs")"
