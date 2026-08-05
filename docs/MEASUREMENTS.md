@@ -2733,3 +2733,42 @@ pursued.
 
 Disk is not the binding constraint here — 186 MB for 2.1 M entries is the same
 order as Everything's index for a million — and latency is.
+
+## 2026-08-05 — what a `rm -rf` costs a commit
+
+The watcher reports one removed path per file and one per directory, and a
+commit lands once a second, so a few thousand of them arrive in one batch. Every
+one of those was checked against every live row of every segment, with the write
+lock held.
+
+```bash
+cargo run --release -p scour-index-native --example removal
+```
+
+One million rows in one segment. The commit alone, so the number is comparable
+across index sizes.
+
+| removed paths in the batch | before | after | |
+|---|---|---|---|
+| 1 | 14.89 ms | 14.18 ms | the floor: a pass over a million rows |
+| 16 | 20.77 | 16.22 | |
+| 256 | 174.24 | 27.68 | 6.3× |
+| 1,024 | 567.42 | 41.59 | 13.6× |
+| **4,096** | **2.24 s** | **77.52 ms** | **29×**, and 4,096 is the engine's batch |
+| one prefix over the whole subtree | 15.08 | 16.35 | unchanged, as it should be |
+
+547 µs a path became 18.9.
+
+The change is to ask the question from the path rather than from the list: a
+path has a dozen ancestors however many thousand paths were removed, so the
+check stops growing with the batch. Within a segment the prefixes additionally
+become merged ranges of directory numbers, plus a list sorted by parent for the
+rows a range cannot reach.
+
+**The obvious version is wrong.** Sorting the removed paths and binary-searching
+for the greatest one not after the row's path misses matches, because sort order
+does not put an ancestor beside its descendant: with `/pkg/lib` and
+`/pkg/lib-old` both removed, `/pkg/lib/deep/f.rs` sorts *after* `/pkg/lib-old`
+— `-` is 0x2D and `/` is 0x2F — so the single comparison lands on the member
+that does not match. Caught by `the_fast_answer_agrees_with_the_slow_one`,
+which asks both ways about 768 probes.

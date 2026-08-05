@@ -132,7 +132,7 @@ struct Inner {
     /// Removals that have taken effect for searches but not yet for the files.
     hidden: HashMap<u64, EntryId>,
     /// Subtrees in the same state.
-    hidden_prefixes: Vec<String>,
+    hidden_prefixes: scour_core::PrefixSet,
     generation: u64,
     /// A generation that has been handed out and not yet reconciled.
     ///
@@ -315,43 +315,17 @@ impl NativeIndex {
         // column, which is the same thing `under:` uses to make scoping a
         // search a comparison rather than a scan.
         if !inner.hidden_prefixes.is_empty() {
-            let prefixes: Vec<String> = inner.hidden_prefixes.clone();
+            let prefixes = std::mem::take(&mut inner.hidden_prefixes);
             for (i, live) in inner.segments.iter_mut().enumerate() {
                 let victims: Vec<usize> = {
                     let seg = live.view()?;
-                    let scopes: Vec<crate::dirs::DirScope> =
-                        prefixes.iter().map(|p| seg.dirs.subtree(p)).collect();
-                    // The removed directory's **own** row is not under itself:
-                    // it lives in its parent, so it carries the parent's
-                    // number and the range check walks straight past it. The
-                    // test caught exactly that — `/home/u/Projeler` survived
-                    // the removal of `/home/u/Projeler`. So the parent's
-                    // number and the last component are collected too, and the
-                    // name is only read for the few rows that sit there.
-                    let selves: Vec<(u32, &str)> = prefixes
-                        .iter()
-                        .filter_map(|p| {
-                            let p = p.trim_end_matches('/');
-                            let (parent, name) = p.rsplit_once('/')?;
-                            let parent = if parent.is_empty() { "/" } else { parent };
-                            Some((seg.dirs.exact(parent)?, name))
-                        })
-                        .collect();
-                    if scopes.iter().all(crate::dirs::DirScope::is_empty) && selves.is_empty() {
+                    let doomed = Doomed::new(&seg, &prefixes);
+                    if doomed.is_empty() {
                         Vec::new()
                     } else {
                         (0..live.rows())
                             .filter(|&row| {
-                                if !live.is_alive(row) {
-                                    return false;
-                                }
-                                let d = seg.dir_id(row);
-                                if scopes.iter().any(|s| s.contains(d)) {
-                                    return true;
-                                }
-                                selves
-                                    .iter()
-                                    .any(|&(pd, name)| pd == d && seg.names.get(row) == Some(name))
+                                live.is_alive(row) && doomed.takes(&seg, row, seg.dir_id(row))
                             })
                             .collect()
                     }
@@ -361,9 +335,8 @@ impl NativeIndex {
                     touched[i] = true;
                 }
             }
-            inner
-                .staged
-                .retain(|e| !prefixes.iter().any(|p| under(&e.path, p)));
+            inner.staged.retain(|e| !prefixes.covers(&e.path));
+            inner.hidden_prefixes = prefixes;
         }
 
         // Named removals, and the old row of everything being re-upserted.
@@ -634,6 +607,95 @@ impl NativeIndex {
     }
 }
 
+/// Which rows of one segment a batch of subtree removals takes.
+///
+/// The list of removed paths arrives in the thousands — a delete reports one
+/// per file and one per directory, and a commit lands once a second — and the
+/// obvious loop asks every row about every path. Measured on a million rows:
+/// four thousand paths cost **2.24 seconds** with the write lock held, one
+/// search behind it for every one of those seconds.
+///
+/// So the paths are turned into two things a row can be looked up in, once per
+/// segment rather than once per row:
+///
+/// * the **directory numbers** below them, which the front-coded table makes
+///   contiguous, merged into disjoint ranges;
+/// * the ones identified by **parent and name** — a removed file has no
+///   directory number of its own, and a removed directory's own row lives in
+///   its parent and so carries the parent's number. `/home/u/Projeler`
+///   surviving the removal of `/home/u/Projeler` is what taught that.
+///
+/// Both are sorted, so a row costs two binary searches and, for the few rows
+/// whose parent is in the second list, one name comparison.
+struct Doomed<'a> {
+    /// Half-open ranges of directory numbers, disjoint and sorted.
+    inside: Vec<(u32, u32)>,
+    /// `(parent number, name)`, sorted by parent.
+    named: Vec<(u32, &'a str)>,
+}
+
+impl<'a> Doomed<'a> {
+    fn new(seg: &Segment<'_>, prefixes: &'a scour_core::PrefixSet) -> Doomed<'a> {
+        let mut inside: Vec<(u32, u32)> = Vec::new();
+        let mut named: Vec<(u32, &'a str)> = Vec::new();
+        for p in prefixes.iter() {
+            let scope = seg.dirs.subtree(p);
+            if let Some(own) = scope.own {
+                inside.push((own, own + 1));
+            }
+            if !scope.below.is_empty() {
+                inside.push((scope.below.start, scope.below.end));
+            }
+            if let Some((parent, name)) = p.trim_end_matches('/').rsplit_once('/') {
+                let parent = if parent.is_empty() { "/" } else { parent };
+                if let Some(pd) = seg.dirs.exact(parent) {
+                    named.push((pd, name));
+                }
+            }
+        }
+        inside.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(inside.len());
+        for (start, end) in inside {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        named.sort_unstable();
+        Doomed {
+            inside: merged,
+            named,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inside.is_empty() && self.named.is_empty()
+    }
+
+    fn takes(&self, seg: &Segment<'_>, row: usize, dir: u32) -> bool {
+        let at = self.inside.partition_point(|&(_, end)| end <= dir);
+        if self.inside.get(at).is_some_and(|&(start, _)| start <= dir) {
+            return true;
+        }
+        if self.named.is_empty() {
+            return false;
+        }
+        // The name is read only for rows sitting directly in a directory that
+        // something was removed from, which is a handful even during a delete.
+        let at = self.named.partition_point(|&(parent, _)| parent < dir);
+        if self.named.get(at).is_none_or(|&(parent, _)| parent != dir) {
+            return false;
+        }
+        let Some(name) = seg.names.get(row) else {
+            return false;
+        };
+        self.named[at..]
+            .iter()
+            .take_while(|&&(parent, _)| parent == dir)
+            .any(|&(_, n)| n == name)
+    }
+}
+
 /// Is this row hidden by a removal that has not been committed yet?
 ///
 /// Costs nothing when there are none, which is the normal state: the checks are
@@ -659,20 +721,11 @@ fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, _name: &[u8]) -> bool 
     }
     if !inner.hidden_prefixes.is_empty() {
         let path = seg.path(row, seg.names.get(row).unwrap_or_default());
-        if inner.hidden_prefixes.iter().any(|p| under(&path, p)) {
+        if inner.hidden_prefixes.covers(&path) {
             return true;
         }
     }
     false
-}
-
-/// Is `path` at or below `prefix`?
-fn under(path: &str, prefix: &str) -> bool {
-    let p = prefix.trim_end_matches('/');
-    if p.is_empty() {
-        return true;
-    }
-    path == p || (path.len() > p.len() && path.starts_with(p) && path.as_bytes()[p.len()] == b'/')
 }
 
 /// One segment's position in a merge.
@@ -840,7 +893,7 @@ impl Index for NativeIndex {
                     report.removed += 1;
                 }
                 Change::RemoveSubtree { path } => {
-                    inner.hidden_prefixes.push(path);
+                    inner.hidden_prefixes.extend([path]);
                     report.subtrees_removed += 1;
                 }
                 // Walking the subtree again is the engine's job; what comes
@@ -1274,22 +1327,5 @@ impl Index for NativeIndex {
             bytes_after: dir_size(&self.dir),
             took_ms: started.elapsed().as_millis() as u64,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_path_is_under_its_own_prefix_but_not_under_a_longer_name() {
-        assert!(under("/home/u/Projeler", "/home/u/Projeler"));
-        assert!(under("/home/u/Projeler/a.rs", "/home/u/Projeler"));
-        assert!(under("/home/u/Projeler/a.rs", "/home/u/Projeler/"));
-        // The trap the directory table had too: a sibling whose name starts
-        // with the prefix is not inside it.
-        assert!(!under("/home/u/Projeler-414/a.rs", "/home/u/Projeler"));
-        assert!(!under("/home/u/Proj", "/home/u/Projeler"));
-        assert!(under("/anything", "/"));
     }
 }

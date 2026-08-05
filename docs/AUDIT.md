@@ -15,8 +15,8 @@ The order is by what it costs a user, not by where it sits in the code.
 | §5 | `.alive` files outlive their segments | fixed |
 | §6 | fragmentation costs nothing measurable | acted on: no more automatic rebuild |
 | §7 | idle housekeeping never runs | fixed |
-| §8 | a pending `rm -rf` may make commits quadratic | **open, and unmeasured** |
-| §9 | smaller things | partly |
+| §8 | a pending `rm -rf` made commits quadratic | measured, then fixed — 29× |
+| §9 | smaller things | fixed, except two left alone on purpose |
 
 Verified afterwards on the live index rather than only in tests: a directory
 created in `~` with three files written into it in the same instant is now
@@ -243,47 +243,92 @@ Together with §4: automatic maintenance either never starts, or never stops.
 
 ---
 
-## 8. A pending `rm -rf` makes a commit quadratic — not yet measured
+## 8. A pending `rm -rf` made a commit quadratic — measured, then fixed
 
 Every removed path becomes one entry in `hidden_prefixes`. `flush_prepare`
-then, per segment, builds one `DirScope` per prefix and checks **every live
-row** against **every scope**:
+then, per segment, built one `DirScope` per prefix and checked **every live
+row** against **every scope**. Commits run once a second, so the list is
+bounded by a second of removals — and a second of `rm -rf node_modules` is
+thousands of paths.
 
-```rust
-(0..live.rows()).filter(|&row| scopes.iter().any(|s| s.contains(d)) || ...)
+It was flagged unmeasured, so the first thing was to measure it:
+
+```bash
+cargo run --release -p scour-index-native --example removal
 ```
 
-Commits run once a second, so the prefix list is bounded by a second of
-removals — but a second of `rm -rf node_modules` is thousands of paths, and
-thousands of scopes against 2.1 M rows is billions of comparisons with the
-write lock held.
+One million rows, one segment, timing the commit alone:
 
-Flagged rather than claimed: I did not measure it. It is the next thing to
-measure, and the measurement is `rm -rf` on a large tree with
-`SCOUR_LOCK_TRACE=1`.
+| removed paths in the batch | before | after |
+|---|---|---|
+| 1 | 14.89 ms | 14.18 ms |
+| 16 | 20.77 | 16.22 |
+| 256 | 174.24 | 27.68 |
+| 1,024 | 567.42 | 41.59 |
+| **4,096** | **2.24 s** | **77.52 ms** |
+| one prefix over the whole subtree | 15.08 ms | 16.35 ms |
+
+At the batch size the engine actually uses, **29×**, and 547 µs a path became
+18.9. The ~14 ms floor is the pass over a million rows that a commit does
+anyway.
+
+Two changes, and the first is the one that matters:
+
+* The question is asked **from the path, not from the list**. A path has a
+  dozen ancestors however many thousand members the set has, so "is this under
+  anything removed" is a dozen lookups and stops growing with the batch. That
+  is `scour_core::PrefixSet`, shared with the engine's walk coalescing, which
+  had grown its own copy of the same idea.
+* Within a segment, the prefixes become **merged ranges of directory numbers**
+  plus a list sorted by parent for the rows a range cannot reach — a removed
+  file has no directory number of its own, and a removed directory's own row
+  carries its parent's.
+
+The obvious version of the first — sort the members, binary-search for the
+greatest one not after the path — is **wrong**, and a test rather than a
+review said so. Sort order does not put an ancestor next to its descendant:
+with `/pkg/lib` and `/pkg/lib-old` both removed, `/pkg/lib/deep/f.rs` sorts
+*after* `/pkg/lib-old`, because `-` is below `/`. One comparison lands on the
+member that does not match and misses the one that does.
 
 ---
 
 ## 9. Smaller things, in one place
 
-- **Durability window.** `commit` saves the manifest under the lock and writes
-  the `.alive` bits after releasing it. A crash in between brings deleted rows
-  back until the next sweep. `write_alive`'s comment argues this is no worse
-  than before, which is true; it is still a real window rather than a
-  theoretical one.
-- **`sweep` builds a path per out-of-scope row.** `under(&seg.path(row,
-  &String::from_utf8_lossy(name)), under_path)` runs for every live row the
-  directory scope did not already accept — under the write lock. With two
-  sources, every row of the other source pays it on every sweep.
-- **An empty-path `Rescan` is not coalesced.** Ten overflow notifications are
-  ten full walks of every source, run one after another on the worker thread.
-- **The owner lookup in the `Rescan` arm is a bare `starts_with`**, unlike
-  `Engine::owner_of` two hundred lines above it, which checks for a separator.
-  A root of `/home/hasan` claims `/home/hasanX`.
+Fixed:
+
+- **`sweep` built a path per out-of-scope row** — a `String` for every live row
+  the directory scope did not already accept, under the write lock. Harmless
+  when a sweep followed a full rescan; not harmless now that creating a folder
+  queues a walk. The directory number already answers it.
+- **An empty-path `Rescan` was not coalesced**, so ten overflow notifications
+  were ten full walks of every source, one after another on the worker thread.
+- **The owner lookup in the `Rescan` arm was a bare `starts_with`**, unlike
+  `Engine::owner_of` two hundred lines above it. A root of `/home/hasan`
+  claimed `/home/hasanX`. Both now go through the same function.
+
+Left alone, deliberately:
+
+- **The durability window.** `commit` saves the manifest under the lock and
+  writes the `.alive` bits after releasing it, so a hard kill in between brings
+  some deleted rows back until the next sweep takes them.
+
+  The fix is to write the bits before the manifest, and the fix is worse than
+  the fault: that write is an `fsync` per touched segment, measured at 13 ms a
+  segment and three or four segments a commit, once a second, with every search
+  waiting. Trading a bounded, self-healing staleness after an unclean shutdown
+  for 40 ms of held lock every second is the wrong way round. A graceful stop
+  commits, so this needs a `SIGKILL` or a power cut to happen at all.
+
+  What would close it honestly is a clean-shutdown marker in the manifest, so
+  the engine could rescan after an unclean start. That is a format bump, and a
+  format bump costs the user a full reindex — too much for this.
+
 - **An unknown `word:` prefix is searched for literally.** `is:dir` finds
-  nothing and looks broken; `explain` says `name contains "is:dir"`, correctly.
-  The token is `folder:` or `kind:folder`. Nothing is wrong here except that
-  the window never shows the user what `explain` knows.
+  nothing and looks broken; `explain` says `name contains "is:dir"`, correctly,
+  and the token is `folder:` or `kind:folder`. Nothing is wrong in the engine;
+  the window simply never shows what `explain` already knows. That belongs with
+  the coloured query chips (Phase 5.2), not here.
 
 ---
 

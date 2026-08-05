@@ -25,7 +25,7 @@ pub use traits::{ChangeSink, ContentSink, EntrySink, Extractor, Flow, Index, Sou
 pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
     EntryId, Error, Facet, FacetBy, FacetRequest, FacetResponse, Group, Hit, IndexStats, Key, Kind,
-    MaintReport, Maintenance, Match, Meta, Page, Result, Role, ScanOptions, ScanReport,
+    MaintReport, Maintenance, Match, Meta, Page, PrefixSet, Result, Role, ScanOptions, ScanReport,
     SearchRequest, SearchResponse, SortKey, SourceId, SourceInfo, SourceKind, Span, Status,
-    TimeField, TreeNode, UsageRequest, UsageResponse, ext_of, ext_str, kind_of, mode_string,
+    TimeField, TreeNode, UsageRequest, UsageResponse, ext_of, ext_str, kind_of, mode_string, under,
 };

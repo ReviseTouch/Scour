@@ -167,7 +167,7 @@ impl<'a> Rollup<'a> {
         let mut stack: Vec<usize> = Vec::new();
         for id in 0..dirs.len() {
             while let Some(&top) = stack.last() {
-                if under(&dirs[id].0, &dirs[top].0) {
+                if strictly_below(&dirs[id].0, &dirs[top].0) {
                     break;
                 }
                 stack.pop();
@@ -218,8 +218,14 @@ impl<'a> Rollup<'a> {
     }
 }
 
-/// Is `path` strictly below `prefix`?
-fn under(path: &str, prefix: &str) -> bool {
+/// Is `path` **strictly** below `prefix`?
+///
+/// Not [`scour_core::under`], and the difference is the whole point: a rollup
+/// asks what a directory *contains*, so the directory is not one of its own
+/// children. Named apart from the shared one because the two were briefly
+/// confused for each other, which is a compile error here and would have been
+/// an off-by-one row in a total.
+fn strictly_below(path: &str, prefix: &str) -> bool {
     let p = prefix.trim_end_matches('/');
     if p.is_empty() {
         return true;
@@ -229,7 +235,7 @@ fn under(path: &str, prefix: &str) -> bool {
 
 /// Is `path` one level below `parent`?
 fn is_child(path: &str, parent: &str) -> bool {
-    under(path, parent) && !path[parent.trim_end_matches('/').len() + 1..].contains('/')
+    strictly_below(path, parent) && !path[parent.trim_end_matches('/').len() + 1..].contains('/')
 }
 
 #[cfg(test)]
@@ -244,7 +250,7 @@ mod tests {
         // The sibling that sorts between a directory and its own children, and
         // which a naive range scan swallows: `-` is 0x2D and `/` is 0x2F.
         assert!(!is_child("/a-1/b", "/a"));
-        assert!(!under("/a-1", "/a"));
+        assert!(!strictly_below("/a-1", "/a"));
     }
 
     #[test]

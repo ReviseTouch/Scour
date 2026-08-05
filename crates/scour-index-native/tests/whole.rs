@@ -409,6 +409,100 @@ fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
 }
 
 #[test]
+fn deleting_a_tree_gives_the_same_answer_however_it_is_reported() {
+    // A delete arrives as one removed path per file and one per directory, and
+    // a commit lands once a second, so a few thousand of them are in one batch.
+    // The obvious loop asks every row about every path, which on a million rows
+    // was **2.24 seconds** of held write lock at four thousand paths — with a
+    // search queued behind it for every one of those seconds.
+    //
+    // What the replacement must not do is change the answer. Reporting a
+    // subtree as one prefix and reporting it as every path inside it are two
+    // descriptions of the same delete, so the index has to end up in the same
+    // place either way.
+    let tree = || -> Vec<Entry> {
+        let mut v = Vec::new();
+        for pkg in 0..40 {
+            let mut d = entry(
+                &format!("/corpus/node_modules/pkg{pkg}"),
+                10,
+                100_000 + pkg as u64,
+            );
+            d.is_dir = true;
+            v.push(d);
+            for f in 0..25 {
+                let n = pkg * 25 + f;
+                v.push(entry(
+                    &format!("/corpus/node_modules/pkg{pkg}/lib/file{n}.js"),
+                    100 + n,
+                    n as u64,
+                ));
+            }
+        }
+        // The sibling whose name merely starts the same, and something else
+        // entirely. Neither may be touched.
+        v.push(entry("/corpus/node_modules-old/keep.js", 5, 90_001));
+        v.push(entry("/other/keep.rs", 6, 90_002));
+        v
+    };
+
+    let run = |as_one_prefix: bool| -> Vec<String> {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let entries = tree();
+        index
+            .apply(&mut entries.clone().into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+
+        let removals: Vec<Change> = if as_one_prefix {
+            vec![Change::RemoveSubtree {
+                path: "/corpus/node_modules".into(),
+            }]
+        } else {
+            // Leaves first and the directory last, which is the order a
+            // filesystem reports them in.
+            entries
+                .iter()
+                .filter(|e| e.path.starts_with("/corpus/node_modules/"))
+                .map(|e| Change::RemoveSubtree {
+                    path: e.path.clone(),
+                })
+                .chain(std::iter::once(Change::RemoveSubtree {
+                    path: "/corpus/node_modules".into(),
+                }))
+                .collect()
+        };
+        index.apply(&mut removals.into_iter()).expect("apply");
+        index.commit().expect("commit");
+
+        let mut left: Vec<String> = index
+            .search(&SearchRequest {
+                page: Page::new(0, 5_000),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect();
+        left.sort();
+        left
+    };
+
+    let one = run(true);
+    assert_eq!(
+        one,
+        vec![
+            "/corpus/node_modules-old/keep.js".to_owned(),
+            "/other/keep.rs".to_owned(),
+        ],
+        "the sibling with the longer name and the unrelated file both stay"
+    );
+    assert_eq!(run(false), one, "one prefix and a thousand have to agree");
+}
+
+#[test]
 fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
     // A segment swept empty is both *touched* — its bitmap changed — and
     // *gone*, and the commit that erases it writes the bitmaps after releasing
