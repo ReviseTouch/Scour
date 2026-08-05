@@ -118,14 +118,18 @@ for mnt in "${BUILT[@]}"; do
     sub="$d/moved"
     mkdir -p "$sub"
     for i in $(seq 0 49); do : > "$d/f$i"; done
+    # A file of its own for the move, so the remount count is not short by the
+    # one that was moved out of the compared set — the control read 49/50 and
+    # the missing one was this.
+    : > "$d/mover"
     sync
 
     before="$(cd "$d" && stat -c '%n %i' f* | sort)"
 
     # A move within the same filesystem, which on FAT rewrites the directory
     # entry the number is derived from.
-    mv "$d/f0" "$sub/f0"
-    moved_before="$(stat -c '%i' "$sub/f0")"
+    mv "$d/mover" "$sub/mover"
+    moved_before="$(stat -c '%i' "$sub/mover")"
 
     umount "$mnt"
     mount -o "loop${opts:+,$opts}" "$img" "$mnt"
@@ -133,7 +137,7 @@ for mnt in "${BUILT[@]}"; do
     after="$(cd "$d" && stat -c '%n %i' f* 2>/dev/null | sort)"
     same="$(comm -12 <(echo "$before") <(echo "$after") | wc -l)"
     total="$(echo "$before" | wc -l)"
-    moved_after="$(stat -c '%i' "$sub/f0" 2>/dev/null || echo "-")"
+    moved_after="$(stat -c '%i' "$sub/mover" 2>/dev/null || echo "-")"
     if [[ "$moved_before" == "$moved_after" ]]; then move="yes"; else move="NO"; fi
 
     printf '%-8s %-22s %s\n' "$fs" "$same/$total" "$move"

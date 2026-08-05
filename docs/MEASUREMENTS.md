@@ -2905,3 +2905,59 @@ which is the only thing the boot walk exists for — in a fraction of the data.
 But `$Extend/$UsnJrnl` reads back as zero bytes and its `$J` stream is not
 exposed under these mount options, and reaching it another way means the raw
 partition, which means root.
+
+## 2026-08-05 — is the filesystem table right?
+
+`FsTraits` is read from a table of `statfs` magic numbers, and a wrong row
+there is not a crash. It is a silently wrong index: a claimed `stable_ids`
+where `st_ino` is invented makes every file its own duplicate after a remount,
+and a claimed `case_sensitive` where the filesystem folds makes `Rapor.pdf` and
+`rapor.pdf` two rows for one file. Neither raises anything.
+
+The table had never been checked against a filesystem. Nothing on a developer
+machine is mounted FAT, which is the row that matters.
+
+```bash
+sudo bash scripts/fsmatrix.sh          # builds each format in /dev/shm
+```
+
+Each image is made in RAM, mounted, probed by writing files, and unmounted.
+`claimed` is the table; `measured` is what the filesystem did.
+
+| | claimed | measured |
+|---|---|---|
+| ext4 | `case=yes ids=yes` | `case=yes ids=yes rename=yes` |
+| ext2 | `case=yes ids=yes` | `case=yes ids=yes rename=yes` |
+| btrfs | `case=yes ids=yes` | `case=yes ids=yes rename=yes` |
+| xfs | `case=yes ids=yes` | `case=yes ids=yes rename=yes` |
+| **vfat** | `case=NO ids=NO` | `case=NO ids=yes rename=yes` |
+| **exfat** | `case=NO ids=NO` | `case=NO ids=yes rename=yes` |
+
+Plus btrfs, ntfs3 and tmpfs as they are mounted on this machine, all agreeing.
+Nothing claimed more than the filesystem offers, which is the only direction
+that is a defect — claiming less is what `FsTraits::UNKNOWN` documents.
+
+### The `ids` column was asking a weaker question
+
+`stable_ids` says `st_ino` "is stored on disk and **survives a remount**". A
+probe running as an ordinary user against something already mounted cannot see
+past its own session, so `ids=yes` on vfat above means "distinct, and stable
+across a rename" — the same shape, a weaker claim. Only root can unmount, so
+the script asks properly: fifty files, their numbers, unmount, mount, compare.
+
+| format | ids survive a remount | ids survive a move |
+|---|---|---|
+| vfat | **0/50** | **NO** |
+| exfat | **0/50** | **NO** |
+| ext4 | all of them | yes |
+
+Not one. FAT regenerates every number, and moving a file between directories
+changes it without a remount at all — the number comes from where the directory
+entry sits on disk, and both operations move it.
+
+So `stable_ids: false` for the FAT family is correct, and `entry_of` falling
+back to `EntryId::path_hash` is what keeps a USB stick from doubling its own
+index on the second scan. The comment there said "can change"; it changes.
+
+(The control row read `49/50` the first time. That was the harness, not ext4 —
+the file it moves was inside the compared set. It has its own file now.)

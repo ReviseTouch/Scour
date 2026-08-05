@@ -372,6 +372,15 @@ pub(crate) fn entry_of(
         // and exFAT `st_ino` is invented by the driver and can change across a
         // remount; an identity built from it makes a rescan decide every file
         // is new, which doubles the index and then sweeps the originals away.
+        //
+        // Measured rather than assumed, by `scripts/fsmatrix.sh` — fifty files,
+        // their numbers taken, the filesystem unmounted and mounted again:
+        //
+        //   vfat    0/50 survive a remount, and a move changes the number too
+        //   exfat   0/50
+        //   ext4    all of them, move included
+        //
+        // Not "can change". Does change, every one of them.
         #[cfg(unix)]
         Some(m) if stable_ids => {
             use std::os::unix::fs::MetadataExt;
