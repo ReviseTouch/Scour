@@ -11,8 +11,17 @@
 //! Prints how long the watch took to install as well as whether it worked: on
 //! Linux a recursive watch is one inotify watch per directory, so the cost is
 //! proportional to the tree and is worth knowing before it is paid at start-up.
+//!
+//! And then it **proves the watch works**, which is a different question from
+//! whether it was accepted. `watch()` returning `Ok` means the kernel took the
+//! request; it does not mean events arrive. Network mounts, FUSE, and anything
+//! whose changes happen on the far side of the wire accept a watch and report
+//! nothing — so this writes a file under the path and waits to be told about
+//! it. A volume that answers `watched` and then `no events` is one that has to
+//! be rescanned on a timer instead.
 
-use std::time::Instant;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -41,7 +50,10 @@ fn main() {
 
     for p in &paths {
         let t = Instant::now();
-        let mut watcher = match notify::recommended_watcher(|_| {}) {
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = match notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        }) {
             Ok(w) => w,
             Err(e) => {
                 println!("{p}: no watcher at all: {e}");
@@ -50,7 +62,46 @@ fn main() {
         };
         match watcher.watch(std::path::Path::new(p), RecursiveMode::Recursive) {
             Ok(()) => println!("{p}: watched, {:.1?} to install", t.elapsed()),
-            Err(e) => println!("{p}: REFUSED after {:.1?} — {e}", t.elapsed()),
+            Err(e) => {
+                println!("{p}: REFUSED after {:.1?} — {e}", t.elapsed());
+                continue;
+            }
         }
+        println!("   {}", proof(&rx, std::path::Path::new(p)));
+    }
+}
+
+/// Write something under a watched path and see whether the watcher notices.
+///
+/// The file is created inside a directory of its own and both are removed
+/// afterwards, so a volume being probed is left as it was found.
+fn proof(rx: &mpsc::Receiver<notify::Result<notify::Event>>, root: &std::path::Path) -> String {
+    let dir = root.join(".scour-watch-probe");
+    let file = dir.join("probe.txt");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return "cannot test: the path is not writable from here".into();
+    }
+    let wrote = std::fs::write(&file, b"probe").is_ok();
+    let mut seen = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(Ok(ev)) if ev.paths.iter().any(|q| q.starts_with(&dir)) => {
+                seen = true;
+                break;
+            }
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let _ = std::fs::remove_file(&file);
+    let _ = std::fs::remove_dir(&dir);
+    match (wrote, seen) {
+        (false, _) => "cannot test: the path is not writable from here".into(),
+        (true, true) => "events arrive — live updates will work here".into(),
+        (true, false) => "**no events in 5s** — the watch was accepted but reports nothing; \
+             this volume has to be rescanned on a timer"
+            .into(),
     }
 }
