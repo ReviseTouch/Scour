@@ -126,13 +126,45 @@ enumeration because the index already knows every directory: **278 ms for
 177,915 `stat` calls**, 1.8 µs each. Once a minute is half a percent of a core
 and a worst case of sixty seconds on a disk that changes four times a day.
 
-Two things were tried against that and are recorded so they are not tried
-again. **Parallelising the sweep makes it slower** — 279 ms on one thread, 690
-on four, 1,319 on eight: `ntfs3` serialises metadata reads and the threads only
-add contention. And **there is no cheap "did anything change" flag**: `$MFT`'s
-mtime does not move, `$LogFile`'s first pages do not change on a Linux write
-(`ntfs3` does not write NTFS's own log), and `statvfs` free blocks move only
-for changes that alter allocation — a rename would slip past it.
+**Parallelising the sweep makes it slower** — 279 ms on one thread, 690 on
+four, 1,319 on eight: `ntfs3` serialises metadata reads and the threads only
+add contention.
+
+**And the sweep does not have to run on a clock.** Three candidates for a cheap
+"has anything changed here" flag were measured. `$MFT`'s mtime does not move.
+`$LogFile`'s first pages do not change on a Linux write — `ntfs3` does not
+write NTFS's own log. `statvfs` free blocks move for a write but not for a
+rename. The fourth works:
+
+| | write sectors on `nvme1n1p2` |
+|---|---:|
+| three seconds idle | **0** — no noise at all |
+| create a file | +56 |
+| **rename it** | **+48** |
+| delete it | +56 |
+
+`/proc/diskstats` is one line to read, it is counted per partition so this
+volume's number is only this volume's, and it moves for metadata-only
+operations that `statvfs` sleeps through. So the volume is polled for pennies
+and the 278 ms sweep runs only when the disk has actually moved — four times a
+day, on the evidence above.
+
+Two caveats it needs. Writes reach the block layer when the page cache decides
+to flush them, so the flag is prompt rather than instant unless the writer
+called `sync`; a slow sweep on a timer remains the backstop. And it says
+"something", never "what" — it is a trigger, not a feed.
+
+One correction while here: **`ntfs3` does support export operations**, against
+the usual claim that NTFS does not. `name_to_handle_at` on this volume returns
+a handle, type 1, 8 bytes — which is `fanotify`'s precondition for
+`FAN_REPORT_DFID_NAME`. Whether the filesystem-wide mark itself then works was
+not tested; that needs the capability this account does not have.
+
+The MFT bitmap idea belongs here too, and it does not survive: diffing the
+record bitmap would give creations and deletions for 270 KB of reading, but
+that bitmap is an *attribute* of `$MFT` and `ntfs3` exposes no attributes. The
+`$Bitmap` that does open is the **cluster** bitmap, 28.8 MB, and it says which
+clusters moved rather than which files.
 
 **Which is a plan rather than a gap.** A volume whose whole table reads in
 1,425 ms cold and 454 ms warm does not need watching: reconciling it is
