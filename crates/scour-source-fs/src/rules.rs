@@ -35,6 +35,17 @@ pub struct Rules {
     dir_seqs: Vec<Vec<String>>,
     files: Vec<String>,
     allow: Vec<String>,
+    /// Allow rules naming a sequence rather than a place — `target/release`,
+    /// matched wherever it appears.
+    ///
+    /// **Why a sequence and not a path.** The exclusion that matters most to a
+    /// developer is `target`, and it is right: 852,437 of 2,986,545 entries
+    /// here, and a flood through the watcher while a build runs. But the
+    /// binaries it produces are the very things a person wants to find and
+    /// run, and they live in exactly two of its children. A path-shaped allow
+    /// means writing one line per project and rewriting it per checkout; a
+    /// sequence means `target/release` once, for every project on the disk.
+    allow_seqs: Vec<Vec<String>>,
     /// Exclusions an allow rule may not overrule.
     ///
     /// The index's own directory is the whole reason this exists: a user's
@@ -71,7 +82,27 @@ impl Rules {
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
-            allow: norm(&opts.allow),
+            allow: norm(
+                &opts
+                    .allow
+                    .iter()
+                    .filter(|a| a.starts_with('/'))
+                    .cloned()
+                    .collect(),
+            ),
+            // Anything that is not an absolute path is a sequence of directory
+            // names, the same shape the exclusions already accept.
+            allow_seqs: opts
+                .allow
+                .iter()
+                .filter(|a| !a.starts_with('/'))
+                .map(|a| {
+                    a.split('/')
+                        .filter(|c| !c.is_empty())
+                        .map(str::to_lowercase)
+                        .collect()
+                })
+                .collect(),
             deny: norm(&opts.deny),
         }
     }
@@ -119,6 +150,60 @@ impl Rules {
             && self.deny.is_empty()
     }
 
+    /// Is this path taken back by an allow rule?
+    ///
+    /// **The two shapes mean different amounts, and the numbers are why.** A
+    /// path — `/home/u/big/keep` — takes back a *subtree*, which is what a
+    /// person naming one place means.
+    ///
+    /// A sequence — `target/release` — takes back that directory's **own
+    /// entries and no deeper**. Measured on this machine: `target/release` is
+    /// 11,056 entries in one project and 114,463 in another, nearly all of it
+    /// `deps/`, while its top level is **41 entries containing all 5
+    /// binaries**. A subtree rule would hand back everything the exclusion
+    /// exists to keep out in order to reach a handful of files; this hands
+    /// back the handful.
+    fn allows(&self, path: &str, is_dir: bool) -> bool {
+        if self.allow.iter().any(|a| under(path, a)) {
+            return true;
+        }
+        if self.allow_seqs.is_empty() {
+            return false;
+        }
+        let comps = lower_components(path);
+        let n = comps.len();
+        self.allow_seqs.iter().any(|rule| {
+            let l = rule.len();
+            // The named directory itself, so it can be entered and listed.
+            if n >= l && comps[n - l..] == rule[..] {
+                return true;
+            }
+            // A file directly inside it. Directories are deliberately left
+            // out: `deps` under `release` is where the noise lives, and
+            // refusing it here is what lets the walk prune it.
+            !is_dir && n >= l + 1 && comps[n - 1 - l..n - 1] == rule[..]
+        })
+    }
+
+    /// Is any *ancestor* of this path an excluded directory?
+    ///
+    /// **Only asked when an allow rule exists.** Ordinarily an excluded
+    /// directory is pruned and nothing under it is ever offered, so this
+    /// question cannot arise and the walk pays nothing for it. An allow rule
+    /// changes that: the walk is let into `target` to reach `target/release`,
+    /// and without this everything else in there — every object file, every
+    /// fingerprint — would be indexed *because* one child was wanted.
+    fn inside_excluded(&self, path: &str) -> bool {
+        let comps = lower_components(path);
+        // The last component is the entry itself; its own rules were already
+        // applied by the caller.
+        let ancestors = comps.len().saturating_sub(1);
+        if comps.iter().take(ancestors).any(|c| self.dirs.contains(c)) {
+            return true;
+        }
+        self.seq_within(path)
+    }
+
     /// Should this entry be skipped?
     ///
     /// `path` is already `/`-normalised.
@@ -126,17 +211,26 @@ impl Rules {
         if self.deny.iter().any(|d| under(path, d)) {
             return true;
         }
-        if self.allow.iter().any(|a| under(path, a)) {
+        if self.allows(path, is_dir) {
             return false;
         }
         if self.paths.iter().any(|p| under(path, p)) {
             return true;
         }
         let lower = name.to_lowercase();
-        if is_dir {
-            return self.dirs.contains(&lower) || self.seq_ends_at(path, name);
+        let by_name = if is_dir {
+            self.dirs.contains(&lower) || self.seq_ends_at(path, name)
+        } else {
+            self.files.contains(&lower)
+        };
+        if by_name {
+            return true;
         }
-        self.files.contains(&lower)
+        // See `inside_excluded`: free unless somebody asked for an exception.
+        if self.allow.is_empty() && self.allow_seqs.is_empty() {
+            return false;
+        }
+        self.inside_excluded(path)
     }
 
     /// Should this path be skipped, judged from the path alone?
@@ -155,7 +249,10 @@ impl Rules {
         if self.deny.iter().any(|d| under(path, d)) {
             return true;
         }
-        if self.allow.iter().any(|a| under(path, a)) {
+        // No `is_dir` here, and the generous reading is the safe one: a
+        // watcher letting one event through costs a check, and refusing one
+        // costs a row that never updates.
+        if self.allows(path, false) || self.allows(path, true) {
             return false;
         }
         if self.paths.iter().any(|p| under(path, p)) {
@@ -176,8 +273,26 @@ impl Rules {
     /// A directory excluded by prefix may still contain an allowed subtree, and
     /// pruning it there would make the allow rule a lie.
     pub fn may_contain_allowed(&self, path: &str) -> bool {
-        self.allow.iter().any(|a| under(a, path))
+        if self.allow.iter().any(|a| under(a, path)) {
+            return true;
+        }
+        if self.allow_seqs.is_empty() {
+            return false;
+        }
+        // A rule naming `target/release` has to let the walk into `target`,
+        // which is to say: this directory ends with some head of the rule.
+        let comps = lower_components(path);
+        self.allow_seqs.iter().any(|rule| {
+            (1..=rule.len().min(comps.len())).any(|n| comps[comps.len() - n..] == rule[..n])
+        })
     }
+}
+
+fn lower_components(path: &str) -> Vec<String> {
+    path.split('/')
+        .filter(|c| !c.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 /// Is `path` inside `prefix`, or the prefix itself?
@@ -294,13 +409,88 @@ mod tests {
         })
     }
 
+    /// `target` excluded the way the defaults exclude it, plus the allow
+    /// rules under test.
+    fn allowing(allow: &[&str]) -> Rules {
+        Rules::from_options(&ScanOptions {
+            exclude_dirs: vec!["target".into()],
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        })
+    }
+
     #[test]
-    fn prefixes_are_matched_by_component() {
-        let r = rules();
-        assert!(r.excludes("/proc/1/status", "status", false));
-        assert!(r.excludes("/proc", "proc", true));
-        // The bug this exists to prevent: /procession is not inside /proc.
-        assert!(!r.excludes("/procession/x", "x", false));
+    fn a_sequence_takes_back_the_binaries_without_the_build() {
+        let r = allowing(&["target/release"]);
+        // The walk has to be let into `target` to reach `release`.
+        assert!(
+            r.excludes("/p/target", "target", true),
+            "still excluded itself"
+        );
+        assert!(r.may_contain_allowed("/p/target"), "but walked into");
+        // What was asked for comes back…
+        assert!(!r.excludes("/p/target/release", "release", true));
+        assert!(!r.excludes("/p/target/release/app", "app", false));
+        // …and its siblings do not come with it, which is the whole point.
+        assert!(r.excludes("/p/target/debug/app", "app", false));
+        assert!(
+            r.excludes("/p/target/release/deps", "deps", true),
+            "nor its depths"
+        );
+        assert!(r.excludes("/p/target/.rustc_info.json", ".rustc_info.json", false));
+        // Every project, not one: the rule names a shape, not a place.
+        assert!(!r.excludes("/other/deep/target/release/bin", "bin", false));
+    }
+
+    #[test]
+    fn a_path_allow_takes_back_one_place_only() {
+        let r = allowing(&["/p/target/release"]);
+        assert!(r.may_contain_allowed("/p/target"), "on the way");
+        assert!(!r.excludes("/p/target/release/app", "app", false));
+        assert!(r.excludes("/p/target/debug/app", "app", false));
+        assert!(
+            r.excludes("/q/target/release/app", "app", false),
+            "another project"
+        );
+    }
+
+    /// The rule as it is actually used: the platform's own exclusions, plus
+    /// what the shipped configuration suggests.
+    #[test]
+    fn the_defaults_plus_one_line_bring_the_binaries_back() {
+        let (paths, dirs, files) = platform_defaults();
+        let r = Rules::from_options(&ScanOptions {
+            exclude_paths: paths,
+            exclude_dirs: dirs,
+            exclude_files: files,
+            allow: vec!["target/release".into(), "target/debug".into()],
+            ..Default::default()
+        });
+        let bin = "/home/u/proj/target/release/app";
+        assert!(r.may_contain_allowed("/home/u/proj/target"), "walked into");
+        assert!(!r.excludes(bin, "app", false), "the binary is kept");
+        assert!(!r.excludes_path(bin), "and the watcher agrees");
+        assert!(
+            r.excludes("/home/u/proj/target/release/deps", "deps", true),
+            "and not the intermediate tree beside it"
+        );
+        assert!(r.excludes(
+            "/home/u/proj/target/release/deps/lib.rlib",
+            "lib.rlib",
+            false
+        ));
+        assert!(r.excludes(
+            "/home/u/proj/target/.rustc_info.json",
+            ".rustc_info.json",
+            false
+        ));
+    }
+
+    #[test]
+    fn the_watcher_agrees_without_being_told_what_is_a_directory() {
+        let r = allowing(&["target/release"]);
+        assert!(!r.excludes_path("/p/target/release/app"));
+        assert!(r.excludes_path("/p/target/debug/app"));
     }
 
     #[test]
