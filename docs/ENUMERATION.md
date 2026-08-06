@@ -52,7 +52,23 @@ is not readable without being in group `disk`. The obvious next idea does not
 work either: the journal's data lives in the `$J` alternate data stream, and
 `ntfs3` exposes no alternate data streams at all — `$Extend/$UsnJrnl:$J` does
 not resolve, and the driver surfaces no extended attributes to reach it
-through. So on Linux this volume has a free bulk path and no change feed.
+through.
+
+**The journal itself is alive, which the table says outright.** `$UsnJrnl` is
+record 38; it carries an `$ATTRIBUTE_LIST`, and following that lists
+`$DATA:$J` in records 251269 and 537269, the second starting at VCN 148144. So
+Windows is keeping it, and this is not a volume with journalling switched off.
+What stands between us and its bytes is that `$J` is non-resident: its runs
+point at clusters, and reading clusters means the raw device —
+`/dev/nvme1n1p2`, `root:disk`, and this account is not in `disk`.
+
+So the distance to a USN feed on Linux is one `usermod -aG disk`. That is not a
+small grant: group `disk` is read access to every block device, which is read
+access to every file on the machine regardless of permissions. And it would buy
+less than it looks like, because of the paragraph below: `ntfs3` updates the
+table but has no reason to append to `$J`, so a journal follower on Linux would
+miss everything Linux itself wrote. On Linux this volume has a free bulk path
+and no change feed worth the grant.
 
 **A Linux write reaches the table.** Worth checking before building anything on
 it, because the volume is mounted `rw` and both systems write to it: a file
