@@ -62,6 +62,19 @@ struct Args {
     /// Refuse `/api/open` entirely, so the page can only look.
     #[arg(long)]
     no_launch: bool,
+    /// Open the folder of an executable rather than running it.
+    ///
+    /// **The default is to run it**, because a search box that finds a
+    /// program and then refuses to start it is a search box that sends you
+    /// somewhere else to finish the job — which is what a person asked for and
+    /// what Everything does. The flag is here because it is a real capability
+    /// and not everyone wants it: with it, this bridge can start any binary
+    /// it can see, for anybody holding the token. The token is new every run
+    /// and the socket is loopback, and `xdg-open` could already run a
+    /// `.desktop` file or a script — so this widens a door rather than
+    /// opening one. It is still a door.
+    #[arg(long)]
+    no_run: bool,
 }
 
 fn main() -> Result<()> {
@@ -103,10 +116,13 @@ fn main() -> Result<()> {
         let client = Arc::clone(&client);
         let addr = Arc::clone(&addr);
         let token = token.clone();
-        let launch = !args.no_launch;
+        let doing = Doing {
+            launch: !args.no_launch,
+            run: !args.no_run,
+        };
         // A thread a connection, and the connection closes after one exchange.
         // A browser opens a handful; there is nothing here to pool.
-        std::thread::spawn(move || serve(stream, &client, &addr, &token, launch));
+        std::thread::spawn(move || serve(stream, &client, &addr, &token, doing));
     }
     Ok(())
 }
@@ -143,7 +159,16 @@ fn open(url: &str) {
         .spawn();
 }
 
-fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, launch: bool) {
+/// What this bridge is allowed to do besides answer questions.
+#[derive(Clone, Copy)]
+struct Doing {
+    /// `/api/open` at all.
+    launch: bool,
+    /// Start an executable rather than showing where it lives.
+    run: bool,
+}
+
+fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, doing: Doing) {
     let Some(req) = http::read_request(&stream) else {
         return;
     };
@@ -202,7 +227,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, l
         "/api/icon" => api_icon(&mut stream, &req),
         "/api/wait" => api_wait(&mut stream, addr, &req),
         "/api/explain" => api_explain(&mut stream, client, &req),
-        "/api/open" if launch => api_open(&mut stream, client, &req),
+        "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
@@ -625,7 +650,7 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// executes it; on an executable a file manager offers to run it. Those get
 /// their folder revealed instead, which is what someone searching for them
 /// wanted. There is no flag to override it.
-fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
         return;
@@ -652,14 +677,28 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let p = std::path::Path::new(&entry.path);
     let want_folder = req.param("what") == Some("folder") || entry.is_dir;
     let runnable = !want_folder && http::is_runnable(p);
-    let target = if want_folder || runnable {
+    // Running it is the file's own answer to "open"; showing where it lives is
+    // what is left when that is not allowed.
+    let run = runnable && may_run;
+    let target = if want_folder || (runnable && !run) {
         p.parent().unwrap_or(p).to_path_buf()
     } else {
         p.to_path_buf()
     };
 
-    match std::process::Command::new("xdg-open")
-        .arg(&target)
+    // A program is started in the directory it lives in, because that is where
+    // whatever it reads beside itself is.
+    let mut cmd = if run {
+        let mut c = std::process::Command::new(&target);
+        c.current_dir(target.parent().unwrap_or(&target));
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&target);
+        c
+    };
+    match cmd
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -669,8 +708,16 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             &serde_json::json!({
                 "opened": target.to_string_lossy(),
                 // Said rather than done silently: a double-click that quietly
-                // does something else is worse than one that explains.
-                "instead": runnable.then_some("bu dosya çalıştırılabilir — klasörü açıldı"),
+                // does something else is worse than one that explains. And a
+                // program that was *started* says so, because nothing else on
+                // the screen will.
+                "instead": if run {
+                    Some(format!("çalıştırıldı: {}", target.file_name().unwrap_or_default().to_string_lossy()))
+                } else if runnable {
+                    Some("bu dosya çalıştırılabilir — klasörü açıldı (--no-run)".to_string())
+                } else {
+                    None
+                },
             }),
         ),
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),

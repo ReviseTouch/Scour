@@ -1854,8 +1854,17 @@
   function acceptHint(i) {
     const h = hints[i];
     if (!h) return;
-    q.value = q.value.slice(0, h.at[0]) + h.insert + q.value.slice(h.at[1]);
-    const caret = h.at[0] + h.insert.length;
+    const before = q.value.slice(0, h.at[0]);
+    const after = q.value.slice(h.at[1]);
+    /* **A space, unless there is one.** A completion offered while the caret
+       sits against the end of another word used to be welded to it —
+       `raporkind:exec`, which is one term nobody meant and a search that
+       quietly answers nothing. The same at the other end: whatever follows
+       has to stay a separate word. */
+    const lead = before && !/\s$/.test(before) ? " " : "";
+    const tail = after && !/^\s/.test(after) ? " " : "";
+    q.value = before + lead + h.insert + tail + after;
+    const caret = before.length + lead.length + h.insert.length + tail.length;
     q.setSelectionRange(caret, caret);
     hideHints();
     render();
@@ -1872,6 +1881,18 @@
   });
 
   q.addEventListener("keydown", (e) => {
+    /* **Down goes to the list**, which is where a person's hand goes after
+       typing: type, look, arrow down, Enter. Only when no completion is
+       showing — there the arrows belong to the completions, and Escape puts
+       them away and gives the key back. */
+    if (hintBox.hidden && e.key === "ArrowDown") {
+      const first = [...body.querySelectorAll("tr[data-path]")][0];
+      if (first) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
+    }
     if (hintBox.hidden) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -3074,15 +3095,41 @@
 
   const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
 
+  /* **The column decides which one is opened**, as Everything does it: the
+     name is the file, the location is the folder it is in. A row is two
+     answers to "where is it", and clicking one of them should give that one
+     rather than a rule the user has to remember. */
   body.addEventListener("dblclick", (e) => {
     const p = pathOf(e.target.closest("tr"));
-    if (p) launch(p, "file");
+    if (!p) return;
+    const cell = e.target.closest("td");
+    const onPath = !!cell && !!cell.querySelector(".path");
+    launch(p, onPath ? "folder" : "file");
   });
   /* Enter opens, because a list you can arrow through is a list you should be
      able to open from. */
   body.addEventListener("keydown", (e) => {
+    const row = e.target.closest("tr");
+    if (!row) return;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const rows = [...body.querySelectorAll("tr[data-path]")];
+      const at = rows.indexOf(row);
+      const next = rows[at + (e.key === "ArrowDown" ? 1 : -1)];
+      if (next) {
+        next.focus();
+        // Only when it is off the edge: `nearest` leaves the list still when
+        // the row is already on screen, which is what a keyboard walk should
+        // feel like.
+        next.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "ArrowUp") {
+        // Off the top is back to the query, where the caret was.
+        q.focus();
+      }
+      return;
+    }
     if (e.key !== "Enter") return;
-    const p = pathOf(e.target.closest("tr"));
+    const p = pathOf(row);
     if (p) { e.preventDefault(); launch(p, e.shiftKey ? "folder" : "file"); }
   });
 
