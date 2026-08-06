@@ -1967,8 +1967,24 @@
 
   /* Which rows the viewport is over, plus a margin so a flick does not show
      blank space before the fetch lands. */
-  /* How many rows the list is allowed to be, which is not how many matched. */
-  const reach = () => Math.min(LIST.total, REACH);
+  /* How many rows the list is allowed to be, which is not how many matched.
+   *
+   * **A capped count is a floor, not a length.** The first answer comes back
+   * fast because the engine stops counting at the cap and says "1.000+"; the
+   * exact number lands about two hundred milliseconds later. Sizing the list by
+   * that first number made the scrollbar go 620,004 px → 31,005 → 620,005 in
+   * two tenths of a second — a twentyfold collapse and an instant recovery.
+   *
+   * If a drag is in progress when that happens, the ground moves under it: the
+   * thumb is somewhere else on release and the list keeps travelling. If the
+   * position was past the thousandth row it lands beyond the end and the screen
+   * goes empty. Both were reported, and they were this.
+   *
+   * So an unfinished count sizes the list by what it can reach rather than by a
+   * bound it is about to contradict. Every row inside that is fetchable — the
+   * engine will serve row nineteen thousand whether or not it has finished
+   * counting — so this is not a promise the list cannot keep. */
+  const reach = () => (LIST.exact ? Math.min(LIST.total, REACH) : REACH);
 
   /* Pixels per row: the real height until the set is too tall to draw, then
      whatever fits. */
