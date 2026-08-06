@@ -11,6 +11,9 @@ publish.workspace      = true
 [lints]
 workspace = true
 
+[features]
+memory-trace = []
+
 # Note what is *not* here: no tantivy, no notify, no ignore, no filesystem.
 # This crate is handed a `Box<dyn Source>` and an `Arc<dyn Index>` and has no
 # way of finding out what they are. If that ever stops being true, the

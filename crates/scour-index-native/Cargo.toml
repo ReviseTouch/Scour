@@ -11,6 +11,9 @@ publish.workspace      = true
 [lints]
 workspace = true
 
+[features]
+memory-trace = []
+
 [dependencies]
 scour-core  = { workspace = true }
 scour-query = { workspace = true }

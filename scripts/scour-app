@@ -146,6 +146,7 @@ start_window() {
         --no-default-browser-check \
         --disable-features=TranslateUI \
         "${DEBUG_ARGS[@]}" \
+        ${SCOUR_APP_EXTRA:-} \
         >/dev/null 2>&1
     # A window that lasted less than this was never a window.
     (( SECONDS - began < 3 ))

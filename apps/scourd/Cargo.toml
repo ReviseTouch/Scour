@@ -15,6 +15,15 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Diagnostics for measurements in docs/REVIEW-MEMORY.md. Nothing in the
+# normal service reads these environment variables or runs the sampler.
+memory-trace = [
+    "scour-engine/memory-trace",
+    "scour-index-native/memory-trace",
+    "dep:libc",
+]
+
 [dependencies]
 scour-core          = { workspace = true }
 scour-query         = { workspace = true }
@@ -32,3 +41,6 @@ serde_json          = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+libc = { workspace = true, optional = true }

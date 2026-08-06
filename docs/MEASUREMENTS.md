@@ -3,6 +3,31 @@
 Numbers, with the command that produced them. A claim without one of these is
 an opinion.
 
+## 2026-08-06 — idle memory and the four-row minute
+
+Release build, a reflinked copy of the live native index: **2,091,824 entries,
+55 segments**. The full attribution, commands, failed hypothesis and
+before/after tables are in [`REVIEW-MEMORY.md`](REVIEW-MEMORY.md).
+
+The memory was not a live half-gigabyte structure. After one `/mnt/depo`
+reconciliation, `/proc/self/smaps_rollup` reported 175.1 MiB anonymous while
+glibc `mallinfo2` reported **10.1 MiB live**; 165.0 MiB was free arena pages.
+The largest live sites during the scan were four 100,000-row `Vec<Entry>`
+batches at 25.6–33.1 MiB each and their 6.7–13.5 MiB `SegmentBytes`. The steady
+watch cost was separately measured at **74.4 MiB live malloc** for 280,706
+directories; `notify` stores each path in two maps.
+
+Dropping and trimming from each successful builder thread reduced settled
+post-scan anonymous memory, median of three interleaved runs, **144.1 → 95.9
+MiB**. Median scan time was 6.14 → 5.59 s; peak memory was unchanged.
+
+The 0.87% worker was one 100,000-row compaction per minute. Four one-row
+commits joined the preceding scan's generation and made its smaller body
+segment eligible again: commits plus compact cost **513.8 ms CPU**, or 0.857%
+of a core. Advancing the generation when the scan closes keeps later trickle
+rows in their own compaction cohort: the same sequence cost **27.4 ms, 0.046%**.
+The worker loop with no work cost another 20 ms in sixty seconds, 0.033%.
+
 ## 2026-08-02 — first end-to-end run
 
 Machine: Linux 6.18, NVMe. Release build.
@@ -3805,3 +3830,41 @@ is free until something fills it; a fixed interval is free until the question
 behind it gets big; speculation is free until it is invalidated faster than it
 is used. None of it showed up in a search that felt fast — it showed up as a
 fan, on a machine nobody was using.
+
+## Verifying the review: the same fixes, on the machine rather than in a copy
+
+`docs/REVIEW-MEMORY.md` measures a four-row minute against a reflinked copy of
+the index. This is the same daemon under systemd, one process, window shut,
+after a full scan had settled:
+
+| | before | after |
+|---|---:|---:|
+| idle CPU | 0.87% | **0.30 / 0.37 / 0.25%** |
+| rows changing in that minute | 4 | 0 / 4 / 2 |
+| own memory (anon + swap) | ~640 MB | 157 + 259 = **416 MB** |
+
+**Three times better here, against nineteen times in the copy, and both numbers
+are honest.** The review measured one sequence — the commits and the compaction
+that follow four rows. This measures everything the service does: the watcher's
+events, the pulses, the commit clock, and that sequence inside it. A fix worth
+nineteen times its own cost is worth three times the whole.
+
+The memory is likewise better and not solved: 416 MB of anonymous and swapped
+pages for an index whose live allocations the review measured at about 10 MB,
+plus 74 MB the `notify` backend genuinely holds. The remainder is the allocator
+slack the review declines to chase without a decision, and it is right to.
+
+### And the measurement that was not a measurement
+
+Three of the numbers taken during this session were taken while **a second
+`scourd` was running** — one started by hand at 22:21 whose `kill` had matched
+the measuring shell's own command line instead of the daemon, so it survived,
+held the index lock, kept the service from starting, and watched `/home` beside
+it. It had been given a narrower configuration, so the live index shrank to
+741,199 rows while it held it.
+
+Two things follow, and the second is the useful one. Any figure in this session
+between 22:21 and the cleanup is void. And the index came back on its own: one
+restart, one scan, **741,199 rows to 2,091,996 in forty seconds**, with nothing
+asked of it. Reconciliation is what that is for, and this is the first time it
+has had to prove it against a real accident rather than a test.

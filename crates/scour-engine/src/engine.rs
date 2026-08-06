@@ -762,6 +762,10 @@ impl Pulses {
     }
 
     fn due(&mut self, shared: &Arc<Shared>) -> Vec<(usize, Nudge)> {
+        #[cfg(feature = "memory-trace")]
+        if std::env::var_os("SCOUR_MEMORY_NO_PULSES").is_some() {
+            return Vec::new();
+        }
         if self.checked.elapsed() < Self::EVERY {
             return Vec::new();
         }

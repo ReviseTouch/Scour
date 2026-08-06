@@ -402,14 +402,31 @@ impl NativeIndex {
         };
         if mine {
             let bytes = build(&staged);
-            let live = match Live::write(&self.dir, number, generation, &bytes) {
+            #[cfg(feature = "memory-trace")]
+            if std::env::var_os("SCOUR_BUILD_TRACE").is_some() {
+                eprintln!(
+                    "scourd: builder {number}: entries {:.1} MiB; segment buffers {:.1} MiB (worker)",
+                    entry_storage(&staged) as f64 / 1_048_576.0,
+                    segment_storage(&bytes) as f64 / 1_048_576.0,
+                );
+            }
+            let written = Live::write(&self.dir, number, generation, &bytes);
+            drop(bytes);
+            let live = match written {
                 Ok(live) => live,
                 Err(e) => {
                     pending.staged = Some((number, generation, staged));
                     Self::restore(inner, pending);
+                    trim_allocator();
                     return Err(e);
                 }
             };
+            drop(staged);
+            // The scan's builder buffers are the process's largest anonymous
+            // allocation. They are gone here, not at the end of the scan: a
+            // builder may run on this long-lived worker, and glibc otherwise
+            // keeps its freed pages until something happens to trim this arena.
+            trim_builder_allocator();
             inner.segments.push(live);
             inner.segments.sort_by_key(|s| s.number);
             // Past here the rows are on disk. A manifest that will not save is
@@ -423,7 +440,16 @@ impl NativeIndex {
         let paths = staged
             .iter()
             .map(|e| digest(e.id.source, &e.path))
-            .collect();
+            .collect::<std::collections::HashSet<_>>();
+        #[cfg(feature = "memory-trace")]
+        if std::env::var_os("SCOUR_BUILD_TRACE").is_some() {
+            eprintln!(
+                "scourd: flight {number}: {} rows = {:.1} MiB; path set {} slots",
+                staged.len(),
+                entry_storage(&staged) as f64 / 1_048_576.0,
+                paths.capacity(),
+            );
+        }
         self.building.0.lock().flights.push(Flight {
             number,
             paths,
@@ -436,8 +462,26 @@ impl NativeIndex {
             .name("scour-build".into())
             .spawn(move || {
                 let bytes = build(&staged);
-                let done = match Live::write(&dir, number, generation, &bytes) {
-                    Ok(live) => Landed::Built { number, live },
+                #[cfg(feature = "memory-trace")]
+                if std::env::var_os("SCOUR_BUILD_TRACE").is_some() {
+                    eprintln!(
+                        "scourd: builder {number}: entries {:.1} MiB; segment buffers {:.1} MiB",
+                        entry_storage(&staged) as f64 / 1_048_576.0,
+                        segment_storage(&bytes) as f64 / 1_048_576.0,
+                    );
+                }
+                let written = Live::write(&dir, number, generation, &bytes);
+                drop(bytes);
+                let done = match written {
+                    Ok(live) => {
+                        drop(staged);
+                        // These threads are deliberately short-lived. Trimming
+                        // while the thread still owns its arena releases the
+                        // pages its entries and output buffers just occupied;
+                        // a later trim from `scour-worker` left them mapped.
+                        trim_builder_allocator();
+                        Landed::Built { number, live }
+                    }
                     Err(e) => Landed::Failed {
                         number,
                         rows: staged,
@@ -1195,6 +1239,107 @@ fn trim_allocator() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn trim_allocator() {}
 
+fn trim_builder_allocator() {
+    #[cfg(feature = "memory-trace")]
+    if std::env::var_os("SCOUR_NO_BUILDER_TRIM").is_some() {
+        return;
+    }
+    trim_allocator();
+}
+
+#[cfg(feature = "memory-trace")]
+fn entry_storage(entries: &Vec<Entry>) -> usize {
+    entries.capacity() * std::mem::size_of::<Entry>()
+        + entries
+            .iter()
+            .map(|entry| entry.path.capacity())
+            .sum::<usize>()
+}
+
+#[cfg(feature = "memory-trace")]
+fn segment_storage(bytes: &crate::build::SegmentBytes) -> usize {
+    bytes.names.capacity()
+        + bytes.fnames.capacity()
+        + bytes.cols.capacity()
+        + bytes.dirs.capacity()
+        + bytes.ids.capacity()
+        + bytes.tri_dict.capacity()
+        + bytes.tri_post.capacity()
+        + bytes.alive.capacity()
+}
+
+#[cfg(feature = "memory-trace")]
+#[derive(Clone, Copy)]
+struct CommitStamp {
+    wall: Instant,
+    cpu: std::time::Duration,
+}
+
+#[cfg(feature = "memory-trace")]
+impl CommitStamp {
+    fn now() -> CommitStamp {
+        CommitStamp {
+            wall: Instant::now(),
+            cpu: thread_cpu(),
+        }
+    }
+
+    fn since(self, earlier: CommitStamp) -> (f64, f64) {
+        (
+            self.wall.duration_since(earlier.wall).as_secs_f64() * 1_000.0,
+            self.cpu.saturating_sub(earlier.cpu).as_secs_f64() * 1_000.0,
+        )
+    }
+}
+
+#[cfg(all(feature = "memory-trace", target_os = "linux"))]
+fn thread_cpu() -> std::time::Duration {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut time) } == 0 {
+        std::time::Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
+    } else {
+        std::time::Duration::ZERO
+    }
+}
+
+#[cfg(all(feature = "memory-trace", not(target_os = "linux")))]
+fn thread_cpu() -> std::time::Duration {
+    std::time::Duration::ZERO
+}
+
+#[cfg(feature = "memory-trace")]
+fn trace_commit(
+    rows: usize,
+    start: CommitStamp,
+    settled: CommitStamp,
+    prepared: CommitStamp,
+    alive: CommitStamp,
+    built: CommitStamp,
+    written: CommitStamp,
+    published: CommitStamp,
+) {
+    if std::env::var_os("SCOUR_COMMIT_TRACE").is_none() {
+        return;
+    }
+    let phase = |a: CommitStamp, b: CommitStamp| {
+        let (wall, cpu) = b.since(a);
+        format!("{wall:.2}/{cpu:.2}")
+    };
+    eprintln!(
+        "scourd: commit {rows} rows, wall/CPU ms: settle {} prepare {} alive {} build {} files {} manifest {} total {}",
+        phase(start, settled),
+        phase(settled, prepared),
+        phase(prepared, alive),
+        phase(alive, built),
+        phase(built, written),
+        phase(written, published),
+        phase(start, published),
+    );
+}
+
 /// Remove segment files the manifest does not name.
 ///
 /// Two things leave them behind, and the manifest is the answer to both: a
@@ -1241,6 +1386,26 @@ fn dir_size(dir: &Path) -> u64 {
                 .sum()
         })
         .unwrap_or(0)
+}
+
+/// Close a scan's compaction cohort before ordinary changes resume.
+///
+/// A generation originally ended only by clearing `open`, so every later
+/// watcher commit kept the scan's stamp. Compaction then saw the scan body and
+/// the trickle as one group: after a 1.55 M-row scan left 1,250,797 and 100,000
+/// row segments, four one-row commits made the group eligible and rewrote the
+/// 100,000-row segment. Measured: **477 ms CPU**, once a minute, which is 0.8%
+/// of a core while the machine appears idle.
+///
+/// Advancing here changes no reconciliation answer. The scan's rows retain the
+/// generation they were stamped with, while the next scan still receives a
+/// newer number and judges every older row exactly as before. It only says
+/// that subsequent commits are a different batch for compaction.
+fn close_generation(inner: &mut Inner, generation: u64) {
+    if inner.open == Some(generation) {
+        inner.open = None;
+        inner.generation = inner.generation.saturating_add(1);
+    }
 }
 
 impl Index for NativeIndex {
@@ -1363,9 +1528,7 @@ impl Index for NativeIndex {
         self.settle()?;
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
-        if inner.open == Some(generation) {
-            inner.open = None;
-        }
+        close_generation(&mut inner, generation);
         let mut gone = 0u64;
         let mut touched = vec![false; inner.segments.len()];
         for (i, live) in inner.segments.iter_mut().enumerate() {
@@ -1476,6 +1639,8 @@ impl Index for NativeIndex {
     /// The same shape as `fold`, and for the same reason: a segment is written
     /// once and never edited, so writing one touches nothing a search reads.
     fn commit(&self) -> Result<()> {
+        #[cfg(feature = "memory-trace")]
+        let trace_start = CommitStamp::now();
         // The bookkeeping half: kills, subtree removals, the manifest. It has
         // to be inside the lock because it edits rows other threads read, and
         // it is cheap now that a subtree is a range check rather than 2.1 M
@@ -1485,7 +1650,11 @@ impl Index for NativeIndex {
         // this returns: the engine announces a revision on the strength of it,
         // and a window told to look again has to find what was written.
         self.settle()?;
+        #[cfg(feature = "memory-trace")]
+        let trace_settled = CommitStamp::now();
         let mut pending = self.flush_prepare(&mut self.inner.write())?;
+        #[cfg(feature = "memory-trace")]
+        let trace_prepared = CommitStamp::now();
         // How long a search could have been waiting. Printed rather than
         // guessed at, because the last three things blamed for this tail were
         // each the wrong one.
@@ -1507,10 +1676,27 @@ impl Index for NativeIndex {
             Self::restore(&mut self.inner.write(), pending);
             return Err(e);
         }
+        #[cfg(feature = "memory-trace")]
+        let trace_alive = CommitStamp::now();
         let Some((number, generation, staged)) = pending.staged.take() else {
+            #[cfg(feature = "memory-trace")]
+            trace_commit(
+                0,
+                trace_start,
+                trace_settled,
+                trace_prepared,
+                trace_alive,
+                trace_alive,
+                trace_alive,
+                trace_alive,
+            );
             return Ok(());
         };
+        #[cfg(feature = "memory-trace")]
+        let trace_rows = staged.len();
         let bytes = build(&staged);
+        #[cfg(feature = "memory-trace")]
+        let trace_built = CommitStamp::now();
         let live = match Live::write(&self.dir, number, generation, &bytes) {
             Ok(live) => live,
             Err(e) => {
@@ -1519,6 +1705,8 @@ impl Index for NativeIndex {
                 return Err(e);
             }
         };
+        #[cfg(feature = "memory-trace")]
+        let trace_written = CommitStamp::now();
         drop(staged);
         drop(bytes);
 
@@ -1526,7 +1714,19 @@ impl Index for NativeIndex {
         inner.next_segment = inner.next_segment.max(number + 1);
         inner.segments.push(live);
         inner.segments.sort_by_key(|s| s.number);
-        self.save_meta(&inner)
+        let saved = self.save_meta(&inner);
+        #[cfg(feature = "memory-trace")]
+        trace_commit(
+            trace_rows,
+            trace_start,
+            trace_settled,
+            trace_prepared,
+            trace_alive,
+            trace_built,
+            trace_written,
+            CommitStamp::now(),
+        );
+        saved
     }
 
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse> {
@@ -1872,5 +2072,27 @@ impl Index for NativeIndex {
             bytes_after: dir_size(&self.dir),
             took_ms: started.elapsed().as_millis() as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closing_a_scan_starts_a_new_compaction_cohort() {
+        let mut inner = Inner {
+            generation: 7,
+            open: Some(7),
+            ..Inner::default()
+        };
+        close_generation(&mut inner, 7);
+        assert_eq!(inner.open, None);
+        assert_eq!(inner.generation, 8);
+
+        // A source with several vouched roots sweeps once per root. Only the
+        // first closes the scan; the remaining roots must not keep advancing.
+        close_generation(&mut inner, 7);
+        assert_eq!(inner.generation, 8);
     }
 }

@@ -4678,6 +4678,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ctrlc",
+ "libc",
  "scour-config",
  "scour-core",
  "scour-engine",

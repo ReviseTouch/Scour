@@ -51,6 +51,16 @@ fn main() -> Result<()> {
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
     let engine = wire::build(&config)?;
 
+    #[cfg(feature = "memory-trace")]
+    if let Some(path) = std::env::var_os("SCOUR_MEMORY_RESCAN") {
+        return trace_rescan(&engine, path.to_string_lossy().into_owned());
+    }
+    #[cfg(feature = "memory-trace")]
+    if let Some(seconds) = std::env::var_os("SCOUR_MEMORY_IDLE_SECS") {
+        let seconds = seconds.to_string_lossy().parse::<u64>().unwrap_or(60);
+        return trace_idle(&engine, Duration::from_secs(seconds));
+    }
+
     if args.check {
         println!("socket:  {addr}");
         println!("index:   {}", config.index.dir.display());
@@ -167,6 +177,115 @@ fn main() -> Result<()> {
     );
     engine.shutdown();
     Ok(())
+}
+
+#[cfg(feature = "memory-trace")]
+fn trace_rescan(engine: &scour_engine::Engine, path: String) -> Result<()> {
+    engine.rescan(Some(path))?;
+    let began = std::time::Instant::now();
+    let after = std::env::var("SCOUR_MEMORY_AFTER_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(10);
+    let mut saw_scan = false;
+    let mut finished_at = None;
+    println!(
+        "ms rss_kb anonymous_kb swap_kb heap_arena_kb heap_mmap_kb \
+         cpu_ticks scanning entries segments"
+    );
+    loop {
+        let status = engine.status();
+        let stats = engine.stats()?;
+        saw_scan |= status.scanning;
+        if saw_scan && !status.scanning && finished_at.is_none() {
+            finished_at = Some(std::time::Instant::now());
+            if std::env::var_os("SCOUR_MEMORY_TRIM").is_some() {
+                #[cfg(all(target_os = "linux", target_env = "gnu"))]
+                unsafe {
+                    libc::malloc_trim(0);
+                }
+            }
+        }
+        let (rss, anonymous) = proc_rollup();
+        let (swap, ticks) = proc_status();
+        let (heap_arena, heap_mmap) = allocator_kb();
+        println!(
+            "{} {rss} {anonymous} {swap} {heap_arena} {heap_mmap} {ticks} {} {} {}",
+            began.elapsed().as_millis(),
+            status.scanning,
+            status.entries,
+            stats.segments,
+        );
+        if finished_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(after)) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    engine.shutdown();
+    Ok(())
+}
+
+#[cfg(feature = "memory-trace")]
+fn trace_idle(engine: &scour_engine::Engine, duration: Duration) -> Result<()> {
+    let (_, before) = proc_status();
+    std::thread::sleep(duration);
+    let (_, after) = proc_status();
+    let ticks = after.saturating_sub(before);
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as f64;
+    let cpu = ticks as f64 / hz;
+    println!(
+        "idle {:.0} s: {ticks} CPU ticks = {:.3} s = {:.3}% of one core",
+        duration.as_secs_f64(),
+        cpu,
+        cpu / duration.as_secs_f64() * 100.0,
+    );
+    engine.shutdown();
+    Ok(())
+}
+
+#[cfg(all(feature = "memory-trace", target_os = "linux", target_env = "gnu"))]
+fn allocator_kb() -> (usize, usize) {
+    let info = unsafe { libc::mallinfo2() };
+    (info.uordblks / 1024, info.hblkhd / 1024)
+}
+
+#[cfg(all(
+    feature = "memory-trace",
+    not(all(target_os = "linux", target_env = "gnu"))
+))]
+fn allocator_kb() -> (usize, usize) {
+    (0, 0)
+}
+
+#[cfg(feature = "memory-trace")]
+fn proc_rollup() -> (u64, u64) {
+    let text = std::fs::read_to_string("/proc/self/smaps_rollup").unwrap_or_default();
+    (proc_kb(&text, "Rss:"), proc_kb(&text, "Anonymous:"))
+}
+
+#[cfg(feature = "memory-trace")]
+fn proc_status() -> (u64, u64) {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+    let ticks = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| fields.split_whitespace().collect::<Vec<_>>())
+        .and_then(|fields| {
+            let user = fields.get(11)?.parse::<u64>().ok()?;
+            let system = fields.get(12)?.parse::<u64>().ok()?;
+            Some(user + system)
+        })
+        .unwrap_or(0);
+    (proc_kb(&status, "VmSwap:"), ticks)
+}
+
+#[cfg(feature = "memory-trace")]
+fn proc_kb(text: &str, key: &str) -> u64 {
+    text.lines()
+        .find(|line| line.starts_with(key))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0)
 }
 
 /// The deepest directory every one of these paths is inside.
