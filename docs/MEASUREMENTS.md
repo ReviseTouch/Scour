@@ -3470,3 +3470,54 @@ fills to sixty-seven rows with sixty-seven icons drawn.
 The order matters more than the numbers. Two days of frame-shaving in the page
 would not have found the third one, and the third one was worth more than both
 of the others together.
+
+## "Sonsuz scroll": a list that scrolled itself
+
+Reported after the frame-rate work, and it was a different fault entirely. The
+window was recording at the time, so this is the trace rather than a theory:
+
+* the page wrote a scroll position **zero times**;
+* with no input at all: **806 steps in 5.2 s**, 133,133 → 619,269, and then
+  **3,842 steps over 52.8 s** travelling backwards, 619,252 → 497,297;
+* and the scrollable height, sampled at every one of those steps, was never the
+  same number twice: 620,005, 620,004, 620,030, 620,031, 620,081, 620,064 …
+
+That is a feedback loop, and the page is only half of it. A scrollable area
+that changes size makes the browser correct the position it is holding;
+correcting the position fires a scroll; a scroll paints; painting changes the
+height again. Nothing has to write a position for a list to run away.
+
+### Why the obvious repair does not work
+
+The height was a sum — top spacer, rows, bottom spacer — and the spacers were
+sized from `ROW_H = 31`, the number the stylesheet asks for. So: measure the
+row instead of assuming it. That was tried, and the measurement says:
+
+| where | drawn row height |
+|---|---:|
+| near the top | **30.6 px** |
+| near the bottom | **30.99 px** |
+
+Same rows, same stylesheet, one screenful apart. This screen is scaled by
+1.667, so 31 CSS pixels is 51.67 device pixels and the browser rounds each row
+to 51 or 52 according to the fraction it starts at. **There is no row height to
+measure.** Any design that computes the scrollable height by multiplying one
+has this bug at every scale factor that is not a whole number — it is just
+smaller or larger.
+
+### What it is now
+
+`.sizer` is an empty absolutely-positioned element as tall as the list, from
+the row count alone. It is the only thing in the scroller that reaches that
+far; the table is held above the bottom by the top spacer, with the headings,
+the rows at the largest they round to and the end notice all subtracted. The
+height stops being a result and goes back to being a decision.
+
+| | distinct heights while scrolling | drift after release | drift at the bottom |
+|---|---:|---:|---:|
+| two spacers, `ROW_H` | 25 | 317,376 px | −1,408 px |
+| two spacers, row measured | 25 | 0 px | 0 px |
+| **sizer** | **1** | **0 px** | **0 px** |
+
+Two queries, top and bottom, 80 steps each. Scrolling after: 7.2 ms median, no
+long frames, no forced layout, and the bottom of the list fills.

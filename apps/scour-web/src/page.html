@@ -491,7 +491,12 @@
 
   /* ---------------- results ---------------- */
   .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .scroll { flex: 1; overflow: auto; }
+  .scroll { flex: 1; overflow: auto; position: relative; }
+  /* **What the list is as tall as.** Nothing is drawn in it and nothing can be
+     clicked through it; it exists so that the scrollable height is a number the
+     page states outright rather than a sum of whatever the rows happened to
+     lay out as. See `paintWindow`. */
+  .sizer { position: absolute; top: 0; left: 0; width: 1px; height: 0; pointer-events: none; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   /* Every cell keeps to its column: a long path is cut, not allowed to widen
      the table. Without this a fixed layout still lets an unbreakable word
@@ -971,6 +976,7 @@
 
       <div class="results">
         <div class="scroll">
+          <div class="sizer" id="sizer"></div>
           <table>
             <thead>
               <!-- Built from `COLUMNS`; the markup carries only the age
@@ -1930,7 +1936,20 @@
    * page is chosen rather than before. */
   const REACH = 20_000;
 
-  const ROW_H = 31;          /* one row, and it must match the CSS */
+  /* One row, as the browser actually draws it.
+   *
+   * **A constant here cannot be right.** The stylesheet asks for 31 px; this
+   * screen is scaled by 1.667, so 31 CSS pixels is 51.67 device pixels, which
+   * the browser snaps to 51 — and draws the row **30.6 CSS pixels** tall. The
+   * number that has to match is what was drawn, not what was asked for, and it
+   * depends on a scale factor the page does not choose.
+   *
+   * What that mismatch did is in `paintWindow`. It is measured from a real row
+   * once there is one, and again whenever the window changes size, which is
+   * when a scale factor can change under it. */
+  const ROW_H = 31;          /* what the CSS asks for; the start value */
+  let rowPx = ROW_H;         /* what came back when it was drawn */
+  let headPx = ROW_H;        /* the column headings, likewise */
   /* **A browser will not make an element taller than about 33.5 million
      pixels**, and 2.1 M rows at 31px want 66 M. Past the ceiling the scroll
      position stops mapping to a row and the list jumps.
@@ -1988,7 +2007,7 @@
 
   /* Pixels per row: the real height until the set is too tall to draw, then
      whatever fits. */
-  const pitch = () => (reach() * ROW_H > MAX_PX ? MAX_PX / reach() : ROW_H);
+  const pitch = () => (reach() * rowPx > MAX_PX ? MAX_PX / reach() : rowPx);
 
   function visibleRange() {
     const p = pitch();
@@ -2017,12 +2036,12 @@
    * The spacers are what make the scrollbar honest: their heights are the rows
    * that exist and are not drawn. */
   let pool = [];
+  const sizer = document.getElementById("sizer");
   const spTop = document.createElement("tr");
-  const spBot = document.createElement("tr");
   const farRow = document.createElement("tr");
-  spTop.className = spBot.className = "spacer";
+  spTop.className = "spacer";
   farRow.className = "far";
-  spTop.innerHTML = spBot.innerHTML = "<td></td>";
+  spTop.innerHTML = "<td></td>";
   farRow.innerHTML = "<td></td>";
 
   function widen(node) {
@@ -2047,13 +2066,13 @@
     /* The shape first: two spacers with the right heights, and enough rows
        between them. Only a resize or a column change gets past the `while`s. */
     if (body.firstElementChild !== spTop) {
-      body.replaceChildren(spTop, spBot, farRow);
+      body.replaceChildren(spTop, farRow);
       pool = [];
     }
     while (pool.length < to - from) {
       const tr = makeRow();
       pool.push(tr);
-      body.insertBefore(tr, spBot);
+      body.insertBefore(tr, farRow);
     }
     while (pool.length > to - from) {
       pool.pop().remove();
@@ -2064,15 +2083,49 @@
           `<td class="age"><i></i></td>` + cols.map(() => "<td></td>").join("");
       }
     }
-    [spTop, spBot, farRow].forEach(widen);
-    spTop.firstElementChild.style.height = `${Math.round(from * p)}px`;
-    spBot.firstElementChild.style.height = `${Math.round(Math.max(0, reach() - to) * p)}px`;
-
+    /* **The list's height is stated, not summed. This is what "sonsuz scroll"
+     * was.**
+     *
+     * It used to be a sum: a top spacer, the rows, a bottom spacer. Recorded
+     * from the running window while it was misbehaving, that sum moved
+     * constantly — 620,005, 620,004, 620,030, 620,081 — and a scrollable area
+     * that changes size makes the browser correct the position it is holding.
+     * Correcting the position fires a scroll. A scroll paints. Painting moves
+     * the height again. Eight hundred steps in five seconds with nothing
+     * touching it, then fifty-three seconds of travelling backwards; the page
+     * never wrote a scroll position once, and never needed to.
+     *
+     * The reason the sum moved is worth stating, because it kills the obvious
+     * repair. **There is no such thing as the row height here.** This screen is
+     * scaled by 1.667, so a row asking for 31 CSS pixels is 51.67 device
+     * pixels, and the browser rounds it to 51 or 52 depending on the fraction
+     * the row happens to start at: the same row is 30.6 px in one place and
+     * 30.99 px in another, measured, in one screenful. Measuring one row and
+     * multiplying — which was tried — is unsound at every scale factor that is
+     * not a whole number.
+     *
+     * So the rows are not asked. `.sizer` is as tall as the list is, from the
+     * row count alone, and it is the only thing in the scroller that reaches
+     * that far. The rows are pushed down by the top spacer and are always
+     * shorter than what is left, so nothing they do can add to the total. The
+     * height stops being a result and goes back to being a decision. */
     /* Said at the end of the list rather than not at all: a list that stops
        twenty thousand rows into two million has to say which of those two
-       numbers it is showing. */
+       numbers it is showing. Decided here rather than below, because it is one
+       more thing that has to fit above the bottom. */
     const far = LIST.total > REACH && to >= reach();
     farRow.hidden = !far;
+
+    [spTop, farRow].forEach(widen);
+    const tall = Math.round(reach() * p);
+    sizer.style.height = `${tall}px`;
+    /* Everything the table holds besides the spacer, generously: the headings,
+       the rows at the largest they round to, the notice if it is showing, and
+       a few pixels over. The spacer stops there, so whatever the table does
+       with its own layout it stays inside what `.sizer` already claimed. */
+    const inside = headPx + (to - from) * (rowPx + 0.5) + (far ? rowPx + 12 : 0) + 4;
+    spTop.firstElementChild.style.height =
+      `${Math.max(0, Math.min(tall - inside, Math.round(from * p)))}px`;
     if (far) {
       farRow.firstElementChild.textContent =
         `ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.`;
@@ -2204,6 +2257,22 @@
     paintQueued = true;
     requestAnimationFrame(() => {
       paintQueued = false;
+      /* **Every frame, from a row that has something in it.**
+       *
+       * At the top of a frame the layout is settled, so this read is free —
+       * which is the whole reason the painter has one door. Measuring once was
+       * tried and was wrong: the first paint has nothing in its rows yet, an
+       * empty row is not the height of a full one, and a number taken then is
+       * kept forever. It is cheaper to ask every time than to be wrong once. */
+      const sample = pool.find((tr) => tr.dataset.path) || pool[0];
+      if (sample) {
+        const h = sample.getBoundingClientRect().height;
+        if (h > 4 && h !== rowPx) { rowPx = h; painted = ""; }
+      }
+      // The header sits inside the table and is as much of its height as any
+      // row is. Read here for the same reason and at the same cost.
+      const head = body.previousElementSibling;
+      if (head) headPx = head.getBoundingClientRect().height || headPx;
       const now = visibleRange().join();
       if (now === painted && !dirty) {
         return;
