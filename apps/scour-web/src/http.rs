@@ -176,6 +176,28 @@ pub fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) {
     let _ = stream.flush();
 }
 
+/// A response the browser may keep.
+///
+/// For icons and nothing else. Everything else this serves is about a
+/// filesystem that is being watched, where a cached answer is one that has
+/// stopped being true — but a theme's drawing of "document" does not change
+/// while a window is open, and re-fetching it per row is what makes a list
+/// scroll badly.
+pub fn cached(stream: &mut TcpStream, kind: &str, body: &[u8]) {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {kind}\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: private, max-age=86400\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
 pub fn json(stream: &mut TcpStream, value: &serde_json::Value) {
     respond(
         stream,

@@ -840,6 +840,20 @@
   thead th:not([data-sort]):not(.pick) { cursor: default; }
   tbody td.mono { font: 400 11.5px/1 var(--mono); color: var(--ink-2); }
 
+  /* The picture in front of a name.
+     Eighteen pixels in a thirty-one pixel row, so a thumbnail reads as an
+     image without the row growing; `contain` because a photograph is not
+     square and cropping one to a tile is a lie about what is in it. */
+  tbody td.name .ico {
+    width: 18px; height: 18px;
+    object-fit: contain;
+    vertical-align: -4px;
+    margin-right: 7px;
+    /* Nothing shifts while they arrive: the box is there from the first
+       frame, whether or not the theme has anything to put in it. */
+    flex: none;
+  }
+
   .rowmenu button:hover, .rowmenu button:focus-visible {
     background: var(--line-soft); color: var(--ink); outline: none;
   }
@@ -925,6 +939,8 @@
       <span id="rows">4.864 satır okundu</span>
       <span class="sep">·</span>
       <span id="path-note">bağlanıyor…</span>
+      <button type="button" id="icons" class="about" aria-pressed="true"
+              title="simgeler" aria-label="simgeleri aç veya kapat">◨</button>
       <button type="button" id="about" class="about" aria-pressed="false"
               title="tasarım notları" aria-label="tasarım notlarını göster">?</button>
     </div>
@@ -1101,6 +1117,9 @@
   const fromService = (row) => ({
     ...row,
     path: row.dir,
+    /* The engine's own word for it, kept beside the translated one: the label
+       is for reading and the token is what the icon is asked for by. */
+    ktoken: row.is_dir ? "folder" : row.kind,
     kind: row.is_dir ? "Klasör" : (KIND_KEY[row.kind] || "Diğer"),
   });
 
@@ -1685,6 +1704,35 @@
     shadow.innerHTML = html;
   }
 
+  /* A picture for a row.
+   *
+   * **The thumbnail if one exists, the type icon otherwise**, and which it is
+   * was decided by the service — a page cannot ask the filesystem whether a
+   * thumbnail is there, and asking the bridge per row would be two hundred
+   * requests a screen. `thumb` comes back with the row, from one `stat`.
+   *
+   * The type icons are shared by every row of the same kind, so a screenful of
+   * two hundred asks for about a dozen distinct URLs and the browser caches
+   * them for a day. That is the whole reason the icon route is the only
+   * cacheable one in the bridge.
+   *
+   * `onerror` empties the box rather than showing a broken image: a theme that
+   * has no drawing for something is an ordinary state, not a fault.
+   *
+   * **Not `loading="lazy"`.** The list is already virtual — the rows in the
+   * document are the rows on the screen — so deferring buys nothing, and it
+   * cost something: a browser will not start a lazy load for a page it thinks
+   * is not being looked at, and every picture stayed at zero by zero. */
+  const iconUrl = (f) =>
+    f.thumb
+      ? `/api/icon?t=${TOKEN}&p=${encodeURIComponent(f.path + "/" + f.name)}`
+      : `/api/icon?t=${TOKEN}&k=${encodeURIComponent(f.ktoken || "file")}&e=${encodeURIComponent(f.ext || "")}`;
+
+  const icon = (f) =>
+    ICONS
+      ? `<img class="ico" src="${iconUrl(f)}" alt="" onerror="this.style.visibility='hidden'">`
+      : "";
+
   function markName(name, terms) {
     if (!terms.length) return escape_(name);
     let best = null;
@@ -2120,7 +2168,7 @@
    * reads the date and paints with it. */
   const COLUMNS = [
     { id: "name",  label: "Ad",       key: "name",  w: 240,
-      cell: (f, p) => `<td class="name">${markName(f.name, p.text)}</td>` },
+      cell: (f, p) => `<td class="name">${icon(f)}${markName(f.name, p.text)}</td>` },
     { id: "path",  label: "Konum",    key: "path",  w: 320,
       cell: (f) => `<td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>` },
     { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
@@ -2709,6 +2757,27 @@
       waiting = false;
     }
   }
+  /* Pictures, behind a button and remembered.
+   *
+   * On by default because a list of names is what this replaced and a list of
+   * names is what it looked like. Off is one click, and it is a real off: the
+   * rows are drawn again without the `<img>` at all rather than hidden by CSS,
+   * so nothing is requested and nothing is decoded. */
+  const ICON_KEY = "scour.icons.v1";
+  let ICONS = localStorage.getItem(ICON_KEY) !== "0";
+  const iconBtn = document.getElementById("icons");
+  function applyIcons() {
+    iconBtn.setAttribute("aria-pressed", String(ICONS));
+    document.body.classList.toggle("no-icons", !ICONS);
+    draw(q.value, parse(q.value), FILES, lastMeter || { total: LIST.total, capped: !LIST.exact, took_us: 0, rows_visited: 0 });
+  }
+  iconBtn.addEventListener("click", () => {
+    ICONS = !ICONS;
+    try { localStorage.setItem(ICON_KEY, ICONS ? "1" : "0"); } catch {}
+    applyIcons();
+  });
+  iconBtn.setAttribute("aria-pressed", String(ICONS));
+
   /* The notes, behind a button and remembered. */
   const SIDE_KEY = "scour.side.v1";
   const aboutBtn = document.getElementById("about");

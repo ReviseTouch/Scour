@@ -29,6 +29,7 @@
 //!   instead. `--no-open` removes it altogether.
 
 mod http;
+mod icons;
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
@@ -195,6 +196,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, l
         "/api/kinds" => api_kinds(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
+        "/api/icon" => api_icon(&mut stream, &req),
         "/api/wait" => api_wait(&mut stream, addr, &req),
         "/api/explain" => api_explain(&mut stream, client, &req),
         "/api/open" if launch => api_open(&mut stream, client, &req),
@@ -299,6 +301,10 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         "user": owner_name(Owner::User, h.meta.uid),
                         "group": owner_name(Owner::Group, h.meta.gid),
                         "items": h.meta.items,
+                        // Whether a picture of this file already exists, so
+                        // the page asks for the ones that do rather than for
+                        // two hundred that mostly do not. One `stat` a row.
+                        "thumb": icons::has_thumbnail(&h.path),
                     })
                 })
                 .collect();
@@ -315,6 +321,29 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         }
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
+/// A picture for a row: the thumbnail somebody has already made, or the
+/// desktop's icon for that kind of file.
+///
+/// **Cacheable, unlike everything else here.** The rest of these routes are
+/// about a filesystem being watched, where a cached answer is an answer that
+/// stopped being true; an icon is a file the theme installed. Without this a
+/// list of two hundred rows asks for the same drawing two hundred times.
+fn api_icon(stream: &mut TcpStream, req: &http::Req) {
+    let picture = match req.param("p") {
+        // A path is only ever hashed, never opened: what comes back is a file
+        // in the thumbnail cache or nothing. See `icons`.
+        Some(path) if !path.is_empty() => icons::thumbnail(path),
+        _ => icons::for_kind(
+            req.param("k").unwrap_or("file"),
+            &req.param("e").unwrap_or_default().to_ascii_lowercase(),
+        ),
+    };
+    match picture {
+        Some(p) => http::cached(stream, p.kind, &p.bytes),
+        None => http::fail(stream, "404 Not Found", "no icon"),
     }
 }
 
