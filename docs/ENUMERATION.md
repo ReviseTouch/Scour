@@ -359,6 +359,44 @@ since" in 0.3 ms, which collapses all three layers into one call and catches
 edits with them. That is the honest price of `CAP_SYS_ADMIN` here — not speed
 in general, but instant *content* updates and one mechanism instead of three.
 
+### The eBPF layer, and what it is actually for
+
+Proposed as the way to see everything at kernel level with no watches at all,
+and worth writing down because this machine is friendlier to it than the
+general case:
+
+```
+kernel                     6.18.40
+/sys/kernel/security/lsm   capability,landlock,lockdown,yama,bpf   ← bpf LSM already on
+/sys/kernel/btf/vmlinux    6,319,903 bytes                          ← CO-RE works
+unprivileged_bpf_disabled  2                                        ← CAP_BPF required
+```
+
+The `bpf` LSM being enabled is the interesting line: `lsm/security_path_*`
+programs can be attached with no boot parameter and no `kprobe` on an unstable
+signature. So the fragile half of this idea does not apply here.
+
+**What it buys is not speed.** Watching costs nothing when idle — inotify is
+event-driven — and 0.7 µs a file on the write path, which a BPF program plus a
+ring-buffer write matches rather than beats. Searching is the index's business
+and is untouched. What it buys is the *ceiling*: no watches at all against
+455,367, every filesystem including FUSE and NTFS where `ctransid` and
+`fanotify`'s FID mode do not reach, and **in-place edits**, which is the one
+thing an unprivileged sweep cannot see — a line appended to a file does not
+move its directory's mtime.
+
+**What it costs.** `CAP_BPF` + `CAP_PERFMON`, which is narrower than
+`CAP_SYS_ADMIN` and was split out for exactly this. A program in the syscall
+path of every file operation on the machine, which is a different order of
+responsibility from being slow in one's own process. A ring buffer that drops
+records under a build storm, so reconciliation stays the backstop either way.
+And `bpf_d_path` is allowed per hook, so building the path is the real work.
+
+**So: optional, never required.** It belongs behind the existing `Source` trait
+as a `WatchHandle` that sets `Caps::RECURSIVE_WATCH`, falls back to inotify
+when the capability or the LSM is missing, and is never what correctness rests
+on.
+
 ### Windows needs no privilege for its biggest win
 
 `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` returns name,
