@@ -292,6 +292,41 @@ sectors moved **fourteen times in fifteen idle seconds** — noise, not signal.
 That trick works on the NTFS volume only because nothing else is mounted on
 that partition.
 
+### Watching btrfs without a single watch, and where that stops
+
+Given the counter above, how far can an unprivileged design get with no inotify
+at all? Measured on `/home/hasan` — 279,740 directories, 2,446,076 files:
+
+| question | unprivileged answer | cost |
+|---|---|---:|
+| has anything changed | `ctransid` | **8 µs** |
+| where — created, deleted, renamed | sweep directory mtimes | **356–370 ms** |
+| where — edited in place | *nothing* | (privileged `min_transid`: 0.3 ms) |
+
+The last row is a measurement, not an omission: a line was appended to a file
+and **the parent directory's mtime did not move**. That is POSIX — a directory
+is stamped when its entries change, not when their contents do. So a sweep sees
+what exists and misses what was edited, and the only unprivileged way to catch
+an edit is to `stat` the files themselves: 2.4 M of them, about 3 s.
+
+Which makes a watch-free design three layers rather than one:
+
+```
+1 Hz        ctransid                 8 µs     has anything happened
+on change   directory mtime sweep    360 ms   where, for existence
+every N min full stat sweep          ~3 s     where, for size and time
+```
+
+Idle cost near zero, **no watches at all**, existence changes visible in a
+second or two, and a file's size and date lagging by minutes. Against today's
+455,367 watches — 99% of this machine's budget — for instant everything and a
+silent failure when the budget fills.
+
+And it is exactly what one capability buys: `min_transid` answers "what changed
+since" in 0.3 ms, which collapses all three layers into one call and catches
+edits with them. That is the honest price of `CAP_SYS_ADMIN` here — not speed
+in general, but instant *content* updates and one mechanism instead of three.
+
 ### Windows needs no privilege for its biggest win
 
 `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` returns name,
