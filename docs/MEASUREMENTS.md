@@ -3711,3 +3711,38 @@ because there was nothing left to fetch.
 What it costs: the whole reachable list is cached in **706 ms** for `a` and
 2,509 ms for `png`, and the page's heap sits at 16–43 MB with twenty thousand
 rows in it. All of it is work done while nothing is being asked for.
+
+## The stall nobody could name was the bridge's single socket
+
+Two loose ends from earlier — a `/api/search` the page once recorded at
+2,255 ms, and facet walks that were 130 ms except when they were 1,400 —
+turned out to be the same thing, and it was not the engine.
+
+Forty facet calls on a quiet query: **thirty-nine took 2 ms and one took
+1,056**, and the slow one landed while the index had twenty-four changes
+staged. Not a revision bump, so not the commit swapping segments — something
+holding a queue.
+
+The service gives every connection a thread of its own. The bridge held **one**
+connection, behind a mutex, for every request the page made. So a screenful of
+rows queued behind whatever was in front of it, and one of the things in front
+of it is a walk of the whole matching set.
+
+The page's own burst — one facet walk and six windows at once, which is what a
+scroll during a fresh query looks like — three interleaved rounds:
+
+| | window, median | window, worst | whole burst |
+|---|---:|---:|---:|
+| one socket | 230 / 240 / 228 ms | 3,130 / 3,004 / 304 ms | 266 / 273 / 276 ms |
+| **pool of 8** | **61 / 65 / 56 ms** | 165 / 1,009 / 1,572 ms | 198 / 792 / 786 ms |
+
+**Four times faster for the thing that becomes rows on the screen**, in every
+round. The whole burst sometimes takes longer, and that is the trade being
+made on purpose: the facet walk now runs beside the windows instead of ahead
+of them, so the count settles later and the rows arrive sooner.
+
+A worst case of one to three seconds survives on both sides and is not this.
+It appears only while the index has work staged, so the next thread to pull is
+the write lock during a commit — `SCOUR_LOCK_TRACE=1` exists in
+`NativeIndex::commit` for exactly that and has not been run against a busy
+index yet.
