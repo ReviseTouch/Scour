@@ -702,6 +702,200 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
     }
 }
 
+/// What the tick decided a source needs.
+#[derive(Debug)]
+enum Nudge {
+    /// Nobody is watching it and it moved.
+    Reconcile,
+    /// Somebody is watching it, it keeps moving, and nothing is arriving.
+    Blind,
+}
+
+/// One pulse reading per source, and the rules that turn it into work.
+///
+/// **Why the pulse is not simply believed.** It says the *filesystem* moved,
+/// not that anything this source indexes did — `/home` shares its partition
+/// with `/var/log`, so its block counter ticks while journald writes. So a
+/// moving pulse never means "rescan now"; it means "you may look, if you have
+/// not looked recently". The floors below are what keep that honest.
+struct Pulses {
+    last: Vec<Option<u64>>,
+    /// The pulse moved and nothing has been done about it yet.
+    ///
+    /// **Remembered rather than dropped.** The floor below says how often a
+    /// source may be walked, not which movements count: a pulse that moves
+    /// inside the floor is still a change, and the first version threw it away
+    /// — so a burst of writes ten seconds after the last walk was noticed,
+    /// declined, and never mentioned again. The disk stayed quiet after that,
+    /// which meant nothing ever asked again.
+    pending: Vec<bool>,
+    /// When each source was last walked because of a pulse.
+    walked: Vec<Instant>,
+    /// When a change last arrived for each source, so a watcher that has gone
+    /// quiet can be told from a disk that is quiet.
+    moved_since_event: Vec<u32>,
+    checked: Instant,
+}
+
+impl Pulses {
+    /// How often the pulses are read. They cost microseconds; this is about
+    /// not calling `scan` in a tight loop, not about the reading.
+    const EVERY: Duration = Duration::from_secs(2);
+    /// The least time between two walks of the same unwatched source.
+    const FLOOR: Duration = Duration::from_secs(15);
+    /// How many consecutive readings may move with nothing arriving before a
+    /// watched source is called blind. At `EVERY` seconds apart, this is five
+    /// minutes of a disk changing while its watcher says nothing — long enough
+    /// that a quiet period cannot be mistaken for a fault.
+    const PATIENCE: u32 = 150;
+
+    fn new(n: usize) -> Pulses {
+        Pulses {
+            last: vec![None; n],
+            pending: vec![false; n],
+            // Back-dated, so the first movement is acted on rather than
+            // waiting out a floor that has protected nothing yet.
+            walked: vec![Instant::now() - Self::FLOOR; n],
+            moved_since_event: vec![0; n],
+            checked: Instant::now(),
+        }
+    }
+
+    fn due(&mut self, shared: &Arc<Shared>) -> Vec<(usize, Nudge)> {
+        if self.checked.elapsed() < Self::EVERY {
+            return Vec::new();
+        }
+        self.checked = Instant::now();
+        let watched: Vec<usize> = shared.watches.lock().iter().map(|(i, _)| *i).collect();
+        let readings: Vec<Option<u64>> = shared.sources.iter().map(|s| s.pulse()).collect();
+        self.decide(&readings, &watched)
+    }
+
+    /// The rules, with the reading already taken.
+    ///
+    /// Split out because everything interesting here is bookkeeping — a
+    /// movement remembered across a floor, a counter cleared by an event — and
+    /// none of it needs a filesystem to be wrong.
+    fn decide(&mut self, readings: &[Option<u64>], watched: &[usize]) -> Vec<(usize, Nudge)> {
+        let trace = std::env::var_os("SCOUR_PULSE_TRACE").is_some();
+        let mut out = Vec::new();
+        for (i, reading) in readings.iter().enumerate() {
+            let Some(now) = *reading else {
+                if trace {
+                    eprintln!("scourd: source {i} has no pulse to read");
+                }
+                continue;
+            };
+            let moved = self.last[i].is_some_and(|was| was != now);
+            if trace {
+                eprintln!(
+                    "scourd: source {i} pulse {now} (was {:?}), moved={moved}, watched={}, since walk {:?}",
+                    self.last[i],
+                    watched.contains(&i),
+                    self.walked[i].elapsed(),
+                );
+            }
+            self.last[i] = Some(now);
+            if moved {
+                self.pending[i] = true;
+            }
+            if watched.contains(&i) {
+                if moved {
+                    self.moved_since_event[i] += 1;
+                }
+                if self.moved_since_event[i] >= Self::PATIENCE {
+                    self.moved_since_event[i] = 0;
+                    self.pending[i] = false;
+                    self.walked[i] = Instant::now();
+                    out.push((i, Nudge::Blind));
+                }
+            } else if self.pending[i] && self.walked[i].elapsed() >= Self::FLOOR {
+                self.pending[i] = false;
+                self.walked[i] = Instant::now();
+                out.push((i, Nudge::Reconcile));
+            }
+        }
+        out
+    }
+
+    /// A change arrived, so whatever the pulse has been saying, the watcher is
+    /// awake.
+    fn saw_event(&mut self, source: usize) {
+        if let Some(n) = self.moved_since_event.get_mut(source) {
+            *n = 0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod pulse_tests {
+    use super::*;
+
+    fn quiet(n: usize) -> Pulses {
+        let mut p = Pulses::new(n);
+        // The first reading only establishes a baseline; start from there.
+        p.decide(&[Some(1)], &[]);
+        p
+    }
+
+    #[test]
+    fn a_movement_inside_the_floor_is_remembered_not_dropped() {
+        let mut p = quiet(1);
+        // Just walked, so the floor is closed.
+        p.walked[0] = Instant::now();
+        assert!(
+            p.decide(&[Some(2)], &[]).is_empty(),
+            "the floor holds it back"
+        );
+        assert!(p.pending[0], "but the movement is remembered");
+        // The floor opens, and nothing has moved since.
+        p.walked[0] = Instant::now() - Pulses::FLOOR;
+        let out = p.decide(&[Some(2)], &[]);
+        assert!(
+            matches!(out.as_slice(), [(0, Nudge::Reconcile)]),
+            "a movement that arrived early is still acted on: {out:?}"
+        );
+        assert!(!p.pending[0], "and only once");
+    }
+
+    #[test]
+    fn a_still_pulse_asks_for_nothing() {
+        let mut p = quiet(1);
+        p.walked[0] = Instant::now() - Pulses::FLOOR;
+        assert!(p.decide(&[Some(1)], &[]).is_empty());
+        assert!(p.decide(&[Some(1)], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_watched_source_is_called_blind_only_after_patience() {
+        let mut p = quiet(1);
+        for step in 0..Pulses::PATIENCE - 1 {
+            let out = p.decide(&[Some(step as u64 + 2)], &[0]);
+            assert!(out.is_empty(), "not yet at step {step}");
+        }
+        let out = p.decide(&[Some(9_999)], &[0]);
+        assert!(matches!(out.as_slice(), [(0, Nudge::Blind)]), "{out:?}");
+    }
+
+    #[test]
+    fn an_event_clears_the_suspicion() {
+        let mut p = quiet(1);
+        for step in 0..Pulses::PATIENCE - 1 {
+            p.decide(&[Some(step as u64 + 2)], &[0]);
+        }
+        p.saw_event(0);
+        let out = p.decide(&[Some(9_999)], &[0]);
+        assert!(out.is_empty(), "a watcher that spoke is not blind: {out:?}");
+    }
+
+    #[test]
+    fn a_source_with_no_pulse_is_left_alone() {
+        let mut p = Pulses::new(1);
+        assert!(p.decide(&[None], &[]).is_empty());
+        assert!(p.decide(&[None], &[]).is_empty());
+    }
+}
+
 fn run(
     shared: Arc<Shared>,
     jobs: Receiver<Job>,
@@ -729,6 +923,7 @@ fn run(
     // `scour rescan`.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
     let tick = crossbeam_channel::tick(Duration::from_millis(100));
+    let mut pulses = Pulses::new(shared.sources.len());
 
     loop {
         select! {
@@ -760,6 +955,14 @@ fn run(
                         batch.push(more);
                         if batch.len() >= 4_096 {
                             break;
+                        }
+                    }
+                    // Whoever these belong to has a watcher that is awake. A
+                    // handful is enough to say so — the counter this clears
+                    // only matters when a source produces *nothing at all*.
+                    for change in batch.iter().take(64) {
+                        if let Some(i) = owner_of(&shared, change.path()) {
+                            pulses.saw_event(i);
                         }
                     }
                     // The walks come out of the batch first, because they are
@@ -847,7 +1050,37 @@ fn run(
                 }
                 Err(_) => break,
             },
-            recv(tick) -> _ => {}
+            recv(tick) -> _ => {
+                for (source, job) in pulses.due(&shared) {
+                    match job {
+                        Nudge::Reconcile => {
+                            // A source nobody is watching, whose pulse moved.
+                            if !scan(&shared, &changes_tx, source, None) {
+                                schedule_retry(&mut retries, source);
+                            }
+                            dirty = true;
+                            idle_done = false;
+                            last_busy = Instant::now();
+                        }
+                        Nudge::Blind => {
+                            // A source that *is* watched, whose pulse has been
+                            // moving for minutes with nothing arriving. Said
+                            // out loud because a watcher that has gone quiet
+                            // is otherwise indistinguishable from a quiet disk.
+                            eprintln!(
+                                "scourd: source {source} has changed repeatedly with no events \
+                                 arriving — the watch is not covering it; rescanning"
+                            );
+                            if !scan(&shared, &changes_tx, source, None) {
+                                schedule_retry(&mut retries, source);
+                            }
+                            dirty = true;
+                            idle_done = false;
+                            last_busy = Instant::now();
+                        }
+                    }
+                }
+            }
         }
 
         // A commit writes a segment, so committing two files costs a segment

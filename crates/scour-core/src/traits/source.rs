@@ -83,6 +83,26 @@ pub trait Source: Send + Sync + Debug {
 
     fn caps(&self) -> Caps;
 
+    /// A number that changes when this source may have changed — cheaply.
+    ///
+    /// **What it is for.** Watching costs one inotify watch per directory on
+    /// Linux and the budget is shared with every other program the user runs;
+    /// a source that is mostly still does not deserve that, but something has
+    /// to notice when it moves. This is that something: a token to compare
+    /// against the last one, costing microseconds, that says *whether* to look
+    /// rather than *what* changed.
+    ///
+    /// It is also a way to catch a watcher that has gone quiet when it should
+    /// not have. inotify's one dangerous failure is silent — the budget fills,
+    /// the directory is never watched, and nothing reports it. A pulse that
+    /// keeps moving while no change arrives is that failure, visible.
+    ///
+    /// `None` when the source has no cheap way to answer, which is not an
+    /// error: the caller falls back to asking on a timer.
+    fn pulse(&self) -> Option<u64> {
+        None
+    }
+
     /// Walk everything and push it into the sink.
     ///
     /// Returns when the walk is done or the sink asked it to stop; the report

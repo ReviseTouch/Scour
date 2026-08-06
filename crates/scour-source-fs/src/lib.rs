@@ -18,6 +18,7 @@
 //! [`Source`]: scour_core::Source
 //! [`Change::Rescan`]: scour_core::Change::Rescan
 
+mod pulse;
 mod rules;
 mod scan;
 mod watch;

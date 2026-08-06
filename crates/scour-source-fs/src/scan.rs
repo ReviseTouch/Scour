@@ -79,6 +79,10 @@ pub struct FsSource {
     /// What they are like to read: how many threads are worth using, and how
     /// long to let events settle.
     medium: crate::fs::Medium,
+    /// How to ask "has anything happened here" without walking anything, one
+    /// per root. Decided at construction because the answer depends on the
+    /// filesystem and the device, neither of which changes under a mount.
+    probes: Vec<crate::pulse::Probe>,
 }
 
 impl FsSource {
@@ -98,6 +102,7 @@ impl FsSource {
             .map(|r| crate::fs::medium_of(r))
             .reduce(|a, b| if a.threads(64) <= b.threads(64) { a } else { b })
             .unwrap_or(crate::fs::Medium::Unknown);
+        let probes = roots.iter().map(|r| crate::pulse::probe_for(r)).collect();
         Self {
             id,
             name: name.into(),
@@ -106,6 +111,7 @@ impl FsSource {
             watch: true,
             traits,
             medium,
+            probes,
         }
     }
 
@@ -209,6 +215,24 @@ impl Source for FsSource {
             roots: self.roots.iter().map(|r| path::from_path(r)).collect(),
             caps: self.caps(),
         }
+    }
+
+    /// The roots' pulses, folded into one number.
+    ///
+    /// Folded rather than reported separately because the caller's question is
+    /// "is it worth looking at this source", and any root moving is a yes.
+    /// `None` only when *nothing* under it can be asked cheaply — one root
+    /// that can answer is enough to be useful.
+    fn pulse(&self) -> Option<u64> {
+        let mut any = false;
+        let mut folded = 0u64;
+        for (root, probe) in self.roots.iter().zip(&self.probes) {
+            if let Some(n) = crate::pulse::read(root, probe) {
+                any = true;
+                folded = folded.rotate_left(17) ^ n;
+            }
+        }
+        any.then_some(folded)
     }
 
     fn caps(&self) -> Caps {
