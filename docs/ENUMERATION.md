@@ -137,6 +137,27 @@ metadata files.
 that 1,425 is sequential I/O at 1.7 GB/s, so it is I/O-bound and close to its
 floor; only overlapping read with parse would help.
 
+**Nothing grows when a file is created, and that is not a failure to record
+it.** The table is 2,213,543,936 bytes — 2,161,664 fixed 1 KB records, laid out
+at format time. A create claims a free slot and writes it in place; a delete
+clears the in-use bit. `ntfs3` reports the record number as the inode, so this
+is watchable without scanning anything:
+
+```
+file created  → inode 200504 · record 200504 in use, name present
+file deleted  →               record 200504 free,   name gone
+$MFT size     : 2,213,543,936 bytes, both times
+```
+
+It is an array, not a log. Which is why `$MFT`'s size and mtime say nothing
+about whether the volume changed, and why the only cheap delta on NTFS is the
+journal — the one thing Linux cannot keep.
+
+The last line above is also a trap for a parser: `ntfs3` **zeroes** the record
+on delete, so the name is gone. Windows usually leaves the bytes, which is what
+undelete tools live on. A reader must believe the in-use flag, not the presence
+of a name, or it indexes deleted files on one platform and not the other.
+
 Traps, all of them found by hitting them: NTFS fixups must be applied before
 parsing; a record can hold several `$FILE_NAME` attributes (76,476 do on this
 volume) and a naive reader emits `PROGRA~1` beside `Program Files`; times come
