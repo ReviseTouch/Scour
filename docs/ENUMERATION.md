@@ -48,7 +48,23 @@ $ head -c 4 '/mnt/depo/$MFT'  →  FILE
 
 `$LogFile`, `$Secure` and `$Bitmap` open too. `$Extend/$UsnJrnl` is mode 000 —
 so the *journal* is closed even though the table is open — and the raw device
-is not readable without being in group `disk`.
+is not readable without being in group `disk`. The obvious next idea does not
+work either: the journal's data lives in the `$J` alternate data stream, and
+`ntfs3` exposes no alternate data streams at all — `$Extend/$UsnJrnl:$J` does
+not resolve, and the driver surfaces no extended attributes to reach it
+through. So on Linux this volume has a free bulk path and no change feed.
+
+**Which is a plan rather than a gap.** A volume whose whole table reads in
+1,425 ms cold and 454 ms warm does not need watching: reconciling it is
+cheaper than subscribing to it. On this machine that is **152,529 of the
+237,488 indexed directories — 64% of the watch budget** — and it costs no
+privilege, because none of what it needs is behind one. What is left to watch
+is `/home`, 85,081 directories on btrfs, and that is the only place where
+`CAP_SYS_ADMIN` has anything to sell.
+
+None of the reading above is implemented in Scour: it is a measurement of what
+a parser could do, made with a standalone one. `Caps::BULK` is where it would
+attach.
 
 A full parser (fixups, `$STANDARD_INFORMATION`, `$FILE_NAME` with 8.3-namespace
 dedup, `$DATA` real size, parent-reference path reconstruction) produced
