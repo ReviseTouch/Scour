@@ -3521,3 +3521,41 @@ height stops being a result and goes back to being a decision.
 
 Two queries, top and bottom, 80 steps each. Scrolling after: 7.2 ms median, no
 long frames, no forced layout, and the bottom of the list fills.
+
+## What is left of "laglı yükleniyor"
+
+Once the list stopped scrolling itself, what remained was loading rather than
+scrolling. Measured against the bridge directly, so the page is not in the way:
+
+**Rows are not the slow part.** A 200-row window, median of three:
+
+| offset | `a` (1.35 M matches) | `png` (123 k) |
+|---|---:|---:|
+| 0 | 16 ms | 7 ms |
+| 2,000 | 24 ms | 18 ms |
+| 10,000 | 50 ms | 39 ms |
+| 19,800 | 84 ms | 46 ms |
+
+Deep windows cost more because the engine walks to the offset, and at the far
+end of what the list can reach that is still under a tenth of a second.
+
+**The walk over the whole matching set is.** `api/facets` — the exact count,
+the kind rail and the age chart, from one walk — took **1,599 ms** for `a` on
+its first call after the index had moved, and **114–200 ms** for the same shape
+of query afterwards. `api/count` alone is 68–228 ms warm. So the first broad
+query after a commit pays for touching cold mmapped columns, and that is the
+second and a half the window feels: the rows are already there, the count still
+says "1.000+", and the rail is empty.
+
+Two things follow, neither of them done here:
+
+* the number is a *first-touch* cost, so warming the columns after a commit
+  (`madvise(WILLNEED)` on what a broad query would walk) would move it off the
+  first keystroke rather than making the walk cheaper;
+* the facet walk is uncapped while the count beside it is capped. Capping it
+  the same way would bound the wait, at the price of a rail that says "at
+  least" instead of a number.
+
+One outlier is unexplained: the page recorded a single `/api/search` at
+2,255 ms while everything measured here was under 100 ms. A commit holding the
+index while a search waits is the obvious candidate and has not been measured.
