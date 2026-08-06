@@ -181,7 +181,7 @@ impl Rules {
             // A file directly inside it. Directories are deliberately left
             // out: `deps` under `release` is where the noise lives, and
             // refusing it here is what lets the walk prune it.
-            !is_dir && n >= l + 1 && comps[n - 1 - l..n - 1] == rule[..]
+            !is_dir && n > l && comps[n - 1 - l..n - 1] == rule[..]
         })
     }
 
