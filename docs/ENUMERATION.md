@@ -216,6 +216,38 @@ on delete, so the name is gone. Windows usually leaves the bytes, which is what
 undelete tools live on. A reader must believe the in-use flag, not the presence
 of a name, or it indexes deleted files on one platform and not the other.
 
+**Racing the user, and what answers it.** A pass over the table takes a second
+and a half while the machine keeps working, so there are three races and two of
+them are already answered.
+
+*A record caught mid-write.* NTFS's fixups exist for exactly this: the last two
+bytes of every sector are replaced by an update sequence number and the
+originals held in an array at the head of the record. A record read while it
+was being written has sector tails that do not match — a two-comparison check,
+and one a parser has to do anyway to read the record at all. Measured on a live
+record: USN 3, two sectors, both tails matching.
+
+*A smeared snapshot.* Files created during the pass may be missed and deleted
+ones may still appear, exactly as with a directory walk. The next reconciliation
+corrects it; nothing is built on the pass being a point in time.
+
+*A record number that means two different files.* Not theoretical — six files
+created and deleted in turn all landed in **record 200504**, with sequence
+numbers 16 through 21, and `ntfs3` reports the inode as the record number
+alone:
+
+```
+file 0: inode 200504 · sequence 16
+file 1: inode 200504 · sequence 17
+...
+file 5: inode 200504 · sequence 21
+```
+
+A file reference on NTFS is *(record, sequence)* and Linux hands over half of
+it. Anything keying identity on the inode would have merged six files into one
+within seconds. Scour keys on the path, which was decided for other reasons and
+turns out to be required here.
+
 Traps, all of them found by hitting them: NTFS fixups must be applied before
 parsing; a record can hold several `$FILE_NAME` attributes (76,476 do on this
 volume) and a naive reader emits `PROGRA~1` beside `Program Files`; times come
