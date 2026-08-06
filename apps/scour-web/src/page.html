@@ -338,9 +338,6 @@
      line box is 26 px and the text sits centred in it, so -19px puts them in
      the air above the query rather than over its last two characters. */
   .qacts button {
-    position: absolute;
-    z-index: 4;
-    top: -19px;
     width: 17px;
     height: 17px;
     padding: 0;
@@ -353,6 +350,33 @@
     pointer-events: auto;
     display: grid;
     place-items: center;
+  }
+  /* **The holes a hand fell through.**
+   *
+   * The buttons are drawn in the air above the query and are put away when the
+   * pointer leaves the field, and there were three ways to leave it without
+   * meaning to. Two pixels between a button's bottom edge (38) and the field's
+   * top (40). Three pixels between the two buttons. And the whole width of the
+   * field to the right of the term, because they sit at the term's *right
+   * edge* — so reaching for them meant leaving the term that drew them.
+   *
+   * All three were the same bug in different clothes: aiming at the target
+   * destroyed it. Neither button could be pressed, and that is what was
+   * reported.
+   *
+   * So the pair is one box now. It covers both buttons and the gap between
+   * them, it reaches down past the field's edge, and the pointer stays inside
+   * it the whole way. Measured with real mouse events walking the path a hand
+   * takes: at 37, 38, 39 and 40 pixels the element under the pointer is the
+   * button. */
+  .qacts .pair {
+    position: absolute;
+    top: -19px;
+    display: flex;
+    gap: 3px;
+    padding-bottom: 8px;
+    pointer-events: auto;
+    z-index: 4;
   }
   .qacts button:hover { background: var(--ink-3); color: var(--panel); }
   /* Removing is destructive, so it says so on hover and nowhere else. */
@@ -743,65 +767,6 @@
   .about:hover { color: var(--ink); border-color: var(--ink-3); }
   .about[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
 
-  /* ---------------- terim çipleri ---------------- */
-  .chips {
-    display: flex; flex-wrap: wrap; gap: calc(var(--u) * 1.5);
-    margin-top: calc(var(--u) * 2);
-    min-height: 22px;
-  }
-  .chip {
-    display: inline-flex; align-items: center; gap: calc(var(--u) * 1.5);
-    font: 500 12px/1 var(--mono);
-    padding: calc(var(--u) * 1.25) calc(var(--u) * 2);
-    border-radius: 11px;
-    border: 1px solid var(--line);
-    background: none;
-    color: var(--ink-2);
-    cursor: pointer;
-    /* The term keeps the colour it has in the line above it, so the eye can
-       carry one to the other without being told they are the same thing. */
-    transition: background .12s, border-color .12s, color .12s;
-  }
-  /* The pill itself is no longer a button — the two things you can do to a
-     term are, and each gets a target a finger can find. */
-  .chip { padding: 0 0 0 calc(var(--u) * 0.5); cursor: default; }
-  .chip .nm { padding: 0 calc(var(--u) * 0.5); }
-  .chip .neg, .chip .rm {
-    background: none; border: 0; cursor: pointer;
-    color: var(--ink-3);
-    font: inherit; line-height: 1;
-    min-width: 22px; height: 22px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 11px;
-  }
-  .chip .rm { font-size: 14px; }
-  .chip .neg { font-weight: 700; opacity: .45; }
-  .chip:hover .neg { opacity: .8; }
-  .chip .neg:hover, .chip .rm:hover {
-    background: color-mix(in srgb, var(--q-not) 18%, transparent);
-    color: var(--q-not);
-    opacity: 1;
-  }
-  .chip .neg:focus-visible, .chip .rm:focus-visible {
-    outline: 2px solid var(--q-key); outline-offset: -2px;
-  }
-  .chip:hover { border-color: var(--ink-3); }
-  /* An excluded term reads as excluded: struck through, and the `!` lit. */
-  .chip.off .nm { text-decoration: line-through; opacity: .65; }
-  .chip.off .neg { opacity: 1; color: var(--q-not); }
-  .chip.key  { color: var(--q-key);  border-color: color-mix(in srgb, var(--q-key) 40%, var(--line)); }
-  .chip.val  { color: var(--q-val);  border-color: color-mix(in srgb, var(--q-val) 40%, var(--line)); }
-  .chip.glob { color: var(--q-glob); border-color: color-mix(in srgb, var(--q-glob) 40%, var(--line)); }
-  .chip.not  { color: var(--q-not);  border-color: color-mix(in srgb, var(--q-not) 40%, var(--line)); }
-  .chip.bad  {
-    color: var(--q-bad);
-    border-color: color-mix(in srgb, var(--q-bad) 55%, var(--line));
-    /* The same wavy underline the line above gives an unreadable term: this is
-       the one thing a query can be wrong about silently. */
-    text-decoration: underline wavy var(--q-bad);
-    text-underline-offset: 3px;
-  }
-
   /* ---------------- satır menüsü ---------------- */
   tbody tr { cursor: default; }
   /* The rows that are not drawn, standing in for their own height. */
@@ -950,10 +915,6 @@
         </div>
       </div>
       <p class="qread" id="qread"></p>
-      <!-- One pill a term. Clicking one takes it out of the text, which is
-           where the query lives — there is no hidden state to get out of step
-           with what is written. -->
-      <div class="chips" id="chips" aria-label="Terimler"></div>
     </div>
 
     <div class="meter">
@@ -1543,10 +1504,12 @@
     const x = Math.max(0, Math.min(left + width - pair + 18, room));
     acts.innerHTML =
       `<div class="band" style="left:${left - 3}px;width:${width + 6}px"></div>` +
-      `<button class="neg" style="left:${x}px" ` +
+      `<div class="pair" style="left:${x}px">` +
+      `<button class="neg" ` +
       `title="${negated ? "Dışlamayı kaldır" : "Bu terimi dışla"}">` +
       `${negated ? "+" : "!"}</button>` +
-      `<button class="drop" style="left:${x + 20}px" title="Terimi kaldır">✕</button>`;
+      `<button class="drop" title="Terimi kaldır">✕</button>` +
+      `</div>`;
   }
 
   /* Replace one term, keeping the spaces around it tidy. */
@@ -1559,6 +1522,10 @@
       // line whose whole job is to be read.
       if (before.endsWith(" ") && after.startsWith(" ")) after = after.slice(1);
       else if (before.endsWith(" ") && !after) before = before.slice(0, -1);
+      // The first term has nothing before it, so neither branch above fires
+      // and the space that followed it is left at the head of the query.
+      // Measured by pressing the button: "hasan raporu" became " raporu".
+      else if (!before && after.startsWith(" ")) after = after.slice(1);
     }
     q.value = before + replacement + after;
     const caret = (before + replacement).length;
@@ -1570,12 +1537,26 @@
 
   q.addEventListener("mousemove", (e) => {
     const t = termAt(e.clientX);
-    const same = t && hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
+    /* **Moving off a term does not put its buttons away.**
+     *
+     * They sit at the term's right edge and above the line, so reaching them
+     * means leaving the term — and this used to answer that by clearing them.
+     * The target was destroyed by aiming at it, which is why neither button
+     * could be pressed. Only a *different* term replaces them; leaving the
+     * field is what puts them away, and that is handled below. */
+    if (!t) return;
+    const same = hoverTerm && t[0] === hoverTerm[0] && t[1] === hoverTerm[1];
     if (!same) drawActs(t);
   });
   // The buttons live inside the layer, so leaving the input for them must not
   // clear them — only leaving the whole field does.
-  document.querySelector(".qfield").addEventListener("mouseleave", () => drawActs(null));
+  document.querySelector(".qfield").addEventListener("mouseleave", (e) => {
+    // Moving onto the buttons is not leaving. They are descendants, so this
+    // should not fire at all — but they are drawn outside the box, and one
+    // layout change is all it takes to open a gap under them again.
+    if (e.relatedTarget && acts.contains(e.relatedTarget)) return;
+    drawActs(null);
+  });
   q.addEventListener("scroll", () => drawActs(hoverTerm));
 
   acts.addEventListener("mousedown", (e) => {
@@ -1626,10 +1607,9 @@
           "warn",
           LAST_SPANS.some((s) => s.role === "unknown_field" || s.role === "bad_value")
         );
-        paintChips(text);
-        /* The sentence and chips live in an `auto` grid row. A longer reading
-           can wrap after the list's frame has already painted, changing its
-           client height without producing a window resize or a scroll. */
+        /* The reading lives in an `auto` grid row. A longer one can wrap
+           after the list's frame has already painted, changing its client
+           height without producing a window resize or a scroll. */
         repaint(true);
       })
       .catch((e) => { console.error("scour: query explanation did not draw:", e); });
@@ -1665,49 +1645,6 @@
      off. Terms are the spans between spaces — the engine has already decided
      where a term begins and ends, and splitting the text again here would be
      the second parser walking back in through a different door. */
-  function paintChips(text) {
-    const chips = [];
-    let cur = null;
-    for (const s of LAST_SPANS) {
-      if (s.role === "space") {
-        if (cur) chips.push(cur);
-        cur = null;
-        continue;
-      }
-      if (!cur) cur = { start: s.start, end: s.start + s.len, roles: [] };
-      cur.end = s.start + s.len;
-      cur.roles.push(s.role);
-    }
-    if (cur) chips.push(cur);
-
-    const rail = document.getElementById("chips");
-    if (!rail) return;
-    rail.innerHTML = chips
-      .map((c) => {
-        const body = text.slice(c.start, c.end);
-        /* The colour of a term is the colour of what makes it what it is: a
-           field name before its value, a mistake before anything. */
-        const rank = ["bad_value", "unknown_field", "not", "field", "or", "glob", "regex", "phrase"];
-        const role = rank.find((r) => c.roles.includes(r)) || "text";
-        /* Three parts, and two of them are hit targets rather than
-           decoration. The first version made the whole pill one button with
-           an 8×13 pixel `×` inside it, which is a target no hand aims at —
-           and it offered no way to say "not this", which is the thing a
-           filter is most often wrong about. */
-        const negated = body.startsWith("!");
-        const label = negated ? body.slice(1) : body;
-        return `<span class="chip ${ROLE_CLASS[role] || ""}${negated ? " off" : ""}"
-                  data-start="${c.start}" data-end="${c.end}">
-          <button type="button" class="neg" data-act="neg"
-                  title="${negated ? "geri al" : "bunu dışla"}"
-                  aria-label="${negated ? "dışlamayı kaldır" : "dışla"}">!</button>
-          <span class="nm">${escape_(label)}</span>
-          <button type="button" class="rm" data-act="rm"
-                  title="çıkar" aria-label="terimi çıkar">×</button>
-        </span>`;
-      })
-      .join("");
-  }
 
   function paint(text) {
     // A caret sits *between* characters, so both neighbours are candidates:
@@ -3005,35 +2942,6 @@
     }, 4000);
   }
 
-  /* Taking a term off. The text is the query — there is no hidden state — so
-     removing a chip is a substring removal and a re-render, and the result is
-     exactly what the user would have typed. */
-  document.getElementById("chips").addEventListener("click", (e) => {
-    const act = e.target.closest("[data-act]");
-    const chip = e.target.closest(".chip");
-    if (!act || !chip) return;
-    const from = Number(chip.dataset.start);
-    const to = Number(chip.dataset.end);
-    const body = q.value.slice(from, to);
-    /* Both edit the text, because the text is the query. What comes out is
-       exactly what the user would have typed, which is the whole reason there
-       is no hidden filter state to drift away from what is written. */
-    const replacement =
-      act.dataset.act === "neg"
-        ? (body.startsWith("!") ? body.slice(1) : "!" + body)
-        : "";
-    const before = q.value.slice(0, from);
-    const after = q.value.slice(to);
-    q.value = replacement
-      ? before + replacement + after
-      : (before.replace(/\s+$/, "") && after.replace(/^\s+/, "")
-          ? before.replace(/\s+$/, "") + " " + after.replace(/^\s+/, "")
-          : before.replace(/\s+$/, "") + after.replace(/^\s+/, ""));
-    q.focus();
-    const caret = replacement ? from + replacement.length : from;
-    q.setSelectionRange(caret, caret);
-    render();
-  });
 
   /* Choosing columns. The list is stored beside the widths and for the same
      reason and with the same shelf life — see `WIDTH_KEY`. */
