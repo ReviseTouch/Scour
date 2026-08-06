@@ -63,8 +63,10 @@ is `/home`, 85,081 directories on btrfs, and that is the only place where
 `CAP_SYS_ADMIN` has anything to sell.
 
 None of the reading above is implemented in Scour: it is a measurement of what
-a parser could do, made with a standalone one. `Caps::BULK` is where it would
-attach.
+a parser could do, made with a standalone one (`mft.c`). There is no `Caps`
+flag for it yet — `WATCH`, `RECURSIVE_WATCH`, `JOURNAL`, `CONTENT` and
+`CASE_SENSITIVE` are what exist — and adding one is the smaller half of the
+work.
 
 A full parser (fixups, `$STANDARD_INFORMATION`, `$FILE_NAME` with 8.3-namespace
 dedup, `$DATA` real size, parent-reference path reconstruction) produced
