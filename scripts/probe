@@ -54,10 +54,15 @@ def page_url() -> str:
     pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
     if not pages:
         raise SystemExit(f"no page is open on port {PORT}; is the window running with SCOUR_APP_DEBUG set?")
+    # A browser has more open than the page being measured — an extension's
+    # background page will happily answer and report nothing at all. The bridge
+    # is always loopback HTTP; anything else is somebody else's.
     for t in pages:
-        if "7621" in t.get("url", "") or "scour" in t.get("title", "").lower():
+        url = t.get("url", "")
+        if url.startswith(("http://127.0.0.1", "http://localhost")):
             return t["webSocketDebuggerUrl"]
-    return pages[0]["webSocketDebuggerUrl"]
+    raise SystemExit(f"the browser on port {PORT} has no Scour page open; it has: "
+                     + ", ".join(t.get("url", "?")[:40] for t in pages))
 
 
 class Socket:
@@ -71,7 +76,10 @@ class Socket:
         rest = url.removeprefix("ws://")
         hostport, _, path = rest.partition("/")
         host, _, port = hostport.partition(":")
-        self.sock = socket.create_connection((host, int(port or 80)), timeout=30)
+        # Long enough for a measurement to finish. A script that drives the
+        # list through several queries takes minutes, and a socket that gives
+        # up first reports a timeout for a page that is working.
+        self.sock = socket.create_connection((host, int(port or 80)), timeout=300)
         key = base64.b64encode(os.urandom(16)).decode()
         self.sock.sendall(
             f"GET /{path} HTTP/1.1\r\nHost: {hostport}\r\nUpgrade: websocket\r\n"

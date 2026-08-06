@@ -491,7 +491,18 @@
 
   /* ---------------- results ---------------- */
   .results { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .scroll { flex: 1; overflow: auto; position: relative; }
+  .scroll {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+    /* A virtual row does not stay where its DOM node stays: the node is reused
+       and the top spacer moves it to another index. Chromium's scroll anchor
+       cannot know that. If it anchors one of those rows, changing the spacer
+       makes it correct `scrollTop`; that correction fires `scroll`, which
+       moves the spacer again. The sizer makes the extent stable, and this
+       makes the position stable for the same reason. */
+    overflow-anchor: none;
+  }
   /* **What the list is as tall as.** Nothing is drawn in it and nothing can be
      clicked through it; it exists so that the scrollable height is a number the
      page states outright rather than a sum of whatever the rows happened to
@@ -1611,8 +1622,12 @@
           LAST_SPANS.some((s) => s.role === "unknown_field" || s.role === "bad_value")
         );
         paintChips(text);
+        /* The sentence and chips live in an `auto` grid row. A longer reading
+           can wrap after the list's frame has already painted, changing its
+           client height without producing a window resize or a scroll. */
+        repaint(true);
       })
-      .catch(() => {});
+      .catch((e) => { console.error("scour: query explanation did not draw:", e); });
   }
 
   /* The engine's role names, as the palette spells them. Anything unknown is
@@ -1936,20 +1951,18 @@
    * page is chosen rather than before. */
   const REACH = 20_000;
 
-  /* One row, as the browser actually draws it.
+  /* One row in the list's logical coordinate system.
    *
-   * **A constant here cannot be right.** The stylesheet asks for 31 px; this
-   * screen is scaled by 1.667, so 31 CSS pixels is 51.67 device pixels, which
-   * the browser snaps to 51 — and draws the row **30.6 CSS pixels** tall. The
-   * number that has to match is what was drawn, not what was asked for, and it
-   * depends on a scale factor the page does not choose.
-   *
-   * What that mismatch did is in `paintWindow`. It is measured from a real row
-   * once there is one, and again whenever the window changes size, which is
-   * when a scale factor can change under it. */
-  const ROW_H = 31;          /* what the CSS asks for; the start value */
-  let rowPx = ROW_H;         /* what came back when it was drawn */
-  let headPx = ROW_H;        /* the column headings, likewise */
+   * This is deliberately not a measurement. At 1.667 scale the browser can
+   * draw the same requested row as 30.6 or 30.99 CSS pixels depending on where
+   * it starts. Feeding either answer back into the sizer makes a paint decide
+   * the next scroll extent, which is the loop the sizer exists to break. The
+   * virtual coordinate is 31 CSS pixels whether a device pixel happens to
+   * land on its edge or not; actual rows are measured only as a conservative
+   * clearance bound for the table below. */
+  const ROW_H = 31;
+  let rowPx = ROW_H;         /* largest row seen; table clearance only */
+  let headPx = ROW_H;        /* largest heading seen; likewise */
   /* **A browser will not make an element taller than about 33.5 million
      pixels**, and 2.1 M rows at 31px want 66 M. Past the ceiling the scroll
      position stops mapping to a row and the list jumps.
@@ -1978,7 +1991,7 @@
     query: null, sort: null, desc: null,
     total: 0,                /* what the scrollbar is sized by */
     rows: new Map(),         /* index -> row, only what has been fetched */
-    pending: new Set(),      /* windows in flight, so none is asked for twice */
+    pending: new Map(),      /* start -> the exact request in flight */
     exact: false,            /* has the exact count landed yet */
   };
 
@@ -2003,23 +2016,33 @@
    * bound it is about to contradict. Every row inside that is fetchable — the
    * engine will serve row nineteen thousand whether or not it has finished
    * counting — so this is not a promise the list cannot keep. */
-  const reach = () => (LIST.exact ? Math.min(LIST.total, REACH) : REACH);
+  const reach = () => {
+    if (LIST.query === null) return 0;
+    return LIST.exact ? Math.min(LIST.total, REACH) : REACH;
+  };
 
-  /* Pixels per row: the real height until the set is too tall to draw, then
-     whatever fits. */
-  const pitch = () => (reach() * rowPx > MAX_PX ? MAX_PX / reach() : rowPx);
+  /* Pixels per logical row until the set is too tall to draw, then whatever
+     fits. A painted row never feeds this number back into the scrollbar. */
+  const pitch = () => (reach() * ROW_H > MAX_PX ? MAX_PX / reach() : ROW_H);
 
   function visibleRange() {
     const p = pitch();
-    const first = Math.max(0, Math.floor(scrollEl.scrollTop / p) - MARGIN);
     const count = Math.ceil(scrollEl.clientHeight / p) + MARGIN * 2;
-    return [first, Math.min(reach(), first + count)];
+    const end = reach();
+    const wanted = Math.max(0, Math.floor(scrollEl.scrollTop / p) - MARGIN);
+    /* `end` can move before Chromium has clamped the old `scrollTop`: an exact
+       count can land during a thumb drag, or live updates can remove the tail.
+       Without this clamp the range is `[19000, 1500]`; the painter then pops
+       past an empty pool and the list never gets another successful draw.
+
+       Clamping to the last *full* window also keeps the pool size from losing
+       one row at a time at the bottom, where removing an anchor candidate is
+       exactly the wrong response to a scroll. */
+    const first = Math.min(wanted, Math.max(0, end - count));
+    return [first, Math.min(end, first + count)];
   }
 
-  /* Draw the window that is on screen, between two spacers.
-     The spacers are what make the scrollbar honest: their heights are the rows
-     that exist and are not drawn. */
-  /* Draw the window that is on screen, between two spacers.
+  /* Draw the window that is on screen, after one top spacer.
    *
    * **The nodes are kept and rewritten, never rebuilt.** Replacing the body's
    * HTML meant that every scroll paid for parsing a table, allocating a row
@@ -2028,13 +2051,13 @@
    * of margin either side, against a frame budget of 16.7. A tall window made
    * it worse, because the cost is per row drawn and a tall window draws more.
    *
-   * So the table holds a fixed shape — a spacer, a pool of rows, a spacer, a
-   * note — and a paint changes text and attributes in place. Nodes are created
+   * So the table holds a fixed shape — a spacer, a pool of rows and a note —
+   * and a paint changes text and attributes in place. Nodes are created
    * only when the window has to hold *more* rows than before, which happens
    * when the window is resized and at no other time.
    *
-   * The spacers are what make the scrollbar honest: their heights are the rows
-   * that exist and are not drawn. */
+   * The separate sizer is what makes the scrollbar honest; the spacer only
+   * places the drawn window inside it. */
   let pool = [];
   const sizer = document.getElementById("sizer");
   const spTop = document.createElement("tr");
@@ -2045,7 +2068,13 @@
   farRow.innerHTML = "<td></td>";
 
   function widen(node) {
-    node.firstElementChild.colSpan = SHOWN.length + 1;
+    /* Age + shown columns + the picker. This used to omit the picker and write
+       the same wrong span on every paint, forcing the table grid to reconcile
+       a short row while it was being scrolled. */
+    const span = SHOWN.length + 2;
+    if (node.firstElementChild.colSpan !== span) {
+      node.firstElementChild.colSpan = span;
+    }
   }
 
   /* One row's worth of cells, made once. */
@@ -2058,13 +2087,12 @@
 
   function paintWindow() {
     const [from, to] = visibleRange();
-    painted = [from, to].join();
     const p = pitch();
     const cols = shownColumns();
     const parsed = parse(q.value);
 
-    /* The shape first: two spacers with the right heights, and enough rows
-       between them. Only a resize or a column change gets past the `while`s. */
+    /* The shape first: one spacer with the right height, and enough rows after
+       it. Only a resize or a column change gets past the `while`s. */
     if (body.firstElementChild !== spTop) {
       body.replaceChildren(spTop, farRow);
       pool = [];
@@ -2081,6 +2109,11 @@
       for (const tr of pool) {
         tr.innerHTML =
           `<td class="age"><i></i></td>` + cols.map(() => "<td></td>").join("");
+        /* The cells are new even though the row object and file are not. A
+           cached stamp from the old shape would make `writeRow` return and
+           leave every new cell blank until another search happened to land. */
+        tr.__stamp = null;
+        tr.__marks = null;
       }
     }
     /* **The list's height is stated, not summed. This is what "sonsuz scroll"
@@ -2114,21 +2147,27 @@
        numbers it is showing. Decided here rather than below, because it is one
        more thing that has to fit above the bottom. */
     const far = LIST.total > REACH && to >= reach();
-    farRow.hidden = !far;
+    if (farRow.hidden === far) farRow.hidden = !far;
 
     [spTop, farRow].forEach(widen);
     const tall = Math.round(reach() * p);
-    sizer.style.height = `${tall}px`;
+    const tallCss = `${tall}px`;
+    if (sizer.style.height !== tallCss) sizer.style.height = tallCss;
     /* Everything the table holds besides the spacer, generously: the headings,
        the rows at the largest they round to, the notice if it is showing, and
        a few pixels over. The spacer stops there, so whatever the table does
        with its own layout it stays inside what `.sizer` already claimed. */
     const inside = headPx + (to - from) * (rowPx + 0.5) + (far ? rowPx + 12 : 0) + 4;
-    spTop.firstElementChild.style.height =
-      `${Math.max(0, Math.min(tall - inside, Math.round(from * p)))}px`;
+    const topCss = `${Math.max(0, Math.min(tall - inside, Math.round(from * p)))}px`;
+    if (spTop.firstElementChild.style.height !== topCss) {
+      spTop.firstElementChild.style.height = topCss;
+    }
     if (far) {
-      farRow.firstElementChild.textContent =
+      const note =
         `ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.`;
+      if (farRow.firstElementChild.textContent !== note) {
+        farRow.firstElementChild.textContent = note;
+      }
     }
 
     /* Whatever was selected keeps being selected. The rows are reused, so what
@@ -2204,25 +2243,45 @@
 
   /* Fetch whatever the visible range is missing, one window at a time. */
   function fillWindow() {
+    if (LIST.query === null) return;          /* the first search has not landed */
     const [from, to] = visibleRange();
     for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
       if (LIST.pending.has(start) || LIST.rows.has(start)) continue;
-      LIST.pending.add(start);
-      const mine = generation;
-      SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, start)
+      const request = {
+        generation,
+        query: LIST.query,
+        sort: LIST.sort,
+        desc: LIST.desc,
+      };
+      LIST.pending.set(start, request);
+      SERVICE.search(request.query, request.sort, request.desc, WINDOW, start)
         .then((res) => {
+          /* Clearing an old result set does not cancel its fetch. Compare the
+             request object before deleting: an old answer for window 400 must
+             not delete a newer query's pending window 400. */
+          if (LIST.pending.get(start) !== request) return;
+          if (request.generation !== generation ||
+              request.query !== LIST.query || request.sort !== LIST.sort ||
+              request.desc !== LIST.desc) {
+            LIST.pending.delete(start);
+            return;
+          }
+          /* Convert the whole answer before committing it or clearing the
+             pending token. If one malformed row throws, the catch below can
+             still identify and report this request instead of silently
+             returning because its token was already gone. */
+          const rows = res.rows.map(fromService);
           LIST.pending.delete(start);
-          if (mine !== generation) return;   /* the query moved on */
-          res.rows.forEach((r, i) => LIST.rows.set(start + i, fromService(r)));
+          rows.forEach((r, i) => LIST.rows.set(start + i, r));
           repaint(true);
         })
         .catch((e) => {
-        LIST.pending.delete(start);
-        // Not silent. This `catch` is here for a request that failed, and it
-        // was also catching everything the drawing threw — which is how a
-        // list that stopped filling in after two rows reported nothing at all.
-        console.error("scour: a window did not draw:", e);
-      });
+          if (LIST.pending.get(start) !== request) return;
+          LIST.pending.delete(start);
+          // Not silent. A failed window remains a ghost until another event
+          // chooses a retry policy, but it must not masquerade as a draw.
+          console.error("scour: a window did not load:", e);
+        });
     }
   }
 
@@ -2244,9 +2303,7 @@
    * mostly smooth and occasionally lurches feels like.
    *
    * So nothing paints inline. Ask for a paint and it happens at the top of the
-   * next frame, where the layout is settled and the same read is free. There is
-   * no path left that can thrash, rather than the paths that were known about
-   * having been fixed one at a time.
+   * next frame, where the layout is settled and the same read is free.
    */
   let paintQueued = false;
   let dirty = false;          /* the rows changed, though the range did not */
@@ -2267,25 +2324,39 @@
       const sample = pool.find((tr) => tr.dataset.path) || pool[0];
       if (sample) {
         const h = sample.getBoundingClientRect().height;
-        if (h > 4 && h !== rowPx) { rowPx = h; painted = ""; }
+        /* A clearance bound can grow, never oscillate. In particular it does
+           not become the logical pitch: device-pixel rounding is paint output,
+           not list state. */
+        if (h > rowPx) { rowPx = h; painted = ""; }
       }
       // The header sits inside the table and is as much of its height as any
       // row is. Read here for the same reason and at the same cost.
       const head = body.previousElementSibling;
-      if (head) headPx = head.getBoundingClientRect().height || headPx;
+      if (head) headPx = Math.max(headPx, head.getBoundingClientRect().height || 0);
       const now = visibleRange().join();
       if (now === painted && !dirty) {
         return;
       }
+      /* Commit the bookkeeping after the draw. Previously a bad row could
+         throw after `painted` and `dirty` said the work was complete; every
+         later scroll inside the same range then skipped the wedged window. */
+      try {
+        paintWindow();
+      } catch (e) {
+        dirty = true;
+        console.error("scour: a window did not draw:", e);
+        return;
+      }
       painted = now;
       dirty = false;
-      paintWindow();
       fillWindow();
     });
   }
   const onScroll = () => repaint(false);
   scrollEl.addEventListener("scroll", onScroll, { passive: true });
-  addEventListener("resize", () => { painted = ""; repaint(true); });
+  addEventListener("resize", () => { charW = 0; painted = ""; repaint(true); });
+  document.addEventListener("scour-search-shown", () => { painted = ""; repaint(true); });
+  document.fonts.ready.then(() => { charW = 0; painted = ""; repaint(true); });
 
   /* Only the newest answer is allowed to draw.
      Typing produces one request a keystroke and they do not come back in the
@@ -2390,7 +2461,7 @@
           }
         }
       })
-      .catch(() => {});
+      .catch((e) => { console.error("scour: sidebar did not draw:", e); });
   }
 
   /* The service could not be reached. Say which, rather than showing an empty
@@ -2402,8 +2473,15 @@
        reached" sends whoever is debugging it to the wrong end of the program.
        Once cost half an hour of looking at a healthy daemon. */
     console.error("scour:", err);
+    LIST.query = null;
+    LIST.total = 0;
+    LIST.exact = true;
+    LIST.rows.clear();
+    LIST.pending.clear();
     body.innerHTML = "";
     empty.hidden = false;
+    painted = "";
+    repaint(true);
     document.getElementById("count").textContent = "—";
     document.getElementById("ms").textContent = "—";
     document.getElementById("rows").textContent =
@@ -2646,6 +2724,10 @@
     fitGrips();
     applyWidths();
     syncHeads();
+    /* A column can add or remove the horizontal scrollbar, which changes the
+       list's client height without resizing the window. */
+    painted = "";
+    repaint(true);
   }
 
   function columnMenu() {
@@ -2699,6 +2781,8 @@
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", up);
       saveWidths();
+      painted = "";
+      repaint(true);
     };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up);
@@ -2713,6 +2797,8 @@
     delete WIDTHS[grip.closest("th").dataset.sort];
     applyWidths();
     saveWidths();
+    painted = "";
+    repaint(true);
   });
 
   function syncHeads() {
@@ -2958,6 +3044,8 @@
       const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
       document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
     }
+    /* The status sentence is in a wrapping `auto` row above the list. */
+    repaint(true);
   }
 
   /* ------------------------------------------------------------------ *
@@ -3008,6 +3096,7 @@
   }
 
   const fullPath = (f) => f.path + "/" + f.name;
+  let rowRefresh = 0;
 
   /* The rows, and only the rows that are on screen.
      Everything cached outside the viewport is dropped rather than kept: it is
@@ -3016,6 +3105,8 @@
   function reviseRows() {
     if (LIST.query === null) return;          /* the first search has not landed */
     const mine = generation;
+    const revision = REV;
+    const refresh = ++rowRefresh;
     const [from, to] = visibleRange();
     const starts = [];
     for (let s = Math.floor(from / WINDOW) * WINDOW; s < to; s += WINDOW) starts.push(s);
@@ -3026,7 +3117,12 @@
       SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, s).then((res) => [s, res])
     ))
       .then((pairs) => {
-        if (mine !== generation) return;      /* a keystroke overtook this */
+        /* The throttle limits starts, not finishes: two refreshes can overlap
+           when a window takes more than 400 ms. The older one must not put an
+           older ordering back after the newer one, and a later index revision
+           makes every answer from this one stale even if no newer fetch has
+           started yet. */
+        if (mine !== generation || refresh !== rowRefresh || revision !== REV) return;
         const rows = new Map();
         for (const [s, res] of pairs) {
           res.rows.forEach((r, i) => rows.set(s + i, fromService(r)));
@@ -3071,7 +3167,10 @@
         } else {
             LIST.rows = rows;
         }
-        LIST.pending.clear();
+        /* These starts have just been supplied by this refresh. Supersede only
+           their ordinary window requests; clearing every pending start also
+           cancelled the viewport the user had scrolled to in the meantime. */
+        for (const start of starts) LIST.pending.delete(start);
         now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
         repaint(true);
         // **And fetch whatever the viewport is now missing.**
@@ -3098,7 +3197,11 @@
           if (any) repaint(true);
         }, FRESH_MS);
       })
-      .catch(() => {});
+      .catch((e) => {
+        if (mine === generation && refresh === rowRefresh && revision === REV) {
+          console.error("scour: live rows did not load:", e);
+        }
+      });
   }
 
   /* The exact count, the kind rail and the histogram.
@@ -3415,7 +3518,8 @@
     document.getElementById("tab-search").setAttribute("aria-selected", String(s));
     document.getElementById("tab-report").setAttribute("aria-selected", String(!s));
     document.querySelector(".meter").style.display = s ? "" : "none";
-    if (!s) drawReport();
+    if (s) document.dispatchEvent(new Event("scour-search-shown"));
+    else drawReport();
   }
   document.getElementById("tab-search").onclick = () => show("search");
   document.getElementById("tab-report").onclick = () => show("report");
