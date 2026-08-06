@@ -1970,6 +1970,7 @@
     rows: new Map(),         /* index -> row, only what has been fetched */
     pending: new Map(),      /* start -> the exact request in flight */
     exact: false,            /* has the exact count landed yet */
+    since: 0,                /* when this result set landed */
     /* **Which revision each cached window came from.**
      *
      * The cache is keyed by position and positions move: the list is sorted by
@@ -2268,6 +2269,11 @@
    * past, which is what was wanted in the first place. */
   const INFLIGHT = 4;
 
+  /* How long a result set has to have stood still before the page reads ahead
+     into it. Long enough that typing does not start a hundred fetches, short
+     enough that a pause is indistinguishable from having stopped. */
+  const SETTLED = 400;
+
   /* **The rest of the list, quietly, while nothing nearer is waiting.**
    *
    * Asking only for what is on the screen leaves it blank whenever the hand
@@ -2323,7 +2329,12 @@
     const eye = (from + to) / 2;
     wanted.sort((a, b) => Math.abs(a + WINDOW / 2 - eye) - Math.abs(b + WINDOW / 2 - eye));
 
-    if (!wanted.length && LIST.pending.size === 0) {
+    /* **And only once the query has stopped changing.** Reading ahead is for a
+       list somebody is looking at; a result set one keystroke old is about to
+       be thrown away. Measured while typing a five-letter word: 123 window
+       requests, nearly all for orderings that no longer existed by the time
+       they arrived. */
+    if (Date.now() - LIST.since > SETTLED && !wanted.length && LIST.pending.size === 0) {
       const rest = nextMissing(from, to);
       if (rest !== null) wanted.push(rest);
     }
@@ -2480,13 +2491,15 @@
         LIST.pending.clear();
         LIST.exact = !res.capped;
         LIST.total = res.total;
+        LIST.since = Date.now();
         res.rows.forEach((r, i) => LIST.rows.set(i, fromService(r)));
         scrollEl.scrollTop = 0;
         FILES = res.rows.map(fromService);
         lastMeter = res;
         draw(text, parse(text), FILES, res);
-        /* And everything else about this result set, in one request. */
-        sidebar(text, mine);
+        /* And everything else about this result set — but not on this
+           keystroke. See `sidebarSoon`. */
+        sidebarSoon();
       })
       .catch((e) => {
         if (mine !== generation) return;
@@ -2525,6 +2538,30 @@
      A later deadline than the rows, which are already on screen — and one
      request rather than three, because they are three views of the same rows
      and asking separately walked them three times. */
+  /* **The count and the rail wait for the typing to stop.**
+   *
+   * The rows do not: a window of them is 7 to 13 ms whatever is typed, so
+   * every keystroke can have its own. The sidebar is a walk of the *whole*
+   * matching set, and the shorter the query the larger that is — measured
+   * while typing one word:
+   *
+   *     r        rows  10 ms      sidebar  1,291 ms
+   *     ra             13 ms                  88 ms
+   *     rap            10 ms                  62 ms
+   *     rapor          12 ms                  29 ms
+   *
+   * Asked per keystroke, the first letters start walks that are still running
+   * when the next letter arrives, and several of them at once are enough to
+   * make the rows late as well. That is the second of lag while typing fast.
+   *
+   * So it is asked once the letters stop, and it charges for itself the same
+   * way the live refresh does: whatever the last one cost, the next waits at
+   * least that long again. Someone who stops at `r` still pays for `r` —
+   * they asked a broad question — but they pay once. */
+  const sidebarSoon = afterQuiet(() => {
+    if (LIST.query !== null) sidebar(LIST.query, generation);
+  }, 220);
+
   let sidebarGeneration = 0;
   function sidebar(text, mine) {
     const ours = ++sidebarGeneration;
@@ -3161,6 +3198,37 @@
    * Cheap answers are unaffected, which is the point — this slows down exactly
    * the queries that deserve it and nothing else. */
   const COST = 10;
+
+  /* Run `fn` once the calls stop for `ms`, and lengthen that wait for a `fn`
+     that turns out to be expensive. The other side of `atMostEvery`: that one
+     keeps a steady stream from being too fast, this one keeps a burst from
+     starting anything until the burst is over.
+   *
+   * **The wait is what the last call cost, and no more than `PATIENCE`.** A
+   * plain "ten times the cost" belongs on a background refresh nobody is
+   * waiting for; here somebody *is* waiting — a 1.3 s walk would push the
+   * count 13 s behind the query it belongs to, which is worse than the
+   * problem. Waiting one walk's length means two of them never overlap, and
+   * the ceiling keeps even a pathological one answerable. */
+  const PATIENCE = 1500;
+  function afterQuiet(fn, ms) {
+    let timer = null, floor = ms;
+    return () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const began = Date.now();
+        const out = fn();
+        if (out && typeof out.then === "function") {
+          const charge = () => {
+            floor = Math.min(PATIENCE, Math.max(ms, Date.now() - began));
+          };
+          out.then(charge, charge);
+        }
+      }, floor);
+    };
+  }
+
   function atMostEvery(fn, ms) {
     let last = 0, timer = null, floor = ms;
     const done = (spent) => { floor = Math.max(ms, spent * COST); };
