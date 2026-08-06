@@ -258,6 +258,40 @@ BTRFS_IOC_TREE_SEARCH_V2 → -1 EPERM
 `INO_LOOKUP` does succeed unprivileged, but only for `objectid == 256`, where
 it returns the subvolume id and a deliberately emptied name.
 
+### btrfs has an unprivileged change counter, and it is eight microseconds
+
+`btrfs subvolume show` needs `CAP_SYS_ADMIN` and that led to the wrong
+conclusion here twice: the capability check is in `btrfs_ioctl_tree_search`,
+which is what the tool reaches for, and **`BTRFS_IOC_GET_SUBVOL_INFO` has no
+such check**. Unprivileged, on this machine:
+
+```
+/home    treeid 257 · generation 13849 · ctransid 13850
+idle 3 s        13850   unchanged
+write a file    13851   moved
+rename it       13852   moved
+delete it       13853   moved
+100 reads       0.7 ms  →  0.008 ms each
+```
+
+`ctransid` is the transaction the subvolume last changed in. It is exact, it is
+per *subvolume* rather than per device, and it costs eight microseconds — so a
+poll at 1 Hz is free by any measure.
+
+What it does not do is say *what* changed; `min_transid` does that and is the
+privileged half. So this is not a replacement for a watcher. It is something
+better than that turned out to be needed: **a way to catch a watcher that has
+gone quiet when it should not have.** inotify's one dangerous failure is silent
+— the budget fills, `inotify_add_watch` returns `ENOSPC`, the directory is
+never watched and nothing anywhere says so. A counter that moves while no
+events arrive says so, for eight microseconds a second.
+
+The block-device counter does not substitute for it. `/home` shares
+`nvme0n1p5` with `/var/log`, `/var/cache`, `/var/tmp` and `/srv`, so its write
+sectors moved **fourteen times in fifteen idle seconds** — noise, not signal.
+That trick works on the NTFS volume only because nothing else is mounted on
+that partition.
+
 ### Windows needs no privilege for its biggest win
 
 `GetFileInformationByHandleEx` with `FileFullDirectoryInfo` returns name,
