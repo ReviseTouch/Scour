@@ -108,6 +108,32 @@ machine that boots both, an indexer following only the journal misses
 everything the other system wrote. Everything survives this by re-reading
 `$MFT` at startup; a design that only ever follows the journal would not.
 
+**And the volume does not deserve watching at all, which the timestamps say
+outright.** Of its 177,915 directories:
+
+| changed within | directories |
+|---|---:|
+| a day | **4** |
+| a week | 17,480 (9%) |
+| a month | 34,523 cumulative (19%) |
+| **over a year ago** | **93%** |
+
+It is an archive. Watching it costs 152,529 inotify watches — 64% of this
+machine's entire budget — to hear about four directories a day.
+
+What replaces it is a sweep of the directory timestamps, which needs no
+enumeration because the index already knows every directory: **278 ms for
+177,915 `stat` calls**, 1.8 µs each. Once a minute is half a percent of a core
+and a worst case of sixty seconds on a disk that changes four times a day.
+
+Two things were tried against that and are recorded so they are not tried
+again. **Parallelising the sweep makes it slower** — 279 ms on one thread, 690
+on four, 1,319 on eight: `ntfs3` serialises metadata reads and the threads only
+add contention. And **there is no cheap "did anything change" flag**: `$MFT`'s
+mtime does not move, `$LogFile`'s first pages do not change on a Linux write
+(`ntfs3` does not write NTFS's own log), and `statvfs` free blocks move only
+for changes that alter allocation — a rename would slip past it.
+
 **Which is a plan rather than a gap.** A volume whose whole table reads in
 1,425 ms cold and 454 ms warm does not need watching: reconciling it is
 cheaper than subscribing to it. On this machine that is **152,529 of the
