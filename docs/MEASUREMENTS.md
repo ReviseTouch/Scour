@@ -3746,3 +3746,50 @@ It appears only while the index has work staged, so the next thread to pull is
 the write lock during a commit — `SCOUR_LOCK_TRACE=1` exists in
 `NativeIndex::commit` for exactly that and has not been run against a busy
 index yet.
+
+## An open window was holding the service at 100% CPU
+
+Asked in passing — does watching steal CPU? — and the answer turned out to be
+about something else entirely.
+
+**What a watch costs is small.** Adding them is 1.5 µs each: the 455,367 this
+machine holds are 0.7 s of setup. On the write path, three interleaved rounds
+of 3,000 creates and deletes, watched against unwatched on the same
+filesystem: 19.8/20.2/19.8 ms against 21.7/22.0/21.9 ms — about **0.7 µs a
+file, ~10% on creates and ~3% on deletes**.
+
+**What the page cost was not small.** With the window open and nobody touching
+it, `scourd` sat at **115%**. Closed: **1.0%**. Reopened: **97.4%**.
+
+The page's own request log over twelve idle seconds said what it was doing:
+
+| | requests | total |
+|---|---:|---:|
+| `facets` | 4 | 3,718 ms — 930 ms each |
+| `search` | 31 | 3,625 ms — 117 ms each |
+
+Two faults, both introduced the same day as the fix for blank rows:
+
+* **The cache is keyed by position, and positions move.** The list is sorted by
+  time, so a file being written walks to the top and everything under it
+  shifts. The live refresh handled that by replacing the row map wholesale —
+  correct when the map held two windows, ruinous once the page read ahead: it
+  discarded twenty thousand rows and asked for them again, **1.26 times a
+  second, which is how often this index moves**. Each window now remembers the
+  revision it came from; the visible ones are refetched when the index moves
+  and the rest are left alone until the eye reaches them.
+* **A fixed refresh interval asks an expensive question as often as a cheap
+  one.** The three-second count refresh was 930 ms of service time each round,
+  on a query with 1.35 M matches, for a number nobody was reading. The
+  throttle now charges for what the last call cost and waits ten times that,
+  so a background refresh can never take more than about a tenth of a machine.
+  Cheap queries are unaffected.
+
+And one in the engine, from the same day: the prepared ordering is thrown away
+whenever the index moves, so on a machine with a watcher the preparing thread
+was rebuilding twenty thousand hits over and over — **27% of a core, idle**.
+It is now built only for a page that is not the first one (which is the only
+kind that needs it), never during a scan, and at most once every two seconds.
+
+After: the page makes no background request at all while idle — fifteen seconds
+of its log holds one long poll and nothing else.

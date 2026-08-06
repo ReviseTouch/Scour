@@ -1970,6 +1970,21 @@
     rows: new Map(),         /* index -> row, only what has been fetched */
     pending: new Map(),      /* start -> the exact request in flight */
     exact: false,            /* has the exact count landed yet */
+    /* **Which revision each cached window came from.**
+     *
+     * The cache is keyed by position and positions move: the list is sorted by
+     * time, so a file being written walks to the top and everything under it
+     * shifts down. A window fetched two revisions ago is not wrong enough to
+     * throw away — it is the right rows, a place or two out — but it is not
+     * something to go on showing either.
+     *
+     * So the visible windows are fetched again when the index moves and the
+     * rest are left alone until the eye reaches them. What happened instead
+     * was that the whole map was replaced on every revision; once the page
+     * started reading ahead, that meant discarding twenty thousand rows and
+     * asking for them again — **1.26 times a second on this machine, which is
+     * what held the daemon at 100% CPU with nobody touching it.** */
+    at: new Map(),           /* window start -> the revision it came from */
   };
 
   const scrollEl = document.querySelector(".scroll");
@@ -2299,7 +2314,9 @@
 
     const wanted = [];
     for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
-      if (LIST.pending.has(start) || LIST.rows.has(start)) continue;
+      if (LIST.pending.has(start)) continue;
+      // On screen, out of date is as good as missing. Off screen it is not.
+      if (LIST.rows.has(start) && LIST.at.get(start) === REV) continue;
       wanted.push(start);
     }
     /* Nearest the middle of the window first. */
@@ -2339,6 +2356,7 @@
           const rows = res.rows.map(fromService);
           LIST.pending.delete(start);
           rows.forEach((r, i) => LIST.rows.set(start + i, r));
+          LIST.at.set(start, REV);
           repaint(true);
           /* A slot has just come free, and the screen may be somewhere else
              now. Asking again here is what keeps a still list filling in
@@ -2457,6 +2475,7 @@
         /* A new result set: everything cached belonged to the old one. */
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
         LIST.rows.clear();
+        LIST.at.clear();
         for (const request of LIST.pending.values()) request.stop.abort();
         LIST.pending.clear();
         LIST.exact = !res.capped;
@@ -2509,7 +2528,7 @@
   let sidebarGeneration = 0;
   function sidebar(text, mine) {
     const ours = ++sidebarGeneration;
-    SERVICE.sidebar(text, BAR_EDGES)
+    return SERVICE.sidebar(text, BAR_EDGES)
       .then((res) => {
         if (ours !== sidebarGeneration || mine !== generation) return;
 
@@ -3130,14 +3149,35 @@
   /* At most one call per `ms`, and never dropped: the last one always runs.
      A scan commits continuously and every commit is a wake-up; without this
      the list would refetch itself as fast as the network allows for as long
-     as the scan lasts. */
+     as the scan lasts.
+   *
+   * **And never more often than the answer is worth.** A fixed interval asks
+   * an expensive question exactly as often as a cheap one: measured on an idle
+   * window showing a query with 1.35 M matches, the three-second count refresh
+   * was taking **930 ms of the service each time** — a third of a core, spent
+   * on a number nobody was reading. The refresh now pays for itself: whatever
+   * the last one cost, the next one waits at least `COST` times that, so a
+   * background refresh can never take more than about a tenth of a machine.
+   * Cheap answers are unaffected, which is the point — this slows down exactly
+   * the queries that deserve it and nothing else. */
+  const COST = 10;
   function atMostEvery(fn, ms) {
-    let last = 0, timer = null;
+    let last = 0, timer = null, floor = ms;
+    const done = (spent) => { floor = Math.max(ms, spent * COST); };
+    const call = () => {
+      last = Date.now();
+      const began = last;
+      const out = fn();
+      // A promise says when it finished; anything else is charged as free.
+      if (out && typeof out.then === "function") {
+        out.then(() => done(Date.now() - began), () => done(Date.now() - began));
+      }
+    };
     return () => {
       if (timer) return;
-      const wait = Math.max(0, ms - (Date.now() - last));
-      if (!wait) { last = Date.now(); fn(); return; }
-      timer = setTimeout(() => { timer = null; last = Date.now(); fn(); }, wait);
+      const wait = Math.max(0, floor - (Date.now() - last));
+      if (!wait) { call(); return; }
+      timer = setTimeout(() => { timer = null; call(); }, wait);
     };
   }
 
@@ -3159,7 +3199,8 @@
     if (!starts.length) starts.push(0);
     const before = new Set([...LIST.rows.values()].map(fullPath));
 
-    Promise.all(starts.map((s) =>
+    // Returned at the end so the throttle can charge for what this cost.
+    return Promise.all(starts.map((s) =>
       SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, s).then((res) => [s, res])
     ))
       .then((pairs) => {
@@ -3207,12 +3248,15 @@
         // next revision refetches it. On a machine whose index moves every
         // second that is a permanent flicker while scrolling, and on a quiet
         // one it never comes back at all.
-        const moved = visibleRange().join() !== [from, to].join();
-        if (moved) {
-            for (const [i, f] of rows) LIST.rows.set(i, f);
-        } else {
-            LIST.rows = rows;
-        }
+        /* **Merge, never replace.** This has authority over the windows it
+           asked for and none over the others. Replacing the map threw away
+           everything the page had read ahead, and the reading-ahead then asked
+           for all of it again — on a machine whose index moves once a second,
+           for ever. The windows it did fetch are stamped with this revision;
+           the rest keep the one they came from and are fetched again when the
+           eye reaches them. */
+        for (const [i, f] of rows) LIST.rows.set(i, f);
+        for (const start of starts) LIST.at.set(start, REV);
         /* These starts have just been supplied by this refresh. Supersede only
            their ordinary window requests; clearing every pending start also
            cancelled the viewport the user had scrolled to in the meantime. */
@@ -3262,7 +3306,8 @@
      paying every few seconds, not several times a second. */
   function reviseCounts() {
     if (LIST.query === null) return;
-    sidebar(LIST.query, generation);
+    // Returned so the throttle above can charge for what it cost.
+    return sidebar(LIST.query, generation);
   }
 
   const rowsSoon = atMostEvery(reviseRows, 400);

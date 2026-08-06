@@ -143,6 +143,8 @@ struct Shared {
     waiters: (Mutex<()>, Condvar),
     /// The ordered hits of whichever query was asked for last.
     prepared: RwLock<Option<Prepared>>,
+    /// When one was last asked for, so misses cannot queue one each.
+    prepared_at: Mutex<Instant>,
     /// Asks the preparing thread for a query's full ordered page. Bounded and
     /// tiny: only the newest request matters, and an older one still in the
     /// channel is work nobody wants done.
@@ -198,6 +200,13 @@ struct Prepared {
 /// ever one.
 const PREPARE: u32 = 20_000;
 
+/// How often an ordering may be built.
+///
+/// Not a tuning knob so much as a ceiling on waste: the walk costs about a
+/// tenth of a second on a broad query, so once every two seconds is at most a
+/// twentieth of a core spent on speculation.
+const PREPARE_EVERY: Duration = Duration::from_secs(2);
+
 impl Shared {
     /// A search run again could now answer differently.
     ///
@@ -252,6 +261,7 @@ impl Engine {
             waiters: (Mutex::new(()), Condvar::new()),
             watchers: AtomicU32::new(0),
             prepared: RwLock::new(None),
+            prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
             prepare: prepare_tx,
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
@@ -404,6 +414,34 @@ impl Engine {
         // Not ready, or ready for something else. Ask for it while this page is
         // answered the long way; a full slot means a newer query is already
         // waiting, and that one is worth more than this one.
+        //
+        // **But not on every miss.** An ordering is thrown away whenever the
+        // index moves, and a machine with a watcher on it moves the index
+        // about once a second — so a window left open on a broad query had the
+        // preparing thread walking twenty thousand hits over and over,
+        // measured at **28% of a core with nobody touching anything**. The
+        // cache is worth having when a list is being scrolled and worth
+        // nothing when it is rebuilt faster than it is read, so it is rebuilt
+        // at most this often and the ordinary path answers in between.
+        // **Only for a list somebody is paging through.** An ordering exists to
+        // make the *deep* windows cheap — 5.5 ms against 114 at row nineteen
+        // thousand — and a window sitting at the top of its results never asks
+        // for one. Preparing anyway is speculation nobody redeems, and while a
+        // scan is running it is speculation thrown away before it lands: the
+        // index moves, the ordering goes with it, and the thread starts over.
+        // Measured at 27% of a core in exactly that state.
+        if page.offset == 0
+            || self.shared.scanning.load(Ordering::Acquire)
+            || self.shared.prepared_at.lock().elapsed() < PREPARE_EVERY
+        {
+            return self.shared.index.search(&SearchRequest {
+                query: scour_query::parse(query),
+                sort,
+                descending,
+                page,
+            });
+        }
+        *self.shared.prepared_at.lock() = Instant::now();
         let _ = self.shared.prepare.try_send(Prepare {
             query: query.to_string(),
             sort,
