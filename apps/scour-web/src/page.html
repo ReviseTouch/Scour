@@ -1571,6 +1571,22 @@
     editTerm(hoverTerm, term.startsWith("!") ? term.slice(1) : "!" + term);
   });
 
+  /* The roles that make a query worth reading back. Anything here means the
+     text is not simply words to look for: a field name, a comparison, a
+     quoted phrase, a pattern, an exclusion, an alternative. */
+  const TELLING = new Set([
+    "field", "colon", "cmp", "quote", "phrase", "glob", "regex", "not", "or",
+    "unknown_field", "bad_value",
+  ]);
+
+  /* Words a person writes as operators and this language does not read as
+     operators. Whitespace is AND, `|` is OR, `!` is NOT — so `a or b` looks
+     for three words, one of which is "or", and says nothing about it. That is
+     the one case where a query is wrong and nothing is marked wrong, so the
+     reading is shown for it whether or not anything else in the query earns
+     a line. */
+  const MISTAKEN = new Set(["or", "and", "not", "ve", "veya", "değil"]);
+
   /* Which roles are punctuation rather than something typed to search for.
      In the product this is `Role::is_syntax` and comes over the wire with the
      spans; the mockup keeps the same list so the two agree. */
@@ -1603,10 +1619,29 @@
         LAST_SPANS = res.spans || [];
         paint(text);
         qread.textContent = res.description || "";
-        qread.classList.toggle(
-          "warn",
-          LAST_SPANS.some((s) => s.role === "unknown_field" || s.role === "bad_value")
+        const wrong = LAST_SPANS.some(
+          (s) => s.role === "unknown_field" || s.role === "bad_value",
         );
+        qread.classList.toggle("warn", wrong);
+        /* **Shown when it has something to say.**
+         *
+         * The line exists to tell you whether the engine read the query the
+         * way you meant it: which word was taken as a field, what a `!`
+         * excludes, whether `size:>1mb` was understood as a size. For
+         * `ext:rs !cache` that is worth a line. For `hasan` it reads the word
+         * back to you — "name contains \"hasan\"" — which is not information,
+         * it is furniture.
+         *
+         * So the rule is not a preference but a property of the query: if
+         * anything in it is more than a plain word, or anything in it is
+         * wrong, the reading appears. Its being there is then a signal in
+         * itself. */
+        qread.hidden =
+          !wrong &&
+          !LAST_SPANS.some((s) => TELLING.has(s.role)) &&
+          !LAST_SPANS.some(
+            (s) => s.role === "text" && MISTAKEN.has(text.slice(s.start, s.start + s.len).toLowerCase()),
+          );
         /* The reading lives in an `auto` grid row. A longer one can wrap
            after the list's frame has already painted, changing its client
            height without producing a window resize or a scroll. */
