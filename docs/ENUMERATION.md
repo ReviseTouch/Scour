@@ -236,6 +236,31 @@ suggesting a 4.8× spread was a cold-inode-cache artifact of run ordering.
 **Buffer size barely matters.** 4 KB is 15–20% worse; 16 KB through 1 MB are
 all within noise. 32 KB matches glibc and is what the measurements above use.
 
+**What an inotify watch actually costs, since the folklore is a round number.**
+Adding them: 4,993 watches in 7 ms — **1.5 µs each**, so the 455,367 this
+machine holds are 0.7 s of setup and nothing else. On the write path, three
+interleaved rounds of 3,000 creates and deletes in a watched directory against
+an unwatched one on the same filesystem:
+
+| | create | delete |
+|---|---:|---:|
+| unwatched | 19.8 / 20.2 / 19.8 ms | 5.7 / 5.8 / 5.8 ms |
+| watched | 21.7 / 22.0 / 21.9 ms | 6.1 / 5.9 / 6.0 ms |
+
+**About 0.7 µs a file, ~10% on creates and ~3% on deletes**, with nobody even
+reading the events. Memory could not be measured from an unprivileged account:
+the delta is under `/proc/meminfo`'s noise floor and `/proc/slabinfo` is
+root-only. The mark itself is small; the usual "1 KB a watch" is mostly the
+inode and dentry a watch **pins**, which is memory the kernel can no longer
+reclaim — stated from the structures rather than measured here.
+
+So watching is not expensive. The problem is not the price of a watch, it is
+that the budget is **small, shared with every other program the user runs, and
+fails silently**: `inotify_add_watch` returns `ENOSPC`, the directory is simply
+never watched, and nothing anywhere says so. That is the difference between
+slow and wrong, and it is why the answer is `Change::Rescan` rather than a
+bigger number.
+
 **fanotify is inotify with a worse budget.** Unprivileged
 `FAN_CLASS_NOTIF|FAN_REPORT_DFID_NAME` initialises, and the FID design works —
 an event's `dfid` byte-matches a handle from `name_to_handle_at`, which needs
