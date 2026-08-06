@@ -31,18 +31,35 @@ PORTABLE=(
 
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+tmp=$(mktemp -t scour-page.XXXXXX.js)
+trap 'rm -f "$tmp"' EXIT
+
 step "format"
 cargo fmt --check
 
 step "lint"
 cargo clippy --workspace --all-targets -- -D warnings
 
+# **The page is a string until it is a program.** `page.html` is compiled into
+# the bridge, so nothing in the Rust toolchain ever parses the JavaScript in
+# it: a duplicate declaration ships, the browser refuses the whole script, and
+# the window comes up blank with nothing reported anywhere. That happened, and
+# it cost an hour of looking at a perfectly healthy service.
+step "the page"
+if command -v node >/dev/null; then
+    python3 scripts/page-script.py > "$tmp"
+    node --check "$tmp"
+    echo "  page.html: the script parses"
+else
+    echo "  node is missing, so the page's script was not parsed" >&2
+fi
+
 step "tests"
 cargo test --workspace
 
 if [[ ${1:-} == --quick ]]; then
     echo
-    echo "checked: format, lint, tests. Targets skipped (--quick)."
+    echo "checked: format, lint, the page, tests. Targets skipped (--quick)."
     exit 0
 fi
 

@@ -559,6 +559,9 @@
     max-width: 34ch;
   }
   .path b { color: var(--ink-2); font-weight: 400; }
+  /* The date columns are right-aligned numbers everywhere else and left
+     where they are words. */
+  td.n.left { text-align: left; }
   td.n {
     font: 400 12px/1 var(--mono);
     font-variant-numeric: tabular-nums;
@@ -1734,22 +1737,61 @@
       ? `/api/icon?t=${TOKEN}&p=${encodeURIComponent(f.path + "/" + f.name)}`
       : `/api/icon?t=${TOKEN}&k=${encodeURIComponent(f.ktoken || "file")}&e=${encodeURIComponent(f.ext || "")}`;
 
-  const icon = (f) =>
-    ICONS
-      ? `<img class="ico" src="${iconUrl(f)}" alt="" onerror="this.style.visibility='hidden'">`
-      : "";
+  /* The name, written into a cell without going through HTML.
+   *
+   * This used to build a string — the picture's tag and the name with a
+   * `<mark>` in it — and hand it to `innerHTML`, which is a parse per row.
+   * With two hundred rows on the screen that measured **15 ms a paint**: most
+   * of a frame spent turning text back into the nodes it had just come from,
+   * and the reason scrolling stuttered even after the rows themselves stopped
+   * being thrown away. The pieces are the same. `append` puts them in as text
+   * nodes and one element, the picture is one `<img>` that stays and has its
+   * `src` set only when it changes, and nothing is parsed at all.
+   */
+  function writeName(td, f, terms) {
+    let img = td.firstElementChild;
+    if (ICONS) {
+      if (!img || img.tagName !== "IMG") {
+        img = new Image();
+        img.className = "ico";
+        img.alt = "";
+        img.onerror = () => { img.style.visibility = "hidden"; };
+        td.prepend(img);
+      }
+      const url = iconUrl(f);
+      if (img.getAttribute("src") !== url) {
+        img.style.visibility = "";
+        img.setAttribute("src", url);
+      }
+    } else if (img && img.tagName === "IMG") {
+      img.remove();
+    }
+    // Everything after the picture is this name, and it is rewritten whole —
+    // the marked run moves with every keystroke.
+    while (td.lastChild && td.lastChild !== td.firstElementChild) {
+      if (td.lastChild.nodeType === 1 && td.lastChild.tagName === "IMG") break;
+      td.lastChild.remove();
+    }
+    const at = span(f.name, terms);
+    if (!at) {
+      td.append(f.name);
+      return;
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = f.name.slice(at[0], at[0] + at[1]);
+    td.append(f.name.slice(0, at[0]), mark, f.name.slice(at[0] + at[1]));
+  }
 
-  function markName(name, terms) {
-    if (!terms.length) return escape_(name);
+  /* Where the first term matches, if any of them do. */
+  function span(name, terms) {
+    if (!terms.length) return null;
+    const lower = name.toLowerCase();
     let best = null;
     for (const t of terms) {
-      const i = name.toLowerCase().indexOf(t);
+      const i = lower.indexOf(t);
       if (i >= 0 && (!best || i < best[0])) best = [i, t.length];
     }
-    if (!best) return escape_(name);
-    return escape_(name.slice(0, best[0])) +
-           "<mark>" + escape_(name.slice(best[0], best[0] + best[1])) + "</mark>" +
-           escape_(name.slice(best[0] + best[1]));
+    return best;
   }
 
   /* The sentence under the line used to be built here, from the page's own
@@ -1899,7 +1941,19 @@
      is left, which is the thing this design refuses to do. */
   const MAX_PX = 33_000_000;
   const WINDOW = 200;        /* rows fetched at a time */
-  const MARGIN = 60;         /* extra rows kept either side of the viewport */
+  /* Extra rows drawn either side of the viewport.
+   *
+   * **Sixty was four times too many and it cost a frame.** Fourteen rows fit
+   * on this screen; with sixty on each side, every scroll event rebuilt a
+   * hundred and thirty-seven of them — measured at **18.5 ms of main thread**,
+   * against a frame budget of 16.7. Every frame was late, which is what
+   * "laggy" is.
+   *
+   * The margin is not what keeps the list from showing blanks — the rows are
+   * *fetched* two hundred at a time and kept, so a flick lands on data that is
+   * already in memory. All the margin buys is drawing slightly ahead of the
+   * edge, and twenty is more than a frame's worth of scrolling. */
+  const MARGIN = 20;
 
   const LIST = {
     query: null, sort: null, desc: null,
@@ -1908,8 +1962,6 @@
     pending: new Set(),      /* windows in flight, so none is asked for twice */
     exact: false,            /* has the exact count landed yet */
   };
-
-  let rowHtml = () => "";
 
   const scrollEl = document.querySelector(".scroll");
 
@@ -1932,34 +1984,152 @@
   /* Draw the window that is on screen, between two spacers.
      The spacers are what make the scrollbar honest: their heights are the rows
      that exist and are not drawn. */
+  /* Draw the window that is on screen, between two spacers.
+   *
+   * **The nodes are kept and rewritten, never rebuilt.** Replacing the body's
+   * HTML meant that every scroll paid for parsing a table, allocating a row
+   * and a cell for each line, creating an `<img>` per row and laying all of it
+   * out again — measured at **18.5 ms** for one scroll event with sixty rows
+   * of margin either side, against a frame budget of 16.7. A tall window made
+   * it worse, because the cost is per row drawn and a tall window draws more.
+   *
+   * So the table holds a fixed shape — a spacer, a pool of rows, a spacer, a
+   * note — and a paint changes text and attributes in place. Nodes are created
+   * only when the window has to hold *more* rows than before, which happens
+   * when the window is resized and at no other time.
+   *
+   * The spacers are what make the scrollbar honest: their heights are the rows
+   * that exist and are not drawn. */
+  let pool = [];
+  const spTop = document.createElement("tr");
+  const spBot = document.createElement("tr");
+  const farRow = document.createElement("tr");
+  spTop.className = spBot.className = "spacer";
+  farRow.className = "far";
+  spTop.innerHTML = spBot.innerHTML = "<td></td>";
+  farRow.innerHTML = "<td></td>";
+
+  function widen(node) {
+    node.firstElementChild.colSpan = SHOWN.length + 1;
+  }
+
+  /* One row's worth of cells, made once. */
+  function makeRow() {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    tr.innerHTML = `<td class="age"><i></i></td>` + shownColumns().map(() => "<td></td>").join("");
+    return tr;
+  }
+
   function paintWindow() {
     const [from, to] = visibleRange();
-    const parts = [];
+    painted = [from, to].join();
     const p = pitch();
-    if (from > 0) parts.push(`<tr class="spacer" style="height:${Math.round(from * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
-    for (let i = from; i < to; i++) {
-      const f = LIST.rows.get(i);
-      parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="${SHOWN.length + 1}"></td></tr>`);
+    const cols = shownColumns();
+    const parsed = parse(q.value);
+
+    /* The shape first: two spacers with the right heights, and enough rows
+       between them. Only a resize or a column change gets past the `while`s. */
+    if (body.firstElementChild !== spTop) {
+      body.replaceChildren(spTop, spBot, farRow);
+      pool = [];
     }
-    const rest = reach() - to;
-    if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
+    while (pool.length < to - from) {
+      const tr = makeRow();
+      pool.push(tr);
+      body.insertBefore(tr, spBot);
+    }
+    while (pool.length > to - from) {
+      pool.pop().remove();
+    }
+    if (pool.length && pool[0].children.length !== cols.length + 1) {
+      for (const tr of pool) {
+        tr.innerHTML =
+          `<td class="age"><i></i></td>` + cols.map(() => "<td></td>").join("");
+      }
+    }
+    [spTop, spBot, farRow].forEach(widen);
+    spTop.firstElementChild.style.height = `${Math.round(from * p)}px`;
+    spBot.firstElementChild.style.height = `${Math.round(Math.max(0, reach() - to) * p)}px`;
+
     /* Said at the end of the list rather than not at all: a list that stops
        twenty thousand rows into two million has to say which of those two
        numbers it is showing. */
-    if (LIST.total > REACH && to >= reach()) {
-      parts.push(`<tr class="far"><td colspan="${SHOWN.length + 1}">ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.</td></tr>`);
+    const far = LIST.total > REACH && to >= reach();
+    farRow.hidden = !far;
+    if (far) {
+      farRow.firstElementChild.textContent =
+        `ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.`;
     }
-    /* Whatever was selected keeps being selected. Replacing the body throws
-       away the focused element, which was survivable when this only ran on
-       scroll — you were moving anyway — and is not now that the list redraws
-       itself under a still cursor every time a file changes. Found by path,
-       because the index a row sits at is exactly what a change moves. */
+
+    /* Whatever was selected keeps being selected. The rows are reused, so what
+       has to be restored is which one holds the focus rather than the element
+       itself — the index a row sits at is exactly what a change moves. */
     const had = document.activeElement;
     const keep = had && body.contains(had) ? had.dataset.path : null;
-    body.innerHTML = parts.join("");
+
+    // The marked letters move with the query, so a row whose file has not
+    // changed still has to be rewritten when the terms have. Joined once here
+    // rather than per row.
+    const marks = parsed.text.join("\u0001");
+    for (let i = from; i < to; i++) {
+      writeRow(pool[i - from], LIST.rows.get(i), cols, parsed, marks);
+    }
     if (keep) {
-      const back = body.querySelector(`tr[data-path="${CSS.escape(keep)}"]`);
+      const back = pool.find((tr) => tr.dataset.path === keep);
       if (back) back.focus({ preventScroll: true });
+    }
+  }
+
+  /* One row, rewritten in place.
+   *
+   * Every cell is set from the row's own values, and none of them goes through
+   * HTML. A row with no data yet is a ghost — the same node, emptied. */
+  function writeRow(tr, f, cols, parsed, marks) {
+    /* **The row this slot already shows.**
+     *
+     * Scrolling moves every slot onto a different file, so this saves nothing
+     * there — but a live refresh repaints the same rows several times a second
+     * on a machine whose index keeps moving, and a repaint that changes
+     * nothing should cost nothing. */
+    const stamp = f
+      ? `${f.path}/${f.name}\u0001${f.mtime}\u0001${f.size}\u0001${f.fresh || 0}`
+      : "";
+    if (tr.__stamp === stamp && tr.__marks === marks) {
+      return;
+    }
+    tr.__stamp = stamp;
+    tr.__marks = marks;
+    if (!f) {
+      if (tr.className !== "ghost") {
+        tr.className = "ghost";
+        tr.removeAttribute("data-path");
+        tr.removeAttribute("title");
+        tr.style.animationDelay = "";
+        // **From the second cell on.** The first holds the age dot, which is
+        // an element rather than text; emptying it took the dot away, and the
+        // next time the row held a file the dot was not there to be coloured.
+        // The throw landed in a `catch` that exists for a fetch failing, so
+        // the list simply stopped filling after two rows and said nothing.
+        for (let i = 1; i < tr.children.length; i++) tr.children[i].textContent = "";
+      }
+      return;
+    }
+    const full = f.path + "/" + f.name;
+    tr.className = f.fresh ? "fresh" : "";
+    tr.style.animationDelay = f.fresh ? `-${Date.now() - f.fresh}ms` : "";
+    if (tr.dataset.path !== full) {
+      tr.dataset.path = full;
+      tr.title = full;
+    }
+    let dot = tr.children[0].firstElementChild;
+    if (!dot) {
+      dot = document.createElement("i");
+      tr.children[0].appendChild(dot);
+    }
+    dot.style.background = `var(${bandOf(f.mtime)})`;
+    for (let c = 0; c < cols.length; c++) {
+      cols[c].write(tr.children[c + 1], f, parsed);
     }
   }
 
@@ -1975,14 +2145,62 @@
           LIST.pending.delete(start);
           if (mine !== generation) return;   /* the query moved on */
           res.rows.forEach((r, i) => LIST.rows.set(start + i, fromService(r)));
-          paintWindow();
+          repaint(true);
         })
-        .catch(() => { LIST.pending.delete(start); });
+        .catch((e) => {
+        LIST.pending.delete(start);
+        // Not silent. This `catch` is here for a request that failed, and it
+        // was also catching everything the drawing threw — which is how a
+        // list that stopped filling in after two rows reported nothing at all.
+        console.error("scour: a window did not draw:", e);
+      });
     }
   }
 
-  scrollEl.addEventListener("scroll", () => { paintWindow(); fillWindow(); }, { passive: true });
-  addEventListener("resize", () => { paintWindow(); fillWindow(); });
+  /* **One door into the painter, and it opens on a frame.**
+   *
+   * A scroll fires far more often than a screen refreshes, so the paint is
+   * coalesced to the frame: the work happens as often as it can be seen and no
+   * oftener, and a scroll inside the rows already drawn costs nothing at all,
+   * which is most of them.
+   *
+   * The part that was missing is that everything *else* painted immediately —
+   * a window of rows landing from the service, a live revision, a layout
+   * toggle — and an immediate paint reads `scrollTop` and `clientHeight` while
+   * the tree is still dirty from the paint before it. That read is not free:
+   * the browser has to lay the document out before it can answer, and with a
+   * table under a thirty-million-pixel spacer the answer cost **24 to 32 ms**,
+   * measured by the browser itself as forced style and layout inside a script.
+   * Twice in a hundred and fifty frames, which is exactly what a scroll that is
+   * mostly smooth and occasionally lurches feels like.
+   *
+   * So nothing paints inline. Ask for a paint and it happens at the top of the
+   * next frame, where the layout is settled and the same read is free. There is
+   * no path left that can thrash, rather than the paths that were known about
+   * having been fixed one at a time.
+   */
+  let paintQueued = false;
+  let dirty = false;          /* the rows changed, though the range did not */
+  let painted = "";
+  function repaint(rowsChanged) {
+    if (rowsChanged) dirty = true;
+    if (paintQueued) return;
+    paintQueued = true;
+    requestAnimationFrame(() => {
+      paintQueued = false;
+      const now = visibleRange().join();
+      if (now === painted && !dirty) {
+        return;
+      }
+      painted = now;
+      dirty = false;
+      paintWindow();
+      fillWindow();
+    });
+  }
+  const onScroll = () => repaint(false);
+  scrollEl.addEventListener("scroll", onScroll, { passive: true });
+  addEventListener("resize", () => { painted = ""; repaint(true); });
 
   /* Only the newest answer is allowed to draw.
      Typing produces one request a keystroke and they do not come back in the
@@ -2032,15 +2250,11 @@
   function draw(text, p, hits, res) {
     now = Math.floor(Date.now() / 1000);
 
-    /* The row's markup, kept as a function because the list is virtual:
-       which rows exist on screen is decided by `paintWindow`, not here. */
-    const cols = shownColumns();
-    rowHtml = (f) => `
-      <tr tabindex="0"${f.fresh ? ` class="fresh" style="animation-delay:-${Date.now() - f.fresh}ms"` : ""} data-path="${escape_(f.path + "/" + f.name)}" title="${escape_(f.path + "/" + f.name)}">
-        <td class="age"><i style="background:var(${bandOf(f.mtime)})"></i></td>
-        ${cols.map((c) => c.cell(f, p)).join("")}
-      </tr>`;
-    paintWindow();
+    /* Which rows are on screen is `paintWindow`'s business, not this one's;
+       what changed here is the query, so every row has to be written again
+       even where the file is the same — the marked letters moved. */
+    for (const tr of pool) tr.__stamp = "";
+    repaint(true);
     /* Shown when nothing matched — and it was the wrong way round, so the one
        case the message exists for was the one case it was hidden in. */
     empty.hidden = LIST.total !== 0;
@@ -2072,7 +2286,7 @@
         /* The scrollbar's real size. */
         LIST.total = res.total;
         LIST.exact = !res.capped;
-        paintWindow();
+        repaint(true);
         const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
         document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
 
@@ -2097,6 +2311,12 @@
   /* The service could not be reached. Say which, rather than showing an empty
      list that looks like "nothing matched". */
   function offline(err) {
+    /* **Said out loud, because this is not only reached when the service is
+       away.** The search's `catch` also catches anything the drawing throws,
+       and a page that answers a rendering fault with "the service cannot be
+       reached" sends whoever is debugging it to the wrong end of the program.
+       Once cost half an hour of looking at a healthy daemon. */
+    console.error("scour:", err);
     body.innerHTML = "";
     empty.hidden = false;
     document.getElementById("count").textContent = "—";
@@ -2207,31 +2427,62 @@
    * says so by leaving it out. `cell` renders one row's value and is given
    * the whole row, because a column is sometimes two fields — the age ruler
    * reads the date and paints with it. */
+  /* The columns, and how each one writes itself into a cell it is given.
+   *
+   * `write` rather than a string of HTML: the rows are reused, so a paint sets
+   * text and attributes on cells that already exist. Only the name is HTML,
+   * because the matched letters are marked inside it and the picture sits in
+   * front of it; everything else is `textContent`, which is a copy rather than
+   * a parse. */
+  const writeText = (td, f, cls, get) => {
+    if (td.className !== cls) td.className = cls;
+    const v = get(f);
+    if (td.textContent !== v) td.textContent = v;
+  };
+  const cell = (cls, get) => (td, f) => writeText(td, f, cls, get);
+
   const COLUMNS = [
     { id: "name",  label: "Ad",       key: "name",  w: 240,
-      cell: (f, p) => `<td class="name">${icon(f)}${markName(f.name, p.text)}</td>` },
+      write: (td, f, p) => {
+        if (td.className !== "name") td.className = "name";
+        writeName(td, f, p.text);
+      } },
     { id: "path",  label: "Konum",    key: "path",  w: 320,
-      cell: (f) => `<td><div class="path">${escape_(f.path.replace("/home/hasan", "~"))}</div></td>` },
+      write: (td, f) => {
+        if (td.className !== "") td.className = "";
+        let div = td.firstElementChild;
+        if (!div || div.className !== "path") {
+          td.textContent = "";
+          div = document.createElement("div");
+          div.className = "path";
+          td.appendChild(div);
+        }
+        const v = f.path.replace("/home/hasan", "~");
+        if (div.textContent !== v) div.textContent = v;
+      } },
     { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
-      cell: (f) => `<td class="n">${f.is_dir ? "" : bytes(f.size)}</td>` },
+      write: cell("n", (f) => (f.is_dir ? "" : bytes(f.size))) },
     { id: "mtime", label: "Değişme",  key: "mtime", w: 120,
-      cell: (f) => `<td class="n" style="text-align:left;color:var(${bandOf(f.mtime)})">${ago(f.mtime)}</td>` },
+      write: (td, f) => {
+        cell("n left", (x) => ago(x.mtime))(td, f);
+        td.style.color = `var(${bandOf(f.mtime)})`;
+      } },
     { id: "kind",  label: "Tür",      key: "kind",  w: 110,
-      cell: (f) => `<td class="kind">${escape_(f.kind)}</td>` },
+      write: cell("kind", (f) => f.kind || "") },
     { id: "ext",   label: "Uzantı",   key: "ext",   w: 80,
-      cell: (f) => `<td class="kind">${escape_(f.ext || "")}</td>` },
+      write: cell("kind", (f) => f.ext || "") },
     { id: "ctime", label: "Oluşturma", key: "created", w: 120,
-      cell: (f) => `<td class="n" style="text-align:left">${f.ctime ? ago(f.ctime) : ""}</td>` },
+      write: cell("n left", (f) => (f.ctime ? ago(f.ctime) : "")) },
     { id: "atime", label: "Erişim",   key: null,    w: 120,
-      cell: (f) => `<td class="n" style="text-align:left">${f.atime ? ago(f.atime) : ""}</td>` },
+      write: cell("n left", (f) => (f.atime ? ago(f.atime) : "")) },
     { id: "perm",  label: "İzinler",  key: null,    w: 108,
-      cell: (f) => `<td class="mono">${escape_(f.perm || "")}</td>` },
+      write: cell("mono", (f) => f.perm || "") },
     { id: "user",  label: "Sahip",    key: null,    w: 100,
-      cell: (f) => `<td class="mono">${escape_(f.user || "")}</td>` },
+      write: cell("mono", (f) => f.user || "") },
     { id: "group", label: "Grup",     key: null,    w: 100,
-      cell: (f) => `<td class="mono">${escape_(f.group || "")}</td>` },
+      write: cell("mono", (f) => f.group || "") },
     { id: "disk",  label: "Diskte",   key: null,    w: 90, num: true,
-      cell: (f) => `<td class="n">${f.disk > 0 ? bytes(f.disk) : ""}</td>` },
+      write: cell("n", (f) => (f.disk > 0 ? bytes(f.disk) : "")) },
   ];
   const COL_DEFAULT = ["name", "path", "size", "mtime", "kind"];
   const SHOWN_KEY = "scour.columns.shown.v1";
@@ -2737,7 +2988,7 @@
         }
         LIST.pending.clear();
         now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
-        paintWindow();
+        repaint(true);
         // **And fetch whatever the viewport is now missing.**
         //
         // The windows above were chosen when the request went out. A scroll
@@ -2759,7 +3010,7 @@
           for (const f of LIST.rows.values()) {
             if (f.fresh && !arrivals.has(fullPath(f))) { delete f.fresh; any = true; }
           }
-          if (any) paintWindow();
+          if (any) repaint(true);
         }, FRESH_MS);
       })
       .catch(() => {});
@@ -2852,8 +3103,7 @@
     aboutBtn.setAttribute("aria-pressed", String(on));
     // The list's height changed with the layout, so what is drawn has to be
     // decided again — otherwise the window is right and the rows are stale.
-    paintWindow();
-    fillWindow();
+    repaint(true);
   }
   aboutBtn.addEventListener("click", () => {
     const on = localStorage.getItem(SIDE_KEY) === "1";

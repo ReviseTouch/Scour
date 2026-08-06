@@ -3407,3 +3407,66 @@ several builds in the air. 1,290–1,318 ms against 1,297–1,419, which is the
 same number, with **34 segments instead of 14**. The build is no longer the
 critical path; paying for more segments to speed up something that is not the
 bottleneck is how an index gets slower at answering. Left at 100,000.
+
+## Scrolling: what was actually costing the frames
+
+Reported as "laglı gidiş" — the list moved, but not the way the rest of the
+desktop moves. Three things were suspected in turn. Two were real and small,
+and the third was most of it and was not in this repository at all.
+
+Everything below is measured in the window Hasan uses, driven through
+`scripts/probe`, which exists because the embedded browser pane lies: it holds
+`document.hidden` true forever, so deferred work never starts and timers are
+throttled to about one a second. An earlier "985 ms to fill a screen" was that
+pane and nothing else.
+
+### 1. The painter — real, small
+
+`innerHTML` per row against text nodes and a reused `<img>`, three rounds
+interleaved, same window, same query, 120 frames a round:
+
+| | median frame | p90 | frames missed |
+|---|---:|---:|---:|
+| `innerHTML` | 7.1 / 6.2 / 10.6 ms | 19.8 / 19.2 / 20.2 ms | 75 of 360 |
+| text nodes | 6.2 / 10.7 / 6.4 ms | 16.5 / 21.3 / 12.3 ms | 43 of 360 |
+
+Better, and noisy enough that it was clearly not the whole story. So the paint
+was timed from the inside: **0.29 ms** for the entire `paintWindow` — range,
+parse, spacers and sixty-eight rows together. The JavaScript was never the
+cost, which is worth knowing before optimising any more of it.
+
+### 2. Painting inline — real, and the cause of the lurches
+
+The browser's own `long-animation-frame` records said: two frames in a hundred
+and fifty, 65 ms each, and inside them **24 to 32 ms of forced style and
+layout** attributed to a script.
+
+That is a read of `scrollTop` taken while the tree is dirty. Rows landing from
+the service called `paintWindow` directly, off a promise, in the middle of a
+scroll — so the read had to wait for the browser to lay out a table sitting
+under a thirty-million-pixel spacer. Every repaint now goes through `repaint()`
+and happens at the top of a frame, where that read is free. Long frames after:
+**zero**, forced layout: **zero**.
+
+### 3. XWayland — not ours, and two thirds of it
+
+Everything above still left every frame arriving at 16.6 ms on a 165 Hz screen.
+The control was a page containing one tall gradient and no application code at
+all, scrolled with a real wheel gesture in the same window:
+
+| | idle | scrolling |
+|---|---:|---:|
+| default (XWayland) | 6.0 ms | 16.6 ms — 60 Hz |
+| `--ozone-platform=wayland` | 6.1 ms | **6.1 ms — 165 Hz** |
+
+Chromium defaults to XWayland here, and an XWayland window scrolls at 60 while
+the screen runs at 165. Nothing in the list was involved: an empty page did the
+same. `scripts/scour-app` now asks for Wayland when the session is Wayland.
+
+The real list, real launcher, after all three: **6.2 ms median, no long frames,
+no forced layout**, and the landing spot after a twelve-thousand-pixel flick
+fills to sixty-seven rows with sixty-seven icons drawn.
+
+The order matters more than the numbers. Two days of frame-shaving in the page
+would not have found the third one, and the third one was worth more than both
+of the others together.

@@ -84,15 +84,81 @@ if [[ -z $browser ]]; then
 fi
 
 mkdir -p "$PROFILE"
+
+# **A profile the last window has not let go of yet.**
+#
+# A browser started against a locked profile does not wait and does not
+# complain: it hands its command line to the instance holding the lock and
+# exits, immediately and successfully. This script then sees the browser exit,
+# does what it is supposed to do on that — kills the bridge — and the window
+# never appears. Which is exactly what a hotkey that closes the old window and
+# opens a new one produces, if the old one takes more than a moment to go.
+#
+# So a lock whose owner is gone is removed, and the whole start is retried once
+# if the browser exits at once. The retry is the honest guard: it catches every
+# reason the first attempt can fail, not only the one that was diagnosed.
+stale_lock() {
+    local owner
+    owner=$(readlink "$PROFILE/SingletonLock" 2>/dev/null) || return 1
+    local pid=${owner##*-}
+    [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null
+}
+
+# **The screen's own rate, rather than sixty.**
+#
+# Chromium on this machine defaults to XWayland, and a window on XWayland
+# scrolls at 60 Hz while the screen is running at 165. Measured with a wheel
+# gesture on a page holding nothing but a tall gradient — no application code at
+# all — 16.6 ms a frame through XWayland against 6.1 ms under Wayland, on the
+# same screen a minute apart. So the list was never what made scrolling feel
+# heavy: two thirds of the frames were simply not being drawn, and every other
+# window on the desktop was moving at the full rate beside it.
+#
+# Only when the session is Wayland. Asking for it under X11 gets a window that
+# does not open.
+WAYLAND_ARGS=()
+if [[ ${XDG_SESSION_TYPE:-} == wayland && -n ${WAYLAND_DISPLAY:-} ]]; then
+    WAYLAND_ARGS=(--ozone-platform=wayland)
+fi
+
+# A port for looking inside the window while it runs, off unless asked for:
+#
+#   SCOUR_APP_DEBUG=9222 scripts/scour-app
+#
+# `scripts/probe` speaks to it. Off by default because it is a way in, and a
+# search index is a list of everything on the machine.
+DEBUG_ARGS=()
+if [[ -n ${SCOUR_APP_DEBUG:-} ]]; then
+    DEBUG_ARGS=(--remote-debugging-port="$SCOUR_APP_DEBUG" --remote-allow-origins='*')
+fi
+
+start_window() {
+    if stale_lock; then
+        rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
+    fi
+    local began=$SECONDS
+    "$browser" \
+        --app="$url" \
+        "${WAYLAND_ARGS[@]}" \
+        --class=Scour \
+        --user-data-dir="$PROFILE" \
+        --no-first-run \
+        --no-default-browser-check \
+        --disable-features=TranslateUI \
+        "${DEBUG_ARGS[@]}" \
+        >/dev/null 2>&1
+    # A window that lasted less than this was never a window.
+    (( SECONDS - began < 3 ))
+}
+
 # **Not `exec`.** Replacing this shell with the browser takes the trap above
 # with it, so the bridge outlived every window that ever closed — one abandoned
 # process a launch, holding a socket, for as long as the session lasted.
 # Waiting here instead costs a sleeping shell and cleans up after itself.
-"$browser" \
-    --app="$url" \
-    --class=Scour \
-    --user-data-dir="$PROFILE" \
-    --no-first-run \
-    --no-default-browser-check \
-    --disable-features=TranslateUI \
-    >/dev/null 2>&1
+if start_window; then
+    # It came straight back. Give the last one a moment to finish dying, take
+    # the lock away from it, and try once more.
+    sleep 1
+    rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
+    start_window || true
+fi

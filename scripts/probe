@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Run a piece of JavaScript inside the real Scour window and print what it says.
+
+    scripts/probe measure.js
+    scripts/probe - <<'JS'
+    ...
+    JS
+    scripts/probe --cdp <<'PLAN'
+    {"method": "Input.synthesizeScrollGesture", "params": {"x": 400, "y": 400, "yDistance": -8000, "speed": 4000}}
+    PLAN
+
+`--cdp` takes one command a line and sends them in order down a single
+connection, printing what the last one answered. It exists because scrolling is
+the thing most often being measured here and *a scroll driven from JavaScript is
+not the scroll a person makes*: setting `scrollTop` runs on the main thread and
+made every frame arrive at 60 Hz on a screen that was idling at 165, which then
+read as the application being slow. A wheel gesture goes in where a wheel goes
+in, and the browser treats it accordingly.
+
+**Why this exists.** The window is where the interface is slow or is not, and
+until now the only way to look inside it was an embedded browser pane. That
+pane lies about two things this project keeps measuring: `document.hidden` is
+always true in it, so a browser refuses to start deferred work and throttles
+timers to about one a second. Both were mistaken for the application being
+slow — once for an hour. A measurement taken somewhere the page behaves
+differently is not a measurement of the page.
+
+So: the window is started with a debugging port, and this speaks to it. The
+protocol is Chrome's, over a WebSocket, which is the only reason there is a
+handshake and a frame encoder in here — no client library is installed and one
+file is cheaper than a dependency.
+
+The script is evaluated as an expression. If it produces a promise, the answer
+waited for is what the promise settles to; anything JSON can carry comes back.
+
+    scripts/scour-app &            # SCOUR_APP_DEBUG=9222 to open the port
+"""
+
+import base64
+import json
+import os
+import socket
+import struct
+import sys
+import urllib.request
+
+PORT = int(os.environ.get("SCOUR_APP_DEBUG", "9222"))
+
+
+def page_url() -> str:
+    """The WebSocket of the Scour page, out of everything the browser has open."""
+    with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/json", timeout=5) as r:
+        targets = json.load(r)
+    pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
+    if not pages:
+        raise SystemExit(f"no page is open on port {PORT}; is the window running with SCOUR_APP_DEBUG set?")
+    for t in pages:
+        if "7621" in t.get("url", "") or "scour" in t.get("title", "").lower():
+            return t["webSocketDebuggerUrl"]
+    return pages[0]["webSocketDebuggerUrl"]
+
+
+class Socket:
+    """As much of RFC 6455 as talking to a debugger on this machine needs.
+
+    No TLS, no continuation frames on the way out, and the only control frame
+    that matters is a ping — the debugger sends none, but a client that would
+    hang on one is not worth the four lines it saves."""
+
+    def __init__(self, url: str):
+        rest = url.removeprefix("ws://")
+        hostport, _, path = rest.partition("/")
+        host, _, port = hostport.partition(":")
+        self.sock = socket.create_connection((host, int(port or 80)), timeout=30)
+        key = base64.b64encode(os.urandom(16)).decode()
+        self.sock.sendall(
+            f"GET /{path} HTTP/1.1\r\nHost: {hostport}\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n".encode()
+        )
+        head = b""
+        while b"\r\n\r\n" not in head:
+            chunk = self.sock.recv(1)
+            if not chunk:
+                raise SystemExit("the debugger closed the connection during the handshake")
+            head += chunk
+        if b"101" not in head.split(b"\r\n", 1)[0]:
+            raise SystemExit(f"the debugger refused the upgrade: {head.split(chr(13).encode())[0]!r}")
+        self.buf = b""
+
+    def send(self, text: str) -> None:
+        payload = text.encode()
+        n = len(payload)
+        header = b"\x81"
+        mask = os.urandom(4)
+        if n < 126:
+            header += bytes([0x80 | n])
+        elif n < 1 << 16:
+            header += b"\xfe" + struct.pack(">H", n)
+        else:
+            header += b"\xff" + struct.pack(">Q", n)
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        self.sock.sendall(header + mask + masked)
+
+    def _take(self, n: int) -> bytes:
+        while len(self.buf) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise SystemExit("the window closed while it was being asked something")
+            self.buf += chunk
+        out, self.buf = self.buf[:n], self.buf[n:]
+        return out
+
+    def recv(self) -> str:
+        while True:
+            first, second = self._take(2)
+            opcode = first & 0x0F
+            n = second & 0x7F
+            if n == 126:
+                n = struct.unpack(">H", self._take(2))[0]
+            elif n == 127:
+                n = struct.unpack(">Q", self._take(8))[0]
+            body = self._take(n)
+            if opcode == 0x9:  # ping
+                self.sock.sendall(b"\x8a" + bytes([0x80 | len(body)]) + b"\x00\x00\x00\x00" + body)
+                continue
+            if opcode == 0x8:  # close
+                raise SystemExit("the window closed the connection")
+            if opcode in (0x1, 0x2):
+                return body.decode("utf8", "replace")
+
+
+def answer(ws: "Socket", want: int) -> dict:
+    """The reply to one command, stepping over the events that arrive with it."""
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get("id") == want:
+            return msg
+
+
+def plan(ws: "Socket") -> int:
+    """Commands, one a line, in order, down one connection."""
+    last = None
+    for n, line in enumerate(sys.stdin, start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        command = json.loads(line)
+        ws.send(json.dumps({"id": n, "method": command["method"], "params": command.get("params", {})}))
+        last = answer(ws, n)
+        if "error" in last:
+            print(json.dumps(last["error"], ensure_ascii=False), file=sys.stderr)
+            return 1
+    print(json.dumps(last.get("result") if last else None, ensure_ascii=False))
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit(__doc__)
+    if sys.argv[1] == "--cdp":
+        return plan(Socket(page_url()))
+    script = sys.stdin.read() if sys.argv[1] == "-" else open(sys.argv[1], encoding="utf8").read()
+
+    ws = Socket(page_url())
+    ws.send(json.dumps({
+        "id": 1,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": script,
+            "awaitPromise": True,
+            "returnByValue": True,
+            "userGesture": True,
+            "timeout": 120000,
+        },
+    }))
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get("id") != 1:
+            continue  # an event; nothing here has asked for any
+        if "error" in msg:
+            print(json.dumps(msg["error"], ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+        result = msg["result"]
+        if "exceptionDetails" in result:
+            detail = result["exceptionDetails"]
+            thrown = detail.get("exception", {})
+            print(thrown.get("description") or detail.get("text"), file=sys.stderr)
+            return 1
+        print(json.dumps(result["result"].get("value"), ensure_ascii=False))
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
