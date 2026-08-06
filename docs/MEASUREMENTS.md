@@ -3677,3 +3677,37 @@ One thing to watch, not yet measured: the prepared ordering is dropped whenever
 the index revision moves, and a busy watcher moves it often. The next window
 then pays the old price once and asks for a rebuild. On a quiet machine this
 never shows; under a large rescan it might.
+
+## The screen stops going blank
+
+"Ekran yine boş kalıyor — bu html versiyonunda mecburen mi?" No. It was the
+pulling, not the HTML.
+
+Two attempts that did **not** work, measured before being believed:
+
+* **Reaching two windows past the edge of the screen.** Blank frames during a
+  drag: 12/19, 52/45, 18/12 out of sixty — noise. A fast drag covers sixty to a
+  hundred and sixty rows *a frame*, so four hundred rows of headroom is three
+  frames of it. No reaching distance survives a hand that means it.
+* **Waiting for the hand to stop** — the settle, already removed above. It
+  makes the flick free and every stop cost a wait.
+
+What works is not reaching further but already being there. With the engine
+keeping the ordering, a window is 5.5 ms at any depth and a thousand rows are
+378 KB, so the whole of what the list can reach is worth fetching outright. It
+goes one window at a time, only while nothing nearer the screen is outstanding,
+outward from the viewport, and is abandoned when the query changes.
+
+Three interleaved rounds, five flicks each, headless at 1.667 scale:
+
+| | blank frames during the drag | fill after the hand stops |
+|---|---:|---:|
+| on demand | 48 / 41 / 23 of 60 | 18 / 99 / 16 ms |
+| **quiet fill** | **0 / 0 / 0 of 60** | **0 ms** |
+
+Fifteen flicks, not one blank frame, and nothing to wait for on stopping
+because there was nothing left to fetch.
+
+What it costs: the whole reachable list is cached in **706 ms** for `a` and
+2,509 ms for `png`, and the page's heap sits at 16–43 MB with twenty thousand
+rows in it. All of it is work done while nothing is being asked for.

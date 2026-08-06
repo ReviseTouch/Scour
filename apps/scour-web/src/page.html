@@ -2281,6 +2281,37 @@
    * past, which is what was wanted in the first place. */
   const INFLIGHT = 4;
 
+  /* **The rest of the list, quietly, while nothing nearer is waiting.**
+   *
+   * Asking only for what is on the screen leaves it blank whenever the hand
+   * outruns the answer, and it can: a fast drag covers sixty to a hundred and
+   * sixty rows a *frame*, so even four hundred rows of headroom is three frames
+   * of it. No reaching distance survives a hand that means it.
+   *
+   * What survives is the rows already being here. The list reaches twenty
+   * thousand, a thousand of them are 378 KB on the wire, and a window is 5.5 ms
+   * now that the engine keeps the ordering — so the whole of what can be
+   * scrolled to is about a hundred requests and well under a second of a
+   * machine that is otherwise idle. One at a time, only when nothing nearer the
+   * screen is outstanding, nearest the viewport first, abandoned the moment the
+   * query changes. */
+
+  /* The missing window nearest the screen, out of the whole reachable list.
+     Outward from the viewport rather than from row zero, so a list being read
+     from the middle fills around where it is being read. */
+  function nextMissing(from, to) {
+    const end = reach();
+    const here = Math.floor((from + to) / 2 / WINDOW) * WINDOW;
+    for (let step = 0; step * WINDOW <= end; step++) {
+      const tries = step === 0 ? [here] : [here + step * WINDOW, here - step * WINDOW];
+      for (const start of tries) {
+        if (start < 0 || start >= end) continue;
+        if (!LIST.rows.has(start) && !LIST.pending.has(start)) return start;
+      }
+    }
+    return null;
+  }
+
   function fillWindow() {
     if (LIST.query === null) return;          /* the first search has not landed */
     const [from, to] = visibleRange();
@@ -2302,6 +2333,11 @@
     /* Nearest the middle of the window first. */
     const eye = (from + to) / 2;
     wanted.sort((a, b) => Math.abs(a + WINDOW / 2 - eye) - Math.abs(b + WINDOW / 2 - eye));
+
+    if (!wanted.length && LIST.pending.size === 0) {
+      const rest = nextMissing(from, to);
+      if (rest !== null) wanted.push(rest);
+    }
 
     for (const start of wanted.slice(0, Math.max(0, INFLIGHT - LIST.pending.size))) {
       const request = {
