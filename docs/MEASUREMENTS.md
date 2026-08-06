@@ -3356,3 +3356,54 @@ dropped columns more than pay for it.
 Query latency, after, on 2.39 M entries: `rapor` 27.5 ms, `ext:rs` 8.7,
 `kind:image` 19.7, the empty query 6.1 — unchanged within noise, and this index
 had 22 segments rather than the 8–10 it settles at.
+
+## 2026-08-06 — building segments elsewhere: tried again, kept
+
+[The 2026-08-04 attempt](#2026-08-04--building-segments-in-parallel-tried-reverted)
+was reverted at 11%, for two reasons that have both since gone:
+
+* its correctness problem was **hard links** — two paths, one inode, one
+  `EntryId`, so a second sighting had to kill the first and a segment on a
+  builder thread was not in the list to be killed in. A row is a path now, so
+  there is no cross-segment replacement to race with. The same shape survives
+  in a narrower form — the *same path* re-indexed while an earlier segment
+  holding it is still being written — and is handled by giving each build a
+  kill list that is applied the moment it lands.
+* its blocker was that `flush` wrote the manifest before the segment existed.
+  A build now hands its files back and **whoever next takes the write lock puts
+  them in the list and saves the manifest**, so there is no window where the
+  two disagree. That also means a builder thread never takes the index lock at
+  all, and a slow disk cannot block a search.
+
+Only the staging buffer overflowing builds elsewhere. Everything whose next
+line depends on the rows being *in* the index — a sweep about to judge them, a
+generation about to stamp them, a fold about to rewrite them, a commit about to
+announce a revision — settles first. Two integration tests found exactly that
+distinction by failing.
+
+Measured end to end with `scourd --scan-only`, which is a real walk into a real
+index, interleaved, alternating, first round of each discarded as cold:
+
+**`/mnt/depo`, 1,565,767 entries, NTFS:**
+
+| round | serial | building elsewhere |
+|---|---:|---:|
+| 1 | 2,093 ms | 1,364 ms |
+| 2 | 2,167 ms | 1,329 ms |
+| 3 | 2,161 ms | 1,306 ms |
+| 4 | 2,129 ms | 1,419 ms |
+| 5 | 2,243 ms | 1,314 ms |
+| 6 | 2,232 ms | 1,297 ms |
+| **median** | **2,164 ms** | **1,321 ms** |
+
+**1.64×, six rounds of six**, and the same fourteen segments on disk either way.
+
+`~/.rustup`, 247,430 entries: 526 ms against 461 — 13%. The difference is how
+many flushes there are to overlap: two on that tree, fourteen on the other.
+A pipeline needs something to put in it.
+
+**`MAX_STAGED` was then tried at 40,000** — four times as many chances to have
+several builds in the air. 1,290–1,318 ms against 1,297–1,419, which is the
+same number, with **34 segments instead of 14**. The build is no longer the
+critical path; paying for more segments to speed up something that is not the
+bottleneck is how an index gets slower at answering. Left at 100,000.

@@ -178,10 +178,71 @@ struct Inner {
     next_segment: u64,
 }
 
+/// A segment being built on another thread.
+///
+/// Its rows are exactly as invisible as staged rows — the trait says a change
+/// is not durable until `commit`, and this is the window in which that is
+/// literally true. What it has to carry is the set of paths it holds: a
+/// removal arriving while it is in the air has no row to kill yet, and the one
+/// it was meant to kill is about to appear.
+#[derive(Debug, Default)]
+struct Flight {
+    number: u64,
+    /// The path digests this segment will hold.
+    paths: std::collections::HashSet<u64>,
+    /// What to kill in it the moment it lands, in `kill_paths` order.
+    doomed: Vec<(u32, SourceId, String)>,
+    /// Subtrees removed while it was in the air. Applied on landing for the
+    /// same reason: the rows were not there to be killed.
+    gone: scour_core::PrefixSet,
+}
+
+/// A build that has finished.
+#[derive(Debug)]
+enum Landed {
+    /// The files are written and synced; the segment needs a place in the list.
+    Built { number: u64, live: Live },
+    /// The rows could not be written. They come back rather than being lost —
+    /// see [`Pending`].
+    Failed {
+        number: u64,
+        rows: Vec<Entry>,
+        detail: String,
+    },
+}
+
+#[derive(Debug, Default)]
+struct Building {
+    /// Handed to a thread and not yet finished.
+    flights: Vec<Flight>,
+    /// Finished, waiting for someone holding the write lock to install them.
+    landed: Vec<Landed>,
+}
+
+/// How many segments may be built at once.
+///
+/// Each one holds its rows and its output bytes — about 35 MB for a full
+/// hundred-thousand-row segment — so this is a memory bound as much as a
+/// concurrency one. Past it, whoever wanted the flush builds it themselves,
+/// which is the back pressure this design needs and costs nothing to write.
+const MAX_BUILDING: usize = 4;
+
 #[derive(Debug)]
 pub struct NativeIndex {
     dir: PathBuf,
     inner: RwLock<Inner>,
+    /// Segments in the air, and something to wait on.
+    ///
+    /// Separate from `inner`, and deliberately: a builder thread never takes
+    /// the index lock at all. It writes its files, drops the result here and
+    /// stops — whoever next holds the write lock puts it in the list. Waiting
+    /// for a build while holding the lock the build needs is the deadlock this
+    /// avoids by construction, and it also means a slow disk cannot block a
+    /// search.
+    building: std::sync::Arc<(parking_lot::Mutex<Building>, parking_lot::Condvar)>,
+    /// Builds that failed. Their rows were put back; this is how the next
+    /// commit finds out it has something to report.
+    build_failed: std::sync::atomic::AtomicUsize,
     /// Released when this is dropped, or by the kernel if the process dies.
     /// Held for the lifetime of the index because every writing path — commit,
     /// sweep, maintain — goes through this value.
@@ -234,6 +295,11 @@ impl NativeIndex {
                 next_segment: meta.next_segment,
                 ..Inner::default()
             }),
+            building: std::sync::Arc::new((
+                parking_lot::Mutex::new(Building::default()),
+                parking_lot::Condvar::new(),
+            )),
+            build_failed: std::sync::atomic::AtomicUsize::new(0),
             _lock: lock,
         })
     }
@@ -297,7 +363,18 @@ impl NativeIndex {
     /// is the old row of every entry being re-upserted, and applying them
     /// afterwards would find — and kill — the row that was just added.
     /// Flush with the lock held throughout. For callers already inside it.
+    /// Flush, and be finished when it returns.
+    ///
+    /// For everything whose next line depends on the rows being *in* the
+    /// index: a sweep about to judge them, a generation about to stamp them, a
+    /// fold about to rewrite them. Only the staging buffer overflowing can
+    /// afford to let a segment be built elsewhere, because nothing is waiting
+    /// on it.
     fn flush(&self, inner: &mut Inner) -> Result<()> {
+        self.flush_maybe_elsewhere(inner, false)
+    }
+
+    fn flush_maybe_elsewhere(&self, inner: &mut Inner, elsewhere: bool) -> Result<()> {
         let mut pending = self.flush_prepare(inner)?;
         if let Err(e) = pending.write_alive(&self.dir) {
             Self::restore(inner, pending);
@@ -306,22 +383,208 @@ impl NativeIndex {
         let Some((number, generation, staged)) = pending.staged.take() else {
             return Ok(());
         };
-        let bytes = build(&staged);
-        let live = match Live::write(&self.dir, number, generation, &bytes) {
-            Ok(live) => live,
-            Err(e) => {
-                pending.staged = Some((number, generation, staged));
-                Self::restore(inner, pending);
-                return Err(e);
+
+        // **Somewhere else, if anybody else is free.**
+        //
+        // A hundred thousand rows take about 150 ms to turn into a segment,
+        // and the scan profile put 85% of a full index in exactly that: one
+        // thread interning directories, folding names and extracting trigrams
+        // while nineteen others had nothing to do. Segments are independent —
+        // separate files, separate numbers, merged at query time — so there is
+        // no reason to build them one after another.
+        //
+        // Past `MAX_BUILDING` the caller builds it itself. That is the back
+        // pressure: memory is bounded by the number in the air, and a walk
+        // that outruns the builders is made to wait by doing the work.
+        let mine = !elsewhere || {
+            let held = self.building.0.lock();
+            held.flights.len() >= MAX_BUILDING
+        };
+        if mine {
+            let bytes = build(&staged);
+            let live = match Live::write(&self.dir, number, generation, &bytes) {
+                Ok(live) => live,
+                Err(e) => {
+                    pending.staged = Some((number, generation, staged));
+                    Self::restore(inner, pending);
+                    return Err(e);
+                }
+            };
+            inner.segments.push(live);
+            inner.segments.sort_by_key(|s| s.number);
+            // Past here the rows are on disk. A manifest that will not save is
+            // a real failure and is reported, but the segment is named by the
+            // next successful save and swept as an orphan if there never is
+            // one — so the entries are not put back, which would duplicate
+            // them.
+            return self.save_meta(inner);
+        }
+
+        let paths = staged
+            .iter()
+            .map(|e| digest(e.id.source, &e.path))
+            .collect();
+        self.building.0.lock().flights.push(Flight {
+            number,
+            paths,
+            doomed: Vec::new(),
+            gone: scour_core::PrefixSet::default(),
+        });
+        let dir = self.dir.clone();
+        let building = std::sync::Arc::clone(&self.building);
+        let started = std::thread::Builder::new()
+            .name("scour-build".into())
+            .spawn(move || {
+                let bytes = build(&staged);
+                let done = match Live::write(&dir, number, generation, &bytes) {
+                    Ok(live) => Landed::Built { number, live },
+                    Err(e) => Landed::Failed {
+                        number,
+                        rows: staged,
+                        detail: e.to_string(),
+                    },
+                };
+                let mut held = building.0.lock();
+                held.landed.push(done);
+                building.1.notify_all();
+            });
+        if let Err(e) = started {
+            // No thread to be had. Build it here rather than lose the rows.
+            self.building
+                .0
+                .lock()
+                .flights
+                .retain(|f| f.number != number);
+            return Err(Error::Io {
+                detail: format!("no thread for a segment build: {e}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// Kill every row of a segment that is under one of these prefixes.
+    fn kill_under(live: &mut Live, prefixes: &scour_core::PrefixSet) -> Result<u64> {
+        let victims: Vec<usize> = {
+            let seg = live.view()?;
+            let doomed = Doomed::new(&seg, prefixes);
+            if doomed.is_empty() {
+                Vec::new()
+            } else {
+                (0..live.rows())
+                    .filter(|&row| live.is_alive(row) && doomed.takes(&seg, row, seg.dir_id(row)))
+                    .collect()
             }
         };
-        inner.segments.push(live);
-        inner.segments.sort_by_key(|s| s.number);
-        // Past here the rows are on disk. A manifest that will not save is a
-        // real failure and is reported, but the segment is named by the next
-        // successful save and swept as an orphan if there never is one — so
-        // the entries are not put back, which would duplicate them.
-        self.save_meta(inner)
+        let mut gone = 0;
+        for row in victims {
+            if live.kill(row) {
+                gone += 1;
+            }
+        }
+        Ok(gone)
+    }
+
+    /// Put every finished build in the list. The caller holds the write lock.
+    ///
+    /// Called from every path that takes it, because a segment sitting in
+    /// `landed` is a set of rows that exist on disk and answer no query.
+    fn collect(&self, inner: &mut Inner) -> Result<()> {
+        let done: Vec<Landed> = {
+            let mut held = self.building.0.lock();
+            if held.landed.is_empty() {
+                return Ok(());
+            }
+            std::mem::take(&mut held.landed)
+        };
+        let mut added = false;
+        let mut failure = None;
+        for one in done {
+            match one {
+                Landed::Built { number, mut live } => {
+                    // Whatever was removed while this was in the air. The rows
+                    // did not exist to be killed then and do now.
+                    let (doomed, gone) = {
+                        let mut held = self.building.0.lock();
+                        let mut taken = (Vec::new(), scour_core::PrefixSet::default());
+                        held.flights.retain(|f| {
+                            if f.number == number {
+                                taken = (f.doomed.clone(), f.gone.clone());
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        taken
+                    };
+                    let mut hit = false;
+                    if !doomed.is_empty() {
+                        let mut wanted: Vec<(u32, SourceId, &str)> = doomed
+                            .iter()
+                            .map(|(k, s, p)| (*k, *s, p.as_str()))
+                            .collect();
+                        wanted.sort_unstable_by_key(|(k, _, _)| *k);
+                        hit |= live.kill_paths(&wanted)? > 0;
+                    }
+                    if !gone.is_empty() {
+                        hit |= Self::kill_under(&mut live, &gone)? > 0;
+                    }
+                    if hit {
+                        let (n, bits) = live.alive_snapshot();
+                        Live::write_alive(&self.dir, n, &bits)?;
+                    }
+                    inner.next_segment = inner.next_segment.max(number + 1);
+                    inner.segments.push(live);
+                    added = true;
+                }
+                Landed::Failed {
+                    number,
+                    rows,
+                    detail,
+                } => {
+                    self.building
+                        .0
+                        .lock()
+                        .flights
+                        .retain(|f| f.number != number);
+                    self.build_failed
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Self::restore(
+                        inner,
+                        Pending {
+                            staged: Some((number, inner.generation, rows)),
+                            ..Pending::default()
+                        },
+                    );
+                    failure = Some(detail);
+                }
+            }
+        }
+        if added {
+            inner.segments.sort_by_key(|s| s.number);
+            self.save_meta(inner)?;
+        }
+        self.building.1.notify_all();
+        match failure {
+            Some(detail) => Err(Error::Io { detail }),
+            None => Ok(()),
+        }
+    }
+
+    /// Wait until nothing is being built, then put the results in the list.
+    ///
+    /// **Every operation that reasons about what the index contains has to do
+    /// this first.** A sweep judges rows by generation, a fold rewrites them, a
+    /// rebuild reads all of them: a segment still in the air is a set of rows
+    /// none of those would see, and the failure is silent — rows that outlive a
+    /// reconciliation they should have been judged by.
+    fn settle(&self) -> Result<()> {
+        {
+            let mut held = self.building.0.lock();
+            while !held.flights.is_empty() && held.landed.len() < held.flights.len() {
+                self.building.1.wait(&mut held);
+            }
+        }
+        self.collect(&mut self.inner.write())
     }
 
     /// Put back what a failed publication was carrying.
@@ -382,6 +645,10 @@ impl NativeIndex {
     /// are read *from* the staged entries, and taking them out first meant a
     /// re-indexed file kept its old row. Two tests said so immediately.
     fn flush_prepare(&self, inner: &mut Inner) -> Result<Pending> {
+        // Anything that finished building belongs in the list before this
+        // decides what to kill: a row that has just landed is a row this flush
+        // may have to replace.
+        self.collect(inner)?;
         if inner.staged.is_empty() && inner.hidden_prefixes.is_empty() {
             return Ok(Pending::default());
         }
@@ -399,22 +666,18 @@ impl NativeIndex {
         if !inner.hidden_prefixes.is_empty() {
             let prefixes = std::mem::take(&mut inner.hidden_prefixes);
             for (i, live) in inner.segments.iter_mut().enumerate() {
-                let victims: Vec<usize> = {
-                    let seg = live.view()?;
-                    let doomed = Doomed::new(&seg, &prefixes);
-                    if doomed.is_empty() {
-                        Vec::new()
-                    } else {
-                        (0..live.rows())
-                            .filter(|&row| {
-                                live.is_alive(row) && doomed.takes(&seg, row, seg.dir_id(row))
-                            })
-                            .collect()
-                    }
-                };
-                for row in victims {
-                    live.kill(row);
+                if Self::kill_under(live, &prefixes)? > 0 {
                     touched[i] = true;
+                }
+            }
+            // A segment still being built holds rows this removal is about and
+            // has none of them yet. It carries the prefixes and applies them
+            // the moment it lands — otherwise a folder deleted during a scan
+            // comes back with the segment that was in the air when it went.
+            {
+                let mut held = self.building.0.lock();
+                for f in held.flights.iter_mut() {
+                    f.gone.extend(prefixes.iter().map(str::to_owned));
                 }
             }
             inner.staged.retain(|e| !prefixes.covers(&e.path));
@@ -465,6 +728,21 @@ impl NativeIndex {
             for (i, live) in segments.iter_mut().enumerate() {
                 if live.kill_paths(&wanted)? > 0 {
                     touched[i] = true;
+                }
+            }
+            // The same rows, in segments that do not exist yet. A path being
+            // re-indexed while an earlier segment holding it is still being
+            // written has no row to kill — and would have two the moment that
+            // segment landed, which is the duplicate this index exists to make
+            // impossible.
+            let mut held = self.building.0.lock();
+            if !held.flights.is_empty() {
+                for f in held.flights.iter_mut() {
+                    for (key, source, path) in &wanted {
+                        if f.paths.contains(&digest(*source, path)) {
+                            f.doomed.push((*key, *source, (*path).to_owned()));
+                        }
+                    }
                 }
             }
         }
@@ -1000,7 +1278,10 @@ impl Index for NativeIndex {
                     }
                     report.upserted += 1;
                     if inner.staged.len() >= MAX_STAGED {
-                        self.flush(&mut inner)?;
+                        // The one place a build may happen elsewhere: this is
+                        // a buffer overflowing during a walk, and nothing is
+                        // waiting on the result.
+                        self.flush_maybe_elsewhere(&mut inner, true)?;
                     }
                 }
                 Change::RemoveSubtree { path } => {
@@ -1016,6 +1297,9 @@ impl Index for NativeIndex {
     }
 
     fn begin_generation(&self) -> Result<u64> {
+        // Rows still being written would be stamped with the generation they
+        // were staged under and judged by the one that starts here.
+        self.settle()?;
         let mut inner = self.inner.write();
         // Flush first, so that no segment ever spans two generations. That is
         // what lets the generation be one number a segment rather than a column
@@ -1032,6 +1316,7 @@ impl Index for NativeIndex {
     }
 
     fn forget(&self, source: SourceId) -> Result<u64> {
+        self.settle()?;
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
         let mut gone = 0u64;
@@ -1073,6 +1358,9 @@ impl Index for NativeIndex {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> Result<u64> {
+        // A segment in the air holds rows this generation stamped; sweeping
+        // before it lands judges them by a walk that never saw them.
+        self.settle()?;
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
         if inner.open == Some(generation) {
@@ -1193,6 +1481,10 @@ impl Index for NativeIndex {
         // it is cheap now that a subtree is a range check rather than 2.1 M
         // paths.
         let held = Instant::now();
+        // Everything that was being built is on disk and in the list before
+        // this returns: the engine announces a revision on the strength of it,
+        // and a window told to look again has to find what was written.
+        self.settle()?;
         let mut pending = self.flush_prepare(&mut self.inner.write())?;
         // How long a search could have been waiting. Printed rather than
         // guessed at, because the last three things blamed for this tail were
@@ -1489,6 +1781,9 @@ impl Index for NativeIndex {
 
     fn maintain(&self, level: Maintenance) -> Result<MaintReport> {
         let started = Instant::now();
+        // A fold rewrites segments and a rebuild reads every row of every one
+        // of them. Both have to see the ones still being written.
+        self.settle()?;
         let before = dir_size(&self.dir);
         match level {
             Maintenance::Flush => self.flush(&mut self.inner.write())?,
