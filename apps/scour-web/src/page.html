@@ -789,6 +789,12 @@
   tbody tr.spacer, tbody tr.ghost { pointer-events: none; }
   tbody tr.spacer td, tbody tr.ghost td { padding: 0; border: 0; }
   tbody tr.ghost { height: 31px; }
+  tbody tr.far td {
+    padding: calc(var(--u) * 4) calc(var(--u) * 5);
+    color: var(--ink-3); font-size: 12px;
+    border-top: 1px solid var(--line);
+  }
+  tbody tr.far:hover { background: none; }
   tbody tr.spacer:hover, tbody tr.ghost:hover { background: none; }
   tbody tr:focus-visible { outline: 2px solid var(--q-key); outline-offset: -2px; }
 
@@ -1855,6 +1861,33 @@
    *   * and it answers fast enough that dragging the thumb does not stutter.
    *     A window is 200 rows and lands in single-digit milliseconds.
    */
+  /* How far down the list you can actually go.
+   *
+   * **Not a stylistic limit — a measured one.** A window of rows at offset N
+   * costs the engine one built row per row it skips, because paging happens
+   * after the merge and every segment has to offer its own best `N + 200`
+   * before the merge can know which of them survive. Measured on 2,083,959
+   * entries, empty query:
+   *
+   *   offset       0 →     3 ms
+   *   offset  10,000 →    26 ms
+   *   offset  50,000 →   174 ms
+   *   offset 200,000 →   541 ms
+   *   offset 750,000 → 1,373 ms
+   *
+   * A list that lets you drag the thumb to two million therefore stops filling
+   * in — which is what it did, and it looked like the lazy loading being
+   * broken rather than like the engine being asked something unreasonable.
+   *
+   * Twenty thousand is where a window still lands inside a frame or two. Past
+   * it the answer is a better query, not more scrolling: `docs/ROADMAP.md` has
+   * said so since phase 2.2 and the page had simply never enforced it.
+   *
+   * Raising it needs the engine to stop building rows it is about to discard —
+   * a hit that carries a segment and a row number, materialised after the
+   * page is chosen rather than before. */
+  const REACH = 20_000;
+
   const ROW_H = 31;          /* one row, and it must match the CSS */
   /* **A browser will not make an element taller than about 33.5 million
      pixels**, and 2.1 M rows at 31px want 66 M. Past the ceiling the scroll
@@ -1882,16 +1915,18 @@
 
   /* Which rows the viewport is over, plus a margin so a flick does not show
      blank space before the fetch lands. */
+  /* How many rows the list is allowed to be, which is not how many matched. */
+  const reach = () => Math.min(LIST.total, REACH);
+
   /* Pixels per row: the real height until the set is too tall to draw, then
      whatever fits. */
-  const pitch = () =>
-    LIST.total * ROW_H > MAX_PX ? MAX_PX / LIST.total : ROW_H;
+  const pitch = () => (reach() * ROW_H > MAX_PX ? MAX_PX / reach() : ROW_H);
 
   function visibleRange() {
     const p = pitch();
     const first = Math.max(0, Math.floor(scrollEl.scrollTop / p) - MARGIN);
     const count = Math.ceil(scrollEl.clientHeight / p) + MARGIN * 2;
-    return [first, Math.min(LIST.total, first + count)];
+    return [first, Math.min(reach(), first + count)];
   }
 
   /* Draw the window that is on screen, between two spacers.
@@ -1906,8 +1941,14 @@
       const f = LIST.rows.get(i);
       parts.push(f ? rowHtml(f) : `<tr class="ghost"><td colspan="${SHOWN.length + 1}"></td></tr>`);
     }
-    const rest = LIST.total - to;
+    const rest = reach() - to;
     if (rest > 0) parts.push(`<tr class="spacer" style="height:${Math.round(rest * p)}px"><td colspan="${SHOWN.length + 1}"></td></tr>`);
+    /* Said at the end of the list rather than not at all: a list that stops
+       twenty thousand rows into two million has to say which of those two
+       numbers it is showing. */
+    if (LIST.total > REACH && to >= reach()) {
+      parts.push(`<tr class="far"><td colspan="${SHOWN.length + 1}">ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.</td></tr>`);
+    }
     /* Whatever was selected keeps being selected. Replacing the body throws
        away the focused element, which was survivable when this only ran on
        scroll — you were moving anyway — and is not now that the list redraws
@@ -2679,10 +2720,34 @@
              where it was rather than start again. */
           if (arrivals.has(p)) f.fresh = arrivals.get(p);
         }
-        LIST.rows = rows;
+        // **Replace only what this was actually about.**
+        //
+        // The windows were chosen when the request went out. If the list has
+        // been scrolled since, replacing the map wholesale throws away the
+        // rows the viewport is showing *now* and puts back the ones it was
+        // showing then — so the screen goes blank and stays blank until the
+        // next revision refetches it. On a machine whose index moves every
+        // second that is a permanent flicker while scrolling, and on a quiet
+        // one it never comes back at all.
+        const moved = visibleRange().join() !== [from, to].join();
+        if (moved) {
+            for (const [i, f] of rows) LIST.rows.set(i, f);
+        } else {
+            LIST.rows = rows;
+        }
         LIST.pending.clear();
         now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
         paintWindow();
+        // **And fetch whatever the viewport is now missing.**
+        //
+        // The windows above were chosen when the request went out. A scroll
+        // between then and now leaves this holding rows for where the list
+        // *was*, and the scroll that would have filled the new position has
+        // already happened — so without this the rows under the cursor stay
+        // blank until the index happens to change again, which on a quiet
+        // machine is never. That is what "the lazy loading stopped working"
+        // looks like from the outside.
+        fillWindow();
         empty.hidden = LIST.total !== 0;
         /* The highlight marks the arrival, not the row, so it is taken off on
            its own clock. */
