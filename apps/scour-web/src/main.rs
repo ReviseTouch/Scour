@@ -23,10 +23,22 @@
 //! * **Read-only, with one exception, and the exception is the careful part.**
 //!   `rescan` and `maintain` are not routed — a page in a browser does not get
 //!   to make the service work. `/api/open` is the exception, because a file
-//!   search that cannot open a file is half a tool, and it is fenced:
-//!   `POST` only, the path must be one the *index* holds, and anything the
-//!   desktop would **run** rather than view is refused and its folder offered
-//!   instead. `--no-open` removes it altogether.
+//!   search that cannot open a file is half a tool, and it is fenced: `POST`
+//!   only, so a link, an image or a prefetch cannot reach it, and the path must
+//!   be one the *index* holds.
+//!
+//!   **And it runs executables.** That was a refusal once — the folder was
+//!   opened instead — and it is not any more, because a search box that finds a
+//!   program and then sends you elsewhere to start it has not finished the job.
+//!   The honest accounting, since a security note that flatters itself is worse
+//!   than none: this does not widen who may ask, only what an asker may do.
+//!   Loopback, token, origin and method are all still in the way, and getting
+//!   past them means holding a token that is new every run and lives in the
+//!   window's own URL. What changes is that such a holder can now start a
+//!   binary directly, where before they could `xdg-open` a `.desktop` file or a
+//!   script and have the desktop start it for them. A door widened rather than
+//!   opened, and still a door: `--no-run` closes it and says so on screen,
+//!   `--no-launch` removes the route altogether.
 
 mod http;
 mod icons;
