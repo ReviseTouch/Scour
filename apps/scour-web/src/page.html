@@ -1105,16 +1105,21 @@
   const TOKEN = new URLSearchParams(location.search).get("t") || "";
 
   const SERVICE = {
-    async get(route, params) {
+    async get(route, params, signal) {
       const q = new URLSearchParams({ ...params, t: TOKEN });
-      const r = await fetch(`/api/${route}?${q}`, { cache: "no-store" });
+      const r = await fetch(`/api/${route}?${q}`, { cache: "no-store", signal });
       if (!r.ok) throw new Error(`${route}: ${r.status}`);
       const j = await r.json();
       if (j.error) throw new Error(j.error);
       return j;
     },
-    search: (q, sort, desc, limit, offset) =>
-      SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }),
+    /* `signal` is not decoration. A flick down a two-million-row list crosses
+       a window boundary every few frames, and a request nobody is waiting for
+       still holds one of the six connections a browser will open to an origin.
+       Abandoning them is what keeps the one window that is finally being looked
+       at from queueing behind thirty that are not. */
+    search: (q, sort, desc, limit, offset, signal) =>
+      SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }, signal),
     /* Every question about the matching set, in one request. The index
        answers them from one walk of it — see `FacetResponse::groups`. */
     explain: (q, cursor) =>
@@ -2241,20 +2246,83 @@
     }
   }
 
-  /* Fetch whatever the visible range is missing, one window at a time. */
+  /* **What is on the screen now, and nothing else.**
+   *
+   * A flick down a two-million-row list crosses a window boundary every few
+   * frames. Every crossing used to start a request, none of them were ever
+   * called off, and a browser opens six connections to an origin — so by the
+   * time the hand stopped, the one window being looked at was queued behind
+   * thirty nobody would ever see. Deep windows are dearer too (16 ms at the
+   * top of the list, 84 ms at the far end, measured), so the queue got slower
+   * exactly as it got longer. That is the "tıkanıyor".
+   *
+   * The policy is the one Hasan asked for: load what can be loaded now, skip
+   * what cannot, and whatever went past while scrolling has gone past. So each
+   * pass abandons every request outside the visible range — `AbortController`,
+   * which frees the connection rather than merely ignoring the answer — and
+   * starts at most `INFLIGHT` new ones, nearest the middle of the screen
+   * first, because that is the window the eye is on.
+   */
+  const INFLIGHT = 2;
+
+  /* **Nothing is asked for while the list is still moving.**
+   *
+   * Cancelling was not enough on its own, and the measurement says why: a drag
+   * of a hundred and twenty thousand pixels asked for twenty-one windows
+   * before, thirty-seven after, and took just as long to fill either way. A
+   * request that is called off has already been sent, has already taken one of
+   * the six connections, and the engine has already started walking for it.
+   *
+   * What costs is the walk to the offset, not the rows: at the far end of the
+   * list sixty rows take 103 ms and two hundred take 88 — the same — while the
+   * same two hundred rows at the top take 9. So the number of requests is the
+   * whole cost, and the windows crossed mid-flick are ones nobody will look at.
+   *
+   * So the list waits for the hand to stop. `SETTLE` is short enough that a
+   * pause reads as instant and long enough that a flick asks for nothing on its
+   * way past. Whatever went by has gone by. */
+  const SETTLE = 90;
+  let movedAt = 0;
+  let settleTimer = 0;
+
   function fillWindow() {
     if (LIST.query === null) return;          /* the first search has not landed */
     const [from, to] = visibleRange();
+
+    /* Anything in flight that the screen has left behind. */
+    for (const [start, request] of LIST.pending) {
+      if (start + WINDOW <= from || start >= to) {
+        request.stop.abort();
+        LIST.pending.delete(start);
+      }
+    }
+
+    const still = performance.now() - movedAt;
+    if (still < SETTLE) {
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(fillWindow, SETTLE - still);
+      return;
+    }
+
+    const wanted = [];
     for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
       if (LIST.pending.has(start) || LIST.rows.has(start)) continue;
+      wanted.push(start);
+    }
+    /* Nearest the middle of the window first. */
+    const eye = (from + to) / 2;
+    wanted.sort((a, b) => Math.abs(a + WINDOW / 2 - eye) - Math.abs(b + WINDOW / 2 - eye));
+
+    for (const start of wanted.slice(0, Math.max(0, INFLIGHT - LIST.pending.size))) {
       const request = {
         generation,
         query: LIST.query,
         sort: LIST.sort,
         desc: LIST.desc,
+        stop: new AbortController(),
       };
       LIST.pending.set(start, request);
-      SERVICE.search(request.query, request.sort, request.desc, WINDOW, start)
+      SERVICE.search(request.query, request.sort, request.desc, WINDOW, start, request.stop.signal)
         .then((res) => {
           /* Clearing an old result set does not cancel its fetch. Compare the
              request object before deleting: an old answer for window 400 must
@@ -2274,10 +2342,16 @@
           LIST.pending.delete(start);
           rows.forEach((r, i) => LIST.rows.set(start + i, r));
           repaint(true);
+          /* A slot has just come free, and the screen may be somewhere else
+             now. Asking again here is what keeps a still list filling in
+             without waiting for the hand to move. */
+          fillWindow();
         })
         .catch((e) => {
           if (LIST.pending.get(start) !== request) return;
           LIST.pending.delete(start);
+          // Being scrolled past is the ordinary case, not a fault.
+          if (e && e.name === "AbortError") return;
           // Not silent. A failed window remains a ghost until another event
           // chooses a retry policy, but it must not masquerade as a draw.
           console.error("scour: a window did not load:", e);
@@ -2347,6 +2421,7 @@
         console.error("scour: a window did not draw:", e);
         return;
       }
+      if (now !== painted) movedAt = performance.now();
       painted = now;
       dirty = false;
       fillWindow();
@@ -2384,7 +2459,9 @@
         if (mine !== generation) return;   // a newer keystroke won
         /* A new result set: everything cached belonged to the old one. */
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
-        LIST.rows.clear(); LIST.pending.clear();
+        LIST.rows.clear();
+        for (const request of LIST.pending.values()) request.stop.abort();
+        LIST.pending.clear();
         LIST.exact = !res.capped;
         LIST.total = res.total;
         res.rows.forEach((r, i) => LIST.rows.set(i, fromService(r)));
@@ -2477,6 +2554,7 @@
     LIST.total = 0;
     LIST.exact = true;
     LIST.rows.clear();
+    for (const request of LIST.pending.values()) request.stop.abort();
     LIST.pending.clear();
     body.innerHTML = "";
     empty.hidden = false;
@@ -3170,7 +3248,12 @@
         /* These starts have just been supplied by this refresh. Supersede only
            their ordinary window requests; clearing every pending start also
            cancelled the viewport the user had scrolled to in the meantime. */
-        for (const start of starts) LIST.pending.delete(start);
+        for (const start of starts) {
+          const request = LIST.pending.get(start);
+          if (!request) continue;
+          request.stop.abort();          /* its answer is already here */
+          LIST.pending.delete(start);
+        }
         now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
         repaint(true);
         // **And fetch whatever the viewport is now missing.**

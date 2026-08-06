@@ -3559,3 +3559,58 @@ Two things follow, neither of them done here:
 One outlier is unexplained: the page recorded a single `/api/search` at
 2,255 ms while everything measured here was under 100 ms. A commit holding the
 index while a search waits is the obvious candidate and has not been measured.
+
+## Fetching: the flick asks for nothing on its way past
+
+"Ne kadar aşağı kaydırsam o kadar lag" — and the diagnosis with it: the list
+keeps trying to load while the hand is moving, and the process clogs.
+
+That is what it was. A drag of a hundred and twenty thousand pixels crosses a
+window boundary every few frames; every crossing started a request, none was
+ever called off, and a browser opens six connections to an origin. By the time
+the hand stopped, the window being looked at was queued behind twenty-nine
+nobody would ever see — and deep windows are dearer, so the queue got slower
+exactly as it got longer.
+
+### Row count is nearly free; the walk to the offset is the cost
+
+Three rounds, median, against the bridge directly:
+
+| offset | 60 rows | 200 rows | 600 rows |
+|---|---:|---:|---:|
+| 0 | 8.0 ms | 9.1 ms | 24.9 ms |
+| 2,000 | 15.6 ms | 27.0 ms | 34.1 ms |
+| 10,000 | 48.2 ms | 43.8 ms | 59.0 ms |
+| 19,800 | 103.0 ms | 88.1 ms | 158.9 ms |
+
+Sixty rows at the far end cost the same as two hundred. So asking for only what
+is on the screen — which was suggested — makes each request no cheaper and
+means three times as many of them for the same distance travelled. **The number
+of requests is the whole cost.** `WINDOW` stays at 200.
+
+### Cancelling was not enough
+
+Abandoning out-of-view requests with `AbortController`, on its own:
+
+| | fill after the hand stops | requests |
+|---|---:|---:|
+| before | 1,399 / 1,691 ms | 21 / 22 |
+| abort only | 1,235 / 3,040 ms | 37 / 37 |
+
+No better, and it asks for *more*: a cancelled request has already been sent,
+has already taken a connection, and the engine has already started walking.
+
+### Waiting for the hand to stop is
+
+`SETTLE = 90 ms` of a still range before anything is asked for. Three
+interleaved rounds, five flicks each, headless at the real 1.667 scale:
+
+| | fill after the hand stops | requests |
+|---|---:|---:|
+| before | 3,291 / 1,627 / 1,927 ms | 29 / 22 / 30 |
+| **settle** | **232 / 906 / 994 ms** | **2 / 2 / 2** |
+
+Every flick now costs two requests instead of twenty-five, and the screen fills
+in about a second at the deep end rather than three. The cancellation stays,
+not because it helped on its own but because it is what keeps a *second* flick
+from queueing behind the first one's answer.
