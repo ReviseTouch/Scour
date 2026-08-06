@@ -64,11 +64,30 @@ point at clusters, and reading clusters means the raw device —
 
 So the distance to a USN feed on Linux is one `usermod -aG disk`. That is not a
 small grant: group `disk` is read access to every block device, which is read
-access to every file on the machine regardless of permissions. And it would buy
-less than it looks like, because of the paragraph below: `ntfs3` updates the
-table but has no reason to append to `$J`, so a journal follower on Linux would
-miss everything Linux itself wrote. On Linux this volume has a free bulk path
-and no change feed worth the grant.
+access to every file on the machine regardless of permissions.
+
+**And it would buy something broken, which was measured rather than assumed.**
+`$J`'s own record gives its size without reading a single cluster: 7,352,352,768
+bytes allocated, 7,352,039,480 written. A file was then created through `ntfs3`,
+`sync()` called, three seconds waited, and the record read again bypassing the
+page cache:
+
+```
+$J before : alloc 7,352,352,768 · real 7,352,039,480
+$J after  : alloc 7,352,352,768 · real 7,352,039,480   (unchanged)
+```
+
+Not one byte. Windows keeps the journal; `ntfs3` does not append to it. So a
+journal follower on Linux would never see a file Linux itself wrote — the feed
+is not merely expensive to reach, it is **wrong**. On Linux this volume has a
+free bulk path and no change feed worth having.
+
+The inversion is worth stating plainly, because it decides both ports: **on
+Windows the journal is complete and the table is a snapshot; on Linux the table
+is complete and the journal is blind.** Each system keeps its own record fully
+and the other's not at all. That is why a Windows port must read `$MFT` at
+startup rather than trusting a stored USN — anything the other system wrote
+while it was off is in the table and nowhere else.
 
 **A Linux write reaches the table.** Worth checking before building anything on
 it, because the volume is mounted `rw` and both systems write to it: a file
