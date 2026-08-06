@@ -2263,27 +2263,23 @@
    * starts at most `INFLIGHT` new ones, nearest the middle of the screen
    * first, because that is the window the eye is on.
    */
-  const INFLIGHT = 2;
-
-  /* **Nothing is asked for while the list is still moving.**
+  /* **Ask at once, and abandon whatever the screen has left behind.**
    *
-   * Cancelling was not enough on its own, and the measurement says why: a drag
-   * of a hundred and twenty thousand pixels asked for twenty-one windows
-   * before, thirty-seven after, and took just as long to fill either way. A
-   * request that is called off has already been sent, has already taken one of
-   * the six connections, and the engine has already started walking for it.
+   * This waited ninety milliseconds for the hand to stop, and that was a
+   * bandage over the engine. A window used to cost what it took to walk to its
+   * offset — 16 ms at the top of a broad result and 114 ms at row nineteen
+   * thousand — so a flick that crossed twenty-five of them queued twenty-five
+   * increasingly expensive walks behind the one window anybody would look at.
+   * Waiting made the flick free; it also made every stop cost a wait.
    *
-   * What costs is the walk to the offset, not the rows: at the far end of the
-   * list sixty rows take 103 ms and two hundred take 88 — the same — while the
-   * same two hundred rows at the top take 9. So the number of requests is the
-   * whole cost, and the windows crossed mid-flick are ones nobody will look at.
-   *
-   * So the list waits for the hand to stop. `SETTLE` is short enough that a
-   * pause reads as instant and long enough that a flick asks for nothing on its
-   * way past. Whatever went by has gone by. */
-  const SETTLE = 90;
-  let movedAt = 0;
-  let settleTimer = 0;
+   * The engine keeps the ordering of the query being looked at now, so a page
+   * is a slice of it: **5.5 ms at row nineteen thousand, against 114**, and
+   * flat at every depth. Nothing has to be rationed at that price. The list
+   * asks the moment the range changes, calls off anything that has scrolled out
+   * of view — `AbortController`, so the connection is freed rather than the
+   * answer ignored — and whatever went past while the hand was moving has gone
+   * past, which is what was wanted in the first place. */
+  const INFLIGHT = 4;
 
   function fillWindow() {
     if (LIST.query === null) return;          /* the first search has not landed */
@@ -2297,12 +2293,6 @@
       }
     }
 
-    const still = performance.now() - movedAt;
-    if (still < SETTLE) {
-      clearTimeout(settleTimer);
-      settleTimer = setTimeout(fillWindow, SETTLE - still);
-      return;
-    }
 
     const wanted = [];
     for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
@@ -2421,7 +2411,6 @@
         console.error("scour: a window did not draw:", e);
         return;
       }
-      if (now !== painted) movedAt = performance.now();
       painted = now;
       dirty = false;
       fillWindow();

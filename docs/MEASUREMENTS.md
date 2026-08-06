@@ -3614,3 +3614,66 @@ Every flick now costs two requests instead of twenty-five, and the screen fills
 in about a second at the deep end rather than three. The cancellation stays,
 not because it helped on its own but because it is what keeps a *second* flick
 from queueing behind the first one's answer.
+
+## Paging stops depending on how deep the page is
+
+The debounce above was a bandage, and Hasan said so: *"debounce yanlış bence…
+istekleri iptal edip yenisini yapmak lazım… durduğu yerde yüklenmeye devam
+edilmeli, bu hızlı olmalı. bizim daemon iletişimimiz nasıl, o yetişir mi?"*
+
+The transport was never the problem. Wall time against the engine's own
+`took_us`, five rounds, median:
+
+| offset | wall | engine | transport |
+|---|---:|---:|---:|
+| 0 | 23.1 ms | 16.0 ms | 7.2 ms |
+| 5,000 | 66.4 ms | 62.4 ms | 4.0 ms |
+| 10,000 | 84.6 ms | 80.7 ms | 3.9 ms |
+| 19,800 | 118.1 ms | 114.1 ms | 3.9 ms |
+
+HTTP, the Unix socket and the bridge together are **four milliseconds, flat**.
+Everything else was the index answering a page by asking every segment for
+`offset + limit` hits, merging, sorting the lot and throwing the first `offset`
+away — linear in how deep the page is, and it rebuilt every discarded path on
+the way.
+
+### One ordering, prepared once
+
+The order does not change while the index does not. `scour-engine` now keeps
+the ordered hits of the query being looked at — up to 20,000, which is as far
+as the list can reach — built on its own thread after the first page is
+answered, and thrown away the moment the index revision moves. A page is a
+slice of it.
+
+| offset | before | after |
+|---|---:|---:|
+| 1,000 | 20.2 ms | 5.7 ms |
+| 5,000 | 66.4 ms | 4.9 ms |
+| 10,000 | 84.6 ms | 5.9 ms |
+| 15,000 | 123.0 ms | 5.7 ms |
+| 19,800 | 118.1 ms | **5.5 ms** |
+
+Engine time on every one of those is **0.0 ms**: what is left is the four
+milliseconds of transport. The first page of a new query is unchanged, because
+it is answered the long way while the ordering is still being built.
+
+### And then the rationing could go
+
+With a window at 5.5 ms there is nothing to ration, so the settle went and the
+list asks the moment the range changes, abandoning what scrolls out of view.
+Three interleaved rounds, five flicks each:
+
+| | fill after the hand stops | requests |
+|---|---:|---:|
+| settle 90 ms | 123 / 122 ms | 2 |
+| **ask at once** | **17 / 21 ms** | 19–21 |
+
+Several rounds measured **0 ms** — the screen was already full when the hand
+stopped, because the rows arrived while it was still moving. Twenty requests at
+six milliseconds cost less than two at a hundred and twenty, and they arrive
+where the eye is rather than where it stopped.
+
+One thing to watch, not yet measured: the prepared ordering is dropped whenever
+the index revision moves, and a busy watcher moves it often. The next window
+then pays the old price once and asks for a rebuild. On a quiet machine this
+never shows; under a large rescan it might.

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use parking_lot::{Condvar, Mutex, RwLock};
 use scour_core::{
-    Change, Completion, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Index,
+    Change, Completion, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Hit, Index,
     IndexStats, MaintReport, Maintenance, Page, Result, ScanOptions, SearchRequest, SearchResponse,
     SortKey, Source, SourceInfo, Span, Status, TreeNode, WatchHandle,
 };
@@ -141,6 +141,12 @@ struct Shared {
     /// landing in that gap without it is a change nobody hears about until the
     /// timeout, which is the one failure a live list must not have.
     waiters: (Mutex<()>, Condvar),
+    /// The ordered hits of whichever query was asked for last.
+    prepared: RwLock<Option<Prepared>>,
+    /// Asks the preparing thread for a query's full ordered page. Bounded and
+    /// tiny: only the newest request matters, and an older one still in the
+    /// channel is work nobody wants done.
+    prepare: Sender<Prepare>,
     /// How many of them there are.
     ///
     /// Read by the commit clock, and that is the whole reason it is counted: a
@@ -148,6 +154,49 @@ struct Shared {
     /// about it. Zero means nobody is looking and the batching stands.
     watchers: AtomicU32,
 }
+
+/// What the preparing thread is asked to have ready.
+struct Prepare {
+    query: String,
+    sort: SortKey,
+    descending: bool,
+    count_cap: u32,
+}
+
+/// One query's ordered hits, kept so that paging through them is free.
+///
+/// **Why this exists.** The index answers a page by asking every segment for
+/// `offset + limit` hits, merging them, sorting the lot and throwing the first
+/// `offset` away. That is honest and it is linear in how deep the page is:
+/// measured on 2.1 M entries, the first window of a broad query costs 16 ms
+/// and the window at row nineteen thousand costs 114 — for the same two
+/// hundred rows. A list being scrolled asks for one of those per window
+/// crossed, so scrolling got slower the further it went, which is exactly how
+/// it felt.
+///
+/// The order does not change while the index does not, so it is computed once.
+/// A window is then a slice, and the cost of a page stops depending on where
+/// the page is.
+struct Prepared {
+    query: String,
+    sort: SortKey,
+    descending: bool,
+    count_cap: u32,
+    /// The index revision this was built from; anything else makes it wrong.
+    revision: u64,
+    hits: Vec<Hit>,
+    total: u64,
+    capped: bool,
+}
+
+/// How many ordered hits are kept hot.
+///
+/// The window can reach twenty thousand rows and no further — beyond that a
+/// query is too broad to page through and wants narrowing instead — so this is
+/// the whole of what any page can ask for. At roughly a hundred bytes a hit it
+/// is a couple of megabytes for the query being looked at, and there is only
+/// ever one.
+const PREPARE: u32 = 20_000;
 
 impl Shared {
     /// A search run again could now answer differently.
@@ -185,6 +234,8 @@ impl Engine {
         index: Arc<dyn Index>,
         opts: EngineOptions,
     ) -> Engine {
+        // One slot: a request that has been overtaken is work nobody wants.
+        let (prepare_tx, prepare_rx) = crossbeam_channel::bounded::<Prepare>(1);
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -200,6 +251,8 @@ impl Engine {
             revision: AtomicU64::new(0),
             waiters: (Mutex::new(()), Condvar::new()),
             watchers: AtomicU32::new(0),
+            prepared: RwLock::new(None),
+            prepare: prepare_tx,
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
         // Bounded: a burst of filesystem events must slow the watcher down
@@ -213,6 +266,16 @@ impl Engine {
                 .spawn(move || run(shared, jobs_rx, changes_rx, changes_tx))
                 .ok()
         };
+        // Its own thread rather than the worker's: the worker is where scans
+        // and commits happen, and a page has to be ready while one is running,
+        // not after it.
+        {
+            let shared = Arc::clone(&shared);
+            std::thread::Builder::new()
+                .name("scour-prepare".into())
+                .spawn(move || prepare_loop(shared, prepare_rx))
+                .ok();
+        }
         Engine {
             shared,
             jobs: jobs_tx,
@@ -316,6 +379,13 @@ impl Engine {
         })
     }
 
+    /// One page of one query.
+    ///
+    /// Served from [`Prepared`] when the same query's order is already known,
+    /// which is what makes a window at row nineteen thousand cost the same as
+    /// the one at row zero. Otherwise the index answers it, and the ordering is
+    /// asked for in the background so that the next window does not have to
+    /// wait for the same walk twice.
     pub fn search(
         &self,
         query: &str,
@@ -323,16 +393,75 @@ impl Engine {
         descending: bool,
         page: Page,
     ) -> Result<SearchResponse> {
-        let ast = scour_query::parse(query);
         let page = Page {
             limit: page.limit.min(self.shared.opts.result_limit),
             ..page
         };
+        let started = Instant::now();
+        if let Some(res) = self.sliced(query, sort, descending, &page, started) {
+            return Ok(res);
+        }
+        // Not ready, or ready for something else. Ask for it while this page is
+        // answered the long way; a full slot means a newer query is already
+        // waiting, and that one is worth more than this one.
+        let _ = self.shared.prepare.try_send(Prepare {
+            query: query.to_string(),
+            sort,
+            descending,
+            count_cap: page.count_cap,
+        });
         self.shared.index.search(&SearchRequest {
-            query: ast,
+            query: scour_query::parse(query),
             sort,
             descending,
             page,
+        })
+    }
+
+    /// The page, if the order it belongs to is already known.
+    ///
+    /// Refuses on anything it cannot answer exactly: a different query, a
+    /// different order, a different count cap, an index that has moved since,
+    /// or a page reaching past what was prepared. A cache that guesses is worse
+    /// than none.
+    fn sliced(
+        &self,
+        query: &str,
+        sort: SortKey,
+        descending: bool,
+        page: &Page,
+        started: Instant,
+    ) -> Option<SearchResponse> {
+        let held = self.shared.prepared.read();
+        let ready = held.as_ref()?;
+        if ready.query != query
+            || ready.sort != sort
+            || ready.descending != descending
+            || ready.count_cap != page.count_cap
+            || ready.revision != self.shared.revision.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let offset = page.offset as usize;
+        // Short of the ceiling means the walk reached the end of the matching
+        // set, so an offset past it is genuinely empty rather than unknown.
+        let complete = ready.hits.len() < PREPARE as usize;
+        if offset > ready.hits.len() && !complete {
+            return None;
+        }
+        let end = (offset + page.limit as usize).min(ready.hits.len());
+        if end < offset + page.limit as usize && !complete {
+            return None;
+        }
+        Some(SearchResponse {
+            hits: ready.hits[offset.min(end)..end].to_vec(),
+            total: ready.total,
+            capped: ready.capped,
+            took_us: started.elapsed().as_micros() as u64,
+            // Nothing was walked to answer this, which is the point of it.
+            fast_path: true,
+            rows_visited: 0,
+            rows_built: 0,
         })
     }
 
@@ -494,6 +623,47 @@ impl scour_core::ChangeSink for Forward {
 }
 
 /// The background thread: one loop for jobs, changes and the commit clock.
+/// Keeps the ordering of whatever query was asked for last.
+///
+/// **Only the newest.** The channel holds one, and a request that arrives
+/// while another is being built simply replaces it — a query nobody is looking
+/// at any more is not worth the walk. The result is dropped if the index moved
+/// while it was being built, because an order taken from an index that has
+/// changed is an order that is wrong, and being wrong here means rows that do
+/// not exist under a scrollbar that says they do.
+fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
+    while let Ok(job) = jobs.recv() {
+        if shared.stop.load(Ordering::Acquire) {
+            return;
+        }
+        let at = shared.revision.load(Ordering::Acquire);
+        let found = shared.index.search(&SearchRequest {
+            query: scour_query::parse(&job.query),
+            sort: job.sort,
+            descending: job.descending,
+            page: Page {
+                offset: 0,
+                limit: PREPARE,
+                count_cap: job.count_cap,
+            },
+        });
+        let Ok(found) = found else { continue };
+        if shared.revision.load(Ordering::Acquire) != at {
+            continue;
+        }
+        *shared.prepared.write() = Some(Prepared {
+            query: job.query,
+            sort: job.sort,
+            descending: job.descending,
+            count_cap: job.count_cap,
+            revision: at,
+            hits: found.hits,
+            total: found.total,
+            capped: found.capped,
+        });
+    }
+}
+
 fn run(
     shared: Arc<Shared>,
     jobs: Receiver<Job>,
