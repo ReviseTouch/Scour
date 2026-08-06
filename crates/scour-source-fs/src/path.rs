@@ -50,7 +50,7 @@ pub fn normalise(p: &str) -> String {
 }
 
 pub fn from_path(p: &Path) -> String {
-    from_bytes(bytes_of(p))
+    from_bytes(&bytes_of(p))
 }
 
 /// The same, for a name that is already bytes — a directory entry, say.
@@ -116,10 +116,16 @@ fn unescape(s: &str) -> Vec<u8> {
     out
 }
 
+/// The name as the operating system holds it.
+///
+/// A `Cow` so that the two platforms have the same signature: unix hands over
+/// the bytes it already has, Windows has to make some. Writing it twice with
+/// two return types means every caller needs a conversion that is useless on
+/// one of them, which the linter is right to object to.
 #[cfg(unix)]
-fn bytes_of(p: &Path) -> &[u8] {
+fn bytes_of(p: &Path) -> std::borrow::Cow<'_, [u8]> {
     use std::os::unix::ffi::OsStrExt;
-    p.as_os_str().as_bytes()
+    std::borrow::Cow::Borrowed(p.as_os_str().as_bytes())
 }
 
 #[cfg(unix)]
@@ -133,8 +139,8 @@ fn from_os_bytes(raw: &[u8]) -> PathBuf {
 /// stays there for now, and the same collision with it — this is the half of
 /// the problem a native key is needed for.
 #[cfg(not(unix))]
-fn bytes_of(p: &Path) -> Vec<u8> {
-    p.to_string_lossy().into_owned().into_bytes()
+fn bytes_of(p: &Path) -> std::borrow::Cow<'_, [u8]> {
+    std::borrow::Cow::Owned(p.to_string_lossy().into_owned().into_bytes())
 }
 
 #[cfg(not(unix))]

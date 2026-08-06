@@ -200,7 +200,12 @@ fn under(path: &str, prefix: &str) -> bool {
 /// user's own `target/` directory is the single loudest source of noise in a
 /// developer's home directory.
 pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
+    // `mut` on a platform that adds nothing to them is an unused-mut warning,
+    // and Android is that platform: it has no `/proc` to exclude by absolute
+    // path because an app cannot walk outside its own directory anyway.
+    #[allow(unused_mut)]
     let mut paths: Vec<String> = Vec::new();
+    #[allow(unused_mut)]
     let mut dirs: Vec<String> = Vec::new();
     let files: Vec<String> = vec![".DS_Store".into(), "Thumbs.db".into(), "desktop.ini".into()];
 

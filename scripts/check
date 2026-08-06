@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Everything that has to be true before a commit.
+#
+#   scripts/check          format, lint, tests, and every target that is claimed
+#   scripts/check --quick  the first three only
+#
+# **This exists because the CI cannot run.** `.github/workflows/ci.yml` has a
+# three-platform matrix and this repository has no remote, so nothing has ever
+# executed it. A workflow nobody runs is a claim nobody checks: the Windows
+# build was broken twice in two days by changes that passed everything anybody
+# actually ran, and the breakage was found by a reviewer rather than by a
+# machine. Until there is a remote, this is the machine.
+#
+# The cross checks are `cargo check`, not `cargo test`: nothing here can run a
+# Windows binary. They prove the code still compiles for a target, which is the
+# difference between "unsupported" and "quietly rotting". What they cannot
+# prove is that it *behaves* — see docs/ROADMAP.md on what Windows still needs
+# before it is a platform rather than a compilation.
+
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+# The desktop crate pulls in a toolkit per platform, and those are not in the
+# local registry for targets this machine does not build for. Everything that
+# is not the window is checked everywhere.
+PORTABLE=(
+    -p scour-core -p scour-query -p scour-config -p scour-index-native
+    -p scour-source-fs -p scour-engine -p scour-ipc -p scour-proto
+    -p scour-i18n -p scourd -p scour -p scour-mcp -p scour-web
+)
+
+step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+step "format"
+cargo fmt --check
+
+step "lint"
+cargo clippy --workspace --all-targets -- -D warnings
+
+step "tests"
+cargo test --workspace
+
+if [[ ${1:-} == --quick ]]; then
+    echo
+    echo "checked: format, lint, tests. Targets skipped (--quick)."
+    exit 0
+fi
+
+step "windows"
+cargo check --offline --target x86_64-pc-windows-msvc --workspace
+
+for target in x86_64-apple-darwin x86_64-linux-android; do
+    step "$target"
+    if ! cargo check --offline --target "$target" "${PORTABLE[@]}"; then
+        echo "  (if this is a download failure rather than an error, run it once online)" >&2
+        exit 1
+    fi
+done
+
+echo
+echo "All of it. Format, lint, ${#PORTABLE[@]} crates on three more targets."

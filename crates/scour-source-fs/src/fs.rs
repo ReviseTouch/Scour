@@ -370,14 +370,24 @@ mod windows_impl {
         if ok == 0 {
             return FsTraits::UNKNOWN;
         }
-        let fs = String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)]);
+        // The filesystem's name — NTFS, ReFS, FAT32 — is read and not used:
+        // nothing here is decided by which format it is any more. Kept because
+        // the call that fills it is the same one that fills `flags`, and
+        // because it is the first thing anybody debugging this will want.
+        let _fs = String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)]);
 
         // Windows reports case sensitivity per volume, and it is off by
         // default even on NTFS — the opposite of the same disk under Linux's
         // ntfs3, which is where this ceased to be a property of the format.
         let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
 
-        FsTraits { case_sensitive }
+        FsTraits {
+            case_sensitive,
+            // Windows has ACLs, not a mode bit. Nothing here can report an
+            // executable bit because there is not one to report; `kind_of`
+            // classifies by extension there, which is what Explorer does.
+            real_modes: false,
+        }
     }
 
     pub fn medium_of(path: &Path) -> Medium {

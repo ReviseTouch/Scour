@@ -513,8 +513,8 @@ this codebase had made in several places at once:
   path. Search returning both names is right; `du` semantics need an object
   identity captured at scan time.
 * ~~**Mount identity is never checked**~~ — fixed below.
-* **Windows does not compile** (three errors), and nothing tests any target but
-  Linux.
+* ~~**Windows does not compile**~~ — it does now, and see below for what that
+  is and is not worth.
 
 ### Since: what a walk is allowed to prove
 
@@ -546,3 +546,32 @@ is reconciled by walking it on purpose — `scour rescan <path>` is a subtree
 walk, and the rule is about source roots only. Telling the two apart without
 asking would mean remembering each root's device across restarts, which is the
 next thing this file will be able to say has been done.
+
+### Since: compiling is not supporting, and nothing was checking either
+
+Windows compiles again. Two of the errors were **mine, from the two days
+before** — one from removing `stable_ids` and not fixing the Windows arm of
+`traits_of`, one from the path encoding returning a different type on each
+platform. Neither was noticed, because `.github/workflows/ci.yml` has a
+three-platform matrix and this repository has no remote: the workflow has never
+run once. A claim nobody checks.
+
+`scripts/check` is what runs instead — format, lint, tests, then `cargo check`
+for Windows, macOS and Android over every crate but the window. It is what the
+CI would do if there were anywhere for it to do it.
+
+**Compiling is where it stops.** Windows still needs, before it is a platform
+rather than a build target:
+
+* **WTF-16 path identity.** The encoding that fixed non-UTF-8 Unix names does
+  nothing there: `to_string_lossy` on an ill-formed UTF-16 name still collapses
+  distinct files onto one path, and the standard library will not hand out the
+  code units to fix it. This is the half of §11 that is still open.
+* **A directory enumeration that is not one `stat` per file.**
+  `GetFileInformationByHandleEx(FileFullDirectoryInfo)` returns name, both
+  sizes and four timestamps per buffer, without an open per file and without
+  Administrator.
+* **A change feed.** `ReadDirectoryChangesW` through `notify` is what there is;
+  the USN journal is what Everything uses and what makes a cold start cheap.
+* **`Medium` detection and case sensitivity per volume**, neither of which has
+  been run against a real Windows filesystem.

@@ -90,20 +90,43 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
 /// must not be a way to launch things. They get their folder revealed instead,
 /// which is what somebody looking for them wanted anyway.
 pub fn is_runnable(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     if matches!(
         ext.as_str(),
-        "desktop" | "sh" | "bash" | "appimage" | "run" | "bin"
+        // Windows decides by extension and has no mode bit to ask about, so
+        // its list is the whole answer there and part of the answer here.
+        "desktop"
+            | "sh"
+            | "bash"
+            | "appimage"
+            | "run"
+            | "bin"
+            | "exe"
+            | "bat"
+            | "cmd"
+            | "com"
+            | "msi"
+            | "ps1"
+            | "scr"
+            | "lnk"
     ) {
         return true;
     }
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+    // And by mode where there is one. Windows has no execute bit — an ACL is
+    // not a bit — so the list above is the whole answer there.
+    #[cfg(unix)]
+    let by_mode = {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    };
+    #[cfg(not(unix))]
+    let by_mode = false;
+    by_mode
 }
 
 /// `%XX` and `+`, which is all a query string can carry.
