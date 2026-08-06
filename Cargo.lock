@@ -4686,6 +4686,9 @@ dependencies = [
  "scour-proto",
  "scour-query",
  "scour-source-fs",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

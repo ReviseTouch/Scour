@@ -297,7 +297,9 @@ impl Source for FsSource {
                         };
                         let is_dir = de.file_type().is_some_and(|t| t.is_dir());
                         let normalised = path::from_path(de.path());
-                        let name = de.file_name().to_string_lossy();
+                        // The same encoding as the path it came from, so a
+                        // rule comparing them compares like with like.
+                        let name = path::from_path(std::path::Path::new(de.file_name()));
 
                         if !rules.is_empty() && rules.excludes(&normalised, &name, is_dir) {
                             excluded.fetch_add(1, Ordering::Relaxed);

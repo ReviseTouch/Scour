@@ -102,6 +102,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         r[Field::Kind.index()] = e.kind().as_u8() as i64;
         r[Field::IsDir.index()] = i64::from(e.is_dir);
         r[Field::Source.index()] = e.id.source.0 as i64;
+        r[Field::Links.index()] = e.meta.links.max(1);
         cols.push(r);
     });
 

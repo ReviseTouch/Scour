@@ -794,12 +794,30 @@ fn run(
 /// `/home/hasanX`, and the version of this that lived in the change loop
 /// thought it did.
 fn owner_of(shared: &Shared, path: &str) -> Option<usize> {
-    shared.sources.iter().position(|s| {
-        s.describe().roots.iter().any(|r| {
-            let r = r.trim_end_matches('/');
-            path == r || (path.starts_with(r) && path.as_bytes().get(r.len()) == Some(&b'/'))
+    // **The longest root wins**, not the first one configured. A project
+    // directory configured as its own source lives inside the home directory
+    // that is also one; asking which source a path belongs to and taking
+    // whichever happened to be listed first sends the walk, and the sweep that
+    // follows it, to the wrong one.
+    shared
+        .sources
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            s.describe()
+                .roots
+                .iter()
+                .filter(|r| {
+                    let r = r.trim_end_matches('/');
+                    path == r
+                        || (path.starts_with(r) && path.as_bytes().get(r.len()) == Some(&b'/'))
+                })
+                .map(|r| r.trim_end_matches('/').len())
+                .max()
+                .map(|len| (i, len))
         })
-    })
+        .max_by_key(|&(_, len)| len)
+        .map(|(i, _)| i)
 }
 
 /// Reduce a set of requested walks to the ones that are not already covered.

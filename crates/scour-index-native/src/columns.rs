@@ -69,6 +69,9 @@ pub enum Field {
     Items = 9,
     Kind = 10,
     IsDir = 11,
+    /// Names this file has. One for almost everything, which is why it costs
+    /// almost nothing: a column whose values are all `1` packs to a bit a row.
+    Links = 13,
     /// Which source produced the entry.
     ///
     /// The last of the identity, and the only part of it that is not already
@@ -83,7 +86,7 @@ pub enum Field {
 }
 
 impl Field {
-    pub const ALL: [Field; 13] = [
+    pub const ALL: [Field; 14] = [
         Field::DirId,
         Field::Size,
         Field::Mtime,
@@ -97,6 +100,7 @@ impl Field {
         Field::Kind,
         Field::IsDir,
         Field::Source,
+        Field::Links,
     ];
 
     pub fn index(self) -> usize {
@@ -415,6 +419,6 @@ mod tests {
         assert_eq!(Field::Mtime.index(), 2);
         assert_eq!(Field::IsDir.index(), 11);
         assert_eq!(Field::Source.index(), 12);
-        assert_eq!(Field::ALL.len(), 13);
+        assert_eq!(Field::ALL.len(), 14);
     }
 }

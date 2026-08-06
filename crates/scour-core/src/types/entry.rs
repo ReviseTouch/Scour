@@ -111,6 +111,16 @@ pub struct Meta {
     pub disk: i64,
     /// Entries directly inside a directory; `-1` for files and when unknown.
     pub items: i64,
+    /// Names this file has — `st_nlink`. One for almost everything.
+    ///
+    /// Kept for one reason: a file with four names is four rows now that a row
+    /// is a name, and a disk-usage report that sums rows counts its blocks four
+    /// times. Each row carries its share, `disk / links`, so the total over a
+    /// tree is the space the tree actually occupies. That is not what `du`
+    /// does — `du` charges the whole file to whichever name it meets first —
+    /// but it agrees with `du` on the total and does not depend on the order a
+    /// walk happened to take.
+    pub links: i64,
 }
 
 impl Meta {
@@ -125,6 +135,7 @@ impl Meta {
         gid: 0,
         disk: 0,
         items: -1,
+        links: 1,
     };
 
     /// Convert from `std::fs::Metadata`. `size` is meaningless for directories,
@@ -143,6 +154,7 @@ impl Meta {
                 gid: md.gid() as i64,
                 disk: md.blocks() as i64 * 512,
                 items: -1,
+                links: md.nlink().max(1) as i64,
             }
         }
         #[cfg(not(unix))]
@@ -165,6 +177,7 @@ impl Meta {
                 // GetCompressedFileSizeW, which belongs in the source, not here.
                 disk: if is_dir { 0 } else { md.len() as i64 },
                 items: -1,
+                links: 1,
             }
         }
     }

@@ -639,3 +639,43 @@ fn stat_cannot_be_walked_out_of_the_source() {
         .expect("the link is inside the source");
     assert!(!link.is_dir, "the final symlink must not be followed");
 }
+
+#[test]
+#[cfg(unix)]
+fn two_files_whose_names_are_not_utf8_are_two_entries() {
+    // **Two files on disk used to become one row.** Every invalid byte decoded
+    // to the same replacement character, so `same-\xfe` and `same-\xff` took
+    // the same path — and since a row is identified by its path, the second
+    // upsert replaced the first. Neither could be named again afterwards.
+    use std::os::unix::ffi::OsStrExt;
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let names: [&[u8]; 3] = [b"ayni-\xfe", b"ayni-\xff", b"rapor-\xc3(2).pdf"];
+    for raw in names {
+        let p = tmp.path().join(std::ffi::OsStr::from_bytes(raw));
+        std::fs::write(&p, b"x").expect("write");
+    }
+
+    let src = FsSource::new(SourceId(0), "t", vec![tmp.path().to_owned()]);
+    let mut sink = Collect::default();
+    src.scan(&ScanOptions::default(), &mut sink).expect("scan");
+
+    let mut paths: Vec<String> = sink
+        .paths
+        .iter()
+        .filter(|p| p.as_str() != tmp.path().to_string_lossy())
+        .cloned()
+        .collect();
+    paths.sort();
+    assert_eq!(paths.len(), 3, "names collapsed into each other: {paths:?}");
+
+    // And every one of them can be asked about again, which is what a search
+    // result has to be able to do.
+    for p in &paths {
+        let back = src
+            .stat(p)
+            .unwrap_or_else(|e| panic!("{p:?} cannot be stat-ed again: {e}"));
+        assert_eq!(&back.path, p);
+        assert_eq!(back.meta.size, 1);
+    }
+}

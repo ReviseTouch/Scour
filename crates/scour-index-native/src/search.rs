@@ -184,6 +184,7 @@ impl<'a> Segment<'a> {
                 gid: self.num(Field::Gid, row),
                 disk: self.num(Field::Disk, row),
                 items: self.num(Field::Items, row),
+                links: self.num(Field::Links, row).max(1),
             },
             path,
         }

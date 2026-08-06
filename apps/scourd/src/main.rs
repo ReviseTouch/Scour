@@ -7,6 +7,7 @@
 //! line here.
 
 mod handle;
+mod sources;
 mod wire;
 
 use std::sync::Arc;

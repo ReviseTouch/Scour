@@ -87,8 +87,10 @@ const META_FILE: &str = "native-index.json";
 /// to it, so an older index decodes into noise rather than into an answer.
 /// Version 8 made a row's identity its path: three identity columns went, and
 /// the lookup table is keyed on the path rather than on whatever the source
-/// called the entry, so an older table answers about nothing.
-const FORMAT: u32 = 8;
+/// called the entry, so an older table answers about nothing. Version 9 added
+/// the link count, without which a disk-usage report counts a hard-linked file
+/// once per name.
+const FORMAT: u32 = 9;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -1027,6 +1029,41 @@ impl Index for NativeIndex {
         inner.open = Some(g);
         self.save_meta(&inner)?;
         Ok(g)
+    }
+
+    fn forget(&self, source: SourceId) -> Result<u64> {
+        let mut inner = self.inner.write();
+        self.flush(&mut inner)?;
+        let mut gone = 0u64;
+        let mut touched = vec![false; inner.segments.len()];
+        for (i, live) in inner.segments.iter_mut().enumerate() {
+            let victims: Vec<usize> = {
+                let seg = live.view()?;
+                (0..live.rows())
+                    .filter(|&row| live.is_alive(row) && seg.source_of(row) == source)
+                    .collect()
+            };
+            for row in victims {
+                if live.kill(row) {
+                    gone += 1;
+                    touched[i] = true;
+                }
+            }
+        }
+        if gone > 0 {
+            for (i, live) in inner.segments.iter().enumerate() {
+                if touched[i] {
+                    let (number, bits) = live.alive_snapshot();
+                    Live::write_alive(&self.dir, number, &bits)?;
+                }
+            }
+            let gone_segments = self.forget_empty(&mut inner);
+            self.save_meta(&inner)?;
+            for n in &gone_segments {
+                Live::erase(&self.dir, *n);
+            }
+        }
+        Ok(gone)
     }
 
     fn sweep(&self, source: SourceId, under_path: &str, generation: u64) -> Result<u64> {

@@ -22,14 +22,24 @@
 //! close. So the per-directory *own* totals are merged by path first, and the
 //! rollup runs once over the merged, sorted list.
 //!
-//! ## Hard links need no work here, and that is worth stating
+//! ## Hard links, and the premise that stopped being true
 //!
-//! A file with four names has one inode, so a source with stable identities
-//! gives it one `EntryId` and the index holds one row for it. Summing the rows
-//! therefore counts it once — which is what `du` does and what `du -l` does
-//! not — without a set of seen inodes and without a second pass. One was
-//! written before this was measured; it folded exactly zero rows, because
-//! there was never a second one to fold.
+//! This used to say that no work was needed: a file with four names had one
+//! inode, an inode was an identity, and the index held one row for it. Identity
+//! became the **path**, because an inode is a promise about an object and a row
+//! is a name — and the moment it did, a four-name file became four rows and
+//! this file started counting its blocks four times.
+//!
+//! Each row carries its share instead: `disk / links`, with `links` straight
+//! from `st_nlink`. The total over a tree is then the space the tree really
+//! occupies, whatever order the walk took. It is not what `du` does — `du`
+//! charges the whole file to whichever name it meets first, so its per-folder
+//! numbers depend on traversal order — but the two agree on the total, and this
+//! one does not change when a directory is renamed.
+//!
+//! The division truncates, so a file with an odd allocation and two names
+//! loses a byte across the pair. Against block sizes of 4,096 that is not a
+//! number anybody can see.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -133,10 +143,12 @@ impl<'a> Rollup<'a> {
             if d >= n_dirs || !wanted[d] {
                 continue;
             }
-            let bytes = seg.num_of(Field::Size, row).max(0) as u64;
+            // One name's share of a file that may have several.
+            let links = seg.num_of(Field::Links, row).max(1) as u64;
+            let bytes = seg.num_of(Field::Size, row).max(0) as u64 / links;
             let o = &mut per_dir[d];
             o.bytes += bytes;
-            o.disk += seg.num_of(Field::Disk, row).max(0) as u64;
+            o.disk += seg.num_of(Field::Disk, row).max(0) as u64 / links;
             o.files += 1;
             o.age[band(self.now - seg.num_of(Field::Mtime, row))] += bytes;
         }

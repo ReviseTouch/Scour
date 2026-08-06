@@ -59,6 +59,19 @@ pub trait Index: Send + Sync + Debug {
     /// rather than committing per change.
     fn commit(&self) -> Result<()>;
 
+    /// Remove everything one source ever put here. Returns how many rows went.
+    ///
+    /// For a source that is no longer configured. Nothing else can do it: a
+    /// sweep needs a generation and a walk, and a source that is gone will
+    /// never walk again — so without this its rows stay in every search
+    /// result, for ever, describing files nobody asked to be told about.
+    ///
+    /// Defaulted to nothing removed, because an index that cannot separate its
+    /// sources should say so by not pretending to have done it.
+    fn forget(&self, _source: SourceId) -> Result<u64> {
+        Ok(0)
+    }
+
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse>;
 
     fn facets(&self, req: &FacetRequest) -> Result<FacetResponse>;

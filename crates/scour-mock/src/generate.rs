@@ -211,6 +211,7 @@ pub fn generate(opt: &MockOptions) -> MockFs {
                 gid: 1000,
                 disk: (size + 4095) / 4096 * 4096,
                 items: if is_dir { 0 } else { -1 },
+                links: 1,
             },
         });
         true

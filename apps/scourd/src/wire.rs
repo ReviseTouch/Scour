@@ -22,13 +22,28 @@ pub fn build(config: &Config) -> Result<Engine> {
     // here and nothing anywhere else.
     let index: Arc<dyn Index> = Arc::new(open_index(&dir)?);
 
+    // **The number a source's rows carry is remembered, not counted.** It used
+    // to be the position in the configuration array, so moving two sources
+    // around in the file rebound every row one of them had written — and a
+    // source deleted from the file left its rows with nothing that would ever
+    // walk them again. See `crate::sources`.
+    let names: Vec<String> = config.sources.iter().map(|s| s.name.clone()).collect();
+    let assigned = crate::sources::assign(&dir, &names);
+    for id in &assigned.dropped {
+        match index.forget(SourceId(*id)) {
+            Ok(0) => {}
+            Ok(n) => eprintln!("scourd: a source is gone; {n} of its entries went with it"),
+            Err(e) => eprintln!("scourd: a removed source's entries are still here: {e}"),
+        }
+    }
+
     let sources: Vec<Arc<dyn Source>> = config
         .sources
         .iter()
-        .enumerate()
-        .map(|(i, s)| {
+        .zip(&assigned.ids)
+        .map(|(s, id)| {
             Arc::new(
-                FsSource::new(SourceId(i as u32), s.name.clone(), s.roots.clone())
+                FsSource::new(SourceId(*id), s.name.clone(), s.roots.clone())
                     .with_kind(s.kind.into())
                     .with_watch(s.watch),
             ) as Arc<dyn Source>

@@ -1396,3 +1396,52 @@ fn relevance_puts_the_near_copy_first_however_many_segments_there_are() {
         assert_eq!(got, want, "with {chunk} entries a segment");
     }
 }
+
+#[test]
+fn a_file_with_two_names_is_not_two_files_worth_of_disk() {
+    // Both names are rows — that is what makes them findable, and it is right.
+    // What must not follow is that the disk report counts the blocks twice.
+    // `usage.rs` said no work was needed here because an inode was one row;
+    // identity became the path and that premise went with it.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let linked = |path: &str| Entry {
+        id: EntryId::path_hash(SourceId(0), path),
+        path: path.into(),
+        is_dir: false,
+        meta: Meta {
+            mtime: NOW,
+            size: 4096,
+            disk: 4096,
+            links: 2,
+            ..Meta::UNKNOWN
+        },
+    };
+    index
+        .apply(
+            &mut [
+                Change::Upsert(Entry {
+                    is_dir: true,
+                    ..linked("/w")
+                }),
+                Change::Upsert(linked("/w/ad-bir.bin")),
+                Change::Upsert(linked("/w/ad-iki.bin")),
+            ]
+            .into_iter(),
+        )
+        .expect("apply");
+    index.commit().expect("commit");
+
+    let usage = index
+        .usage(&scour_core::UsageRequest {
+            path: "/w".into(),
+            top: 5,
+        })
+        .expect("usage");
+    assert_eq!(usage.root.files, 2, "both names are findable");
+    assert_eq!(
+        usage.root.disk, 4096,
+        "one file's blocks were counted once per name"
+    );
+    assert_eq!(usage.root.bytes, 4096);
+}
