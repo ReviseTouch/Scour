@@ -3792,4 +3792,16 @@ It is now built only for a page that is not the first one (which is the only
 kind that needs it), never during a scan, and at most once every two seconds.
 
 After: the page makes no background request at all while idle — fifteen seconds
-of its log holds one long poll and nothing else.
+of its log holds one long poll and nothing else. With the scan and the rebuild
+it triggered both settled, the service with that same window open measures
+**3.3%, 7.2% and 15.8%** across three ten-second windows, against 115% before;
+what is left is the live refresh doing its job as the index moves, which is
+the thing it is for.
+
+The lesson is not about any of the three faults. Each was a small change that
+was correct in isolation, and each stopped being correct because a *different*
+change made the thing it assumed cheap expensive. A cache that is thrown away
+is free until something fills it; a fixed interval is free until the question
+behind it gets big; speculation is free until it is invalidated faster than it
+is used. None of it showed up in a search that felt fast — it showed up as a
+fan, on a machine nobody was using.
