@@ -898,16 +898,25 @@ fn scan(
     // for the same reason from the other end: a batch that failed to apply is
     // a set of files that exist and are unstamped, so a sweep would delete
     // exactly the rows the walk was there to keep.
-    let could_look = report.as_ref().is_ok_and(|r| !r.root_unreadable);
+    //
+    // **Only the roots the walk vouched for**, and sparing what it could not
+    // look into. One absent removable disk used to stop a home directory being
+    // reconciled at all, because the evidence was one boolean for the source;
+    // and a directory that lost its read permission after being indexed lost
+    // its files from the index too, because a walk that could not look was
+    // treated as a walk that found nothing.
+    let vouched: Vec<String> = report
+        .as_ref()
+        .map(|r| r.vouched.clone())
+        .unwrap_or_default();
+    let spare =
+        scour_core::PrefixSet::new(report.as_ref().map(|r| r.blind.clone()).unwrap_or_default());
+    let could_look = !vouched.is_empty();
     let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
     if trustworthy {
-        let roots: Vec<String> = match &subtree {
-            Some(s) => vec![s.clone()],
-            None => src.describe().roots,
-        };
         let mut gone = 0;
-        for r in roots {
-            match shared.index.sweep(src.id(), &r, generation) {
+        for r in vouched {
+            match shared.index.sweep(src.id(), &r, generation, &spare) {
                 Ok(n) => gone += n,
                 // Half a reconciliation. Saying so is all that can be done
                 // here; the retry is the caller's, and the rows that should

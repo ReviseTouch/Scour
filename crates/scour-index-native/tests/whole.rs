@@ -14,8 +14,8 @@
 use std::os::unix::fs::PermissionsExt;
 
 use scour_core::{
-    Change, Entry, EntryId, FacetBy, FacetRequest, Index, Maintenance, Meta, Page, SearchRequest,
-    SortKey, SourceId,
+    Change, Entry, EntryId, FacetBy, FacetRequest, Index, Maintenance, Meta, Page, PrefixSet,
+    SearchRequest, SortKey, SourceId,
 };
 use scour_index_native::NativeIndex;
 use scour_mock::{MockOptions, brute_force, generate};
@@ -306,7 +306,9 @@ fn one_source_cannot_sweep_away_another_source_rows() {
 
     // Source 0 walks and finds nothing, so it sweeps its own row away.
     let g = index.begin_generation().expect("generation");
-    let gone = index.sweep(SourceId(0), "/ortak", g).expect("sweep");
+    let gone = index
+        .sweep(SourceId(0), "/ortak", g, &PrefixSet::default())
+        .expect("sweep");
     index.commit().expect("commit");
     assert_eq!(gone, 1, "a source swept more than its own rows");
     assert_eq!(
@@ -470,7 +472,9 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
             .into_iter(),
         )
         .expect("apply");
-    let gone = index.sweep(SourceId(0), "/w", g).expect("sweep");
+    let gone = index
+        .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+        .expect("sweep");
     assert_eq!(gone, 1, "exactly the file the rescan did not see");
 
     let paths: Vec<String> = index
@@ -527,7 +531,9 @@ fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
 
     // A walk of `/w/proj` that finds nothing: the directory was removed.
     let g = index.begin_generation().expect("generation");
-    let gone = index.sweep(SourceId(0), "/w/proj", g).expect("sweep");
+    let gone = index
+        .sweep(SourceId(0), "/w/proj", g, &PrefixSet::default())
+        .expect("sweep");
     assert_eq!(gone, 3, "the directory, its file and the one below it");
 
     let mut paths: Vec<String> = index
@@ -877,7 +883,12 @@ fn a_generation_is_never_folded_into_another_one() {
     );
 
     // The sweep still finds the older pass.
-    assert_eq!(index.sweep(SourceId(0), "/w", g).expect("sweep"), 4);
+    assert_eq!(
+        index
+            .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+            .expect("sweep"),
+        4
+    );
     let left: Vec<String> = index
         .search(&SearchRequest {
             page: Page::new(0, 20),
@@ -942,7 +953,9 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
         }
         // What ends a scan, and what makes the next fold safe: after this,
         // nothing is waiting to judge these rows.
-        index.sweep(SourceId(0), root, g).expect("sweep");
+        index
+            .sweep(SourceId(0), root, g, &PrefixSet::default())
+            .expect("sweep");
     }
     assert!(index.stats().expect("stats").segments > 2);
 
@@ -977,7 +990,12 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
         ))))
         .expect("apply");
     index.commit().expect("commit");
-    assert_eq!(index.sweep(SourceId(0), "/mnt/depo", g).expect("sweep"), 3);
+    assert_eq!(
+        index
+            .sweep(SourceId(0), "/mnt/depo", g, &PrefixSet::default())
+            .expect("sweep"),
+        3
+    );
     let left = index.stats().expect("stats").entries;
     assert_eq!(left, 5, "four from home and the one depo file that remains");
 }
@@ -1228,7 +1246,9 @@ fn a_segment_a_sweep_emptied_stops_costing_anything() {
     index
         .apply(&mut second.into_iter().map(Change::Upsert))
         .expect("apply");
-    index.sweep(SourceId(0), "/w", g).expect("sweep");
+    index
+        .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+        .expect("sweep");
 
     let s = index.stats().expect("stats");
     assert_eq!(s.entries, 10);

@@ -51,7 +51,17 @@ pub trait Index: Send + Sync + Debug {
     /// alone deletes the other's rows on the strength of a walk that never
     /// looked at them. Reproduced before this argument existed — a rescan of
     /// source 0 took source 1's row.
-    fn sweep(&self, source: SourceId, under: &str, generation: u64) -> Result<u64>;
+    /// `spare` names subtrees the walk could not look inside. Rows under them
+    /// are left alone: the walk has no evidence about them either way, and
+    /// deleting on no evidence is how a directory that lost its read
+    /// permission loses its files from the index as well.
+    fn sweep(
+        &self,
+        source: SourceId,
+        under: &str,
+        generation: u64,
+        spare: &crate::types::PrefixSet,
+    ) -> Result<u64>;
 
     /// Make everything applied so far durable and visible to new readers.
     ///

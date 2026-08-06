@@ -99,8 +99,9 @@ impl Source for MemSource {
         // A root that is not there yet: nothing found, and the report says the
         // walk could not look rather than that there was nothing to find.
         if self.offline.load(Ordering::Relaxed) {
+            // Nothing vouched for: the walk could not look, so nothing may
+            // be reconciled against it.
             return Ok(ScanReport {
-                root_unreadable: true,
                 took_ms: 0,
                 ..Default::default()
             });
@@ -123,6 +124,10 @@ impl Source for MemSource {
         }
         Ok(ScanReport {
             entries: n,
+            vouched: match &opts.subtree {
+                Some(s) => vec![s.clone()],
+                None => vec!["/home/u".into()],
+            },
             ..Default::default()
         })
     }

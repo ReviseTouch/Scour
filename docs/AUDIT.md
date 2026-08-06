@@ -512,7 +512,37 @@ this codebase had made in several places at once:
   identity makes one row per object; that premise went when identity became the
   path. Search returning both names is right; `du` semantics need an object
   identity captured at scan time.
-* **Mount identity is never checked**, so an unmount mid-scan can still
-  authorise a sweep, and an emptied source cannot be reconciled at all.
+* ~~**Mount identity is never checked**~~ — fixed below.
 * **Windows does not compile** (three errors), and nothing tests any target but
   Linux.
+
+### Since: what a walk is allowed to prove
+
+A sweep deletes on the strength of one claim — *I walked this and those rows
+were not there* — and the evidence behind it was one boolean for the whole
+source, taken from one `read_dir` **before** the walk started. Three things
+followed, all of them silent:
+
+* a volume that went away *during* the walk was still reconciled against, which
+  deletes everything the index held for it;
+* one absent removable disk stopped a home directory being reconciled at all,
+  because the boolean covered every root at once;
+* a directory that lost its read permission after it was indexed had its files
+  deleted, because a walk that could not look was treated as a walk that found
+  nothing.
+
+`ScanReport` now carries the evidence instead: `vouched`, the roots the walk is
+willing to be reconciled against, and `blind`, the subtrees it could not look
+inside. A root is vouched for only if it was readable at the start and is still
+on **the same filesystem at the end** — the device number is asked twice, and a
+walk that started on a mounted volume and finished on its empty mount point
+proves nothing. `Index::sweep` takes the blind list and spares whatever is under
+it.
+
+What is still deliberately refused: a source root that is readable and *empty*
+is not reconciled, because an unmounted volume looks exactly like one and
+guessing wrong empties the index for that volume. Emptying a folder on purpose
+is reconciled by walking it on purpose — `scour rescan <path>` is a subtree
+walk, and the rule is about source roots only. Telling the two apart without
+asking would mean remembering each root's device across restarts, which is the
+next thing this file will be able to say has been done.

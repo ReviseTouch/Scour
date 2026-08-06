@@ -1066,7 +1066,13 @@ impl Index for NativeIndex {
         Ok(gone)
     }
 
-    fn sweep(&self, source: SourceId, under_path: &str, generation: u64) -> Result<u64> {
+    fn sweep(
+        &self,
+        source: SourceId,
+        under_path: &str,
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> Result<u64> {
         let mut inner = self.inner.write();
         self.flush(&mut inner)?;
         if inner.open == Some(generation) {
@@ -1123,6 +1129,14 @@ impl Index for NativeIndex {
                             // overlap, that is a statement about one of them
                             // and was being applied to both.
                             if seg.source_of(row) != source {
+                                return false;
+                            }
+                            // Somewhere the walk could not look. Its rows are
+                            // not evidence of anything, so they stay.
+                            if !spare.is_empty()
+                                && spare
+                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default()))
+                            {
                                 return false;
                             }
                             if whole {

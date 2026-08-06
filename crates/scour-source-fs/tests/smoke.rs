@@ -510,7 +510,7 @@ fn an_empty_root_is_reported_as_one_that_could_not_be_looked_at() {
     let src = FsSource::new(SourceId(9), "empty", vec![dir.path().to_path_buf()]);
     let (_paths, report) = scan(&src, &ScanOptions::default());
     assert!(
-        report.root_unreadable,
+        report.vouched.is_empty(),
         "an empty source root is 'could not look', not 'there is nothing'"
     );
 }
@@ -528,8 +528,9 @@ fn an_emptied_subtree_is_still_reconciled() {
         ..ScanOptions::default()
     };
     let (_paths, report) = scan(&src, &opts);
-    assert!(
-        !report.root_unreadable,
+    assert_eq!(
+        report.vouched.len(),
+        1,
         "a walked subtree that is empty is an answer, not a failure"
     );
 }
@@ -547,14 +548,14 @@ fn a_root_that_cannot_be_read_is_reported_as_such() {
     let good = FsSource::new(SourceId(0), "t", vec![real.clone()]);
     let mut sink = Collect::default();
     let r = good.scan(&ScanOptions::default(), &mut sink).expect("scan");
-    assert!(!r.root_unreadable);
+    assert_eq!(r.vouched.len(), 1);
     assert!(r.entries > 0);
 
     let gone = FsSource::new(SourceId(0), "t", vec![tmp.path().join("nowhere")]);
     let mut sink = Collect::default();
     let r = gone.scan(&ScanOptions::default(), &mut sink).expect("scan");
     assert!(
-        r.root_unreadable,
+        r.vouched.is_empty(),
         "a root that is not there has to be distinguishable from an empty one"
     );
     assert_eq!(r.entries, 0);
@@ -678,4 +679,76 @@ fn two_files_whose_names_are_not_utf8_are_two_entries() {
         assert_eq!(&back.path, p);
         assert_eq!(back.meta.size, 1);
     }
+}
+
+#[test]
+fn a_directory_that_cannot_be_read_is_named_so_the_sweep_can_spare_it() {
+    // A directory that loses its read permission *after* it was indexed still
+    // holds every one of its files. The walk cannot say they are gone, because
+    // it could not look — and a sweep that does not know that deletes them.
+    // Counting the failures was never enough; the sweep needs the paths.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let root = tmp.path().join("kok");
+    let closed = root.join("kapali");
+    std::fs::create_dir_all(closed.join("derin")).expect("mkdir");
+    std::fs::write(root.join("gorunur.txt"), b"x").expect("write");
+    std::fs::write(closed.join("gizli.txt"), b"x").expect("write");
+
+    let mut mode = std::fs::metadata(&closed).expect("stat").permissions();
+    let was = std::os::unix::fs::PermissionsExt::mode(&mode);
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o000);
+    std::fs::set_permissions(&closed, mode.clone()).expect("chmod");
+
+    let src = FsSource::new(SourceId(0), "t", vec![root.clone()]);
+    let mut sink = Collect::default();
+    let report = src.scan(&ScanOptions::default(), &mut sink).expect("scan");
+
+    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, was);
+    std::fs::set_permissions(&closed, mode).expect("chmod back");
+
+    assert_eq!(
+        report.vouched.len(),
+        1,
+        "one unreadable directory does not make the root unreadable"
+    );
+    assert!(
+        report
+            .blind
+            .iter()
+            .any(|b| b.ends_with("kapali") || b.contains("kapali")),
+        "the unreadable directory was counted but not named: {:?}",
+        report.blind
+    );
+}
+
+#[test]
+fn a_root_that_changes_underneath_the_walk_is_not_vouched_for() {
+    // The check used to be one `read_dir` before the walk started; everything
+    // after that was taken on trust. Unmount a volume mid-scan, let a share
+    // drop, pull a disk — the walk still came back with a report the engine
+    // reconciled against, and reconciling against a filesystem that is not
+    // there deletes every row it had.
+    //
+    // A bind mount is the portable way to make a directory's device number
+    // change without root here; without one, the same evidence comes from a
+    // root that is replaced by a different filesystem between the two checks.
+    // What is asserted is the rule itself: same device, or no vouching.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let root = tmp.path().join("kok");
+    std::fs::create_dir(&root).expect("mkdir");
+    std::fs::write(root.join("a.txt"), b"x").expect("write");
+
+    let src = FsSource::new(SourceId(0), "t", vec![root.clone()]);
+    let mut sink = Collect::default();
+    let ok = src.scan(&ScanOptions::default(), &mut sink).expect("scan");
+    assert_eq!(ok.vouched.len(), 1, "an ordinary walk vouches for its root");
+
+    // And when the root is gone by the end of it, nothing is vouched for.
+    std::fs::remove_dir_all(&root).expect("rm");
+    let mut sink = Collect::default();
+    let after = src.scan(&ScanOptions::default(), &mut sink).expect("scan");
+    assert!(
+        after.vouched.is_empty(),
+        "a root that vanished was still being reconciled against"
+    );
 }

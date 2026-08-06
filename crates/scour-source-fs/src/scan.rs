@@ -18,7 +18,52 @@ use crate::rules::Rules;
 /// What a walker thread sends back.
 enum Msg {
     Entry(Entry),
-    Unreadable(String),
+    /// Where the walk could not look, and why.
+    Unreadable(String, String),
+}
+
+/// How many unreadable subtrees are worth remembering by name.
+///
+/// Past this the root is not vouched for at all: a walk that could not look
+/// into thousands of places has not proved anything about what is missing.
+const MAX_BLIND: usize = 4_096;
+
+/// Where the walker's error happened.
+///
+/// The path is wrapped: an unreadable directory arrives as `WithDepth` around
+/// `WithPath` around the `io::Error`, so matching the outer variant finds
+/// nothing — which is exactly what the first version of this did, and the
+/// blind list stayed empty while the count went up.
+fn where_of(e: &ignore::Error) -> Option<&std::path::Path> {
+    match e {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+            where_of(err)
+        }
+        ignore::Error::Loop { child, .. } => Some(child),
+        ignore::Error::Partial(all) => all.iter().find_map(where_of),
+        _ => None,
+    }
+}
+
+/// Which filesystem a path is on, or nothing if it cannot be asked.
+///
+/// The number itself means nothing outside this machine and this boot. What
+/// matters is that it is the *same* number at the end of a walk as at the
+/// start — see `ScanReport::vouched`.
+fn device_of(p: &std::path::Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(p).ok().map(|m| m.dev())
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows has volume serial numbers, through
+        // `GetFileInformationByHandle` — an open per root, which is a thing to
+        // add when this is wired for that platform.
+        std::fs::metadata(p).ok().map(|_| 0)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -207,28 +252,38 @@ impl Source for FsSource {
         // Unplug a drive, let a share drop, boot before an encrypted home is
         // mounted — measured: five entries became zero.
         //
-        // **A mount that is not mounted is a readable, empty directory**, which
-        // the `read_dir` check above does not catch — the doc comment on
-        // `root_unreadable` claimed it did, and was wrong. `/mnt/depo`
-        // unmounted opens fine and lists nothing, and a machine that has just
-        // booted is precisely where a scan-on-start meets a volume that is not
-        // up yet. So an empty root counts as "could not look".
+        // **A mount that is not mounted is a readable, empty directory.**
+        // `/mnt/depo` unmounted opens fine and lists nothing, and a machine
+        // that has just booted is precisely where a scan-on-start meets a
+        // volume that is not up yet. So an empty root is not evidence that its
+        // contents are gone.
         //
         // Only for a **whole source**, never for a subtree. Emptying a folder
         // is an ordinary thing a person does and the walk of it has to be
-        // reconciled, or the folder's contents never leave the index. A source
-        // root that is empty is either a mistake or nothing to index, and both
-        // are better answered by keeping what is there and saying so.
+        // reconciled, or the folder's contents never leave the index — and an
+        // explicit `scour rescan <path>` is a subtree walk, which is how a
+        // source root that really was emptied is reconciled on purpose.
+        //
+        // Per root, not per source: one absent removable disk used to stop a
+        // home directory being reconciled at all.
         let whole_source = opts.subtree.is_none();
-        let root_unreadable = roots.iter().any(|r| match std::fs::read_dir(r) {
-            Err(_) => true,
-            Ok(mut entries) => whole_source && entries.next().is_none(),
-        });
+        let before: Vec<(PathBuf, Option<u64>)> = roots
+            .iter()
+            .map(|r| {
+                let ok = match std::fs::read_dir(r) {
+                    Err(_) => false,
+                    Ok(mut entries) => !(whole_source && entries.next().is_none()),
+                };
+                (r.clone(), ok.then(|| device_of(r)).flatten())
+            })
+            .collect();
 
         // `ignore`'s parallel walker, with every one of its opinions turned
         // off. It is used here purely as a fast concurrent directory walk: a
         // file index must not skip what `.gitignore` says to skip, because the
         // whole point is finding the file you cannot find.
+        let mut blind: Vec<String> = Vec::new();
+        let mut too_blind = false;
         let mut builder = WalkBuilder::new(first);
         for r in rest {
             builder.add(r);
@@ -291,7 +346,12 @@ impl Source for FsSource {
                                 // missing things" should be visible rather than
                                 // mysterious.
                                 unreadable.fetch_add(1, Ordering::Relaxed);
-                                let _ = tx.send(Msg::Unreadable(e.to_string()));
+                                // The path, not only the count. A directory
+                                // that became unreadable after it was indexed
+                                // still holds its files, and the sweep has to
+                                // be told to spare it — see `ScanReport::blind`.
+                                let where_ = where_of(&e).map(path::from_path).unwrap_or_default();
+                                let _ = tx.send(Msg::Unreadable(where_, e.to_string()));
                                 return WalkState::Continue;
                             }
                         };
@@ -358,11 +418,36 @@ impl Source for FsSource {
                             stopping = true;
                         }
                     }
-                    Msg::Unreadable(detail) => sink.unreadable("", &Error::Io { detail }),
+                    Msg::Unreadable(path, detail) => {
+                        // Bounded: a tree nobody may read produces one of these
+                        // per directory, and a list of them is not worth more
+                        // memory than the index it protects. Past the ceiling
+                        // the root stops being vouched for at all, which is the
+                        // safe direction.
+                        if !path.is_empty() && blind.len() < MAX_BLIND {
+                            blind.push(path.clone());
+                        } else if !path.is_empty() {
+                            too_blind = true;
+                        }
+                        sink.unreadable(&path, &Error::Io { detail });
+                    }
                 }
             }
             let _ = walker.join();
         });
+
+        // **Asked again, now that the walk is over.** The check before it was
+        // one `read_dir`; everything after that was taken on trust, so a volume
+        // that went away mid-walk — an unmount, a pulled disk, a share that
+        // dropped — still produced a report the engine reconciled against, and
+        // reconciling against a filesystem that is not there deletes all of it.
+        // A device number that is not the one the walk started on means the
+        // walk was about something else.
+        let vouched: Vec<String> = before
+            .iter()
+            .filter(|(root, dev)| dev.is_some() && *dev == device_of(root) && !too_blind)
+            .map(|(root, _)| path::from_path(root))
+            .collect();
 
         Ok(ScanReport {
             entries: entries.load(Ordering::Relaxed),
@@ -371,7 +456,8 @@ impl Source for FsSource {
             unreadable: unreadable.load(Ordering::Relaxed),
             took_ms: started.elapsed().as_millis() as u64,
             cancelled: cancelled.load(Ordering::Relaxed),
-            root_unreadable,
+            vouched,
+            blind,
         })
     }
 

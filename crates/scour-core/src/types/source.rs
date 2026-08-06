@@ -108,7 +108,7 @@ impl Default for ScanOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ScanReport {
     pub entries: u64,
     pub dirs: u64,
@@ -119,12 +119,28 @@ pub struct ScanReport {
     pub took_ms: u64,
     /// True when the walk stopped early because the sink asked it to.
     pub cancelled: bool,
-    /// True when a root could not be walked at all — it does not exist, is not
-    /// readable, or is not mounted.
+    /// The roots this walk is willing to be reconciled against.
     ///
-    /// This exists because a scan that found nothing and a scan that could not
-    /// look are the same `entries: 0` and mean opposite things. Reconciling the
-    /// first deletes what is gone; reconciling the second deletes everything.
-    /// A source that cannot see a root must say so here.
-    pub root_unreadable: bool,
+    /// **A sweep is a claim** — "I walked this and those rows were not there" —
+    /// and it deletes on the strength of it. The claim holds only where the
+    /// walk really could look, at the same filesystem, for the whole walk. This
+    /// is where a source says which of its roots that was true of.
+    ///
+    /// It used to be one boolean for the source, which was wrong in both
+    /// directions: one absent removable disk stopped a home directory being
+    /// reconciled at all, and a volume that disappeared *during* the walk was
+    /// still swept, because the check was a single `read_dir` before it
+    /// started.
+    ///
+    /// Empty is not a failure to report — it is a walk nothing may be deleted
+    /// on.
+    pub vouched: Vec<String>,
+    /// Subtrees the walk could not look inside.
+    ///
+    /// Ordinary — a home directory here has 191 of them, mostly permissions —
+    /// and the reason they are named rather than counted: a directory that
+    /// became unreadable *after* it was indexed still holds its files, and a
+    /// sweep that does not know to spare it deletes every one of them. The
+    /// walk cannot say they are gone, because it could not look.
+    pub blind: Vec<String>,
 }
