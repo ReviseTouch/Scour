@@ -54,6 +54,25 @@ work either: the journal's data lives in the `$J` alternate data stream, and
 not resolve, and the driver surfaces no extended attributes to reach it
 through. So on Linux this volume has a free bulk path and no change feed.
 
+**A Linux write reaches the table.** Worth checking before building anything on
+it, because the volume is mounted `rw` and both systems write to it: a file
+created through `ntfs3` was found in `$MFT` afterwards — once, by its UTF-16
+name, through the page cache and again with `O_DIRECT`, against a control name
+already on the volume found 197 times. So the table stays authoritative no
+matter which system wrote, which is the whole premise.
+
+Two limits found with it. The record arrives **late**: the same probe found
+nothing after `sync()` and a second, and found it after a second and a half.
+And `$MFT`'s own mtime and size do **not** move when the volume changes, so
+there is no cheap "has anything changed" probe — the table offers a snapshot,
+never a delta.
+
+That also names a trap for the eventual Windows port. `ntfs3` maintains the
+table but there is no reason to think it maintains the *USN journal* — so on a
+machine that boots both, an indexer following only the journal misses
+everything the other system wrote. Everything survives this by re-reading
+`$MFT` at startup; a design that only ever follows the journal would not.
+
 **Which is a plan rather than a gap.** A volume whose whole table reads in
 1,425 ms cold and 454 ms warm does not need watching: reconciling it is
 cheaper than subscribing to it. On this machine that is **152,529 of the
