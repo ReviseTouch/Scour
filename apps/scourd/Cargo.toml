@@ -21,7 +21,6 @@ workspace = true
 memory-trace = [
     "scour-engine/memory-trace",
     "scour-index-native/memory-trace",
-    "dep:libc",
 ]
 
 [dependencies]
@@ -43,4 +42,6 @@ serde_json          = { workspace = true }
 tempfile = "3"
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
-libc = { workspace = true, optional = true }
+# Not optional any more. The arena cap in `main` is part of the shipped
+# service rather than a diagnostic — see `cap_allocator_arenas`.
+libc = { workspace = true }

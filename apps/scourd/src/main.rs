@@ -36,7 +36,64 @@ struct Args {
     check: bool,
 }
 
+/// How many heaps glibc may keep. See [`cap_allocator_arenas`].
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const ARENAS: libc::c_int = 2;
+
+/// Cap how many heaps the allocator keeps, before any thread asks for one.
+///
+/// glibc hands a thread its own arena rather than let it contend for one, up
+/// to **eight per core** — 160 on a twenty-core machine — and each grows to
+/// 64 MiB. Memory freed into an arena goes back to that arena and not to the
+/// kernel, so a parallel walk that touches all of them leaves the process
+/// holding hundreds of megabytes that are free, fragmented and never handed
+/// out again. This is the "allocator or worker-pool decision" left open in
+/// `docs/REVIEW-MEMORY.md`, and it is the allocator half.
+///
+/// **The whole curve, measured**, alternating over a 743,000-entry scan of one
+/// local source, medians of three rounds (memory) and three rounds (time):
+///
+/// | arenas | settled anonymous | scan |
+/// |---|---|---|
+/// | 160 (the default here) | 164 MiB | 0.865 s |
+/// | 8 | 98 MiB | 0.866 s |
+/// | 4 | 57 MiB | 1.070 s |
+/// | 2 | 31 MiB | 1.262 s |
+///
+/// So it is a trade and not a free win: **two arenas cost 46% of the scan's
+/// wall clock** — 0.39 s here, and on the two-source index this service
+/// actually holds, about a second, once, at start-up. Eight is free and gives
+/// back 40%; two gives back 81%.
+///
+/// Two, because the shapes of the two costs are different. A scan happens at
+/// start-up and when something asks for one; the memory is held every second
+/// of every day the machine is on, and this is a service that exists to sit
+/// there being ready. Paying a second of one to stop paying 130 MiB of the
+/// other is the trade this program is for. Eight is the setting for a machine
+/// that rescans constantly, and the table is here so that choice can be made
+/// again without measuring it again.
+///
+/// Set before anything spawns, because an arena a thread already holds is not
+/// given back by lowering the cap. `MALLOC_ARENA_MAX` in the environment wins,
+/// which is what keeps the measurement harness — and anyone whose machine
+/// disagrees — able to say otherwise.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn cap_allocator_arenas() {
+    if std::env::var_os("MALLOC_ARENA_MAX").is_some() {
+        return;
+    }
+    // SAFETY: `mallopt` is a plain setter on the allocator's own parameters,
+    // called here before any thread but this one exists.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, ARENAS);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn cap_allocator_arenas() {}
+
 fn main() -> Result<()> {
+    cap_allocator_arenas();
     let args = Args::parse();
     let (config, problem) = match &args.config {
         Some(p) => (Config::load_from(p)?, None),

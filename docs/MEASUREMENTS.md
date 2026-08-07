@@ -3,6 +3,46 @@
 Numbers, with the command that produced them. A claim without one of these is
 an opinion.
 
+## 2026-08-07 — the arena cap, and what it costs
+
+The allocator half of the decision left open in
+[`REVIEW-MEMORY.md`](REVIEW-MEMORY.md).
+
+A service up for one hour and three quarters, having scanned both sources at
+start-up and served a window, held **589.9 MiB anonymous** against the 95.9
+MiB the previous day's fix settled at on an index of the same size. Its shape
+said allocator rather than structure: 868 anonymous mappings, the largest at
+64, 46, 43, 35 and 34 MiB. glibc gives a thread its own arena, up to eight per
+core — **160 on this twenty-core machine** — and each grows to 64 MiB and
+hands nothing back.
+
+Alternating runs, one local source of 743,000 entries, fresh index each time.
+Memory is settled anonymous from `/proc/<pid>/smaps`, median of three; time is
+`--scan-only` wall clock, median of three.
+
+| `MALLOC_ARENA_MAX` | settled anonymous | scan |
+|---|---|---|
+| unset (160) | 164 MiB | 0.865 s |
+| 8 | 98 MiB | 0.866 s |
+| 4 | 57 MiB | 1.070 s |
+| 2 | 31 MiB | 1.262 s |
+
+Eight is free. Two costs **46% of the scan** and gives back 81% of the memory,
+and two is what `scourd` now sets with `mallopt` before it spawns anything.
+The reasoning is in `cap_allocator_arenas`: a scan is paid at start-up, the
+memory is paid every second the machine is on.
+
+**A measurement is of one binary.** The first pass of this A/B was invalidated
+halfway through by rebuilding `scourd` with the cap compiled in — every
+"default" row after that point was measuring the new default and read 26 MiB.
+The table above uses an explicit `MALLOC_ARENA_MAX=160` control instead of an
+unset variable, so the comparison survives the binary changing underneath it.
+
+```
+scourd --config <one-source-config> --scan-only                  # time
+awk '/^Anonymous:/{a+=$2} END{print a/1024}' /proc/<pid>/smaps    # memory
+```
+
 ## 2026-08-06 — idle memory and the four-row minute
 
 Release build, a reflinked copy of the live native index: **2,091,824 entries,

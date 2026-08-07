@@ -171,6 +171,14 @@ surface.
 
 ### The remaining allocator slack needs an allocator or worker-pool decision
 
+> **Decided 2026-08-07 — the allocator half.** `scourd` now calls
+> `mallopt(M_ARENA_MAX, 2)` before it spawns anything. On a 743,000-entry scan
+> that is settled anonymous 164 MiB → 31 MiB for 46% of the scan's wall clock;
+> the whole curve, including the free setting at eight, is in
+> [`MEASUREMENTS.md`](MEASUREMENTS.md). What prompted it: a service up for
+> under two hours held 589.9 MiB, six times the figure below, on an index of
+> the same size. The worker-pool half is still open.
+
 Even after builder-local trims, median post-scan anonymous memory was 95.9 MiB
 against about 10 MiB of live malloc storage. glibc still owns free, fragmented
 pages from the parallel walker and builders.
