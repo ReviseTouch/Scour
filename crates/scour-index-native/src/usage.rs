@@ -205,18 +205,65 @@ impl<'a> Rollup<'a> {
             age: total[i].age,
         };
 
-        // The scope is the shallowest path that is in it. With no scope that
-        // is the first row; with one it is the directory itself, if the index
-        // holds it at all.
-        let root = (0..dirs.len())
-            .find(|&i| self.in_scope(&dirs[i].0))
-            .map(usage)
-            .unwrap_or_default();
-
-        let mut children: Vec<DirUsage> = (0..dirs.len())
-            .filter(|&i| is_child(&dirs[i].0, &root.path))
-            .map(usage)
-            .collect();
+        // **With no scope there is no single root**, and taking the first row
+        // as one was wrong in a way that looked right. Rows are sorted by path,
+        // so on an index of `/home/hasan` and `/mnt/depo` the first row is
+        // under `/home` — and the answer came back naming `/home`, totalling
+        // only `/home`, and looking complete. Measured on this machine when
+        // the report tab was first wired to it: 93.8 GiB reported against
+        // 384.8 GiB indexed, with the larger source silently absent.
+        //
+        // So an unscoped roll-up sums the *maximal* directories — those with no
+        // ancestor in the set — and reports them as the children of a root that
+        // stands for everything. One source gives the same answer as before;
+        // two give both. The empty path is what names it, because that is what
+        // was asked for and any real path here would be a claim about the
+        // filesystem that the index cannot make.
+        let (root, mut children) = if self.scope.is_empty() {
+            // **Checked against every maximal so far, not just the last one.**
+            // The obvious version keeps one open directory and asks whether the
+            // row is below it, which assumes a directory's descendants follow
+            // it without interruption. They do not: `-` is 0x2D and `/` is
+            // 0x2F, so `/a-b` sorts *between* `/a` and `/a/x`, becomes the open
+            // directory, and `/a/x` is then not below it and is counted twice.
+            // The test below is that exact list, and it failed on the first
+            // version of this loop.
+            //
+            // The list it scans is the source roots — two here, and a machine
+            // with a hundred separate mount points is not the shape this is
+            // for — so this is linear in the rows and constant in practice.
+            let mut tops: Vec<usize> = Vec::new();
+            for i in 0..dirs.len() {
+                if tops.iter().any(|&t| strictly_below(&dirs[i].0, &dirs[t].0)) {
+                    continue;
+                }
+                tops.push(i);
+            }
+            let mut all = Own::default();
+            for &i in &tops {
+                all.add(&total[i]);
+            }
+            (
+                DirUsage {
+                    path: String::new(),
+                    bytes: all.bytes,
+                    disk: all.disk,
+                    files: all.files,
+                    age: all.age,
+                },
+                tops.into_iter().map(usage).collect::<Vec<DirUsage>>(),
+            )
+        } else {
+            let root = (0..dirs.len())
+                .find(|&i| self.in_scope(&dirs[i].0))
+                .map(usage)
+                .unwrap_or_default();
+            let kids = (0..dirs.len())
+                .filter(|&i| is_child(&dirs[i].0, &root.path))
+                .map(usage)
+                .collect::<Vec<DirUsage>>();
+            (root, kids)
+        };
         let child_count = children.len() as u32;
         children.sort_unstable_by(|a, b| b.bytes.cmp(&a.bytes).then(a.path.cmp(&b.path)));
         children.truncate(self.req.top.max(1) as usize);
@@ -253,6 +300,38 @@ fn is_child(path: &str, parent: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_maximal_directories_of_a_sorted_list_are_found_in_one_pass() {
+        // What an unscoped roll-up sums. The trap is the sibling that sorts
+        // between a directory and its children — `-` is 0x2D, `/` is 0x2F — so
+        // `/a-b` lands after `/a` and before `/a/x`, and a scan that only ever
+        // looked at the previous row would call it a child of `/a`.
+        let sorted = [
+            "/home",
+            "/home/hasan",
+            "/home/hasan/Projeler",
+            "/mnt",
+            "/mnt/depo",
+        ];
+        assert_eq!(maximal(&sorted), vec!["/home", "/mnt"]);
+
+        assert_eq!(maximal(&["/a", "/a-b", "/a/x"]), vec!["/a", "/a-b"]);
+        assert_eq!(maximal(&["/only"]), vec!["/only"]);
+        assert!(maximal(&[]).is_empty());
+    }
+
+    /// The loop `finish` runs, in isolation.
+    fn maximal(sorted: &[&str]) -> Vec<String> {
+        let mut tops: Vec<usize> = Vec::new();
+        for i in 0..sorted.len() {
+            if tops.iter().any(|&t| strictly_below(sorted[i], sorted[t])) {
+                continue;
+            }
+            tops.push(i);
+        }
+        tops.into_iter().map(|i| sorted[i].to_owned()).collect()
+    }
 
     #[test]
     fn a_child_is_one_level_down_and_a_grandchild_is_not() {
