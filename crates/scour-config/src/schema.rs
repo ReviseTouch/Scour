@@ -1,4 +1,29 @@
 //! The file itself.
+//!
+//! ## Eight settings that were removed rather than wired up
+//!
+//! `index.engine`, `index.paths`, `index.heap_mb`, `scan.fast`, `ui.columns`,
+//! `service.maintain_every_hours`, `content.enabled`, `content.max_file_mb`.
+//! All were parsed, defaulted and round-trip tested; none was read by anything.
+//! A third of this file described a program that did not exist.
+//!
+//! Two of them did worse than nothing. `scan.fast` promised "the difference
+//! between a usable index in a minute and one in ten" and was forced off at
+//! both wiring sites. `index.paths` carried a real measurement — 174 MB of a
+//! 352 MB index on 855,126 entries — and said "turn this on if `path:` matters
+//! more than the disk", and turning it on did nothing at all. A setting that
+//! promises a measured result and delivers none is worse than an absent one,
+//! because the absent one cannot be believed.
+//!
+//! `content.*` went with them even though `trait Extractor` is deliberately
+//! reserved and stays. The trait is vocabulary the workspace talks to itself
+//! in; a config key is a promise to a person, and `content.enabled = true`
+//! silently did nothing. `ui.columns` went because the Slint window will want
+//! column *widths* beside the list, so the shape it would come back in is
+//! already known to differ from the shape it had.
+//!
+//! They come back when something reads them, and the file is shorter and true
+//! until then.
 
 use std::path::PathBuf;
 
@@ -19,7 +44,6 @@ pub struct Config {
     pub sources: Vec<SourceCfg>,
     pub scan: ScanCfg,
     pub exclude: ExcludeCfg,
-    pub content: ContentCfg,
     pub service: ServiceCfg,
     pub ui: UiCfg,
 }
@@ -28,52 +52,15 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct IndexCfg {
     pub dir: PathBuf,
-    /// Which implementation answers searches.
-    ///
-    /// The two do not share a file format and do not read each other's
-    /// directories, so changing this means the first scan runs again. They are
-    /// kept side by side because the comparison is the only honest way to know
-    /// which one to ship — see `docs/MEASUREMENTS.md`.
-    pub engine: EngineCfg,
-    /// Index full paths as trigrams, so `path:` is a term rather than a
-    /// filter applied to every candidate.
-    ///
-    /// **Off by default, and measured**: on 855,126 entries it cost 174 MB of
-    /// a 352 MB index — 45%. `under:` and `parent:` are unaffected and remain
-    /// the fast way to scope a search to a folder, because those are ancestor
-    /// tokens rather than trigrams. Turn this on if `path:` matters more than
-    /// the disk.
-    pub paths: bool,
-    /// Writer memory in megabytes. The peak while indexing follows it.
-    pub heap_mb: usize,
     /// How many entries may sit outside the ordered body before a rebuild is
     /// advised. Every query reads all of them.
     pub rebuild_threshold: u64,
-}
-
-/// The implementations of `Index` a build knows about.
-///
-/// Named rather than numbered so the file says what it means, and so a build
-/// without one of them can report an unknown engine instead of a wrong one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EngineCfg {
-    /// The index written for this workload: no inverted index, rows in date
-    /// order, 44.5 bytes an entry.
-    #[default]
-    Native,
 }
 
 impl Default for IndexCfg {
     fn default() -> Self {
         Self {
             dir: crate::paths::default_index_dir(),
-            engine: EngineCfg::default(),
-            paths: false,
-            // Only ever used for a bulk scan or a rebuild, and handed back
-            // afterwards. These documents are a path, a name and ten numbers —
-            // there is no body text — so the steady state runs on far less.
-            heap_mb: 128,
             rebuild_threshold: 200_000,
         }
     }
@@ -129,10 +116,6 @@ impl From<SourceKindCfg> for SourceKind {
 pub struct ScanCfg {
     pub hidden: bool,
     pub follow_symlinks: bool,
-    /// Skip the per-entry `stat` on the first pass and fill the rest in
-    /// afterwards. The difference between a usable index in a minute and one
-    /// in ten.
-    pub fast: bool,
     /// Worker threads; zero decides from the hardware.
     pub threads: usize,
     /// Rescan every source when the service starts.
@@ -155,7 +138,6 @@ impl Default for ScanCfg {
         Self {
             hidden: true,
             follow_symlinks: false,
-            fast: true,
             threads: 0,
             on_start: true,
         }
@@ -175,18 +157,6 @@ pub struct ExcludeCfg {
     pub allow: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ContentCfg {
-    /// Index the contents of documents, not just their names.
-    ///
-    /// Nothing extracts content yet. The setting exists because turning it on
-    /// changes what is on disk, and the index has to be built knowing.
-    pub enabled: bool,
-    /// Files larger than this are indexed by name only.
-    pub max_file_mb: u64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServiceCfg {
@@ -200,9 +170,6 @@ pub struct ServiceCfg {
     /// removals are hidden immediately regardless, because a deleted file that
     /// is still listed is the more annoying failure.
     pub commit_interval_ms: u64,
-    /// Run a maintenance pass this many hours after starting, and then at that
-    /// interval. Zero disables it.
-    pub maintain_every_hours: u64,
 }
 
 impl Default for ServiceCfg {
@@ -210,7 +177,6 @@ impl Default for ServiceCfg {
         Self {
             socket: String::new(),
             commit_interval_ms: 1_000,
-            maintain_every_hours: 24,
         }
     }
 }
@@ -221,7 +187,6 @@ pub struct UiCfg {
     pub result_limit: u32,
     /// BCP-47 tag, or empty for the system language.
     pub language: String,
-    pub columns: Vec<String>,
 }
 
 impl Default for UiCfg {
@@ -229,7 +194,6 @@ impl Default for UiCfg {
         Self {
             result_limit: 200,
             language: String::new(),
-            columns: ["name", "path", "size", "mtime"].map(String::from).to_vec(),
         }
     }
 }
@@ -366,14 +330,14 @@ mod tests {
         // still valid — which is the whole reason nothing has to migrate.
         let text = r#"
             [index]
-            paths = false
+            rebuild_threshold = 50000
             [[source]]
             name = "work"
             roots = ["/srv/work"]
         "#;
         let c: Config = toml::from_str(text).expect("parse");
-        assert!(!c.index.paths);
-        assert_eq!(c.index.heap_mb, IndexCfg::default().heap_mb);
+        assert_eq!(c.index.rebuild_threshold, 50_000);
+        assert_eq!(c.index.dir, IndexCfg::default().dir, "an omitted field");
         assert_eq!(c.sources[0].name, "work");
         assert!(c.sources[0].watch, "an omitted flag takes its default");
         assert_eq!(c.ui.result_limit, 200);
