@@ -132,6 +132,22 @@ if [[ -n ${SCOUR_APP_DEBUG:-} ]]; then
     DEBUG_ARGS=(--remote-debugging-port="$SCOUR_APP_DEBUG" --remote-allow-origins='*')
 fi
 
+# **No keyring.** A browser keeps the key to its own cookie and password store
+# in the desktop's secret service, and asks for it at startup. On a machine
+# where the login keyring is not unlocked by the login itself -- a fingerprint
+# hands PAM no password to unlock it with -- that is a password prompt in front
+# of a search box, once per boot, for a profile that holds no secret: measured
+# here, zero saved passwords and zero cookies, because the page is on loopback
+# and its token arrives in the URL.
+#
+# `basic` keeps that key in the profile instead of the keyring. What it weakens
+# is the protection on saved passwords and cookies, and there are none. What
+# the window is actually asked to remember -- the chosen columns, their widths,
+# the last query -- is `localStorage`, which no password store touches; those
+# keys are readable in the profile's LevelDB today.
+#
+# This flag leaves with the browser. A Slint window has no cookie store, and no
+# keyring to ask.
 start_window() {
     if stale_lock; then
         rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
@@ -142,6 +158,7 @@ start_window() {
         "${WAYLAND_ARGS[@]}" \
         --class=Scour \
         --user-data-dir="$PROFILE" \
+        --password-store=basic \
         --no-first-run \
         --no-default-browser-check \
         --disable-features=TranslateUI \

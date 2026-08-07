@@ -2543,6 +2543,8 @@
      order they were sent; without this, pausing after "rapor" can leave the
      screen showing what "rapo" matched. */
   let generation = 0;
+  /* The search this keystroke started, so the next one can let it go. */
+  let typingSearch = null;
   let lastMeter = null;
 
   function render() {
@@ -2558,8 +2560,27 @@
     showHints();
     syncHeads();
 
+    /* One search in flight, and the older ones let go of.
+     *
+     * This asks for a whole window of rows — around a hundred kilobytes of
+     * them for a query that matches a lot, which on the Windows volume is
+     * most of them. Seven letters typed at speed meant seven of those at
+     * once, and a browser opens **six** connections to an origin: the last
+     * keystroke, the only one anybody is waiting for, queued behind six
+     * answers already on their way to being thrown out — and each of those
+     * six was still downloaded and still parsed on the main thread before
+     * `generation` discarded it.
+     *
+     * `SERVICE.search` has taken a signal since the list learned to abandon
+     * windows scrolled past, and its own note says why: a request nobody is
+     * waiting for still holds one of the six. The typing path was the one
+     * caller that never passed one. `generation` stays — it decides which
+     * answer may draw, which is a different question from which request is
+     * still worth finishing. */
     const mine = ++generation;
-    SERVICE.search(text, sortKey, sortDesc, WINDOW, 0)
+    if (typingSearch) typingSearch.abort();
+    typingSearch = new AbortController();
+    SERVICE.search(text, sortKey, sortDesc, WINDOW, 0, typingSearch.signal)
       .then((res) => {
         if (mine !== generation) return;   // a newer keystroke won
         /* A new result set: everything cached belonged to the old one. */
@@ -2581,6 +2602,9 @@
         sidebarSoon();
       })
       .catch((e) => {
+        // Abandoned on purpose, by the next keystroke. Not a service that
+        // went away, and saying so would put the window offline mid-word.
+        if (e.name === "AbortError") return;
         if (mine !== generation) return;
         offline(e);
       });
@@ -2642,10 +2666,16 @@
   }, 220);
 
   let sidebarGeneration = 0;
+  /* What the last one cost, so the live refresh can decline to repeat it.
+     Reset by a new query, because a new query's cost is its own. */
+  let sidebarCost = 0;
   function sidebar(text, mine) {
     const ours = ++sidebarGeneration;
+    const began = Date.now();
+    const charge = () => { sidebarCost = Date.now() - began; };
     return SERVICE.sidebar(text, BAR_EDGES)
       .then((res) => {
+        charge();
         if (ours !== sidebarGeneration || mine !== generation) return;
 
         /* The scrollbar's real size. */
@@ -2670,7 +2700,10 @@
           }
         }
       })
-      .catch((e) => { console.error("scour: sidebar did not draw:", e); });
+      .catch((e) => {
+        charge();
+        console.error("scour: sidebar did not draw:", e);
+      });
   }
 
   /* The service could not be reached. Say which, rather than showing an empty
@@ -3477,8 +3510,33 @@
      cautious: this walks the whole matching set and cost 119 ms on the empty
      query, against single-digit milliseconds for a window of rows. Worth
      paying every few seconds, not several times a second. */
+
+  /* How dear a refresh may be and still be repeated for a change nobody
+     asked about.
+   *
+   * **The leash above is not enough, by construction.** `atMostEvery` waits
+   * `COST` times what the last call took, so a refresh that costs anything at
+   * all settles at a fixed *share* of the machine — one eleventh — however
+   * dear it is. Measured with an open window and nobody touching it: the
+   * service sat at **8.14% of a core**, and six facet calls in thirty seconds
+   * accounted for 1.73 of those seconds. A tenth of a core, forever, for
+   * numbers nobody was reading.
+   *
+   * A share is the wrong shape for this. So: a query whose sidebar is cheap
+   * stays live, because it costs nothing to keep it that way — and on a
+   * narrow query, which is what somebody reading the rail has typed, it is
+   * single-digit milliseconds. A query broad enough to be dear keeps the
+   * numbers it was answered with until the query changes. The rows stay live
+   * either way; they are a hundredth of the price.
+   *
+   * Deliberately generous, because the cost of being wrong is asymmetric: too
+   * high wastes a little CPU on a narrow query, too low silently stops the
+   * rail updating on one where somebody is watching it. */
+  const SIDEBAR_LIVE_UNDER_MS = 40;
+
   function reviseCounts() {
     if (LIST.query === null) return;
+    if (sidebarCost > SIDEBAR_LIVE_UNDER_MS) return;
     // Returned so the throttle above can charge for what it cost.
     return sidebar(LIST.query, generation);
   }

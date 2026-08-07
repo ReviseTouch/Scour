@@ -3,6 +3,58 @@
 Numbers, with the command that produced them. A claim without one of these is
 an opinion.
 
+## 2026-08-07 — what an open window costs, and why it was a share of the machine
+
+An idle service with a search window open sat at **8.59% of a core** against
+0.108% with the window shut, same binary, nothing compiling. Two causes, and
+the second is the interesting one.
+
+**The empty query's count was walked.** `/api/count` with no query took
+**1.233 s** across 2,094,185 rows to arrive at a number every segment already
+keeps as its live-row count. A window opens showing the empty query, so this
+was part of opening one. Short-circuited in `NativeIndex::search`: no
+conditions and nothing hidden means every live row matches.
+
+| | before | after |
+|---|---|---|
+| `/api/count`, empty query | 1.233 s | **12.8 ms** |
+| opening a window, total CPU | 7.76 s | **4.86 s** |
+
+**The sidebar refresh was a fixed share of the machine, by construction.**
+`atMostEvery` waits `COST` (10) times what the last call took, so a refresh
+settles at one eleventh of a core however dear it is — a tenth of a machine,
+forever, for numbers nobody is reading. Six facet calls in thirty seconds
+accounted for 1.73 s of the 8.59%.
+
+A share is the wrong shape. The live refresh now runs only when the last one
+was cheap (`SIDEBAR_LIVE_UNDER_MS`, 40 ms), which keeps it live for the
+queries somebody reading the rail has actually typed and stops it for the ones
+that are broad enough to be dear. The rows stay live either way at a hundredth
+of the price.
+
+| `/api/facets` | | live refresh |
+|---|---|---|
+| `trabzon` | 2.6 ms | kept |
+| `rapor` | 9.5 ms | kept |
+| `a` | 134 ms | frozen until the query changes |
+| empty | 97.8 ms | frozen until the query changes |
+
+| scourd, 90 s, nothing compiling | before | after |
+|---|---|---|
+| window open, untouched | 8.59% | **0.72%** |
+| window shut | 0.108% | 0.122% |
+
+**Verify the window is actually open, at both ends of the measurement.** Five
+readings in this session were invalidated by not doing so — `pgrep -f 'chromium
+--app'` matches the measuring shell's own command line, so it must be
+`pgrep -f '^/usr/lib/chromium/chromium --app=http'`, and the pid checked again
+when the timer stops.
+
+```
+pgrep -f '^/usr/lib/chromium/chromium --app=http'   # before and after
+awk '{print $14+$15}' /proc/<pid>/stat              # jiffies, both ends
+```
+
 ## 2026-08-07 — the arena cap, and what it costs
 
 The allocator half of the decision left open in
@@ -3908,3 +3960,50 @@ between 22:21 and the cleanup is void. And the index came back on its own: one
 restart, one scan, **741,199 rows to 2,091,996 in forty seconds**, with nothing
 asked of it. Reconciliation is what that is for, and this is the first time it
 has had to prove it against a real accident rather than a test.
+
+## What wakes an untouched window's connection threads
+
+Temporary dispatch instrumentation wrote request names and handler durations to
+`/run/user/1000/scour/request-trace`, outside every indexed source. CPU was the
+`utime + stime` delta from `/proc/<pid>/stat` and each task's `stat`; one jiffy
+is 10 ms on this host. The same release binary was used on both sides, Cargo was
+absent, and the window PID was checked before and after.
+
+With the window open and untouched for 30 seconds:
+
+```text
+revision=459..479 delta=20 process_jiffies=263 process_cpu=8.76%
+scour-conn: 36 + 196 + 0 + 0 + 0 jiffies = 7.73%
+await  count=20 elapsed_ms=29490.207
+facets count=6  elapsed_ms=1730.572
+search count=34 elapsed_ms=99.310
+```
+
+The command took byte and jiffy snapshots, slept 30 seconds, then reduced only
+the new trace bytes:
+
+```sh
+pid=$(systemctl --user show scourd -p MainPID --value)
+start_bytes=$(stat -c %s /run/user/1000/scour/request-trace)
+start_cpu=$(awk '{print $14+$15}' /proc/$pid/stat)
+for f in /proc/$pid/task/*/stat; do
+  awk '$2=="(scour-conn)" {print $1, $14+$15}' "$f"
+done > /tmp/scour-open-before.$pid
+sleep 30
+# Repeat the snapshots, subtract by TID, and reduce trace lines after
+# start_bytes by request name and elapsed_us.
+```
+
+The exact equality between revision delta and completed `await` calls identifies
+the wake-up: a commit changes the revision, the long poll returns, and
+`indexMoved()` in `apps/scour-web/src/page.html` starts visible-row searches and
+the throttled sidebar refresh. The sidebar is the expensive part here: its six
+`facets` calls spent 1.731 seconds inside dispatch.
+
+Closing only the window on the same binary removed all `await`, `search`, and
+`facets` calls during a 30-second control interval, even though unrelated
+activity in the watched home source moved the revision 208 times. Total service
+CPU was 31 jiffies (1.03%), including the worker handling that activity. The
+window was then reopened and the open measurement above was taken. Suppressing
+the refresh would change the documented live-window semantics, so runtime
+behaviour was not changed.
