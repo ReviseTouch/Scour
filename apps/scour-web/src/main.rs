@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use scour_core::{Catalog, FacetBy, Page, SortKey};
+use scour_core::{Catalog, DirUsage, FacetBy, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
@@ -235,6 +235,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
+        "/api/usage" => api_usage(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/icon" => api_icon(&mut stream, &req),
         "/api/wait" => api_wait(&mut stream, addr, &req),
@@ -478,6 +479,53 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// order asked, plus the exact total, which the walk produces for free. The
 /// page used to make three requests for this — a count, a rail and a chart —
 /// and each of them walked the matching set again.
+/// What a folder weighs, and which of its children weigh the most.
+///
+/// The report tab drew this from a table of twenty-four folders written into
+/// the page when it was a mockup — real numbers once, measured against a home
+/// directory in August, and frozen ever since. It sat three inches from a
+/// sidebar that says *"Aşağısı canlı"*, which made it the one place in the
+/// interface that showed somebody invented figures about their own disk.
+///
+/// The engine has answered this the whole time: `Request::Usage` ships, `scour
+/// du` uses it, and it is 96 ms over 658,360 files because the sizes and the
+/// parent links are already in the index and nothing has to touch the disk.
+/// Only the route between them was missing.
+///
+/// `top` is how many children come back, heaviest first; `child_count` says
+/// how many there were before the cut, so the page can say what it is not
+/// showing rather than quietly showing less.
+fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let request = Request::Usage {
+        path: req.param("path").unwrap_or_default().to_owned(),
+        top: req.param("top").and_then(|s| s.parse().ok()).unwrap_or(24),
+    };
+    match call(client, request) {
+        Ok(Response::Usage(r)) => {
+            let dir = |d: &DirUsage| {
+                serde_json::json!({
+                    "path": d.path,
+                    "bytes": d.bytes,
+                    "disk": d.disk,
+                    "files": d.files,
+                    "age": d.age,
+                })
+            };
+            http::json(
+                stream,
+                &serde_json::json!({
+                    "root": dir(&r.root),
+                    "children": r.children.iter().map(dir).collect::<Vec<_>>(),
+                    "child_count": r.child_count,
+                    "took_us": r.took_us,
+                }),
+            );
+        }
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let edges: Vec<u32> = req
         .param("edges")

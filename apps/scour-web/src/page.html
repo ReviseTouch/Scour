@@ -1007,14 +1007,6 @@
           <div id="p-kind"></div>
         </div>
         <div class="panel">
-          <h4>Aynı dosya</h4>
-          <div id="p-dupe"></div>
-          <p class="hint">İlk üçü indeksten, bedava. Boyut süzgeci dosya sayısına
-          göre yalnızca %6 eliyor — ama 1 MB üstü adayların baş+son 4 KB'ını okumak
-          <b>140 MB</b>'a mal olup <b>141,8 GB</b>'ı kapsıyor. Bu yüzden büyükten
-          küçüğe inilir, adet değil kazanç raporlanır.</p>
-        </div>
-        <div class="panel">
           <h4>En büyük dosyalar</h4>
           <div id="p-big"></div>
         </div>
@@ -1087,6 +1079,10 @@
       SERVICE.get("explain", cursor === null ? { q } : { q, cursor }, signal),
     sidebar: (q, edges) =>
       SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
+    /* What a folder weighs, and its heaviest children. One walk of the index —
+       96 ms over 658,360 files — and no filesystem access at all: the sizes and
+       the parent links are already there. */
+    usage: (path, top) => SERVICE.get("usage", { path, top: top || 24 }),
     status: () => SERVICE.get("status", {}),
     /* The one request that is meant to take a long time: it does not answer
        until the index would answer differently. See the live section at the
@@ -3666,168 +3662,169 @@
 })();
 
 // ---------------------------------------------------------------- RAPOR
-// The numbers are real: `cargo run --example rollup` over a home directory
-// of 1,225,711 entries. The age percentages were measured too, not invented.
+//
+// **This was a mockup for a long time, and it showed.** The tree below used to
+// be twenty-four folders written into the page — real numbers once, measured
+// against a home directory in August, and frozen from then on. It sat three
+// inches from a sidebar that says "Aşağısı canlı", which made it the one place
+// in this interface that showed somebody invented figures about their own disk.
+//
+// The engine had answered this the whole time: `Request::Usage` ships and
+// `scour du` uses it. Only the route was missing. Every number here now comes
+// from the index, and the one panel nothing could answer — what is duplicated,
+// which needs a grouping this index does not do — is gone rather than
+// fabricated. `docs/REPORTS.md` §B is where it comes back, if it does.
 (function () {
   const AGE = [
     ["bugün",    "--t0"], ["bu hafta", "--t1"], ["bu ay",   "--t2"],
     ["6 ay",     "--t3"], ["bu yıl",   "--t4"], ["daha eski","--t5"]
   ];
-  const GB = 1073741824;
 
-  // path -> { bytes, files, age[6], kids:[path], leaf? }
-  const T = {
-    "/home/hasan": {
-      bytes: 374.6 * GB, files: 1225710, age: [58, 38, 1, 0, 0, 1],
-      kids: ["/home/hasan/Projeler", "/home/hasan/.AffinityLinux", "/home/hasan/Android",
-             "/home/hasan/.cache", "/home/hasan/.local", "/home/hasan/.rustup",
-             "/home/hasan/.cargo", "/home/hasan/(diğer 34 klasör)"]
-    },
-    "/home/hasan/Projeler": {
-      bytes: 325.8 * GB, files: 612292, age: [62, 38, 0, 0, 0, 0],
-      kids: ["/home/hasan/Projeler/ColpanRust", "/home/hasan/Projeler/Sezi",
-             "/home/hasan/Projeler/RustWailsChat", "/home/hasan/Projeler/SnipperSlint",
-             "/home/hasan/Projeler/RustEverything", "/home/hasan/Projeler/Scour",
-             "/home/hasan/Projeler/RustPrinter", "/home/hasan/Projeler/(diğer 15)"]
-    },
-    "/home/hasan/Projeler/ColpanRust": {
-      bytes: 165.1 * GB, files: 344789, age: [66, 34, 0, 0, 0, 0],
-      kids: ["/home/hasan/Projeler/ColpanRust/target", "/home/hasan/Projeler/ColpanRust/src",
-             "/home/hasan/Projeler/ColpanRust/(diğer)"]
-    },
-    "/home/hasan/Projeler/ColpanRust/target": {
-      bytes: 164.4 * GB, files: 327854, age: [66, 34, 0, 0, 0, 0],
-      kids: ["/home/hasan/Projeler/ColpanRust/target/debug",
-             "/home/hasan/Projeler/ColpanRust/target/release"]
-    },
-    "/home/hasan/Projeler/ColpanRust/target/debug": {
-      bytes: 115.3 * GB, files: 192493, age: [63, 37, 0, 0, 0, 0],
-      kids: ["/home/hasan/Projeler/ColpanRust/target/debug/deps",
-             "/home/hasan/Projeler/ColpanRust/target/debug/incremental",
-             "/home/hasan/Projeler/ColpanRust/target/debug/(diğer)"]
-    },
-    "/home/hasan/Projeler/ColpanRust/target/debug/deps":        { bytes: 61.6*GB, files: 89375,  age:[59,41,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/ColpanRust/target/debug/incremental": { bytes: 48.6*GB, files: 69423,  age:[71,29,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/ColpanRust/target/debug/(diğer)":     { bytes:  5.1*GB, files: 33695,  age:[60,40,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/ColpanRust/target/release":           { bytes: 45.5*GB, files:110259,  age:[78,21,0,0,1,0], leaf:1 },
-    "/home/hasan/Projeler/ColpanRust/src":                      { bytes:  0.4*GB, files:  6210,  age:[41,52,4,2,1,0], leaf:1 },
-    "/home/hasan/Projeler/ColpanRust/(diğer)":                  { bytes:  0.3*GB, files: 10725,  age:[38,50,6,3,2,1], leaf:1 },
-    "/home/hasan/Projeler/Sezi": {
-      bytes: 62.9 * GB, files: 155444, age: [69, 31, 0, 0, 0, 0],
-      kids: ["/home/hasan/Projeler/Sezi/core", "/home/hasan/Projeler/Sezi/mobile",
-             "/home/hasan/Projeler/Sezi/(diğer)"]
-    },
-    "/home/hasan/Projeler/Sezi/core":     { bytes: 49.1*GB, files: 71324, age:[79,21,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/Sezi/mobile":   { bytes:  6.3*GB, files: 17496, age:[44,50,4,1,1,0], leaf:1 },
-    "/home/hasan/Projeler/Sezi/(diğer)":  { bytes:  7.5*GB, files: 66624, age:[52,42,3,2,1,0], leaf:1 },
-    "/home/hasan/Projeler/RustWailsChat": { bytes: 28.1*GB, files: 23499, age:[99, 0,0,0,1,0], leaf:1 },
-    "/home/hasan/Projeler/SnipperSlint":  { bytes: 24.7*GB, files: 16919, age:[ 0,100,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/RustEverything":{ bytes: 23.3*GB, files: 31819, age:[34, 64,1,0,1,0], leaf:1 },
-    "/home/hasan/Projeler/Scour":         { bytes:  9.1*GB, files: 17126, age:[96,  4,0,0,0,0], leaf:1 },
-    "/home/hasan/Projeler/RustPrinter":   { bytes:  8.7*GB, files:  9873, age:[ 2, 12,9,7,58,12], leaf:1 },
-    "/home/hasan/Projeler/(diğer 15)":    { bytes:  3.9*GB, files:242743, age:[18, 31,9,8,21,13], leaf:1 },
-    "/home/hasan/.AffinityLinux":         { bytes:  8.8*GB, files: 24163, age:[ 1,  3,4,9,44,39], leaf:1 },
-    "/home/hasan/Android":                { bytes:  5.2*GB, files:  6943, age:[ 0,  1,2,5,31,61], leaf:1 },
-    "/home/hasan/.cache":                 { bytes:  4.3*GB, files: 16496, age:[22, 41,17,12,6,2], leaf:1 },
-    "/home/hasan/.local":                 { bytes:  3.1*GB, files:  6113, age:[11, 24,18,21,19,7], leaf:1 },
-    "/home/hasan/.rustup":                { bytes:  1.5*GB, files: 27679, age:[ 0,  2,7,26,49,16], leaf:1 },
-    "/home/hasan/.cargo":                 { bytes:  1.4*GB, files: 25312, age:[ 3,  9,12,28,36,12], leaf:1 },
-    "/home/hasan/(diğer 34 klasör)":      { bytes: 24.5*GB, files:266073, age:[ 6, 14,11,16,34,19], leaf:1 }
-  };
-
-  const KIND = [["Derleme çıktısı", 675457, "291,0 GB"], ["İşaretleme/veri", 284055, "9,4 GB"],
-                ["Kod", 174027, "3,0 GB"], ["Görsel", 57982, "18,7 GB"],
-                ["Belge", 17420, "4,1 GB"], ["Kurulum", 6496, "31,2 GB"],
-                ["Diğer", 346975, "17,2 GB"]];
-  const BIG = [["colpan-ner.onnx","1,9 GB"],["libui_shell.rlib","1,2 GB"],
-               ["qdrant-storage.dat","667 MB"],["rust-docs.tar.xz","604 MB"],
-               ["flutter36.avd.img","3,7 GB"]];
-
-  const nodes = Object.keys(T);
   const bytes = (n) => {
     const u = ["B","KB","MB","GB","TB"]; let v = n, i = 0;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i ? v.toFixed(1) : v) + " " + u[i];
   };
   const fmt = (n) => n.toLocaleString("tr-TR");
-  const leafOf = (p) => p.slice(p.lastIndexOf("/") + 1);
+  const leafOf = (p) => p.slice(p.lastIndexOf("/") + 1) || p;
 
-  let scope = "/home/hasan/Projeler";
+  /* Where the report is looking. Empty means everything indexed, which is what
+     `Request::Usage` means by an empty path — so the first view is the whole
+     index rather than a folder somebody's machine happened to have. */
+  let scope = "";
+  let drawing = 0;
 
   const crumb = document.getElementById("crumb");
   const kidsEl = document.getElementById("r-kids");
 
-  function stack(age) {
-    return `<div class="stack">` + age.map((v, i) =>
-      v > 0 ? `<i style="width:${v}%;background:var(${AGE[i][1]})" title="${AGE[i][0]} · %${v}"></i>` : ""
-    ).join("") + `</div>`;
+  /* The age spread, from bytes rather than percentages.
+     `DirUsage.age` is six counts of bytes; the bar wants six widths. Computing
+     the percentage here rather than sending it keeps the wire honest — a
+     percentage of nothing is not zero, it is undefined, and the guard below is
+     the difference between an empty bar and six NaNs. */
+  function stack(age, total) {
+    if (!total) return `<div class="stack"></div>`;
+    return `<div class="stack">` + age.map((v, i) => {
+      const pct = (v / total) * 100;
+      if (pct < 0.05) return "";
+      const shown = pct < 1 ? pct.toFixed(1) : Math.round(pct);
+      return `<i style="width:${pct}%;background:var(${AGE[i][1]})" title="${AGE[i][0]} · %${shown}"></i>`;
+    }).join("") + `</div>`;
   }
 
-  function drawReport() {
-    const n = T[scope];
-    if (!n) return;
-
+  function breadcrumb() {
     const parts = scope.split("/").filter(Boolean);
-    crumb.innerHTML = parts.map((seg, i) => {
+    const home = `<button data-path="">tümü</button>`;
+    if (!parts.length) return `<span>tümü</span>`;
+    return home + parts.map((seg, i) => {
       const path = "/" + parts.slice(0, i + 1).join("/");
-      const label = i === 1 ? "~" : seg;
-      const known = T[path] ? `<button data-path="${path}">${label}</button>`
-                            : `<span>${label}</span>`;
-      return (i === 0 ? "" : `<span class="s">/</span>`) + (i === 0 ? "" : known);
-    }).join("") || "<span>/</span>";
+      const last = i === parts.length - 1;
+      const label = last ? `<span>${seg}</span>` : `<button data-path="${path}">${seg}</button>`;
+      return `<span class="s">/</span>` + label;
+    }).join("");
+  }
 
+  async function drawReport() {
+    const mine = ++drawing;
+    crumb.innerHTML = breadcrumb();
+    let res;
+    try {
+      res = await SERVICE.usage(scope, 24);
+    } catch (e) {
+      if (mine !== drawing) return;
+      console.error("scour: the report did not load:", e);
+      document.getElementById("r-bytes").textContent = "—";
+      document.getElementById("r-meta").textContent = "servise ulaşılamıyor";
+      kidsEl.innerHTML = "";
+      return;
+    }
+    if (mine !== drawing) return;          /* a newer folder won */
+
+    const n = res.root;
     document.getElementById("r-bytes").textContent = bytes(n.bytes);
-    const stale = n.age[4] + n.age[5];
-    document.getElementById("r-meta").innerHTML =
-      `${fmt(n.files)} dosya<br><b>%${stale}</b>'i bir yıldan eski` +
-      `<br>130.796 dizin · <b>72,9 ms</b> (51,7 satır + 21,1 toparlama)`;
 
-    const kids = (n.kids || []).map((k) => [k, T[k]]).filter(([, v]) => v)
-      .sort((a, b) => b[1].bytes - a[1].bytes);
-    kidsEl.innerHTML = kids.map(([path, v]) => `
+    /* What the headline says, and every part of it is measured. `disk` beside
+       `bytes` because showing the logical size and calling it disk usage is the
+       standard lie — the engine's own words, and it stores both. */
+    const stale = n.bytes ? Math.round(((n.age[4] + n.age[5]) / n.bytes) * 100) : 0;
+    const cut = res.child_count > res.children.length
+      ? ` · ${fmt(res.child_count)} klasörün en ağır ${res.children.length}'i`
+      : "";
+    document.getElementById("r-meta").innerHTML =
+      `${fmt(n.files)} dosya · diskte ${bytes(n.disk)}<br>` +
+      `<b>%${stale}</b>'i bir yıldan eski<br>` +
+      `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}`;
+
+    /* Already heaviest-first from the engine, which is what `top` cuts on. */
+    kidsEl.innerHTML = res.children.map((v) => `
       <tr>
-        <td class="nmcell">${v.leaf
-          ? `<span class="leaf">${leafOf(path)}</span>`
-          : `<button data-path="${path}">${leafOf(path)} <span style="color:var(--ink-3)">›</span></button>`}</td>
-        <td class="stack-wrap">${stack(v.age)}</td>
+        <td class="nmcell"><button data-path="${v.path}">${leafOf(v.path)} <span style="color:var(--ink-3)">›</span></button></td>
+        <td class="stack-wrap">${stack(v.age, v.bytes)}</td>
         <td class="r big">${bytes(v.bytes)}</td>
-        <td class="r">%${((v.bytes / n.bytes) * 100).toFixed(1)}</td>
+        <td class="r">%${n.bytes ? ((v.bytes / n.bytes) * 100).toFixed(1) : "0,0"}</td>
         <td class="r">${fmt(v.files)}</td>
       </tr>`).join("") ||
       `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">
-        Bu klasörün alt klasörü indekste ayrıca gösterilmiyor.</td></tr>`;
+        Bu klasörün altında ayrıca gösterilecek klasör yok.</td></tr>`;
 
     document.getElementById("agekey").innerHTML = AGE.map(([lbl, c]) =>
       `<span><i style="background:var(${c})"></i>${lbl}</span>`).join("");
 
-    const kmax = Math.max(...KIND.map((k) => k[1]));
-    document.getElementById("p-kind").innerHTML = KIND.map(([nm, ct, sz]) =>
-      `<div class="line" style="position:relative">
-         <span style="position:absolute;left:-4px;top:3px;bottom:3px;width:${(ct / kmax * 100).toFixed(1)}%;background:var(--line);border-radius:0 2px 2px 0"></span>
-         <span style="position:relative">${nm} <em>${fmt(ct)}</em></span>
-         <span style="position:relative">${sz}</span></div>`).join("");
+    drawKinds();
+    drawBiggest();
+    drawJump();
+  }
 
-    // Measured: 1,474,650 files, 493.6 GB. The size gate is useless by file
-    // count (it eliminates 6.2%) and excellent by bytes — so this panel
-    // shows *space that could be reclaimed*, not a tally.
-    document.getElementById("p-dupe").innerHTML =
-      `<div class="line"><span>Sabit bağ <em>fazladan</em></span><span>227.552</span></div>` +
-      `<div class="line"><span>Aynı ad</span><span>1.005.407</span></div>` +
-      `<div class="line"><span>Aynı boyut <em>&gt;1 MB</em></span><span>18.723</span></div>` +
-      `<div class="line"><span><em>en fazla kazanç</em></span><span>141,8 GB</span></div>` +
-      `<div class="line"><span>İçerik doğrulandı</span><span style="color:var(--ink-3)">—</span></div>`;
+  /* The type breakdown, from the same faceting the search sidebar uses. */
+  async function drawKinds() {
+    const el = document.getElementById("p-kind");
+    const q = scope ? `under:${scope}` : "";
+    try {
+      const res = await SERVICE.sidebar(q, BAR_EDGES);
+      const g = (res.groups || []).find((x) => x.by === "kind");
+      const rows = (g ? g.facets : []).filter((f) => f.count > 0)
+        .sort((a, b) => b.count - a.count).slice(0, 8);
+      const max = Math.max(1, ...rows.map((r) => r.count));
+      el.innerHTML = rows.map((r) => `
+        <div class="line" style="position:relative">
+          <span style="position:absolute;left:-4px;top:3px;bottom:3px;width:${(r.count / max * 100).toFixed(1)}%;background:var(--line);border-radius:0 2px 2px 0"></span>
+          <span style="position:relative">${(KINDS.find(([, t]) => t === r.key) || [r.key])[0]}</span>
+          <span style="position:relative">${fmt(r.count)}</span>
+        </div>`).join("") ||
+        `<div class="line"><span style="color:var(--ink-3)">—</span></div>`;
+    } catch (e) {
+      console.error("scour: the kind panel did not load:", e);
+    }
+  }
 
-    document.getElementById("p-big").innerHTML = BIG.map(([nm, sz]) =>
-      `<div class="line"><span>${nm}</span><span>${sz}</span></div>`).join("");
+  /* The heaviest files in scope, which is an ordinary search — the index sorts
+     by size without walking, so this costs what any other query costs. */
+  async function drawBiggest() {
+    const el = document.getElementById("p-big");
+    const q = (scope ? `under:${scope} ` : "") + "file:";
+    try {
+      const res = await SERVICE.search(q, "size", true, 8, 0);
+      el.innerHTML = res.rows.map((r) => `
+        <div class="line" title="${r.dir}/${r.name}">
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${r.name}</span>
+          <span>${bytes(r.size)}</span>
+        </div>`).join("") ||
+        `<div class="line"><span style="color:var(--ink-3)">—</span></div>`;
+    } catch (e) {
+      console.error("scour: the largest-files panel did not load:", e);
+    }
+  }
 
+  function drawJump() {
     document.getElementById("p-jump").innerHTML =
-      `<div class="line"><span>under:</span><span style="font-size:10.5px">${scope.replace("/home/hasan", "~")}</span></div>` +
+      `<div class="line"><span>under:</span><span style="font-size:10.5px">${scope || "/"}</span></div>` +
       `<button class="facet" style="padding-left:0;margin-top:6px" id="jump">
          <span class="dot" style="background:var(--t1)"></span>
          <span class="nm">Bu kapsamda ara</span></button>`;
     document.getElementById("jump").onclick = () => {
       const q = document.getElementById("q");
-      q.value = ("under:" + scope + " " + q.value.replace(/under:\S+\s*/g, "")).trim();
+      const rest = q.value.replace(/under:\S+\s*/g, "").trim();
+      q.value = (scope ? "under:" + scope + " " + rest : rest).trim();
       q.dispatchEvent(new Event("input"));
       show("search");
     };
@@ -3850,9 +3847,6 @@
   }
   document.getElementById("tab-search").onclick = () => show("search");
   document.getElementById("tab-report").onclick = () => show("report");
-
-  drawReport();
-  const _ = nodes;
 })();
 
 </script>
