@@ -1162,13 +1162,6 @@ fn run(
             }
         }
 
-        // The pulses, read outside the wait rather than inside it.
-        //
-        // As an arm of the `select!` they were only read when nothing else was
-        // ready, so a steady stream of changes could starve them — and an
-        // unwatched volume is exactly what they exist to notice. `due` carries
-        // its own two-second floor, so asking every turn costs a comparison.
-
         // A commit writes a segment, so committing two files costs a segment
         // holding two rows — and a browser cache touching one file a second
         // produced one segment a second for as long as the machine was on.
