@@ -249,7 +249,15 @@ fn capabilities_describe_this_platform_honestly() {
     let (_dir, src) = tree();
     let caps = src.caps();
     assert!(caps.contains(Caps::WATCH));
-    assert!(caps.contains(Caps::CONTENT));
+    // **Not `CONTENT`**, and this assertion used to say the opposite — which
+    // is how a test named for honesty came to hold the one dishonest claim in
+    // the file. `open` refuses unconditionally, so advertising the capability
+    // told a caller it could ask for something no answer exists for, and
+    // `scour sources` printed it. It comes back with the first `Extractor`.
+    assert!(
+        !caps.contains(Caps::CONTENT),
+        "nothing here can open a file, so nothing here may claim it can"
+    );
     #[cfg(unix)]
     {
         assert!(
@@ -494,8 +502,11 @@ fn a_source_told_not_to_watch_says_it_cannot() {
     let s = s.with_watch(false);
     assert!(!s.caps().contains(Caps::WATCH));
     assert!(!s.caps().contains(Caps::RECURSIVE_WATCH));
-    // And the rest of what it can do is unchanged.
-    assert!(s.caps().contains(Caps::CONTENT));
+    // And what is left says something about the filesystem rather than about
+    // this source: /tmp is case sensitive here, and that is measured rather
+    // than assumed. Nothing else remains —  went when it turned out
+    // that claiming it and refusing every  were the same source.
+    assert_eq!(s.caps(), Caps::CASE_SENSITIVE);
 }
 
 #[test]

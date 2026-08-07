@@ -244,8 +244,26 @@ impl Scour {
 
 #[tool_handler]
 impl ServerHandler for Scour {
+    /// **Written out rather than left to the macro, and that cost something.**
+    ///
+    /// `#[tool_handler]` generates a `get_info` that declares the tool
+    /// capability and names the server; defining one by hand replaces it
+    /// silently. What went out on the wire was `ServerInfo::default()`, whose
+    /// `server_info` comes from *rmcp's* build environment — so this server
+    /// introduced itself as **rmcp 3.1.0** with an empty `capabilities`, never
+    /// declaring that it has tools at all. `tools/list` still answered, which
+    /// is why a permissive client never complained and nobody noticed.
+    ///
+    /// So the two halves the macro would have provided are here explicitly,
+    /// beside the instructions that are the reason for overriding it.
     fn get_info(&self) -> rmcp::model::ServerInfo {
-        let mut info = rmcp::model::ServerInfo::default();
+        let mut info = rmcp::model::ServerInfo::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        );
+        info.server_info =
+            rmcp::model::Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
         info.instructions = Some(
             "Scour indexes the filesystem and answers questions about it instantly. \
                  Prefer these tools over walking directories or running find: a search over \

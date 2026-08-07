@@ -236,7 +236,13 @@ impl Source for FsSource {
     }
 
     fn caps(&self) -> Caps {
-        let mut c = Caps::CONTENT;
+        // **Not `CONTENT`.** This claimed it unconditionally while `open`
+        // refused unconditionally, which made the one capability bit a caller
+        // could act on a bit that lied — and `scour sources` printed it, so the
+        // lie was on screen. The flag comes back with the first `Extractor`,
+        // which is what it is for; until then the honest answer is that this
+        // source hands out metadata and nothing else.
+        let mut c = Caps::empty();
         if self.watch {
             c |= Caps::WATCH;
         }
