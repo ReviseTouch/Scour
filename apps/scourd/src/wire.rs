@@ -122,11 +122,26 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
     // and a rule a user can switch off by accident: an `allow` covering the
     // index directory used to win, because allow is tested first and returns
     // before the exclusions are read.
+    // **The same loop, one step out**: everything else Scour writes about
+    // itself. The web window is a browser, its profile lives under Scour's
+    // data directory, and a browser writes to its cache constantly. Watched,
+    // that becomes: the window writes → the index goes dirty → a client is
+    // waiting, so the commit clock is one second rather than fifteen → the
+    // revision moves → the page wakes and runs its whole query again → the
+    // window writes more cache.
+    //
+    // Measured with a window open and nothing else happening on the machine:
+    // the revision moved **fourteen times in twenty seconds** and one
+    // connection thread sat at **8.25% of a core**, against 0.37% for the
+    // whole service with the window shut — for a profile of 5,110 entries
+    // nobody will ever search for. Excluding the index did not catch this,
+    // because the profile is not in the index directory.
     merge(
         &mut o.deny,
         vec![
             config.index.dir.to_string_lossy().into_owned(),
             index_dir(config).to_string_lossy().into_owned(),
+            scour_config::data_dir().to_string_lossy().into_owned(),
         ],
     );
     merge(&mut o.exclude_paths, paths);
@@ -159,6 +174,27 @@ mod tests {
         assert!(
             o.exclude_dirs.iter().any(|d| d == "node_modules"),
             "the platform's does too"
+        );
+    }
+
+    #[test]
+    fn scour_never_indexes_what_it_writes_about_itself() {
+        // The index directory is not the only thing this program writes. The
+        // web window's browser profile is under the data directory, and a
+        // browser's cache churns; watched, it kept the page waking itself in
+        // a circle at 8.25% of a core. Nothing under here is searchable in
+        // any sense a person means.
+        let c = Config::default();
+        let o = scan_options(&c);
+        let rules = scour_source_fs::Rules::from_options(&o);
+        let data = scour_config::data_dir();
+        assert!(
+            rules.excludes_path(&format!(
+                "{}/app/Default/Cache/Cache_Data/x_0",
+                data.display()
+            )),
+            "the window's own browser cache is indexed: {:?}",
+            o.deny
         );
     }
 
