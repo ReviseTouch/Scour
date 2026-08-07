@@ -1054,35 +1054,42 @@ fn run(
                 }
                 Err(_) => break,
             },
-            recv(tick) -> _ => {
-                for (source, job) in pulses.due(&shared) {
-                    match job {
-                        Nudge::Reconcile => {
-                            // A source nobody is watching, whose pulse moved.
-                            if !scan(&shared, &changes_tx, source, None) {
-                                schedule_retry(&mut retries, source);
-                            }
-                            dirty = true;
-                            idle_done = false;
-                            last_busy = Instant::now();
-                        }
-                        Nudge::Blind => {
-                            // A source that *is* watched, whose pulse has been
-                            // moving for minutes with nothing arriving. Said
-                            // out loud because a watcher that has gone quiet
-                            // is otherwise indistinguishable from a quiet disk.
-                            eprintln!(
-                                "scourd: source {source} has changed repeatedly with no events \
-                                 arriving — the watch is not covering it; rescanning"
-                            );
-                            if !scan(&shared, &changes_tx, source, None) {
-                                schedule_retry(&mut retries, source);
-                            }
-                            dirty = true;
-                            idle_done = false;
-                            last_busy = Instant::now();
-                        }
+            recv(tick) -> _ => {}
+        }
+
+        // The pulses, read outside the wait rather than inside it.
+        //
+        // As an arm of the `select!` they were only read when nothing else was
+        // ready, so a machine producing a steady stream of changes could
+        // starve them — and an unwatched volume is exactly what pulses exist
+        // to notice. `due` carries its own two-second floor, so asking on
+        // every turn of the loop costs a comparison.
+        for (source, job) in pulses.due(&shared) {
+            match job {
+                Nudge::Reconcile => {
+                    // A source nobody is watching, whose pulse moved.
+                    if !scan(&shared, &changes_tx, source, None) {
+                        schedule_retry(&mut retries, source);
                     }
+                    dirty = true;
+                    idle_done = false;
+                    last_busy = Instant::now();
+                }
+                Nudge::Blind => {
+                    // A source that *is* watched, whose pulse has been
+                    // moving for minutes with nothing arriving. Said
+                    // out loud because a watcher that has gone quiet
+                    // is otherwise indistinguishable from a quiet disk.
+                    eprintln!(
+                        "scourd: source {source} has changed repeatedly with no events \
+                         arriving — the watch is not covering it; rescanning"
+                    );
+                    if !scan(&shared, &changes_tx, source, None) {
+                        schedule_retry(&mut retries, source);
+                    }
+                    dirty = true;
+                    idle_done = false;
+                    last_busy = Instant::now();
                 }
             }
         }
@@ -1097,7 +1104,36 @@ fn run(
         // is a change sitting unwritten indefinitely, which is why the second
         // half of that sentence exists.
         let waited = last_commit.elapsed();
-        let enough = shared.pending.load(Ordering::Relaxed) >= shared.opts.commit_batch;
+        let watched = shared.watchers.load(Ordering::Relaxed) > 0;
+        // **The batch is a latency rule, so it only applies when latency has
+        // somebody to matter to.**
+        //
+        // `commit_batch` is sixty-four because a window waiting on a file it
+        // just saved should not wait for a clock. With nothing open, nobody
+        // can observe the index at all — there is no latency to protect, and
+        // the only reason left to commit is to stop the staging buffer
+        // growing. That is a memory bound, and sixty-four rows is nowhere
+        // near one.
+        //
+        // The note below already recorded that this desktop produces 30–50
+        // changes a second, which reaches sixty-four in about two: what it
+        // did not follow through on is that `commit_idle` was therefore never
+        // consulted, open window or not. Measured with nothing running: the
+        // entry count moved by **2** in sixty seconds and the revision by
+        // **14**. Fourteen commits a minute, at the ~13 ms a commit costs
+        // whatever it holds, is 180 ms — the whole of the 0.30% of a core the
+        // worker spent while nobody had asked it for anything.
+        //
+        // Kept as a ceiling rather than removed, because a burst is still
+        // real: an unpacked archive or a build tree is hundreds of thousands
+        // of changes, and holding fifteen seconds of those unstaged is the
+        // memory problem the small number was never guarding against.
+        let batch = if watched {
+            shared.opts.commit_batch
+        } else {
+            shared.opts.commit_batch.max(IDLE_BATCH)
+        };
+        let enough = shared.pending.load(Ordering::Relaxed) >= batch;
         // How long a trickle may wait, and it depends on whether anyone is
         // watching. Nobody is: fifteen seconds, and the machine writes one
         // segment a minute instead of one a second. Somebody is: as soon as the
@@ -1105,12 +1141,8 @@ fn run(
         // just saved.
         //
         // This is not a small difference by luck. Measured here, a file created
-        // in a watched directory became findable in **0.90 s** — which looked
-        // like the design working and was not: this desktop happens to produce
-        // 30–50 filesystem changes a second, so `commit_batch` was reached
-        // before the trickle clock ever mattered. On a quiet machine the same
-        // file waits the full fifteen.
-        let patience = if shared.watchers.load(Ordering::Relaxed) > 0 {
+        // in a watched directory became findable in **0.90 s**.
+        let patience = if watched {
             shared.opts.commit_watched
         } else {
             shared.opts.commit_idle
@@ -1422,6 +1454,16 @@ fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, source: usize) {
 /// there is no point paying it on a machine whose segment count moves by one
 /// every few seconds.
 const COMPACT_EVERY: Duration = Duration::from_secs(60);
+
+/// The batch that stands in for `commit_batch` when nobody is watching.
+///
+/// `commit_batch` is a latency rule and sixty-four is a latency number. With
+/// nothing open there is no latency to protect, and the only reason left to
+/// commit is to keep the staging buffer bounded — so this is a memory number.
+/// It is a ceiling rather than a removal because a burst is real: an unpacked
+/// archive is hundreds of thousands of changes, and holding fifteen seconds of
+/// those unstaged is the problem the small number was never guarding against.
+const IDLE_BATCH: u64 = 4_096;
 
 const BATCH: usize = 4_096;
 
