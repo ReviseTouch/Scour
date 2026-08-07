@@ -1083,8 +1083,8 @@
       SERVICE.get("search", { q, sort, desc: desc ? 1 : 0, limit, offset: offset || 0 }, signal),
     /* Every question about the matching set, in one request. The index
        answers them from one walk of it — see `FacetResponse::groups`. */
-    explain: (q, cursor) =>
-      SERVICE.get("explain", cursor === null ? { q } : { q, cursor }),
+    explain: (q, cursor, signal) =>
+      SERVICE.get("explain", cursor === null ? { q } : { q, cursor }, signal),
     sidebar: (q, edges) =>
       SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
     status: () => SERVICE.get("status", {}),
@@ -1609,11 +1609,20 @@
    * no change at all. */
   let readGeneration = 0;
   let LAST_SPANS = [];
+  /* The reading this keystroke asked for. Cheap on the service — under a
+     millisecond — but it is a request, and requests are the scarce thing: six
+     to an origin, shared with the search that the same keystroke started. */
+  let reading = null;
 
   function refreshReading(text) {
     const mine = ++readGeneration;
-    const caret = document.activeElement === q ? (q.selectionStart ?? null) : null;
-    SERVICE.explain(text, caret)
+    // In bytes: see `jsIndexByByte`. Sent as a code-unit index, one `İ` before
+    // it was enough to put it inside a character, and the service sliced there.
+    const where = document.activeElement === q ? (q.selectionStart ?? null) : null;
+    const caret = where === null ? null : bytesBefore(text, where);
+    if (reading) reading.abort();
+    reading = new AbortController();
+    SERVICE.explain(text, caret, reading.signal)
       .then((res) => {
         if (mine !== readGeneration) return;
         LAST_SPANS = res.spans || [];
@@ -1636,18 +1645,29 @@
          * anything in it is more than a plain word, or anything in it is
          * wrong, the reading appears. Its being there is then a signal in
          * itself. */
+        // Byte offsets, so through the map — the same reason `paintSpans`
+        // uses it. Without it a word with `ş` in it is cut short here and
+        // stops being recognised as one of the mistaken ones.
+        const js = jsIndexByByte(text);
         qread.hidden =
           !wrong &&
           !LAST_SPANS.some((s) => TELLING.has(s.role)) &&
           !LAST_SPANS.some(
-            (s) => s.role === "text" && MISTAKEN.has(text.slice(s.start, s.start + s.len).toLowerCase()),
+            (s) =>
+              s.role === "text" &&
+              MISTAKEN.has(text.slice(js(s.start), js(s.start + s.len)).toLowerCase()),
           );
         /* The reading lives in an `auto` grid row. A longer one can wrap
            after the list's frame has already painted, changing its client
            height without producing a window resize or a scroll. */
         repaint(true);
       })
-      .catch((e) => { console.error("scour: query explanation did not draw:", e); });
+      .catch((e) => {
+        // Let go of by the next keystroke, which is the normal case while
+        // someone is typing rather than something to write down.
+        if (e.name === "AbortError") return;
+        console.error("scour: query explanation did not draw:", e);
+      });
   }
 
   /* The engine's role names, as the palette spells them. Anything unknown is
@@ -1663,14 +1683,52 @@
     unknown_field: "bad", bad_value: "bad",
   };
 
+  /* The engine counts bytes; a string here is counted in UTF-16 code units.
+   *
+   * The two agree exactly until the first character that is not ASCII, which
+   * in Turkish is usually the first word. After that every span is cut a byte
+   * or two off its own start: a coloured term ends mid-character and the next
+   * one begins inside it. The same mismatch, sent the other way, was landing
+   * the caret inside a character and panicking the service — `İ` is one unit
+   * here and two bytes there.
+   *
+   * This is the one place the two are reconciled. Everything downstream of
+   * `paintSpans` is in the units the page uses, and `caret` is turned into
+   * bytes before it is sent. Built per call rather than kept: the string is
+   * whatever fits in a search box, and a cached map is one more thing that can
+   * be stale.
+   */
+  const ENCODER = new TextEncoder();
+  const bytesBefore = (text, i) => ENCODER.encode(text.slice(0, i)).length;
+
+  function jsIndexByByte(text) {
+    const at = new Map([[0, 0]]);
+    let b = 0;
+    for (let i = 0; i < text.length; ) {
+      const cp = text.codePointAt(i);
+      const wide = cp > 0xffff;
+      b += cp < 0x80 ? 1 : cp < 0x800 ? 2 : wide ? 4 : 3;
+      i += wide ? 2 : 1;
+      at.set(b, i);
+    }
+    /* An offset that is not a boundary means the engine and the page are
+       looking at different strings, which is a different bug from this one.
+       The end is a wrong answer that still draws; `undefined` slices from
+       `NaN` and empties the box. */
+    return (off) => (at.has(off) ? at.get(off) : text.length);
+  }
+
   function paintSpans(text) {
     if (!LAST_SPANS.length) return [["text", text]];
+    const js = jsIndexByByte(text);
     const out = [];
     let at = 0;
     for (const s of LAST_SPANS) {
-      if (s.start > at) out.push(["text", text.slice(at, s.start)]);
-      out.push([s.role, text.slice(s.start, s.start + s.len)]);
-      at = s.start + s.len;
+      const start = js(s.start);
+      const end = js(s.start + s.len);
+      if (start > at) out.push(["text", text.slice(at, start)]);
+      out.push([s.role, text.slice(start, end)]);
+      at = end;
     }
     if (at < text.length) out.push(["text", text.slice(at)]);
     return out;

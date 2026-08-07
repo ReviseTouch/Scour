@@ -287,7 +287,7 @@ fn field_split(s: &str) -> Option<(&str, &str)> {
 /// from the field table, which means a field that exists is offered and a field
 /// that does not cannot be.
 pub fn complete(input: &str, cursor: usize) -> Vec<Completion> {
-    let cursor = cursor.min(input.len());
+    let cursor = caret(input, cursor);
     let word = word_at(input, cursor);
     let typed = &input[word.0..cursor];
     let stripped = typed.strip_prefix('!').unwrap_or(typed);
@@ -338,6 +338,29 @@ fn values_for(f: &fields::Field, written_name: &str, typed: &str) -> Vec<Complet
 }
 
 /// The whitespace-delimited word the cursor sits in, as byte offsets.
+/// The caret, moved to a boundary this string actually has.
+///
+/// A caret is a number from somewhere else, and the somewhere else counts
+/// differently. A browser's `selectionStart` counts UTF-16 code units; this
+/// counts bytes; `İ` is one of the first and two of the second. So a caret
+/// after a single Turkish capital I arrives one short of where it means, and
+/// slicing there is not a wrong answer but a panic — which took the connection
+/// with it, and the request that connection was carrying. Measured on this
+/// machine: two of them in one second of ordinary typing.
+///
+/// Clients should send bytes and the page now does. This is what happens when
+/// one does not: the caret moves back to the start of the character it landed
+/// inside, and the offer is for a word that was very nearly the right one. The
+/// alternative — refusing, or returning nothing — spends a crash to punish a
+/// caller for a rounding error nobody can see.
+fn caret(input: &str, cursor: usize) -> usize {
+    let mut at = cursor.min(input.len());
+    while !input.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
 fn word_at(input: &str, cursor: usize) -> (usize, usize) {
     let bytes = input.as_bytes();
     let mut start = cursor;
@@ -619,6 +642,24 @@ mod tests {
             complete("rapor ex", 5).iter().all(|c| c.insert != "ext:"),
             "a cursor inside the first word does not complete the second"
         );
+    }
+
+    #[test]
+    fn a_caret_inside_a_character_does_not_take_the_connection_down() {
+        // What a browser sends after typing `İ`: one code unit per character,
+        // where this counts two bytes for that one. Every offset from nowhere
+        // to past the end has to answer rather than panic — the caller is a
+        // socket, and the panic was killing the thread holding it.
+        for input in ["İ", "kİ", "ad:İ", "rapor İş", "TRABZON.MÜZEKKERE"] {
+            for cursor in 0..=input.len() + 4 {
+                let _ = complete(input, cursor);
+            }
+        }
+
+        // And it lands on the character the caret is inside, not before it:
+        // `ad:İ` is 5 bytes, so a browser's 4 is mid-`İ` and means the word so
+        // far — which is still `ad:`, still a field, still worth an offer.
+        assert_eq!(complete("ad:İ", 4), complete("ad:İ", 3));
     }
 
     #[test]
