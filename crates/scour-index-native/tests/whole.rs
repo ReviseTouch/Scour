@@ -1521,3 +1521,71 @@ fn a_directory_is_not_a_file_of_type_grup() {
         f.check(q, SortKey::Name, false);
     }
 }
+
+#[test]
+fn the_empty_query_counts_what_is_live_without_walking_for_it() {
+    // Nothing to test means every live row matches, and how many that is is a
+    // number each segment already keeps. The walk was visiting all of them to
+    // arrive at it: 1.233 s on a 2.09 M-row index, for the query a window
+    // shows the moment it opens.
+    //
+    // What this has to get right is *live*, not stored. A removed row is
+    // still in the segment, and reading a total off the wrong counter would
+    // be a fast wrong answer — the worst kind, and invisible until somebody
+    // notices the number is bigger than the list.
+    let f = Fixture::new(4_000, 500);
+    let live = f.entries.len() as u64;
+
+    let count = |index: &NativeIndex, cap: u32| -> (u64, bool) {
+        let r = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 0,
+                    count_cap: cap,
+                },
+            })
+            .expect("count");
+        (r.total, r.capped)
+    };
+
+    assert_eq!(count(&f.index, u32::MAX).0, live, "every row, and no more");
+
+    // Take four leaves away and ask again. Leaves, because
+    // on a directory takes everything under it — which is correct, and would
+    // make this test about something else.
+    let doomed: Vec<String> = f
+        .entries
+        .iter()
+        .filter(|e| !e.is_dir)
+        .filter(|e| {
+            !f.entries
+                .iter()
+                .any(|o| o.path.starts_with(&format!("{}/", e.path)))
+        })
+        .take(4)
+        .map(|e| e.path.clone())
+        .collect();
+    assert_eq!(doomed.len(), 4, "four leaves to remove");
+    for path in &doomed {
+        f.index
+            .apply(&mut std::iter::once(Change::RemoveSubtree {
+                path: path.clone(),
+            }))
+            .expect("remove");
+    }
+    f.index.commit().expect("commit");
+    assert_eq!(
+        count(&f.index, u32::MAX).0,
+        live - doomed.len() as u64,
+        "a removed row is not live and must not be counted"
+    );
+
+    // And the cap still means what it meant.
+    let (total, capped) = count(&f.index, 100);
+    assert!(capped, "a cap below the total still reports capped");
+    assert_eq!(total, 100, "and reports the cap, not the true total");
+}

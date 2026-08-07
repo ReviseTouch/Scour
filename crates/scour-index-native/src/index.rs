@@ -1755,6 +1755,26 @@ impl Index for NativeIndex {
             rows += live.rows() as u64;
             let seg = live.view()?;
             let plan = Plan::compile(&req.query, &seg)?;
+            // **A query with no conditions matches every live row**, and how
+            // many that is is a number the segment already keeps.
+            //
+            // Nothing hidden, nothing to test: the walk's only remaining job
+            // is to produce the page, and rows are stored newest-first so it
+            // stops as soon as the page is full. What it was doing instead was
+            // visiting all of them to arrive at a total — measured on this
+            // index, `/api/count` on the empty query took **1.233 s** across
+            // 2,094,185 rows, against 5.5 ms for the same query's first page.
+            // A window opens showing the empty query, so that second and a
+            // quarter was part of every time one was opened.
+            let matches_all = !hiding && plan.is_empty();
+            if matches_all && need == 0 {
+                // A count and nothing else. There is no page to build, so
+                // there is nothing left to walk for.
+                let live_rows = live.live_rows();
+                counted += live_rows;
+                budget = budget.saturating_sub(live_rows as usize);
+                continue;
+            }
             let found = run_with(
                 &seg,
                 &plan,
@@ -1774,12 +1794,19 @@ impl Index for NativeIndex {
                     // corpus. With the budget shared, a segment that cannot
                     // add to the count stops as soon as it has enough rows to
                     // be considered for the page — which is what it is for.
-                    count_cap: budget,
+                    // Everything matches, so the walk needs only enough rows
+                    // to fill the page; the total comes from the segment.
+                    count_cap: if matches_all { need } else { budget },
                 },
                 hiding.then_some(&mut veto as &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool),
             );
-            counted += found.total;
-            budget = budget.saturating_sub(found.total as usize);
+            let total = if matches_all {
+                live.live_rows()
+            } else {
+                found.total
+            };
+            counted += total;
+            budget = budget.saturating_sub(total as usize);
             visited += found.rows_visited;
             built += found.rows_built;
             all.extend(found.hits);
