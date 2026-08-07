@@ -245,13 +245,31 @@ impl Config {
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Config>(&text) {
                 Ok(c) => (c.with_defaults_filled(), None),
-                // A malformed file must not stop the service: it starts on
-                // defaults and reports why, which is far better than refusing
-                // to run because of one stray character.
+                // **A file that exists and does not parse is fatal**, and the
+                // reasoning it replaces was right about the wrong settings.
+                // "A malformed file must not stop the service: it starts on
+                // defaults and reports why" is correct for a result limit or a
+                // language — the default is harmless and the user loses a
+                // preference. It is not correct for a source list, because the
+                // default *is* a source list: one entry, the home directory.
+                //
+                // So a stray character in the file — one unknown key, and the
+                // schema denies those — dropped every other source. On this
+                // machine that is `/mnt/depo`: the engine sees a source it no
+                // longer has and calls `forget`, and a million rows leave the
+                // index. The service stays up, indexing the wrong tree, and
+                // says so in one line on stderr that goes to the journal.
+                //
+                // Refusing to start is the smaller failure by a wide margin.
+                // It is loud, it is immediate, and nothing is lost.
                 Err(e) => (
                     Config::default().with_defaults_filled(),
                     Some(Error::Config {
-                        detail: e.to_string(),
+                        detail: format!(
+                            "{}: {e}\nNothing was loaded. Fix the file, or move it aside to \
+                             start on defaults.",
+                            path.display()
+                        ),
                     }),
                 ),
             },

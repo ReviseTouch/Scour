@@ -99,10 +99,20 @@ fn main() -> Result<()> {
         Some(p) => (Config::load_from(p)?, None),
         None => Config::load_or_default(),
     };
-    if let Some(e) = &problem {
-        // Not fatal: the service runs on defaults and says why, which beats
-        // refusing to start because of one stray character in a settings file.
-        eprintln!("scourd: {e}");
+    if let Some(e) = problem {
+        // **Fatal**, and it was not. The service used to run on defaults and
+        // say why, which is the right answer for a preference and the wrong
+        // one for a source list: the default source list is one entry, the
+        // home directory, so a single stray character dropped every other
+        // source — and the engine, seeing a source it no longer has, forgets
+        // its rows. On this machine that is a million of them, gone, while the
+        // service stays up indexing the wrong tree and reports it in one line
+        // nobody reads.
+        //
+        // A service that will not start is a problem somebody fixes in a
+        // minute. An index quietly rebuilt around the wrong sources is one
+        // they notice a week later, if at all.
+        return Err(e.into());
     }
 
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());

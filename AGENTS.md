@@ -19,17 +19,17 @@ Everything else is an *implementation* and lives in its own crate:
 | Contract | `scour-core` | nothing |
 | Language | `scour-query` | the query syntax, no backend |
 | Wire | `scour-proto`, `scour-ipc` | the request/response shape, the socket |
-| Implementations | `scour-index-native`| one concrete technology each |
+| Implementations | `scour-index-native`, `scour-source-fs`, `scour-config`, `scour-i18n` | one concrete technology each |
 | Orchestration | `scour-engine` | `Box<dyn Source>`, `Box<dyn Index>` — no concrete types |
 | Wiring | `apps/scourd` | **the only place concrete types are named** |
-| Frontends | `apps/scour`, `apps/scour-mcp`, later the GUI | `scour-proto` only |
+| Frontends | `apps/scour`, `apps/scour-mcp`, `apps/scour-web`, `apps/scour-gui` | `scour-proto` only |
 
 Consequences that are not negotiable:
 
 - `scour-engine` must never contain the word `notify`, `ignore`, or the name
   of any index implementation. It had a dead `scour-index-tantivy` dependency
   in its manifest for a while, which nothing caught because nothing checked.
-- Swapping the search engine must be a one-line change in `apps/scourd/src/main.rs`.
+- Swapping the search engine must be a one-line change in `apps/scourd/src/wire.rs`.
 - If an implementation crate needs another implementation crate, the abstraction
   it actually needs is missing from `scour-core`. Add the trait; do not add the
   dependency.
@@ -63,7 +63,7 @@ Performance claims in this repository are measurements, not opinions. Numbers
 live in `docs/MEASUREMENTS.md` with the command that produced them. A change
 that claims to be faster cites a before and an after.
 
-The verifier is not optional: `scour-index-native`
+The verifier is not optional: `scour-index-native` checks its results against
 `scour-mock::brute_force`. Three real bugs — a capped count that bounded the
 value but not the work, a segment tail cut at page size, and deleted documents
 reappearing — were invisible to timing and only caught by that comparison.
@@ -81,16 +81,17 @@ carries the `id` of the call it answers. Requests:
 |---|---|---|
 | `search` | | `query`, `sort`, `descending`, `page{offset,limit,count_cap}`; the reply carries `rows_visited` and `rows_built`, the second being what makes a deep page's cost visible |
 | `count` | | `query`, `cap` — the total is a floor when `capped` |
-| `facets` | | `query`, `by`: `kind` / `ext{top}` / `dir{path,top}` |
+| `facets` | | `query`, `by`: a **list** of `kind` / `ext{top}` / `dir{path,top}` / `age{edges}`, answered from one walk of the matching set — a sidebar wanting three used to walk it three times. `age` bands are the caller's, because a chart of twenty-four bars and a list of six periods want different edges out of the same rows |
 | `tree` | | `path`, `depth`, `limit` — bounded *per level* |
 | `stat` | | `path`; answered from the source, so a new file is never missing |
-| `usage` | | `path` (empty for everything), `top` → what a subtree weighs, its heaviest children, and the age of its bytes. Matches `du` byte for byte — including that a hard-linked file is counted once |
+| `usage` | | `path` (empty for everything), `top` → what a subtree weighs, its heaviest children, and the age of its bytes. Agrees with `du` on the total and **deliberately not per directory**: a hard-linked file is charged `disk / links` to each of its names, where `du` charges the whole file to whichever name it meets first, so its per-folder numbers depend on traversal order and these do not change when a directory is renamed |
 | `explain` | | `query`, optional `cursor` → the sentence, the coloured `spans`, and `completions` at the caret — without running it |
 | `sources` | | what is indexed, and each source's `Caps` |
 | `status` | | numbers and flags only, never a sentence |
 | `stats` | | index size, segments, unsorted tail |
+| `await` | | `since` (the last `revision` seen), `timeout_ms` → a `Status`, returned when the index would answer differently or when the wait runs out; the revision in it says which. The one request allowed to take its time, and what makes a live list one blocked thread rather than 86,400 searches a day spent discovering that a desktop was idle. It is also what tells the service somebody is looking, which is what makes a change worth committing sooner than it would be for nobody |
 | `rescan` | ✓ | optional `path` to narrow it |
-| `maintain` | ✓ | `flush` / `compact` / `rebuild` |
+| `maintain` | ✓ | `flush` / `idle` / `compact` / `rebuild` — `idle` is separate from `flush` because they happen at different rates: flushing is what a burst of changes needs every second, giving back the write buffer is what a machine sitting overnight needs once |
 | `syntax` | | the query language reference, as text |
 | `shutdown` | ✓ | |
 
@@ -108,13 +109,14 @@ A client and nothing else: no index, no filesystem, does not link the engine.
 
 ```
 scour [-n N] [-s SORT] <query>       search, ordered by relevance (the default)
-scour search <q> --sort --limit --offset --ascending
+scour search <q> --sort --limit --offset --ascending --count-cap
 scour count <q>                      scour facets <q> --by kind|ext|<dir>
 scour tree <path> --depth --limit    scour stat <path>
 scour du [path] --top
 scour explain <q>                    scour syntax
 scour sources                        scour status
-scour rescan [path]                  scour maintain flush|compact|rebuild
+scour stats                          scour rescan [path]
+scour maintain flush|compact|rebuild
 scour where                          scour mcp-config
 ```
 
@@ -124,9 +126,12 @@ is broken. The sharp edge is that `scour rapor -n 100` searches for three words
 and returns a silent zero, so `-n` and `-s` are accepted *before* the query and
 `--help` says so. `scour search` takes them anywhere.
 
-`--json` on every command prints the protocol type serialised directly — the
-same bytes the service sent. `where` and `mcp-config` answer without a service,
-because both are what you reach for when the service is what is not working.
+`--json` and `--socket` are global. `--json` prints the protocol type
+serialised directly — the same bytes the service sent — on every command that
+reaches the service; `--socket` points at one other than the configured one.
+`where` and `mcp-config` are the two that reach no service, because both are
+what you reach for when the service is what is not working, and they return
+before `--json` is looked at.
 
 ### MCP — `scour-mcp`
 
