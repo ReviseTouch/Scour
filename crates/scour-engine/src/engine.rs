@@ -761,6 +761,14 @@ impl Pulses {
         }
     }
 
+    /// When the pulses will next be worth reading.
+    ///
+    /// On an idle machine this is the only deadline left, so it is what
+    /// decides how often a service with nothing to do wakes at all.
+    fn next_due(&self) -> Instant {
+        self.checked + Self::EVERY
+    }
+
     fn due(&mut self, shared: &Arc<Shared>) -> Vec<(usize, Nudge)> {
         #[cfg(feature = "memory-trace")]
         if std::env::var_os("SCOUR_MEMORY_NO_PULSES").is_some() {
@@ -926,10 +934,70 @@ fn run(
     // again, so the volume stays as stale as it was until a person types
     // `scour rescan`.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
-    let tick = crossbeam_channel::tick(Duration::from_millis(100));
     let mut pulses = Pulses::new(shared.sources.len());
 
     loop {
+        // **Wait for the next thing that has to happen, not for a tick.**
+        //
+        // This was `tick(100ms)`: ten wake-ups a second, forever, owed or not
+        // — 864,000 a day on a machine where nothing changed. Measured on a
+        // small, quiet, watched source, where what is left is the loop's own
+        // pulse and nothing else: **20 ms of CPU per sixty seconds, 0.033% of
+        // a core**, and it was the floor under an idle service.
+        //
+        // Every deadline the body below acts on is known here, so the wait is
+        // the nearest of them. Idle — nothing dirty, housekeeping done, no
+        // source waiting to be retried — the only one left is the pulse at two
+        // seconds.
+        //
+        // **A deadline that has passed is not a deadline.** The first attempt
+        // at this asked for the earlier of `commit_interval` and `patience`
+        // whenever anything was dirty. One second after a commit the first is
+        // behind us, the wait is zero, and the body declines to commit because
+        // the batch is not full and the patience has not run out — so the loop
+        // asks again immediately, and again, for the whole fifteen seconds.
+        // Each deadline has to be the moment the body would actually *do*
+        // something.
+        let now = Instant::now();
+        let left = |at: Instant| at.saturating_duration_since(now);
+        let mut wake = Duration::from_secs(10);
+        wake = wake.min(left(pulses.next_due()));
+        if dirty {
+            // A full batch is held only by the interval floor; an unfull one
+            // waits out patience. More changes can fill it early, and those
+            // arrive on `changes`, which wakes this anyway.
+            let watched = shared.watchers.load(Ordering::Relaxed) > 0;
+            let patience = if watched {
+                shared.opts.commit_watched
+            } else {
+                shared.opts.commit_idle
+            };
+            let batch = if watched {
+                shared.opts.commit_batch
+            } else {
+                shared.opts.commit_batch.max(IDLE_BATCH)
+            };
+            let at = if shared.pending.load(Ordering::Relaxed) >= batch {
+                last_commit + shared.opts.commit_interval
+            } else {
+                last_commit + patience.max(shared.opts.commit_interval)
+            };
+            wake = wake.min(left(at));
+        }
+        if dirty_settled {
+            wake = wake.min(left(last_compact + COMPACT_EVERY));
+        }
+        if !dirty && !idle_done {
+            wake = wake.min(left(last_busy + shared.opts.idle_after));
+        }
+        if let Some(at) = retries.iter().map(|(_, at, _)| *at).min() {
+            wake = wake.min(left(at));
+        }
+        // A backstop, not a schedule. If a deadline above is ever computed
+        // wrong the cost is fifty turns a second rather than a spun core, and
+        // it shows as CPU instead of as housekeeping that quietly stopped.
+        wake = wake.max(Duration::from_millis(20));
+
         select! {
             recv(jobs) -> job => match job {
                 Ok(Job::Stop) | Err(_) => break,
@@ -1054,7 +1122,7 @@ fn run(
                 }
                 Err(_) => break,
             },
-            recv(tick) -> _ => {}
+            default(wake) => {}
         }
 
         // The pulses, read outside the wait rather than inside it.
@@ -1093,6 +1161,13 @@ fn run(
                 }
             }
         }
+
+        // The pulses, read outside the wait rather than inside it.
+        //
+        // As an arm of the `select!` they were only read when nothing else was
+        // ready, so a steady stream of changes could starve them — and an
+        // unwatched volume is exactly what they exist to notice. `due` carries
+        // its own two-second floor, so asking every turn costs a comparison.
 
         // A commit writes a segment, so committing two files costs a segment
         // holding two rows — and a browser cache touching one file a second
