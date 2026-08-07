@@ -273,7 +273,15 @@ enum Test {
     /// The name matches this wildcard pattern, anchored end to end.
     NameGlob(String),
     /// The extension, taken from the name, is one of these.
-    Ext(Vec<String>),
+    ///
+    /// `dirs` is whether a directory can have one. Asked as `ext:` it cannot —
+    /// `Trabzon 2. Grup` is a folder, not a file of type ` grup`, and on a
+    /// volume written from Windows a dot in a folder name is ordinary. Asked
+    /// as `*.rs` it can, because that is a pattern over the name and a folder
+    /// called `mod.rs` does match it. Two questions that share an answer for
+    /// files and part company on directories, which is why the flag is here
+    /// and not at the two call sites deciding separately.
+    Ext { list: Vec<String>, dirs: bool },
     /// The whole path contains this, case-folded. The most expensive test.
     PathHas(Needle),
     /// Matches nothing. What an impossible condition compiles to — an `under:`
@@ -289,7 +297,7 @@ impl Test {
             Test::Never => 0,
             Test::Num { .. } | Test::DirIn(_) | Test::KindIn(_) | Test::Bits { .. } => 1,
             Test::Depth { .. } => 2,
-            Test::Ext(_) => 3,
+            Test::Ext { .. } => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::NameLen { .. } => 4,
             Test::NameHasCased(_) => 20,
@@ -509,7 +517,7 @@ fn filterable(test: &Test) -> Option<Vec<u8>> {
         // A name with extension `pdf` contains `.pdf`, because an extension is
         // only an extension when something precedes the dot. One extension
         // only: a list would need the union of its lists, not the intersection.
-        Test::Ext(list) => match &list[..] {
+        Test::Ext { list, .. } => match &list[..] {
             [only] => Some(format!(".{only}").into_bytes()),
             _ => None,
         },
@@ -648,7 +656,7 @@ impl Plan {
                 t,
                 Test::NameHas(_)
                     | Test::NameGlob(_)
-                    | Test::Ext(_)
+                    | Test::Ext { .. }
                     | Test::PathHas(_)
                     | Test::Regex(_)
                     | Test::NameLen { .. }
@@ -700,12 +708,19 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
         // pattern matcher over the whole name. Measured at 175 ms against 47.
         Match::NameGlob(p) => match p.strip_prefix("*.") {
             Some(ext) if !ext.is_empty() && !ext.contains(['*', '?', '.']) => {
-                Test::Ext(vec![ext.to_owned()])
+                // A pattern over the name, so a directory called `mod.rs` matches.
+                Test::Ext {
+                    list: vec![ext.to_owned()],
+                    dirs: true,
+                }
             }
             _ => Test::NameGlob(p.clone()),
         },
         Match::PathContains(t) => Test::PathHas(Needle::new(t)),
-        Match::Ext(list) => Test::Ext(list.clone()),
+        Match::Ext(list) => Test::Ext {
+            list: list.clone(),
+            dirs: false,
+        },
         Match::IsDir(want) => Test::Num {
             field: Field::IsDir,
             cmp: Cmp::Eq,
@@ -854,11 +869,14 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             let k = seg.num(Field::Kind, row);
             (0..16).contains(&k) && mask & 1 << k != 0
         }
-        Test::Ext(list) => {
-            // The extension of a folded name is a folded extension, so this
-            // is a comparison and nothing else.
+        Test::Ext { list, dirs } => {
+            // A directory has no extension, so `ext:` never matches one. The
+            // column read is the cheap half of this test and only happens for
+            // a name that already looked like a match.
             let ext = ext_bytes(name);
-            !ext.is_empty() && list.iter().any(|e| e.as_bytes() == ext)
+            !ext.is_empty()
+                && list.iter().any(|e| e.as_bytes() == ext)
+                && (*dirs || seg.num(Field::IsDir, row) == 0)
         }
         Test::NameHas(n) => n.found_in(name),
         Test::NameGlob(p) => match std::str::from_utf8(name) {

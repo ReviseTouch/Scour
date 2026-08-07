@@ -214,8 +214,20 @@ impl Entry {
         }
     }
 
-    /// Lowercase extension without the dot.
+    /// Lowercase extension without the dot. A directory has none.
+    ///
+    /// The name rule and the directory rule are two different questions and
+    /// [`ext_of`] only answers the first, because most of its callers have a
+    /// name and nothing else. Here there is a row, so the second is answered
+    /// too: `Trabzon 2. Grup` is a folder, not a file of type ` grup`, and
+    /// `TRABZON.MÜZEKKERE.CEVABI` is not one of type `cevabi`. Both are real,
+    /// off a volume written from Windows, where a dot in a folder name is
+    /// ordinary — 81 of the 200 rows one query returned were directories and
+    /// six of them had been given an extension out of their own name.
     pub fn ext(&self) -> String {
+        if self.is_dir {
+            return String::new();
+        }
         ext_of(self.name())
     }
 
@@ -987,6 +999,18 @@ mod tests {
         );
         assert_eq!(ext_of("LICENSE"), "");
         assert_eq!(ext_of("file."), "");
+    }
+
+    #[test]
+    fn a_directory_has_no_extension() {
+        // Real names, off the Windows volume. A dot in a folder name is
+        // ordinary there, and the last one is not a type.
+        for name in ["TRABZON.MÜZEKKERE.CEVABI", "Trabzon 2. Grup", "mod.rs"] {
+            let dir = entry(&format!("/mnt/depo/{name}"), true, 0o40755);
+            assert_eq!(dir.ext(), "", "a directory named {name} has no extension");
+            let file = entry(&format!("/mnt/depo/{name}"), false, 0o100644);
+            assert_ne!(file.ext(), "", "a file named {name} still has one");
+        }
     }
 
     #[test]

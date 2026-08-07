@@ -1465,3 +1465,59 @@ fn a_file_with_two_names_is_not_two_files_worth_of_disk() {
     );
     assert_eq!(usage.root.bytes, 4096);
 }
+
+#[test]
+fn a_directory_is_not_a_file_of_type_grup() {
+    // Real names, off a volume written from Windows, where a dot inside a
+    // folder name is ordinary. `ext:` asks what kind of file a row is, and a
+    // folder is not one — asked of `Trabzon 2. Grup` the old answer was that
+    // it was a file of type ` grup`. But `*.rs` asks about the *name*, and a
+    // folder called `mod.rs` has that name, so the two part company here and
+    // the test is what keeps them apart.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let entries: Vec<Entry> = [
+        ("/d/Trabzon 2. Grup", true),
+        ("/d/TRABZON.MÜZEKKERE.CEVABI", true),
+        ("/d/mod.rs", true),
+        ("/d/main.rs", false),
+        ("/d/rapor.grup", false),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (path, is_dir))| Entry {
+        is_dir: *is_dir,
+        ..entry(path, NOW, i as u64 + 1)
+    })
+    .collect();
+    let mut it = entries.iter().cloned().map(Change::Upsert);
+    index.apply(&mut it).expect("apply");
+    index.commit().expect("commit");
+    let f = Fixture {
+        _tmp: tmp,
+        index,
+        entries,
+    };
+
+    assert_eq!(
+        f.search("ext:rs", SortKey::Name, false, 50),
+        vec!["/d/main.rs"],
+        "ext: is about files, and the directory called mod.rs is not one"
+    );
+    assert_eq!(
+        f.search("ext:grup", SortKey::Name, false, 50),
+        vec!["/d/rapor.grup"],
+        "`Trabzon 2. Grup` is a folder, not a file of type ` grup`"
+    );
+    assert_eq!(
+        f.search("*.rs", SortKey::Name, false, 50),
+        vec!["/d/main.rs", "/d/mod.rs"],
+        "a glob is about the name, and a directory can have that name"
+    );
+
+    // And the slow answer agrees, which is what makes the above the rule
+    // rather than this index's opinion of it.
+    for q in ["ext:rs", "ext:grup", "ext:cevabi", "*.rs", "*.grup"] {
+        f.check(q, SortKey::Name, false);
+    }
+}
