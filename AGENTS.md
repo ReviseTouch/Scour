@@ -143,12 +143,43 @@ Two rules that are not negotiable:
 
 * **Every answer is bounded**, and says so when it was cut. A model that cannot
   tell a full listing from a truncated one draws confident wrong conclusions.
-* **Nothing mutating is exposed.** `rescan`, `maintain` and `shutdown` exist in
-  the protocol and stay out of the tool list.
+* **Nothing mutating is exposed**, and that is enforced rather than described.
+  Every tool goes through one `call`, and anything `Request::is_mutating`
+  answers `true` for is refused there before it reaches the socket — so the
+  server is read-only because writes are stopped, not because the three tools
+  that could write were never written. `rescan`, `maintain` and `shutdown` stay
+  out of the tool list too, but the list is not what keeps the promise: the day
+  somebody adds a tenth tool, the guard already knows the answer.
 
 Tool descriptions say what a tool is *for*, not what it does — a model choosing
 between `scour_search` and `scour_tree` is making the same decision a person
 does, and the descriptions exist to make it easy.
+
+### Browser — `scour-web`
+
+A bridge and only a bridge: one page and ten JSON routes, holding no index and
+linking no engine. Every route but two is a thin mapping onto a `scour-proto`
+request; `/api/kinds` and `/api/icon` answer from this machine, because the
+kinds a rail should offer come from `Kind::OFFERED` and a thumbnail is a file
+the desktop already made. **No HTTP framework and no async runtime** — axum
+would bring tokio, hyper and about a hundred crates to do what two hundred
+lines of `std::net` do, and `scour-mcp` is a separate binary precisely so the
+rest of the workspace stays free of one.
+
+What is behind the port is an index of every file the user owns, so four things
+hold and none is a preference: **127.0.0.1 only**, with no flag to change it; a
+**token** generated per run and printed with the URL, without which every route
+answers 403; **`Origin` checked** on every request, because a page on the
+internet can make a browser send one here; and `GET` for reading against `POST`
+for the one route that does something, so a link, an image or a prefetch cannot
+reach it. `rescan` and `maintain` are not routed at all — a page in a browser
+does not get to make the service work.
+
+`/api/open` is that one route, and **it runs executables**. That was a refusal
+once, and is not any more, because a search box that finds a program and sends
+you elsewhere to start it has not finished the job. The fence is the index: the
+path is `stat`ed through the service first, so a path no source owns cannot be
+opened. `--no-run` reveals the folder instead; `--no-launch` removes the route.
 
 ### Window — `scour-gui`
 
@@ -173,6 +204,8 @@ as three strings.
 
 ### Service — `scourd`
 
-`src/wire.rs` is the only file in the workspace that names `TantivyIndex` or
-`FsSource`. If a second one ever does, something above has stopped being written
-against its trait.
+`src/wire.rs` is the only file outside the crates that define them which builds
+a `NativeIndex` or an `FsSource`. If a second one ever does, something above
+has stopped being written against its trait. `scour-engine`'s tests are the
+deliberate exception: they wire a real index to a source the engine cannot
+tell from a filesystem, which is the half of the rule worth testing.
