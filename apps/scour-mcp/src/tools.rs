@@ -107,7 +107,22 @@ impl Scour {
     }
 
     /// Send a request, reconnecting once if the service was restarted.
+    ///
+    /// **Nothing that changes anything leaves this function.** Every tool goes
+    /// through here, so this is the one place the promise can be kept rather
+    /// than repeated: the server is read-only because a request that would
+    /// write is refused, not because the three tools that could write were
+    /// never written. The difference matters the day somebody adds a tenth
+    /// tool — `Request::is_mutating` knows the answer for a variant nobody has
+    /// thought about yet, and a guard that has to be remembered is a guard
+    /// that will not be.
     fn call(&self, req: Request) -> String {
+        if req.is_mutating() {
+            return crate::render::failure(&scour_core::Error::unsupported(format!(
+                "{}: this server is read-only",
+                req.name()
+            )));
+        }
         let mut guard = match self.inner.client.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),

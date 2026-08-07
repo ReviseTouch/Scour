@@ -237,13 +237,32 @@ pub enum Response {
 impl Request {
     /// Does this request change anything?
     ///
-    /// A read-only client — the MCP server offering a model a filesystem to
-    /// explore, say — can refuse the rest without knowing what each one does.
+    /// **This is the MCP server's read-only promise**, and it is a promise
+    /// rather than a description: `scour-mcp` refuses anything that answers
+    /// `true` before the request reaches the socket, so the server is
+    /// read-only because writes are stopped, not because the tools that could
+    /// write were never written.
+    ///
+    /// Written as an exhaustive `match` on purpose. `matches!` would let a new
+    /// variant default to harmless and be waved through, which is exactly the
+    /// mistake this guards: whoever adds the next request has to say which
+    /// side it is on, because nothing compiles until they do.
     pub fn is_mutating(&self) -> bool {
-        matches!(
-            self,
-            Request::Rescan { .. } | Request::Maintain { .. } | Request::Shutdown {}
-        )
+        match self {
+            Request::Rescan { .. } | Request::Maintain { .. } | Request::Shutdown {} => true,
+            Request::Search { .. }
+            | Request::Count { .. }
+            | Request::Facets { .. }
+            | Request::Tree { .. }
+            | Request::Stat { .. }
+            | Request::Usage { .. }
+            | Request::Explain { .. }
+            | Request::Sources {}
+            | Request::Status {}
+            | Request::Stats {}
+            | Request::Await { .. }
+            | Request::Syntax {} => false,
+        }
     }
 
     /// A short, stable name for logs and metrics.
@@ -271,6 +290,49 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_three_requests_change_anything() {
+        // The MCP server refuses everything this calls mutating, so the list
+        // is a security boundary rather than a classification. Named one by
+        // one: `is_mutating` is exhaustive, so a new variant cannot be
+        // forgotten — but an existing one could be quietly moved to the other
+        // side, and that is what this catches.
+        let mutating: Vec<Request> = vec![
+            Request::Rescan { path: None },
+            Request::Maintain {
+                level: Maintenance::Compact,
+            },
+            Request::Shutdown {},
+        ];
+        for r in &mutating {
+            assert!(r.is_mutating(), "{} has to be refused", r.name());
+        }
+
+        let readonly: Vec<Request> = vec![
+            Request::Search {
+                query: String::new(),
+                sort: SortKey::default(),
+                descending: true,
+                page: Page::default(),
+            },
+            Request::Count {
+                query: String::new(),
+                cap: 1,
+            },
+            Request::Sources {},
+            Request::Status {},
+            Request::Stats {},
+            Request::Syntax {},
+            Request::Await {
+                since: 0,
+                timeout_ms: 1,
+            },
+        ];
+        for r in &readonly {
+            assert!(!r.is_mutating(), "{} is not a write", r.name());
+        }
+    }
 
     #[test]
     fn a_minimal_search_request_needs_only_a_query() {
