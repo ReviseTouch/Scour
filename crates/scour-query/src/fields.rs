@@ -213,13 +213,6 @@ pub const FIELDS: &[Field] = &[
         example: "group:wheel",
     },
     Field {
-        name: "items",
-        aliases: &["count"],
-        takes: Takes::Size,
-        about: "how many entries a folder holds, with an optional comparison",
-        example: "items:=0",
-    },
-    Field {
         name: "depth",
         aliases: &["derinlik"],
         takes: Takes::Size,

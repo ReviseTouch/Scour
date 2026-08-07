@@ -27,10 +27,18 @@ pub struct SourceId(pub u32);
 /// * An object store has neither: the key is the name and the version is an
 ///   opaque token.
 ///
-/// A source declares which of these it provides through [`Caps::STABLE_IDS`],
-/// and the engine adapts. Nothing above this type ever writes `if source_is_fs`.
+/// **The filesystem source no longer uses any of this**, and the capability
+/// that used to select between them is gone. A row is a *name*, so its
+/// identity is its path: an editor that saves by writing a temporary file and
+/// renaming it over the target keeps the path and changes the inode, and
+/// nothing can say "the inode that used to be here is gone" — which left 267
+/// rows at one path on a live index, one per save. See `EntryId::path_hash`
+/// and `docs/AUDIT.md` §11.
 ///
-/// [`Caps::STABLE_IDS`]: crate::types::Caps::STABLE_IDS
+/// What remains here is vocabulary for the sources that are not filesystems.
+/// `Opaque` is what an object store's version token would be; keeping the
+/// shape costs nothing and means the day one exists, this type does not have
+/// to change underneath everything that reads it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Key {
     /// POSIX inode identity. Survives rename and move within a device.
@@ -110,6 +118,22 @@ pub struct Meta {
     /// for tiny ones because of block rounding.
     pub disk: i64,
     /// Entries directly inside a directory; `-1` for files and when unknown.
+    ///
+    /// **Nothing writes anything else yet**, so it is `-1` on every row of
+    /// every real index — `Meta::from_std` has one `stat` and a `stat` does not
+    /// count children. The walk cannot fill it either: `ignore` emits entries
+    /// one at a time, so a directory's row is built before its children are
+    /// seen, and knowing the count would take a second pass or a different
+    /// walker.
+    ///
+    /// The column stays because it costs nothing — it is a varint of `-1` in a
+    /// block that is already there — and because the day the walk can count,
+    /// this is where the number goes. What did **not** stay is the language
+    /// around it: `items:` was in the field table and the syntax reference,
+    /// was offered as a completion, and answered every query with nothing at
+    /// all, silently, because `-1` is not `0` and not `>= 5`. A field that
+    /// cannot be answered is worse than a field that does not exist, since the
+    /// second one says so.
     pub items: i64,
     /// Names this file has — `st_nlink`. One for almost everything.
     ///

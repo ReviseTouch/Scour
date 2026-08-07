@@ -27,7 +27,6 @@ pub enum SortKey {
     Accessed,
     Ext,
     Kind,
-    Items,
     Mode,
     Uid,
     Gid,

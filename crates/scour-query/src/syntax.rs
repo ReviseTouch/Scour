@@ -66,7 +66,6 @@ The columns an index has always held and no query could name. This is what
 | `ww:` | world-writable — `perm:/002`, spelled the way it is asked about |
 | `user:root` `user:1000` | owned by this user, by name or number |
 | `group:wheel` `group:0` | owned by this group |
-| `items:=0` | how many entries a folder holds |
 | `depth:3` | the path has exactly three components; `depth:<=4`, `depth:>8` |
 | `regex:^[0-9]{4}-` | the name matches this regular expression |
 

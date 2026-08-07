@@ -114,7 +114,6 @@ pub fn brute_force(
             SortKey::Created => a.meta.ctime.cmp(&b.meta.ctime),
             SortKey::Accessed => a.meta.atime.cmp(&b.meta.atime),
             SortKey::Kind => a.kind.cmp(&b.kind),
-            SortKey::Items => a.meta.items.cmp(&b.meta.items),
             SortKey::Mode => a.meta.mode.cmp(&b.meta.mode),
             SortKey::Uid => a.meta.uid.cmp(&b.meta.uid),
             SortKey::Gid => a.meta.gid.cmp(&b.meta.gid),

@@ -374,7 +374,6 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             Some("ww") => Some(bits(0o0002, 0, true)),
             Some("user") => resolve_owner(scour_core::NumField::Uid, &raw),
             Some("group") => resolve_owner(scour_core::NumField::Gid, &raw),
-            Some("items") => parse_count(scour_core::NumField::Items, &folded),
             // **A bare number means *equals* here, not "at least".**
             //
             // `size:1mb` meaning "at least" is right — nobody looks for a file
@@ -479,15 +478,6 @@ fn parse_perm(v: &str) -> Option<Match> {
         // `type:`'s business and nobody writes `perm:100644`.
         Some(bits(0o7777, n, false))
     }
-}
-
-/// A number with an optional comparison, for the columns that hold one.
-fn parse_count(field: scour_core::NumField, v: &str) -> Option<Match> {
-    let (cmp, rest) = split_cmp(v);
-    rest.trim()
-        .parse::<i64>()
-        .ok()
-        .map(|n| Match::Num(field, cmp, n))
 }
 
 /// `user:` and `group:` — a number, or a name looked up on this machine.
