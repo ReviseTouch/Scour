@@ -18,7 +18,15 @@ conditions and nothing hidden means every live row matches.
 | | before | after |
 |---|---|---|
 | `/api/count`, empty query | 1.233 s | **12.8 ms** |
-| opening a window, total CPU | 7.76 s | **4.86 s** |
+
+**Correction, same day.** This section first put the window's opening cost —
+7.76 s of CPU before, 4.86 s after — in that table, as though the count were
+part of it. **The page never calls `/api/count`**: `SERVICE` exposes search,
+explain, sidebar, status and wait, and nothing else, which an audit of the web
+app found hours later. Whatever moved that number, it was not this. The route
+serves the CLI and MCP, where the measurement stands and is worth having; the
+attribution to window opening was a causal claim with no measurement under it
+and is withdrawn.
 
 **The sidebar refresh was a fixed share of the machine, by construction.**
 `atMostEvery` waits `COST` (10) times what the last call took, so a refresh
