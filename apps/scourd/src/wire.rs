@@ -56,6 +56,16 @@ pub fn build(config: &Config) -> Result<Engine> {
         EngineOptions {
             scan: scan_options(config),
             commit_interval: Duration::from_millis(config.service.commit_interval_ms.max(50)),
+            // Never shorter than the burst clock, because below it nothing
+            // happens sooner — `commit_interval` is a floor on how often a
+            // segment is written at all — so a smaller number would read faster
+            // than it behaves.
+            commit_idle: Duration::from_millis(
+                config
+                    .service
+                    .commit_idle_ms
+                    .max(config.service.commit_interval_ms),
+            ),
             rebuild_threshold: config.index.rebuild_threshold,
             result_limit: config.ui.result_limit.max(1_000),
             ..EngineOptions::default()

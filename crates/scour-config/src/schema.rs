@@ -170,6 +170,30 @@ pub struct ServiceCfg {
     /// removals are hidden immediately regardless, because a deleted file that
     /// is still listed is the more annoying failure.
     pub commit_interval_ms: u64,
+    /// How long a handful of changes may wait while **nobody is looking**.
+    ///
+    /// The bound on staleness for a search typed at a prompt, which is the case
+    /// this exists for: an open window registers as a watcher and gets the fast
+    /// clock, a `scour foo` does not, so this is what it sees.
+    ///
+    /// **It is the largest single piece of what an idle service costs**, and
+    /// the trade is measured. Only this number changed, alternating 180-second
+    /// runs at three changes a second, arms that do not overlap:
+    ///
+    /// | this setting | worker |
+    /// |---|---|
+    /// | 5 s | ~0.09% of a core |
+    /// | 15 s | 0.050% / 0.056% |
+    /// | 60 s | 0.022% / 0.022% |
+    ///
+    /// The cost is linear in the number of commits and not in the rows they
+    /// carry: a commit is about **ten `fsync` calls** — seven segment parts,
+    /// the alive bitmap, the manifest — and one row costs 22.5 ms where a
+    /// hundred and twenty-eight cost 23.7. So this is a freshness contract with
+    /// a price on it rather than a tuning knob, and it belongs in the
+    /// configuration for the same reason: only the person searching knows what
+    /// their answer is worth.
+    pub commit_idle_ms: u64,
 }
 
 impl Default for ServiceCfg {
@@ -177,6 +201,7 @@ impl Default for ServiceCfg {
         Self {
             socket: String::new(),
             commit_interval_ms: 1_000,
+            commit_idle_ms: 15_000,
         }
     }
 }
