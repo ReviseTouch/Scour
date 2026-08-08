@@ -3,6 +3,157 @@
 Numbers, with the command that produced them. A claim without one of these is
 an opinion.
 
+## 2026-08-09 — where the idle worker's time goes, and what a wider window would buy
+
+The watcher was measured at 0.029% of a core and closed. What was left was
+`scour-worker` at **0.150%**, and the proposal on the table was to widen
+fanotify's 200 ms collection window so that repeated writes to one file
+deduplicate harder. It was measured before it was written, and the measurement
+declined it: the window is not where the worker's time goes.
+
+### The instrument
+
+The live service could not be used — it had exited, and the machine stopped
+being idle part-way through the night — so the worker was measured against a
+**reflinked copy of the live index** (2,217,125 entries, 11 segments, 183 MiB)
+under a second `scourd` with its own socket, its own index directory and
+synthetic roots under `/var/tmp`, where nothing but the harness writes. Load is
+generated at a chosen rate, so the number of events is known rather than
+guessed at. `scan.on_start = false`, or the first walk would sweep a copied
+index that no walk had stamped.
+
+```bash
+scourd --config <bench.toml>                     # its own socket and index
+awk '{print $14+$15}' /proc/<pid>/task/<tid>/stat  # jiffies, both ends
+```
+
+### The worker with nothing to do costs nothing
+
+240 s, no events at all, watching two empty roots:
+
+| | jiffies | share of a core |
+|---|---|---|
+| `scour-worker`, idle | 1 in 240 s | **0.0042%** |
+
+So none of the 0.150% is the loop's own pulse. All of it is work it was asked
+to do, and the question is which work.
+
+### The shape of it: a floor, a commit clock, and a cost per wake-up
+
+Same index, 180 s a run, distinct paths so that nothing deduplicates:
+
+| upserts a second | `scour-worker` | worker wake-ups |
+|---|---|---|
+| 0 | 0.0111% | 0.5/s |
+| 3 | 0.0556% | 8.0/s |
+| 15 | 0.1278% | 20.2/s |
+
+Three points on a line: **0.006% floor + a fixed commit term + 60 µs a
+wake-up.** The 60 µs is per *wake*, not per row — `apply` was measured
+separately at **0.45 µs a row** (0.003 ms for one, 0.057 ms for 128), and a
+commit costs the same whatever it holds:
+
+```
+commit_cost <index copy> 0 <n paths already in the index>
+```
+
+| rows in the commit | apply, CPU | commit, CPU |
+|---|---|---|
+| 1 | 0.003 ms | 22.5 ms |
+| 8 | 0.007 ms | 23.8 ms |
+| 32 | 0.019 ms | 27.3 ms |
+| 128 | 0.057 ms | 23.7 ms |
+
+Flat, because a commit is about ten `fsync`s — seven segment parts, the alive
+bitmap and the manifest — and a two-row segment pays all of them. (The 22 ms
+here is a cold copy; in the long-lived service the same commit settled at about
+3.4 ms, see below.)
+
+### The commit clock is the largest thing the worker does
+
+`commit_idle` is fifteen seconds, so anything at all changing keeps the service
+writing a segment four times a minute. Alternating runs, 3 upserts a second,
+180 s each, changing only `service.commit_interval_ms` — which raises the floor
+above `commit_idle` and so decides the cadence:
+
+| commit every | run 1 | run 2 |
+|---|---|---|
+| 15 s | 0.0500% | 0.0556% |
+| 60 s | **0.0222%** | **0.0222%** |
+
+**0.031% of a core, and the arms do not overlap.** Nine fewer commits in 180 s
+is 3.4 ms a commit. At three upserts a second — roughly what this desktop
+produces through a 200 ms window — the worker's 0.053% is 0.006% floor, 0.018%
+events and **0.031% commit clock**.
+
+### What a wider window would actually buy
+
+One 300 s trace of the real home directory, replayed through every candidate
+window rather than run several times, because a desktop's churn differs more
+between two minutes than the windows differ between themselves:
+
+```bash
+cargo run --release --example window -- 300 /home/you
+```
+
+**4,474 events, 177 distinct paths.**
+
+| window | windows | looks | looks/s | deduplicated | largest batch |
+|---|---|---|---|---|---|
+| **200 ms** | 428 | 869 | 2.90 | **80.6%** | 228 |
+| 1 s | 291 | 849 | 2.83 | 81.0% | 236 |
+| 5 s | 63 | 563 | 1.88 | 87.4% | 295 |
+| 15 s | 22 | 407 | 1.36 | 90.9% | 443 |
+| 30 s | 11 | 324 | 1.08 | 92.8% | 646 |
+
+**Two hundred milliseconds already removes four fifths of the duplication.**
+The whole of the remaining headroom is 1.54 looks a second, which at 60 µs a
+wake-up is **0.009% of a core on the worker** — a third of a jiffy per minute,
+under the resolution of the measurement that would have to confirm it. The
+loudest single path, `cookies.sqlite-wal`, was written 2,002 times in 300 s and
+collapses to one look per window at any width; what a wider window adds is only
+the collapsing of *windows*, and there are already only 1.43 of them a second.
+
+The saving that is real is on the reader, not the worker: this module's own
+table has 200 ms at 5 wakes a second and 0.030%, and 1000 ms at 1 wake and
+0.014%. That is where a wider window pays.
+
+**And it cannot be a fixed number.** The same table reverses at high load —
+1000 ms costs *more* than 500 ms at 2,120 events a second, because the batch
+reaches 2,600 events and stops fitting in cache. Fifteen seconds at that rate
+is 31,800 events, about 1.9 MiB of `Seen`. So the window has to be short when
+somebody is waiting or the machine is busy and long only when neither is true,
+which is the same rule `commit_watched` and `commit_idle` already implement one
+layer up. The watcher cannot read that rule today: `scour-source-fs` may not
+depend on the engine. The smallest thing that would let it is a defaulted
+method on `WatchHandle` — `fn attention(&self, waiting: bool) {}` — called by
+the engine when its watcher count crosses zero. That is a trait in core, not a
+dependency between implementations.
+
+### Measured and rejected
+
+* **`SCOUR_WAKE_TRACE=1` costs nothing.** The owner's service was running with
+  it set, which made it a suspect. Alternating runs, 3 upserts a second, 180 s:
+  off 0.0556% / 0.0444%, on 0.0556% / 0.0500%. The difference is smaller than
+  one jiffy in 180 s.
+* **Deleting is not more expensive than writing.** A create-and-delete load at
+  3 cycles a second produced two events a cycle and cost 0.0722%, against
+  0.0736% predicted by the line above for six events a second. `hidden_prefixes`
+  and the sweep it triggers cost nothing measurable at this scale.
+* **Measuring against the real home directory was abandoned.** Four alternating
+  180 s runs gave 3.39% / 1.11% / 1.30% / 1.65% — the spread inside one arm is
+  larger than the difference between the arms, because the machine was not idle
+  (load 2.3; a browser, two editors). A desktop's churn is not stationary and
+  cannot be the control variable.
+
+### Still open
+
+The bench accounts for 0.045–0.055% of a worker at this desktop's event rate,
+against the 0.150% measured on the live service. The gap is not explained. It
+was measured under fanotify with a second source on ntfs3, and neither could be
+reproduced here: the marks need `CAP_SYS_ADMIN`, and this session had no way to
+place them.
+
 ## 2026-08-07 — what an open window costs, and why it was a share of the machine
 
 An idle service with a search window open sat at **8.59% of a core** against

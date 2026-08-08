@@ -969,9 +969,27 @@ fn run(
         // context-switch rate; this is so the second one does not.
         let trace = std::env::var_os("SCOUR_WAKE_TRACE").is_some();
         let mut who = "floor";
+        // **Every deadline that has already passed, not only the first one.**
+        //
+        // `left` saturates at zero and the comparison below is strictly less,
+        // so the first deadline to read zero takes the name and every later one
+        // that also reads zero is refused it. `pulse` is evaluated first, and
+        // it therefore wins every tie: measured over four traced runs of three
+        // minutes, **177 of 182 floored lines said "pulse"** and three said
+        // "commit" — and "commit" could only appear at all where it was
+        // *strictly* smaller than a pulse that had also expired. A commit that
+        // cannot run is the exact failure this trace was added to find, and the
+        // trace was hiding it behind the pulse.
+        //
+        // Costs nothing when the trace is off: `Vec::new` does not allocate and
+        // nothing is pushed.
+        let mut floored: Vec<&str> = Vec::new();
         macro_rules! deadline {
             ($name:literal, $at:expr) => {
                 let d = left($at);
+                if trace && d <= WAKE_FLOOR {
+                    floored.push($name);
+                }
                 if d < wake {
                     wake = d;
                     who = $name;
@@ -1029,8 +1047,16 @@ fn run(
         // A backstop, not a schedule. If a deadline above is ever computed
         // wrong the cost is fifty turns a second rather than a spun core, and
         // it shows as CPU instead of as housekeeping that quietly stopped.
-        wake = wake.max(Duration::from_millis(20));
-        if trace && wake <= Duration::from_millis(20) {
+        wake = wake.max(WAKE_FLOOR);
+        if trace && wake <= WAKE_FLOOR {
+            // All of them, comma separated. One name would be the shortest true
+            // sentence only when exactly one deadline had passed, and the case
+            // worth finding is the other one.
+            let who = if floored.is_empty() {
+                who.to_owned()
+            } else {
+                floored.join(", ")
+            };
             scour_core::note!(
                 "scourd: wake floored by {who} (dirty={dirty} settled={dirty_settled} idle_done={idle_done})"
             );
@@ -1562,6 +1588,15 @@ fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, source: usize) {
 /// there is no point paying it on a machine whose segment count moves by one
 /// every few seconds.
 const COMPACT_EVERY: Duration = Duration::from_secs(60);
+
+/// The shortest the worker will ever sleep.
+///
+/// A backstop rather than a schedule: if a deadline is ever computed wrong the
+/// cost is fifty turns a second rather than a spun core. Named because the
+/// wake-up trace has to compare against exactly the number the sleep is
+/// clamped to — the two drifting apart is how a floored wake stops being
+/// reported as one.
+const WAKE_FLOOR: Duration = Duration::from_millis(20);
 
 /// The batch that stands in for `commit_batch` when nobody is watching.
 ///
