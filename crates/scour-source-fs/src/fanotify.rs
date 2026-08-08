@@ -462,6 +462,13 @@ pub fn try_start(
     let stopped = Arc::new(AtomicBool::new(false));
     let handle_stop = Arc::clone(&stopped);
 
+    // **Which mechanism is running has to be visible.** The fallback to inotify
+    // is silent by design — a machine without the helper is the ordinary case,
+    // not a failure — and that is exactly what makes the successful case worth
+    // one line: otherwise the only way to tell a filesystem-wide watch from
+    // 296,711 individual ones is to count watches in `/proc`.
+    eprintln!("scourd: watching with fanotify (one mark a filesystem)");
+
     let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
     let theirs = Arc::clone(&uncovered);
     let thread = std::thread::Builder::new()
