@@ -18,6 +18,11 @@
 //! [`Source`]: scour_core::Source
 //! [`Change::Rescan`]: scour_core::Change::Rescan
 
+/// One mark a filesystem instead of one watch a directory. Linux only, and
+/// only when a privileged helper has handed the descriptor over — otherwise
+/// [`watch`] falls back to inotify and nothing in it runs.
+#[cfg(target_os = "linux")]
+mod fanotify;
 mod pulse;
 mod rules;
 mod scan;

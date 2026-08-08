@@ -30,6 +30,20 @@ pub fn start(
     sink: Box<dyn ChangeSink>,
 ) -> Result<Box<dyn WatchHandle>> {
     let sink: Arc<dyn ChangeSink> = Arc::from(sink);
+
+    // **One mark a filesystem, when something has left us one.** This is not a
+    // faster inotify, it is the only way two of the disks here get watched at
+    // all: inotify wants 296,711 watches for the home directory against a limit
+    // of 268,593, and 152,529 for the NTFS volume, which is why that volume was
+    // not being watched. The marks need `CAP_SYS_ADMIN`, this process must not
+    // have it, and the two are reconciled outside: a helper sets them and hands
+    // the descriptor over. No helper, no descriptor, and inotify below is the
+    // answer — which is the ordinary case and not a failure.
+    #[cfg(target_os = "linux")]
+    if let Some(started) = crate::fanotify::try_start(&source, opts, Arc::clone(&sink)) {
+        return started;
+    }
+
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
     let real_modes = source.real_modes();
@@ -208,6 +222,82 @@ fn cover(
 /// A create or a modify becomes an upsert *after re-examining the path*, never
 /// from the event's own description: by the time this runs the file may have
 /// been changed again, or removed, and the event says only where to look.
+/// Look at one path and say what changed there.
+///
+/// **This is where the contract at the top of the module is kept**, and it is
+/// shared rather than duplicated because the two backends arrive at it from
+/// opposite directions: inotify hands over a path and fanotify hands over a
+/// directory handle and a name. What neither of them hands over is what
+/// happened — a fanotify event merges a create, a write, a close and a delete
+/// into one mask with no order, measured — so both end here, at a `stat`.
+///
+/// `fresh` means the path was not there a moment ago: a create, or the
+/// destination of a rename. It is the only case that needs the walk below, and
+/// separating it is what keeps a compile from queueing one for every directory
+/// whose mtime moved.
+pub(crate) fn look(
+    id: scour_core::SourceId,
+    real_modes: bool,
+    path: &str,
+    fresh: bool,
+    sink: &dyn ChangeSink,
+) {
+    match std::fs::symlink_metadata(path) {
+        Ok(md) => {
+            sink.emit(Change::Upsert(crate::scan::entry_of(
+                id,
+                path,
+                Some(&md),
+                md.is_dir(),
+                real_modes,
+            )));
+            // **A directory that has just appeared is a subtree, not a row.**
+            // Three different things are lost by treating it as one, and all
+            // three were reproduced:
+            //
+            // * Between `mkdir a/b` and the moment an inotify backend has added
+            //   a watch for `a/b`, anything created inside it produces no event
+            //   at all. `mkdir d && echo > d/f` left `f` on disk and out of the
+            //   index permanently; the same two commands eight seconds apart
+            //   worked. That is `git clone`, `cargo new`, `unzip` and every
+            //   installer.
+            // * Where the recursive watch was refused and rebuilt shallow (see
+            //   `cover`), a directory created in the shallow parent never gets
+            //   a watch at all, so *nothing* inside it is ever seen.
+            // * A btrfs snapshot makes a whole tree visible behind **one**
+            //   event: measured at 1 event for 201 files, and a subvolume
+            //   deletion at 1 for 202. No per-file event exists to be missed,
+            //   on any mechanism, because the kernel never made one.
+            //
+            // A walk covers all three, because it reads what is there instead
+            // of waiting to be told. `symlink_metadata` rather than `metadata`,
+            // so a link to a directory is not descended.
+            if fresh && md.is_dir() {
+                sink.emit(Change::Rescan {
+                    path: path.to_owned(),
+                });
+            }
+        }
+        // Gone between the event and the look. That is a removal, and it is the
+        // common case under any kind of churn — it is also the cheap one:
+        // a failing `statx` costs 0.6–2.3 µs against 98 µs for one that finds
+        // something on a cold NTFS volume.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => sink.emit(Change::RemoveSubtree {
+            path: path.to_owned(),
+        }),
+        // **Everything else is "I could not look", and that is not a
+        // deletion.** Out of file descriptors, permission withdrawn, a network
+        // mount gone stale, a transient read error: treating any of them as a
+        // removal hides a tree that is still there, and the next commit makes
+        // it durable. Ask for the path to be walked again instead — it is the
+        // same message the backend sends when it loses track, and the engine
+        // already knows what to do with it.
+        Err(_) => sink.emit(Change::Rescan {
+            path: path.to_owned(),
+        }),
+    }
+}
+
 fn translate(
     id: scour_core::SourceId,
     real_modes: bool,
@@ -228,53 +318,7 @@ fn translate(
     // sentence below, and separating it is what keeps a compile from queueing a
     // walk for every directory whose mtime moved.
     let upsert = |p: &std::path::Path, fresh: bool| {
-        let path = path::from_path(p);
-        match std::fs::symlink_metadata(p) {
-            Ok(md) => {
-                sink.emit(Change::Upsert(crate::scan::entry_of(
-                    id,
-                    &path,
-                    Some(&md),
-                    md.is_dir(),
-                    real_modes,
-                )));
-                // **A directory that has just appeared is a subtree, not a
-                // row.** Two different things are lost by treating it as one,
-                // and both were reproduced on this machine:
-                //
-                // * Between `mkdir a/b` and the moment the backend has added a
-                //   watch for `a/b`, anything created inside it produces no
-                //   event at all — there is nothing to report it against.
-                //   `mkdir d && echo > d/f` left `f` on disk and out of the
-                //   index permanently; the same two commands eight seconds
-                //   apart worked. That is `git clone`, `cargo new`, `unzip`
-                //   and every installer.
-                // * Where the recursive watch was refused and rebuilt shallow
-                //   (see `cover`), a directory created in the shallow parent
-                //   never gets a watch at all, so *nothing* inside it is ever
-                //   seen.
-                //
-                // A walk covers both, because it reads what is there instead of
-                // waiting to be told. `symlink_metadata` rather than
-                // `metadata`, so a link to a directory is not descended.
-                if fresh && md.is_dir() {
-                    sink.emit(Change::Rescan { path });
-                }
-            }
-            // Gone between the event and the look. That is a removal, and it
-            // is the common case under any kind of churn.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                sink.emit(Change::RemoveSubtree { path })
-            }
-            // **Everything else is "I could not look", and that is not a
-            // deletion.** Out of file descriptors, permission withdrawn, a
-            // network mount gone stale, a transient read error: treating any
-            // of them as a removal hides a tree that is still there, and the
-            // next commit makes it durable. Ask for the path to be walked
-            // again instead — it is the same message the backend sends when it
-            // loses track, and the engine already knows what to do with it.
-            Err(_) => sink.emit(Change::Rescan { path }),
-        }
+        look(id, real_modes, &path::from_path(p), fresh, sink);
     };
 
     // **The backend has lost track.** inotify's queue overflowed, a watch was
