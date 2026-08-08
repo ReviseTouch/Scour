@@ -33,10 +33,11 @@
 //! rules, the metadata read and the "a new directory is a subtree" step are
 //! shared and cannot drift apart.
 
-use std::collections::HashMap;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scour_core::{Change, ChangeSink, Result, ScanOptions, SourceId, WatchHandle};
@@ -248,6 +249,51 @@ impl DirMap {
     }
 }
 
+/// Every filesystem with a block device behind it, as `mountinfo` sees it.
+///
+/// The key is the mount id — the first field, unique for the life of a mount —
+/// rather than the device, because a disk that is unmounted and mounted again
+/// is a *new* mount of the same device and the two have to be told apart: the
+/// mark does not survive it. Measured, and it is the surprising half of the
+/// pair: the mark does survive the unmount of the path it was placed through,
+/// but a remount of the filesystem itself does not bring it back. A fresh
+/// group saw the same write the old one had gone silent for.
+fn mounts(text: &str) -> HashSet<(u32, String)> {
+    let mut out = HashSet::new();
+    for line in text.lines() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        let mut r = right.split_whitespace();
+        let (Some(_fs), Some(source)) = (r.next(), r.next()) else {
+            continue;
+        };
+        if !source.starts_with("/dev/") {
+            continue;
+        }
+        let mut l = left.split_whitespace();
+        let (Some(id), Some(at)) = (l.next(), l.nth(3)) else {
+            continue;
+        };
+        if let Ok(id) = id.parse::<u32>() {
+            out.insert((id, at.replace("\\040", " ")));
+        }
+    }
+    out
+}
+
+/// Open `/proc/self/mountinfo` for watching rather than for reading.
+///
+/// `poll` on it returns `POLLERR | POLLPRI` when the mount table changes and
+/// nothing otherwise — measured at 300 ms from the mount to the wake, with a
+/// negative control that stayed quiet. It is the only way this process learns a
+/// disk was plugged in, because a filesystem mark covers one superblock and a
+/// new disk is a new superblock: the events simply never come, measured, and
+/// nothing about that is visible from inside the fanotify descriptor.
+fn mountinfo() -> Option<std::fs::File> {
+    std::fs::File::open("/proc/self/mountinfo").ok()
+}
+
 /// One event, as far as this module cares: which directory, what name, and
 /// whether the entry might be new.
 struct Seen {
@@ -356,9 +402,20 @@ fn inherited() -> Option<OwnedFd> {
 struct FanWatch {
     stopped: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Filesystems that appeared after the marks were set.
+    ///
+    /// They are not covered and cannot be from here: placing a mark needs
+    /// `CAP_SYS_ADMIN` and this process deliberately has none, so the honest
+    /// thing is to name them and let the layer above say so. That is what this
+    /// side of [`WatchHandle`] is for, and `scourd` already prints it.
+    uncovered: Arc<Mutex<Vec<String>>>,
 }
 
 impl WatchHandle for FanWatch {
+    fn unwatched(&self) -> Vec<String> {
+        self.uncovered.lock().map(|v| v.clone()).unwrap_or_default()
+    }
+
     /// Nothing to do, and that is the point of this backend.
     ///
     /// inotify needs to be told about a subtree that appeared after the watch
@@ -405,13 +462,16 @@ pub fn try_start(
     let stopped = Arc::new(AtomicBool::new(false));
     let handle_stop = Arc::clone(&stopped);
 
+    let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
+    let theirs = Arc::clone(&uncovered);
     let thread = std::thread::Builder::new()
         .name("scour-fanotify".into())
-        .spawn(move || drain(fd, roots, id, real_modes, rules, sink, stopped))
+        .spawn(move || drain(fd, roots, id, real_modes, rules, sink, stopped, theirs))
         .ok()?;
     Some(Ok(Box::new(FanWatch {
         stopped: Arc::clone(&handle_stop),
         thread: Some(thread),
+        uncovered,
     })))
 }
 
@@ -431,25 +491,83 @@ fn drain(
     rules: Arc<Rules>,
     sink: Arc<dyn ChangeSink>,
     stopped: Arc<AtomicBool>,
+    uncovered: Arc<Mutex<Vec<String>>>,
 ) {
-    use std::os::fd::AsRawFd;
-
     let mut map = DirMap::build(&roots, &rules);
     let mut devices = map.devices();
     let mut buf = vec![0u8; BUF];
     let mut seen: Vec<Seen> = Vec::new();
     let raw = fd.as_raw_fd();
 
+    // The mount table, watched beside the events rather than on a thread of its
+    // own: one `poll` over two descriptors costs nothing extra and keeps the
+    // whole watcher a single place that can be stopped.
+    let mut mi = mountinfo();
+    let mut known = mi
+        .as_mut()
+        .and_then(|f| {
+            let mut s = String::new();
+            f.read_to_string(&mut s).ok()?;
+            Some(mounts(&s))
+        })
+        .unwrap_or_default();
+
     while !stopped.load(Ordering::Relaxed) {
-        let mut pfd = libc::pollfd {
-            fd: raw,
-            events: libc::POLLIN,
-            revents: 0,
-        };
+        let mut pfds = [
+            libc::pollfd {
+                fd: raw,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: mi.as_ref().map_or(-1, |f| f.as_raw_fd()),
+                // `POLLERR` is not requested — it always arrives — but `POLLPRI`
+                // is what the mount table signals a change with.
+                events: libc::POLLPRI,
+                revents: 0,
+            },
+        ];
         // A bounded wait so that dropping the handle is noticed even on a
         // filesystem where nothing ever happens.
-        let pr = unsafe { libc::poll(&mut pfd, 1, 500) };
-        if pr <= 0 || pfd.revents & libc::POLLIN == 0 {
+        let pr = unsafe { libc::poll(pfds.as_mut_ptr(), 2, 500) };
+        if pr <= 0 {
+            continue;
+        }
+
+        if pfds[1].revents != 0 {
+            // Re-read from the start, or `poll` keeps reporting the same change
+            // and the loop spins.
+            if let Some(f) = mi.as_mut() {
+                let mut s = String::new();
+                if f.seek(SeekFrom::Start(0)).is_ok() && f.read_to_string(&mut s).is_ok() {
+                    let now = mounts(&s);
+                    let fresh: Vec<String> = now
+                        .difference(&known)
+                        .map(|(_, at)| at.clone())
+                        .filter(|at| !rules.excludes_path(at))
+                        .collect();
+                    known = now;
+                    if !fresh.is_empty() {
+                        // Its contents can still be indexed — a walk reads what
+                        // is there. What cannot happen from here is watching it:
+                        // a new filesystem is a new superblock and a mark needs
+                        // a privilege this process does not have.
+                        if let Ok(mut u) = uncovered.lock() {
+                            for at in &fresh {
+                                if !u.contains(at) {
+                                    u.push(at.clone());
+                                }
+                            }
+                        }
+                        for at in fresh {
+                            sink.emit(Change::Rescan { path: at });
+                        }
+                    }
+                }
+            }
+        }
+
+        if pfds[0].revents & libc::POLLIN == 0 {
             continue;
         }
         std::thread::sleep(WINDOW);
@@ -581,6 +699,51 @@ mod tests {
         buf[0..4].copy_from_slice(&9999u32.to_le_bytes());
         assert!(parse(&buf, &mut out));
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn only_a_filesystem_with_a_disk_behind_it_counts_as_a_mount() {
+        let text = "\
+25 1 0:23 / /proc rw - proc proc rw
+26 1 0:5 / /sys rw - sysfs sysfs rw
+31 1 259:5 /@ / rw - btrfs /dev/nvme0n1p5 rw,subvolid=256
+48 1 259:5 /@home /home rw - btrfs /dev/nvme0n1p5 rw,subvolid=257
+60 1 259:9 / /mnt/depo rw - ntfs3 /dev/nvme1n1p2 rw
+61 1 0:44 / /run/user/1000 rw - tmpfs tmpfs rw
+";
+        let m = mounts(text);
+        let mut at: Vec<&str> = m.iter().map(|(_, p)| p.as_str()).collect();
+        at.sort_unstable();
+        assert_eq!(at, ["/", "/home", "/mnt/depo"]);
+    }
+
+    #[test]
+    fn two_mounts_of_one_disk_are_two_mounts_because_a_remount_loses_the_mark() {
+        // Both lines are `/dev/nvme0n1p5`, and they are deliberately *not*
+        // folded together: what matters here is not which superblock it is but
+        // whether this particular mount is one the marks were placed before.
+        let text = "\
+31 1 259:5 /@ / rw - btrfs /dev/nvme0n1p5 rw,subvolid=256
+48 1 259:5 /@home /home rw - btrfs /dev/nvme0n1p5 rw,subvolid=257
+";
+        assert_eq!(mounts(text).len(), 2);
+
+        // The same filesystem unmounted and mounted again comes back with a
+        // different mount id, which is what makes it visible as new.
+        let after = "49 1 259:5 /@home /home rw - btrfs /dev/nvme0n1p5 rw,subvolid=257\n";
+        let before = mounts(text);
+        let now = mounts(after);
+        assert_eq!(now.difference(&before).count(), 1);
+    }
+
+    #[test]
+    fn a_mount_point_with_a_space_in_it_survives_being_read() {
+        let text = "70 1 259:9 / /mnt/My\\040Disk rw - ntfs3 /dev/sdb1 rw\n";
+        let m = mounts(text);
+        assert_eq!(
+            m.iter().next().map(|(_, p)| p.as_str()),
+            Some("/mnt/My Disk")
+        );
     }
 
     #[test]
