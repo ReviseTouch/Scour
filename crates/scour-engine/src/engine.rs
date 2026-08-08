@@ -794,13 +794,13 @@ impl Pulses {
         for (i, reading) in readings.iter().enumerate() {
             let Some(now) = *reading else {
                 if trace {
-                    eprintln!("scourd: source {i} has no pulse to read");
+                    scour_core::note!("scourd: source {i} has no pulse to read");
                 }
                 continue;
             };
             let moved = self.last[i].is_some_and(|was| was != now);
             if trace {
-                eprintln!(
+                scour_core::note!(
                     "scourd: source {i} pulse {now} (was {:?}), moved={moved}, watched={}, since walk {:?}",
                     self.last[i],
                     watched.contains(&i),
@@ -961,7 +961,24 @@ fn run(
         let now = Instant::now();
         let left = |at: Instant| at.saturating_duration_since(now);
         let mut wake = Duration::from_secs(10);
-        wake = wake.min(left(pulses.next_due()));
+        // Which deadline set the wake-up, when asked.
+        //
+        // A deadline that collapses onto the floor below is invisible from
+        // outside — the loop looks like it is sleeping, and the only symptom is
+        // a wake-up count. Finding the first one took stack samples and a
+        // context-switch rate; this is so the second one does not.
+        let trace = std::env::var_os("SCOUR_WAKE_TRACE").is_some();
+        let mut who = "floor";
+        macro_rules! deadline {
+            ($name:literal, $at:expr) => {
+                let d = left($at);
+                if d < wake {
+                    wake = d;
+                    who = $name;
+                }
+            };
+        }
+        deadline!("pulse", pulses.next_due());
         if dirty {
             // A full batch is held only by the interval floor; an unfull one
             // waits out patience. More changes can fill it early, and those
@@ -982,7 +999,7 @@ fn run(
             } else {
                 last_commit + patience.max(shared.opts.commit_interval)
             };
-            wake = wake.min(left(at));
+            deadline!("commit", at);
         }
         // **`&& !dirty` is not decoration — it is the difference between a
         // deadline and a spin.** The work this wakes for is guarded by exactly
@@ -1001,18 +1018,23 @@ fn run(
         // `dirty` clears, the commit that cleared it is itself a wake-up and
         // this is recomputed there.
         if dirty_settled && !dirty {
-            wake = wake.min(left(last_compact + COMPACT_EVERY));
+            deadline!("compact", last_compact + COMPACT_EVERY);
         }
         if !dirty && !idle_done {
-            wake = wake.min(left(last_busy + shared.opts.idle_after));
+            deadline!("idle", last_busy + shared.opts.idle_after);
         }
         if let Some(at) = retries.iter().map(|(_, at, _)| *at).min() {
-            wake = wake.min(left(at));
+            deadline!("retry", at);
         }
         // A backstop, not a schedule. If a deadline above is ever computed
         // wrong the cost is fifty turns a second rather than a spun core, and
         // it shows as CPU instead of as housekeeping that quietly stopped.
         wake = wake.max(Duration::from_millis(20));
+        if trace && wake <= Duration::from_millis(20) {
+            scour_core::note!(
+                "scourd: wake floored by {who} (dirty={dirty} settled={dirty_settled} idle_done={idle_done})"
+            );
+        }
 
         select! {
             recv(jobs) -> job => match job {
@@ -1164,7 +1186,7 @@ fn run(
                     // moving for minutes with nothing arriving. Said
                     // out loud because a watcher that has gone quiet
                     // is otherwise indistinguishable from a quiet disk.
-                    eprintln!(
+                    scour_core::note!(
                         "scourd: source {source} has changed repeatedly with no events \
                          arriving — the watch is not covering it; rescanning"
                     );
@@ -1258,7 +1280,9 @@ fn run(
                     // Once, then every thirty tries: a service whose disk is
                     // full should say so, not fill the log with saying so.
                     if n == 1 || n % 30 == 0 {
-                        eprintln!("scourd: the index could not be written ({n} attempts): {e}");
+                        scour_core::note!(
+                            "scourd: the index could not be written ({n} attempts): {e}"
+                        );
                     }
                 }
             }
@@ -1276,7 +1300,7 @@ fn run(
             retries.retain(|(_, at, _)| *at > now);
             for (source, attempt) in due {
                 if scan(&shared, &changes_tx, source, None) {
-                    eprintln!(
+                    scour_core::note!(
                         "scourd: {} is readable again",
                         shared.sources[source].describe().name
                     );
@@ -1416,7 +1440,7 @@ fn scan(
     let generation = match shared.index.begin_generation() {
         Ok(g) => g,
         Err(e) => {
-            eprintln!(
+            scour_core::note!(
                 "scourd: a scan of {} could not start: {e}",
                 src.describe().name
             );
@@ -1482,7 +1506,7 @@ fn scan(
                 // Half a reconciliation. Saying so is all that can be done
                 // here; the retry is the caller's, and the rows that should
                 // have gone are found again by the next full scan.
-                Err(e) => eprintln!("scourd: {r} could not be reconciled: {e}"),
+                Err(e) => scour_core::note!("scourd: {r} could not be reconciled: {e}"),
             }
         }
         // A sweep takes effect at once, like any other removal, so anyone
@@ -1574,7 +1598,7 @@ impl ToIndex {
         }
         let batch = std::mem::replace(&mut self.buffer, Vec::with_capacity(BATCH));
         if let Err(e) = self.index.apply(&mut batch.into_iter()) {
-            eprintln!("scourd: a batch of the scan was not indexed: {e}");
+            scour_core::note!("scourd: a batch of the scan was not indexed: {e}");
             self.failed = true;
         }
     }

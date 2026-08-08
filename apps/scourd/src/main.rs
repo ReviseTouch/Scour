@@ -154,7 +154,7 @@ fn main() -> Result<()> {
 
     let server = Server::bind(&addr)?;
     let stop = Arc::new(AtomicBool::new(false));
-    eprintln!(
+    scour_core::note!(
         "scourd: listening on {addr} · {} sources · watching starting",
         engine.sources().len()
     );
@@ -183,14 +183,14 @@ fn main() -> Result<()> {
             if let Ok(n) = engine.start_watching() {
                 let skipped = engine.unwatched();
                 if skipped.is_empty() {
-                    eprintln!("scourd: watching {n} source(s)");
+                    scour_core::note!("scourd: watching {n} source(s)");
                 } else {
                     // Named, not merely counted — "live updates are partial"
                     // is not something anyone can act on and a path is. But
                     // named *briefly*: one unreadable directory tree here
                     // produced 191 of them, and a log line that long is one
                     // nobody reads. The shared prefix is the useful part.
-                    eprintln!(
+                    scour_core::note!(
                         "scourd: watching {n} source(s); {} subtree(s) unreadable, under {}",
                         skipped.len(),
                         common_prefix(&skipped)
@@ -201,7 +201,7 @@ fn main() -> Result<()> {
             // there. A change during this walk is queued behind it and applied
             // when it finishes.
             if want_scan && let Err(e) = engine.rescan(None) {
-                eprintln!("scourd: the first walk could not start: {e}");
+                scour_core::note!("scourd: the first walk could not start: {e}");
             }
         });
     }
@@ -400,7 +400,7 @@ fn wait_for_scan(engine: &scour_engine::Engine) {
         // last batch has been applied.
         if idle >= 2 {
             let st = engine.status();
-            eprintln!(
+            scour_core::note!(
                 "scourd: {} entries · {:.1} MB · {} ms",
                 st.entries,
                 st.index_bytes as f64 / 1_048_576.0,

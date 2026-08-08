@@ -30,3 +30,26 @@ pub use types::{
     SourceInfo, SourceKind, Span, Status, TimeField, TreeNode, UsageRequest, UsageResponse, ext_of,
     ext_str, kind_of, mode_string, path_digest, under,
 };
+
+/// Say something, and carry on if nobody is listening.
+///
+/// **`eprintln!` panics when the write fails**, and a long-lived service has a
+/// stderr that can go away at any moment: a pipe whose reader exits, a terminal
+/// that closes, a shell that moves on. Reproduced exactly that way — the daemon
+/// was started with its output piped through `head`, the reader left, and the
+/// next line the worker printed killed the worker thread. Nothing announced it.
+/// The service went on answering searches from a frozen index at **no CPU at
+/// all**, which reads as the best result anyone had measured all evening and
+/// was a corpse.
+///
+/// Rust already ignores `SIGPIPE`, so the write returns `EPIPE` rather than
+/// ending the process; what was left to remove is the panic. A thread that
+/// cannot say what it is doing has to keep doing it — the line is a courtesy
+/// and the work is the job.
+#[macro_export]
+macro_rules! note {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
