@@ -984,7 +984,23 @@ fn run(
             };
             wake = wake.min(left(at));
         }
-        if dirty_settled {
+        // **`&& !dirty` is not decoration — it is the difference between a
+        // deadline and a spin.** The work this wakes for is guarded by exactly
+        // that condition further down, and for a while this half was not: with
+        // changes still staged, the compaction below was skipped, so
+        // `dirty_settled` was never cleared and `last_compact` never advanced.
+        // Once `last_compact + COMPACT_EVERY` was in the past, `left` returned
+        // zero every turn, `wake` collapsed onto the twenty-millisecond floor,
+        // and the loop ran at **fifty turns a second** — five times the fixed
+        // tick this computation replaced, and measured at 69 wake-ups a second
+        // against 0.85% of a core with nothing else happening.
+        //
+        // It only showed once a second source was watched, because that is what
+        // keeps `dirty` true often enough for the two guards to disagree. A
+        // deadline for work that cannot run is not a deadline; the moment
+        // `dirty` clears, the commit that cleared it is itself a wake-up and
+        // this is recomputed there.
+        if dirty_settled && !dirty {
             wake = wake.min(left(last_compact + COMPACT_EVERY));
         }
         if !dirty && !idle_done {
