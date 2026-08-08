@@ -398,10 +398,51 @@ fn inherited() -> Option<OwnedFd> {
     Some(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
+/// One source's share of the one reader.
+///
+/// **There is a single fanotify group and it cannot be split.** Two readers on
+/// two descriptors for the same group share one queue, so each would take about
+/// half the events and silently drop the other half. The first attempt handed
+/// the descriptor to whichever source asked first and left the second on
+/// inotify, which put `/mnt/depo` — 152,529 watches, the volume this whole
+/// mechanism exists for — back to being unwatched. So one thread reads, and the
+/// sources subscribe to it.
+///
+/// Routing is not a lookup table: each subscriber knows its own directories, so
+/// the event's parent handle is offered to each in turn and the one that
+/// recognises it owns the path. A source cannot claim another's tree because it
+/// never walked it.
+struct Sub {
+    id: SourceId,
+    real_modes: bool,
+    rules: Arc<Rules>,
+    sink: Arc<dyn ChangeSink>,
+    roots: Vec<std::path::PathBuf>,
+    map: DirMap,
+    devices: Vec<u64>,
+    /// Cleared when the handle is dropped. The entry stays in the list — an
+    /// index has to keep meaning what it meant — and is simply skipped.
+    live: Arc<AtomicBool>,
+    uncovered: Arc<Mutex<Vec<String>>>,
+}
+
+/// The subscribers, and whether the reader has been started.
+static SUBS: Mutex<Vec<Sub>> = Mutex::new(Vec::new());
+static READER: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+impl std::fmt::Debug for Sub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sub")
+            .field("id", &self.id)
+            .field("roots", &self.roots)
+            .field("dirs", &self.map.by_key.len())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 struct FanWatch {
-    stopped: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    live: Arc<AtomicBool>,
     /// Filesystems that appeared after the marks were set.
     ///
     /// They are not covered and cannot be from here: placing a mark needs
@@ -425,26 +466,24 @@ impl WatchHandle for FanWatch {
     /// subvolume created after the mark produced its event like any other.
     fn cover(&self, _path: &str) {}
 
-    fn stop(mut self: Box<Self>) {
-        self.stopped.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+    /// Leave the reader running.
+    ///
+    /// It serves every source, so one of them stopping is not a reason to take
+    /// it down; the subscription goes quiet and the thread stays for the rest.
+    /// The thread ends with the process, which is the only moment at which no
+    /// source is left to serve.
+    fn stop(self: Box<Self>) {
+        self.live.store(false, Ordering::Relaxed);
     }
 }
 
 impl Drop for FanWatch {
-    /// Ask the reader to stop but do not wait for it.
-    ///
-    /// `poll` runs on a half-second timeout, so this is bounded; `stop` is the
-    /// one that waits, which is what its documentation promises and what a
-    /// `Drop` cannot offer without blocking whoever let the handle go.
     fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Relaxed);
+        self.live.store(false, Ordering::Relaxed);
     }
 }
 
-/// Start watching, or say this mechanism is not available here.
+/// Subscribe to the one reader, or say this mechanism is not available here.
 ///
 /// `None` means "not this one" rather than "no watching": the caller falls back
 /// to inotify, which is why nothing in here panics or reports a failure for the
@@ -454,35 +493,54 @@ pub fn try_start(
     opts: &ScanOptions,
     sink: Arc<dyn ChangeSink>,
 ) -> Option<Result<Box<dyn WatchHandle>>> {
-    let fd = inherited()?;
+    // The descriptor is taken once. After that the reader owns it and later
+    // sources join the reader instead of trying to take it again — two owners
+    // of one descriptor is a double close, and two readers of one group is half
+    // the events each.
+    let first = READER.get().is_none();
+    let fd = if first { Some(inherited()?) } else { None };
+
     let roots: Vec<std::path::PathBuf> = source.roots().to_vec();
-    let id = source.source_id();
-    let real_modes = source.real_modes();
     let rules = Arc::new(Rules::from_options(opts));
-    let stopped = Arc::new(AtomicBool::new(false));
-    let handle_stop = Arc::clone(&stopped);
-
-    // **Which mechanism is running has to be visible.** The fallback to inotify
-    // is silent by design — a machine without the helper is the ordinary case,
-    // not a failure — and that is exactly what makes the successful case worth
-    // one line: otherwise the only way to tell a filesystem-wide watch from
-    // 296,711 individual ones is to count watches in `/proc`.
-    eprintln!("scourd: watching with fanotify (one mark a filesystem)");
-
+    let map = DirMap::build(&roots, &rules);
+    let devices = map.devices();
+    let live = Arc::new(AtomicBool::new(true));
     let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
-    let theirs = Arc::clone(&uncovered);
-    let thread = std::thread::Builder::new()
-        .name("scour-fanotify".into())
-        .spawn(move || drain(fd, roots, id, real_modes, rules, sink, stopped, theirs))
-        .ok()?;
-    Some(Ok(Box::new(FanWatch {
-        stopped: Arc::clone(&handle_stop),
-        thread: Some(thread),
-        uncovered,
-    })))
+
+    eprintln!(
+        "scourd: watching with fanotify — {} director{} under {}",
+        map.by_key.len(),
+        if map.by_key.len() == 1 { "y" } else { "ies" },
+        roots
+            .first()
+            .map(|r| path::from_path(r))
+            .unwrap_or_default()
+    );
+
+    SUBS.lock().ok()?.push(Sub {
+        id: source.source_id(),
+        real_modes: source.real_modes(),
+        rules,
+        sink,
+        roots,
+        map,
+        devices,
+        live: Arc::clone(&live),
+        uncovered: Arc::clone(&uncovered),
+    });
+
+    if let Some(fd) = fd {
+        READER.get_or_init(|| {
+            let _ = std::thread::Builder::new()
+                .name("scour-fanotify".into())
+                .spawn(move || drain(fd));
+        });
+    }
+
+    Some(Ok(Box::new(FanWatch { live, uncovered })))
 }
 
-/// The reader.
+/// The reader. One thread, however many sources.
 ///
 /// Wakes at most five times a second by construction: `poll` returns as soon as
 /// the first event lands, and then the window runs before anything is read, so
@@ -490,18 +548,7 @@ pub fn try_start(
 /// is reduced to distinct paths before a single `stat` is made — the same file
 /// written a hundred times in the window is one look, which is where the second
 /// saving is, and it does not show up in an event count.
-fn drain(
-    fd: OwnedFd,
-    roots: Vec<std::path::PathBuf>,
-    id: SourceId,
-    real_modes: bool,
-    rules: Arc<Rules>,
-    sink: Arc<dyn ChangeSink>,
-    stopped: Arc<AtomicBool>,
-    uncovered: Arc<Mutex<Vec<String>>>,
-) {
-    let mut map = DirMap::build(&roots, &rules);
-    let mut devices = map.devices();
+fn drain(fd: OwnedFd) {
     let mut buf = vec![0u8; BUF];
     let mut seen: Vec<Seen> = Vec::new();
     let raw = fd.as_raw_fd();
@@ -519,7 +566,7 @@ fn drain(
         })
         .unwrap_or_default();
 
-    while !stopped.load(Ordering::Relaxed) {
+    loop {
         let mut pfds = [
             libc::pollfd {
                 fd: raw,
@@ -534,8 +581,6 @@ fn drain(
                 revents: 0,
             },
         ];
-        // A bounded wait so that dropping the handle is noticed even on a
-        // filesystem where nothing ever happens.
         let pr = unsafe { libc::poll(pfds.as_mut_ptr(), 2, 500) };
         if pr <= 0 {
             continue;
@@ -548,27 +593,11 @@ fn drain(
                 let mut s = String::new();
                 if f.seek(SeekFrom::Start(0)).is_ok() && f.read_to_string(&mut s).is_ok() {
                     let now = mounts(&s);
-                    let fresh: Vec<String> = now
-                        .difference(&known)
-                        .map(|(_, at)| at.clone())
-                        .filter(|at| !rules.excludes_path(at))
-                        .collect();
+                    let fresh: Vec<String> =
+                        now.difference(&known).map(|(_, at)| at.clone()).collect();
                     known = now;
                     if !fresh.is_empty() {
-                        // Its contents can still be indexed — a walk reads what
-                        // is there. What cannot happen from here is watching it:
-                        // a new filesystem is a new superblock and a mark needs
-                        // a privilege this process does not have.
-                        if let Ok(mut u) = uncovered.lock() {
-                            for at in &fresh {
-                                if !u.contains(at) {
-                                    u.push(at.clone());
-                                }
-                            }
-                        }
-                        for at in fresh {
-                            sink.emit(Change::Rescan { path: at });
-                        }
+                        note_new_mounts(&fresh);
                     }
                 }
             }
@@ -601,57 +630,86 @@ fn drain(
             }
         }
 
+        let Ok(mut subs) = SUBS.lock() else { return };
+
         if lost {
             // Nothing in the overflow record says what was missed, so the
-            // subtree is the only unit available.
-            for r in &roots {
-                sink.emit(Change::Rescan {
-                    path: path::from_path(r),
-                });
+            // subtree is the only unit available — for everyone, because the
+            // queue that overflowed was shared.
+            for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
+                for r in &s.roots {
+                    s.sink.emit(Change::Rescan {
+                        path: path::from_path(r),
+                    });
+                }
             }
             continue;
         }
 
-        // Distinct paths, keeping "this might be new" if any event said so.
-        let mut batch: HashMap<String, (bool, bool)> = HashMap::new();
-        let mut unresolved = false;
-        for s in seen.drain(..) {
-            let Some(dir) = map.path_of(s.parent_ino, &devices) else {
-                unresolved = true;
+        // Distinct paths a subscriber, keeping "this might be new" if any event
+        // said so.
+        let mut batch: HashMap<(usize, String), (bool, bool)> = HashMap::new();
+        for ev in seen.drain(..) {
+            // The subscriber that walked this directory owns the path. An event
+            // nobody recognises is **dropped, not escalated**: it is almost
+            // always another source's tree or an excluded one, and answering it
+            // with a rescan of every root turns ordinary traffic into a storm.
+            // The case that would have justified escalating is covered
+            // elsewhere — a btrfs snapshot arrives as a create *in a directory
+            // that is known*, and a fresh directory already queues a walk.
+            let Some((i, dir)) = subs.iter().enumerate().find_map(|(i, s)| {
+                if !s.live.load(Ordering::Relaxed) {
+                    return None;
+                }
+                s.map
+                    .path_of(ev.parent_ino, &s.devices)
+                    .map(|d| (i, d.to_owned()))
+            }) else {
                 continue;
             };
             let full = if dir.ends_with('/') {
-                format!("{dir}{}", s.name)
+                format!("{dir}{}", ev.name)
             } else {
-                format!("{dir}/{}", s.name)
+                format!("{dir}/{}", ev.name)
             };
-            if rules.excludes_path(&full) {
+            if subs[i].rules.excludes_path(&full) {
                 continue;
             }
-            let e = batch.entry(full).or_insert((false, false));
-            e.0 |= s.fresh;
-            e.1 |= s.is_dir;
+            let e = batch.entry((i, full)).or_insert((false, false));
+            e.0 |= ev.fresh;
+            e.1 |= ev.is_dir;
         }
 
-        for (full, (fresh, is_dir)) in batch {
+        for ((i, full), (fresh, is_dir)) in batch {
+            let s = &mut subs[i];
             if fresh && is_dir {
-                map.learn(&full);
-                devices = map.devices();
+                s.map.learn(&full);
+                s.devices = s.map.devices();
             }
-            crate::watch::look(id, real_modes, &full, fresh, sink.as_ref());
+            crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
         }
+    }
+}
 
-        // A handle nothing knows is a directory that appeared without its
-        // creation being seen — a btrfs snapshot, which was measured to make
-        // 201 files visible behind a single event, or a tree moved in from
-        // outside the roots. Neither can be resolved from the event, and both
-        // are exactly what `Rescan` is for.
-        if unresolved {
-            for r in &roots {
-                sink.emit(Change::Rescan {
-                    path: path::from_path(r),
-                });
+/// A filesystem that appeared after the marks were set.
+///
+/// Its contents can still be indexed — a walk reads what is there — but nothing
+/// here can watch it: a new filesystem is a new superblock and a mark needs a
+/// privilege this process does not have. So it goes to every subscriber that
+/// wants it, as a walk and as an entry on the list `unwatched` carries.
+fn note_new_mounts(fresh: &[String]) {
+    let Ok(subs) = SUBS.lock() else { return };
+    for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
+        for at in fresh {
+            if s.rules.excludes_path(at) {
+                continue;
             }
+            if let Ok(mut u) = s.uncovered.lock()
+                && !u.contains(at)
+            {
+                u.push(at.clone());
+            }
+            s.sink.emit(Change::Rescan { path: at.clone() });
         }
     }
 }
