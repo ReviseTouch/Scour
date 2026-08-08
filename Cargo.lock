@@ -4658,6 +4658,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-watch"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "scour-web"
 version = "0.1.0"
 dependencies = [

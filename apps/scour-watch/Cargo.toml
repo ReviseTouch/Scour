@@ -1,0 +1,24 @@
+[package]
+name        = "scour-watch"
+description = "Sets the filesystem marks Scour watches with, then drops privilege and runs it."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour-watch"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# **No dependency on anything of Scour's.** This is the one program in the
+# workspace that runs as root, so what it can be made to do is bounded by how
+# little it can reach: it parses `/proc/self/mountinfo`, calls four syscalls and
+# execs. Pulling in the config crate would mean root parsing a file the user can
+# write, and pulling in the engine would mean root linking the index.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }

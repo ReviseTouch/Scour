@@ -220,9 +220,10 @@ impl DirMap {
     /// directory covers the entries; this covers the *events*.
     fn learn(&mut self, path: &str) {
         if let Ok(md) = std::fs::symlink_metadata(path)
-            && md.is_dir() {
-                self.insert(&md, path.to_owned());
-            }
+            && md.is_dir()
+        {
+            self.insert(&md, path.to_owned());
+        }
     }
 
     fn path_of(&self, ino: u64, dev_candidates: &[u64]) -> Option<&str> {
@@ -295,19 +296,21 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
                     let ht = i32::from_le_bytes(buf[fh + 4..fh + 8].try_into().unwrap());
                     let body = fh + 8;
                     if body + hb <= p + info_len
-                        && let Some(ino) = handle_ino(ht, &buf[body..body + hb]) {
-                            let tail = &buf[body + hb..p + info_len];
-                            let n = tail.iter().position(|&c| c == 0).unwrap_or(tail.len());
-                            if n > 0
-                                && let Ok(name) = std::str::from_utf8(&tail[..n]) {
-                                    out.push(Seen {
-                                        parent_ino: ino,
-                                        name: name.to_owned(),
-                                        fresh: mask & (FAN_CREATE | FAN_MOVED_TO) != 0,
-                                        is_dir: mask & FAN_ONDIR != 0,
-                                    });
-                                }
+                        && let Some(ino) = handle_ino(ht, &buf[body..body + hb])
+                    {
+                        let tail = &buf[body + hb..p + info_len];
+                        let n = tail.iter().position(|&c| c == 0).unwrap_or(tail.len());
+                        if n > 0
+                            && let Ok(name) = std::str::from_utf8(&tail[..n])
+                        {
+                            out.push(Seen {
+                                parent_ino: ino,
+                                name: name.to_owned(),
+                                fresh: mask & (FAN_CREATE | FAN_MOVED_TO) != 0,
+                                is_dir: mask & FAN_ONDIR != 0,
+                            });
                         }
+                    }
                 }
                 break;
             }
