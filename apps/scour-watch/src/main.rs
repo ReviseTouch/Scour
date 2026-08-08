@@ -296,6 +296,78 @@ fn mark(fd: libc::c_int, sb: &Sb) -> bool {
     ok
 }
 
+/// Put the environment back to the invoking user's.
+///
+/// **Dropping the user id is not enough**, and the first real run is what said
+/// so: `sudo` leaves `HOME=/root`, so `scourd` came up as uid 1000 and went
+/// looking for its configuration in `/root/.config/scour`, which it is not
+/// allowed to read. Every path a program derives from the environment rather
+/// than from `getuid` has this problem — the config, the index, the socket —
+/// and setting the identity without setting the environment produces the worst
+/// version of it: a process that is the right user and behaves like the wrong
+/// one.
+///
+/// The home directory comes from the password database rather than from
+/// `SUDO_HOME`, because there is no such variable and guessing `/home/<name>`
+/// is wrong on any machine that does not keep them there.
+fn restore_environment(uid: u32, gid: u32) {
+    let mut home = String::new();
+    let mut name = String::new();
+    // SAFETY: `getpwuid` returns a pointer into a static buffer that is valid
+    // until the next call, and both strings are copied out before returning.
+    unsafe {
+        let pw = libc::getpwuid(uid);
+        if !pw.is_null() {
+            if !(*pw).pw_dir.is_null() {
+                home = std::ffi::CStr::from_ptr((*pw).pw_dir)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            if !(*pw).pw_name.is_null() {
+                name = std::ffi::CStr::from_ptr((*pw).pw_name)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+    }
+    if name.is_empty() {
+        name = std::env::var("SUDO_USER").unwrap_or_default();
+    }
+
+    unsafe {
+        if !home.is_empty() {
+            // Anything pointing into root's home is `sudo`'s, not the user's,
+            // and would send the index or the cache somewhere unreadable. The
+            // ones that are set deliberately do not start with `/root`.
+            for k in [
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_STATE_HOME",
+            ] {
+                if std::env::var(k).is_ok_and(|v| v.starts_with("/root")) {
+                    std::env::remove_var(k);
+                }
+            }
+            std::env::set_var("HOME", &home);
+        }
+        if !name.is_empty() {
+            std::env::set_var("USER", &name);
+            std::env::set_var("LOGNAME", &name);
+        }
+        // The session bus and the socket live here, and `sudo` either drops it
+        // or points it at root's.
+        let run = format!("/run/user/{uid}");
+        if std::path::Path::new(&run).is_dir() {
+            std::env::set_var("XDG_RUNTIME_DIR", &run);
+        }
+        for k in ["SUDO_UID", "SUDO_GID", "SUDO_USER", "SUDO_COMMAND"] {
+            std::env::remove_var(k);
+        }
+    }
+    let _ = gid;
+}
+
 /// Become the user who invoked `sudo`, irreversibly.
 ///
 /// Order matters and is not stylistic: the supplementary groups have to go
@@ -420,6 +492,8 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Read before the identity is dropped, because the variables that say who
+    // invoked this are the first thing `restore_environment` clears.
     let (uid, gid) = match become_invoker() {
         Ok(v) => v,
         Err(e) => {
@@ -427,6 +501,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    restore_environment(uid, gid);
     println!("  {marked} dosya sistemi, uid={uid} gid={gid} olarak calistiriliyor\n");
 
     // The descriptor has to cross the exec, so the flag that would close it is
