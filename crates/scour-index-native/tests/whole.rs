@@ -1589,3 +1589,65 @@ fn the_empty_query_counts_what_is_live_without_walking_for_it() {
     assert!(capped, "a cap below the total still reports capped");
     assert_eq!(total, 100, "and reports the cap, not the true total");
 }
+
+/// A removal that arrives before anything was ever indexed must not vanish.
+///
+/// `kill_leaves` keys its lookup on a source, and an index that has been
+/// handed no rows this session knows none — reopening is exactly that state.
+/// The path has to fall through to the walk rather than be dropped between
+/// the two. The first version dropped it, and nothing failed: the file simply
+/// stayed in the index for ever.
+#[test]
+fn a_removal_before_the_first_upsert_still_takes_the_row() {
+    fn row(path: &str) -> Entry {
+        Entry {
+            id: EntryId::path_hash(SourceId(0), path),
+            path: path.into(),
+            is_dir: false,
+            meta: Meta::UNKNOWN,
+        }
+    }
+    fn found(index: &NativeIndex, q: &str) -> usize {
+        index
+            .search(&SearchRequest {
+                query: parse_at(q, NOW),
+                sort: SortKey::Relevance,
+                descending: false,
+                page: Page {
+                    offset: 0,
+                    limit: 50,
+                    count_cap: 100,
+                },
+            })
+            .expect("search")
+            .hits
+            .len()
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut it = vec![
+            Change::Upsert(row("/a/keepme.txt")),
+            Change::Upsert(row("/a/goneme.txt")),
+        ]
+        .into_iter();
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    index
+        .apply(&mut std::iter::once(Change::RemoveSubtree {
+            path: "/a/goneme.txt".into(),
+        }))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    assert_eq!(
+        found(&index, "goneme"),
+        0,
+        "a removal with no source to key on has to reach the walk, not be dropped"
+    );
+    assert_eq!(found(&index, "keepme"), 1, "and take nothing else");
+}

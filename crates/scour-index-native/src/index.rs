@@ -149,6 +149,19 @@ struct Inner {
     segments: Vec<Live>,
     /// Upserts not yet written. Searchable only after a commit.
     staged: Vec<Entry>,
+    /// Every source this index has been handed a row for.
+    ///
+    /// **`RemoveSubtree` carries a path and no source**, and the identity
+    /// table is keyed on both — so a removal cannot ask "which row is this
+    /// path" without one. Guessing is not needed: there are as many of these
+    /// as there are configured sources, two on the machine this was written
+    /// for, and trying each is two lookups against a scan of every row.
+    ///
+    /// Learned rather than stored. An index reopened and not yet written to
+    /// knows none, and a removal arriving before the first upsert falls back
+    /// to the scan — which is correct, and does not happen in practice
+    /// because a scan upserts before a watcher reports anything.
+    sources: Vec<SourceId>,
     /// Where each staged path sits, so a second upsert of the same file
     /// replaces the first instead of adding a second row for it.
     staged_at: HashMap<u64, usize>,
@@ -507,6 +520,54 @@ impl NativeIndex {
     }
 
     /// Kill every row of a segment that is under one of these prefixes.
+    /// Remove paths that name a file, without looking at any row that is not
+    /// one of them.
+    ///
+    /// **A watcher cannot tell a file from a folder**, so it reports every
+    /// removal as a subtree and the overwhelming majority of them are one
+    /// file. Answering those by scanning was linear in how much had been
+    /// indexed — 10.5 ms at half a million rows and 64.9 ms at four million,
+    /// with a realistic spread of timestamps — while the identity table
+    /// answers "which row is this path" in a binary search.
+    ///
+    /// The path is a file here only if the directory table does not hold it.
+    /// A path that names a directory has descendants to find and goes to
+    /// [`NativeIndex::kill_under`] as before; a path that names neither is
+    /// looked up, missed, and costs nothing.
+    ///
+    /// Returns the prefixes that still need the scan.
+    fn kill_leaves<'p>(
+        live: &mut Live,
+        prefixes: &'p scour_core::PrefixSet,
+        sources: &[SourceId],
+    ) -> Result<(u64, scour_core::PrefixSet)> {
+        let mut keep: Vec<String> = Vec::new();
+        let mut wanted: Vec<(u32, SourceId, &'p str)> = Vec::new();
+        {
+            let seg = live.view()?;
+            for p in prefixes.iter() {
+                let trimmed = p.trim_end_matches('/');
+                // No source yet means no way to key a lookup, so the scan
+                // has to answer it. Dropping it instead would lose the
+                // removal outright, which is what the first version did.
+                if sources.is_empty() || trimmed.is_empty() || !seg.dirs.subtree(p).is_empty() {
+                    keep.push(p.to_owned());
+                    continue;
+                }
+                for &source in sources {
+                    wanted.push((crate::ids::IdMap::key_of(source, trimmed), source, trimmed));
+                }
+            }
+        }
+        let rest = scour_core::PrefixSet::new(keep);
+        if wanted.is_empty() {
+            return Ok((0, rest));
+        }
+        wanted.sort_unstable_by_key(|(k, _, _)| *k);
+        let gone = live.kill_paths(&wanted)?;
+        Ok((gone, rest))
+    }
+
     fn kill_under(live: &mut Live, prefixes: &scour_core::PrefixSet) -> Result<u64> {
         let victims: Vec<usize> = {
             let seg = live.view()?;
@@ -725,8 +786,16 @@ impl NativeIndex {
         // search a comparison rather than a scan.
         if !inner.hidden_prefixes.is_empty() {
             let prefixes = std::mem::take(&mut inner.hidden_prefixes);
+            let sources = inner.sources.clone();
             for (i, live) in inner.segments.iter_mut().enumerate() {
-                if Self::kill_under(live, &prefixes)? > 0 {
+                // Files first, by identity, and only what is left over — a
+                // real directory — pays for a walk.
+                let (leaves, rest) = Self::kill_leaves(live, &prefixes, &sources)?;
+                let mut gone = leaves;
+                if !rest.is_empty() {
+                    gone += Self::kill_under(live, &rest)?;
+                }
+                if gone > 0 {
                     touched[i] = true;
                 }
             }
@@ -1451,6 +1520,9 @@ impl Index for NativeIndex {
         for c in changes {
             match c {
                 Change::Upsert(e) => {
+                    if !inner.sources.contains(&e.id.source) {
+                        inner.sources.push(e.id.source);
+                    }
                     // A file that was removed and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
                     //
