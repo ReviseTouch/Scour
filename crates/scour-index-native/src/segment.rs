@@ -29,7 +29,35 @@ fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
     dir.join(format!("seg-{number:08}.{ext}"))
 }
 
-/// An opened segment: six mapped files and one bitmap that is not.
+/// One piece of a segment: mapped from a file, or held in memory.
+///
+/// **The second case is what lets a change be searchable before it is
+/// durable.** Those were the same thing here, and the cost of conflating them
+/// was measured: a search could not see a new file until a commit, and a commit
+/// writes seven files and calls `fsync` about ten times — 22.5 ms whether it
+/// carries one row or a hundred and twenty-eight. Freshness was therefore
+/// bought in units of a whole segment write, and at a five-second clock that
+/// was the single largest thing an idle service did.
+///
+/// Nothing downstream can tell the difference: every reader takes a `&[u8]`,
+/// and both arms give it one.
+#[derive(Debug)]
+enum Part {
+    Mapped(Mmap),
+    Owned(Vec<u8>),
+}
+
+impl std::ops::Deref for Part {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Part::Mapped(m) => m,
+            Part::Owned(v) => v,
+        }
+    }
+}
+
+/// An opened segment: six parts and one bitmap that is not.
 #[derive(Debug)]
 pub struct Live {
     pub number: u64,
@@ -38,7 +66,7 @@ pub struct Live {
     /// Kept per segment rather than per row because [`crate::NativeIndex`]
     /// flushes when a generation begins, so a segment never spans two.
     pub generation: u64,
-    maps: Vec<Mmap>,
+    maps: Vec<Part>,
     alive: Vec<u8>,
     rows: usize,
     /// How many of those rows are directories.
@@ -86,11 +114,39 @@ impl Live {
             // Safe as long as nobody rewrites the file underneath us, which
             // nothing does: a segment is written once and then only deleted.
             let m = unsafe { Mmap::map(&f) }.map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
-            maps.push(m);
+            maps.push(Part::Mapped(m));
         }
         let p = part_path(dir, number, "alive");
         let alive = std::fs::read(&p).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
+        Live::assemble(number, generation, maps, alive)
+    }
 
+    /// A segment that was never written, and may never be.
+    ///
+    /// The same bytes `write` would have put in seven files, kept in memory
+    /// instead. It is a real segment to every reader — same format, same
+    /// trigram filter, same zone maps — and the only thing it is not is
+    /// durable. See [`Part`] for why that distinction had to be made.
+    pub fn in_memory(number: u64, generation: u64, bytes: &SegmentBytes) -> Result<Live> {
+        let maps = vec![
+            Part::Owned(bytes.names.clone()),
+            Part::Owned(bytes.cols.clone()),
+            Part::Owned(bytes.dirs.clone()),
+            Part::Owned(bytes.ids.clone()),
+            Part::Owned(bytes.tri_dict.clone()),
+            Part::Owned(bytes.tri_post.clone()),
+            Part::Owned(bytes.fnames.clone()),
+        ];
+        Live::assemble(number, generation, maps, bytes.alive.clone())
+    }
+
+    /// Check the pieces agree with each other and count what a search needs.
+    ///
+    /// Shared by both ways in, so an in-memory segment is validated exactly as
+    /// hard as one read off a disk. A bug that built a short bitmap would
+    /// otherwise be caught in one path and silently answer "nothing matched" in
+    /// the other.
+    fn assemble(number: u64, generation: u64, maps: Vec<Part>, alive: Vec<u8>) -> Result<Live> {
         let rows = NameArena::open(&maps[0])
             .ok_or_else(|| Error::IndexCorrupt {
                 detail: format!("seg-{number:08}.names is unreadable"),
@@ -383,6 +439,72 @@ impl Live {
         // time, and a half-written one turns every row in the segment into a
         // coin flip between alive and dead.
         replace_synced(&part_path(dir, self.number, "alive"), &self.alive)
+    }
+}
+
+#[cfg(test)]
+mod memory_segment {
+    use super::*;
+    use scour_core::{EntryId, Meta, SourceId};
+
+    fn entry(path: &str) -> Entry {
+        Entry {
+            id: EntryId::path_hash(SourceId(0), path),
+            path: path.into(),
+            is_dir: false,
+            meta: Meta::UNKNOWN,
+        }
+    }
+
+    /// A segment held in memory has to be the same segment, not a near one.
+    ///
+    /// Written and unwritten are the same bytes by construction, so the thing
+    /// worth asserting is that both arrive at the same *reader* — same row
+    /// count, same names, same directory table. If they ever diverge, a search
+    /// would answer differently depending on whether a commit had happened,
+    /// which is exactly the bug this split exists to remove.
+    #[test]
+    fn an_unwritten_segment_reads_the_same_as_a_written_one() {
+        let rows = [
+            entry("/a/one.txt"),
+            entry("/a/two.txt"),
+            entry("/b/three.txt"),
+        ];
+        let bytes = crate::build::build(&rows);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let on_disk = Live::write(dir.path(), 1, 0, &bytes).expect("write");
+        let in_ram = Live::in_memory(1, 0, &bytes).expect("in_memory");
+
+        assert_eq!(in_ram.rows(), on_disk.rows());
+        assert_eq!(in_ram.live_rows(), on_disk.live_rows());
+
+        let a = on_disk.view().expect("view");
+        let b = in_ram.view().expect("view");
+        let mut seen = Vec::new();
+        for r in 0..on_disk.rows() {
+            assert_eq!(b.dir_id(r), a.dir_id(r), "row {r}");
+            seen.push(b.path(r, "x"));
+            assert_eq!(b.path(r, "x"), a.path(r, "x"), "row {r}");
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            ["/a/x", "/a/x", "/b/x"],
+            "the directory table came through"
+        );
+    }
+
+    /// The validation is shared, so damage is caught on both paths.
+    #[test]
+    fn an_unwritten_segment_with_a_short_bitmap_is_refused() {
+        let rows = [entry("/a/one.txt"), entry("/a/two.txt")];
+        let mut bytes = crate::build::build(&rows);
+        bytes.alive.clear();
+        assert!(
+            Live::in_memory(2, 0, &bytes).is_err(),
+            "a bitmap that does not cover the rows is damage, not a dead segment"
+        );
     }
 }
 
