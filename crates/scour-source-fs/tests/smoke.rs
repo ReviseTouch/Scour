@@ -572,22 +572,26 @@ fn a_root_that_cannot_be_read_is_reported_as_such() {
     assert_eq!(r.entries, 0);
 }
 
-/// A spinning disk is not a fast disk with fewer cores.
+/// A spinning disk is not a fast disk with fewer cores — and a fast disk is
+/// not a reason to use every core.
 ///
-/// The thread count belongs to the device, not to the machine: on NVMe it
-/// tracks the core count (and this machine's hardware queue count, which is
-/// the same number), and on a spinning disk it is one, because every extra
-/// concurrent reader is another seek. A network mount sits between the two —
-/// bounded by round trips rather than by the device.
+/// The thread count belongs to the device *and* to what the entries are handed
+/// to: one thread stages and indexes them, so walker threads past what it can
+/// absorb spin in `ignore`'s wait-for-work loop and starve it. Measured at
+/// seventeen times the CPU and three times the wall clock on twenty threads
+/// against four; see `Medium::threads`. A spinning disk is still one, because
+/// every extra concurrent reader is another seek.
 #[test]
 fn the_device_decides_how_many_threads_are_worth_using() {
     use scour_source_fs::fs::Medium;
     assert_eq!(Medium::Spinning.threads(20), 1);
-    assert_eq!(Medium::Solid.threads(20), 20);
-    assert_eq!(Medium::Memory.threads(20), 20);
+    assert_eq!(Medium::Solid.threads(20), 4);
+    assert_eq!(Medium::Memory.threads(20), 4);
     assert_eq!(Medium::Network.threads(20), 4);
     // A machine with more cores than the ceiling does not get more threads.
-    assert_eq!(Medium::Solid.threads(128), 32);
+    assert_eq!(Medium::Solid.threads(128), 4);
+    // Nor a machine with fewer cores than the floor fewer than two.
+    assert_eq!(Medium::Solid.threads(1), 2);
     // Nor does a spinning disk on a big machine.
     assert_eq!(Medium::Spinning.threads(128), 1);
 }
