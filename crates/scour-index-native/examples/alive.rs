@@ -53,8 +53,29 @@ fn main() {
             "esit (yol sirali)"
         }
     );
-    let dir = tempfile::tempdir().expect("tempdir");
-    let index = NativeIndex::open_or_create(dir.path()).expect("open");
+    // **Where the index sits decides what is being measured.** `tempdir` lands
+    // in `/tmp`, which is tmpfs here, and an `fsync` to memory costs nothing —
+    // so a commit measured there is the work and not the write. That is the
+    // right choice for anything CPU-bound and the wrong one for the commit
+    // clock, which is `fsync` almost all the way down. `SCOUR_BENCH_DIR` puts
+    // it on a real filesystem.
+    let held;
+    let dir: &std::path::Path = match std::env::var_os("SCOUR_BENCH_DIR") {
+        Some(d) => {
+            held = std::path::PathBuf::from(d);
+            let _ = std::fs::remove_dir_all(&held);
+            std::fs::create_dir_all(&held).expect("mkdir");
+            println!("indeks     : {} (gercek disk)", held.display());
+            &held
+        }
+        None => {
+            let t = tempfile::tempdir().expect("tempdir");
+            println!("indeks     : {} (tmpfs — fsync bedava)", t.path().display());
+            held = t.keep();
+            &held
+        }
+    };
+    let index = NativeIndex::open_or_create(dir).expect("open");
 
     let t = Instant::now();
     let mut it = (0..rows).map(|i| Change::Upsert(entry(i, scatter)));
