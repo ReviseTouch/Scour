@@ -166,6 +166,27 @@ impl<'a> Segment<'a> {
         known == parent
     }
 
+    /// Does this row already say exactly what an entry says?
+    ///
+    /// Asked once a row that [`Segment::is_at`] has just confirmed, so it runs
+    /// on the view that confirmation already opened. That order is the whole
+    /// design: opening a view *per entry* to answer this instead — four headers
+    /// parsed, a trigram index mapped, for six integer comparisons — measured a
+    /// rescan of two million untouched rows at 6.65 s against the 3.04 s it was
+    /// trying to beat.
+    ///
+    /// `atime` is not compared. It moves when a file is *read*, so including it
+    /// would call almost everything changed and the answer would always be no.
+    pub fn same_meta(&self, row: usize, meta: &Meta, is_dir: bool) -> bool {
+        self.num(Field::Size, row) == meta.size
+            && self.num(Field::Mtime, row) == meta.mtime
+            && self.num(Field::Ctime, row) == meta.ctime
+            && self.num(Field::Mode, row) == meta.mode
+            && self.num(Field::Uid, row) == meta.uid
+            && self.num(Field::Gid, row) == meta.gid
+            && (self.num(Field::IsDir, row) != 0) == is_dir
+    }
+
     fn hit(&self, row: usize, name: &str) -> Hit {
         let path = self.path(row, name);
         Hit {

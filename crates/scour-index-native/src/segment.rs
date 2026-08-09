@@ -192,32 +192,104 @@ impl Live {
         }
     }
 
-    /// Does this row already say exactly what an entry says?
+    /// Which of these entries this segment already holds, exactly as they are.
     ///
-    /// **Opens the columns and nothing else.** The obvious way to ask is
-    /// through [`Live::view`], and the obvious way is two million times slower
-    /// on a rescan: a view builds the name arena, the directory table and the
-    /// trigram index as well, and none of them is consulted here. Measured
-    /// against the whole point of asking — a rescan of an untouched two
-    /// million rows went from 3.04 s to 6.65 s with the view, which is worse
-    /// than writing the rows it was trying not to write.
+    /// **The question a rescan asks two million times.** A walk hands over
+    /// every entry it saw, changed or not, and writing them all again costs
+    /// three seconds and twenty segments of an index that was already right.
     ///
-    /// `atime` is not compared. It moves when a file is *read*, so including
-    /// it would call almost everything changed and the answer would always be
-    /// no.
-    pub fn row_matches(&self, row: usize, meta: &scour_core::Meta, is_dir: bool) -> bool {
-        use crate::columns::Field;
-        let Some(cols) = ColumnBlocks::open(&self.maps[1]) else {
-            return false;
-        };
-        let n = |f: Field| cols.get(f, row).unwrap_or(0);
-        n(Field::Size) == meta.size
-            && n(Field::Mtime) == meta.mtime
-            && n(Field::Ctime) == meta.ctime
-            && n(Field::Mode) == meta.mode
-            && n(Field::Uid) == meta.uid
-            && n(Field::Gid) == meta.gid
-            && (n(Field::IsDir) != 0) == is_dir
+    /// Shaped like [`Live::kill_paths`] and for the same reason. Asked one
+    /// entry at a time it is a binary search per entry per segment, and a bulk
+    /// pass makes both numbers large at once — measured at 3.04 s to 5.23 s on
+    /// a two-million-row rescan, which is slower than not asking. Sorting the
+    /// batch once puts it in the order the id table is already in and the check
+    /// becomes one sequential pass; the probing branch stays for the batch of
+    /// three a watcher hands over, where a full walk of the table would be the
+    /// expensive shape instead.
+    ///
+    /// `keys` must be sorted by [`IdMap::key_of`], and each `.1` indexes
+    /// `staged`. **A row this segment claims settles the question here**,
+    /// matching or not: `decided` is set either way, so a stale copy of the
+    /// same path in an older segment cannot answer for it. Only matches reach
+    /// `out`, as `(index into staged, row)`.
+    pub fn spare_paths(
+        &self,
+        keys: &[(u32, u32)],
+        staged: &[Entry],
+        decided: &mut [bool],
+        out: &mut Vec<(u32, usize)>,
+    ) -> Result<()> {
+        if keys.is_empty() || self.rows == 0 {
+            return Ok(());
+        }
+        let ids = self.ids()?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Rows to confirm, with the entry each one might belong to.
+        let mut pairs: Vec<(usize, u32)> = Vec::new();
+        if keys.len().saturating_mul(ids.len().ilog2().max(1) as usize) < ids.len() {
+            for &(key, at) in keys {
+                if decided[at as usize] {
+                    continue;
+                }
+                for row in ids.rows_for(key) {
+                    pairs.push((row as usize, at));
+                }
+            }
+        } else {
+            let (mut i, mut j) = (0usize, 0usize);
+            while i < ids.len() && j < keys.len() {
+                let h = ids.at(i).0;
+                match h.cmp(&keys[j].0) {
+                    std::cmp::Ordering::Less => i += 1,
+                    std::cmp::Ordering::Greater => j += 1,
+                    std::cmp::Ordering::Equal => {
+                        // A run of equal hashes on each side. Both are tiny —
+                        // a collision in a 32-bit key is rare and a repeated
+                        // identity is a bug — so the cross product is cheap.
+                        let mut i2 = i;
+                        while i2 < ids.len() && ids.at(i2).0 == h {
+                            i2 += 1;
+                        }
+                        let mut j2 = j;
+                        while j2 < keys.len() && keys[j2].0 == h {
+                            j2 += 1;
+                        }
+                        for k in i..i2 {
+                            for w in j..j2 {
+                                if !decided[keys[w].1 as usize] {
+                                    pairs.push((ids.at(k).1 as usize, keys[w].1));
+                                }
+                            }
+                        }
+                        i = i2;
+                        j = j2;
+                    }
+                }
+            }
+        }
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let seg = self.view()?;
+        let mut dirs = std::collections::HashMap::new();
+        for (row, at) in pairs {
+            let e = &staged[at as usize];
+            // A digest collision can name the same row twice in one pass, and
+            // an entry settled by an earlier candidate is not asked again.
+            if decided[at as usize] || !self.is_alive(row) {
+                continue;
+            }
+            if !seg.is_at(&mut dirs, row, e.id.source, &e.path) {
+                continue;
+            }
+            decided[at as usize] = true;
+            if seg.same_meta(row, &e.meta, e.is_dir) {
+                out.push((at, row));
+            }
+        }
+        Ok(())
     }
 
     /// The searchable view.

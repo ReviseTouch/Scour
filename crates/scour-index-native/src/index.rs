@@ -164,6 +164,14 @@ struct Inner {
     /// renumbering would leave every bit pointing at the wrong row, and the
     /// failure would be the silent one.
     seen: HashMap<u64, Vec<u8>>,
+    /// How many rows have been spared since the last time somebody was told.
+    ///
+    /// Sparing happens when the batch is flushed, which is not when the entry
+    /// was handed over — so the count reaches [`ApplyReport`] one batch late,
+    /// and the tail of a scan is reported by whatever calls `apply` next. It is
+    /// a diagnostic, and this is the honest shape of it rather than an accurate
+    /// number bought with a probe per entry.
+    spared: u64,
     /// Every source this index has been handed a row for.
     ///
     /// **`RemoveSubtree` carries a path and no source**, and the identity
@@ -854,6 +862,11 @@ impl NativeIndex {
         // each of them to satisfy the borrow checker was **0.32 µs an entry**
         // — a third of what writing an entry costs in total, spent on strings
         // that are three lines away from the originals.
+        //
+        // First, though: the rows that are already right leave the batch, so
+        // neither the kill below nor the build after it is asked to do anything
+        // about them. See `spare_unchanged`.
+        spare_unchanged(inner)?;
         {
             let Inner {
                 staged, segments, ..
@@ -1271,42 +1284,94 @@ impl<'a> Doomed<'a> {
     }
 }
 
-/// Does the index already hold this entry, exactly as it is?
+/// Take out of the batch every entry the index already holds, exactly as it is.
 ///
-/// **The question a rescan asks two million times and never used to.** A walk
-/// hands over every entry it saw, changed or not, and writing them all again
-/// costs three seconds and twenty segments of an index that was already right.
+/// **A rescan of an untouched filesystem should cost nothing to write**, and
+/// used to cost the whole index: the walk hands over every entry it saw and
+/// each one was staged, built into a segment and committed over a row that
+/// already said the same thing.
 ///
-/// Marks the row as seen and returns true when it matches. `atime` is not
-/// compared: it moves when a file is *read*, so comparing it would call almost
-/// everything changed and the answer would always be no.
-fn already_indexed(inner: &mut Inner, e: &Entry) -> bool {
-    // Nothing to match against, and a scan with no open generation has no
-    // stamp to preserve either.
-    if inner.open.is_none() {
-        return false;
+/// Asked here rather than in [`Index::apply`], and that placement is the whole
+/// of the performance. `apply` sees one entry at a time, so asking there is a
+/// binary search per entry per segment — twenty segments deep by two million
+/// entries, and it measured *slower* than writing the rows. Here the batch is
+/// already assembled, so it is sorted once and merged against each segment's id
+/// table in a single pass. See [`Live::spare_paths`].
+///
+/// Nothing is written and no live bit moves: an entry is dropped from the batch
+/// and its row is marked in [`Inner::seen`] so the sweep knows the walk saw it.
+fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
+    // Only inside a generation. Outside one there is no sweep coming, so
+    // nothing needs the mark — and the marks are cleared when a generation
+    // opens, which would make a spared row look unstamped to the sweep that
+    // follows.
+    if inner.open.is_none() || inner.staged.is_empty() || inner.segments.is_empty() {
+        return Ok(0);
     }
-    for i in 0..inner.segments.len() {
-        let live = &inner.segments[i];
-        let Ok(Some(row)) = live.find(e.id.source, &e.path) else {
-            continue;
-        };
-        let number = live.number;
-        let rows = live.rows();
-        if !live.row_matches(row, &e.meta, e.is_dir) {
-            return false;
+    let mut drop_at = vec![false; inner.staged.len()];
+    let mut marks: HashMap<u64, Vec<u8>> = HashMap::new();
+    let mut spared = 0u64;
+    {
+        let Inner {
+            staged, segments, ..
+        } = &mut *inner;
+        let mut keys: Vec<(u32, u32)> = staged
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (crate::ids::IdMap::key_of(e.id.source, &e.path), i as u32))
+            .collect();
+        keys.sort_unstable();
+        let mut decided = vec![false; staged.len()];
+        let mut hits: Vec<(u32, usize)> = Vec::new();
+        for live in segments.iter() {
+            hits.clear();
+            live.spare_paths(&keys, staged, &mut decided, &mut hits)?;
+            if hits.is_empty() {
+                continue;
+            }
+            let bits = marks
+                .entry(live.number)
+                .or_insert_with(|| vec![0u8; live.rows().div_ceil(8)]);
+            for &(at, row) in &hits {
+                drop_at[at as usize] = true;
+                if let Some(b) = bits.get_mut(row / 8) {
+                    *b |= 1 << (row % 8);
+                }
+            }
+            spared += hits.len() as u64;
         }
-        if let Some(b) = inner
+    }
+    if spared == 0 {
+        return Ok(0);
+    }
+    // Onto whatever earlier batches of the same generation already marked.
+    for (number, bits) in marks {
+        let held = inner
             .seen
             .entry(number)
-            .or_insert_with(|| vec![0u8; rows.div_ceil(8)])
-            .get_mut(row / 8)
-        {
-            *b |= 1 << (row % 8);
+            .or_insert_with(|| vec![0u8; bits.len()]);
+        if held.len() < bits.len() {
+            held.resize(bits.len(), 0);
         }
-        return true;
+        for (h, b) in held.iter_mut().zip(bits) {
+            *h |= b;
+        }
     }
-    false
+    let mut i = 0usize;
+    inner.staged.retain(|_| {
+        let keep = !drop_at[i];
+        i += 1;
+        keep
+    });
+    // Rebuilt rather than adjusted: the positions all moved, and a stale one
+    // would have a later upsert overwrite an unrelated entry. Cheap because it
+    // runs over what is *left*, which is the changed files.
+    inner.staged_at.clear();
+    for (i, e) in inner.staged.iter().enumerate() {
+        inner.staged_at.insert(digest(e.id.source, &e.path), i);
+    }
+    inner.spared += spared;
+    Ok(spared)
 }
 
 /// Is this row hidden by a removal that has not been committed yet?
@@ -1591,12 +1656,6 @@ impl Index for NativeIndex {
                     if !inner.sources.contains(&e.id.source) {
                         inner.sources.push(e.id.source);
                     }
-                    // Already right, and marked so the sweep knows the walk
-                    // saw it. See `already_indexed`.
-                    if already_indexed(&mut inner, &e) {
-                        report.unchanged += 1;
-                        continue;
-                    }
                     // A file that was removed and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
                     //
@@ -1640,6 +1699,16 @@ impl Index for NativeIndex {
                 Change::Rescan { .. } => {}
             }
         }
+        // What the flushes inside this call decided was already indexed. See
+        // `Inner::spared` for why it is drained here rather than counted above.
+        //
+        // Moved out of `upserted` rather than added beside it: every spared
+        // entry was counted as an upsert on the way in, and `seen()` adds the
+        // two. Saturating because the batch that was spared is not always the
+        // batch that was staged.
+        let spared = std::mem::take(&mut inner.spared);
+        report.upserted = report.upserted.saturating_sub(spared);
+        report.unchanged = spared;
         Ok(report)
     }
 
@@ -1648,16 +1717,22 @@ impl Index for NativeIndex {
         // were staged under and judged by the one that starts here.
         self.settle()?;
         let mut inner = self.inner.write();
-        // Flush first, so that no segment ever spans two generations. That is
+        // Whatever was open is finished: callers scan one at a time. A scan
+        // that ended without sweeping — a cancelled walk, an unreadable root —
+        // deliberately leaves nothing to reconcile.
+        //
+        // **Closed before the flush, not after.** The flush below would
+        // otherwise spare rows into marks that the `clear` two lines down
+        // throws away, leaving them unwritten *and* unstamped — which the next
+        // sweep reads as "the walk did not find them".
+        inner.open = None;
+        inner.seen.clear();
+        // Flush second, so that no segment ever spans two generations. That is
         // what lets the generation be one number a segment rather than a column
         // a row, and it is why `sweep` is a loop over segments and not a scan.
         self.flush(&mut inner)?;
         inner.generation += 1;
-        inner.seen.clear();
         let g = inner.generation;
-        // Whatever was open is finished: callers scan one at a time. A scan
-        // that ended without sweeping — a cancelled walk, an unreadable root —
-        // deliberately leaves nothing to reconcile.
         inner.open = Some(g);
         self.save_meta(&inner)?;
         Ok(g)
