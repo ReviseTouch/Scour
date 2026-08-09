@@ -60,16 +60,45 @@ impl Medium {
     /// count — the driver opens one queue per core, which is why the two
     /// agree. Going past it buys nothing and 48 costs dearly.
     ///
-    /// The previous project's rule was `cores * 2`, on a note claiming 32 beat
-    /// 20 by 20%. That did not reproduce here; the numbers above are why this
-    /// says `cores`.
+    /// **That table measured the walk and this one has to pay for the scan.**
+    /// The walk is not the consumer: entries go down a channel to one thread
+    /// that stages and indexes them, and it absorbs about 300,000 a second.
+    /// Walker threads past that do not go faster — they go round `ignore`'s
+    /// wait-for-work loop, which spins while any other worker still owes a
+    /// directory, and the worker that owes it is blocked handing entries over.
+    /// Nineteen threads spinning at a full core each then starve the one thread
+    /// that would have unblocked them.
+    ///
+    /// Cold first scan, whole service, this machine, both directions:
+    ///
+    /// | threads | /home, 870k, cached | /mnt/depo, ntfs3, cold |
+    /// |---|---|---|
+    /// | 1 | 6.3 core-s · 4.9 s | — |
+    /// | **2** | **7.0 core-s · 2.9 s** | 20.3 core-s · **30.0 s** |
+    /// | 3 | 10.6 core-s · 3.7 s | — |
+    /// | **4** | 16.1 core-s · 4.4 s | **29.1 core-s · 7.2 s** |
+    /// | 8 | 26.5 core-s · 5.3 s | 62.8 core-s · 10.2 s |
+    /// | 20 | 120.3 core-s · 8.5 s | 176.3 core-s · 13.2 s |
+    ///
+    /// Twenty is the worst row on both volumes, on both axes: seventeen times
+    /// the CPU of the best and three times the wall clock. It also measured
+    /// 8,231,481 voluntary context switches against 24,007 at two.
+    ///
+    /// Two is the optimum for a tree that is already in the page cache, where
+    /// the consumer is the bottleneck. Four is the optimum for one that has to
+    /// come off the disk, where two threads leave the device idle — 30 seconds
+    /// against 7. **Four**, because the volume that has to come off the disk is
+    /// the one that takes long enough to be noticed, and being twice the CPU on
+    /// a cached tree is cheaper than being four times the wall clock on a cold
+    /// one. Both mounts here are NVMe, so nothing about the device separates
+    /// them; picking per source would mean measuring the source.
     ///
     /// The network and spinning figures are **not measured** — there is no HDD
     /// and no network mount on this machine. They are conservative guesses,
     /// and marked as such rather than presented as findings.
     pub fn threads(self, cores: usize) -> usize {
         match self {
-            Medium::Solid | Medium::Memory => cores.clamp(2, 32),
+            Medium::Solid | Medium::Memory => cores.clamp(2, 4),
             // One seek at a time. Concurrency on a spinning disk turns a
             // sequential read into a head-thrashing one.
             Medium::Spinning => 1,

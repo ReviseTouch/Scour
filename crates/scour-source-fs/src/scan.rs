@@ -17,9 +17,74 @@ use crate::rules::Rules;
 
 /// What a walker thread sends back.
 enum Msg {
-    Entry(Entry),
+    /// A thread's worth of entries, not one entry. See [`Batch`].
+    Entries(Vec<Entry>),
     /// Where the walk could not look, and why.
     Unreadable(String, String),
+}
+
+/// How many entries a walker thread collects before handing them over.
+///
+/// The number is not delicate — anything that turns a send per entry into a
+/// send per hundred does almost all of the work — but it is bounded on both
+/// sides. Too small and the channel is busy again; too large and the walk
+/// stutters, because a batch is invisible to the index until it is sent.
+const BATCH: usize = 512;
+
+/// How many batches may be in the air. Bound times batch is what the channel
+/// holds, and it is deliberately about what one message used to hold.
+const IN_FLIGHT: usize = 64;
+
+/// One walker thread's outgoing buffer.
+///
+/// **The channel was the scan.** Twenty threads sending one entry each into a
+/// bounded queue drained by one is a queue that is always full, so nearly every
+/// send parks the thread and nearly every receive wakes one: measured at
+/// 8,231,481 voluntary context switches for 870,000 entries — 9.5 a file — and
+/// 84 of the 112 core-seconds a start-up cost were the kernel doing that. The
+/// same walk on two threads cost 44,238 switches and 7.9 core-seconds.
+///
+/// The fix is not fewer threads, which only hides it; it is fewer messages.
+/// Backpressure is unchanged — [`IN_FLIGHT`] batches is about as many entries
+/// as the old bound — and so is what the walk is allowed to get ahead by.
+struct Batch {
+    tx: crossbeam_channel::Sender<Msg>,
+    buf: Vec<Entry>,
+}
+
+impl Batch {
+    fn new(tx: crossbeam_channel::Sender<Msg>) -> Batch {
+        Batch {
+            tx,
+            buf: Vec::with_capacity(BATCH),
+        }
+    }
+
+    /// Returns false once the far end is gone, which is a walk to abandon.
+    fn push(&mut self, e: Entry) -> bool {
+        self.buf.push(e);
+        self.buf.len() < BATCH || self.flush()
+    }
+
+    fn flush(&mut self) -> bool {
+        if self.buf.is_empty() {
+            return true;
+        }
+        let full = std::mem::replace(&mut self.buf, Vec::with_capacity(BATCH));
+        self.tx.send(Msg::Entries(full)).is_ok()
+    }
+}
+
+/// The tail of a thread's last batch.
+///
+/// `ignore` gives a visitor no way to say it has finished, but it does drop the
+/// box when the thread ends — so this is where the remainder goes. Without it a
+/// walk loses up to [`BATCH`] entries a thread, which on a quiet disk is the
+/// whole scan.
+impl Drop for Batch {
+    fn drop(&mut self) {
+        self.flush();
+    }
 }
 
 /// How many unreadable subtrees are worth remembering by name.
@@ -355,7 +420,7 @@ impl Source for FsSource {
         // sink's world simple and gives backpressure for free: when the
         // consumer is slower than the disk, the walker waits instead of
         // building an unbounded queue of a million entries in memory.
-        let (tx, rx) = crossbeam_channel::bounded::<Msg>(8192);
+        let (tx, rx) = crossbeam_channel::bounded::<Msg>(IN_FLIGHT);
 
         std::thread::scope(|scope| {
             let walker_tx = tx.clone();
@@ -364,6 +429,7 @@ impl Source for FsSource {
             let walker = scope.spawn(move || {
                 builder.build_parallel().run(|| {
                     let tx = walker_tx.clone();
+                    let mut batch = Batch::new(tx.clone());
                     Box::new(move |result| {
                         if cancelled.load(Ordering::Relaxed) {
                             return WalkState::Quit;
@@ -414,16 +480,13 @@ impl Source for FsSource {
                         if is_dir {
                             dirs.fetch_add(1, Ordering::Relaxed);
                         }
-                        if tx
-                            .send(Msg::Entry(entry_of(
-                                src_id,
-                                &normalised,
-                                md.as_ref(),
-                                is_dir,
-                                real_modes,
-                            )))
-                            .is_err()
-                        {
+                        if !batch.push(entry_of(
+                            src_id,
+                            &normalised,
+                            md.as_ref(),
+                            is_dir,
+                            real_modes,
+                        )) {
                             return WalkState::Quit;
                         }
                         WalkState::Continue
@@ -442,10 +505,13 @@ impl Source for FsSource {
                     continue;
                 }
                 match msg {
-                    Msg::Entry(e) => {
-                        if sink.push(e).is_stop() {
-                            cancelled.store(true, Ordering::Relaxed);
-                            stopping = true;
+                    Msg::Entries(batch) => {
+                        for e in batch {
+                            if sink.push(e).is_stop() {
+                                cancelled.store(true, Ordering::Relaxed);
+                                stopping = true;
+                                break;
+                            }
                         }
                     }
                     Msg::Unreadable(path, detail) => {
