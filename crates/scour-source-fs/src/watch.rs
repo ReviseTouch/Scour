@@ -57,7 +57,7 @@ pub fn start(
         let sink = Arc::clone(&sink);
         let rules = Arc::clone(&rules);
         move |res: notify::Result<Event>| match res {
-            Ok(event) => translate(id, real_modes, &rules, &event, sink.as_ref()),
+            Ok(event) => translate(id, real_modes, &rules, &event, &sink),
             Err(e) => {
                 // The interesting failures are the ones that mean "I stopped
                 // seeing things": inotify running out of watches, a Windows
@@ -235,13 +235,15 @@ fn cover(
 /// destination of a rename. It is the only case that needs the walk below, and
 /// separating it is what keeps a compile from queueing one for every directory
 /// whose mtime moved.
+/// Returns what the `stat` saw, so a caller that wants to remember this path
+/// does not pay for a second one. `None` means the path is gone or unreadable.
 pub(crate) fn look(
     id: scour_core::SourceId,
     real_modes: bool,
     path: &str,
     fresh: bool,
     sink: &dyn ChangeSink,
-) {
+) -> Option<std::fs::Metadata> {
     match std::fs::symlink_metadata(path) {
         Ok(md) => {
             sink.emit(Change::Upsert(crate::scan::entry_of(
@@ -277,6 +279,7 @@ pub(crate) fn look(
                     path: path.to_owned(),
                 });
             }
+            return Some(md);
         }
         // Gone between the event and the look. That is a removal, and it is the
         // common case under any kind of churn — it is also the cheap one:
@@ -296,6 +299,7 @@ pub(crate) fn look(
             path: path.to_owned(),
         }),
     }
+    None
 }
 
 fn translate(
@@ -303,7 +307,7 @@ fn translate(
     real_modes: bool,
     rules: &Rules,
     event: &Event,
-    sink: &dyn ChangeSink,
+    sink: &Arc<dyn ChangeSink>,
 ) {
     // What the walk would not have looked at, this does not report. Checked
     // once here rather than in each arm, because every arm has the same answer
@@ -318,7 +322,13 @@ fn translate(
     // sentence below, and separating it is what keeps a compile from queueing a
     // walk for every directory whose mtime moved.
     let upsert = |p: &std::path::Path, fresh: bool| {
-        look(id, real_modes, &path::from_path(p), fresh, sink);
+        let text = path::from_path(p);
+        // Looked at now, and looked at again later: a write through a shared
+        // mapping produces no event on this backend either. See
+        // [`crate::revisit`].
+        let md = look(id, real_modes, &text, fresh, sink.as_ref());
+        let _ = &md;
+        crate::revisit::note(&text, id, real_modes, sink, md.as_ref());
     };
 
     // **The backend has lost track.** inotify's queue overflowed, a watch was
@@ -504,7 +514,8 @@ mod tests {
     }
 
     fn translated(event: Event) -> Vec<Change> {
-        let sink = Collect::default();
+        let collector = Arc::new(Collect::default());
+        let sink: Arc<dyn ChangeSink> = Arc::clone(&collector) as Arc<dyn ChangeSink>;
         translate(
             scour_core::SourceId(0),
             true,
@@ -512,7 +523,7 @@ mod tests {
             &event,
             &sink,
         );
-        sink.0.into_inner().expect("the collector")
+        collector.0.lock().expect("the collector").clone()
     }
 
     #[test]

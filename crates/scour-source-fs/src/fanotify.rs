@@ -101,6 +101,7 @@ const FAN_EVENT_INFO_TYPE_DFID_NAME: u8 = 2;
 const FAN_ONDIR: u64 = 0x4000_0000;
 const FAN_CREATE: u64 = 0x0000_0100;
 const FAN_MOVED_TO: u64 = 0x0000_0080;
+const FAN_CLOSE_WRITE: u64 = 0x0000_0008;
 
 /// What identifies a directory across a reboot, a remount and a rename.
 ///
@@ -301,6 +302,11 @@ struct Seen {
     name: String,
     fresh: bool,
     is_dir: bool,
+    /// The kernel says the content is final: a descriptor opened for writing
+    /// was closed. For a mapping that is `munmap` rather than `close`, which
+    /// is what takes a path off the revisit list without asking `/proc`
+    /// anything. See [`crate::revisit::forget`].
+    settled: bool,
 }
 
 /// Pull every event out of one buffer.
@@ -354,6 +360,7 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
                                 name: name.to_owned(),
                                 fresh: mask & (FAN_CREATE | FAN_MOVED_TO) != 0,
                                 is_dir: mask & FAN_ONDIR != 0,
+                                settled: mask & FAN_CLOSE_WRITE != 0,
                             });
                         }
                     }
@@ -648,7 +655,7 @@ fn drain(fd: OwnedFd) {
 
         // Distinct paths a subscriber, keeping "this might be new" if any event
         // said so.
-        let mut batch: HashMap<(usize, String), (bool, bool)> = HashMap::new();
+        let mut batch: HashMap<(usize, String), (bool, bool, bool)> = HashMap::new();
         for ev in seen.drain(..) {
             // The subscriber that walked this directory owns the path. An event
             // nobody recognises is **dropped, not escalated**: it is almost
@@ -675,18 +682,27 @@ fn drain(fd: OwnedFd) {
             if subs[i].rules.excludes_path(&full) {
                 continue;
             }
-            let e = batch.entry((i, full)).or_insert((false, false));
+            let e = batch.entry((i, full)).or_insert((false, false, false));
             e.0 |= ev.fresh;
             e.1 |= ev.is_dir;
+            e.2 |= ev.settled;
         }
 
-        for ((i, full), (fresh, is_dir)) in batch {
+        for ((i, full), (fresh, is_dir, settled)) in batch {
             let s = &mut subs[i];
             if fresh && is_dir {
                 s.map.learn(&full);
                 s.devices = s.map.devices();
             }
-            crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
+            let md = crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
+            // A write through a mapping produces no event at all, so a path
+            // that has just spoken is a path worth looking at again later —
+            // unless the kernel has said the content is final.
+            if settled {
+                crate::revisit::forget(&full);
+            } else {
+                crate::revisit::note(&full, s.id, s.real_modes, &s.sink, md.as_ref());
+            }
         }
     }
 }

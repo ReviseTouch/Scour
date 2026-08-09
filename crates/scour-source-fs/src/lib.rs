@@ -24,6 +24,8 @@
 #[cfg(target_os = "linux")]
 mod fanotify;
 mod pulse;
+/// Looking again at what a mapped write never announced.
+mod revisit;
 mod rules;
 mod scan;
 mod watch;
