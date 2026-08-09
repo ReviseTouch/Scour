@@ -88,6 +88,26 @@ fn main() {
     println!("kuruldu    : {rows} satir, {built:.2?}");
     println!("canlilik   : {} bayt ({} satir)", bitmap, stats.entries);
 
+    // **What a start-up costs when nothing changed.** The walk hands the
+    // index every entry it saw, unchanged or not, so a rescan of an untouched
+    // filesystem writes the whole index again. This is the number any fix has
+    // to beat.
+    let _g = index.begin_generation().expect("generation");
+    let t = Instant::now();
+    let mut again = (0..rows).map(|i| Change::Upsert(entry(i, scatter)));
+    let rep = index.apply(&mut again).expect("reapply");
+    let applied = t.elapsed();
+    println!("degismeyen : {} / {}", rep.unchanged, rep.seen());
+    let t = Instant::now();
+    index.commit().expect("commit");
+    let committed = t.elapsed();
+    println!("yeniden    : apply {applied:.2?}, commit {committed:.2?}");
+    let st = index.stats().expect("stats");
+    println!(
+        "segment    : {} · sirasiz {}",
+        st.segments, st.unsorted_entries
+    );
+
     // Two kinds of commit, the same size, so the difference is the work and
     // not the write. An upsert of a path that is already there and a removal
     // of one file both change exactly one row.

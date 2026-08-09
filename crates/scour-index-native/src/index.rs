@@ -149,6 +149,21 @@ struct Inner {
     segments: Vec<Live>,
     /// Upserts not yet written. Searchable only after a commit.
     staged: Vec<Entry>,
+    /// Rows a walk found exactly as they already were, by segment number.
+    ///
+    /// **A sweep deletes what the walk did not stamp, and the stamp is one
+    /// number a segment.** So a row that is skipped because nothing about it
+    /// changed has no way to say it was seen — and a rescan of an untouched
+    /// filesystem would empty the index while reporting success. This is that
+    /// way: one bit a row, held only while a generation is open, and never
+    /// written anywhere.
+    ///
+    /// 275 KB for two million rows, against the three seconds and twenty
+    /// segments that writing them all again costs. It is keyed on the segment
+    /// number, which is why folding is refused while a generation is open —
+    /// renumbering would leave every bit pointing at the wrong row, and the
+    /// failure would be the silent one.
+    seen: HashMap<u64, Vec<u8>>,
     /// Every source this index has been handed a row for.
     ///
     /// **`RemoveSubtree` carries a path and no source**, and the identity
@@ -968,6 +983,21 @@ impl NativeIndex {
     /// that does otherwise gets a slow commit rather than a wrong answer: the
     /// numbers folded are checked against the list again before the swap.
     fn fold(&self, which_numbers: &[u64]) -> Result<()> {
+        // **Not while a walk is running.** Folding renumbers what is left, and
+        // the marks that say "this row was seen unchanged" are keyed on the
+        // number a row's segment had when it was seen. Renumbering leaves every
+        // one of them pointing at a different row, and the sweep that follows
+        // deletes files that are on the disk — silently, and reporting success.
+        //
+        // The condition is the marks themselves rather than "a walk is
+        // running": a generation with nothing marked has nothing to invalidate,
+        // and a test that folds mid-generation said so before this shipped.
+        //
+        // Refusing is free: a fold is housekeeping and the next one is a minute
+        // away, while a walk is measured in seconds.
+        if !self.inner.read().seen.is_empty() {
+            return Ok(());
+        }
         // **The number is claimed under the write lock, before anything is
         // built.** Reading `next_segment` under the read lock is not reserving
         // it: a commit takes the write lock meanwhile, claims the same number
@@ -1239,6 +1269,44 @@ impl<'a> Doomed<'a> {
         let at = self.named.partition_point(|&(parent, _)| parent < lo);
         self.named.get(at).is_some_and(|&(parent, _)| parent <= hi)
     }
+}
+
+/// Does the index already hold this entry, exactly as it is?
+///
+/// **The question a rescan asks two million times and never used to.** A walk
+/// hands over every entry it saw, changed or not, and writing them all again
+/// costs three seconds and twenty segments of an index that was already right.
+///
+/// Marks the row as seen and returns true when it matches. `atime` is not
+/// compared: it moves when a file is *read*, so comparing it would call almost
+/// everything changed and the answer would always be no.
+fn already_indexed(inner: &mut Inner, e: &Entry) -> bool {
+    // Nothing to match against, and a scan with no open generation has no
+    // stamp to preserve either.
+    if inner.open.is_none() {
+        return false;
+    }
+    for i in 0..inner.segments.len() {
+        let live = &inner.segments[i];
+        let Ok(Some(row)) = live.find(e.id.source, &e.path) else {
+            continue;
+        };
+        let number = live.number;
+        let rows = live.rows();
+        if !live.row_matches(row, &e.meta, e.is_dir) {
+            return false;
+        }
+        if let Some(b) = inner
+            .seen
+            .entry(number)
+            .or_insert_with(|| vec![0u8; rows.div_ceil(8)])
+            .get_mut(row / 8)
+        {
+            *b |= 1 << (row % 8);
+        }
+        return true;
+    }
+    false
 }
 
 /// Is this row hidden by a removal that has not been committed yet?
@@ -1523,6 +1591,12 @@ impl Index for NativeIndex {
                     if !inner.sources.contains(&e.id.source) {
                         inner.sources.push(e.id.source);
                     }
+                    // Already right, and marked so the sweep knows the walk
+                    // saw it. See `already_indexed`.
+                    if already_indexed(&mut inner, &e) {
+                        report.unchanged += 1;
+                        continue;
+                    }
                     // A file that was removed and has come back must stop being
                     // hidden, or the row the user just created stays invisible.
                     //
@@ -1579,6 +1653,7 @@ impl Index for NativeIndex {
         // a row, and it is why `sweep` is a loop over segments and not a scan.
         self.flush(&mut inner)?;
         inner.generation += 1;
+        inner.seen.clear();
         let g = inner.generation;
         // Whatever was open is finished: callers scan one at a time. A scan
         // that ended without sweeping — a cancelled walk, an unreadable root —
@@ -1638,6 +1713,7 @@ impl Index for NativeIndex {
         self.flush(&mut inner)?;
         close_generation(&mut inner, generation);
         let mut gone = 0u64;
+        let inner_seen = std::mem::take(&mut inner.seen);
         let mut touched = vec![false; inner.segments.len()];
         for (i, live) in inner.segments.iter_mut().enumerate() {
             if live.generation >= generation {
@@ -1677,9 +1753,24 @@ impl Index for NativeIndex {
                 if !whole && scope.is_empty() && own.is_none() {
                     Vec::new()
                 } else {
+                    // Rows the walk found unchanged are stamped here rather
+                    // than by being rewritten. Without this they look
+                    // unstamped, and an untouched filesystem empties the
+                    // index. See `Inner::seen`.
+                    let seen = inner_seen.get(&live.number);
+                    let spared = |row: usize| {
+                        seen.is_some_and(|bits: &Vec<u8>| {
+                            bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
+                        })
+                    };
                     (0..live.rows())
                         .filter(|&row| {
                             if !live.is_alive(row) {
+                                return false;
+                            }
+                            // The walk saw it and it had not changed, so it
+                            // was not rewritten. That is a stamp.
+                            if spared(row) {
                                 return false;
                             }
                             // **Another source's rows are not this walk's to

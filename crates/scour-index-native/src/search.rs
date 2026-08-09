@@ -81,7 +81,7 @@ impl<'a> Segment<'a> {
         }
     }
 
-    fn num(&self, field: Field, row: usize) -> i64 {
+    pub(crate) fn num(&self, field: Field, row: usize) -> i64 {
         self.cols.get(field, row).unwrap_or(0)
     }
 

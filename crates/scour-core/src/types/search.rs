@@ -254,11 +254,24 @@ pub struct ApplyReport {
     pub upserted: u64,
     pub removed: u64,
     pub subtrees_removed: u64,
+    /// Entries the index already held exactly as they arrived.
+    ///
+    /// A walk reports what it saw rather than what changed, so on an untouched
+    /// filesystem this is nearly all of them. Counted because it is the
+    /// difference between a rescan that costs nothing and one that rewrites the
+    /// index — and because a number that is suddenly zero is how a bug in
+    /// deciding "unchanged" would announce itself.
+    pub unchanged: u64,
 }
 
 impl ApplyReport {
     pub fn total(&self) -> u64 {
         self.upserted + self.removed + self.subtrees_removed
+    }
+
+    /// What the walk handed over, including what it did not have to write.
+    pub fn seen(&self) -> u64 {
+        self.total() + self.unchanged
     }
 }
 
