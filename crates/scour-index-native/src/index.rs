@@ -411,7 +411,11 @@ impl NativeIndex {
     }
 
     fn flush_maybe_elsewhere(&self, inner: &mut Inner, elsewhere: bool) -> Result<()> {
-        let mut pending = self.flush_prepare(inner)?;
+        // `elsewhere` twice over, and it is the same fact both times: this
+        // flush happens because a buffer filled up, not because a caller needs
+        // the rows in. That is what lets the segment be built on another
+        // thread, and it is what lets the flush be called off entirely.
+        let mut pending = self.flush_prepare(inner, elsewhere)?;
         if let Err(e) = pending.write_alive(&self.dir) {
             Self::restore(inner, pending);
             return Err(e);
@@ -788,7 +792,7 @@ impl NativeIndex {
     /// duplicated, because the order inside matters: the identities to kill
     /// are read *from* the staged entries, and taking them out first meant a
     /// re-indexed file kept its old row. Two tests said so immediately.
-    fn flush_prepare(&self, inner: &mut Inner) -> Result<Pending> {
+    fn flush_prepare(&self, inner: &mut Inner, discretionary: bool) -> Result<Pending> {
         // Anything that finished building belongs in the list before this
         // decides what to kill: a row that has just landed is a row this flush
         // may have to replace.
@@ -905,7 +909,21 @@ impl NativeIndex {
         }
         let t_kill = Instant::now();
 
-        let pending = Self::take_staged(inner);
+        // **A buffer that emptied itself has nothing to flush.** The overflow
+        // that called this in is the only discretionary flush there is, and on
+        // a rescan almost every entry in it leaves through `spare_unchanged` a
+        // few lines up. Writing what is left anyway turned a rescan of an
+        // untouched disk into nine segments of two rows each — one a batch, the
+        // index twice as many segments as it started with, every search reading
+        // all of them and a compaction owed for the rest.
+        //
+        // So the rows stay in the buffer and wait for the next batch, or for
+        // the commit clock, which is a flush that is not discretionary.
+        let pending = if discretionary && inner.staged.len() < MAX_STAGED {
+            None
+        } else {
+            Self::take_staged(inner)
+        };
         let _ = t_kill;
         // Copied, not written. The write is an `fsync` a segment and it happens
         // once a second; doing it here held the index for 33 to 56 ms while
@@ -1340,6 +1358,17 @@ fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
             }
             spared += hits.len() as u64;
         }
+    }
+    // How much of a batch was already there, and how many segments it had to
+    // be asked about. Both numbers, because a ratio that falls is either the
+    // disk changing or this deciding wrongly, and the segment count is what
+    // says which — a rescan that keeps adding segments is not sparing.
+    if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
+        scour_core::note!(
+            "scourd: spare {spared} / {} across {} segments",
+            drop_at.len(),
+            inner.segments.len()
+        );
     }
     if spared == 0 {
         return Ok(0);
@@ -1926,7 +1955,7 @@ impl Index for NativeIndex {
         self.settle()?;
         #[cfg(feature = "memory-trace")]
         let trace_settled = CommitStamp::now();
-        let mut pending = self.flush_prepare(&mut self.inner.write())?;
+        let mut pending = self.flush_prepare(&mut self.inner.write(), false)?;
         #[cfg(feature = "memory-trace")]
         let trace_prepared = CommitStamp::now();
         // How long a search could have been waiting. Printed rather than
