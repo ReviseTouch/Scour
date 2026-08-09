@@ -1651,3 +1651,106 @@ fn a_removal_before_the_first_upsert_still_takes_the_row() {
     );
     assert_eq!(found(&index, "keepme"), 1, "and take nothing else");
 }
+
+/// A scan that finds every file exactly as it left it must delete nothing.
+///
+/// **This is the guard on the most dangerous path in the index.** A sweep
+/// decides a row is gone because the walk did not stamp it, and stamping is
+/// per segment — so any change that lets an unchanged file skip being written
+/// has to keep it stamped some other way, or a rescan that found nothing wrong
+/// empties the index and reports success. The failure is silent and total.
+///
+/// Written before the optimisation it guards, and it passes both before and
+/// after by construction: what it asserts is the behaviour, not the mechanism.
+#[test]
+fn a_rescan_that_finds_nothing_changed_removes_nothing() {
+    fn row(path: &str, mtime: i64) -> Entry {
+        let mut meta = Meta::UNKNOWN;
+        meta.size = 11;
+        meta.mtime = mtime;
+        Entry {
+            id: EntryId::path_hash(SourceId(0), path),
+            path: path.into(),
+            is_dir: false,
+            meta,
+        }
+    }
+    let files = ["/w/a.txt", "/w/b.txt", "/w/deep/c.txt"];
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    let g = index.begin_generation().expect("generation");
+    let mut it = files
+        .iter()
+        .map(|p| Change::Upsert(row(p, 1000)))
+        .collect::<Vec<_>>()
+        .into_iter();
+    index.apply(&mut it).expect("apply");
+    index.commit().expect("commit");
+    index
+        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .expect("sweep");
+    assert_eq!(index.stats().expect("stats").entries, 3, "the first pass");
+
+    // The same walk again: same paths, same metadata, nothing on disk moved.
+    let g = index.begin_generation().expect("generation");
+    let mut it = files
+        .iter()
+        .map(|p| Change::Upsert(row(p, 1000)))
+        .collect::<Vec<_>>()
+        .into_iter();
+    index.apply(&mut it).expect("apply");
+    index.commit().expect("commit");
+    let gone = index
+        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .expect("sweep");
+
+    assert_eq!(gone, 0, "a pass that saw everything must remove nothing");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        3,
+        "and the rows have to still be there"
+    );
+}
+
+/// The other half, so the guard cannot be satisfied by never sweeping at all.
+#[test]
+fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
+    fn row(path: &str) -> Entry {
+        Entry {
+            id: EntryId::path_hash(SourceId(0), path),
+            path: path.into(),
+            is_dir: false,
+            meta: Meta::UNKNOWN,
+        }
+    }
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    let g = index.begin_generation().expect("generation");
+    let mut it = vec![
+        Change::Upsert(row("/w/stays.txt")),
+        Change::Upsert(row("/w/goes.txt")),
+    ]
+    .into_iter();
+    index.apply(&mut it).expect("apply");
+    index.commit().expect("commit");
+    index
+        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .expect("sweep");
+
+    let g = index.begin_generation().expect("generation");
+    let mut it = std::iter::once(Change::Upsert(row("/w/stays.txt")));
+    index.apply(&mut it).expect("apply");
+    index.commit().expect("commit");
+    index
+        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .expect("sweep");
+
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        1,
+        "the file the walk stopped seeing has to go"
+    );
+}
