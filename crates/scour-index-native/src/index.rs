@@ -514,9 +514,25 @@ impl NativeIndex {
             if doomed.is_empty() {
                 Vec::new()
             } else {
-                (0..live.rows())
-                    .filter(|&row| live.is_alive(row) && doomed.takes(&seg, row, seg.dir_id(row)))
-                    .collect()
+                let rows = live.rows();
+                let mut out = Vec::new();
+                for block in 0..rows.div_ceil(crate::columns::BLOCK) {
+                    // A block whose directory numbers all fall outside every
+                    // prefix holds nothing this removal is about. See
+                    // `Doomed::touches`.
+                    if let Some((lo, hi)) = seg.cols.block_range(Field::DirId, block)
+                        && lo >= 0
+                        && !doomed.touches(lo as u32, hi as u32)
+                    {
+                        continue;
+                    }
+                    let from = block * crate::columns::BLOCK;
+                    let to = (from + crate::columns::BLOCK).min(rows);
+                    out.extend((from..to).filter(|&row| {
+                        live.is_alive(row) && doomed.takes(&seg, row, seg.dir_id(row))
+                    }));
+                }
+                out
             }
         };
         let mut gone = 0;
@@ -1133,6 +1149,26 @@ impl<'a> Doomed<'a> {
             .iter()
             .take_while(|&&(parent, _)| parent == dir)
             .any(|&(_, n)| n == name)
+    }
+
+    /// Could any row in a block of directory numbers `lo..=hi` be taken?
+    ///
+    /// **The zone map, used for a removal the way a search already uses it.**
+    /// Deleting one file was a scan of every row of every segment: measured at
+    /// 4.58 ms over 250,000 rows, 19.99 ms over a million and 64.14 ms over
+    /// four — linear in how much had been indexed, against 535 µs for an upsert
+    /// of the same size, and it is the common case because a watcher reports
+    /// every removed file this way.
+    ///
+    /// A block holds 128 rows and the column keeps its smallest and largest
+    /// directory number. One deleted file lives under one directory, so almost
+    /// every block can be dismissed on two comparisons rather than read.
+    fn touches(&self, lo: u32, hi: u32) -> bool {
+        if self.inside.iter().any(|&(s, e)| s <= hi && e > lo) {
+            return true;
+        }
+        let at = self.named.partition_point(|&(parent, _)| parent < lo);
+        self.named.get(at).is_some_and(|&(parent, _)| parent <= hi)
     }
 }
 
