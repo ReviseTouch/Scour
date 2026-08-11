@@ -170,6 +170,81 @@ fn paging_across_segments_reconstructs_the_list() {
     assert_eq!(got, f.expected("ext:rs", SortKey::Name, false, 60));
 }
 
+/// A page deep in the list is the same rows the list has there.
+///
+/// **The guard over what a deep offset is allowed to become.** Reaching row
+/// 100,000 costs 1.43 s and 401,438 reconstructed paths to return sixty, because
+/// every segment materialises `offset + limit` rows and the merge throws all but
+/// the window away. Anything that fixes that changes where the offset is
+/// applied — which is exactly the change that can quietly return *a* page
+/// instead of *the* page.
+///
+/// So: every order, both directions, offsets that land inside a segment and
+/// across a boundary.
+///
+/// The reference is the index's **own** full answer rather than brute force,
+/// and that is the point rather than a weakening. Paging is a statement about
+/// self-consistency: whatever order the index chose, the window at 900 has to
+/// be that order's rows 900 to 960. Brute force cannot say — where a sort ties,
+/// two orders are both right, and `ext:rs` sorted by relevance ties on every
+/// row, because a filter gives relevance nothing to score. Comparing against it
+/// there fails on a disagreement that is not an error, and the tests that do
+/// compare orders against brute force already exist.
+#[test]
+fn a_page_deep_in_the_list_holds_the_rows_the_list_holds_there() {
+    // Twelve segments, so an offset of 900 is several boundaries in.
+    let f = Fixture::new(6_000, 500);
+    const ORDERS: [SortKey; 8] = [
+        SortKey::Relevance,
+        SortKey::Name,
+        SortKey::Path,
+        SortKey::Size,
+        SortKey::Modified,
+        SortKey::Created,
+        SortKey::Ext,
+        SortKey::Kind,
+    ];
+    // The empty query is what a window opens on and the one that pages
+    // furthest; the other two page across a filtered list, where the offset
+    // counts matches rather than rows.
+    for q in ["", "ext:rs", "size:>1k"] {
+        for sort in ORDERS {
+            for desc in [true, false] {
+                let whole = f.paged(q, sort, desc, 0, 1_000);
+                for &(offset, limit) in &[(0, 20), (19, 3), (200, 40), (499, 2), (900, 60)] {
+                    if offset >= whole.len() {
+                        continue;
+                    }
+                    let end = (offset + limit).min(whole.len());
+                    assert_eq!(
+                        f.paged(q, sort, desc, offset, limit),
+                        whole[offset..end],
+                        "{q:?} by {sort:?} (desc={desc}) at {offset}+{limit}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Asking for one row at a time gives the same list as asking for all of them.
+///
+/// The same invariant from the other side, and it catches what a slice
+/// comparison cannot: an offset applied per segment loses a row per segment
+/// rather than shifting the window, so every page is subtly different but each
+/// one on its own looks reasonable.
+#[test]
+fn a_list_read_one_row_at_a_time_is_the_list() {
+    let f = Fixture::new(2_000, 200);
+    for sort in [SortKey::Name, SortKey::Size, SortKey::Modified] {
+        let whole = f.expected("ext:rs", sort, true, 60);
+        let one: Vec<String> = (0..whole.len())
+            .flat_map(|i| f.paged("ext:rs", sort, true, i, 1))
+            .collect();
+        assert_eq!(one, whole, "one row at a time by {sort:?}");
+    }
+}
+
 #[test]
 fn saving_over_a_file_leaves_one_row_however_the_source_names_it() {
     // **The duplicate bug, pinned.** Everything that saves carefully writes a

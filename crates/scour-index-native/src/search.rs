@@ -987,16 +987,33 @@ pub fn run_with(
     // then throw all but forty of them away.
     let mut keyed: Vec<(SortValue, u32)> = Vec::new();
 
-    // The terms relevance scores against, folded, collected once. `filterable`
-    // already answers "what must every matching name contain", which is the
-    // same question — a term that cannot be claimed as containment cannot be
-    // scored against either.
+    // The terms relevance scores against, folded, collected once.
+    //
+    // **The same rule the merge uses, and it has to be.** A search over several
+    // segments ranks twice: each segment picks the best `need` of its own rows,
+    // and `sort_hits` then orders what they all handed over. If the two score
+    // against different terms, the page is *chosen* by one ranking and
+    // *ordered* by another — and what comes back is neither.
+    //
+    // That is what `filterable` did here. It answers "what must every matching
+    // name contain", which for `ext:rs` is `.rs` — true, and useless as a
+    // score, because every match contains it by definition. So a segment
+    // ranked its rows by name length and directory depth, handed over the
+    // twenty shortest-named shallowest, and the merge — which scores against
+    // `narrowing_terms`, where an `ext:` filter contributes nothing — reordered
+    // those twenty by date and called them the twenty newest. They were not.
+    // Asking the same query for twenty rows and for a thousand returned
+    // different first twenty, which is how it was found.
+    //
+    // This is `narrowing_terms(1)` expressed over the compiled plan: one
+    // alternative, not negated, a plain name containment.
     let score_terms: Vec<Vec<u8>> = if want.sort == SortKey::Relevance {
         plan.clauses
             .iter()
-            .flat_map(|c| &c.alts)
-            .filter(|(neg, _)| !neg)
-            .filter_map(|(_, t)| filterable(t))
+            .filter_map(|c| match &c.alts[..] {
+                [(false, Test::NameHas(n))] if !n.folded().is_empty() => Some(n.folded().to_vec()),
+                _ => None,
+            })
             .collect()
     } else {
         Vec::new()
