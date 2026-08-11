@@ -1319,6 +1319,7 @@ impl<'a> Doomed<'a> {
 /// Nothing is written and no live bit moves: an entry is dropped from the batch
 /// and its row is marked in [`Inner::seen`] so the sweep knows the walk saw it.
 fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
+    let began = Instant::now();
     // Only inside a generation. Outside one there is no sweep coming, so
     // nothing needs the mark — and the marks are cleared when a generation
     // opens, which would make a spared row look unstamped to the sweep that
@@ -1364,10 +1365,13 @@ fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
     // disk changing or this deciding wrongly, and the segment count is what
     // says which — a rescan that keeps adding segments is not sparing.
     if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
+        let n = drop_at.len().max(1);
         scour_core::note!(
-            "scourd: spare {spared} / {} across {} segments",
+            "scourd: spare {spared} / {} across {} segments, {:.0?} ({:.2} us/kayit)",
             drop_at.len(),
-            inner.segments.len()
+            inner.segments.len(),
+            began.elapsed(),
+            began.elapsed().as_secs_f64() * 1e6 / n as f64,
         );
     }
     if spared == 0 {
@@ -1707,6 +1711,7 @@ fn close_generation(inner: &mut Inner, generation: u64) {
 
 impl Index for NativeIndex {
     fn apply(&self, changes: &mut dyn Iterator<Item = Change>) -> Result<ApplyReport> {
+        let began = Instant::now();
         let mut inner = self.inner.write();
         let mut report = ApplyReport::default();
         for c in changes {
@@ -1768,6 +1773,14 @@ impl Index for NativeIndex {
         let spared = std::mem::take(&mut inner.spared);
         report.upserted = report.upserted.saturating_sub(spared);
         report.unchanged = spared;
+        if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
+            let n = report.seen().max(1);
+            scour_core::note!(
+                "scourd: apply {n} kayit, {:.0?} ({:.2} us/kayit, sparing dahil)",
+                began.elapsed(),
+                began.elapsed().as_secs_f64() * 1e6 / n as f64,
+            );
+        }
         Ok(report)
     }
 
@@ -1840,6 +1853,7 @@ impl Index for NativeIndex {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> Result<u64> {
+        let began = Instant::now();
         // A segment in the air holds rows this generation stamped; sweeping
         // before it lands judges them by a walk that never saw them.
         self.settle()?;
@@ -1952,6 +1966,9 @@ impl Index for NativeIndex {
         self.save_meta(&inner)?;
         for n in erased {
             Live::erase(&self.dir, n);
+        }
+        if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
+            scour_core::note!("scourd: sweep {gone} satir sildi, {:.0?}", began.elapsed());
         }
         Ok(gone)
     }

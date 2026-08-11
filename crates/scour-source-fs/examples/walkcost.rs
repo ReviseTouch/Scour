@@ -39,13 +39,26 @@ fn main() {
     let threads: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let meta = std::env::var_os("SCOUR_WALK_NOMETA").is_none();
 
+    // **The rules are not decoration.** With every list empty the walk skips
+    // rule evaluation entirely — `rules.is_empty()` short-circuits it — so a
+    // measurement taken that way is of a scan nobody runs. `SCOUR_WALK_NORULES`
+    // takes them back out, which is how their share is read off.
+    let rules = std::env::var_os("SCOUR_WALK_NORULES").is_none();
+    let (def_paths, def_dirs, def_files) = scour_source_fs::platform_defaults();
     let source = FsSource::new(SourceId(0), "probe", vec![root.clone().into()]);
     let opts = ScanOptions {
         hidden: true,
         follow_symlinks: false,
         skip_metadata: !meta,
         threads,
-        allow: vec!["target/release".into(), "target/debug".into()],
+        exclude_paths: if rules { def_paths } else { Vec::new() },
+        exclude_dirs: if rules { def_dirs } else { Vec::new() },
+        exclude_files: if rules { def_files } else { Vec::new() },
+        allow: if rules {
+            vec!["target/release".into(), "target/debug".into()]
+        } else {
+            Vec::new()
+        },
         ..Default::default()
     };
 
