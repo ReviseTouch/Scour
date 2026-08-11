@@ -46,59 +46,58 @@ pub enum Medium {
 impl Medium {
     /// How many walker threads this mount is worth.
     ///
-    /// Measured on this machine, `/home/hasan`, 1.85 M entries, two rounds:
+    /// **This number belonged to the device and it does not.** It was twenty
+    /// here — the core count, and this machine's NVMe hardware queue count,
+    /// which is the same number and looked like a reason. What that measured
+    /// was the *walk*: 1.85 M entries in 241 ms at twenty threads against
+    /// 1073 ms at eight.
     ///
-    /// | threads | round 1 | round 2 |
+    /// A scan is not a walk. Entries go down a channel to one thread that
+    /// stages and indexes them, and it takes them slower than one walker
+    /// produces them. So the channel fills, a walker blocks in `send` while
+    /// still owing a directory, and `ignore`'s other workers spin in their
+    /// wait-for-work loop until it comes back — at a full core each, starving
+    /// the one thread that would have released them. The walk got faster and
+    /// the scan got worse.
+    ///
+    /// First scan of `/mnt/depo`, 1,565,781 entries on ntfs3, whole service,
+    /// both directions. The page cache is the variable that matters, so both
+    /// states are here — cold is the first scan after a boot, warm is every
+    /// restart during a session:
+    ///
+    /// | threads | warm | cold |
     /// |---|---|---|
-    /// | 8 | 1073 ms | 337 ms |
-    /// | 16 | 284 ms | 306 ms |
-    /// | **20** | **241 ms** | **277 ms** |
-    /// | 32 | 250 ms | 282 ms |
-    /// | 48 | 365 ms | 705 ms |
+    /// | 1 | 12.1 core-s · 8.4 s | — |
+    /// | **2** | **13.3 core-s · 5.1 s** | 20.1 core-s · 17-24 s |
+    /// | 4 | 31.0 core-s · 8.2 s | 27.2 core-s · **11-14 s** |
+    /// | 8 | 70.3 core-s · 10.9 s | — |
+    /// | 20 | 176.3 core-s · 13.2 s | — |
     ///
-    /// Twenty is this machine's core count *and* its NVMe hardware queue
-    /// count — the driver opens one queue per core, which is why the two
-    /// agree. Going past it buys nothing and 48 costs dearly.
+    /// Warm, two wins on both axes and twenty is the worst row on both — it
+    /// measured 8,231,481 voluntary context switches against 24,007 at two.
+    /// Cold, four is half the wall clock, because the walker is waiting on the
+    /// device rather than on anything here.
     ///
-    /// **That table measured the walk and this one has to pay for the scan.**
-    /// The walk is not the consumer: entries go down a channel to one thread
-    /// that stages and indexes them, and it absorbs about 300,000 a second.
-    /// Walker threads past that do not go faster — they go round `ignore`'s
-    /// wait-for-work loop, which spins while any other worker still owes a
-    /// directory, and the worker that owes it is blocked handing entries over.
-    /// Nineteen threads spinning at a full core each then starve the one thread
-    /// that would have unblocked them.
+    /// **Two.** It is the lower CPU in *both* states — a third less cold, less
+    /// than half warm — and the only thing four buys is about six seconds of a
+    /// scan that happens once a boot, against a saving on every restart during
+    /// the session.
     ///
-    /// Cold first scan, whole service, this machine, both directions:
-    ///
-    /// | threads | /home, 870k, cached | /mnt/depo, ntfs3, cold |
-    /// |---|---|---|
-    /// | 1 | 6.3 core-s · 4.9 s | — |
-    /// | **2** | **7.0 core-s · 2.9 s** | 20.3 core-s · **30.0 s** |
-    /// | 3 | 10.6 core-s · 3.7 s | — |
-    /// | **4** | 16.1 core-s · 4.4 s | **29.1 core-s · 7.2 s** |
-    /// | 8 | 26.5 core-s · 5.3 s | 62.8 core-s · 10.2 s |
-    /// | 20 | 120.3 core-s · 8.5 s | 176.3 core-s · 13.2 s |
-    ///
-    /// Twenty is the worst row on both volumes, on both axes: seventeen times
-    /// the CPU of the best and three times the wall clock. It also measured
-    /// 8,231,481 voluntary context switches against 24,007 at two.
-    ///
-    /// Two is the optimum for a tree that is already in the page cache, where
-    /// the consumer is the bottleneck. Four is the optimum for one that has to
-    /// come off the disk, where two threads leave the device idle — 30 seconds
-    /// against 7. **Four**, because the volume that has to come off the disk is
-    /// the one that takes long enough to be noticed, and being twice the CPU on
-    /// a cached tree is cheaper than being four times the wall clock on a cold
-    /// one. Both mounts here are NVMe, so nothing about the device separates
-    /// them; picking per source would mean measuring the source.
+    /// The number is a symptom and worth naming as one. The walk alone costs
+    /// 3.0 core-seconds and scales to four threads perfectly, 0.85 s wall with
+    /// no spinning at all; the whole scan costs 13.3. The other ten are the
+    /// index, and the wait it imposes: one consumer cannot take rows as fast as
+    /// one walker produces them, so the channel fills, a walker blocks holding
+    /// a directory it owes, and `ignore`'s other workers spin waiting for it.
+    /// A faster consumer would make this number four again — see
+    /// `scour-source-fs/examples/walkcost.rs`, which is how it was split.
     ///
     /// The network and spinning figures are **not measured** — there is no HDD
     /// and no network mount on this machine. They are conservative guesses,
     /// and marked as such rather than presented as findings.
     pub fn threads(self, cores: usize) -> usize {
         match self {
-            Medium::Solid | Medium::Memory => cores.clamp(2, 4),
+            Medium::Solid | Medium::Memory => 2,
             // One seek at a time. Concurrency on a spinning disk turns a
             // sequential read into a head-thrashing one.
             Medium::Spinning => 1,
