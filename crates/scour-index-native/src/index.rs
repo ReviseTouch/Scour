@@ -2085,21 +2085,88 @@ impl Index for NativeIndex {
         // paths to return sixty, and took 1.43 s — which the window pays again
         // on every index revision, for as long as the list stays scrolled.
         let mut pool: Vec<Candidate> = Vec::new();
-        // Kept so the page can be built after the merge has chosen it. The
-        // segments are borrowed from `inner`, which outlives all of this.
-        let mut views: Vec<Segment<'_>> = Vec::with_capacity(inner.segments.len());
+        // Opened before the walk rather than during it, so that the comparator
+        // below can hold them while the pool is still being filled — which is
+        // what lets the pool be trimmed as it grows instead of at the end.
+        let views: Vec<Segment<'_>> = inner
+            .segments
+            .iter()
+            .map(|live| live.view())
+            .collect::<Result<Vec<_>>>()?;
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;
         // Paths reconstructed, page and discarded prefix alike — see
         // `SearchResponse::rows_built`.
         let mut rows = 0u64;
+        // The order the merge imposes, and it is `sort_hits`'s — moved to where
+        // the rows have not been built yet, which means every part of it has to
+        // be answerable without building one.
+        //
+        // Two of the three parts needed work. The name key is the first sixteen
+        // bytes packed into a number, an abbreviation, so where two agree the
+        // real folded names are compared out of the arena. And the last tie is
+        // broken by the path, which is the one thing this exists not to build —
+        // so paths are compared *as if joined*, byte by byte, out of the
+        // directory table and the name arena. Neither allocates; a directory is
+        // decoded once and answers for every row in it.
+        //
+        // Both are on ties alone, and both are load-bearing: a corpus where
+        // many files share a date — an unpacked archive, a checkout — ties on
+        // every comparison, and five tests said so the first time this ordered
+        // ties by segment instead.
+        let exact = crate::search::key_is_exact(req.sort);
+        let desc = req.descending;
+        let mut dirs: HashMap<(u32, u32), String> = HashMap::new();
+        let mut cmp = |a: &Candidate, b: &Candidate| {
+            let mut o = a.key.cmp(&b.key);
+            if o.is_eq() && !exact {
+                let folded = |c: &Candidate| {
+                    views
+                        .get(c.seg as usize)
+                        .and_then(|s| s.folded.get(c.row as usize))
+                        .unwrap_or_default()
+                };
+                o = folded(a).cmp(folded(b));
+            }
+            let o = if desc { o.reverse() } else { o };
+            o.then_with(|| b.mtime.cmp(&a.mtime)).then_with(|| {
+                // **Inside one segment the row number is the path order.**
+                // Rows are stored newest-first with the path breaking that, and
+                // the dates have just tied — so what is left is path order, and
+                // it is already a number. Worth the two lines: sorting by date
+                // means the key *is* the date, so every tie on it falls through
+                // to here, and on a corpus where files share dates in thousands
+                // that is most comparisons.
+                if a.seg == b.seg {
+                    return a.row.cmp(&b.row);
+                }
+                for c in [a, b] {
+                    let Some(seg) = views.get(c.seg as usize) else {
+                        continue;
+                    };
+                    let at = (c.seg, seg.dir_id(c.row as usize));
+                    dirs.entry(at)
+                        .or_insert_with(|| seg.dirs.get(at.1).unwrap_or_default());
+                }
+                let joined = |c: &Candidate| {
+                    let seg = views.get(c.seg as usize);
+                    let dir = seg
+                        .map(|s| dirs[&(c.seg, s.dir_id(c.row as usize))].as_str())
+                        .unwrap_or_default();
+                    let name = seg
+                        .and_then(|s| s.names.get(c.row as usize))
+                        .unwrap_or_default();
+                    joined_path(dir, name)
+                };
+                joined(a).cmp(joined(b))
+            })
+        };
+
         let mut veto =
             |seg: &Segment<'_>, row: usize, name: &[u8]| conceals(&inner, seg, row, name);
         for (which, live) in inner.segments.iter().enumerate() {
             rows += live.rows() as u64;
-            let seg = live.view()?;
-            views.push(seg);
             let seg = &views[which];
             let plan = Plan::compile(&req.query, seg)?;
             // **A query with no conditions matches every live row**, and how
@@ -2163,60 +2230,6 @@ impl Index for NativeIndex {
                 row: r.row,
             }));
         }
-
-        // The order the merge imposes, and it is `sort_hits`'s — moved to where
-        // the rows have not been built yet, which means every part of it has to
-        // be answerable without building one.
-        //
-        // Two of the three parts needed work. The name key is the first sixteen
-        // bytes packed into a number, an abbreviation, so where two agree the
-        // real folded names are compared out of the arena. And the last tie is
-        // broken by the path, which is the one thing this exists not to build —
-        // so paths are compared *as if joined*, byte by byte, out of the
-        // directory table and the name arena. Neither allocates; a directory is
-        // decoded once and answers for every row in it.
-        //
-        // Both are on ties alone, and both are load-bearing: a corpus where
-        // many files share a date — an unpacked archive, a checkout — ties on
-        // every comparison, and five tests said so the first time this ordered
-        // ties by segment instead.
-        let exact = crate::search::key_is_exact(req.sort);
-        let desc = req.descending;
-        let mut dirs: HashMap<(u32, u32), String> = HashMap::new();
-        let mut cmp = |a: &Candidate, b: &Candidate| {
-            let mut o = a.key.cmp(&b.key);
-            if o.is_eq() && !exact {
-                let folded = |c: &Candidate| {
-                    views
-                        .get(c.seg as usize)
-                        .and_then(|s| s.folded.get(c.row as usize))
-                        .unwrap_or_default()
-                };
-                o = folded(a).cmp(folded(b));
-            }
-            let o = if desc { o.reverse() } else { o };
-            o.then_with(|| b.mtime.cmp(&a.mtime)).then_with(|| {
-                for c in [a, b] {
-                    let Some(seg) = views.get(c.seg as usize) else {
-                        continue;
-                    };
-                    let at = (c.seg, seg.dir_id(c.row as usize));
-                    dirs.entry(at)
-                        .or_insert_with(|| seg.dirs.get(at.1).unwrap_or_default());
-                }
-                let joined = |c: &Candidate| {
-                    let seg = views.get(c.seg as usize);
-                    let dir = seg
-                        .map(|s| dirs[&(c.seg, s.dir_id(c.row as usize))].as_str())
-                        .unwrap_or_default();
-                    let name = seg
-                        .and_then(|s| s.names.get(c.row as usize))
-                        .unwrap_or_default();
-                    joined_path(dir, name)
-                };
-                joined(a).cmp(joined(b))
-            })
-        };
 
         // Selection, not a sort. Two partitions put the window where it
         // belongs without ordering the hundred thousand rows in front of it,
