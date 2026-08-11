@@ -41,7 +41,7 @@ use crate::columns::Field;
 use crate::durable::replace_synced;
 use crate::ids::digest;
 use crate::lock::DirLock;
-use crate::search::{Plan, Segment, Wanted, run_with, sort_hits};
+use crate::search::{Plan, Segment, Wanted, run_with};
 use crate::segment::Live;
 use crate::usage::Rollup;
 
@@ -1425,6 +1425,36 @@ fn conceals(inner: &Inner, seg: &Segment<'_>, row: usize, _name: &[u8]) -> bool 
     false
 }
 
+/// A row's path, as bytes, without a string being made of it.
+///
+/// The join `Segment::path` performs, expressed as a comparison rather than an
+/// allocation — and it has to be the join rather than the two parts, because
+/// they do not order the same way. `("/a", "c")` is less than `("/a-x", "b")`
+/// as a pair, and `/a-x/b` is less than `/a/c` as a path: `-` sorts before `/`.
+fn joined_path<'a>(dir: &'a str, name: &'a str) -> impl Iterator<Item = u8> + 'a {
+    let (head, slash) = match dir {
+        "" => ("", false),
+        "/" => ("/", false),
+        d => (d, true),
+    };
+    head.bytes()
+        .chain(slash.then_some(b'/'))
+        .chain(name.bytes())
+}
+
+/// A row that might be on the page, ordered but not built.
+///
+/// Four numbers and a key, against a `Hit` that carries a reconstructed path,
+/// a name and eleven fields. A deep page holds a hundred thousand of these on
+/// the way to sixty rows, which is why it is worth the difference.
+struct Candidate {
+    key: crate::search::SortValue,
+    /// What breaks a tie on the key: newest first, as `sort_hits` does it.
+    mtime: i64,
+    seg: u32,
+    row: u32,
+}
+
 /// One segment's position in a merge.
 struct Cursor {
     entry: Entry,
@@ -2044,20 +2074,34 @@ impl Index for NativeIndex {
         // names, the walk never touches the name arena at all.
         let hiding = !inner.hidden_prefixes.is_empty();
 
-        let mut all: Vec<Hit> = Vec::new();
+        // **Candidates, not rows.** Each segment hands over what it takes to
+        // *order* a row — the sort key, the date that breaks a tie on it, and
+        // where the row is — and nothing that it takes to *show* one. The page
+        // is decided from those and only the page is built.
+        //
+        // What it replaces: every segment built `offset + limit` rows, the
+        // merge sorted them all and threw away everything but the window. A
+        // sixty-row page at offset 100,000 reconstructed 401,438 front-coded
+        // paths to return sixty, and took 1.43 s — which the window pays again
+        // on every index revision, for as long as the list stays scrolled.
+        let mut pool: Vec<Candidate> = Vec::new();
+        // Kept so the page can be built after the merge has chosen it. The
+        // segments are borrowed from `inner`, which outlives all of this.
+        let mut views: Vec<Segment<'_>> = Vec::with_capacity(inner.segments.len());
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;
         // Paths reconstructed, page and discarded prefix alike — see
         // `SearchResponse::rows_built`.
-        let mut built = 0u64;
         let mut rows = 0u64;
         let mut veto =
             |seg: &Segment<'_>, row: usize, name: &[u8]| conceals(&inner, seg, row, name);
-        for live in &inner.segments {
+        for (which, live) in inner.segments.iter().enumerate() {
             rows += live.rows() as u64;
             let seg = live.view()?;
-            let plan = Plan::compile(&req.query, &seg)?;
+            views.push(seg);
+            let seg = &views[which];
+            let plan = Plan::compile(&req.query, seg)?;
             // **A query with no conditions matches every live row**, and how
             // many that is is a number the segment already keeps.
             //
@@ -2079,7 +2123,7 @@ impl Index for NativeIndex {
                 continue;
             }
             let found = run_with(
-                &seg,
+                seg,
                 &plan,
                 Wanted {
                     sort: req.sort,
@@ -2100,6 +2144,7 @@ impl Index for NativeIndex {
                     // Everything matches, so the walk needs only enough rows
                     // to fill the page; the total comes from the segment.
                     count_cap: if matches_all { need } else { budget },
+                    rank_only: true,
                 },
                 hiding.then_some(&mut veto as &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool),
             );
@@ -2111,16 +2156,93 @@ impl Index for NativeIndex {
             counted += total;
             budget = budget.saturating_sub(total as usize);
             visited += found.rows_visited;
-            built += found.rows_built;
-            all.extend(found.hits);
+            pool.extend(found.ranked.into_iter().map(|r| Candidate {
+                key: r.key,
+                mtime: r.mtime,
+                seg: which as u32,
+                row: r.row,
+            }));
         }
 
-        // The merge across segments has to score against the same terms the
-        // segments did. `narrowing_terms` is the query's own answer to "what
-        // must a name contain", which is the same question relevance asks.
-        let terms = req.query.narrowing_terms(1);
-        sort_hits(&mut all, req.sort, req.descending, &terms);
-        let hits: Vec<Hit> = all.into_iter().skip(offset).take(limit).collect();
+        // The order the merge imposes, and it is `sort_hits`'s — moved to where
+        // the rows have not been built yet, which means every part of it has to
+        // be answerable without building one.
+        //
+        // Two of the three parts needed work. The name key is the first sixteen
+        // bytes packed into a number, an abbreviation, so where two agree the
+        // real folded names are compared out of the arena. And the last tie is
+        // broken by the path, which is the one thing this exists not to build —
+        // so paths are compared *as if joined*, byte by byte, out of the
+        // directory table and the name arena. Neither allocates; a directory is
+        // decoded once and answers for every row in it.
+        //
+        // Both are on ties alone, and both are load-bearing: a corpus where
+        // many files share a date — an unpacked archive, a checkout — ties on
+        // every comparison, and five tests said so the first time this ordered
+        // ties by segment instead.
+        let exact = crate::search::key_is_exact(req.sort);
+        let desc = req.descending;
+        let mut dirs: HashMap<(u32, u32), String> = HashMap::new();
+        let mut cmp = |a: &Candidate, b: &Candidate| {
+            let mut o = a.key.cmp(&b.key);
+            if o.is_eq() && !exact {
+                let folded = |c: &Candidate| {
+                    views
+                        .get(c.seg as usize)
+                        .and_then(|s| s.folded.get(c.row as usize))
+                        .unwrap_or_default()
+                };
+                o = folded(a).cmp(folded(b));
+            }
+            let o = if desc { o.reverse() } else { o };
+            o.then_with(|| b.mtime.cmp(&a.mtime)).then_with(|| {
+                for c in [a, b] {
+                    let Some(seg) = views.get(c.seg as usize) else {
+                        continue;
+                    };
+                    let at = (c.seg, seg.dir_id(c.row as usize));
+                    dirs.entry(at)
+                        .or_insert_with(|| seg.dirs.get(at.1).unwrap_or_default());
+                }
+                let joined = |c: &Candidate| {
+                    let seg = views.get(c.seg as usize);
+                    let dir = seg
+                        .map(|s| dirs[&(c.seg, s.dir_id(c.row as usize))].as_str())
+                        .unwrap_or_default();
+                    let name = seg
+                        .and_then(|s| s.names.get(c.row as usize))
+                        .unwrap_or_default();
+                    joined_path(dir, name)
+                };
+                joined(a).cmp(joined(b))
+            })
+        };
+
+        // Selection, not a sort. Two partitions put the window where it
+        // belongs without ordering the hundred thousand rows in front of it,
+        // and only the window itself is sorted.
+        let end = need.min(pool.len());
+        if pool.len() > end && end > 0 {
+            pool.select_nth_unstable_by(end - 1, &mut cmp);
+            pool.truncate(end);
+        }
+        let start = offset.min(pool.len());
+        if start > 0 && start < pool.len() {
+            pool.select_nth_unstable_by(start - 1, &mut cmp);
+        }
+        let window = &mut pool[start..];
+        window.sort_unstable_by(&mut cmp);
+
+        let built = window.len() as u64;
+        let hits: Vec<Hit> = window
+            .iter()
+            .take(limit)
+            .filter_map(|c| {
+                let seg = views.get(c.seg as usize)?;
+                let row = c.row as usize;
+                seg.names.get(row).map(|n| seg.hit(row, n))
+            })
+            .collect();
         Ok(SearchResponse {
             hits,
             total: counted.min(cap as u64),

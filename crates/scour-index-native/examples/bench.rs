@@ -81,6 +81,7 @@ fn main() {
                     offset: 0,
                     limit: 40,
                     count_cap: cap,
+                    rank_only: false,
                 },
             );
             best = best.min(t.elapsed().as_secs_f64() * 1000.0);

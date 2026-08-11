@@ -61,6 +61,7 @@ impl Fixture {
                 offset: 0,
                 limit,
                 count_cap: 10_000_000,
+                rank_only: false,
             },
         )
         .hits
@@ -169,6 +170,7 @@ fn the_newest_page_stops_almost_immediately() {
             offset: 0,
             limit: 40,
             count_cap: 200,
+            rank_only: false,
         },
     );
     assert!(found.early_exit, "the stored order should let this stop");
@@ -191,6 +193,7 @@ fn the_newest_page_stops_almost_immediately() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert!(!all.early_exit);
@@ -216,6 +219,7 @@ fn a_count_cap_never_changes_which_rows_win() {
                 offset: 0,
                 limit: 40,
                 count_cap: cap,
+                rank_only: false,
             },
         )
         .hits
@@ -243,6 +247,7 @@ fn a_capped_count_is_a_floor_and_says_so() {
             offset: 0,
             limit: 10,
             count_cap: 100,
+            rank_only: false,
         },
     );
     assert_eq!(capped.total, 100);
@@ -257,6 +262,7 @@ fn a_capped_count_is_a_floor_and_says_so() {
             offset: 0,
             limit: 10,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert!(!full.capped);
@@ -278,6 +284,7 @@ fn paging_reconstructs_the_head_of_the_list() {
                 offset,
                 limit: 20,
                 count_cap: 10_000_000,
+                rank_only: false,
             },
         )
         .hits
@@ -320,6 +327,7 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
             offset: 0,
             limit: 100,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert!(
@@ -390,6 +398,7 @@ fn a_selective_term_stops_reading_the_corpus() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert!(
@@ -447,6 +456,7 @@ fn an_extension_and_a_glob_narrow_the_same_way_a_substring_does() {
                 offset: 0,
                 limit: 40,
                 count_cap: 10_000_000,
+                rank_only: false,
             },
         );
         assert_eq!(
@@ -475,6 +485,7 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
                 offset: 0,
                 limit: 40,
                 count_cap: 10_000_000,
+                rank_only: false,
             },
         );
         assert_eq!(
@@ -503,6 +514,7 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert_eq!(
@@ -523,6 +535,7 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert_eq!(found.total, f.expected_count("folder:"));
@@ -549,6 +562,7 @@ fn ties_come_back_newest_first() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     let times: Vec<i64> = found.hits.iter().map(|h| h.meta.mtime).collect();
@@ -607,6 +621,7 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
             offset: 0,
             limit: 10,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     )
     .hits
@@ -646,6 +661,7 @@ fn a_query_with_no_name_test_still_sorts_by_name_correctly() {
             offset: 0,
             limit: 40,
             count_cap: 10_000_000,
+            rank_only: false,
         },
     );
     assert!(

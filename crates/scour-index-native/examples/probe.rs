@@ -36,6 +36,7 @@ fn main() {
                     offset: 0,
                     limit: 40,
                     count_cap: cap,
+                    rank_only: false,
                 },
             );
             println!(

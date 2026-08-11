@@ -187,7 +187,7 @@ impl<'a> Segment<'a> {
             && (self.num(Field::IsDir, row) != 0) == is_dir
     }
 
-    fn hit(&self, row: usize, name: &str) -> Hit {
+    pub(crate) fn hit(&self, row: usize, name: &str) -> Hit {
         let path = self.path(row, name);
         Hit {
             // From the path that has just been built, rather than by building
@@ -931,11 +931,28 @@ pub struct Wanted {
     pub limit: usize,
     /// Stop counting matches here.
     pub count_cap: usize,
+    /// Answer with [`Found::ranked`] instead of [`Found::hits`].
+    ///
+    /// For a caller with several segments to merge: it decides the page and
+    /// builds only that, rather than each segment building a page's worth of
+    /// rows for a merge to discard.
+    pub rank_only: bool,
+}
+
+/// A candidate row, ordered but not built.
+#[derive(Debug, Clone)]
+pub struct Ranked {
+    pub key: SortValue,
+    /// What breaks a tie on the key, the same way [`sort_hits`] breaks it.
+    pub mtime: i64,
+    pub row: u32,
 }
 
 #[derive(Debug, Default)]
 pub struct Found {
     pub hits: Vec<Hit>,
+    /// Set instead of `hits` when [`Wanted::rank_only`] was asked for.
+    pub ranked: Vec<Ranked>,
     pub total: u64,
     pub capped: bool,
     /// Whether the walk was able to stop early.
@@ -1120,9 +1137,51 @@ pub fn run_with(
         i = j + 1;
     }
 
-    if !stored_order {
-        kept = narrow(&mut keyed, need, want.descending, key_is_exact(want.sort));
+    // The candidates, each with what it sorts by. The stored order needs no
+    // selection — the rows arrived in it — but it still has to say what it
+    // sorts by, because whoever merges this segment with another cannot see
+    // the row order that made it true.
+    let ranked: Vec<(SortValue, u32)> = if stored_order {
+        kept.iter()
+            .map(|&row| {
+                // Safe to pass no name: the stored order is `Modified` or an
+                // unscored `Relevance`, and neither reads one.
+                (
+                    sort_value(seg, row as usize, b"", want.sort, &score_terms),
+                    row,
+                )
+            })
+            .collect()
+    } else {
+        narrow(keyed, need, want.descending, key_is_exact(want.sort))
+    };
+
+    // **Keys and row numbers, for a caller that has other segments to merge
+    // this with.** Building a row means reconstructing its front-coded path,
+    // and the merge throws away all but the page: at offset 100,000 the index
+    // built 401,438 paths to return sixty, which took 1.43 s. So the segment
+    // hands over what it takes to *order* a row and nothing that it takes to
+    // *show* one, and the caller builds the window it ends up with.
+    if want.rank_only {
+        return Found {
+            ranked: ranked
+                .into_iter()
+                .map(|(key, row)| Ranked {
+                    key,
+                    // The merge's second key, matching `sort_hits`. One column
+                    // read a candidate, and only for candidates.
+                    mtime: seg.num(Field::Mtime, row as usize),
+                    row,
+                })
+                .collect(),
+            total: counted.min(want.count_cap) as u64,
+            capped: counted >= want.count_cap,
+            early_exit: stored_order && done,
+            rows_visited: visited,
+            ..Found::default()
+        };
     }
+    kept = ranked.into_iter().map(|(_, row)| row).collect();
 
     // Materialise. Only now, and only what can appear: reading a row means
     // building its path, which is the expensive part of the whole operation.
@@ -1157,6 +1216,7 @@ pub fn run_with(
         early_exit: stored_order && done,
         rows_visited: visited,
         rows_built,
+        ..Found::default()
     }
 }
 
@@ -1168,8 +1228,8 @@ pub fn run_with(
 /// big-endian into a `u64`, which orders identically to the bytes it came
 /// from and costs nothing: rows that tie on it are the few that share eight
 /// bytes of name, and only those are compared properly.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum SortValue {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SortValue {
     Num(i64),
     /// The first sixteen bytes, big-endian. Exact for an extension, which is
     /// at most twelve bytes by definition; abbreviated for a name, where
@@ -1194,7 +1254,7 @@ fn head(bytes: &[u8]) -> u128 {
 /// Only the name is abbreviated. An extension is at most twelve bytes — that
 /// is what makes it an extension — so sixteen holds all of it, and sorting
 /// `ext:rs` by extension stops being a single tie group of seventy thousand.
-fn key_is_exact(key: SortKey) -> bool {
+pub(crate) fn key_is_exact(key: SortKey) -> bool {
     key != SortKey::Name
 }
 
@@ -1237,12 +1297,17 @@ fn sort_value(
 /// still displace it. Cutting at exactly `need` would return a page that is
 /// deterministic, plausible, and not the one brute force produces — timestamps
 /// tie in the thousands on a real filesystem.
-fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool, exact: bool) -> Vec<u32> {
+fn narrow(
+    mut keyed: Vec<(SortValue, u32)>,
+    need: usize,
+    desc: bool,
+    exact: bool,
+) -> Vec<(SortValue, u32)> {
     if need == 0 || keyed.is_empty() {
         return Vec::new();
     }
     if keyed.len() <= need {
-        return keyed.iter().map(|(_, row)| *row).collect();
+        return keyed;
     }
     // The row number is the second key, and it is not a formality: rows are
     // stored newest-first with the path breaking *that*, so ordering ties by
@@ -1260,16 +1325,17 @@ fn narrow(keyed: &mut [(SortValue, u32)], need: usize, desc: bool, exact: bool) 
     // survivors anyway.
     let k = need - 1;
     keyed.select_nth_unstable_by(k, cmp);
-    let (top, rest) = keyed.split_at(need);
-    let mut out: Vec<u32> = top.iter().map(|(_, row)| *row).collect();
-    if !exact {
-        // An abbreviated key only says the first eight bytes agree. The rows
-        // that share them still have to be compared properly, and there are
-        // few of them.
-        let boundary = &top[k].0;
-        out.extend(rest.iter().filter(|(v, _)| v == boundary).map(|(_, r)| *r));
+    if exact {
+        keyed.truncate(need);
+        return keyed;
     }
-    out
+    // An abbreviated key only says the first sixteen bytes agree. The rows
+    // that share them still have to be compared properly, and there are few
+    // of them.
+    let boundary = keyed[k].0.clone();
+    let rest: Vec<(SortValue, u32)> = keyed.split_off(need);
+    keyed.extend(rest.into_iter().filter(|(v, _)| *v == boundary));
+    keyed
 }
 
 /// Deterministic ordering, with an explicit tie-break on the path.

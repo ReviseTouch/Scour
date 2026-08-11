@@ -125,6 +125,7 @@ fn main() {
         offset: 0,
         limit: 200,
         count_cap: 100_000,
+        rank_only: false,
     };
     let t = Instant::now();
     let found = scour_index_native::run(&seg, &plan, want);
