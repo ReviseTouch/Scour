@@ -1128,12 +1128,18 @@
      which answers for the query as it stands; there is no equivalent for these
      two, and the mockup's numbers were about a different index on a different
      day. A label with no number is honest, a stale number is not. */
-  const SCOPES = [
-    ["Projeler", "/home/hasan/Projeler", null],
-    ["Belgeler", "/home/hasan/Belgeler", null],
-    ["Resimler", "/home/hasan/Resimler", null],
-    ["İndirilenler", "/home/hasan/İndirilenler", null]
-  ];
+  /* **Both of these were the author's own home directory, written out.** Four
+     literal paths under `/home/hasan` for the scope shortcuts, and the same
+     string again where a path is shortened to `~`. On anyone else's machine
+     that is four shortcuts to folders that are not there and no path that ever
+     shortens — the two most visible things in the window, wrong for everybody
+     but one person.
+
+     Filled from `/api/places` on load, which reads the desktop's own record of
+     what its owner calls Documents and Downloads, in their own language.
+     Empty until then, which is a few milliseconds and honest. */
+  let SCOPES = [];
+  let HOME = "";
   const SIZES = [[">10 MB", ">10mb", null], [">1 MB", ">1mb", null], ["= 0", "=0", null]];
 
   const BANDS = [
@@ -2859,7 +2865,7 @@
           div.className = "path";
           td.appendChild(div);
         }
-        const v = f.path.replace("/home/hasan", "~");
+        const v = HOME && f.path.startsWith(HOME + "/") ? "~" + f.path.slice(HOME.length) : f.path;
         if (div.textContent !== v) div.textContent = v;
       } },
     { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
@@ -3652,6 +3658,13 @@
 
   /* The taxonomy, then the first search. The rail cannot be drawn before the
      engine has said what is in it. */
+  SERVICE.get("places", {})
+    .then((res) => {
+      HOME = res.home || "";
+      SCOPES = (res.places || []).map((p) => [p.label, p.path, null]);
+    })
+    .catch(() => {});
+
   SERVICE.get("kinds", {})
     .then((res) => {
       KINDS = res.kinds.map((k) => [k.label, k.token]);

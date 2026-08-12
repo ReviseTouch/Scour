@@ -234,6 +234,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream),
+        "/api/places" => api_places(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
@@ -449,6 +450,56 @@ fn api_kinds(stream: &mut TcpStream) {
         })
         .collect();
     http::json(stream, &serde_json::json!({ "kinds": kinds }));
+}
+
+/// Where this person keeps things, so the page does not have to guess.
+///
+/// **It guessed, and it guessed the author's home directory.** The sidebar's
+/// scope shortcuts were four literal paths under `/home/hasan` and the path
+/// shortener replaced that same string with `~`. On anyone else's machine the
+/// shortcuts point at folders that are not there and no path ever shortens —
+/// the two most visible things in the window, both wrong, for everybody but
+/// one person.
+///
+/// The names come from the XDG user directories, which is where a desktop
+/// records what its owner calls Documents and Downloads in their own language,
+/// and only the ones that exist are offered. A machine with no `user-dirs.dirs`
+/// gets the home directory and nothing else, which is honest rather than four
+/// dead links.
+fn api_places(stream: &mut TcpStream) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut places: Vec<serde_json::Value> = Vec::new();
+    if !home.is_empty() {
+        // `user-dirs.dirs` is `XDG_DOCUMENTS_DIR="$HOME/Belgeler"` a line, and
+        // the quoting and the `$HOME` are both part of the format.
+        let conf = std::path::Path::new(&home).join(".config/user-dirs.dirs");
+        let text = std::fs::read_to_string(&conf).unwrap_or_default();
+        for line in text.lines() {
+            let line = line.trim();
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if !key.starts_with("XDG_") || !key.ends_with("_DIR") {
+                continue;
+            }
+            let path = value.trim().trim_matches('"').replace("$HOME", &home);
+            // The desktop's own name for it, which is the last component and
+            // is already in the owner's language.
+            let label = path.rsplit('/').next().unwrap_or_default().to_owned();
+            // `XDG_DESKTOP_DIR` is often the home itself on a headless setup,
+            // and a shortcut to everything is not a shortcut.
+            if label.is_empty() || path == home || !std::path::Path::new(&path).is_dir() {
+                continue;
+            }
+            places.push(serde_json::json!({ "label": label, "path": path }));
+        }
+        places.sort_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
+        places.dedup_by(|a, b| a["path"] == b["path"]);
+    }
+    http::json(
+        stream,
+        &serde_json::json!({ "home": home, "places": places }),
+    );
 }
 
 /// How many match, exactly, however long that takes.
