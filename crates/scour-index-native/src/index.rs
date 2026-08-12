@@ -1125,6 +1125,30 @@ impl NativeIndex {
     /// eight segments can become nine underneath it, and index 3 would then be
     /// a different segment than the one that was chosen.
     fn groups(inner: &Inner) -> Vec<Vec<u64>> {
+        // **The stamp only constrains a fold while a scan is open.**
+        //
+        // A sweep judges the segments stamped below the generation it was given
+        // and spares the rest, so merging across that line during a scan would
+        // hand old rows a stamp that carries them past it. Outside a scan there
+        // is no sweep coming and the next generation starts above all of them —
+        // the same argument `Maintenance::Rebuild` already makes for folding
+        // everything at once, and `fold` already gives the merged segment the
+        // highest stamp in its group.
+        //
+        // Grouping by it *always* is what killed compaction. The stamp advances
+        // on every walk, a watcher on a busy disk runs walks between almost
+        // every pair of commits, and each segment then sits alone in its own
+        // generation: measured on the live index at **241 segments across 205
+        // generations, largest group 2**, against a threshold of three. Nothing
+        // could ever be folded again, so the count only went up, and every
+        // search opened all 241.
+        //
+        // One group is not a rebuild: `next_head` drops the largest member
+        // unless a quarter of it is dead, which is the head-and-body split this
+        // has always had. What changes is that the head can form at all.
+        if inner.open.is_none() {
+            return vec![inner.segments.iter().map(|s| s.number).collect()];
+        }
         let mut by_gen: HashMap<u64, Vec<u64>> = HashMap::new();
         for s in &inner.segments {
             by_gen.entry(s.generation).or_default().push(s.number);

@@ -944,6 +944,54 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     );
 }
 
+/// Compaction still folds when every segment has a generation of its own.
+///
+/// **The shape a real machine produces, and the one nothing tested.** A walk
+/// bumps the generation, a commit writes a segment, and a watcher on a busy
+/// disk puts a walk between almost every pair of commits — so each segment ends
+/// up alone in its own generation. Grouping candidates *by* that number then
+/// never finds three to fold, and compaction dies: measured on the live index
+/// at **241 segments across 205 generations, largest group 2**, against a
+/// threshold of three. Every search opened all 241.
+///
+/// It is a one-way trap. Once the stamps are spread there is no state the index
+/// can reach on its own where three of them agree again, so the count only ever
+/// goes up. The existing compaction tests all build their fixture in one
+/// generation, which is the one shape that cannot show it.
+#[test]
+fn compaction_still_folds_when_every_segment_has_its_own_generation() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    for i in 0..12u64 {
+        let g = index.begin_generation().expect("generation");
+        let e = entry(&format!("/w/dosya-{i}.txt"), NOW + i as i64, i + 1);
+        index
+            .apply(&mut std::iter::once(Change::Upsert(e)))
+            .expect("apply");
+        index.commit().expect("commit");
+        // Closes the generation without judging anything: the scope holds no
+        // rows, so this is the bump and nothing else.
+        index
+            .sweep(SourceId(0), "/baska-yer", g, &PrefixSet::default())
+            .expect("sweep");
+    }
+
+    let before = index.stats().expect("stats").segments;
+    assert!(
+        before >= 10,
+        "the fixture is supposed to be fragmented: {before}"
+    );
+
+    index.maintain(Maintenance::Compact).expect("compact");
+    let after = index.stats().expect("stats");
+    assert!(
+        after.segments < before,
+        "compaction folded nothing: {before} segments, each alone in its generation"
+    );
+    assert_eq!(after.entries, 12, "and it lost nothing doing it");
+}
+
 /// A compaction that is not allowed to fold still ends.
 ///
 /// **This one spun a core on the live index for as long as a generation stayed
