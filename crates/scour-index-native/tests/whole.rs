@@ -2403,3 +2403,112 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
     let folded = agree("after a rebuild");
     assert_eq!(folded[0], (12_000, 4));
 }
+
+/// Sorting by size puts a folder where its number says it is.
+///
+/// **The failure this guards made folders vanish.** A directory's `Size`
+/// column is its own entry table — about four kilobytes — so ordering by it
+/// put every folder behind every file larger than a block. On a page of two
+/// hundred rows out of two million, that is not "mis-sorted", it is gone: a
+/// size-sorted list had no folders in it at all, while the column beside it
+/// said one of them held thirteen gigabytes.
+#[test]
+fn a_folder_sorts_by_the_number_it_shows() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    let mut rows = vec![
+        // A folder whose own row is small and whose contents are not.
+        Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 1),
+            path: "/big".into(),
+            is_dir: true,
+            meta: Meta {
+                mtime: NOW,
+                size: 4_096,
+                disk: 4_096,
+                ..Meta::UNKNOWN
+            },
+        },
+        // And a file that beats the folder's own row but not its contents.
+        Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 2),
+            path: "/middling.bin".into(),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW,
+                size: 500_000,
+                disk: 500_000,
+                ..Meta::UNKNOWN
+            },
+        },
+    ];
+    for i in 0..4u64 {
+        rows.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 10 + i),
+            path: format!("/big/part{i}"),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW,
+                size: 1_000_000,
+                disk: 1_000_000,
+                ..Meta::UNKNOWN
+            },
+        });
+    }
+    index
+        .apply(&mut rows.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    let by_size = |index: &NativeIndex| -> Vec<String> {
+        index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Size,
+                descending: true,
+                page: Page::new(0, 10),
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect()
+    };
+
+    // Cold: nothing has asked for a folder size, so the table is not built and
+    // the folder sorts by its own column — the old behaviour, on purpose,
+    // because building it here would put ninety milliseconds in a keystroke.
+    let cold = by_size(&index);
+    assert!(
+        cold.iter().position(|p| p == "/big").unwrap()
+            > cold.iter().position(|p| p == "/middling.bin").unwrap(),
+        "a cold cache is the old order, not a wrong one: {cold:?}"
+    );
+
+    // Warm: `/big` holds 4 MB, so it goes above the 500 KB file and below the
+    // 1 MB parts.
+    index.subtree_sizes(&[]).expect("warm");
+    let warm = by_size(&index);
+    assert_eq!(warm[0], "/big", "the folder holds more than anything in it");
+    assert!(
+        warm.iter().position(|p| p == "/big").unwrap()
+            < warm.iter().position(|p| p == "/middling.bin").unwrap(),
+        "the folder has to sort by what it shows: {warm:?}"
+    );
+
+    // Ascending too, since a comparator is easy to get right in one direction.
+    let up = index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Size,
+            descending: false,
+            page: Page::new(0, 10),
+        })
+        .expect("search");
+    assert_eq!(
+        up.hits.last().expect("rows").path,
+        "/big",
+        "the biggest is last when the order is reversed"
+    );
+}

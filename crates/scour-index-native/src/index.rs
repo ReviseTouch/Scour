@@ -290,7 +290,7 @@ pub struct NativeIndex {
     ///
     /// Taken *after* `inner` on every path, which is what keeps the two from
     /// deadlocking against each other.
-    sizes: parking_lot::Mutex<crate::sizes::Cache>,
+    sizes: parking_lot::RwLock<crate::sizes::Cache>,
     /// Released when this is dropped, or by the kernel if the process dies.
     /// Held for the lifetime of the index because every writing path — commit,
     /// sweep, maintain — goes through this value.
@@ -348,7 +348,7 @@ impl NativeIndex {
                 parking_lot::Condvar::new(),
             )),
             build_failed: std::sync::atomic::AtomicUsize::new(0),
-            sizes: parking_lot::Mutex::new(crate::sizes::Cache::default()),
+            sizes: parking_lot::RwLock::new(crate::sizes::Cache::default()),
             _lock: lock,
         })
     }
@@ -2262,6 +2262,9 @@ impl Index for NativeIndex {
 
         let mut veto =
             |seg: &Segment<'_>, row: usize, name: &[u8]| conceals(&inner, seg, row, name);
+        // Held for the whole loop, and only when the order depends on it.
+        // A read guard, because nothing here builds: see the note at the call.
+        let folders = (req.sort == scour_core::SortKey::Size).then(|| self.sizes.read());
         for (which, live) in inner.segments.iter().enumerate() {
             rows += live.rows() as u64;
             let seg = &views[which];
@@ -2311,6 +2314,15 @@ impl Index for NativeIndex {
                     rank_only: true,
                 },
                 hiding.then_some(&mut veto as &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool),
+                // Only `sort:size` reads this, and it never *builds* it: a
+                // cold cache means a folder sorts by its own column, which is
+                // what it did before folder sizes existed. Building here would
+                // put ninety milliseconds inside a keystroke and hold a lock
+                // across it; the idle pass and `subtree_sizes` fill it.
+                folders
+                    .as_ref()
+                    .and_then(|c| c.rows_of(live.number))
+                    .unwrap_or(&[]),
             );
             let total = if matches_all {
                 live.live_rows()
@@ -2392,7 +2404,7 @@ impl Index for NativeIndex {
     /// the deadlock this order exists to prevent.
     fn subtree_sizes(&self, paths: &[String]) -> Result<Vec<Option<(u64, u64)>>> {
         let inner = self.inner.read();
-        let mut cache = self.sizes.lock();
+        let mut cache = self.sizes.write();
         Ok(cache
             .subtrees(&inner.segments, paths)
             .into_iter()

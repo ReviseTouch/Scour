@@ -63,6 +63,19 @@ use crate::segment::Live;
 pub struct Prefix {
     disk: Vec<u64>,
     files: Vec<u64>,
+    /// What each *directory row* has under it, by row number, in row order.
+    ///
+    /// **Because a folder that is shown as `~13 GB` has to sort as 13 GB.**
+    /// A directory's `Size` column is its own entry table — four kilobytes —
+    /// so ordering by it put every folder behind every file bigger than a
+    /// block, which on a page of two hundred means folders vanish from a
+    /// size-sorted list entirely. Showing one number and ordering by another
+    /// is the kind of wrongness that reads as a broken sort.
+    ///
+    /// Sorted by row already, because the pass that fills it goes in row
+    /// order, so a lookup is a binary search over twelve bytes an entry rather
+    /// than a hash of a path.
+    by_row: Vec<(u32, i64)>,
     /// What the segment's death count was when this was built. Anything else
     /// means the alive bits have moved and these numbers are stale.
     deaths: u64,
@@ -99,9 +112,46 @@ impl Prefix {
                 run += own;
             }
         }
+        // The rows that *are* directories, and what is under each.
+        //
+        // Their own number is not `dir_id(row)` — that is the parent — so it
+        // has to be looked up by path, which is a binary search. Parent paths
+        // are decoded once each rather than once per row: there are two orders
+        // of magnitude more rows than directories.
+        let mut by_row: Vec<(u32, i64)> = Vec::new();
+        let mut parents: HashMap<u32, String> = HashMap::new();
+        for row in 0..seg.rows() {
+            if !seg.is_alive(row) || seg.num_of(Field::IsDir, row) == 0 {
+                continue;
+            }
+            let Some(name) = seg.names.get(row) else {
+                continue;
+            };
+            let parent = parents
+                .entry(seg.dir_id(row))
+                .or_insert_with(|| seg.dirs.get(seg.dir_id(row)).unwrap_or_default());
+            let path = match parent.as_str() {
+                "" => name.to_string(),
+                "/" => format!("/{name}"),
+                p => format!("{p}/{name}"),
+            };
+            let scope = seg.dirs.subtree(&path);
+            let mut total = 0i64;
+            if let Some(own) = scope.own {
+                let i = own as usize;
+                total += disk[i + 1].saturating_sub(disk[i]) as i64;
+            }
+            let (a, b) = (scope.below.start as usize, scope.below.end as usize);
+            if let (Some(from), Some(to)) = (disk.get(a), disk.get(b)) {
+                total += to.saturating_sub(*from) as i64;
+            }
+            by_row.push((row as u32, total));
+        }
+
         Prefix {
             disk,
             files,
+            by_row,
             deaths,
         }
     }
@@ -177,11 +227,21 @@ impl Cache {
         out
     }
 
+    /// What each directory row in this segment has under it — the table the
+    /// sort reads, so that a folder shown as `~13 GB` orders as 13 GB.
+    ///
+    /// `None` when the segment has no entry yet, which means nothing has asked
+    /// for a folder size since it appeared. The sort then falls back to the
+    /// stored column, which is the old behaviour rather than a wrong one.
+    pub fn rows_of(&self, segment: u64) -> Option<&[(u32, i64)]> {
+        self.per_segment.get(&segment).map(|p| &p.by_row[..])
+    }
+
     /// What the cache is holding, for the memory line in `stats`.
     pub fn bytes(&self) -> u64 {
         self.per_segment
             .values()
-            .map(|p| ((p.disk.len() + p.files.len()) * 8) as u64)
+            .map(|p| ((p.disk.len() + p.files.len()) * 8 + p.by_row.len() * 12) as u64)
             .sum()
     }
 }

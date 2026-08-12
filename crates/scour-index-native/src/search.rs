@@ -978,7 +978,7 @@ pub struct Found {
 
 /// Walk the segment and answer.
 pub fn run(seg: &Segment<'_>, plan: &Plan, want: Wanted) -> Found {
-    run_with(seg, plan, want, None)
+    run_with(seg, plan, want, None, &[])
 }
 
 /// The same walk, with a veto over rows that match but must not be shown.
@@ -1000,6 +1000,12 @@ pub fn run_with(
     plan: &Plan,
     want: Wanted,
     mut conceals: Option<&mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool>,
+    // What each directory row has under it, by row, sorted — see `sizes.rs`.
+    //
+    // **Only `sort:size` reads it**, and only for rows that are directories.
+    // Empty means the caller has not built it, and then a folder sorts by its
+    // own `Size` column, which is what it did before folder sizes existed.
+    folders: &[(u32, i64)],
 ) -> Found {
     let has_veto = conceals.is_some();
     let mut fold = Folded::new();
@@ -1094,7 +1100,7 @@ pub fn run_with(
             // verifier missed it because the test asked for an uncapped count,
             // where the two happen to agree.
             keyed.push((
-                sort_value(seg, row, name, want.sort, &score_terms),
+                sort_value(seg, row, name, want.sort, &score_terms, folders),
                 row as u32,
             ));
         }
@@ -1159,7 +1165,7 @@ pub fn run_with(
                 // Safe to pass no name: the stored order is `Modified` or an
                 // unscored `Relevance`, and neither reads one.
                 (
-                    sort_value(seg, row as usize, b"", want.sort, &score_terms),
+                    sort_value(seg, row as usize, b"", want.sort, &score_terms, folders),
                     row,
                 )
             })
@@ -1277,6 +1283,7 @@ fn sort_value(
     name: &[u8],
     key: SortKey,
     terms: &[Vec<u8>],
+    folders: &[(u32, i64)],
 ) -> SortValue {
     match key {
         // Already folded, which is what the terms are, plus the directory's
@@ -1290,7 +1297,32 @@ fn sort_value(
             let raw = seg.names.get(row).unwrap_or_default();
             SortValue::Text(seg.path(row, raw).into_bytes())
         }
-        SortKey::Size => SortValue::Num(seg.num(Field::Size, row)),
+        // **A folder sorts by what is under it**, when that is known. Its own
+        // `Size` is its entry table — four kilobytes — so ordering by that put
+        // every folder behind every file larger than a block, and on a page of
+        // two hundred rows the folders simply were not there. The number on
+        // screen and the order now come from one place.
+        //
+        // Empty table, or a row that is not a directory: the column, as
+        // before.
+        SortKey::Size => SortValue::Num({
+            let own = seg.num(Field::Size, row);
+            // **The `IsDir` read first, and it is not a micro-optimisation.**
+            // Without it every one of two million file rows pays a failed
+            // binary search over a quarter of a million directories, to learn
+            // what one column read already said. Measured on an unfiltered
+            // size sort: 183 ms with the search first, 138 ms with the column
+            // first, over the same 2.2 M rows.
+            if seg.num(Field::IsDir, row) == 0 || folders.is_empty() {
+                own
+            } else {
+                folders
+                    .binary_search_by_key(&(row as u32), |(r, _)| *r)
+                    .ok()
+                    .map(|i| folders[i].1)
+                    .unwrap_or(own)
+            }
+        }),
         SortKey::Modified => SortValue::Num(seg.num(Field::Mtime, row)),
         SortKey::Created => SortValue::Num(seg.num(Field::Ctime, row)),
         SortKey::Accessed => SortValue::Num(seg.num(Field::Atime, row)),
