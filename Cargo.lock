@@ -4630,6 +4630,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-preview"
+version = "0.1.0"
+
+[[package]]
 name = "scour-proto"
 version = "0.1.0"
 dependencies = [
@@ -4676,6 +4680,7 @@ dependencies = [
  "scour-core",
  "scour-i18n",
  "scour-ipc",
+ "scour-preview",
  "scour-proto",
  "serde_json",
 ]

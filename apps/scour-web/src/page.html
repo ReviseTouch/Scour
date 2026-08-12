@@ -644,6 +644,112 @@
     color: var(--ink-3);
   }
 
+  /* ---------------- önizleme ----------------
+
+     A third column, shut by default: most of what this list is used for is
+     finding a path and getting out of the way, and a panel that is always
+     there costs the list a third of its width to say so. */
+  .body { --peek-w: 380px; }
+  .body.peeking { grid-template-columns: 186px minmax(0, 1fr) var(--peek-w); }
+  /* Under this there is no room for three, so the panel becomes the window:
+     the list is what you came from, not what you are reading. */
+  @media (max-width: 900px) {
+    .body.peeking { grid-template-columns: 0 0 1fr; }
+    .body.peeking .rail, .body.peeking .results { display: none; }
+  }
+  .peek {
+    border-left: 1px solid var(--line-soft);
+    background: var(--panel-2);
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0; overflow: hidden;
+  }
+  .peek[hidden] { display: none; }
+  .peek-head {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 3);
+    border-bottom: 1px solid var(--line-soft);
+    flex: none;
+  }
+  .peek-head .nm {
+    flex: 1; min-width: 0;
+    font-size: 12.5px; font-weight: 600; color: var(--ink);
+    /* **It wraps rather than truncating**, and that is a correction. The first
+       version clipped with `direction: rtl`, which keeps the *end* of a name
+       visible — the end being what tells `rapor-v2.pdf` from `rapor-v3.pdf`.
+       It also reorders the string: `2023 NTP.pdf` came out as `NTP.pdf 2023`,
+       because a leading run of digits is bidi-neutral and an rtl paragraph
+       puts it on the far side. A header has room for two lines, and losing
+       nothing beats a clever ellipsis that renames the file. */
+    overflow-wrap: anywhere;
+    max-height: 2.8em; overflow: hidden;
+    line-height: 1.35;
+  }
+  .peek-head button {
+    flex: none; background: none; border: 0; cursor: pointer;
+    color: var(--ink-3); font-size: 15px; line-height: 1;
+    padding: 2px 6px; border-radius: 3px;
+  }
+  .peek-head button:hover { color: var(--ink); background: var(--line-soft); }
+  .peek-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  .peek-body {
+    flex: 1; min-height: 0; overflow: auto;
+    display: flex; align-items: center; justify-content: center;
+    padding: calc(var(--u) * 3);
+  }
+  /* Text fills the panel; a picture is centred in it. One box, two jobs, and
+     the difference is which way the content wants to grow. */
+  .peek-body.text { display: block; padding: 0; }
+  .peek-body pre {
+    margin: 0; padding: calc(var(--u) * 3);
+    font: 400 11.5px/1.55 var(--mono);
+    color: var(--ink-2);
+    white-space: pre-wrap; word-break: break-word;
+    tab-size: 4;
+  }
+  .peek-body pre mark {
+    background: var(--mark); color: var(--mark-ink);
+    padding: 1px 0; border-radius: 1px;
+  }
+  .peek-body img, .peek-body video {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain;
+    /* A transparent PNG on a dark panel is a picture of nothing. */
+    background:
+      repeating-conic-gradient(var(--line-soft) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+    border-radius: 2px;
+  }
+  .peek-body audio { width: 100%; }
+  .peek-body embed { width: 100%; height: 100%; border: 0; }
+  .peek-body .none {
+    text-align: center; color: var(--ink-3); font-size: 12px; line-height: 1.6;
+  }
+  .peek-body .none img {
+    display: block; margin: 0 auto calc(var(--u) * 2);
+    max-width: 128px; max-height: 128px; background: none;
+  }
+  .peek-cut {
+    flex: none;
+    padding: calc(var(--u) * 1.5) calc(var(--u) * 3);
+    border-top: 1px solid var(--line-soft);
+    font: 500 10.5px var(--mono); color: var(--ink-3);
+  }
+  .peek-facts {
+    flex: none; margin: 0;
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2.5) calc(var(--u) * 3);
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 3px calc(var(--u) * 3);
+    font-size: 11.5px;
+    max-height: 42%; overflow: auto;
+  }
+  .peek-facts dt { color: var(--ink-3); white-space: nowrap; }
+  .peek-facts dd {
+    margin: 0; color: var(--ink-2);
+    font-family: var(--mono); font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
   /* ---------------- notlar ---------------- */
   .legend {
     max-width: 1180px;
@@ -975,6 +1081,20 @@
           </div>
         </div>
       </div>
+
+      <!-- Önizleme. Boşluk tuşuyla açılır, tıpkı Quick Look ve sushi gibi. -->
+      <aside class="peek" id="peek" hidden aria-label="Önizleme">
+        <div class="peek-head">
+          <span class="nm" id="peek-name"></span>
+          <button type="button" id="peek-native" title="sistem önizleyicisinde aç"
+                  aria-label="sistem önizleyicisinde aç" hidden>⤢</button>
+          <button type="button" id="peek-close" title="kapat (Boşluk)"
+                  aria-label="önizlemeyi kapat">×</button>
+        </div>
+        <div class="peek-body" id="peek-body"></div>
+        <div class="peek-cut" id="peek-cut" hidden></div>
+        <dl class="peek-facts" id="peek-facts"></dl>
+      </aside>
     </div>
 
     <!-- ------------------------------ RAPOR ------------------------------ -->
@@ -1088,6 +1208,17 @@
        until the index would answer differently. See the live section at the
        bottom of this file. */
     wait: (rev, ms) => SERVICE.get("wait", { rev, ms }),
+    /* What can be shown of this file, asked *before* anything is fetched.
+       A page cannot tell that `notes.bak` is readable and `model.safetensors`
+       is not — that is decided by looking at the bytes, which happens in the
+       bridge — and it must not find out by pulling a four-gigabyte video into
+       memory to read its content type. */
+    peek: (path, signal) => SERVICE.get("preview", { path, meta: 1 }, signal),
+    /* The bytes themselves, as a URL rather than a fetch. An `<img>` or a
+       `<video>` given this streams it and seeks in it; a `fetch` into a blob
+       would hold the whole file to show the first frame. */
+    peekUrl: (path) =>
+      `/api/preview?${new URLSearchParams({ path, t: TOKEN })}`,
   };
 
   /* The rows the last search returned. Filled by `render`, read by the table
@@ -2298,6 +2429,10 @@
       return;
     }
     const full = f.path + "/" + f.name;
+    // The preview panel wants the row, not the path: it has every fact it
+    // shows already, and re-asking the service for what is on the screen would
+    // be a second round trip to learn nothing new.
+    tr.__row = f;
     tr.className = f.fresh ? "fresh" : "";
     tr.style.animationDelay = f.fresh ? `-${Date.now() - f.fresh}ms` : "";
     if (tr.dataset.path !== full) {
@@ -3268,6 +3403,321 @@
   document.addEventListener("click", hideMenu);
   document.addEventListener("scroll", hideMenu, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
+
+  /* ------------------------------------------------------------------ *
+   * Önizleme — the panel the window draws itself.
+   *
+   * A search that finds the right *name* and then cannot tell you whether it
+   * is the right *file* has stopped one step early. Three `rapor-son.pdf`s in
+   * three folders is the ordinary case, and the row that tells them apart is
+   * the one you can see inside.
+   *
+   * **Space, because every quick-look is space** — macOS since 2007, GNOME's
+   * sushi, and the file managers that copied both. Nobody has to be told.
+   *
+   * What can be shown of a file is asked of the bridge and never guessed here.
+   * A page cannot know that `notes.bak` is readable text and
+   * `model.safetensors` is not: that is decided by looking at the bytes. And
+   * once the answer is in, the bytes are reached by pointing an element at the
+   * URL rather than by fetching them — a `<video>` given a URL streams and
+   * seeks, where a fetch into a blob holds four gigabytes to show one frame.
+   * ------------------------------------------------------------------ */
+  const peek = document.getElementById("peek");
+  const peekBody = document.getElementById("peek-body");
+  const peekName = document.getElementById("peek-name");
+  const peekFacts = document.getElementById("peek-facts");
+  const peekCut = document.getElementById("peek-cut");
+  const peekNative = document.getElementById("peek-native");
+  const viewSearch = document.getElementById("view-search");
+
+  const PEEK = {
+    on: false,
+    /* What is drawn now, so that arrowing back onto the same row does not
+       redraw it — and, more to the point, does not restart a video. */
+    path: null,
+    ctrl: null,
+    timer: 0,
+  };
+
+  /* The row that has the keyboard, or the one that had it last.
+     `document.activeElement` is the whole of the selection model here: the
+     rows are focusable and the list already restores focus across a repaint,
+     so there is no second notion of "selected" to keep in step with it. */
+  const focusedRow = () => {
+    const el = document.activeElement;
+    return el && el.closest ? el.closest("tr[data-path]") : null;
+  };
+
+  function setPeek(on) {
+    PEEK.on = on;
+    peek.hidden = !on;
+    viewSearch.classList.toggle("peeking", on);
+    if (!on) {
+      /* **Emptied on the way out, not left to be garbage.** A `<video>` whose
+         node is merely hidden keeps decoding, and one that was hidden while
+         playing keeps playing — from a panel nobody can see. */
+      showNothing("");
+      PEEK.path = null;
+      if (PEEK.ctrl) PEEK.ctrl.abort();
+    } else {
+      const row = focusedRow();
+      if (row) drawPeek(row.__row);
+    }
+  }
+
+  /* Everything the panel says about a file, from the row the list already
+     has. No request: these are the same values the columns are drawn from. */
+  function peekFactsOf(f) {
+    const full = f.path + "/" + f.name;
+    const shown = HOME && f.path.startsWith(HOME + "/")
+      ? "~" + f.path.slice(HOME.length) : f.path;
+    const rows = [
+      ["Konum", shown],
+      ["Tür", f.kind || ""],
+      [f.is_dir ? "İçindekiler" : "Boyut",
+       f.is_dir ? (f.items ? fmt(f.items) + " öge" : "") : bytes(f.size)],
+      ["Değişme", f.mtime ? ago(f.mtime) : ""],
+      ["Oluşturma", f.ctime ? ago(f.ctime) : ""],
+      ["Erişim", f.atime ? ago(f.atime) : ""],
+      ["İzinler", f.perm || ""],
+      ["Sahip", [f.user, f.group].filter(Boolean).join(" · ")],
+    ].filter(([, v]) => v);
+    peekFacts.textContent = "";
+    for (const [k, v] of rows) {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      peekFacts.append(dt, dd);
+    }
+    peekName.textContent = f.name;
+    peekName.title = full;
+  }
+
+  function showNothing(message, thumbPath) {
+    peekBody.className = "peek-body";
+    peekBody.textContent = "";
+    peekCut.hidden = true;
+    const box = document.createElement("div");
+    box.className = "none";
+    /* The picture somebody's file manager already made, when there is one. It
+       is the only thing there is for the formats a browser cannot open at all
+       — a `.docx`, a `.psd`, a video in a codec it does not have — and showing
+       it beats showing the word "no". */
+    if (thumbPath) {
+      const img = document.createElement("img");
+      img.src = `/api/icon?${new URLSearchParams({ p: thumbPath, t: TOKEN })}`;
+      img.alt = "";
+      box.appendChild(img);
+    }
+    box.appendChild(document.createTextNode(message));
+    peekBody.appendChild(box);
+  }
+
+  /* The head of a text file, with the words that were searched for marked.
+   *
+   * Marked here rather than in the bridge because the terms are the page's:
+   * the same folded list the name column uses, so a hit in the file is marked
+   * the same way as a hit in the name. Built with nodes rather than by
+   * assembling HTML — this is somebody else's file, and the one thing it must
+   * never be is parsed. */
+  function writePeekText(text, terms) {
+    peekBody.className = "peek-body text";
+    peekBody.textContent = "";
+    const pre = document.createElement("pre");
+    const hay = fold(text);
+    const wanted = terms.filter((t) => t.length > 1);
+    let at = 0;
+    /* A bounded number of marks. A one-letter term in a quarter of a megabyte
+       is tens of thousands of elements, and the panel would take longer to
+       lay out than the search took to run. */
+    let left = wanted.length ? 2000 : 0;
+    while (left > 0) {
+      let best = -1, len = 0;
+      for (const t of wanted) {
+        const i = hay.indexOf(t, at);
+        if (i >= 0 && (best < 0 || i < best)) { best = i; len = t.length; }
+      }
+      if (best < 0) break;
+      pre.append(text.slice(at, best));
+      const m = document.createElement("mark");
+      m.textContent = text.slice(best, best + len);
+      pre.appendChild(m);
+      at = best + len;
+      left--;
+    }
+    pre.append(text.slice(at));
+    peekBody.appendChild(pre);
+  }
+
+  /* One more fact, added when the browser learns it.
+   *
+   * **The two facts the index does not hold and cannot** — how many pixels
+   * wide a picture is, how long a recording runs — and they are the two people
+   * actually want. Nothing but a decoder knows them, and a decoder is what is
+   * already being asked to draw the thing. So they arrive late, from the
+   * element, rather than costing every row a decode at scan time. */
+  function addFact(key, value) {
+    if (!value) return;
+    const dt = document.createElement("dt");
+    dt.textContent = key;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    peekFacts.append(dt, dd);
+  }
+
+  const clock = (s) => {
+    if (!isFinite(s) || s <= 0) return "";
+    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    return m >= 60
+      ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+      : `${m}:${String(sec).padStart(2, "0")}`;
+  };
+
+  function media(tag, url, type) {
+    const el = document.createElement(tag);
+    /* The panel the fact belongs to, caught now: by the time a forty-megabyte
+       video has its metadata the reader may have arrowed on, and appending to
+       whatever the panel shows *then* would put one file's length under
+       another file's name. */
+    const mine = PEEK.path;
+    if (tag === "img") {
+      el.alt = "";
+      el.addEventListener("load", () => {
+        if (PEEK.path === mine) addFact("Boyutlar", `${el.naturalWidth} × ${el.naturalHeight}`);
+      });
+    } else {
+      el.controls = true;
+      /* No autoplay: a list you arrow through would otherwise start a
+         soundtrack per row. `metadata` is what makes the length known without
+         fetching the whole file — which is the reason ranges exist. */
+      el.preload = "metadata";
+      if (type) el.type = type;
+      el.addEventListener("loadedmetadata", () => {
+        if (PEEK.path !== mine) return;
+        addFact("Süre", clock(el.duration));
+        if (tag === "video" && el.videoWidth) {
+          addFact("Boyutlar", `${el.videoWidth} × ${el.videoHeight}`);
+        }
+      });
+    }
+    el.src = url;
+    return el;
+  }
+
+  /* Draw one file. Debounced, because arrowing down a list is not a request
+     to preview forty files — it is a request to preview the one the hand
+     stops on. */
+  function drawPeek(f) {
+    if (!PEEK.on || !f) return;
+    const full = f.path + "/" + f.name;
+    if (full === PEEK.path) return;
+    PEEK.path = full;
+    peekFactsOf(f);
+    clearTimeout(PEEK.timer);
+    if (PEEK.ctrl) PEEK.ctrl.abort();
+    peekBody.className = "peek-body";
+    peekBody.textContent = "";
+    peekCut.hidden = true;
+    /* Hidden until the bridge says there is a previewer, so it never flashes
+       on for the moment between one file and the next. */
+    peekNative.hidden = true;
+    if (f.is_dir) {
+      showNothing("Klasör — içindekiler listede.");
+      return;
+    }
+    PEEK.timer = setTimeout(() => {
+      const ctrl = new AbortController();
+      PEEK.ctrl = ctrl;
+      SERVICE.peek(full, ctrl.signal)
+        .then((meta) => {
+          if (ctrl.signal.aborted) return;
+          const url = SERVICE.peekUrl(full);
+          /* Offered only where it leads somewhere. GNOME has `sushi` and
+             macOS has `qlmanage`; KDE's preview lives inside Dolphin, and
+             Hyprland and Windows have no such thing at all — so on three
+             desktops out of five this button would be a promise nothing
+             keeps. The bridge looks for the binary and says. */
+          peekNative.hidden = !meta.native;
+          if (meta.shape === "image") {
+            peekBody.appendChild(media("img", url));
+          } else if (meta.shape === "video") {
+            peekBody.appendChild(media("video", url, meta.type));
+          } else if (meta.shape === "audio") {
+            peekBody.appendChild(media("audio", url, meta.type));
+          } else if (meta.shape === "pdf") {
+            /* `<embed>` rather than `<iframe>`: the PDF viewer is a plugin,
+               and an iframe would also be a document this page's origin has
+               to reason about. */
+            const e = document.createElement("embed");
+            e.src = url;
+            e.type = "application/pdf";
+            peekBody.appendChild(e);
+          } else if (meta.shape === "text") {
+            fetch(url, { cache: "no-store", signal: ctrl.signal })
+              .then((r) => r.text().then((t) => [r, t]))
+              .then(([r, t]) => {
+                if (ctrl.signal.aborted) return;
+                /* Read at draw time rather than captured: the query moves
+                   while a panel is open, and the marks should be whatever is
+                   in the box now. Same `parse` the name column uses, so a hit
+                   inside the file is marked exactly as a hit in the name is. */
+                writePeekText(t, parse(q.value).text);
+                if (r.headers.get("X-Scour-Complete") === "0") {
+                  peekCut.textContent =
+                    `ilk ${bytes(new Blob([t]).size)} — dosya ${bytes(meta.size)}`;
+                  peekCut.hidden = false;
+                }
+              })
+              .catch(() => {});
+          } else {
+            showNothing("Bu dosya türü tarayıcıda gösterilemiyor.",
+                        meta.thumb ? full : null);
+          }
+        })
+        .catch((e) => {
+          if (ctrl.signal.aborted) return;
+          /* 403 is the one refusal worth naming, because it is a decision
+             somebody made rather than a failure: `--no-preview`. */
+          showNothing(String(e).includes("403")
+            ? "Önizleme kapalı (--no-preview)."
+            : "Önizlenemedi.");
+        });
+    }, 120);
+  }
+
+  /* Space toggles, wherever the focus is in the list — and only there, so the
+     same key still scrolls the page everywhere else. */
+  body.addEventListener("keydown", (e) => {
+    if (e.key !== " " || e.ctrlKey || e.altKey || e.metaKey) return;
+    const row = e.target.closest("tr[data-path]");
+    if (!row) return;
+    e.preventDefault();
+    if (PEEK.on && row.__row && row.__row.path + "/" + row.__row.name === PEEK.path) {
+      setPeek(false);
+    } else {
+      PEEK.path = null;
+      setPeek(true);
+      drawPeek(row.__row);
+    }
+  });
+  /* Whatever takes the focus is what is previewed: one rule for the arrow
+     keys, a click, and the focus the list restores after a repaint. */
+  body.addEventListener("focusin", (e) => {
+    const row = e.target.closest && e.target.closest("tr[data-path]");
+    if (row && PEEK.on) drawPeek(row.__row);
+  });
+  document.getElementById("peek-close").addEventListener("click", () => {
+    setPeek(false);
+    const row = focusedRow();
+    if (row) row.focus();
+  });
+  peekNative.addEventListener("click", () => {
+    if (PEEK.path) launch(PEEK.path, "preview");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && PEEK.on && !peek.hidden) setPeek(false);
+  });
 
   /* The index's size, for the "x / y" meter. */
   function applyStatus(s) {

@@ -1,0 +1,19 @@
+[package]
+name        = "scour-preview"
+description = "What a browser can draw of a file, and where the desktop's own quick-look is."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **No dependencies, not even `scour-core`.** Nothing here knows what an index
+# is, what a `Kind` is, or that Scour exists: it answers "can this be shown,
+# and how much of it", which is a question about a file and a browser. That is
+# what makes it usable from the bridge, the window, or anything else that ever
+# needs to show a file — and what makes its tests need no fixtures.
+[dependencies]

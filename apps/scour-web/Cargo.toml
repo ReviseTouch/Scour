@@ -31,6 +31,10 @@ scour-proto  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
+# The one thing here that is not about search. It has no dependency of its own
+# — not even `scour-core` — because "what can be shown of this file" is a
+# question about a file and a decoder, not about an index.
+scour-preview = { workspace = true }
 anyhow       = { workspace = true }
 serde_json   = { workspace = true }
 clap         = { workspace = true }

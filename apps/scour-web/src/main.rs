@@ -43,6 +43,7 @@
 mod http;
 mod icons;
 
+use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 
@@ -87,6 +88,26 @@ struct Args {
     /// opening one. It is still a door.
     #[arg(long)]
     no_run: bool,
+    /// The command that opens the desktop's own quick-look, if the detected
+    /// one is wrong or there is none to detect.
+    ///
+    /// The file's path is appended. `--quicklook "gwenview"` on KDE, or
+    /// `--quicklook "imv"` under a compositor that has no such thing. Empty
+    /// means detect: `qlmanage -p` on macOS, `sushi` where it is installed,
+    /// and nothing anywhere else — the button is only offered when there is
+    /// something behind it.
+    #[arg(long, value_name = "CMD")]
+    quicklook: Option<String>,
+    /// Refuse `/api/preview`, so the page never receives a file's contents.
+    ///
+    /// The preview panel reads files the index holds, which is the user's own
+    /// home. That is a door widened rather than opened — the same loopback,
+    /// token, origin and method fences are in front of it, and the path must
+    /// be one the index holds — but it does turn "open this in an editor" into
+    /// one GET, and somebody who would rather it did not should be able to say
+    /// so. With this the panel shows what the index knows and nothing else.
+    #[arg(long)]
+    no_preview: bool,
 }
 
 fn main() -> Result<()> {
@@ -112,8 +133,19 @@ fn main() -> Result<()> {
     let token = token();
     let url = format!("http://127.0.0.1:{port}/?t={token}");
 
+    let _ = QUICKLOOK.set(scour_preview::quicklook(args.quicklook.as_deref()));
+
     eprintln!("scour-web: {url}");
     eprintln!("scour-web: the token is per run — restarting invalidates the link");
+    // Said, because its absence is the ordinary case on three desktops out of
+    // five and looks like a fault otherwise.
+    match QUICKLOOK.get().and_then(|q| q.as_ref()) {
+        Some(cmd) => eprintln!("scour-web: system preview: {}", cmd.join(" ")),
+        None => eprintln!(
+            "scour-web: no system preview found; the panel is the preview \
+             (--quicklook names one)"
+        ),
+    }
     if !args.no_open {
         open(&url);
     }
@@ -131,6 +163,7 @@ fn main() -> Result<()> {
         let doing = Doing {
             launch: !args.no_launch,
             run: !args.no_run,
+            preview: !args.no_preview,
         };
         // A thread a connection, and the connection closes after one exchange.
         // A browser opens a handful; there is nothing here to pool.
@@ -178,7 +211,16 @@ struct Doing {
     launch: bool,
     /// Start an executable rather than showing where it lives.
     run: bool,
+    /// `/api/preview` at all — hand the *contents* of a file to the page.
+    preview: bool,
 }
+
+/// The desktop's quick-look command, resolved once at start.
+///
+/// Once, because it is a `PATH` walk and the answer cannot change while the
+/// process runs — and because a lookup per request would be a lookup per
+/// keystroke on a list somebody is arrowing through.
+static QUICKLOOK: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
 
 fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, doing: Doing) {
     let Some(req) = http::read_request(&stream) else {
@@ -241,6 +283,12 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/icon" => api_icon(&mut stream, &req),
         "/api/wait" => api_wait(&mut stream, addr, &req),
         "/api/explain" => api_explain(&mut stream, client, &req),
+        "/api/preview" if doing.preview => api_preview(&mut stream, client, &req),
+        "/api/preview" => http::fail(
+            &mut stream,
+            "403 Forbidden",
+            "previewing is off (--no-preview)",
+        ),
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
@@ -795,6 +843,35 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     };
 
     let p = std::path::Path::new(&entry.path);
+
+    // The desktop's own quick-look, when there is one and it was asked for.
+    //
+    // A launch like any other on this route, and fenced by the same things —
+    // `POST`, the token, the origin, and a path the index holds. What makes it
+    // *not* like the others is that it is a viewer rather than a handler: the
+    // point of pressing this is to see the file without whatever program owns
+    // the extension deciding to open, and that is worth its own verb rather
+    // than a heuristic on top of "open".
+    if req.param("what") == Some("preview")
+        && let Some(cmd) = QUICKLOOK.get().and_then(|q| q.as_ref())
+    {
+        let mut c = std::process::Command::new(&cmd[0]);
+        c.args(&cmd[1..]).arg(p);
+        match c
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => http::json(
+                stream,
+                &serde_json::json!({ "opened": entry.path, "with": cmd[0] }),
+            ),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        }
+        return;
+    }
+
     let want_folder = req.param("what") == Some("folder") || entry.is_dir;
     let runnable = !want_folder && http::is_runnable(p);
     // Running it is the file's own answer to "open"; showing where it lives is
@@ -842,6 +919,194 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
         ),
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
     }
+}
+
+/// The contents of one file, if it is something a browser can draw.
+///
+/// **Fenced exactly as `/api/open` is, and for the same reason.** The path is
+/// not opened as it arrives: the *service* is asked for it first, and a path
+/// the index does not hold is refused — so this cannot be pointed at
+/// `/etc/shadow`, at a path a page assembled, or at anything outside the roots
+/// the user configured. `stat` already refuses a path no source owns, and that
+/// refusal is the whole check. `..` needs no special handling because of it: a
+/// traversal that escapes the roots lands somewhere the index has never heard
+/// of, and a traversal that does not escape them names a file that was already
+/// reachable by its ordinary path.
+///
+/// What comes back and under what headers is [`preview`]'s business, and the
+/// headers are the careful part — this is the one route that answers with
+/// bytes this program did not write.
+fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no path");
+        return;
+    };
+    let entry = match call(
+        client,
+        Request::Stat {
+            path: path.to_owned(),
+        },
+    ) {
+        Ok(Response::Stat(e)) => e,
+        Ok(_) => {
+            http::fail(stream, "502 Bad Gateway", "unexpected reply");
+            return;
+        }
+        // Not in the index, or under no configured root. Either way, not ours
+        // to read.
+        Err(e) => {
+            http::fail(stream, "404 Not Found", &e);
+            return;
+        }
+    };
+
+    let p = std::path::Path::new(&entry.path);
+    let shape = scour_preview::shape_of(p, entry.is_dir);
+
+    // The probe. A page cannot tell that `notes.bak` is readable and
+    // `model.safetensors` is not — that is decided by looking at the bytes,
+    // which happens in `scour-preview` — and it must not find out by fetching
+    // a four-gigabyte video into memory to read its content type. So it asks
+    // first, and then points an `<img>` or a `<video>` at the same URL, which
+    // streams and seeks the way the browser wants to.
+    if req.param("meta") == Some("1") {
+        let (what, kind) = shape.shown();
+        http::json(
+            stream,
+            &serde_json::json!({
+                "shape": what,
+                "type": kind,
+                "size": entry.meta.size,
+                // The picture somebody's file manager already made. It is what
+                // the panel falls back to for the formats a browser cannot
+                // open at all — a `.docx`, a `.psd`, a video in a codec it
+                // does not have — and for those it is the only thing there is.
+                "thumb": icons::has_thumbnail(&entry.path),
+                // Whether there is a system previewer to hand this to, so the
+                // page offers the button only where it leads somewhere. On
+                // KDE, under Hyprland and on Windows there is nothing to
+                // offer, and a button that quietly does nothing is worse than
+                // no button.
+                "native": QUICKLOOK.get().and_then(|q| q.as_ref()).is_some(),
+            }),
+        );
+        return;
+    }
+
+    // **The framing is here and the bytes are not**, which is the split: only
+    // this file knows it is speaking HTTP, and `scour-preview` knows nothing
+    // about a socket. The three headers below are what keep somebody else's
+    // file from becoming this page's script, and they are the reason a preview
+    // route is more careful than every other route here — every other one
+    // answers with JSON this program wrote.
+    let result = match shape {
+        scour_preview::Shape::Text => send_text(stream, p),
+        scour_preview::Shape::Whole(kind) => send_whole(stream, p, kind),
+        scour_preview::Shape::Streamed(kind) => send_stream(stream, p, kind, req.header("range")),
+        // 415 rather than 404: the file is there, and this is a statement
+        // about what can be shown of it. That lets the panel say "no preview"
+        // instead of "not found" — two different things to be told about a
+        // file you can see in the list.
+        scour_preview::Shape::Nothing => {
+            http::fail(stream, "415 Unsupported Media Type", "nothing to show");
+            return;
+        }
+    };
+    match result {
+        Ok(true) => {}
+        // Refused by size, and the number is the answer: a picture has no
+        // useful partial rendering, so past the ceiling the panel says how big
+        // it is rather than spending fifty megabytes to say the same thing.
+        Ok(false) => http::fail(stream, "413 Payload Too Large", "too big to show"),
+        // Every path that can fail before a header has been written fails
+        // here, so a status line is still the right answer.
+        Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+    }
+}
+
+/// The headers every preview carries.
+///
+/// `no-store` for the same reason as everywhere else here — the file is being
+/// watched and a cached copy is one that stopped being true. The other two are
+/// what keep somebody else's bytes from becoming this page's script:
+/// `nosniff`, so a browser does not overrule a `text/plain` it disagrees with,
+/// and `sandbox`, which does nothing to an `<img>` or a `<video>` and
+/// everything to a top-level navigation. An SVG opened straight at its URL
+/// lands in an opaque origin with scripts off, and that is what makes serving
+/// SVG as a picture safe rather than merely convenient.
+const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
+     X-Content-Type-Options: nosniff\r\n\
+     Content-Security-Policy: sandbox; default-src 'none'\r\n\
+     Connection: close\r\n";
+
+fn send_text(stream: &mut TcpStream, p: &std::path::Path) -> std::io::Result<bool> {
+    let (text, whole, len) = scour_preview::text_head(p)?;
+    // The page has to know it is looking at the beginning of something rather
+    // than the whole of it, and a header says so without touching the bytes.
+    // Appending a note to the body would put it *inside* the file being
+    // previewed, where it reads as part of the file.
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         X-Scour-Complete: {}\r\n\
+         X-Scour-Size: {len}\r\n\
+         {PREVIEW_HEADERS}\r\n",
+        text.len(),
+        u64::from(whole),
+    );
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(text.as_bytes())?;
+    stream.flush()?;
+    Ok(true)
+}
+
+fn send_whole(stream: &mut TcpStream, p: &std::path::Path, kind: &str) -> std::io::Result<bool> {
+    let Some(len) = scour_preview::whole_len(p)? else {
+        return Ok(false);
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {kind}\r\n\
+         Content-Length: {len}\r\n\
+         {PREVIEW_HEADERS}\r\n"
+    );
+    stream.write_all(head.as_bytes())?;
+    scour_preview::write_span(p, 0, len, stream)?;
+    stream.flush()?;
+    Ok(true)
+}
+
+fn send_stream(
+    stream: &mut TcpStream,
+    p: &std::path::Path,
+    kind: &str,
+    range: Option<&str>,
+) -> std::io::Result<bool> {
+    let len = scour_preview::len_of(p)?;
+    let asked = range.and_then(|r| scour_preview::parse_range(r, len));
+    let (status, from, count) = match asked {
+        Some((from, to)) => ("206 Partial Content", from, to - from + 1),
+        None => ("200 OK", 0, len),
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {kind}\r\n\
+         Content-Length: {count}\r\n\
+         Accept-Ranges: bytes\r\n"
+    );
+    if asked.is_some() {
+        head.push_str(&format!(
+            "Content-Range: bytes {from}-{}/{len}\r\n",
+            from + count - 1
+        ));
+    }
+    head.push_str(PREVIEW_HEADERS);
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    scour_preview::write_span(p, from, count, stream)?;
+    stream.flush()?;
+    Ok(true)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
