@@ -202,6 +202,9 @@ impl<'a> Segment<'a> {
             // From the path that has just been built, rather than by building
             // it a second time.
             id: EntryId::path_hash(self.source_of(row), &path),
+            // Filled by the engine, which is the layer that knows whether
+            // anybody asked for it.
+            under: None,
             is_dir: self.num(Field::IsDir, row) != 0,
             kind: Kind::from_u8(self.num(Field::Kind, row) as u8).unwrap_or(Kind::File),
             meta: Meta {

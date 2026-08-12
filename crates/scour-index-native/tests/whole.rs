@@ -2275,3 +2275,131 @@ fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
         "the file the walk stopped seeing has to go"
     );
 }
+
+/// A folder's size agrees with the report, and keeps agreeing.
+///
+/// **The two must never drift**, because the interface prints them beside each
+/// other: the column comes from prefix sums over directory numbers and the
+/// report comes from `usage.rs`'s rollup, which are two entirely different
+/// routes to one number. This holds them together across everything that can
+/// move the answer — several segments, a hard-linked file, a removal, and a
+/// compaction that renumbers the segments the cache is keyed on.
+#[test]
+fn a_folder_weighs_what_the_report_says_it_weighs() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    let file = |path: &str, ino: u64, disk: i64, links: i64| Entry {
+        id: EntryId::inode(SourceId(0), 66_310, ino),
+        path: path.into(),
+        is_dir: false,
+        meta: Meta {
+            mtime: NOW,
+            size: disk,
+            disk,
+            links,
+            ..Meta::UNKNOWN
+        },
+    };
+    let dir = |path: &str, ino: u64| Entry {
+        id: EntryId::inode(SourceId(0), 66_310, ino),
+        path: path.into(),
+        is_dir: true,
+        // A directory's own `st_size` is its entry table, and counting it
+        // would report bookkeeping as content. Made large here so that a
+        // version which counted it could not pass.
+        meta: Meta {
+            mtime: NOW,
+            size: 99_000,
+            disk: 99_000,
+            ..Meta::UNKNOWN
+        },
+    };
+
+    // Two commits, so the answer has to be summed across segments — and the
+    // sibling that sorts *between* a folder and its children, because `-` is
+    // 0x2D and `/` is 0x2F.
+    let first = vec![
+        dir("/p", 1),
+        dir("/p/a", 2),
+        dir("/p-yedek", 3),
+        file("/p/one", 10, 1_000, 1),
+        file("/p/a/two", 11, 2_000, 1),
+        file("/p-yedek/other", 12, 8_000, 1),
+    ];
+    let second = vec![
+        dir("/p/a/deep", 4),
+        file("/p/a/deep/three", 13, 4_000, 1),
+        // One file, two names: each row carries half, so a tree holding both
+        // is charged 6,000 once rather than 12,000.
+        file("/p/a/deep/link-a", 14, 6_000, 2),
+        file("/p/a/deep/link-b", 15, 6_000, 2),
+    ];
+    for batch in [first, second] {
+        index
+            .apply(&mut batch.into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let paths = ["/p".to_string(), "/p/a".into(), "/p-yedek".into()];
+    let agree = |when: &str| {
+        let fast: Vec<(u64, u64)> = index
+            .subtree_sizes(&paths)
+            .expect("sizes")
+            .into_iter()
+            .map(|s| s.expect("the native index always has an answer"))
+            .collect();
+        for (path, (disk, files)) in paths.iter().zip(&fast) {
+            let report = index
+                .usage(&scour_core::UsageRequest {
+                    path: path.clone(),
+                    top: 0,
+                })
+                .expect("usage");
+            assert_eq!(
+                (*disk, *files),
+                (report.root.disk, report.root.files),
+                "{path} disagrees with the report {when}"
+            );
+        }
+        fast
+    };
+
+    let fresh = agree("when fresh");
+    // The numbers themselves, so that "they agree" cannot mean "both wrong".
+    // /p holds 1,000 + 2,000 + 4,000 + 3,000 + 3,000 — the last two being the
+    // two halves of the hard-linked six.
+    assert_eq!(fresh[0], (13_000, 5), "/p");
+    assert_eq!(fresh[1], (12_000, 4), "/p/a");
+    assert_eq!(fresh[2], (8_000, 1), "/p-yedek");
+
+    // A removal moves the alive bits without changing a byte of the segment,
+    // which is exactly the case the cache stamp exists for. Without the stamp
+    // this still answers 13,000.
+    //
+    // **The commit is not incidental.** A removal takes effect for *searches*
+    // at once — `hidden_prefixes` — but the rows stay alive until they are
+    // written away, so until then a subtree still weighs what it weighed. The
+    // report does the same, which is what matters here: the two agree at every
+    // step, and the window they are both stale in is one commit interval.
+    index
+        .apply(&mut std::iter::once(Change::RemoveSubtree {
+            path: "/p/one".into(),
+        }))
+        .expect("remove");
+    assert_eq!(
+        index.subtree_sizes(&paths).expect("sizes")[0],
+        Some((13_000, 5)),
+        "a hidden-but-not-yet-written removal is not a size change"
+    );
+    index.commit().expect("commit");
+    let after = agree("after a removal");
+    assert_eq!(after[0], (12_000, 4), "the removed file is still counted");
+
+    // And compaction, which folds segments away and hands out new numbers —
+    // the numbers the cache is keyed on.
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    let folded = agree("after a rebuild");
+    assert_eq!(folded[0], (12_000, 4));
+}

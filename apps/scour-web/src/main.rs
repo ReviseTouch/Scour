@@ -429,6 +429,13 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         "user": owner_name(Owner::User, h.meta.uid),
                         "group": owner_name(Owner::Group, h.meta.gid),
                         "items": h.meta.items,
+                        // What the folder holds, when the index could say. A
+                        // folder with no number is a folder whose size is not
+                        // known — which is true — where a zero would read as
+                        // an empty one.
+                        "under": h.under.map(|u| serde_json::json!({
+                            "disk": u.disk, "files": u.files
+                        })),
                         // Whether a picture of this file already exists, so
                         // the page asks for the ones that do rather than for
                         // two hundred that mostly do not. One `stat` a row.

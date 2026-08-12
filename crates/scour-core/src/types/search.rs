@@ -101,6 +101,29 @@ pub struct Hit {
     pub is_dir: bool,
     pub kind: Kind,
     pub meta: Meta,
+    /// For a directory: what everything under it comes to.
+    ///
+    /// **Not folded into `meta.size`, deliberately.** A directory's `size` is
+    /// its own entry table, it is what the `Size` column holds, and it is what
+    /// `sort:size` orders by — so overwriting it here would put a number on
+    /// screen that the ordering beside it disagrees with, which is the sort of
+    /// wrongness that looks like a sorting bug for weeks.
+    ///
+    /// `None` for files, and for an index whose layout cannot answer it
+    /// cheaply. See [`Index::subtree_sizes`].
+    ///
+    /// [`Index::subtree_sizes`]: crate::Index::subtree_sizes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub under: Option<Subtree>,
+}
+
+/// What a folder holds, totalled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subtree {
+    /// Space on disk, hard links counted once — the same arithmetic the
+    /// disk-usage report does, because the two are printed beside each other.
+    pub disk: u64,
+    pub files: u64,
 }
 
 impl Hit {
@@ -120,6 +143,9 @@ impl From<&Entry> for Hit {
             is_dir: e.is_dir,
             kind: e.kind(),
             meta: e.meta,
+            // An entry is one row. What is under it is a question about the
+            // index, and this conversion has no index.
+            under: None,
         }
     }
 }
@@ -375,6 +401,7 @@ mod tests {
             is_dir: false,
             kind: Kind::Doc,
             meta: Meta::UNKNOWN,
+            under: None,
         };
         assert_eq!(h.name(), "c.txt");
     }

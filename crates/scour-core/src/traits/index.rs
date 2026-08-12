@@ -109,6 +109,24 @@ pub trait Index: Send + Sync + Debug {
 
     fn facets(&self, req: &FacetRequest) -> Result<FacetResponse>;
 
+    /// What each of these folders weighs: bytes on disk, and how many files.
+    ///
+    /// **Batched, because the caller is a page and a page has many folders on
+    /// it.** An implementation that has to build something to answer builds it
+    /// once for the whole list, which is the difference between a column and a
+    /// wait.
+    ///
+    /// Hard links are counted once — `disk / links` a row — because this is
+    /// printed beside [`Index::usage`] and the two must not disagree.
+    ///
+    /// Defaulted to *nothing known* rather than to zero: zero is a claim, and
+    /// an index whose layout cannot answer this cheaply should say it has no
+    /// answer instead of one that reads as an empty folder. Callers see
+    /// `None`, and a frontend shows the same thing it shows for a file.
+    fn subtree_sizes(&self, paths: &[String]) -> Result<Vec<Option<(u64, u64)>>> {
+        Ok(vec![None; paths.len()])
+    }
+
     fn stats(&self) -> Result<IndexStats>;
 
     fn maintain(&self, level: Maintenance) -> Result<MaintReport>;

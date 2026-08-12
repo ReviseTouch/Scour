@@ -27,8 +27,8 @@ pub use types::{
     EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Group, Hit,
     IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Page, PrefixSet,
     Result, Role, ScanOptions, ScanReport, SearchRequest, SearchResponse, SortKey, SourceId,
-    SourceInfo, SourceKind, Span, Status, TimeField, TreeNode, UsageRequest, UsageResponse, ext_of,
-    ext_str, kind_of, mode_string, path_digest, under,
+    SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode, UsageRequest,
+    UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest, under,
 };
 
 /// Say something, and carry on if nobody is listening.

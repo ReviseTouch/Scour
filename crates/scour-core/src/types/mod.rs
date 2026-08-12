@@ -17,7 +17,7 @@ pub use error::{Error, Result};
 pub use prefix::{PrefixSet, under};
 pub use search::{
     AGE_BANDS, ApplyReport, DirUsage, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Hit,
-    IndexStats, MaintReport, Maintenance, Page, SearchRequest, SearchResponse, SortKey,
+    IndexStats, MaintReport, Maintenance, Page, SearchRequest, SearchResponse, SortKey, Subtree,
     UsageRequest, UsageResponse,
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};

@@ -3077,8 +3077,31 @@
         const v = HOME && f.path.startsWith(HOME + "/") ? "~" + f.path.slice(HOME.length) : f.path;
         if (div.textContent !== v) div.textContent = v;
       } },
+    /* **A folder's number is what is under it, and it is marked.**
+     *
+     * The column was blank for folders, which is what every file manager does
+     * and what makes "which of these is eating the disk" a question you have
+     * to leave the list to answer. It is not blank now — but the number is the
+     * size of what *this index holds* under that folder, and the scan rules
+     * leave things out: `target`, `node_modules`, whatever else is configured.
+     *
+     * So it carries a `~`. Not decoration and not an apology: without it the
+     * number claims to be the folder's size and is not, and a folder that
+     * hides nothing gets the mark too because the index cannot tell which ones
+     * those are without a walk it is not going to do. Over-marking is the
+     * direction to be wrong in. What is excluded is in the settings, which is
+     * what the title says. */
     { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
-      write: cell("n", (f) => (f.is_dir ? "" : bytes(f.size))) },
+      write: (td, f) => {
+        cell("n", (x) => (x.is_dir
+          ? (x.under ? "~" + bytes(x.under.disk) : "")
+          : bytes(x.size)))(td, f);
+        const t = f.is_dir && f.under
+          ? `indekslenen boyut · ${fmt(f.under.files)} dosya`
+            + `\ndışlananlar (target, node_modules…) sayılmaz — ayarlarda`
+          : "";
+        if (td.title !== t) td.title = t;
+      } },
     { id: "mtime", label: "Değişme",  key: "mtime", w: 120,
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);

@@ -20,10 +20,16 @@ pub fn human(r: &Response) -> String {
             for h in &s.hits {
                 out.push_str(&format!(
                     "{}  {}  {}\n",
-                    if h.is_dir {
-                        "dir ".to_owned()
-                    } else {
-                        format!("{:>9}", format_size(h.meta.size as u64, BINARY))
+                    // The folder's total, marked. A model asked "what is
+                    // big here" can answer from the listing rather than
+                    // calling disk usage per row — and the `~` is not
+                    // decoration: it is the size of what the index holds, and
+                    // the scan rules leave build trees out.
+                    match (h.is_dir, h.under) {
+                        (true, Some(u)) =>
+                            format!("{:>9}", format!("~{}", format_size(u.disk, BINARY))),
+                        (true, None) => "dir ".to_owned(),
+                        (false, _) => format!("{:>9}", format_size(h.meta.size as u64, BINARY)),
                     },
                     day(h.meta.mtime),
                     h.path
@@ -427,6 +433,7 @@ mod tests {
                 mtime: 1_769_817_600,
                 ..scour_core::Meta::UNKNOWN
             },
+            under: None,
         };
         let out = human(&Response::Search(SearchResponse {
             hits: vec![hit],

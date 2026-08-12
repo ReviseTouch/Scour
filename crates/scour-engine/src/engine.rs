@@ -468,7 +468,42 @@ impl Engine {
         // warning, because it teaches the reader that its absence means
         // something.
         res.misread = misread(query);
+        self.weigh_folders(&mut res);
         Ok(res)
+    }
+
+    /// Fill in what each folder on this page holds.
+    ///
+    /// **Here rather than in the index's own search**, and that is the point:
+    /// the index answers about rows and this is a question about subtrees, so
+    /// keeping it out of the row loop means the search path is untouched and
+    /// the cost is one batched call somebody can see.
+    ///
+    /// Nothing at all when the page has no folders on it, which is most pages.
+    /// A failure is left as `None` — a folder with no number reads as a folder
+    /// whose size is not known, which is true, where a zero would read as an
+    /// empty one.
+    fn weigh_folders(&self, res: &mut SearchResponse) {
+        let where_dirs: Vec<usize> = res
+            .hits
+            .iter()
+            .enumerate()
+            .filter(|(_, h)| h.is_dir)
+            .map(|(i, _)| i)
+            .collect();
+        if where_dirs.is_empty() {
+            return;
+        }
+        let paths: Vec<String> = where_dirs
+            .iter()
+            .map(|&i| res.hits[i].path.clone())
+            .collect();
+        let Ok(sizes) = self.shared.index.subtree_sizes(&paths) else {
+            return;
+        };
+        for (&i, size) in where_dirs.iter().zip(sizes) {
+            res.hits[i].under = size.map(|(disk, files)| scour_core::Subtree { disk, files });
+        }
     }
 
     fn page_of(
@@ -1550,6 +1585,20 @@ fn run(
             // machine this is the difference between a service that costs
             // hundreds of megabytes to leave running and one that does not.
             let _ = shared.index.maintain(Maintenance::Idle);
+            // And while nobody is waiting, work out what the folders weigh.
+            //
+            // **90 ms, and the only question is who pays it.** The prefix sums
+            // behind the folder-size column are built on first use, and first
+            // use is the window opening — so without this the first list
+            // anybody sees costs an extra tenth of a second, once per service
+            // start, at the moment somebody is watching. Here it is spent on a
+            // machine that has been quiet for `idle_after` and has just been
+            // asked to give its write buffer back.
+            //
+            // An empty path list builds the cache and asks nothing of it,
+            // which is exactly the shape of a warm-up. After this a commit
+            // rebuilds only the segment it changed.
+            let _ = shared.index.subtree_sizes(&[]);
             idle_done = true;
         }
         if shared.stop.load(Ordering::Relaxed) && jobs.is_empty() && changes.is_empty() {

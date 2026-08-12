@@ -82,6 +82,17 @@ pub struct Live {
     /// drifts by the number of deleted folders is a status line being slightly
     /// stale; recomputing it was a service being unusable.
     dirs: usize,
+    /// How many rows this segment has lost since it was opened.
+    ///
+    /// **A stamp, not a statistic.** Anything derived from a segment's *live*
+    /// rows is valid only while the alive bits are the ones it was built from,
+    /// and this says so in `O(1)` where counting the bits again is a pass over
+    /// a quarter of a megabyte. A segment's bytes never change; only which of
+    /// its rows still count does, and this is exactly that.
+    ///
+    /// It starts at zero every time the segment is opened, which is right: a
+    /// derived table does not survive a restart either.
+    deaths: u64,
 }
 
 impl Live {
@@ -180,6 +191,7 @@ impl Live {
             alive,
             rows,
             dirs,
+            deaths: 0,
         })
     }
 
@@ -345,7 +357,16 @@ impl Live {
         }
         let was = self.is_alive(row);
         self.alive[row / 8] &= !(1 << (row % 8));
+        // Every route to a dead row comes through here — `kill_paths`, the
+        // sweep, a commit that replaces one — so one counter covers all of
+        // them, and anything that adds a fourth route gets it for free.
+        self.deaths += u64::from(was);
         was
+    }
+
+    /// How many rows have been retired since this segment was opened.
+    pub fn deaths(&self) -> u64 {
+        self.deaths
     }
 
     /// The row holding this path, if the segment has it and it is live.

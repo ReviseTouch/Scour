@@ -78,10 +78,14 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!(
                     "{:>10}  {:>10}  {}",
                     kind_tag(h.kind),
-                    if h.is_dir {
-                        "—".to_owned()
-                    } else {
-                        format_size(h.meta.size as u64, BINARY)
+                    // A folder's number is what is under it, and the `~` says
+                    // it is the size of what the index holds — whatever the
+                    // scan rules exclude is not in it. A dash where the index
+                    // could not say, which is not the same as zero.
+                    match (h.is_dir, h.under) {
+                        (true, Some(u)) => format!("~{}", format_size(u.disk, BINARY)),
+                        (true, None) => "—".to_owned(),
+                        (false, _) => format_size(h.meta.size as u64, BINARY),
                     },
                     h.path
                 );
