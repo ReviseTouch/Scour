@@ -944,6 +944,172 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     );
 }
 
+/// Two paths that hash to the same key are still two files.
+///
+/// **Not a hypothetical.** The identity table is keyed on half a digest — 32
+/// bits — and the birthday bound on 2.2 million entries puts the expected
+/// number of colliding pairs at about **576**. There are hundreds of them in
+/// the index on this machine right now, and the only thing that makes them
+/// harmless is that a probe answers with *candidates* which `Segment::is_at`
+/// then confirms against the directory and the spelled name the row carries.
+///
+/// Deleting any of those three confirmations — name, directory, source — leaves
+/// the whole suite passing, because a fixture never produces a collision by
+/// accident. So this produces one on purpose: a short search over generated
+/// paths until two of them agree on the key, which takes a few tens of
+/// thousands of tries.
+///
+/// What it would look like if the confirmation went: a search finds a file and
+/// hands back a different file's row. Not a crash, not a missing result — a
+/// wrong one.
+#[test]
+fn two_paths_that_collide_on_the_key_are_still_two_files() {
+    let key = |p: &str| (scour_core::path_digest(SourceId(0), p) >> 32) as u32;
+
+    let mut seen: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut pair: Option<(String, String)> = None;
+    for i in 0..4_000_000u64 {
+        let path = format!("/w/carpisma/dosya-{i}.txt");
+        if let Some(other) = seen.insert(key(&path), path.clone()) {
+            pair = Some((other, path));
+            break;
+        }
+    }
+    let (a, b) = pair.expect("32 bitlik anahtarda carpisma bulunamadi");
+    assert_ne!(a, b);
+    assert_eq!(key(&a), key(&b), "the whole point of the pair");
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    // Different sizes, so a row that answers for the wrong path says so.
+    for (i, p) in [&a, &b].iter().enumerate() {
+        let mut e = entry(p, NOW + i as i64, i as u64 + 1);
+        e.meta.size = 100 + i as i64;
+        index
+            .apply(&mut std::iter::once(Change::Upsert(e)))
+            .expect("apply");
+    }
+    index.commit().expect("commit");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        2,
+        "a collision must not merge two files into one row"
+    );
+
+    // **Saving over one of them must not take the other.** This is where the
+    // confirmation earns its place: replacing a row means finding the old one
+    // by identity, the identity table answers with *both* of these, and only
+    // the name and directory comparison says which. Without it the wrong row
+    // dies and a file disappears from the index while it is still on the disk.
+    let mut again = entry(&a, NOW + 50, 1);
+    again.meta.size = 999;
+    index
+        .apply(&mut std::iter::once(Change::Upsert(again)))
+        .expect("apply");
+    index.commit().expect("commit");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        2,
+        "saving over one of a colliding pair took the other"
+    );
+
+    // And each name finds its own row, with its own size.
+    for (i, p) in [&a, &b].iter().enumerate() {
+        let name = p.rsplit('/').next().expect("name");
+        let hits = index
+            .search(&SearchRequest {
+                query: parse_at(name, NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 10,
+                    count_cap: 100,
+                },
+            })
+            .expect("search")
+            .hits;
+        assert_eq!(hits.len(), 1, "{name} should find exactly itself");
+        assert_eq!(&hits[0].path, *p);
+        assert_eq!(
+            hits[0].meta.size,
+            if i == 0 { 999 } else { 101 },
+            "{name} came back with the other file's row"
+        );
+    }
+}
+
+/// Two colliding paths that share a name are told apart by their directory.
+///
+/// The narrower half of the same guard. When a collision happens between two
+/// paths with different names, comparing the name settles it — and that is the
+/// common case, so a test that only covers it leaves the directory comparison
+/// untested, which it was. This forces the case the name cannot settle: same
+/// basename, different folder, same 32-bit key.
+///
+/// A search tool that answers `rapor.pdf` with the wrong `rapor.pdf` is worse
+/// than one that answers nothing.
+#[test]
+fn colliding_paths_with_one_name_are_told_apart_by_their_folder() {
+    let key = |p: &str| (scour_core::path_digest(SourceId(0), p) >> 32) as u32;
+    let mut seen: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+    let mut pair: Option<(String, String)> = None;
+    for i in 0..8_000_000u64 {
+        let path = format!("/w/klasor-{i}/ayni-ad.txt");
+        if let Some(other) = seen.insert(key(&path), path.clone()) {
+            pair = Some((other, path));
+            break;
+        }
+    }
+    let (a, b) = pair.expect("ayni adli carpisma bulunamadi");
+    assert_eq!(
+        a.rsplit('/').next(),
+        b.rsplit('/').next(),
+        "the pair has to share a name or this tests nothing"
+    );
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    for (i, p) in [&a, &b].iter().enumerate() {
+        let mut e = entry(p, NOW + i as i64, i as u64 + 1);
+        e.meta.size = 100 + i as i64;
+        index
+            .apply(&mut std::iter::once(Change::Upsert(e)))
+            .expect("apply");
+    }
+    index.commit().expect("commit");
+    assert_eq!(index.stats().expect("stats").entries, 2);
+
+    let mut again = entry(&a, NOW + 50, 1);
+    again.meta.size = 999;
+    index
+        .apply(&mut std::iter::once(Change::Upsert(again)))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        2,
+        "saving over one folder's copy took the other folder's"
+    );
+    let hits = index
+        .search(&SearchRequest {
+            query: parse_at("ayni-ad", NOW),
+            sort: SortKey::Size,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 10,
+                count_cap: 100,
+            },
+        })
+        .expect("search")
+        .hits;
+    assert_eq!(hits.len(), 2, "both copies must still be findable");
+    assert_eq!(hits[0].meta.size, 101, "the untouched one kept its size");
+    assert_eq!(hits[1].meta.size, 999, "and the saved one took the new one");
+}
+
 /// A pass that is never swept still lets housekeeping run afterwards.
 ///
 /// **The leak behind the 241 segments, pinned at its source.** A walk that
