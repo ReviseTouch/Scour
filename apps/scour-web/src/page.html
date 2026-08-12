@@ -31,8 +31,7 @@
     --ink:         #e7eaee;
     --ink-2:       #9aa5b1;
     --ink-3:       #63707e;
-    --mark:        #ffd24a;
-    --mark-ink:    #1a1200;
+    --mark:        rgba(255, 210, 74, .17);
     --focus:       #4a9eff;
 
     --t0: #ffb020;  /* dakikalar */
@@ -70,8 +69,7 @@
       --ink:       #1c1e21;
       --ink-2:     #5c636c;
       --ink-3:     #8a9198;
-      --mark:      #ffdf6b;
-      --mark-ink:  #2a1f00;
+      --mark:      rgba(226, 160, 0, .18);
       --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
       --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
       --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
@@ -87,8 +85,7 @@
     --ink:       #1c1e21;
     --ink-2:     #5c636c;
     --ink-3:     #8a9198;
-    --mark:      #ffdf6b;
-    --mark-ink:  #2a1f00;
+    --mark:      rgba(226, 160, 0, .18);
     --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
     --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
     --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
@@ -103,8 +100,7 @@
     --ink:       #e7eaee;
     --ink-2:     #9aa5b1;
     --ink-3:     #63707e;
-    --mark:      #ffd24a;
-    --mark-ink:  #1a1200;
+    --mark:      rgba(255, 210, 74, .17);
     --t0: #ffb020; --t1: #ff7a45; --t2: #c2688f;
     --t3: #7a6fc4; --t4: #4a7fb5; --t5: #3b4a58;
     --q-key: #7fa9e0; --q-val: #6fc2a0; --q-glob: #b48ce0;
@@ -589,7 +585,14 @@
   td.age i { display: block; width: 3px; height: var(--row); }
 
   .name { font: 500 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
-  .name mark { background: var(--mark); color: var(--mark-ink); padding: 1px 0; border-radius: 1px; }
+  /* **A wash, not a highlighter.** This used to be solid yellow with near-black
+     text, which on a list where every third row matches turned the column into
+     a page of stickers — and inverting the ink meant the matched letters were
+     the only ones not in the row's own colour, so the eye read the *marks* as
+     the content. Translucent, and the letters keep their colour: the run is
+     visible without shouting, and it stacks correctly over a selected row
+     because it is an overlay rather than a replacement. */
+  .name mark { background: var(--mark); color: inherit; padding: 1px 0; border-radius: 2px; }
   .path {
     font: 400 11.5px/1 var(--mono);
     color: var(--ink-3);
@@ -756,8 +759,8 @@
     tab-size: 4;
   }
   .peek-body pre mark {
-    background: var(--mark); color: var(--mark-ink);
-    padding: 1px 0; border-radius: 1px;
+    background: var(--mark); color: inherit;
+    padding: 1px 0; border-radius: 2px;
   }
   .peek-body img, .peek-body video {
     max-width: 100%; max-height: 100%;
@@ -1060,7 +1063,11 @@
         <span class="prompt" aria-hidden="true">⌕</span>
         <div class="qfield">
           <div class="qshadow" id="shadow"></div>
-          <input id="q" value="rapor" spellcheck="false" autocomplete="off"
+          <!-- **No value.** This said `rapor` for as long as the file has
+               existed: the word the design mockup was demonstrated with, left
+               in when the mockup became the product. A fresh browser profile
+               therefore opened searching for somebody else's example. -->
+          <input id="q" spellcheck="false" autocomplete="off"
                  aria-label="Sorgu" role="combobox" aria-expanded="false"
                  aria-autocomplete="list" aria-controls="hints"
                  placeholder="dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:&gt;10mb">
@@ -4146,19 +4153,23 @@
   });
   applySide();
 
-  /* The query survives the window.
+  /* **The window opens on your disk, not on your last keystroke.**
    *
-   * A search box opened by a hotkey should come back with what was last typed,
-   * selected, so the next keystroke replaces it — which is what every launcher
-   * does and what makes "press the key, type" work without thinking. It also
-   * covers the case the window is closed and opened again to bring it forward,
-   * which is what happens on a desktop that will not let anything raise a
-   * window it does not own. */
+   * This used to restore the previous query and run it, and the argument for
+   * it was a good one: a launcher brought up by a hotkey should come back with
+   * what was last typed, selected, so the next keystroke replaces it. What it
+   * did in practice was open the window searching for a leftover letter —
+   * whatever half-typed thing the last session ended on, which for a search
+   * box is usually one or two characters that meant nothing on their own.
+   *
+   * The empty query is a better opening: it is the whole index, newest first,
+   * and it is the cheapest query there is — the count comes straight from
+   * `stats().entries` rather than from a walk. So the box is empty, the list
+   * is your disk, and the first key you press starts the search.
+   *
+   * The text is still saved. Nothing reads it yet; it is one line to bring
+   * back the day somebody wants the last query offered rather than run. */
   const Q_KEY = "scour.q.v1";
-  try {
-    const saved = localStorage.getItem(Q_KEY);
-    if (saved !== null) q.value = saved;
-  } catch {}
   q.focus();
   q.select();
 
