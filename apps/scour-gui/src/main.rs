@@ -592,7 +592,15 @@ fn apply(
             if generation != state.borrow().generation {
                 return;
             }
-            if let Response::Count { total, capped } = *reply {
+            // `misread` is not used here: this window colours the query line
+            // from `explain` while it is being typed, which reaches the reader
+            // before the count does.
+            if let Response::Count {
+                total,
+                capped,
+                misread: _,
+            } = *reply
+            {
                 w.set_meter(
                     format!(
                         "{total}{} {}",

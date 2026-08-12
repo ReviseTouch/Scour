@@ -105,6 +105,26 @@ impl Span {
         let end = start + self.len as usize;
         query.get(start..end).unwrap_or("")
     }
+
+    /// The whole term this span sits in, given the query it came from.
+    ///
+    /// For colouring, a span is exactly the right extent. For *telling someone
+    /// what went wrong*, it is not: [`Role::BadValue`] covers the value alone,
+    /// so `size:>abc` reports `>abc` — and a value with no field in front of it
+    /// does not say who refused it, which is the only thing the reader needs.
+    ///
+    /// A term is a run of non-space, which is what the tokeniser means by one.
+    /// The two warning roles cannot occur inside a quoted phrase — a phrase is
+    /// literal all the way through — so there is no quoted case to widen past.
+    pub fn term_of<'a>(&self, query: &'a str) -> &'a str {
+        let start = (self.start as usize).min(query.len());
+        let end = (start + self.len as usize).min(query.len());
+        // Only ASCII space is cut on, so both edges stay on a char boundary
+        // wherever the term itself is.
+        let from = query[..start].rfind(' ').map_or(0, |i| i + 1);
+        let to = query[end..].find(' ').map_or(query.len(), |i| end + i);
+        query.get(from..to).unwrap_or("")
+    }
 }
 
 /// Something the user could type next.
@@ -133,4 +153,45 @@ pub enum CompletionKind {
     Value,
     /// An operator or piece of punctuation: `!`, `|`, `"`.
     Operator,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(query: &str, needle: &str) -> Span {
+        let at = query.find(needle).expect("needle not in query");
+        Span::new(at, needle.len(), Role::BadValue)
+    }
+
+    #[test]
+    fn a_value_is_reported_with_the_field_that_refused_it() {
+        let q = "ext:rs size:>abc dm:7d";
+        assert_eq!(span(q, ">abc").term_of(q), "size:>abc");
+    }
+
+    #[test]
+    fn a_term_at_either_end_keeps_its_edge() {
+        assert_eq!(span("size:>abc", ">abc").term_of("size:>abc"), "size:>abc");
+        assert_eq!(span(">abc ext:rs", ">abc").term_of(">abc ext:rs"), ">abc");
+    }
+
+    /// Cutting on spaces must not cut inside a character.
+    ///
+    /// Byte offsets and multi-byte text is the pairing that produces a panic
+    /// rather than a wrong answer, and every path in this file is byte offsets.
+    #[test]
+    fn a_term_beside_letters_that_are_not_one_byte_is_still_a_term() {
+        let q = "değiştirme kind:zurna öğe";
+        assert_eq!(span(q, "zurna").term_of(q), "kind:zurna");
+        let q = "kind:çğüşöı";
+        assert_eq!(span(q, "çğüşöı").term_of(q), "kind:çğüşöı");
+    }
+
+    #[test]
+    fn a_span_the_query_does_not_reach_answers_rather_than_panics() {
+        let s = Span::new(40, 9, Role::BadValue);
+        assert_eq!(s.of("short"), "");
+        assert_eq!(s.term_of("short"), "short");
+    }
 }

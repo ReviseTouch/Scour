@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use humansize::{BINARY, format_size};
-use scour_core::{Catalog, FacetBy, Kind, TreeNode};
+use scour_core::{Catalog, FacetBy, Kind, Role, TreeNode};
 use scour_i18n::Catalogue;
 use scour_proto::Response;
 
@@ -32,6 +32,43 @@ fn label(msgid: &str) -> String {
     // characters, so padding alone leaves the value touching the label — the
     // kind of thing that only shows up in the language nobody tested in.
     format!("{:<12} ", t(msgid))
+}
+
+/// Say which terms the engine could not read the way they were written.
+///
+/// **The one thing a search box gets for free and a command line does not.**
+/// The parser never fails, so `dm:yarin` becomes a search for the text
+/// "dm:yarin" and answers `0 of 0` — the same answer a query that was
+/// understood and matched nothing gives, and the reader has no way to tell
+/// them apart. A window colours the term while it is being typed; here there
+/// is one line of output and then the shell prompt.
+///
+/// To stderr, beside the timing line, so a pipeline still receives only paths.
+///
+/// **[`Role::BadValue`] only, though the wire carries both warning roles.**
+/// `UnknownField` means "letters, a colon, and not a field", which is a
+/// perfectly ordinary thing to search for: `http://example.com`, `12:30`,
+/// `C:`. Warning about those would put a line of noise under a query that did
+/// exactly what it looked like. `BadValue` is the other case — a field that
+/// *is* real, refusing the value written for it — and that is nearly always a
+/// mistake.
+fn complain(misread: &[scour_core::Span], query: Option<&str>) {
+    let Some(query) = query else { return };
+    let mut said: Vec<&str> = Vec::new();
+    for span in misread.iter().filter(|s| s.role == Role::BadValue) {
+        let term = span.term_of(query);
+        // One line per term, not per span: `ext:a size:>x;>y` can refuse twice
+        // inside one term and saying so twice adds nothing.
+        if term.is_empty() || said.contains(&term) {
+            continue;
+        }
+        said.push(term);
+        eprintln!(
+            "{}: `{term}` {}",
+            t("warning"),
+            t("was searched for as text")
+        );
+    }
 }
 
 pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
@@ -78,9 +115,15 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     String::new()
                 }
             );
+            complain(&r.misread, echo);
         }
-        Response::Count { total, capped } => {
+        Response::Count {
+            total,
+            capped,
+            misread,
+        } => {
             println!("{total}{}", if *capped { "+" } else { "" });
+            complain(misread, echo);
         }
         Response::Facets(f) => {
             // A kind facet is keyed by the token so that a rail can build
@@ -103,6 +146,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             if f.capped {
                 println!("{}", t("counts are a lower bound: the scan hit its cap"));
             }
+            complain(&f.misread, echo);
         }
         Response::Usage(u) => {
             println!(
@@ -532,6 +576,8 @@ mod tests {
             "accepted",
             "full scan",
             "paths built",
+            "warning",
+            "was searched for as text",
             "a rebuild would speed searches up",
             "The index is empty. Run `scour rescan`.",
             "needs document contents, which this index may not have",

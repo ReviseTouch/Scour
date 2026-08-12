@@ -515,7 +515,16 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             .unwrap_or(u32::MAX),
     };
     match call(client, request) {
-        Ok(Response::Count { total, capped }) => http::json(
+        // `misread` is dropped here on purpose. This page asks `explain` on
+        // every keystroke and colours the offending run inside the query line,
+        // which says it earlier and in a better place than a note beside the
+        // count. The surfaces that keep the warning are the ones with no
+        // search box to colour.
+        Ok(Response::Count {
+            total,
+            capped,
+            misread: _,
+        }) => http::json(
             stream,
             &serde_json::json!({ "total": total, "capped": capped }),
         ),

@@ -196,6 +196,12 @@ pub enum Response {
         total: u64,
         /// The count stopped at the cap, so this is a floor.
         capped: bool,
+        /// Terms the parser could not read as written. See
+        /// [`SearchResponse::misread`] — a count is the answer most likely to
+        /// be believed without a second look, so it is the one that can least
+        /// afford to drop the warning on its way out.
+        #[serde(default)]
+        misread: Vec<scour_core::Span>,
     },
     Facets(FacetResponse),
     Tree {
@@ -430,6 +436,7 @@ mod tests {
             Response::Count {
                 total: 5,
                 capped: true,
+                misread: vec![scour_core::Span::new(0, 3, scour_core::Role::BadValue)],
             },
             Response::Facets(FacetResponse::default()),
             Response::Tree {

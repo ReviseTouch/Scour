@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use scour_core::{
-    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, Maintenance, Page, ScanOptions,
-    ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
+    Caps, Change, ChangeSink, Entry, EntryId, EntrySink, Error, FacetBy, Maintenance, Page,
+    ScanOptions, ScanReport, SortKey, Source, SourceId, SourceInfo, SourceKind, WatchHandle,
 };
 use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
@@ -958,4 +958,49 @@ fn a_rescan_that_cannot_say_where_walks_everything() {
         f.engine.status().entries,
         f.source.entries.read().len() as u64
     );
+}
+
+/// A query the parser could not read comes back saying so.
+///
+/// **The failure this guards looks exactly like success.** The parser never
+/// fails on purpose — a half-typed query has to stay usable — so `size:>abc`
+/// is not a size, the whole term becomes a search for that text, and the
+/// answer is `0 of 0`. That is also what a query which *was* understood and
+/// matched nothing says, and nothing anywhere told the two apart. A window
+/// colours the term while it is being typed; a command line and a model get
+/// one answer and do not know to ask a second question.
+#[test]
+fn a_term_the_parser_could_not_read_is_reported_with_the_answer() {
+    let f = fixture(200);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+
+    let bad = f
+        .engine
+        .search("size:>abc", SortKey::Modified, true, Page::new(0, 5))
+        .expect("search");
+    let terms: Vec<&str> = bad.misread.iter().map(|s| s.term_of("size:>abc")).collect();
+    assert_eq!(terms, ["size:>abc"], "name the field that refused it");
+
+    // The other half, and the half that makes the warning worth anything: one
+    // that is always there is not a warning.
+    let good = f
+        .engine
+        .search("ext:rs", SortKey::Modified, true, Page::new(0, 5))
+        .expect("search");
+    assert!(good.misread.is_empty(), "{:?}", good.misread);
+
+    // Every shape of answer, because each is an arm somebody can forget: a
+    // count is a search for no rows, and a facet is a grouping of the same
+    // wrong set one level up.
+    let counted = f
+        .engine
+        .search("kind:zurna", SortKey::Modified, true, Page::new(0, 0))
+        .expect("count");
+    assert!(!counted.misread.is_empty(), "a count dropped the warning");
+    let grouped = f
+        .engine
+        .facets("kind:zurna", vec![FacetBy::Kind])
+        .expect("facets");
+    assert!(!grouped.misread.is_empty(), "a facet dropped the warning");
 }

@@ -191,10 +191,16 @@ fn main() -> Result<()> {
     })?;
 
     let request = build(&args)?;
-    // `explain` prints the query back with its own colouring, so the text has
-    // to survive the call. Nothing else needs the request afterwards.
+    // The query text has to survive the call, for two things. `explain` prints
+    // it back with its own colouring — and **any** answer may carry a warning
+    // about a term the parser could not read, which arrives as offsets into
+    // this string. A warning about `>abc` with no `size:` in front of it does
+    // not say who refused it.
     let echo = match &request {
-        scour_proto::Request::Explain { query, .. } => Some(query.clone()),
+        scour_proto::Request::Explain { query, .. }
+        | scour_proto::Request::Search { query, .. }
+        | scour_proto::Request::Count { query, .. }
+        | scour_proto::Request::Facets { query, .. } => Some(query.clone()),
         _ => None,
     };
     let reply = client.call(request)?;

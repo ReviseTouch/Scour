@@ -35,6 +35,7 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
             Response::Count {
                 total: r.total,
                 capped: r.capped,
+                misread: r.misread,
             }
         }
         Request::Facets { query, by } => Response::Facets(engine.facets(&query, by)?),

@@ -207,6 +207,24 @@ const PREPARE: u32 = 20_000;
 /// twentieth of a core spent on speculation.
 const PREPARE_EVERY: Duration = Duration::from_secs(2);
 
+/// The parts of a query the parser could not read as written.
+///
+/// The service does this rather than the caller, and that is the whole point:
+/// it is the one that read the query, so it is the one that can say how. A
+/// client parsing the text a second time to find out would be a second opinion
+/// about the same string, and the day the two disagree is the day the warning
+/// is worse than nothing.
+///
+/// Measured at 0.5 µs for a query with five terms and 0.17 µs for two — cheaper
+/// than the parse that precedes it, against 160 µs for the fastest search there
+/// is. `scour-query/examples/spancost.rs`.
+fn misread(query: &str) -> Vec<scour_core::Span> {
+    scour_query::spans(query)
+        .into_iter()
+        .filter(|s| s.role.is_warning())
+        .collect()
+}
+
 impl Shared {
     /// A search run again could now answer differently.
     ///
@@ -434,6 +452,22 @@ impl Engine {
         descending: bool,
         page: Page,
     ) -> Result<SearchResponse> {
+        let mut res = self.page_of(query, sort, descending, page)?;
+        // Every answer, on every path, including the cached one — a warning
+        // that appears on a cache miss and vanishes on a hit is worse than no
+        // warning, because it teaches the reader that its absence means
+        // something.
+        res.misread = misread(query);
+        Ok(res)
+    }
+
+    fn page_of(
+        &self,
+        query: &str,
+        sort: SortKey,
+        descending: bool,
+        page: Page,
+    ) -> Result<SearchResponse> {
         let page = Page {
             limit: page.limit.min(self.shared.opts.result_limit),
             ..page
@@ -531,15 +565,19 @@ impl Engine {
             fast_path: true,
             rows_visited: 0,
             rows_built: 0,
+            // Stamped by `search` for every path alike.
+            misread: Vec::new(),
         })
     }
 
     /// Every facet question about one query, answered from one walk.
     pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
-        self.shared.index.facets(&FacetRequest {
+        let mut res = self.shared.index.facets(&FacetRequest {
             query: scour_query::parse(query),
             by,
-        })
+        })?;
+        res.misread = misread(query);
+        Ok(res)
     }
 
     /// Read a query back without running it: what it means, what its pieces

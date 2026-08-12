@@ -155,6 +155,24 @@ pub struct SearchResponse {
     /// "the query is expensive" from "you asked for page a thousand".
     #[serde(default)]
     pub rows_built: u64,
+    /// Terms the parser could not read as written, as offsets into the query
+    /// that was sent.
+    ///
+    /// **The parser never fails, and that is what makes this necessary.** A
+    /// term it cannot read is searched for as its own text, so `dm:yarin`
+    /// quietly becomes a name search and `ext:` becomes an extension filter
+    /// nothing can satisfy. Both answer `0 of 0`, which is indistinguishable
+    /// from a query that was understood and matched nothing — and of those two
+    /// readings, the wrong one is the one anybody draws.
+    ///
+    /// A search box shows this while it is being typed, out of `explain`. The
+    /// surfaces with no search box — a command line, a model — get one answer
+    /// and do not ask a second question, so the warning has to travel with it.
+    /// Only [`Role::is_warning`] roles appear here; empty is the ordinary case.
+    ///
+    /// [`Role::is_warning`]: crate::Role::is_warning
+    #[serde(default)]
+    pub misread: Vec<crate::Span>,
 }
 
 /// What to group a facet count by.
@@ -246,6 +264,14 @@ pub struct FacetResponse {
     #[serde(default)]
     pub capped: bool,
     pub took_us: u64,
+    /// Terms the parser could not read as written. See
+    /// [`SearchResponse::misread`].
+    ///
+    /// A grouping of the wrong set of rows is the same lie as a count of it,
+    /// told one level up: every bar has a plausible height and the whole
+    /// picture is of files nobody asked about.
+    #[serde(default)]
+    pub misread: Vec<crate::Span>,
 }
 
 /// What one `apply` did.

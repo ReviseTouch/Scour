@@ -2341,6 +2341,10 @@ impl Index for NativeIndex {
             fast_path: rows > 0 && visited < rows,
             rows_visited: visited,
             rows_built: built,
+            // An index is handed a parsed query and never sees the text, so it
+            // has nothing to say about how that text was read. The engine
+            // stamps this on the way out.
+            misread: Vec::new(),
         })
     }
 
@@ -2467,6 +2471,10 @@ impl Index for NativeIndex {
             groups,
             capped: seen >= cap,
             took_us: started.elapsed().as_micros() as u64,
+            // The index is handed a parsed query and never sees the text, so
+            // it has nothing to say about how that text was read. Stamped by
+            // the engine on the way out.
+            misread: Vec::new(),
         })
     }
 

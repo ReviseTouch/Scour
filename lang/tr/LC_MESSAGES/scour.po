@@ -191,3 +191,14 @@ msgstr "klasör, en büyükten"
 
 msgid "a hard-linked file is counted once, like du"
 msgstr "sabit bağlı dosya bir kez sayılır, du gibi"
+
+# --- a term the engine could not read the way it was written ---
+#
+# The parser never fails on purpose: a half-typed query has to stay usable. So
+# `dm:yarin` becomes a search for that text and answers "0 of 0", which is what
+# a query that was understood and matched nothing also answers.
+msgid "warning"
+msgstr "uyarı"
+
+msgid "was searched for as text"
+msgstr "süzgeç olarak okunamadı, metin olarak arandı"

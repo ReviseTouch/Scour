@@ -10,7 +10,7 @@
 //! confident wrong conclusions from it.
 
 use humansize::{BINARY, format_size};
-use scour_core::{Error, Kind, TreeNode};
+use scour_core::{Error, Kind, Role, Span, TreeNode};
 use scour_proto::Response;
 
 pub fn human(r: &Response) -> String {
@@ -44,7 +44,13 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
-        Response::Count { total, capped } => {
+        Response::Count {
+            total,
+            capped,
+            // Warnings are appended by `warning` for every reply alike, so that
+            // no arm here can forget one.
+            misread: _,
+        } => {
             if *capped {
                 format!("At least {total} matches (counting stopped at the cap).")
             } else {
@@ -221,6 +227,62 @@ fn tree(node: &TreeNode, depth: usize, out: &mut String) {
 ///
 /// The advice is the point: a model that is told "the index is not ready yet"
 /// and nothing else will either give up or retry forever.
+/// What the engine could not read the way it was written, if anything.
+///
+/// **The worst failure this server has, and it looks like a correct answer.**
+/// The parser never fails: `dm:yarin` is not a date, so the whole term becomes
+/// a search for the text "dm:yarin", and the reply is `0 matches.` — which is
+/// also what a query that was understood and matched nothing says. A model
+/// reading that concludes the files are not there and moves on. There is no
+/// second question it would know to ask.
+///
+/// Appended rather than woven into each arm, so that adding a reply type
+/// cannot quietly drop it.
+///
+/// [`Role::BadValue`] only, though the wire carries both warning roles:
+/// `UnknownField` means letters and a colon that are not a field, which is
+/// what `http://example.com` and `12:30` legitimately are. A field that exists
+/// and refuses its value is the case that is nearly always a mistake.
+pub fn warning(r: &Response, query: Option<&str>) -> String {
+    let (Some(query), Some(misread)) = (query, misread_of(r)) else {
+        return String::new();
+    };
+    let mut terms: Vec<&str> = Vec::new();
+    for s in misread.iter().filter(|s| s.role == Role::BadValue) {
+        let term = s.term_of(query);
+        if !term.is_empty() && !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    if terms.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nNote: {} not read as {} — the whole term was searched for as \
+         ordinary text, so this answer is about a different question than the \
+         one you meant. Call scour_syntax for the field's accepted values.",
+        terms
+            .iter()
+            .map(|t| format!("`{t}` was"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if terms.len() == 1 {
+            "a filter"
+        } else {
+            "filters"
+        },
+    )
+}
+
+fn misread_of(r: &Response) -> Option<&[Span]> {
+    match r {
+        Response::Search(s) => Some(&s.misread),
+        Response::Count { misread, .. } => Some(misread),
+        Response::Facets(f) => Some(&f.misread),
+        _ => None,
+    }
+}
+
 pub fn failure(e: &Error) -> String {
     let advice = match e {
         Error::QueryTooShort { .. } => {
@@ -291,14 +353,16 @@ mod tests {
         assert!(
             human(&Response::Count {
                 total: 10_000,
-                capped: true
+                capped: true,
+                misread: Vec::new()
             })
             .starts_with("At least")
         );
         assert_eq!(
             human(&Response::Count {
                 total: 7,
-                capped: false
+                capped: false,
+                misread: Vec::new()
             }),
             "7 matches."
         );
@@ -325,6 +389,7 @@ mod tests {
             fast_path: true,
             rows_visited: 0,
             rows_built: 0,
+            misread: Vec::new(),
         }));
         assert!(out.contains("1 shown of 500"), "{out}");
         assert!(out.contains("narrow the query"), "{out}");
@@ -354,6 +419,7 @@ mod tests {
             by: scour_core::FacetBy::Ext { top: 10 },
             capped: false,
             took_us: 0,
+            misread: Vec::new(),
         };
         assert!(human(&Response::Facets(f)).contains("rs"));
     }
