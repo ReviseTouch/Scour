@@ -150,6 +150,15 @@ impl<'a> Segment<'a> {
         source: SourceId,
         path: &str,
     ) -> bool {
+        // **A rejection, not a guarantee**, and worth saying so because it
+        // reads like one. The key a probe is made with is `key_of(source,
+        // path)` and the source is mixed into it, so another source's row for
+        // the same path has a different key and is never a candidate here. The
+        // two comparisons below are what make a collision harmless; this one
+        // only makes the common rejection cheaper than reading a name.
+        //
+        // Checked by deleting it: no answer changes, on a two-source index with
+        // one path in both — see `one_path_under_two_sources_is_two_rows`.
         if self.source_of(row) != source {
             return false;
         }

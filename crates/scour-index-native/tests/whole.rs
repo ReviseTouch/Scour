@@ -1110,6 +1110,49 @@ fn colliding_paths_with_one_name_are_told_apart_by_their_folder() {
     assert_eq!(hits[1].meta.size, 999, "and the saved one took the new one");
 }
 
+/// The same path under two sources stays two rows when one is saved over.
+///
+/// Written to cover the source comparison in `Segment::is_at`, and what it
+/// found instead is that the comparison cannot change an answer — see the note
+/// there. Kept because the *behaviour* is worth pinning whatever enforces it:
+/// two volumes holding the same path is ordinary, and a save on one taking the
+/// other's row would be a file vanishing from the index.
+#[test]
+fn one_path_under_two_sources_is_two_rows() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let path = "/ortak/rapor.pdf";
+
+    for src in [0u32, 1] {
+        let mut e = entry(path, NOW + src as i64, src as u64 + 1);
+        e.id = EntryId::path_hash(SourceId(src), path);
+        e.meta.size = 100 + src as i64;
+        index
+            .apply(&mut std::iter::once(Change::Upsert(e)))
+            .expect("apply");
+    }
+    index.commit().expect("commit");
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        2,
+        "two sources holding one path are two rows"
+    );
+
+    let mut again = entry(path, NOW + 50, 1);
+    again.id = EntryId::path_hash(SourceId(0), path);
+    again.meta.size = 999;
+    index
+        .apply(&mut std::iter::once(Change::Upsert(again)))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    assert_eq!(
+        index.stats().expect("stats").entries,
+        2,
+        "saving one source's copy took the other source's row"
+    );
+}
+
 /// A pass that is never swept still lets housekeeping run afterwards.
 ///
 /// **The leak behind the 241 segments, pinned at its source.** A walk that
