@@ -1204,14 +1204,32 @@ fn owner_name(which: Owner, id: i64) -> String {
     map.get(&id).cloned().unwrap_or_else(|| id.to_string())
 }
 
+/// The order a column header asked for.
+///
+/// **Every key the engine has**, and it did not used to be: six of the
+/// fourteen were mapped here, so clicking `Erişim`, `İzinler`, `Sahip`, `Grup`
+/// or `Diskte` did nothing at all. The engine could sort by all of them the
+/// whole time — the page simply had no name to send, and a header that does
+/// nothing when clicked reads as a broken sort rather than as a missing
+/// mapping.
+///
+/// `Relevance` is here for completeness and is what an unrecognised name falls
+/// back to nowhere: the default stays `Modified`, because a list nobody has
+/// ordered is a list of what changed last.
 fn sort_of(s: Option<&str>) -> SortKey {
     match s.unwrap_or("modified") {
+        "relevance" => SortKey::Relevance,
         "name" => SortKey::Name,
         "path" => SortKey::Path,
         "size" => SortKey::Size,
         "created" => SortKey::Created,
+        "accessed" => SortKey::Accessed,
         "ext" => SortKey::Ext,
         "kind" => SortKey::Kind,
+        "mode" => SortKey::Mode,
+        "uid" => SortKey::Uid,
+        "gid" => SortKey::Gid,
+        "disk" => SortKey::Disk,
         _ => SortKey::Modified,
     }
 }
