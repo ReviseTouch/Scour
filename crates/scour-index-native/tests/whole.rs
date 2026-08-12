@@ -1727,6 +1727,56 @@ fn a_removal_before_the_first_upsert_still_takes_the_row() {
     assert_eq!(found(&index, "keepme"), 1, "and take nothing else");
 }
 
+/// A rescan that changed nothing writes nothing either.
+///
+/// The other half of the pair below. That one says an untouched rescan must not
+/// *remove* anything; this one says it must not *add* anything — and the two
+/// failures look nothing alike. Recognising the unchanged rows and then writing
+/// what is left anyway is the shape the first version had: the batch that
+/// overflowed the buffer was almost all rows the index already held, and the
+/// two or three survivors still became a segment. A walk of 870,000 entries
+/// left nine of them, one a batch, doubling what every search reads and owing
+/// a compaction for the rest.
+///
+/// The segment count, not the entry count, because the entry count was right
+/// the whole time.
+#[test]
+fn a_rescan_that_changed_nothing_adds_no_segment() {
+    let f = Fixture::new(6_000, 500);
+    let before = f.index.stats().expect("stats").segments;
+    assert!(before > 1, "several segments, or this asserts nothing");
+
+    let g = f.index.begin_generation().expect("generation");
+    let mut again = f.entries.iter().cloned().map(Change::Upsert);
+    let report = f.index.apply(&mut again).expect("apply");
+    f.index.commit().expect("commit");
+    f.index
+        .sweep(SourceId(0), "", g, &PrefixSet::default())
+        .expect("sweep");
+
+    let after = f.index.stats().expect("stats");
+    assert_eq!(after.segments, before, "a segment a batch is the bug");
+    assert_eq!(
+        after.entries,
+        f.entries.len() as u64,
+        "and every row is still there"
+    );
+    // **Nothing new was written, and the count that says so arrives late.**
+    // Sparing happens when a batch is flushed; this batch fitted in the buffer,
+    // so nothing flushed it until the commit — after `apply` had returned its
+    // report. The number therefore reaches whoever calls next, which is the
+    // documented shape of `ApplyReport::unchanged` and is pinned here because a
+    // drain that stopped working would otherwise be invisible.
+    assert_eq!(report.unchanged, 0, "this batch had not been flushed yet");
+    let mut one = std::iter::once(Change::Upsert(f.entries[0].clone()));
+    let later = f.index.apply(&mut one).expect("apply");
+    assert!(
+        later.unchanged >= before as u64,
+        "the commit's sparing never reached a report: {}",
+        later.unchanged
+    );
+}
+
 /// A scan that finds every file exactly as it left it must delete nothing.
 ///
 /// **This is the guard on the most dangerous path in the index.** A sweep
