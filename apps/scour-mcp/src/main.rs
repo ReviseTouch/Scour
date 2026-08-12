@@ -20,7 +20,7 @@
 mod render;
 mod tools;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
@@ -33,10 +33,14 @@ async fn main() -> Result<()> {
         .nth(1)
         .unwrap_or_else(|| scour_config::Config::load_or_default().0.socket());
 
-    let scour = tools::Scour::connect(&addr).with_context(|| {
-        format!("no Scour service is listening on {addr}. Start one with `scourd`.")
-    })?;
-    eprintln!("scour-mcp: connected to {addr}");
+    // Said once, for whoever reads the client's server log — and said either
+    // way, because "not yet" is not a reason to stop.
+    let scour = tools::Scour::new(&addr);
+    if scour_ipc::is_running(&addr) {
+        eprintln!("scour-mcp: {addr}");
+    } else {
+        eprintln!("scour-mcp: nothing listening on {addr} yet; will connect when asked");
+    }
 
     let service = scour.serve(stdio()).await?;
     service.waiting().await?;

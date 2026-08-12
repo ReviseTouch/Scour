@@ -23,11 +23,16 @@ pub struct Scour {
 }
 
 struct Inner {
-    /// One connection, serialised.
+    /// One connection, serialised, and **not opened until something is asked**.
     ///
     /// Requests are milliseconds long and a model makes a few at a time, so a
     /// lock costs nothing measurable and avoids a connection per call.
-    client: Mutex<Client>,
+    ///
+    /// `None` means no connection is held — either nothing has been asked yet,
+    /// or the last attempt found nobody listening. That distinction does not
+    /// matter here, which is the point: every call takes the same path, and a
+    /// service that appears later is picked up by the next one.
+    client: Mutex<Option<Client>>,
     addr: String,
 }
 
@@ -96,17 +101,31 @@ pub struct NoArgs {}
 
 #[tool_router]
 impl Scour {
-    pub fn connect(addr: &str) -> scour_core::Result<Scour> {
-        Ok(Scour {
+    /// Name the service to talk to. **Nothing is opened here.**
+    ///
+    /// This used to connect, and to fail if it could not — which read as
+    /// carefulness and was the opposite. An MCP client starts its servers when
+    /// *it* starts, and this service is started separately by hand; whichever
+    /// order that happens in, a server that exits at spawn is a server the
+    /// client marks dead and does not spawn again. So the window in which
+    /// `scourd` was a few seconds behind cost the whole session its tools, and
+    /// the only way back was for somebody to notice and reconnect by hand.
+    ///
+    /// Refusing to start is also the wrong shape for the failure. "The service
+    /// is not running" is an answer a model can act on — it can say so, and it
+    /// can try again later — and it can only reach the model as the reply to a
+    /// tool call, which requires having started.
+    pub fn new(addr: &str) -> Scour {
+        Scour {
             inner: std::sync::Arc::new(Inner {
-                client: Mutex::new(Client::connect(addr)?),
+                client: Mutex::new(None),
                 addr: addr.to_owned(),
             }),
             tool_router: Self::tool_router(),
-        })
+        }
     }
 
-    /// Send a request, reconnecting once if the service was restarted.
+    /// Send a request, connecting or reconnecting as needed.
     ///
     /// **Nothing that changes anything leaves this function.** Every tool goes
     /// through here, so this is the one place the promise can be kept rather
@@ -123,23 +142,42 @@ impl Scour {
                 req.name()
             )));
         }
+        // The query text, kept because the answer may carry a warning about a
+        // term the engine could not read, and that warning arrives as offsets
+        // into this string. Here rather than in each tool, so that the next
+        // query-taking tool gets it without anybody remembering to add it.
+        let query = match &req {
+            Request::Search { query, .. }
+            | Request::Count { query, .. }
+            | Request::Facets { query, .. } => Some(query.clone()),
+            _ => None,
+        };
+        let say = |r: &scour_proto::Response| {
+            crate::render::human(r) + &crate::render::warning(r, query.as_deref())
+        };
         let mut guard = match self.inner.client.lock() {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        match guard.call(req.clone()) {
-            Ok(r) => crate::render::human(&r),
-            Err(e) if e.is_transient() => match Client::connect(&self.inner.addr) {
-                Ok(mut fresh) => {
-                    let out = match fresh.call(req) {
-                        Ok(r) => crate::render::human(&r),
-                        Err(e) => crate::render::failure(&e),
-                    };
-                    *guard = fresh;
-                    out
-                }
-                Err(e) => crate::render::failure(&e),
-            },
+        // The connection we hold, if we hold one. A transient failure drops it
+        // and falls through to a fresh one; anything else is the answer, since
+        // reconnecting will not change what the service thinks of the request.
+        if let Some(held) = guard.as_mut() {
+            match held.call(req.clone()) {
+                Ok(r) => return say(&r),
+                Err(e) if !e.is_transient() => return crate::render::failure(&e),
+                Err(_) => *guard = None,
+            }
+        }
+        match Client::connect(&self.inner.addr) {
+            Ok(mut fresh) => {
+                let out = match fresh.call(req) {
+                    Ok(r) => say(&r),
+                    Err(e) => crate::render::failure(&e),
+                };
+                *guard = Some(fresh);
+                out
+            }
             Err(e) => crate::render::failure(&e),
         }
     }
@@ -305,5 +343,57 @@ fn sort_of(s: Option<&str>) -> SortKey {
         "ext" => SortKey::Ext,
         "kind" => SortKey::Kind,
         _ => SortKey::Modified,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOWHERE: &str = "/nonexistent/scour-should-not-be-here.sock";
+
+    /// A server with nothing to talk to is still a server.
+    ///
+    /// The failure this guards is not a crash, which is why it was invisible:
+    /// the process exited 1 at spawn, the MCP client wrote "server failed" in
+    /// a log nobody opens, and every tool was gone for the rest of the
+    /// session. Whoever noticed blamed the query.
+    #[test]
+    fn a_server_starts_with_no_service_to_talk_to() {
+        let s = Scour::new(NOWHERE);
+        let out = s.call(Request::Sources {});
+        assert!(
+            out.contains("not running"),
+            "should say the service is down, said: {out}"
+        );
+    }
+
+    /// Asking again is how a service that starts late gets picked up.
+    ///
+    /// One attempt per call, and no memory of having failed — a server that
+    /// gave up after the first refusal would be the same bug one call later.
+    #[test]
+    fn a_failed_call_does_not_poison_the_next_one() {
+        let s = Scour::new(NOWHERE);
+        let first = s.call(Request::Sources {});
+        let second = s.call(Request::Sources {});
+        assert_eq!(first, second);
+    }
+
+    /// The read-only promise costs no connection to keep.
+    ///
+    /// Worth its own test because the order matters: refusing *after*
+    /// connecting would mean a service that is down turns "this server is
+    /// read-only" into "the service is not running", which is a different and
+    /// wrong answer to the question the caller asked.
+    #[test]
+    fn a_request_that_would_write_is_refused_before_anything_is_opened() {
+        let s = Scour::new(NOWHERE);
+        let out = s.call(Request::Shutdown {});
+        assert!(out.contains("read-only"), "{out}");
+        assert!(
+            s.inner.client.lock().unwrap().is_none(),
+            "refusing should not have opened a connection"
+        );
     }
 }
