@@ -354,17 +354,88 @@ impl<'a> DirTable<'a> {
         (self.get(at).as_deref() == Some(path)).then_some(at)
     }
 
+    /// The path stored at a restart, borrowed rather than built.
+    ///
+    /// **A restart shares nothing with the row before it** — that is what a
+    /// restart is — so its bytes are its whole path and sit contiguously in
+    /// the mapped file. No decoding, no allocation, and this is what makes the
+    /// binary search below cheap.
+    fn restart_path(&self, block: usize) -> Option<&'a str> {
+        let at = self.restart_at(block)?;
+        let (shared, used) = varint::get(self.rows.get(at..)?)?;
+        debug_assert_eq!(shared, 0, "a restart row shares nothing");
+        let at = at + used;
+        let (len, used) = varint::get(self.rows.get(at..)?)?;
+        let at = at + used;
+        std::str::from_utf8(self.rows.get(at..at + len as usize)?).ok()
+    }
+
     /// The first number whose path is not less than `prefix`.
+    ///
+    /// **Two levels, and the first one touches no bytes it does not compare.**
+    /// The obvious version binary-searches all `count` rows and calls
+    /// [`DirTable::get`] per probe — and `get` decodes from the nearest
+    /// restart and allocates a `String` every time. Over 247,769 directories
+    /// that is eighteen probes, each decoding up to sixteen rows and
+    /// allocating, and the whole of it is paid **twice per subtree and once
+    /// per segment**: measured at 75 µs of a 89 µs subtree lookup across 64
+    /// segments, and paid again by every `under:` search, which is the same
+    /// call.
+    ///
+    /// So: binary-search the *restarts*, whose paths are already whole and
+    /// borrowable — fourteen probes, no decoding, no allocation — and then
+    /// walk the one block that can hold the answer, at most sixteen rows,
+    /// through a single reused buffer.
     fn lower_bound(&self, prefix: &str) -> u32 {
-        let (mut lo, mut hi) = (0usize, self.count);
+        if self.count == 0 {
+            return 0;
+        }
+        let blocks = self.restarts.len() / 4;
+        let (mut lo, mut hi) = (0usize, blocks);
         while lo < hi {
             let mid = (lo + hi) / 2;
-            match self.get(mid as u32) {
-                Some(p) if p.as_str() < prefix => lo = mid + 1,
+            match self.restart_path(mid) {
+                Some(p) if p < prefix => lo = mid + 1,
                 _ => hi = mid,
             }
         }
-        lo as u32
+        // `lo` is the first block that starts at or after `prefix`, so the
+        // answer is inside the block before it — or at row zero, when there is
+        // no block before it.
+        let block = lo.saturating_sub(1);
+        let Some(mut at) = self.restart_at(block) else {
+            return self.count as u32;
+        };
+        let first = block * RESTART;
+        let mut path = String::new();
+        for step in 0..RESTART {
+            let id = first + step;
+            if id >= self.count {
+                break;
+            }
+            let Some((shared, used)) = varint::get(&self.rows[at..]) else {
+                break;
+            };
+            at += used;
+            let Some((rest, used)) = varint::get(&self.rows[at..]) else {
+                break;
+            };
+            at += used;
+            let rest = rest as usize;
+            let Some(bytes) = self.rows.get(at..at + rest) else {
+                break;
+            };
+            at += rest;
+            path.truncate(shared as usize);
+            let Ok(tail) = std::str::from_utf8(bytes) else {
+                break;
+            };
+            path.push_str(tail);
+            if path.as_str() >= prefix {
+                return id as u32;
+            }
+        }
+        (first + RESTART).min(self.count) as u32
     }
 }
 
@@ -607,6 +678,51 @@ mod tests {
         assert_eq!(dir_part("/home/u/a.txt"), "/home/u");
         assert_eq!(dir_part("/a.txt"), "/");
         assert_eq!(dir_part("a.txt"), "");
+    }
+
+    /// **Against brute force, over every path in the table and past both
+    /// edges.** The two-level search reads restart rows for the outer probe
+    /// and decodes the one block that can hold the answer; a mistake in either
+    /// half lands one row out, and one row out in a directory table is a
+    /// search scoped to the wrong folder — which returns files, silently, and
+    /// looks like a working search.
+    ///
+    /// The sizes cross a restart boundary in both directions (RESTART is 16),
+    /// so the "block before `lo`" arithmetic is exercised at the start of a
+    /// block, in the middle of one, and past the last.
+    #[test]
+    fn the_first_row_not_below_a_prefix_is_the_one_brute_force_finds() {
+        for n in [0usize, 1, 15, 16, 17, 31, 32, 33, 200] {
+            let mut paths: Vec<String> = Vec::new();
+            for i in 0..n {
+                // Deep, shared prefixes, and the sibling that sorts *between*
+                // a directory and its children — `-` is 0x2D and `/` is 0x2F.
+                paths.push(format!("/home/u/Projeler/p{i:03}"));
+                if i % 3 == 0 {
+                    paths.push(format!("/home/u/Projeler/p{i:03}-yedek"));
+                    paths.push(format!("/home/u/Projeler/p{i:03}/src"));
+                }
+            }
+            paths.sort();
+            paths.dedup();
+            let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let (bytes, _) = build(&refs);
+            let t = DirTable::open(&bytes).expect("table");
+
+            // Every stored path, every path with a byte appended, every one
+            // with its last byte removed, and two that fall outside.
+            let mut asked: Vec<String> = vec![String::new(), "/".into(), "~".into(), "/zzz".into()];
+            for p in &paths {
+                asked.push(p.clone());
+                asked.push(format!("{p}/"));
+                asked.push(format!("{p}0"));
+                asked.push(p[..p.len() - 1].to_owned());
+            }
+            for q in &asked {
+                let brute = paths.partition_point(|p| p.as_str() < q.as_str()) as u32;
+                assert_eq!(t.lower_bound(q), brute, "n={n} prefix={q:?}");
+            }
+        }
     }
 
     #[test]
