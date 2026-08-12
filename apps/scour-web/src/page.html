@@ -314,6 +314,30 @@
   /* No z-index on the layer itself, so its two children can sit on opposite
      sides of the text. Putting the whole layer above it — which is what this
      did first — hid the very term it was pointing at. */
+  /* The chevron sits inside the field, at its trailing edge, clear of the
+     text: the input's own padding-right leaves room for it. */
+  #qpast {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 3;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 3px;
+    background: none;
+    color: var(--ink-3);
+    font: 600 11px/1 var(--sans);
+    cursor: pointer;
+  }
+  #qpast[hidden] { display: none; }
+  #qpast:hover { color: var(--ink); background: var(--line-soft); }
+  #qpast[aria-expanded="true"] { color: var(--ink); background: var(--line-soft); }
+  #qpast:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .qfield input { padding-right: 22px; }
+
   .qacts {
     position: absolute;
     inset: 0;
@@ -662,6 +686,18 @@
     flex: 1; min-width: 0;
     font-family: var(--mono); font-size: 11.5px; color: var(--ink-2);
   }
+  .floors { flex: none; display: flex; gap: 1px; }
+  .floors button {
+    font: inherit; font-size: 11px; font-family: var(--mono);
+    background: none; color: var(--ink-3);
+    border: 1px solid var(--line); border-right-width: 0;
+    padding: 2px calc(var(--u) * 1.5); cursor: pointer;
+  }
+  .floors button:first-child { border-radius: 3px 0 0 3px; }
+  .floors button:last-child { border-radius: 0 3px 3px 0; border-right-width: 1px; }
+  .floors button:hover { color: var(--ink); }
+  .floors button[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--ink-3); }
+  .floors button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .dupes-head button {
     flex: none; font: inherit; font-size: 11.5px;
     background: var(--panel-2); color: var(--ink-2);
@@ -1072,6 +1108,13 @@
                  aria-autocomplete="list" aria-controls="hints"
                  placeholder="dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:&gt;10mb">
           <div class="qacts" id="qacts" aria-hidden="true"></div>
+          <!-- **A shortcut nobody can see is a feature nobody has.** `Alt+↓`
+               is the combo box gesture, and this is what says so — the same
+               chevron an address bar has had for thirty years. Hidden until
+               there is a past to show, because an arrow that opens nothing is
+               worse than none. -->
+          <button type="button" id="qpast" tabindex="-1" hidden
+                  title="önceki aramalar (Alt+↓)" aria-label="önceki aramalar">▾</button>
           <div class="hints" id="hints" role="listbox" aria-label="Öneriler" hidden></div>
         </div>
       </div>
@@ -1198,6 +1241,7 @@
         <div class="dupes-head">
           <h4>Yinelenen dosyalar</h4>
           <div class="dupes-sum" id="d-sum">—</div>
+          <div class="floors" id="d-floor"></div>
           <button type="button" id="d-confirm">Okuyarak doğrula</button>
         </div>
         <p class="hint" id="d-note">Aynı boyutta olmak aynı dosya olmak değildir.
@@ -1275,8 +1319,9 @@
        and answers "which of these *might* be copies". Confirming means reading
        them, which is somebody's disk and therefore a button rather than a
        default. */
-    dupes: (under, budgetMb, signal) =>
-      SERVICE.get("dupes", { under, budget_mb: budgetMb || 0, top: 25 }, signal),
+    dupes: (under, budgetMb, minMb, signal) =>
+      SERVICE.get("dupes",
+        { under, budget_mb: budgetMb || 0, min_mb: minMb || 1, top: 25 }, signal),
     /* What this window remembers, kept by the service.
      *
      * **Not `localStorage`, and that is a correction.** A browser writes it on
@@ -2134,6 +2179,8 @@
     hints = [];
     hintSel = 0;
     q.setAttribute("aria-expanded", "false");
+    const arrow = document.getElementById("qpast");
+    if (arrow) arrow.setAttribute("aria-expanded", "false");
   }
 
   /* The past, in the same box the completions use.
@@ -2167,10 +2214,25 @@
    * `rap`. What goes in the history is what was committed to — Enter, or
    * opening a result — and only this half of the program knows which keys
    * those are. */
+  const qpast = document.getElementById("qpast");
+  /* Shown only when there is a past. An arrow that opens an empty list is a
+     promise of something that is not there. */
+  function showPastAffordance() {
+    qpast.hidden = HISTORY.length === 0;
+  }
+  qpast.addEventListener("mousedown", (e) => {
+    // `mousedown`, for the same reason the hint list uses it: by `click` the
+    // input has lost focus and the list has already closed itself.
+    e.preventDefault();
+    if (hintBox.hidden) { q.focus(); showHistory(); } else { hideHints(); }
+    qpast.setAttribute("aria-expanded", String(!hintBox.hidden));
+  });
+
   function remember(text) {
     text = (text || "").trim();
     if (!text || HISTORY[0] === text) return;
     HISTORY = [text, ...HISTORY.filter((h) => h !== text)].slice(0, 100);
+    showPastAffordance();
     keep();
   }
   function acceptHint(i) {
@@ -3285,6 +3347,7 @@
     if (s.sort && COLUMNS.some((c) => c.key === s.sort)) sortKey = s.sort;
     if (typeof s.descending === "boolean") sortDesc = s.descending;
     HISTORY = Array.isArray(s.history) ? s.history : [];
+    showPastAffordance();
     buildHeads();
     applyWidths();
     render();
@@ -4589,6 +4652,14 @@
    * to be the same length. Free means free: nothing is read until the button
    * is pressed, because the disk being read is theirs. */
   let dupeRun = 0;
+  /* **The floor is the whole speed knob**, and it is a knob because the
+     measurement made it one: a unique size rules out only 6.2% of files, so
+     the candidate list below a megabyte is a million files covering 28 GB —
+     while above ten megabytes it is under two thousand covering 90 GB. Asking
+     for the big ones is not a filter on the answer, it is a much smaller
+     question. */
+  const FLOORS = [[1, "1 MB"], [10, "10 MB"], [100, "100 MB"], [1024, "1 GB"]];
+  let dupeFloor = 10;
 
   async function drawDupes(budgetMb) {
     const mine = ++dupeRun;
@@ -4599,7 +4670,7 @@
     btn.disabled = true;
     let res;
     try {
-      res = await SERVICE.dupes(scope, budgetMb);
+      res = await SERVICE.dupes(scope, budgetMb, dupeFloor);
     } catch (e) {
       if (mine !== dupeRun) return;
       console.error("scour: the duplicates panel did not load:", e);
@@ -4640,6 +4711,23 @@
       </div>`).join("") ||
       `<div class="dupe"><div class="top"><span class="of">bu kapsamda yinelenen yok</span></div></div>`;
   }
+
+  const floorBox = document.getElementById("d-floor");
+  function drawFloors() {
+    floorBox.innerHTML = FLOORS.map(([mb, label]) =>
+      `<button type="button" data-mb="${mb}" aria-pressed="${mb === dupeFloor}"
+        title="bu boyuttan küçükleri hiç bakma">${label}+</button>`).join("");
+  }
+  floorBox.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-mb]");
+    if (!b) return;
+    dupeFloor = +b.dataset.mb;
+    drawFloors();
+    // Free again: a floor change goes back to the size groups rather than
+    // keeping a confirmation that was about a different set of files.
+    drawDupes(0);
+  });
+  drawFloors();
 
   document.getElementById("d-confirm").onclick = () => drawDupes(2048);
 
