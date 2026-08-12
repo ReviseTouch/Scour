@@ -177,5 +177,25 @@ answer without walking a filesystem it should not be walking.
 4. **B, tier four.** A digest column and a job. Only after the first three prove
    the feature is wanted.
 
+**Done, and not the way this planned it.** Three corrections worth keeping,
+because each was a reasonable expectation that the work disproved:
+
+* **Tier one is gone.** The `dev`/`ino` columns were removed from the index to
+  save 19 MB of 200 — see `columns.rs` — so hard links can be counted through
+  `Links` and cannot be grouped. Not a regression to fix; a cost that was paid
+  deliberately and has to be stated rather than worked around.
+* **No `duplicates()` on `trait Index`, and no digest column.** The candidates
+  are an ordinary `size:>=N` search ordered by size, and everything after it is
+  `crates/scour-dupes`, which takes `(path, size)` pairs and depends on
+  nothing. The whole of D's "what it costs the architecture" turned out to cost
+  one method on `Engine`.
+* **Tier four is a comparison, not a digest.** Same reads, no collision, and
+  the thing being decided is which file somebody deletes.
+
+Measured on this disk: 39.16 GiB of size candidates in 84 ms with nothing read,
+of which 4.16 GiB survived being read and compared. Those two numbers travel
+together everywhere, because the first one alone is an instruction to delete
+files that were never copies.
+
 Nothing here needs a file format change except the digest, and that one is
 additive.

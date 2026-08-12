@@ -454,10 +454,18 @@ a repository's text can be indexed, at what bytes per entry, against how long
 
 ## Deliberately later
 
-* **Duplicate detection by content** (`REPORTS.md` §B tier four). The first
-  three tiers — same inode, same name, same size — are free and can come with
-  Phase 6. A digest column is a maintenance job and should wait until the free
-  tiers prove anyone wants the feature.
+* ~~**Duplicate detection by content**~~ — **done**, and it needed neither of
+  the two things this entry expected. No `duplicates()` on `trait Index` and no
+  digest column: the candidates are an ordinary `size:>=N` search and the rest
+  is `scour-dupes`, which takes paths and sizes and has no dependency at all.
+  Tier one is the exception and is *not* available — the inode columns were
+  removed on purpose, 19 MB of a 200 MB index, so hard links can be counted but
+  not grouped.
+
+  The digest column stays unbuilt, and should, until somebody wants duplicates
+  *below* the size where reading is affordable. Above a megabyte a comparison
+  is exact and takes seconds; a digest would be faster and less certain, and
+  what is being decided is which file somebody deletes.
 * **Regex, `case:`, `ww:`, query grouping with parentheses.** Real gaps against
   Everything, none of them blocking.
 * **Windows file attributes** (hidden, system, archive) as query terms.
