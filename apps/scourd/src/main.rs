@@ -220,7 +220,20 @@ fn main() -> Result<()> {
     // somebody drags a column, and rewriting a hand-edited `config.toml` — with
     // its comments and its measurements — to record a column width would be
     // vandalism.
-    let kept = handle::Kept::open(scour_config::data_dir().join("state"));
+    //
+    // **Beside *this* index, not beside the default one.** The first version
+    // took `data_dir()`, which meant a service started with `--config` for a
+    // test wrote over the settings of the one somebody actually uses — and it
+    // did, within an hour of being written. Anything the config points at has
+    // to move together, or `--config` is not the isolation it claims to be.
+    let kept = handle::Kept::open(
+        config
+            .index
+            .dir
+            .parent()
+            .unwrap_or(&config.index.dir)
+            .join("state"),
+    );
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();
