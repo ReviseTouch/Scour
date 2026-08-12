@@ -279,6 +279,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/places" => api_places(&mut stream),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
+        "/api/dupes" => api_dupes(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/icon" => api_icon(&mut stream, &req),
         "/api/wait" => api_wait(&mut stream, addr, &req),
@@ -603,6 +604,57 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// `top` is how many children come back, heaviest first; `child_count` says
 /// how many there were before the cut, so the page can say what it is not
 /// showing rather than quietly showing less.
+/// The same file, several times over, under one folder.
+///
+/// **Scoped by the same term the rest of the report is scoped by.** Changing
+/// directory in the report changes `under:` and every panel recomputes; this
+/// is one more panel and needs no new mechanism.
+///
+/// Reads nothing unless asked. The free answer — sizes only — is 84 ms over
+/// thirty thousand candidates and is what the panel opens with; confirming
+/// costs real disk and is a button somebody presses.
+fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let mb = |k: &str, d: u64| -> u64 {
+        req.param(k).and_then(|s| s.parse().ok()).unwrap_or(d) * 1024 * 1024
+    };
+    let request = Request::Duplicates {
+        under: req.param("under").unwrap_or_default().to_owned(),
+        min_size: mb("min_mb", 1),
+        read_budget: mb("budget_mb", 0),
+        top: req.param("top").and_then(|s| s.parse().ok()).unwrap_or(25),
+    };
+    match call(client, request) {
+        Ok(Response::Duplicates {
+            groups,
+            candidates,
+            waste,
+            proven,
+            read,
+            unconfirmed,
+        }) => http::json(
+            stream,
+            &serde_json::json!({
+                "groups": groups.iter().map(|g| serde_json::json!({
+                    "size": g.size,
+                    "waste": g.waste,
+                    "paths": g.paths,
+                    // The page shows this rather than deciding for itself:
+                    // "identical" and "the same length" are different claims
+                    // and the difference is what somebody deletes on.
+                    "certainty": g.certainty,
+                })).collect::<Vec<_>>(),
+                "candidates": candidates,
+                "waste": waste,
+                "proven": proven,
+                "read": read,
+                "unconfirmed": unconfirmed,
+            }),
+        ),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Usage {
         path: req.param("path").unwrap_or_default().to_owned(),

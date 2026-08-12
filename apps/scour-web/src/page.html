@@ -644,6 +644,54 @@
     color: var(--ink-3);
   }
 
+  /* ---------------- yinelenenler ---------------- */
+  .dupes { margin-top: calc(var(--u) * 7); }
+  .dupes-head {
+    display: flex; align-items: baseline; gap: calc(var(--u) * 3);
+    border-top: 2px solid var(--line); padding-top: calc(var(--u) * 3);
+  }
+  .dupes-head h4 {
+    margin: 0; flex: none;
+    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink); font-weight: 650;
+  }
+  .dupes-sum {
+    flex: 1; min-width: 0;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-2);
+  }
+  .dupes-head button {
+    flex: none; font: inherit; font-size: 11.5px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 3px calc(var(--u) * 2.5); cursor: pointer;
+  }
+  .dupes-head button:hover:enabled { color: var(--ink); border-color: var(--ink-3); }
+  .dupes-head button:disabled { opacity: .5; cursor: default; }
+  .dupes-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe {
+    border-top: 1px solid var(--line-soft);
+    padding: calc(var(--u) * 2) 0;
+  }
+  .dupe .top {
+    display: flex; align-items: baseline; gap: calc(var(--u) * 2.5);
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .dupe .save { color: var(--ink); font-weight: 650; }
+  .dupe .of { color: var(--ink-3); }
+  /* **The word that decides whether a file gets deleted**, so it is coloured
+     rather than left as one more grey label: proven and merely-the-same-length
+     are different claims. */
+  .dupe .sure { margin-left: auto; font-size: 10.5px; letter-spacing: .04em; }
+  /* Read and compared is the calm state; not-yet-read is the one that needs
+     to catch the eye, because that is the one somebody must not act on. */
+  .dupe .sure.content { color: var(--ink-2); }
+  .dupe .sure.size, .dupe .sure.edges { color: var(--t1); font-weight: 650; }
+  .dupe ul { margin: 3px 0 0; padding: 0 0 0 calc(var(--u) * 3); list-style: none; }
+  .dupe li {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+    overflow-wrap: anywhere; line-height: 1.5;
+  }
+
   /* ---------------- önizleme ----------------
 
      A third column, shut by default: most of what this list is used for is
@@ -1137,6 +1185,18 @@
           eklenir, arama sekmesi aynı kapsamla açılır.</p>
         </div>
       </div>
+
+      <!-- Yinelenenler. `docs/REPORTS.md` §B; buraya döneceği yazılmıştı. -->
+      <div class="dupes">
+        <div class="dupes-head">
+          <h4>Yinelenen dosyalar</h4>
+          <div class="dupes-sum" id="d-sum">—</div>
+          <button type="button" id="d-confirm">Okuyarak doğrula</button>
+        </div>
+        <p class="hint" id="d-note">Aynı boyutta olmak aynı dosya olmak değildir.
+        Aşağısı boyuta göre aday listesidir; <b>doğrulanmadan hiçbir şey silinmemeli</b>.</p>
+        <div id="d-list"></div>
+      </div>
     </div>
   </div>
 
@@ -1203,6 +1263,13 @@
        96 ms over 658,360 files — and no filesystem access at all: the sizes and
        the parent links are already there. */
     usage: (path, top) => SERVICE.get("usage", { path, top: top || 24 }),
+    /* The same file, several times over, under one folder.
+       `budget_mb: 0` reads nothing — 84 ms over thirty thousand candidates —
+       and answers "which of these *might* be copies". Confirming means reading
+       them, which is somebody's disk and therefore a button rather than a
+       default. */
+    dupes: (under, budgetMb, signal) =>
+      SERVICE.get("dupes", { under, budget_mb: budgetMb || 0, top: 25 }, signal),
     status: () => SERVICE.get("status", {}),
     /* The one request that is meant to take a long time: it does not answer
        until the index would answer differently. See the live section at the
@@ -4122,6 +4189,33 @@
     })
     .catch(() => {})
     .finally(render);
+
+  /* What the report is allowed to reach in here.
+   *
+   * **The report is a separate closure and could not see into this one**, and
+   * that was not a style choice — it was a bug that hid for as long as the
+   * report was live. Wiring the report to the engine put `SERVICE.usage(...)`
+   * inside a scope where `SERVICE` does not exist, so the first panel threw
+   * `ReferenceError` into the `catch` that prints "servise ulaşılamıyor", and
+   * every figure on the tab stayed a dash. It looked exactly like the service
+   * being down, which is why nobody suspected the page.
+   *
+   * Published rather than merged, because the two halves really are two
+   * programs: the list and the report share the bridge and nothing else. A
+   * getter for `HOME` and not the value, since it arrives from `/api/places`
+   * after this runs — handing over the empty string it holds now would show
+   * everybody's paths unshortened for ever. */
+  window.SCOUR = {
+    service: SERVICE,
+    escape: escape_,
+    home: () => HOME,
+    // Both arrive from the service after this runs, so both are getters. The
+    // kind panel was empty for the same reason the rest of the tab was blank:
+    // it reached for `KINDS` and `BAR_EDGES` across a closure boundary and
+    // threw into its own `catch`.
+    kinds: () => KINDS,
+    barEdges: () => BAR_EDGES,
+  };
 })();
 
 // ---------------------------------------------------------------- RAPOR
@@ -4138,6 +4232,15 @@
 // which needs a grouping this index does not do — is gone rather than
 // fabricated. `docs/REPORTS.md` §B is where it comes back, if it does.
 (function () {
+  /* Taken in by name, so that a reference to something this half was never
+     handed is a `ReferenceError` here in one line rather than inside a
+     `catch` three panels later. See the note where these are published. */
+  const SERVICE = window.SCOUR.service;
+  const escape_ = window.SCOUR.escape;
+  const home = window.SCOUR.home;
+  const kinds = window.SCOUR.kinds;
+  const barEdges = window.SCOUR.barEdges;
+
   const AGE = [
     ["bugün",    "--t0"], ["bu hafta", "--t1"], ["bu ay",   "--t2"],
     ["6 ay",     "--t3"], ["bu yıl",   "--t4"], ["daha eski","--t5"]
@@ -4150,6 +4253,13 @@
   };
   const fmt = (n) => n.toLocaleString("tr-TR");
   const leafOf = (p) => p.slice(p.lastIndexOf("/") + 1) || p;
+  /* `~` for the reader's own home, the same substitution the location column
+     makes. Read at call time, not captured: `HOME` arrives from
+     `/api/places` after this file has finished loading. */
+  const shorten = (p) => {
+    const h = home();
+    return h && p.startsWith(h + "/") ? "~" + p.slice(h.length) : p;
+  };
 
   /* Where the report is looking. Empty means everything indexed, which is what
      `Request::Usage` means by an empty path — so the first view is the whole
@@ -4236,6 +4346,10 @@
     drawKinds();
     drawBiggest();
     drawJump();
+    // Free by default: the size groups cost 84 ms over thirty thousand
+    // candidates and read nothing. Confirming is a button, because the disk it
+    // would read is the reader's.
+    drawDupes(0);
   }
 
   /* The type breakdown, from the same faceting the search sidebar uses. */
@@ -4243,7 +4357,7 @@
     const el = document.getElementById("p-kind");
     const q = scope ? `under:${scope}` : "";
     try {
-      const res = await SERVICE.sidebar(q, BAR_EDGES);
+      const res = await SERVICE.sidebar(q, barEdges());
       const g = (res.groups || []).find((x) => x.by === "kind");
       const rows = (g ? g.facets : []).filter((f) => f.count > 0)
         .sort((a, b) => b.count - a.count).slice(0, 8);
@@ -4251,7 +4365,7 @@
       el.innerHTML = rows.map((r) => `
         <div class="line" style="position:relative">
           <span style="position:absolute;left:-4px;top:3px;bottom:3px;width:${(r.count / max * 100).toFixed(1)}%;background:var(--line);border-radius:0 2px 2px 0"></span>
-          <span style="position:relative">${(KINDS.find(([, t]) => t === r.key) || [r.key])[0]}</span>
+          <span style="position:relative">${(kinds().find(([, t]) => t === r.key) || [r.key])[0]}</span>
           <span style="position:relative">${fmt(r.count)}</span>
         </div>`).join("") ||
         `<div class="line"><span style="color:var(--ink-3)">—</span></div>`;
@@ -4277,6 +4391,70 @@
       console.error("scour: the largest-files panel did not load:", e);
     }
   }
+
+  /* Yinelenenler — `docs/REPORTS.md` §B, and the panel this report used to
+     fake before anything could answer it.
+   *
+   * Two numbers, always both. What *could* be freed is every file that shares
+   * a size with another; what is *confirmed* was read end to end and compared.
+   * On this disk they are 39.16 GiB and 4.16 GiB, and a panel that showed only
+   * the first would be telling somebody to delete database pages that happen
+   * to be the same length. Free means free: nothing is read until the button
+   * is pressed, because the disk being read is theirs. */
+  let dupeRun = 0;
+
+  async function drawDupes(budgetMb) {
+    const mine = ++dupeRun;
+    const list = document.getElementById("d-list");
+    const sum = document.getElementById("d-sum");
+    const btn = document.getElementById("d-confirm");
+    sum.textContent = budgetMb ? "okunuyor…" : "…";
+    btn.disabled = true;
+    let res;
+    try {
+      res = await SERVICE.dupes(scope, budgetMb);
+    } catch (e) {
+      if (mine !== dupeRun) return;
+      console.error("scour: the duplicates panel did not load:", e);
+      sum.textContent = "servise ulaşılamıyor";
+      list.textContent = "";
+      btn.disabled = false;
+      return;
+    }
+    if (mine !== dupeRun) return;
+    btn.disabled = false;
+
+    sum.textContent =
+      `${bytes(res.proven)} doğrulandı · ${bytes(res.waste)} aday · ` +
+      `${fmt(res.candidates)} dosya` + (res.read ? ` · ${bytes(res.read)} okundu` : "");
+    /* The one sentence that must never be dropped: a partial answer that looks
+       complete is what gets files deleted on a guess. */
+    document.getElementById("d-note").innerHTML = res.unconfirmed
+      ? `Aynı boyutta olmak aynı dosya olmak değildir. <b>${fmt(res.unconfirmed)} grup
+         okunarak doğrulanmadı</b> — onlar aday, yinelenen değil.`
+      : `Hepsi okunarak karşılaştırıldı.`;
+
+    const word = { content: "birebir aynı", edges: "uçları aynı", size: "yalnız boyut" };
+    list.innerHTML = res.groups.map((g) => `
+      <div class="dupe">
+        <div class="top">
+          <span class="save">${bytes(g.waste)}</span>
+          <span class="of">×${g.paths.length} · ${bytes(g.size)}</span>
+          <span class="sure ${g.certainty}">${word[g.certainty] || g.certainty}</span>
+        </div>
+        <ul>${g.paths.slice(0, 6).map((p) => `<li>${escape_(shorten(p))}</li>`).join("")}${
+          /* One group of twenty-eight qdrant pages otherwise swallows the
+             panel, and the twenty-second path teaches nobody what the sixth
+             did not. The count above still says how many there are. */
+          g.paths.length > 6
+            ? `<li style="color:var(--ink-3)">… ${fmt(g.paths.length - 6)} tane daha</li>`
+            : ""
+        }</ul>
+      </div>`).join("") ||
+      `<div class="dupe"><div class="top"><span class="of">bu kapsamda yinelenen yok</span></div></div>`;
+  }
+
+  document.getElementById("d-confirm").onclick = () => drawDupes(2048);
 
   function drawJump() {
     document.getElementById("p-jump").innerHTML =
