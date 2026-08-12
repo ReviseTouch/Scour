@@ -1013,7 +1013,7 @@ impl NativeIndex {
     /// runs both on one worker thread, so it cannot happen there. A caller
     /// that does otherwise gets a slow commit rather than a wrong answer: the
     /// numbers folded are checked against the list again before the swap.
-    fn fold(&self, which_numbers: &[u64]) -> Result<()> {
+    fn fold(&self, which_numbers: &[u64]) -> Result<bool> {
         // **Not while a walk is running.** Folding renumbers what is left, and
         // the marks that say "this row was seen unchanged" are keyed on the
         // number a row's segment had when it was seen. Renumbering leaves every
@@ -1026,8 +1026,18 @@ impl NativeIndex {
         //
         // Refusing is free: a fold is housekeeping and the next one is a minute
         // away, while a walk is measured in seconds.
+        //
+        // **`false`, not `Ok(())`, and the difference was a spun core.** The
+        // compaction loop is `while let Some(head) = next_head() { fold(head) }`
+        // and it ends because folding makes the group too small to qualify. A
+        // refusal that looks like success leaves the group exactly as it was,
+        // `next_head` hands back the same one, and the loop never ends —
+        // measured on the live index at **99.7% of a core with nothing
+        // happening**, 224 segments that would not come down, for as long as a
+        // generation stayed open. Whether a caller can tell "refused" from
+        // "done" is not a detail.
         if !self.inner.read().seen.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         // **The number is claimed under the write lock, before anything is
         // built.** Reading `next_segment` under the read lock is not reserving
@@ -1052,8 +1062,11 @@ impl NativeIndex {
                 .iter()
                 .filter(|s| which_numbers.contains(&s.number))
                 .collect();
+            // Nothing here worth rewriting. `false` for the same reason as
+            // above: the caller loops until a fold stops changing anything, and
+            // it can only know that if it is told.
             if segs.len() < 2 && segs.iter().all(|s| s.dead_rows() == 0) {
-                return Ok(());
+                return Ok(false);
             }
             // The merged segment can carry only one stamp, so the group must
             // either share one or be known to be entirely current — see
@@ -1098,7 +1111,7 @@ impl NativeIndex {
             Live::erase(&self.dir, n);
         }
         trim_allocator();
-        Ok(())
+        Ok(true)
     }
 
     /// Segments grouped by generation, **by number rather than by position**.
@@ -2499,7 +2512,11 @@ impl Index for NativeIndex {
                 // group of eleven becomes two, which no longer qualifies, so
                 // this terminates.
                 while let Some(head) = self.next_head() {
-                    self.fold(&head)?;
+                    // A refusal ends the round rather than repeating it. See
+                    // `fold`.
+                    if !self.fold(&head)? {
+                        break;
+                    }
                 }
             }
             // Everything becomes one segment, generations included.
@@ -2544,7 +2561,9 @@ impl Index for NativeIndex {
                     }
                 };
                 for group in work {
-                    self.fold(&group)?;
+                    if !self.fold(&group)? {
+                        break;
+                    }
                 }
             }
         }

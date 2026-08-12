@@ -896,6 +896,58 @@ fn a_rebuild_finishes_even_while_the_index_is_being_written_to() {
     );
 }
 
+/// A compaction that is not allowed to fold still ends.
+///
+/// **This one spun a core on the live index for as long as a generation stayed
+/// open.** Folding is refused while a walk has marked rows as seen — the marks
+/// are keyed on segment numbers and folding renumbers them — and the refusal
+/// returned `Ok(())`, which the caller could not tell from having done the
+/// work. `maintain(Compact)` is `while let Some(head) = next_head() { fold }`
+/// and it ends because a folded group stops qualifying, so a refusal that
+/// changed nothing handed back the same group for ever: 99.7% of a core with
+/// nothing happening, 224 segments that would not come down.
+///
+/// The assertion is that it *returns*. Before the fix this test does not fail,
+/// it hangs — so it runs on its own thread with a deadline, and the failure is
+/// a sentence rather than a timeout nobody can read.
+#[test]
+fn a_compaction_that_may_not_fold_still_finishes() {
+    use std::sync::mpsc;
+
+    let f = Fixture::new(8_000, 800);
+    assert!(
+        f.index.stats().expect("stats").segments >= 10,
+        "the fixture is supposed to be fragmented"
+    );
+
+    // A generation with rows marked seen: exactly the state a start-up walk is
+    // in for its first several seconds, and the one folding is refused in.
+    f.index.begin_generation().expect("generation");
+    let mut again = f.entries.iter().cloned().map(Change::Upsert);
+    f.index.apply(&mut again).expect("apply");
+    f.index.commit().expect("commit");
+
+    let before = f.index.stats().expect("stats").segments;
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            let r = f.index.maintain(Maintenance::Compact);
+            let _ = tx.send(r.is_ok());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(20)) {
+            Ok(ok) => assert!(ok, "the compaction failed rather than declining"),
+            Err(_) => {
+                panic!("maintain(Compact) never returned: a refused fold is being retried for ever")
+            }
+        }
+    });
+    assert_eq!(
+        f.index.stats().expect("stats").segments,
+        before,
+        "it declined, so nothing should have moved"
+    );
+}
+
 #[test]
 fn a_compaction_folds_the_head_and_leaves_the_body() {
     // What a search pays for is the number of segments, so a compaction only
