@@ -554,8 +554,48 @@ fn api_places(stream: &mut TcpStream) {
     }
     http::json(
         stream,
-        &serde_json::json!({ "home": home, "places": places }),
+        &serde_json::json!({ "home": home, "places": places, "mounts": mounts() }),
     );
+}
+
+/// Every mount point, and whether the kernel records reads on it.
+///
+/// **A column that shows a number nobody maintains is worse than an empty
+/// one.** With `noatime`, `st_atime` is written once — when the file is made —
+/// and never again, so a browser profile rewritten every second reports
+/// "accessed eleven days ago", which is the day the application was installed.
+/// Every one of those numbers is *true* and none of them answers the question
+/// the column's heading asks.
+///
+/// **All of them, not only the `noatime` ones**, because mount points nest and
+/// the deepest one owns the file: `/` is `noatime` on this machine while
+/// `/mnt/depo` under it is `relatime`, so a list of just the silent mounts
+/// would call the whole disk silent. That was the first version, and it marked
+/// every row.
+///
+/// Read once per run: mount options do not change while a window is open, and
+/// reopening it is the ordinary way to find out if they did. Empty on anything
+/// without `/proc/self/mounts` — the honest answer where this cannot be asked,
+/// and the column then behaves as it always did.
+fn mounts() -> Vec<serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            // `device point type options dump pass`, space separated, with
+            // octal escapes in the point. A path with a space in it is the
+            // only one that needs unescaping, and `\040` is the only escape
+            // that turns up.
+            let mut parts = line.split_whitespace();
+            let point = parts.nth(1)?.replace(r"\040", " ");
+            let opts = parts.nth(1)?;
+            Some(serde_json::json!({
+                "at": point,
+                "reads": !opts.split(',').any(|o| o == "noatime"),
+            }))
+        })
+        .collect()
 }
 
 /// How many match, exactly, however long that takes.

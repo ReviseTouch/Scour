@@ -1344,6 +1344,12 @@
      what its owner calls Documents and Downloads, in their own language.
      Empty until then, which is a few milliseconds and honest. */
   let SCOPES = [];
+  /* Mount points where the kernel does not record reads. See `noatime_mounts`
+     in the bridge: with `noatime`, `st_atime` is written when the file is made
+     and never again, so a browser profile rewritten every second reports
+     "accessed eleven days ago" — the day it was installed. True, and not an
+     answer to the question the column asks. */
+  let MOUNTS = [];
   let HOME = "";
   const SIZES = [[">10 MB", ">10mb", null], [">1 MB", ">1mb", null], ["= 0", "=0", null]];
 
@@ -3113,8 +3119,33 @@
       write: cell("kind", (f) => f.ext || "") },
     { id: "ctime", label: "Oluşturma", key: "created", w: 120,
       write: cell("n left", (f) => (f.ctime ? ago(f.ctime) : "")) },
+    /* **A dash where nothing is recorded, not a stale number.**
+     *
+     * Checked against the mounts rather than assumed: `/mnt/depo` is
+     * `relatime` and its access times are real, `/home` here is `noatime` and
+     * its are frozen at creation. The same column, two volumes, two different
+     * meanings — so the one that means nothing says nothing, and the title
+     * says why rather than leaving somebody to work it out from the numbers. */
     { id: "atime", label: "Erişim",   key: "accessed", w: 120,
-      write: cell("n left", (f) => (f.atime ? ago(f.atime) : "")) },
+      write: (td, f) => {
+        /* The deepest mount point that contains this file is the one it
+           lives on: `/` is `noatime` here and `/mnt/depo` under it is not, so
+           anything shorter than the longest match answers about the wrong
+           filesystem. */
+        let owner = null;
+        for (const m of MOUNTS) {
+          const under = m.at === "/" || (f.path + "/").startsWith(m.at + "/");
+          if (under && (!owner || m.at.length > owner.at.length)) owner = m;
+        }
+        const dead = !!owner && !owner.reads;
+        cell("n left", (x) => (dead ? "—" : x.atime ? ago(x.atime) : ""))(td, f);
+        const t = dead
+          ? "bu birimde okuma zamanı kaydedilmiyor (noatime) — gösterilen sayı"
+            + " dosyanın oluşturulduğu andan kalma olurdu"
+          : "";
+        if (td.title !== t) td.title = t;
+        td.style.color = dead ? "var(--ink-3)" : "";
+      } },
     { id: "perm",  label: "İzinler",  key: "mode",  w: 108,
       write: cell("mono", (f) => f.perm || "") },
     { id: "user",  label: "Sahip",    key: "uid",   w: 100,
@@ -4212,6 +4243,7 @@
   SERVICE.get("places", {})
     .then((res) => {
       HOME = res.home || "";
+      MOUNTS = res.mounts || [];
       SCOPES = (res.places || []).map((p) => [p.label, p.path, null]);
     })
     .catch(() => {});
