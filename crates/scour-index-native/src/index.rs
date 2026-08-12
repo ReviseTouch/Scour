@@ -2029,6 +2029,18 @@ impl Index for NativeIndex {
     ///
     /// The same shape as `fold`, and for the same reason: a segment is written
     /// once and never edited, so writing one touches nothing a search reads.
+    fn abandon_generation(&self, generation: u64) -> Result<()> {
+        let mut inner = self.inner.write();
+        close_generation(&mut inner, generation);
+        // The marks are worthless without the sweep that would have read them,
+        // and expensive to keep: a marked segment cannot be folded, so leaving
+        // them behind stops compaction until something else opens and closes a
+        // generation. See the trait.
+        inner.seen.clear();
+        drop(inner);
+        self.save_meta(&self.inner.read())
+    }
+
     fn commit(&self) -> Result<()> {
         #[cfg(feature = "memory-trace")]
         let trace_start = CommitStamp::now();

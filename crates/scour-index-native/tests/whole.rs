@@ -944,6 +944,45 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     );
 }
 
+/// A pass that is never swept still lets housekeeping run afterwards.
+///
+/// **The leak behind the 241 segments, pinned at its source.** A walk that
+/// could not look must not sweep — deleting on no evidence is how a directory
+/// that lost its read permission loses its files too — but the sweep was the
+/// only thing that ended a generation. So the pass stayed open, the notes it
+/// made about unchanged rows stayed with it, and a noted segment cannot be
+/// folded. One walk of a directory a watcher had just seen deleted was enough
+/// to stop compaction for good.
+///
+/// The fix is that ending a pass and reconciling it are two things.
+#[test]
+fn a_pass_that_is_never_swept_does_not_block_compaction() {
+    let f = Fixture::new(8_000, 800);
+    let started = f.index.stats().expect("stats");
+    let before = started.segments;
+    assert!(before >= 10, "the fixture is supposed to be fragmented");
+
+    // A walk that found everything exactly as it was: nothing written, every
+    // row noted instead.
+    let g = f.index.begin_generation().expect("generation");
+    let mut again = f.entries.iter().cloned().map(Change::Upsert);
+    f.index.apply(&mut again).expect("apply");
+    f.index.commit().expect("commit");
+
+    // And then it turns out the walk could not be trusted, so there is no
+    // sweep — only an ending.
+    f.index.abandon_generation(g).expect("abandon");
+
+    f.index.maintain(Maintenance::Compact).expect("compact");
+    let after = f.index.stats().expect("stats");
+    assert!(
+        after.segments < before,
+        "compaction is still blocked by a pass nobody ended: {before} -> {}",
+        after.segments
+    );
+    assert_eq!(after.entries, started.entries, "and it lost nothing");
+}
+
 /// Compaction still folds when every segment has a generation of its own.
 ///
 /// **The shape a real machine produces, and the one nothing tested.** A walk

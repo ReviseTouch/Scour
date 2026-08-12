@@ -1603,6 +1603,23 @@ fn scan(
         if gone > 0 {
             shared.touched();
         }
+    } else if let Err(e) = shared.index.abandon_generation(generation) {
+        // **A pass that will not be swept still has to end.** Not sweeping is
+        // the right answer here — the walk could not look, and deleting on no
+        // evidence is how a directory that lost its read permission loses its
+        // files too — but the generation was the sweep's to close, and nobody
+        // else was going to.
+        //
+        // What it cost while nothing did: the index keeps per-segment notes
+        // about rows a walk found unchanged, a noted segment cannot be folded,
+        // and the notes only go when a generation ends. One walk of a directory
+        // that had just been deleted — which a watcher asks for routinely —
+        // was enough to stop compaction for good. Measured on the live index at
+        // 241 segments, every search reading all of them.
+        scour_core::note!(
+            "scourd: a pass of {} could not be ended: {e}",
+            src.describe().name
+        );
     }
     let _ = changes;
 

@@ -63,6 +63,29 @@ pub trait Index: Send + Sync + Debug {
         spare: &crate::types::PrefixSet,
     ) -> Result<u64>;
 
+    /// End a pass that will not be swept, and throw away what it noted.
+    ///
+    /// **A generation exists for the sweep that consumes it.** A walk that
+    /// could not look — an unmounted volume, a root that lost its read
+    /// permission, a cancelled pass — must not sweep, because sweeping on no
+    /// evidence deletes what is merely out of reach. But it must still *end*,
+    /// and until this existed only the sweep ended one.
+    ///
+    /// What that cost: whatever the pass noted about rows it found unchanged
+    /// stayed noted, and the index keeps those notes per segment. So a
+    /// compaction could not touch a noted segment — rightly, since folding
+    /// renumbers what the notes point at — and the notes never went away. On a
+    /// machine whose watcher walks a subtree every few seconds, one walk of a
+    /// directory that had just been deleted was enough to stop compaction for
+    /// good: the segment count then only rises, and every search reads all of
+    /// them. Measured at 241.
+    ///
+    /// Doing nothing is a valid implementation for an index that keeps no such
+    /// state, which is why this has a default.
+    fn abandon_generation(&self, _generation: u64) -> Result<()> {
+        Ok(())
+    }
+
     /// Make everything applied so far durable and visible to new readers.
     ///
     /// Expensive — tens of milliseconds — which is why the engine batches
