@@ -204,6 +204,16 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 );
             }
         }
+        Response::Settings(s) => {
+            // Printed rather than hidden, because `scour where` exists for the
+            // same reason: when something is remembered wrongly, the first
+            // question is what is remembered.
+            println!("{}{}", label("columns"), s.columns.join(", "));
+            println!("{}{}", label("sort"), s.sort);
+            for q in s.history.iter().take(20) {
+                println!("{}{q}", label("history"));
+            }
+        }
         Response::Usage(u) => {
             println!(
                 "{:>10}  {:>10}  {:>9}  {}",
@@ -641,6 +651,9 @@ mod tests {
             "read",
             "groups were not confirmed: raise --budget-mb",
             "warning",
+            "columns",
+            "sort",
+            "history",
             "was searched for as text",
             "a rebuild would speed searches up",
             "The index is empty. Run `scour rescan`.",

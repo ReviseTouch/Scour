@@ -5,17 +5,39 @@
 //! never fails — so there is nothing left here but naming which method a
 //! request means. That is what makes a second frontend cheap.
 
+use std::path::PathBuf;
+use std::sync::Mutex;
+
 use scour_engine::Engine;
 use scour_proto::{Outcome, Request, Response};
 
-pub fn dispatch(engine: &Engine, req: Request) -> Outcome {
-    match run(engine, req) {
+/// What every frontend remembers, and where it is written.
+///
+/// **Held here rather than in the engine**, because it is not about the index:
+/// which columns somebody shows is a fact about a person. The engine would
+/// have to carry it through every layer to reach the one place that serves it.
+pub struct Kept {
+    pub dir: PathBuf,
+    pub settings: Mutex<scour_settings::Settings>,
+}
+
+impl Kept {
+    pub fn open(dir: PathBuf) -> Kept {
+        Kept {
+            settings: Mutex::new(scour_settings::Settings::load(&dir)),
+            dir,
+        }
+    }
+}
+
+pub fn dispatch(engine: &Engine, kept: &Kept, req: Request) -> Outcome {
+    match run(engine, kept, req) {
         Ok(r) => Outcome::Ok(r),
         Err(e) => Outcome::Error(e),
     }
 }
 
-fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
+fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Response> {
     Ok(match req {
         Request::Search {
             query,
@@ -77,6 +99,23 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
                 read: r.read,
                 unconfirmed: r.unconfirmed,
             }
+        }
+        Request::Settings {} => Response::Settings(
+            kept.settings
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+        ),
+        // Written where the change happens rather than at shutdown. The whole
+        // reason this moved out of the browser is that a process which is
+        // killed never gets to write anything.
+        Request::SetSettings { settings } => {
+            let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
+            *held = settings;
+            if let Err(e) = held.save(&kept.dir) {
+                scour_core::note!("scourd: settings could not be written: {e}");
+            }
+            Response::Accepted
         }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);

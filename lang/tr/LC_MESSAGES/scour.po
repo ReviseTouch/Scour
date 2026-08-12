@@ -227,3 +227,13 @@ msgstr "okundu"
 
 msgid "groups were not confirmed: raise --budget-mb"
 msgstr "grup doğrulanmadı: --budget-mb değerini artırın"
+
+# --- what the frontends remember ---
+msgid "columns"
+msgstr "kolonlar"
+
+msgid "sort"
+msgstr "sıralama"
+
+msgid "history"
+msgstr "geçmiş"

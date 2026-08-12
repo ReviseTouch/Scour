@@ -4643,6 +4643,7 @@ name = "scour-proto"
 version = "0.1.0"
 dependencies = [
  "scour-core",
+ "scour-settings",
  "serde",
  "serde_json",
 ]
@@ -4652,6 +4653,14 @@ name = "scour-query"
 version = "0.1.0"
 dependencies = [
  "scour-core",
+ "serde_json",
+]
+
+[[package]]
+name = "scour-settings"
+version = "0.1.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 
@@ -4706,6 +4715,7 @@ dependencies = [
  "scour-ipc",
  "scour-proto",
  "scour-query",
+ "scour-settings",
  "scour-source-fs",
  "serde",
  "serde_json",

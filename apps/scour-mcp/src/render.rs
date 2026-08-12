@@ -110,6 +110,9 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        // Never reached: the tool surface offers no settings tool, and a
+        // write would be refused as mutating regardless.
+        Response::Settings(_) => "settings are not part of this surface.".into(),
         Response::Facets(f) => {
             if f.facets.is_empty() {
                 return "Nothing matched.".into();

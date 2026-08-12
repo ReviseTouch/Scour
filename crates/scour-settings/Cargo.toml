@@ -1,6 +1,6 @@
 [package]
-name        = "scour-proto"
-description = "The Scour wire contract. Types only, no I/O."
+name        = "scour-settings"
+description = "What every frontend remembers between runs, kept where all of them can reach it."
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -11,10 +11,8 @@ publish.workspace      = true
 [lints]
 workspace = true
 
+# Serde, and nothing else. Not the index, not the engine, not a frontend:
+# "which columns are shown" is a fact about a person, not about a filesystem.
 [dependencies]
-scour-core     = { workspace = true }
-scour-settings = { workspace = true }
 serde      = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }

@@ -121,6 +121,19 @@ pub enum Request {
         #[serde(default = "default_dupe_top")]
         top: u32,
     },
+    /// What this person's frontends remember: columns, widths, order, the
+    /// queries they have run.
+    ///
+    /// **Held by the service because it is the only thing all the frontends
+    /// talk to.** The window kept these in `localStorage`, which a browser
+    /// writes on a clean shutdown and loses when it is killed — measured both
+    /// ways — and which a terminal interface cannot read at all.
+    Settings {},
+    /// Replace them. The whole object, because a frontend that sent one field
+    /// would have to know what the others currently are anyway.
+    SetSettings {
+        settings: scour_settings::Settings,
+    },
     /// Read a query back — as a sentence, as coloured pieces, and as what
     /// could be typed next. Nothing is run.
     ///
@@ -277,6 +290,7 @@ pub enum Response {
         /// deleted on the strength of a guess.
         unconfirmed: u64,
     },
+    Settings(scour_settings::Settings),
     Facets(FacetResponse),
     Tree {
         root: TreeNode,
@@ -329,7 +343,10 @@ impl Request {
     /// side it is on, because nothing compiles until they do.
     pub fn is_mutating(&self) -> bool {
         match self {
-            Request::Rescan { .. } | Request::Maintain { .. } | Request::Shutdown {} => true,
+            Request::Rescan { .. }
+            | Request::Maintain { .. }
+            | Request::SetSettings { .. }
+            | Request::Shutdown {} => true,
             Request::Search { .. }
             | Request::Count { .. }
             | Request::Facets { .. }
@@ -337,6 +354,7 @@ impl Request {
             | Request::Stat { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
+            | Request::Settings {}
             | Request::Explain { .. }
             | Request::Sources {}
             | Request::Status {}
@@ -356,6 +374,8 @@ impl Request {
             Request::Stat { .. } => "stat",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",
+            Request::Settings {} => "settings",
+            Request::SetSettings { .. } => "set-settings",
             Request::Explain { .. } => "explain",
             Request::Sources {} => "sources",
             Request::Status {} => "status",

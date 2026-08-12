@@ -216,6 +216,11 @@ fn main() -> Result<()> {
         });
     }
 
+    // Beside the index rather than in the config file: this is written when
+    // somebody drags a column, and rewriting a hand-edited `config.toml` — with
+    // its comments and its measurements — to record a column width would be
+    // vandalism.
+    let kept = handle::Kept::open(scour_config::data_dir().join("state"));
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();
@@ -237,7 +242,7 @@ fn main() -> Result<()> {
                     let _ = scour_ipc::Client::connect(&addr);
                 });
             }
-            handle::dispatch(&handler_engine, req)
+            handle::dispatch(&handler_engine, &kept, req)
         },
         Arc::clone(&stop),
     );

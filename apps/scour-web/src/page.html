@@ -1277,6 +1277,19 @@
        default. */
     dupes: (under, budgetMb, signal) =>
       SERVICE.get("dupes", { under, budget_mb: budgetMb || 0, top: 25 }, signal),
+    /* What this window remembers, kept by the service.
+     *
+     * **Not `localStorage`, and that is a correction.** A browser writes it on
+     * a clean shutdown and loses it when the process is killed — measured both
+     * ways, and this window is killed often enough that its own launcher has a
+     * comment about it. It also cannot be read by a terminal interface or a
+     * Slint one, and a person who turns off a column has said something about
+     * Scour rather than about Chromium. */
+    settings: () => SERVICE.get("settings", {}),
+    saveSettings: (s) => fetch(
+      `/api/settings?${new URLSearchParams({ set: JSON.stringify(s), t: TOKEN })}`,
+      { method: "POST" },
+    ).catch(() => {}),
     status: () => SERVICE.get("status", {}),
     /* The one request that is meant to take a long time: it does not answer
        until the index would answer differently. See the live section at the
@@ -2122,6 +2135,44 @@
     hintSel = 0;
     q.setAttribute("aria-expanded", "false");
   }
+
+  /* The past, in the same box the completions use.
+   *
+   * **One dropdown, not two.** A second list with its own keys and its own
+   * idea of what Escape means would be two things to get right and two things
+   * to explain. So a remembered query is a completion whose insert is the
+   * whole line: the arrows, Enter, Escape and the mouse already work.
+   *
+   * `Alt+↓` opens it, which is what a combo box has meant since Windows 95
+   * and what a browser's address bar still does. Plain `↓` keeps its job of
+   * walking into the results. */
+  function showHistory() {
+    const typed = q.value.trim().toLowerCase();
+    // What was typed narrows it, because a hundred past queries is a list
+    // nobody reads. An empty box offers everything, newest first.
+    const past = HISTORY.filter((h) => !typed || h.toLowerCase().includes(typed));
+    if (!past.length) { hideHints(); return; }
+    hints = past.map((h) => ({ insert: h, label: h, about: "", at: [0, q.value.length] }));
+    hintSel = 0;
+    hintBox.innerHTML = hints.map((h, i) =>
+      '<button role="option" data-i="' + i + '" aria-selected="' + (i === hintSel) + '">' +
+      "<code>" + escape_(h.label) + "</code><span></span></button>").join("");
+    hintBox.hidden = false;
+    q.setAttribute("aria-expanded", "true");
+  }
+
+  /* A query somebody meant, rather than one they were halfway through typing.
+   *
+   * The box searches per keystroke, so what was *searched* is `r`, `ra`,
+   * `rap`. What goes in the history is what was committed to — Enter, or
+   * opening a result — and only this half of the program knows which keys
+   * those are. */
+  function remember(text) {
+    text = (text || "").trim();
+    if (!text || HISTORY[0] === text) return;
+    HISTORY = [text, ...HISTORY.filter((h) => h !== text)].slice(0, 100);
+    keep();
+  }
   function acceptHint(i) {
     const h = hints[i];
     if (!h) return;
@@ -2152,6 +2203,21 @@
   });
 
   q.addEventListener("keydown", (e) => {
+    /* `Alt+↓` opens what was searched before — the combo box gesture. Plain
+       `↓` still walks into the results, which is the more common move and
+       should not be taken from it. */
+    if (e.altKey && e.key === "ArrowDown") {
+      e.preventDefault();
+      if (hintBox.hidden) showHistory(); else hideHints();
+      return;
+    }
+    /* Enter commits: the query goes into the history, and the box keeps the
+       text so the next keystroke can still edit it. When the list is open,
+       Enter takes the selection instead — handled below. */
+    if (e.key === "Enter" && hintBox.hidden) {
+      remember(q.value);
+      return;
+    }
     /* **Down goes to the list**, which is where a person's hand goes after
        typing: type, look, arrow down, Enter. Only when no completion is
        showing — there the arrows belong to the completions, and Escape puts
@@ -3186,8 +3252,50 @@
     }
   }
 
+  /* Everything this window remembers, sent to the service.
+   *
+   * Debounced, because dragging a column edge fires per pixel and a settings
+   * write per pixel would be a file rewritten a hundred times a second. A
+   * quarter of a second after the hand stops is soon enough for something
+   * nobody reads until the next launch. */
+  let keepTimer = null;
+  function keep() {
+    clearTimeout(keepTimer);
+    keepTimer = setTimeout(() => {
+      SERVICE.saveSettings({
+        columns: SHOWN,
+        widths: WIDTHS,
+        sort: sortKey,
+        descending: sortDesc,
+        history: HISTORY,
+      });
+    }, 250);
+  }
+
+  /* What the service handed back, applied to a window that has already drawn
+     itself with defaults. The request is one round trip and the page must not
+     wait for it — a blank window while a socket answers is worse than a
+     window whose columns settle a moment later. */
+  function applySettings(s) {
+    if (Array.isArray(s.columns) && s.columns.length) {
+      const ok = s.columns.filter((id) => COLUMNS.some((c) => c.id === id));
+      if (ok.length) SHOWN = ok;
+    }
+    if (s.widths && typeof s.widths === "object") WIDTHS = { ...s.widths };
+    if (s.sort && COLUMNS.some((c) => c.key === s.sort)) sortKey = s.sort;
+    if (typeof s.descending === "boolean") sortDesc = s.descending;
+    HISTORY = Array.isArray(s.history) ? s.history : [];
+    buildHeads();
+    applyWidths();
+    render();
+  }
+
+  /* Past queries, newest first. Filled by the service, added to only when a
+     search was *meant* — see `remember`. */
+  let HISTORY = [];
+
   function saveWidths() {
-    try { localStorage.setItem(WIDTH_KEY, JSON.stringify(WIDTHS)); } catch {}
+    keep();
   }
 
   /* One grip a heading, on its trailing edge. The last column has none: there
@@ -3347,6 +3455,7 @@
     if (!th) return;
     if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
     else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "mtime" || th.dataset.sort === "size"; }
+    keep();
     render();
   });
   /* **The box does not edit what is being typed, and it used to.**
@@ -3385,6 +3494,10 @@
    * than view has its folder revealed instead. Neither is enforced here,
    * because a check that lives in the page is a check an attacker skips. */
   async function launch(path, what) {
+    // Opening a result is the strongest thing a person can say about a query:
+    // it found what they were looking for. That belongs in the history even if
+    // they never pressed Enter.
+    remember(q.value);
     try {
       const q = new URLSearchParams({ path, what: what || "file", t: TOKEN });
       const r = await fetch(`/api/open?${q}`, { method: "POST" });
@@ -3441,7 +3554,7 @@
         // clicked: a column belongs where its neighbours expect it.
         SHOWN = COLUMNS.filter((c) => SHOWN.includes(c.id) || c.id === id).map((c) => c.id);
       }
-      try { localStorage.setItem(SHOWN_KEY, JSON.stringify(SHOWN)); } catch {}
+      keep();
       buildHeads();
       render();
       colMenu.remove();
@@ -4240,6 +4353,14 @@
 
   /* The taxonomy, then the first search. The rail cannot be drawn before the
      engine has said what is in it. */
+  /* Before anything else the window is told what it remembered. It has
+     already drawn itself with defaults by now, which is deliberate: a blank
+     window while a socket answers is worse than one whose columns settle a
+     moment later. */
+  SERVICE.settings()
+    .then(applySettings)
+    .catch(() => {});
+
   SERVICE.get("places", {})
     .then((res) => {
       HOME = res.home || "";

@@ -242,7 +242,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     }
     // Reading is `GET`, doing is `POST`, and the split is not decoration: it
     // is what keeps a link, a prefetch or a history entry from opening a file.
-    let acting = req.path == "/api/open";
+    let acting =
+        req.path == "/api/open" || (req.path == "/api/settings" && req.param("set").is_some());
     if req.method != if acting { "POST" } else { "GET" } {
         http::fail(
             &mut stream,
@@ -277,6 +278,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream),
         "/api/places" => api_places(&mut stream),
+        "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
         "/api/dupes" => api_dupes(&mut stream, client, &req),
@@ -522,6 +524,42 @@ fn api_kinds(stream: &mut TcpStream) {
 /// and only the ones that exist are offered. A machine with no `user-dirs.dirs`
 /// gets the home directory and nothing else, which is honest rather than four
 /// dead links.
+/// What this person's frontends remember.
+///
+/// **The second thing on this bridge that writes**, and the accounting is the
+/// same as `/api/open`'s: `POST` only when it is setting, so a link or a
+/// prefetch cannot change somebody's columns, and the token and the origin are
+/// still in front of it. What it can write is a column list — not a file.
+///
+/// It lives in the service rather than in the browser because a browser loses
+/// it. `localStorage` is flushed on a clean shutdown and dropped when the
+/// process is killed — measured both ways — and a terminal interface cannot
+/// read it at all. See `scour-settings`.
+fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let request = match req.param("set") {
+        Some(text) => match serde_json::from_str(text) {
+            Ok(settings) => Request::SetSettings { settings },
+            Err(e) => {
+                http::fail(
+                    stream,
+                    "400 Bad Request",
+                    &format!("unreadable settings: {e}"),
+                );
+                return;
+            }
+        },
+        None => Request::Settings {},
+    };
+    match call(client, request) {
+        Ok(Response::Settings(s)) => match serde_json::to_value(&s) {
+            Ok(v) => http::json(stream, &v),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        },
+        Ok(_) => http::json(stream, &serde_json::json!({ "saved": true })),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 fn api_places(stream: &mut TcpStream) {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut places: Vec<serde_json::Value> = Vec::new();
