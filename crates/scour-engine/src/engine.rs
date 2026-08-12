@@ -946,6 +946,8 @@ fn run(
     changes_tx: Sender<Change>,
 ) {
     let mut dirty = false;
+    // Set when a walk finishes with changes already queued behind it.
+    let mut overdue = false;
     // Housekeeping runs once per quiet period, not once per tick.
     let mut idle_done = false;
     // Set by a commit, cleared by the check after it: the moment a batch of
@@ -1104,6 +1106,29 @@ fn run(
                     dirty = true;
                     idle_done = false;
                     last_busy = Instant::now();
+                    // **Whatever waited out the walk has waited long enough.**
+                    // A walk does not drain this channel, so a file created
+                    // while one was running has already been unwritten for as
+                    // long as the walk took — and `commit_idle` would then
+                    // charge it that again from the moment it lands. The
+                    // staleness that setting promises is measured from when
+                    // something changed, not from when the index got round to
+                    // it, so here the clock is treated as already spent.
+                    //
+                    // Measured on a start-up walk of two sources, 300 files
+                    // created into the first after it was already walked and
+                    // swept: **15.0 seconds** from the walk ending to the rows
+                    // being findable, all of it this wait — against 0.5 with
+                    // the bound turned down. One extra commit a walk, and only
+                    // when something actually queued behind it.
+                    //
+                    // Noted here and acted on where the batch lands, because
+                    // the commit at the bottom of this turn belongs to the
+                    // walk's own rows: backdating the clock here is spent on
+                    // those and the queued ones wait the full patience again.
+                    // Which is what the first version of this did, and it
+                    // measured worse than no change at all.
+                    overdue = !changes.is_empty();
                 }
                 Ok(Job::Maintain(level)) => {
                     let _ = shared.index.maintain(level);
@@ -1164,6 +1189,12 @@ fn run(
                         }
                         dirty = true;
                         idle_done = false;
+                        // These are the ones that waited out a walk. See the
+                        // note in the scan arm.
+                        if overdue {
+                            overdue = false;
+                            last_commit = Instant::now() - shared.opts.commit_idle;
+                        }
                     }
                     // A watcher that lost track becomes a walk of the subtree
                     // it lost. Every platform loses track differently; this is
