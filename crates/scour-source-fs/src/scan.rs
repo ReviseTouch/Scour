@@ -35,6 +35,51 @@ const BATCH: usize = 512;
 /// holds, and it is deliberately about what one message used to hold.
 const IN_FLIGHT: usize = 64;
 
+/// Step out of the way of everything else on the machine.
+///
+/// **A first scan has no deadline and the rest of the boot does.** The walk
+/// starts when the service does, which on a desktop is while every other
+/// service is also coming up and reading from the same disk — and a cold walk
+/// of an NTFS volume here is sixty-one seconds of device time. Nothing about
+/// the index is more urgent than the session the person is waiting for.
+///
+/// **Per thread, and that is the point.** Only the walkers are made polite; the
+/// worker that answers searches and the connection threads are left alone, so a
+/// query typed during the first scan is served at full speed. On Linux both of
+/// these apply to the calling task rather than the process, which is what makes
+/// that possible.
+///
+/// Neither costs anything on an idle machine: a nice value only decides who
+/// yields when two want the same core, and the idle I/O class only defers when
+/// something else wants the disk. Measured that way before it shipped.
+fn stand_aside() {
+    // SAFETY: both are ordinary syscalls on the calling thread, and a failure
+    // to become polite is not a failure to scan — so neither result is checked
+    // beyond ignoring it.
+    unsafe {
+        // Ten *more* than whatever this already is, not ten absolutely.
+        // `setpriority` sets a value and `nice` adds to one, and the difference
+        // shows on a service someone has already made polite: started at
+        // `Nice=15`, an absolute ten would make the walkers the most aggressive
+        // thing in the process, which is the opposite of the intent.
+        //
+        // Ten is enough to lose every contest against an interactive process,
+        // and not so much that the walk starves outright on a busy machine.
+        libc::nice(10);
+        // IOPRIO_CLASS_IDLE (3) << IOPRIO_CLASS_SHIFT (13). The disk is the
+        // half that matters: the walk is `getdents` and `statx` all the way
+        // down, and cold that is where the sixty-one seconds go.
+        const IOPRIO_WHO_PROCESS: libc::c_int = 1;
+        const IOPRIO_CLASS_IDLE: libc::c_int = 3;
+        libc::syscall(
+            libc::SYS_ioprio_set,
+            IOPRIO_WHO_PROCESS,
+            0,
+            IOPRIO_CLASS_IDLE << 13,
+        );
+    }
+}
+
 /// One walker thread's outgoing buffer.
 ///
 /// **The channel was the scan.** Twenty threads sending one entry each into a
@@ -430,7 +475,16 @@ impl Source for FsSource {
                 builder.build_parallel().run(|| {
                     let tx = walker_tx.clone();
                     let mut batch = Batch::new(tx.clone());
+                    // On the first entry rather than here: `ignore` builds the
+                    // visitor on the thread that spawns the workers, so setting
+                    // a thread's priority at this point would set the wrong
+                    // one. The closure below runs on the walker itself.
+                    let mut polite = false;
                     Box::new(move |result| {
+                        if !polite {
+                            polite = true;
+                            stand_aside();
+                        }
                         if cancelled.load(Ordering::Relaxed) {
                             return WalkState::Quit;
                         }
