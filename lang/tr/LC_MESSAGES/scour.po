@@ -202,3 +202,28 @@ msgstr "uyarı"
 
 msgid "was searched for as text"
 msgstr "süzgeç olarak okunamadı, metin olarak arandı"
+
+# --- the same file, several times over ---
+msgid "identical"
+msgstr "birebir aynı"
+
+msgid "same ends"
+msgstr "uçları aynı"
+
+msgid "same size only"
+msgstr "yalnız boyutu aynı"
+
+msgid "confirmed"
+msgstr "doğrulandı"
+
+msgid "could be freed"
+msgstr "geri kazanılabilir"
+
+msgid "candidates"
+msgstr "aday"
+
+msgid "read"
+msgstr "okundu"
+
+msgid "groups were not confirmed: raise --budget-mb"
+msgstr "grup doğrulanmadı: --budget-mb değerini artırın"

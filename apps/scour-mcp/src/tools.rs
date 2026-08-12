@@ -97,6 +97,23 @@ pub struct FacetArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DupeArgs {
+    /// Limit it to this folder. Empty means everything indexed.
+    #[serde(default)]
+    pub under: String,
+    /// Ignore files smaller than this many megabytes. Default 1.
+    #[serde(default)]
+    pub min_mb: Option<u64>,
+    /// How many megabytes may be read to confirm. 0 answers from sizes alone,
+    /// instantly, and reports those groups as unconfirmed. Default 1024.
+    #[serde(default)]
+    pub budget_mb: Option<u64>,
+    /// How many groups. Default 20.
+    #[serde(default)]
+    pub top: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct NoArgs {}
 
 #[tool_router]
@@ -224,6 +241,23 @@ impl Scour {
             path: a.path,
             depth: a.depth.unwrap_or(1).min(6),
             limit: a.limit.unwrap_or(50).min(500),
+        })
+    }
+
+    #[tool(
+        description = "Find files that are the same file, biggest saving first. Answers \
+                       'what can I delete to get space back'. Works down from the largest \
+                       files and confirms by reading and comparing them — the reply says \
+                       per group whether it was confirmed or is only a size match, and a \
+                       size match is NOT a duplicate. Do not delete anything on the strength \
+                       of an unconfirmed group."
+    )]
+    fn scour_duplicates(&self, Parameters(a): Parameters<DupeArgs>) -> String {
+        self.call(Request::Duplicates {
+            under: a.under,
+            min_size: a.min_mb.unwrap_or(1) * 1024 * 1024,
+            read_budget: a.budget_mb.unwrap_or(1024) * 1024 * 1024,
+            top: a.top.unwrap_or(20).min(200),
         })
     }
 

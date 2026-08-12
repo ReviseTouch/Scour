@@ -29,6 +29,7 @@ scour-query         = { workspace = true }
 scour-proto         = { workspace = true }
 scour-ipc           = { workspace = true }
 scour-config        = { workspace = true }
+scour-dupes         = { workspace = true }
 scour-engine        = { workspace = true }
 scour-index-native  = { workspace = true }
 scour-source-fs     = { workspace = true }

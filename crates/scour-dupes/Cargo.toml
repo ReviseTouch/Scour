@@ -1,0 +1,18 @@
+[package]
+name        = "scour-dupes"
+description = "The same file, several times over: size groups first, then the bytes."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **No dependencies, not even `scour-core`.** What arrives is a list of paths
+# and their sizes; what leaves is which of them hold the same bytes. Nothing
+# here knows what an index is, and nothing here needs to — which is what lets
+# the whole of it be tested against a temp directory rather than a fixture.
+[dependencies]

@@ -207,6 +207,16 @@ const PREPARE: u32 = 20_000;
 /// twentieth of a core spent on speculation.
 const PREPARE_EVERY: Duration = Duration::from_secs(2);
 
+/// How many of the biggest files are considered for duplication.
+///
+/// A ceiling rather than a target, and the measurement says it is a generous
+/// one: on 1,474,650 files and 493.6 GB, everything over a megabyte is 18,723
+/// files. Past that the list is dominated by build output and small files that
+/// collide on size trivially — 59.3% of files are 4 KB or smaller — and the
+/// bytes they could give back are a rounding error against the 141.8 GB above
+/// the knee.
+const CANDIDATES: u32 = 200_000;
+
 /// The parts of a query the parser could not read as written.
 ///
 /// The service does this rather than the caller, and that is the whole point:
@@ -641,6 +651,57 @@ impl Engine {
     /// and the engine has nothing to add to it but the request.
     pub fn usage(&self, req: &scour_core::UsageRequest) -> Result<scour_core::UsageResponse> {
         self.shared.index.usage(req)
+    }
+
+    /// The same file, several times over.
+    ///
+    /// **This needed nothing new from the index**, which is worth saying
+    /// because the plan in `docs/REPORTS.md` expected a `duplicates()` on the
+    /// trait and a digest column behind it. Neither is here. The candidates
+    /// are a search — `size:>N`, ordered by size — and everything after that
+    /// is `scour-dupes`, which takes paths and sizes and knows nothing about
+    /// an index. The digest column stays unbuilt until somebody wants
+    /// duplicates *below* the size where reading is affordable.
+    ///
+    /// The query is built here rather than taken from the caller, because a
+    /// caller that could pass one could ask for duplicates among directories,
+    /// and a directory has no bytes to compare.
+    ///
+    /// `index.search` directly, not [`Engine::search`]: that one clamps the
+    /// page to `result_limit`, which exists so a window cannot ask for a
+    /// million rows behind a keystroke. Nineteen thousand paths is the whole
+    /// candidate set on the measured corpus and costs about twenty
+    /// milliseconds to build.
+    pub fn duplicates(
+        &self,
+        under: &str,
+        opts: &scour_dupes::Options,
+    ) -> Result<scour_dupes::Report> {
+        let mut query = format!("file: size:>={}", opts.min_size);
+        if !under.is_empty() {
+            // Quoted, because a path can hold a space and an unquoted one
+            // would become two terms — which would silently widen the scope
+            // rather than fail, and a report about the wrong folder looks
+            // exactly like a report about the right one.
+            query.push_str(&format!(" under:\"{under}\""));
+        }
+        let found = self.shared.index.search(&SearchRequest {
+            query: scour_query::parse(&query),
+            sort: SortKey::Size,
+            descending: true,
+            page: Page {
+                offset: 0,
+                limit: CANDIDATES,
+                count_cap: CANDIDATES,
+            },
+        })?;
+        Ok(scour_dupes::find(
+            found
+                .hits
+                .into_iter()
+                .map(|h| (h.path, h.meta.size.max(0) as u64)),
+            opts,
+        ))
     }
 
     pub fn stats(&self) -> Result<IndexStats> {

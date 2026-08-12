@@ -21,6 +21,10 @@ memory-trace = []
 [dependencies]
 scour-core        = { workspace = true }
 scour-query       = { workspace = true }
+# Not about search: it takes paths and sizes and answers which of them hold
+# the same bytes. Here rather than in the index because the index's job is to
+# say which files there are, and this one's is what to do with that list.
+scour-dupes       = { workspace = true }
 crossbeam-channel = { workspace = true }
 parking_lot       = { workspace = true }
 

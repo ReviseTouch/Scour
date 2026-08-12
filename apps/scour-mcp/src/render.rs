@@ -57,6 +57,53 @@ pub fn human(r: &Response) -> String {
                 format!("{total} matches.")
             }
         }
+        Response::Duplicates {
+            groups,
+            candidates,
+            waste,
+            proven,
+            read,
+            unconfirmed,
+        } => {
+            if groups.is_empty() {
+                return format!(
+                    "No duplicates among the {candidates} files at or above the size floor."
+                );
+            }
+            let mut out = String::new();
+            for g in groups {
+                out.push_str(&format!(
+                    "{} reclaimable — {} copies of {} ({})\n",
+                    format_size(g.waste, BINARY),
+                    g.paths.len(),
+                    format_size(g.size, BINARY),
+                    // Never "identical" unless it was read and compared. The
+                    // caller may be about to delete one of these.
+                    match g.certainty.as_str() {
+                        "content" => "read and compared, identical",
+                        "edges" => "same size and same first and last 4 KB, not fully compared",
+                        _ => "same size only, nothing read",
+                    }
+                ));
+                for p in &g.paths {
+                    out.push_str(&format!("  {p}\n"));
+                }
+            }
+            out.push_str(&format!(
+                "\n{} confirmed reclaimable — read and compared. {} more only shares a size \
+                 with something and was NOT verified. {candidates} candidates, {} read.",
+                format_size(*proven, BINARY),
+                format_size(waste.saturating_sub(*proven), BINARY),
+                format_size(*read, BINARY),
+            ));
+            if *unconfirmed > 0 {
+                out.push_str(&format!(
+                    " {unconfirmed} group(s) were NOT confirmed by reading — treat those as \
+                     candidates, not as duplicates."
+                ));
+            }
+            out
+        }
         Response::Facets(f) => {
             if f.facets.is_empty() {
                 return "Nothing matched.".into();

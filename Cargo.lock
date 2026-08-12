@@ -4538,12 +4538,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-dupes"
+version = "0.1.0"
+
+[[package]]
 name = "scour-engine"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "parking_lot",
  "scour-core",
+ "scour-dupes",
  "scour-index-native",
  "scour-mock",
  "scour-query",
@@ -4695,6 +4700,7 @@ dependencies = [
  "libc",
  "scour-config",
  "scour-core",
+ "scour-dupes",
  "scour-engine",
  "scour-index-native",
  "scour-ipc",

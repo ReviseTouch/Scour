@@ -99,6 +99,28 @@ pub enum Request {
         #[serde(default = "default_usage_top")]
         top: u32,
     },
+    /// The same file, several times over.
+    ///
+    /// Ordered by what deleting the copies would give back, largest first,
+    /// because that is the question — a count of duplicates is not something
+    /// anybody wanted. `read_budget` of zero answers from the sizes alone,
+    /// which costs nothing and is already the answer to "where might my disk
+    /// be going".
+    Duplicates {
+        /// Empty means everything indexed.
+        #[serde(default)]
+        under: String,
+        /// Ignore anything smaller. A unique size eliminates only 6.2% of
+        /// files but candidates over a megabyte are 18,723 of them holding
+        /// 141.8 GB — see `docs/REPORTS.md`.
+        #[serde(default = "default_dupe_floor")]
+        min_size: u64,
+        /// How many bytes may be read confirming. Zero reads nothing.
+        #[serde(default = "default_dupe_budget")]
+        read_budget: u64,
+        #[serde(default = "default_dupe_top")]
+        top: u32,
+    },
     /// Read a query back — as a sentence, as coloured pieces, and as what
     /// could be typed next. Nothing is run.
     ///
@@ -173,6 +195,37 @@ fn default_tree_limit() -> u32 {
 fn default_usage_top() -> u32 {
     20
 }
+/// A megabyte: the measured knee. Below it the candidate list is a million
+/// files covering 28 GB; above it, nineteen thousand covering 141.8 GB.
+fn default_dupe_floor() -> u64 {
+    1024 * 1024
+}
+/// A gigabyte of reading, which confirmed the whole interesting range on the
+/// corpus those numbers came from.
+fn default_dupe_budget() -> u64 {
+    1024 * 1024 * 1024
+}
+fn default_dupe_top() -> u32 {
+    50
+}
+
+/// Files that are, or may be, the same file.
+///
+/// A wire type of its own rather than `scour_dupes::Group` reaching this far:
+/// `scour-dupes` has no dependencies and no serde, deliberately, and a
+/// protocol crate is exactly the wrong place to force one on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DupGroup {
+    /// What each of them weighs.
+    pub size: u64,
+    pub paths: Vec<String>,
+    /// What deleting all but one would give back.
+    pub waste: u64,
+    /// `size`, `edges` or `content` — how far the checking got. **Only
+    /// `content` means read end to end and compared**, and the difference
+    /// decides whether a caller may say "identical" or only "the same size".
+    pub certainty: String,
+}
 /// How long an unqualified [`Request::Await`] waits.
 ///
 /// Long enough that a quiet machine costs one round trip a minute, short
@@ -202,6 +255,27 @@ pub enum Response {
         /// afford to drop the warning on its way out.
         #[serde(default)]
         misread: Vec<scour_core::Span>,
+    },
+    Duplicates {
+        groups: Vec<DupGroup>,
+        /// Files considered at all.
+        candidates: u64,
+        /// Everything the groups could give back, **including any left out of
+        /// `groups`** — a total that shrank when the list was truncated would
+        /// be a total nobody could act on.
+        waste: u64,
+        /// How much of `waste` was read and compared rather than guessed.
+        /// The two are different questions: 39.36 GiB by size against 18.29
+        /// GiB once read, measured here. Printing only the first tells
+        /// somebody they can delete files that were never copies.
+        #[serde(default)]
+        proven: u64,
+        /// Bytes read confirming.
+        read: u64,
+        /// Groups the read budget did not reach. Said rather than left to be
+        /// inferred: a partial answer that looks complete is what gets files
+        /// deleted on the strength of a guess.
+        unconfirmed: u64,
     },
     Facets(FacetResponse),
     Tree {
@@ -262,6 +336,7 @@ impl Request {
             | Request::Tree { .. }
             | Request::Stat { .. }
             | Request::Usage { .. }
+            | Request::Duplicates { .. }
             | Request::Explain { .. }
             | Request::Sources {}
             | Request::Status {}
@@ -280,6 +355,7 @@ impl Request {
             Request::Tree { .. } => "tree",
             Request::Stat { .. } => "stat",
             Request::Usage { .. } => "usage",
+            Request::Duplicates { .. } => "duplicates",
             Request::Explain { .. } => "explain",
             Request::Sources {} => "sources",
             Request::Status {} => "status",

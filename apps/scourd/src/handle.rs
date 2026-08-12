@@ -46,6 +46,38 @@ fn run(engine: &Engine, req: Request) -> scour_core::Result<Response> {
         Request::Usage { path, top } => {
             Response::Usage(engine.usage(&scour_core::UsageRequest { path, top })?)
         }
+        Request::Duplicates {
+            under,
+            min_size,
+            read_budget,
+            top,
+        } => {
+            let r = engine.duplicates(
+                &under,
+                &scour_dupes::Options {
+                    min_size,
+                    read_budget,
+                    top: top as usize,
+                },
+            )?;
+            Response::Duplicates {
+                groups: r
+                    .groups
+                    .iter()
+                    .map(|g| scour_proto::DupGroup {
+                        size: g.size,
+                        paths: g.paths.clone(),
+                        waste: g.waste(),
+                        certainty: g.certainty.token().to_owned(),
+                    })
+                    .collect(),
+                candidates: r.candidates,
+                waste: r.waste,
+                proven: r.proven,
+                read: r.read,
+                unconfirmed: r.unconfirmed,
+            }
+        }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);
             Response::Explain {

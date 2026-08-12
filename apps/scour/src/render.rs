@@ -148,6 +148,58 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             }
             complain(&f.misread, echo);
         }
+        Response::Duplicates {
+            groups,
+            candidates,
+            waste,
+            proven,
+            read,
+            unconfirmed,
+        } => {
+            for g in groups {
+                // The saving first, because it is the reason to look: a header
+                // line per group and then its paths, so the output stays
+                // greppable and a person reads down the left edge.
+                println!(
+                    "{:>10}  ×{}  {}  [{}]",
+                    format_size(g.waste, BINARY),
+                    g.paths.len(),
+                    format_size(g.size, BINARY),
+                    t(match g.certainty.as_str() {
+                        "content" => "identical",
+                        "edges" => "same ends",
+                        _ => "same size only",
+                    })
+                );
+                for p in &g.paths {
+                    println!("            {p}");
+                }
+            }
+            // **Two numbers, not one.** The first is what was read and
+            // compared; the second is what merely shares a size with
+            // something. On this disk they are 18.29 GiB and 39.36 GiB, and
+            // printing only the larger tells somebody they can delete
+            // database pages that happen to be the same length.
+            eprintln!(
+                "{} {} · {} {} · {} {} · {} {}",
+                format_size(*proven, BINARY),
+                t("confirmed"),
+                format_size(*waste, BINARY),
+                t("could be freed"),
+                candidates,
+                t("candidates"),
+                format_size(*read, BINARY),
+                t("read")
+            );
+            // **The one line that must never be dropped.** A partial answer
+            // that looks complete is what gets files deleted on a guess.
+            if *unconfirmed > 0 {
+                eprintln!(
+                    "{unconfirmed} {}",
+                    t("groups were not confirmed: raise --budget-mb")
+                );
+            }
+        }
         Response::Usage(u) => {
             println!(
                 "{:>10}  {:>10}  {:>9}  {}",
@@ -576,6 +628,14 @@ mod tests {
             "accepted",
             "full scan",
             "paths built",
+            "identical",
+            "same ends",
+            "same size only",
+            "confirmed",
+            "could be freed",
+            "candidates",
+            "read",
+            "groups were not confirmed: raise --budget-mb",
             "warning",
             "was searched for as text",
             "a rebuild would speed searches up",
