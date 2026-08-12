@@ -70,6 +70,15 @@ pub struct Settings {
     pub sort: String,
     #[serde(default)]
     pub descending: Option<bool>,
+    /// Whether the duplicates panel in the report is open.
+    ///
+    /// **Closed by default, and the default is the point.** It went in as
+    /// always-on, which meant opening the report to look at what a folder
+    /// weighs also ran a duplicate hunt over thirty thousand candidates —
+    /// work nobody asked for, in a tab opened for something else. It is one
+    /// click away and it stays where it was put.
+    #[serde(default)]
+    pub dupes_open: bool,
     /// Past queries, most recent first.
     ///
     /// **Only queries somebody meant.** A search box runs a query per

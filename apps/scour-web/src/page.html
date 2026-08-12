@@ -698,6 +698,14 @@
   .floors button:hover { color: var(--ink); }
   .floors button[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--ink-3); }
   .floors button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  #d-open {
+    flex: none; font: inherit; font-size: 11.5px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 3px calc(var(--u) * 2.5); cursor: pointer;
+  }
+  #d-open:hover { color: var(--ink); border-color: var(--ink-3); }
+  #d-open:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .dupes-head button {
     flex: none; font: inherit; font-size: 11.5px;
     background: var(--panel-2); color: var(--ink-2);
@@ -1240,13 +1248,14 @@
       <div class="dupes">
         <div class="dupes-head">
           <h4>Yinelenen dosyalar</h4>
-          <div class="dupes-sum" id="d-sum">—</div>
-          <div class="floors" id="d-floor"></div>
-          <button type="button" id="d-confirm">Okuyarak doğrula</button>
+          <button type="button" id="d-open" aria-expanded="false">göster</button>
+          <div class="dupes-sum" id="d-sum" hidden>—</div>
+          <div class="floors" id="d-floor" hidden></div>
+          <button type="button" id="d-confirm" hidden>Okuyarak doğrula</button>
         </div>
-        <p class="hint" id="d-note">Aynı boyutta olmak aynı dosya olmak değildir.
+        <p class="hint" id="d-note" hidden>Aynı boyutta olmak aynı dosya olmak değildir.
         Aşağısı boyuta göre aday listesidir; <b>doğrulanmadan hiçbir şey silinmemeli</b>.</p>
-        <div id="d-list"></div>
+        <div id="d-list" hidden></div>
       </div>
     </div>
   </div>
@@ -3320,6 +3329,10 @@
    * write per pixel would be a file rewritten a hundred times a second. A
    * quarter of a second after the hand stops is soon enough for something
    * nobody reads until the next launch. */
+  /* Settings that belong to no particular part of this file — the report's
+     panels, for one. Merged into what is sent, so a second closure can record
+     a preference without owning the whole object. */
+  let EXTRA = {};
   let keepTimer = null;
   function keep() {
     clearTimeout(keepTimer);
@@ -3330,6 +3343,7 @@
         sort: sortKey,
         descending: sortDesc,
         history: HISTORY,
+        ...EXTRA,
       });
     }, 250);
   }
@@ -3347,6 +3361,7 @@
     if (s.sort && COLUMNS.some((c) => c.key === s.sort)) sortKey = s.sort;
     if (typeof s.descending === "boolean") sortDesc = s.descending;
     HISTORY = Array.isArray(s.history) ? s.history : [];
+    EXTRA = { dupes_open: !!s.dupes_open };
     showPastAffordance();
     buildHeads();
     applyWidths();
@@ -4465,6 +4480,11 @@
     // threw into its own `catch`.
     kinds: () => KINDS,
     barEdges: () => BAR_EDGES,
+    /* What the report remembers. It is a separate closure and cannot reach
+       `keep`, so it hands over a patch and this half saves it with the rest —
+       one settings object on the wire rather than two. */
+    prefs: () => EXTRA,
+    pref: (patch) => { Object.assign(EXTRA, patch); keep(); },
   };
 })();
 
@@ -4596,10 +4616,16 @@
     drawKinds();
     drawBiggest();
     drawJump();
-    // Free by default: the size groups cost 84 ms over thirty thousand
-    // candidates and read nothing. Confirming is a button, because the disk it
-    // would read is the reader's.
-    drawDupes(0);
+    // **Only if it was opened.** The panel used to run on every draw of this
+    // tab, so looking at what a folder weighs also started a duplicate hunt
+    // over thirty thousand candidates — cheap, and still not something to do
+    // unasked. The choice is remembered, so somebody who wants it has it.
+    // Read every time rather than once: the settings arrive a moment after
+    // the page does, and this tab may be drawn on either side of that.
+    if (window.SCOUR.prefs().dupes_open !== dupesOpen) {
+      showDupes(!!window.SCOUR.prefs().dupes_open, false);
+    }
+    if (dupesOpen) drawDupes(0);
   }
 
   /* The type breakdown, from the same faceting the search sidebar uses. */
@@ -4711,6 +4737,27 @@
       </div>`).join("") ||
       `<div class="dupe"><div class="top"><span class="of">bu kapsamda yinelenen yok</span></div></div>`;
   }
+
+  /* Open or shut, and remembered. Read from the settings the service holds,
+     so the terminal interface will start from the same answer. */
+  let dupesOpen = false;
+  const dupeParts = ["d-sum", "d-floor", "d-confirm", "d-note", "d-list"];
+  function showDupes(open, ask) {
+    dupesOpen = open;
+    const opener = document.getElementById("d-open");
+    opener.textContent = open ? "gizle" : "göster";
+    opener.setAttribute("aria-expanded", String(open));
+    for (const id of dupeParts) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = !open;
+    }
+    if (open && ask) drawDupes(0);
+  }
+  showDupes(false, false);
+  document.getElementById("d-open").addEventListener("click", () => {
+    showDupes(!dupesOpen, true);
+    window.SCOUR.pref({ dupes_open: dupesOpen });
+  });
 
   const floorBox = document.getElementById("d-floor");
   function drawFloors() {
