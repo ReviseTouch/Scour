@@ -28,6 +28,9 @@ struct MemSource {
     sink: RwLock<Option<Box<dyn ChangeSink>>>,
     /// Pretend the roots are not there — an unmounted volume, a pulled drive.
     offline: std::sync::atomic::AtomicBool,
+    /// Pretend the walk stopped partway: some of the tree reached the sink and
+    /// the rest never will.
+    cancelled: std::sync::atomic::AtomicBool,
     /// Every `cover` and every `scan`, in the order they happened.
     ///
     /// The order is the thing being tested and nothing else can see it: a walk
@@ -45,6 +48,7 @@ impl MemSource {
             watchable: true,
             sink: RwLock::new(None),
             offline: std::sync::atomic::AtomicBool::new(false),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -56,6 +60,7 @@ impl MemSource {
             watchable: false,
             sink: RwLock::new(None),
             offline: std::sync::atomic::AtomicBool::new(false),
+            cancelled: std::sync::atomic::AtomicBool::new(false),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -93,6 +98,23 @@ impl Source for MemSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
         self.scans.fetch_add(1, Ordering::Relaxed);
+        // A walk that stopped partway: some of the tree reached the sink and
+        // the rest never will. The report has to say so, because everything
+        // downstream reconciles on the assumption that it saw everything.
+        if self.cancelled.load(Ordering::Relaxed) {
+            let mut n = 0;
+            for e in self.entries.read().iter().take(5) {
+                n += 1;
+                let _ = sink.push(e.clone());
+            }
+            return Ok(ScanReport {
+                entries: n,
+                cancelled: true,
+                vouched: vec![String::new()],
+                took_ms: 0,
+                ..Default::default()
+            });
+        }
         // Every walk, not only a subtree's: the start-up ordering test is about
         // the whole-source one, and it is the bigger window of the two.
         self.order.write().push("scan");
@@ -174,6 +196,84 @@ struct Fixture {
     engine: Engine,
     source: Arc<MemSource>,
     _dir: tempfile::TempDir,
+}
+
+/// An index that stops accepting rows partway through.
+///
+/// **Because a walk that found files the index could not take is a walk whose
+/// evidence is incomplete**, and the sweep that follows judges by exactly that
+/// evidence: rows the walk *did* find and the index does *not* have look, from
+/// the sweep's side, like files that are gone. Deleting them is the failure the
+/// guard exists for and it had no test — checked by removing it, which the
+/// suite did not notice.
+///
+/// A disk that fills partway through is what this stands in for. Everything
+/// else is passed through, so the engine sees a real index behaving normally
+/// right up to the moment it does not.
+#[derive(Debug)]
+struct Fragile {
+    inner: Arc<NativeIndex>,
+    /// Applies to refuse. Counted down; zero refuses for ever after.
+    left: AtomicU64,
+    refused: AtomicU64,
+}
+
+impl scour_core::Index for Fragile {
+    fn apply(
+        &self,
+        changes: &mut dyn Iterator<Item = scour_core::Change>,
+    ) -> scour_core::Result<scour_core::ApplyReport> {
+        if self.left.load(Ordering::Relaxed) == 0 {
+            self.refused.fetch_add(1, Ordering::Relaxed);
+            // Drained, because a caller that hands over an iterator has handed
+            // it over whether or not this works.
+            while changes.next().is_some() {}
+            return Err(scour_core::Error::Io {
+                detail: "disk dolu (test)".into(),
+            });
+        }
+        self.left.fetch_sub(1, Ordering::Relaxed);
+        self.inner.apply(changes)
+    }
+    fn begin_generation(&self) -> scour_core::Result<u64> {
+        self.inner.begin_generation()
+    }
+    fn sweep(
+        &self,
+        source: SourceId,
+        under: &str,
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> scour_core::Result<u64> {
+        self.inner.sweep(source, under, generation, spare)
+    }
+    fn abandon_generation(&self, g: u64) -> scour_core::Result<()> {
+        self.inner.abandon_generation(g)
+    }
+    fn commit(&self) -> scour_core::Result<()> {
+        self.inner.commit()
+    }
+    fn maintain(
+        &self,
+        level: scour_core::Maintenance,
+    ) -> scour_core::Result<scour_core::MaintReport> {
+        self.inner.maintain(level)
+    }
+    fn search(
+        &self,
+        req: &scour_core::SearchRequest,
+    ) -> scour_core::Result<scour_core::SearchResponse> {
+        self.inner.search(req)
+    }
+    fn facets(
+        &self,
+        req: &scour_core::FacetRequest,
+    ) -> scour_core::Result<scour_core::FacetResponse> {
+        self.inner.facets(req)
+    }
+    fn stats(&self) -> scour_core::Result<scour_core::IndexStats> {
+        self.inner.stats()
+    }
 }
 
 fn fixture(files: usize) -> Fixture {
@@ -633,6 +733,98 @@ fn not_walking_on_start_still_watches() {
     assert!(
         !f.source.order.read().contains(&"scan"),
         "nothing asked for a walk"
+    );
+}
+
+/// A walk that stopped partway is not evidence either.
+///
+/// The same failure from the other side, and it also had no test. A cancelled
+/// walk reached some of the tree and none of the rest; sweeping on it deletes
+/// everything it never got to. What makes this worth its own test rather than
+/// an argument is that the two guards are separate conditions on one line, and
+/// removing either one leaves the other looking like it covers the case.
+#[test]
+fn a_walk_that_stopped_partway_stops_the_sweep() {
+    let f = fixture(400);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+    settle(&f, |f| !f.engine.status().scanning);
+    let held = f.engine.status().entries;
+    assert!(held > 100, "the first walk has to land: {held}");
+
+    f.source.cancelled.store(true, Ordering::Relaxed);
+    let before = f.source.scans.load(Ordering::Relaxed);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > before);
+    settle(&f, |f| !f.engine.status().scanning);
+
+    assert_eq!(
+        f.engine.status().entries,
+        held,
+        "a walk that never finished was swept on anyway"
+    );
+}
+
+/// A walk the index could not take is not evidence, so nothing is swept on it.
+///
+/// **The guard whose failure is losing files, and it had no test.** A sweep
+/// deletes what the walk did not stamp. If the index refused a batch — a full
+/// disk, a write error — those rows exist on the filesystem and are missing
+/// from the index, which from the sweep's side is indistinguishable from files
+/// that were deleted. It would then remove them, and report success.
+///
+/// Checked by removing the guard: with `trustworthy` forced true this test
+/// fails and nothing else in the suite notices.
+#[test]
+fn a_batch_the_index_refused_stops_the_sweep() {
+    let dir = tempfile::tempdir().expect("temp");
+    let real = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let fs = generate(&MockOptions {
+        files: 400,
+        ..Default::default()
+    });
+    let source = MemSource::new(fs.entries);
+    // One walk lands whole; the next is refused partway. That order matters —
+    // there has to be something in the index worth losing.
+    let fragile = Arc::new(Fragile {
+        inner: Arc::clone(&real),
+        left: AtomicU64::new(u64::MAX),
+        refused: AtomicU64::new(0),
+    });
+    let engine = Engine::new(
+        vec![source.clone()],
+        Arc::clone(&fragile) as Arc<dyn scour_core::Index>,
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+    settle(&f, |f| !f.engine.status().scanning);
+    let held = f.engine.status().entries;
+    assert!(held > 100, "the first walk has to land: {held}");
+
+    // And now the index stops taking rows.
+    fragile.left.store(0, Ordering::Relaxed);
+    let before = f.source.scans.load(Ordering::Relaxed);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > before);
+    settle(&f, |f| !f.engine.status().scanning);
+
+    assert!(
+        fragile.refused.load(Ordering::Relaxed) > 0,
+        "the fixture did not actually refuse anything"
+    );
+    assert_eq!(
+        f.engine.status().entries,
+        held,
+        "a walk the index could not take was swept on anyway"
     );
 }
 
