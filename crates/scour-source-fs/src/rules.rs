@@ -28,12 +28,14 @@ use scour_core::ScanOptions;
 pub struct Rules {
     paths: Vec<String>,
     /// Rules naming one directory, wherever it appears. The common case, and
-    /// the one that has to stay a hash lookup on the entry's own name.
-    dirs: Vec<String>,
+    /// the one that has to stay a hash lookup on the entry's own name — it was
+    /// a `Vec` under that very comment, so every entry compared its name
+    /// against every rule in turn.
+    dirs: std::collections::HashSet<String>,
     /// Rules naming a sequence — `.git/objects`. Matched at any component
     /// boundary, and everything below the match goes with it.
     dir_seqs: Vec<Vec<String>>,
-    files: Vec<String>,
+    files: std::collections::HashSet<String>,
     allow: Vec<String>,
     /// Allow rules naming a sequence rather than a place — `target/release`,
     /// matched wherever it appears.
@@ -170,18 +172,49 @@ impl Rules {
         if self.allow_seqs.is_empty() {
             return false;
         }
-        let comps = lower_components(path);
-        let n = comps.len();
+        // **Only the tail can match, and it is read from the end.** This runs
+        // once an entry — 1,350,806 of them on this machine's smaller volume —
+        // and it used to fold every component of a hundred-and-fifteen-byte
+        // path into its own `String` to compare the last two. Measured with
+        // `examples/rulecost.rs`, which times each rule kind over the same
+        // collected paths: 0.68 µs an entry, against 0.03 for the other three
+        // kinds put together.
+        //
+        // Three things came out, in that order, and only the last two are
+        // worth much. Folding the tail rather than the path: 0.63. Reading the
+        // tail from the end rather than counting components to skip them,
+        // which was two passes over the whole path: 0.55.
+        let keep = self.allow_seqs.iter().map(Vec::len).max().unwrap_or(0) + 1;
+        let mut buf = [""; MAX_TAIL];
+        if keep > MAX_TAIL {
+            // A rule deeper than anyone writes. Correctness over speed.
+            let comps = lower_components(path);
+            let n = comps.len();
+            return self.allow_seqs.iter().any(|rule| {
+                let l = rule.len();
+                (n >= l && comps[n - l..] == rule[..])
+                    || (!is_dir && n > l && comps[n - 1 - l..n - 1] == rule[..])
+            });
+        }
+        // `tail[0]` is the last component, so a rule is compared reversed.
+        let n = tail_of(path, keep, &mut buf);
+        let tail = &buf[..n];
         self.allow_seqs.iter().any(|rule| {
             let l = rule.len();
             // The named directory itself, so it can be entered and listed.
-            if n >= l && comps[n - l..] == rule[..] {
+            let matches = |from: usize| {
+                rule.iter()
+                    .rev()
+                    .zip(tail[from..].iter())
+                    .all(|(r, c)| eq_folded(c, r))
+            };
+            if n >= l && matches(0) {
                 return true;
             }
             // A file directly inside it. Directories are deliberately left
             // out: `deps` under `release` is where the noise lives, and
             // refusing it here is what lets the walk prune it.
-            !is_dir && n > l && comps[n - 1 - l..n - 1] == rule[..]
+            !is_dir && n > l && matches(1)
         })
     }
 
@@ -194,12 +227,24 @@ impl Rules {
     /// and without this everything else in there — every object file, every
     /// fingerprint — would be indexed *because* one child was wanted.
     fn inside_excluded(&self, path: &str) -> bool {
-        let comps = lower_components(path);
-        // The last component is the entry itself; its own rules were already
-        // applied by the caller.
-        let ancestors = comps.len().saturating_sub(1);
-        if comps.iter().take(ancestors).any(|c| self.dirs.contains(c)) {
-            return true;
+        // **One buffer, not one string a component.** This is the other thing
+        // an allow rule turns on for every entry, and it folded a
+        // hundred-and-fifteen-byte path into ten fresh `String`s to ask ten
+        // questions of a nine-name list. The buffer is reused across
+        // components and the list is a set.
+        let mut fold = String::with_capacity(32);
+        let mut it = path.split('/').filter(|c| !c.is_empty()).peekable();
+        while let Some(c) = it.next() {
+            // The last component is the entry itself; its own rules were
+            // already applied by the caller.
+            if it.peek().is_none() {
+                break;
+            }
+            fold.clear();
+            fold.extend(c.chars().flat_map(char::to_lowercase));
+            if self.dirs.contains(&fold) {
+                return true;
+            }
         }
         self.seq_within(path)
     }
@@ -293,6 +338,57 @@ fn lower_components(path: &str) -> Vec<String> {
         .filter(|c| !c.is_empty())
         .map(str::to_lowercase)
         .collect()
+}
+
+/// The last `keep` components of a path, folded.
+///
+/// **The whole path used to be folded to compare its tail.** A sequence rule of
+/// `l` components is only ever matched against the last `l`, or against the `l`
+/// before the name — so `l + 1` components are all that can matter, and on this
+/// machine `l` is two. The paths are not short: 1,350,806 entries under
+/// `/mnt/depo` average 115 bytes and about ten components each, so folding all
+/// of them cost thirteen million allocations a scan to look at three.
+///
+/// Folding is `to_lowercase` rather than the ASCII one, because the names here
+/// are as often Turkish as not: `Müzik` and `MÜZIK` are one directory and only
+/// the Unicode form says so.
+/// How deep a tail this can read without allocating. Longer than any sequence
+/// rule anybody writes; a rule past it falls back to folding the path.
+const MAX_TAIL: usize = 8;
+
+/// The last components of a path, newest first, borrowed.
+///
+/// **From the end and without folding.** A sequence rule is compared against
+/// the tail, so the head is never looked at — and the comparison itself does
+/// not need the tail folded, only compared folded, which [`eq_folded`] does in
+/// place. What is left is `rsplit`, which touches the bytes it returns and no
+/// others.
+///
+/// Returned reversed, so `tail[0]` is the last component. The caller compares
+/// rules reversed to match, which costs nothing and saves putting it back.
+fn tail_of<'a>(path: &'a str, keep: usize, buf: &mut [&'a str; MAX_TAIL]) -> usize {
+    let mut n = 0;
+    for c in path.rsplit('/').filter(|c| !c.is_empty()).take(keep) {
+        buf[n] = c;
+        n += 1;
+    }
+    n
+}
+
+/// Is `component` this rule component, ignoring case?
+///
+/// `folded` is already lowercase — every rule is folded when it is built — so
+/// only one side has to be, and folding it into a comparison rather than into a
+/// `String` is what takes the allocation out of the walk's inner loop.
+///
+/// No length shortcut. `to_lowercase` is not length-preserving outside ASCII —
+/// `İ` folds to two characters — and this file exists on a machine whose paths
+/// are half Turkish.
+fn eq_folded(component: &str, folded: &str) -> bool {
+    component
+        .chars()
+        .flat_map(char::to_lowercase)
+        .eq(folded.chars())
 }
 
 /// Is `path` inside `prefix`, or the prefix itself?
