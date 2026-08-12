@@ -32,5 +32,7 @@ libc = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
+scour-config = { path = "../scour-config" }
+scour-source-fs = { path = "../scour-source-fs" }
 scour-mock = { workspace = true }
 tempfile   = "3"
