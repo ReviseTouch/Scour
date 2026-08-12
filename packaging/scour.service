@@ -1,0 +1,64 @@
+[Unit]
+# Scour, started at boot with the one privilege it needs.
+#
+# **Why a system unit and not the user one.** Watching a whole filesystem means
+# one `FAN_MARK_FILESYSTEM` a superblock, and placing a mark needs
+# CAP_SYS_ADMIN. `scour-watch` is the only program here that ever has it: it
+# opens the fanotify descriptor, sets the marks, drops to the invoking user and
+# execs `scourd`, which then runs unprivileged for the rest of its life. The
+# handover was measured rather than assumed — the served process comes back
+# `CapEff=0` and both escalation attempts return EPERM.
+#
+# What this replaces is authenticating by hand on every start. The alternative
+# people reach for — a NOPASSWD sudo rule — is worse than it looks here: every
+# binary in the chain lives under the user's home, so a passwordless rule
+# pointing at one of them is passwordless root for anything that can write that
+# directory, which is the user's own account.
+#
+# Install (once):
+#
+#   sudo install -m644 packaging/scour.service /etc/systemd/system/scour.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now scour.service
+#
+# **Untested.** Written from reading `scour-watch`, not from running it under
+# systemd — placing a mark needs root and that is not mine to take. The parts
+# that were checked: the uid comes from `SUDO_UID` in the environment, which
+# systemd sets from `Environment=`, and everything else — HOME, USER,
+# XDG_RUNTIME_DIR — is derived from `getpwuid` rather than from sudo.
+#
+# and turn the user unit off, or two writers race for the index lock:
+#
+#   systemctl --user disable --now scourd.service
+Description=Scour file index
+Documentation=https://github.com/hasantr/Scour
+# **Not at boot — after the session.** The socket lives in
+# `/run/user/1000/scour/`, and systemd-logind does not create `/run/user/1000`
+# until the user logs in. Starting earlier fails; the restart below covers a
+# race, the ordering covers the ordinary case.
+After=local-fs.target user@1000.service
+Wants=user@1000.service
+
+[Service]
+Type=simple
+# The user the service actually runs as. `scour-watch` reads it from SUDO_UID,
+# which systemd does not set, so it is passed here instead — and it must match
+# whose `~/.config/scour/config.toml` and index are meant.
+Environment=SUDO_UID=1000
+Environment=SUDO_GID=1000
+Environment=SUDO_USER=hasan
+ExecStart=/home/hasan/.local/bin/scour-watch -- /home/hasan/.local/bin/scourd
+# Also the safety net for starting before the runtime directory exists.
+Restart=on-failure
+RestartSec=5
+# The index is derived from the filesystem, so nothing here is worth protecting
+# from a kill -9; what matters is that only one writer exists, which scourd
+# enforces with a lock on its own directory.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target
