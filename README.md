@@ -7,8 +7,13 @@ of everything. The same index answers `scour tree /some/huge/directory` in the
 same millisecond, whether that directory holds ten files or a million — which
 is what makes it usable from an assistant's context window.
 
-Runs on Linux, Windows and macOS. Written in Rust. Nothing here is a wrapper
-around anything else.
+Written in Rust, and nothing here is a wrapper around anything else.
+
+Developed and used daily on Linux, against 2.2 million entries across an ext4
+home and an NTFS volume. It is written for Windows and macOS too and compiles
+for both, but it has not been run on either — and compiling is not running:
+every fault found in a day of measuring this on Linux was one a compiler
+cannot see.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
