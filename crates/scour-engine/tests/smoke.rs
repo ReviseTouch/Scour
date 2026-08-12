@@ -31,6 +31,8 @@ struct MemSource {
     /// Pretend the walk stopped partway: some of the tree reached the sink and
     /// the rest never will.
     cancelled: std::sync::atomic::AtomicBool,
+    /// Make the walk take this long, so a change can arrive during one.
+    slow_ms: AtomicU64,
     /// Every `cover` and every `scan`, in the order they happened.
     ///
     /// The order is the thing being tested and nothing else can see it: a walk
@@ -49,6 +51,7 @@ impl MemSource {
             sink: RwLock::new(None),
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
+            slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -61,6 +64,7 @@ impl MemSource {
             sink: RwLock::new(None),
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
+            slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
         })
     }
@@ -98,6 +102,11 @@ impl Source for MemSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
         self.scans.fetch_add(1, Ordering::Relaxed);
+        // A walk that takes a while, so something can happen during it.
+        let slow = self.slow_ms.load(Ordering::Relaxed);
+        if slow > 0 {
+            std::thread::sleep(Duration::from_millis(slow));
+        }
         // A walk that stopped partway: some of the tree reached the sink and
         // the rest never will. The report has to say so, because everything
         // downstream reconciles on the assumption that it saw everything.
@@ -733,6 +742,52 @@ fn not_walking_on_start_still_watches() {
     assert!(
         !f.source.order.read().contains(&"scan"),
         "nothing asked for a walk"
+    );
+}
+
+/// What waited out a walk does not then wait out the clock as well.
+///
+/// A walk does not drain the change channel — deliberately, because the walk's
+/// snapshot and the event stream have to stay ordered — so a file created while
+/// one is running waits for it. That part is the design. What was not is being
+/// charged twice: `commit_idle` is a staleness bound, and it was measured from
+/// the commit rather than from the change, so a row already unwritten for the
+/// whole walk waited the full bound again from the moment it landed.
+///
+/// Measured on the real service before this test existed: 7.6 and 13.3 seconds
+/// from the walk ending to the rows being findable, all of it this wait,
+/// against 0.00 with the fix.
+#[test]
+fn a_change_that_waited_out_a_walk_is_written_at_once() {
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    // Nobody is looking, so the slow clock applies — and it is the one this is
+    // about. Long enough that waiting it out would be unmistakable.
+    let held = f.engine.status().entries;
+
+    f.source.slow_ms.store(1_200, Ordering::Relaxed);
+    f.engine.rescan(None).expect("rescan");
+    // Into the window: the worker is inside the walk and not draining changes.
+    std::thread::sleep(Duration::from_millis(300));
+    let mut e = f.source.entries.read()[0].clone();
+    e.path = "/home/u/gecikme-testi.txt".into();
+    e.id = scour_core::EntryId::path_hash(SourceId(0), &e.path);
+    f.source.changed(Change::Upsert(e));
+
+    settle(&f, |f| !f.engine.status().scanning);
+    // The walk has ended. With the clock measured from the commit this row
+    // would wait `commit_idle` — fifteen seconds by default — from here.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        if count(&f, "gecikme-testi") > 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!(
+        "a row that queued behind the walk was still unwritten four seconds \
+         after it ended (index holds {}, was {held})",
+        f.engine.status().entries
     );
 }
 
