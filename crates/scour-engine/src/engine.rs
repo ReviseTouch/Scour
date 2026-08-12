@@ -341,6 +341,37 @@ impl Engine {
             .collect()
     }
 
+    /// Watch everything, then walk it — **and the order is the whole point.**
+    ///
+    /// A walk is a snapshot; a watch is everything after it. Walking first
+    /// leaves the window between them covered by neither, and whatever is
+    /// created in it is reported by nothing and found by nothing until the next
+    /// full walk. The same race was found and fixed once for subtrees a watcher
+    /// discovers — see `a_subtree_is_watched_before_it_is_walked` — and was
+    /// still here afterwards on the biggest walk of all: 5,000 files written
+    /// into 200 fresh directories left 1,260 of them missing, in one unbroken
+    /// run rather than scattered, which is the window in which the shell loop
+    /// writing them was fastest.
+    ///
+    /// **`rescan` only queues**, and that is exactly why the order has to be
+    /// written down rather than trusted: watching a home directory installs
+    /// 342,000 watches one at a time and takes fifteen seconds, so a walk
+    /// queued first is picked up by the worker while most of the tree is still
+    /// uncovered. It lived in `scourd`'s start-up as two calls with a comment
+    /// between them, which is not something a test can hold on to.
+    ///
+    /// Returns what watching reported, so the caller can say so. Reported
+    /// *after* the walk is queued rather than between the two, and that costs
+    /// nothing: queueing is all `rescan` does.
+    pub fn cover_then_walk(&self, walk: bool) -> Result<(u32, Vec<String>)> {
+        let started = self.start_watching()?;
+        let skipped = self.unwatched();
+        if walk {
+            self.rescan(None)?;
+        }
+        Ok((started, skipped))
+    }
+
     /// Queue a full walk of every source, or of one subtree.
     pub fn rescan(&self, subtree: Option<String>) -> Result<()> {
         match &subtree {

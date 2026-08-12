@@ -180,11 +180,15 @@ fn main() -> Result<()> {
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
-            if let Ok(n) = engine.start_watching() {
-                let skipped = engine.unwatched();
-                if skipped.is_empty() {
+            // **One call, because the order inside it is the invariant.** Two
+            // calls with a comment between them is not something a test can
+            // hold on to, and this one had already been got wrong twice. See
+            // `Engine::cover_then_walk`.
+            match engine.cover_then_walk(want_scan) {
+                Ok((n, skipped)) if skipped.is_empty() => {
                     scour_core::note!("scourd: watching {n} source(s)");
-                } else {
+                }
+                Ok((n, skipped)) => {
                     // Named, not merely counted — "live updates are partial"
                     // is not something anyone can act on and a path is. But
                     // named *briefly*: one unreadable directory tree here
@@ -196,12 +200,7 @@ fn main() -> Result<()> {
                         common_prefix(&skipped)
                     );
                 }
-            }
-            // Now that anything happening is being reported, find out what is
-            // there. A change during this walk is queued behind it and applied
-            // when it finishes.
-            if want_scan && let Err(e) = engine.rescan(None) {
-                scour_core::note!("scourd: the first walk could not start: {e}");
+                Err(e) => scour_core::note!("scourd: the first walk could not start: {e}"),
             }
         });
     }

@@ -93,9 +93,9 @@ impl Source for MemSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
         self.scans.fetch_add(1, Ordering::Relaxed);
-        if opts.subtree.is_some() {
-            self.order.write().push("scan");
-        }
+        // Every walk, not only a subtree's: the start-up ordering test is about
+        // the whole-source one, and it is the bigger window of the two.
+        self.order.write().push("scan");
         // A root that is not there yet: nothing found, and the report says the
         // walk could not look rather than that there was nothing to find.
         if self.offline.load(Ordering::Relaxed) {
@@ -140,6 +140,16 @@ impl Source for MemSource {
         if !self.watchable {
             return Err(Error::unsupported("watch"));
         }
+        // **Installing a watch takes time, and the test is about that time.**
+        // On this machine a recursive watch over a home directory is 342,000
+        // inotify watches installed one at a time — fifteen seconds — while
+        // `rescan` only queues a job and returns at once. A source that watches
+        // instantly cannot tell a correct ordering from a lucky one: with the
+        // two calls deliberately swapped, the ordering test still passed.
+        std::thread::sleep(Duration::from_millis(150));
+        // Recorded once it is actually in place, which is what the ordering is
+        // about — not when it was asked for.
+        self.order.write().push("watch");
         *self.sink.write() = Some(s);
         Ok(Box::new(NoopWatch {
             order: Arc::clone(&self.order),
@@ -577,6 +587,53 @@ fn a_volume_that_was_not_mounted_yet_is_picked_up_without_being_asked() {
     );
     settle(&f, |f| f.engine.status().entries == held);
     assert_eq!(f.engine.status().entries, held);
+}
+
+/// Nothing is walked until everything is watched.
+///
+/// The start-up version of the test below, and the one that was missing. That
+/// one covers a subtree a watcher discovers; this covers the first walk of
+/// every source, which is the biggest window there is — on this machine it is
+/// seven seconds during which a compile, a download or a `git checkout` is
+/// perfectly likely.
+///
+/// It was live-checked before this existed, on the real service: 300 files
+/// created into an already-walked and already-swept directory while a second
+/// source was still being walked, and all 300 arrived — about thirteen seconds
+/// later, by the queued events being replayed after the sweep. What this test
+/// holds is the ordering that makes that true.
+#[test]
+fn everything_is_watched_before_the_first_walk() {
+    let f = fixture(200);
+    f.engine.cover_then_walk(true).expect("cover then walk");
+    settle(&f, |f| f.source.order.read().contains(&"scan"));
+
+    let order = f.source.order.read().clone();
+    assert_eq!(
+        order.first(),
+        Some(&"watch"),
+        "the first walk must not start before the watch is in place: {order:?}"
+    );
+    assert!(
+        order.contains(&"scan"),
+        "and the walk has to happen: {order:?}"
+    );
+}
+
+/// The same call, told not to walk, still watches.
+///
+/// `scan.on_start = false` is a real configuration — a machine that trusts its
+/// watcher across restarts — and the ordering call must not make watching
+/// conditional on walking.
+#[test]
+fn not_walking_on_start_still_watches() {
+    let f = fixture(50);
+    let (n, _) = f.engine.cover_then_walk(false).expect("cover only");
+    assert_eq!(n, 1, "the source is watchable and was not watched");
+    assert!(
+        !f.source.order.read().contains(&"scan"),
+        "nothing asked for a walk"
+    );
 }
 
 #[test]
