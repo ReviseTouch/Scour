@@ -896,6 +896,54 @@ fn a_rebuild_finishes_even_while_the_index_is_being_written_to() {
     );
 }
 
+/// Folding a segment a walk has marked must not lose the files it marked.
+///
+/// **The invariant behind the guard in `fold`, and it had none.** A walk that
+/// finds a row unchanged does not rewrite it; it marks it instead, and the mark
+/// is keyed on the number of the segment the row is in. A fold consumes
+/// segments and writes one with a *new* number — so folding a marked segment
+/// leaves every one of its marks pointing at a segment that no longer exists.
+/// The sweep that follows then cannot tell those rows were seen, and deletes
+/// files that are on the disk. Silently, reporting success.
+///
+/// Checked by removal: with the guard taken out entirely this test fails and
+/// `a_generation_is_never_folded_into_another_one` — which sounds like it
+/// covers this and does not — still passes.
+#[test]
+fn folding_a_marked_segment_does_not_delete_what_it_marked() {
+    let f = Fixture::new(6_000, 500);
+    let held = f.index.stats().expect("stats").entries;
+    assert!(
+        f.index.stats().expect("stats").segments >= 10,
+        "the fixture is supposed to be fragmented"
+    );
+
+    // A walk that finds everything exactly as it left it: nothing is written,
+    // every row is marked instead.
+    let g = f.index.begin_generation().expect("generation");
+    let mut again = f.entries.iter().cloned().map(Change::Upsert);
+    f.index.apply(&mut again).expect("apply");
+    f.index.commit().expect("commit");
+
+    // Housekeeping, arriving in the middle of it. This is not contrived — the
+    // engine compacts on the commit boundary and a walk of a real disk holds a
+    // generation open for seconds.
+    f.index
+        .maintain(Maintenance::Compact)
+        .expect("compaction should decline, not fail");
+
+    // And now the sweep, judging rows by marks the fold may have invalidated.
+    f.index
+        .sweep(SourceId(0), "", g, &PrefixSet::default())
+        .expect("sweep");
+
+    assert_eq!(
+        f.index.stats().expect("stats").entries,
+        held,
+        "the sweep deleted rows the walk had seen — the marks were folded away"
+    );
+}
+
 /// A compaction that is not allowed to fold still ends.
 ///
 /// **This one spun a core on the live index for as long as a generation stayed

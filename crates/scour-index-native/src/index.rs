@@ -1020,23 +1020,27 @@ impl NativeIndex {
         // one of them pointing at a different row, and the sweep that follows
         // deletes files that are on the disk — silently, and reporting success.
         //
-        // The condition is the marks themselves rather than "a walk is
-        // running": a generation with nothing marked has nothing to invalidate,
-        // and a test that folds mid-generation said so before this shipped.
+        // **Only the segments being folded, and that width matters.** Marks
+        // are keyed on segment numbers and a fold renumbers only what it
+        // consumes — every other segment keeps its number and its marks stay
+        // true. Refusing on *any* mark anywhere was the first version, and on a
+        // machine whose watcher keeps opening generations it meant compaction
+        // never ran at all: 224 segments that would not come down, every search
+        // reading all of them.
         //
-        // Refusing is free: a fold is housekeeping and the next one is a minute
-        // away, while a walk is measured in seconds.
-        //
-        // **`false`, not `Ok(())`, and the difference was a spun core.** The
+        // **`false`, not `Ok(())`, and that difference was a spun core.** The
         // compaction loop is `while let Some(head) = next_head() { fold(head) }`
         // and it ends because folding makes the group too small to qualify. A
         // refusal that looks like success leaves the group exactly as it was,
         // `next_head` hands back the same one, and the loop never ends —
         // measured on the live index at **99.7% of a core with nothing
-        // happening**, 224 segments that would not come down, for as long as a
-        // generation stayed open. Whether a caller can tell "refused" from
-        // "done" is not a detail.
-        if !self.inner.read().seen.is_empty() {
+        // happening**. Whether a caller can tell "refused" from "done" is not a
+        // detail.
+        let marked = {
+            let inner = self.inner.read();
+            which_numbers.iter().any(|n| inner.seen.contains_key(n))
+        };
+        if marked {
             return Ok(false);
         }
         // **The number is claimed under the write lock, before anything is
