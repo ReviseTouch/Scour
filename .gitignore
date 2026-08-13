@@ -6,3 +6,4 @@ Cargo.lock.bak
 /bench
 /docs/*.local.md
 *.profraw
+__pycache__/

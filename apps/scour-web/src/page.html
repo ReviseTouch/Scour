@@ -2641,6 +2641,11 @@
     pending: new Map(),      /* start -> the exact request in flight */
     exact: false,            /* has the exact count landed yet */
     since: 0,                /* when this result set landed */
+    /* **What one window of this result set costs the service**, in
+     * milliseconds, as the service itself measured it. Read by the
+     * reading-ahead, which is the only thing here that asks for rows nobody
+     * has looked at yet — see `READ_AHEAD_MAX`. */
+    cost: 0,
     /* **Which revision each cached window came from.**
      *
      * The cache is keyed by position and positions move: the list is sorted by
@@ -2961,6 +2966,14 @@
      enough that a pause is indistinguishable from having stopped. */
   const SETTLED = 400;
 
+  /* What a window may cost before reading ahead stops being worth it, in
+     milliseconds of the service's own measure.
+     A hundred windows is the whole reachable list, so this is the price of
+     filling it in: two and a half seconds at 25 ms, four minutes at 2,464.
+     The number is a budget for the *whole* read-ahead rather than a judgement
+     about one request. */
+  const READ_AHEAD_MAX = 25;
+
   /* **The rest of the list, quietly, while nothing nearer is waiting.**
    *
    * Asking only for what is on the screen leaves it blank whenever the hand
@@ -3021,7 +3034,32 @@
        be thrown away. Measured while typing a five-letter word: 123 window
        requests, nearly all for orderings that no longer existed by the time
        they arrived. */
-    if (Date.now() - LIST.since > SETTLED && !wanted.length && LIST.pending.size === 0) {
+    /* **And only while a window is cheap.**
+     *
+     * The whole case for reading ahead was the price: "a window is 5.5 ms now
+     * that the engine keeps the ordering, so the whole of what can be scrolled
+     * to is about a hundred requests and well under a second of a machine that
+     * is otherwise idle." That sentence is true of the *stored* order and of
+     * nothing else. Measured on this index, 2,241,762 rows, one window of two
+     * hundred:
+     *
+     *     sort: modified      3.2 ms      1,734 rows visited
+     *     sort: size      1,220.0 ms  2,241,640
+     *     sort: path      2,463.6 ms  2,241,762
+     *
+     * Every order but the stored one has to look at every match to know which
+     * two hundred come first — the count cap bounds the counting, not the
+     * ordering. So a hundred windows of read-ahead is four minutes of the
+     * service rather than under a second, and the list becomes unusable
+     * exactly when somebody sorts it by name or by folder. That is what "arama
+     * süreleri felaket oldu" was: eleven seconds for one screen, with the
+     * reading-ahead queued behind it.
+     *
+     * The rows on screen are still fetched at any price — that is what was
+     * asked for. This governs only the rows nobody has looked at. */
+    const affordable = LIST.cost <= READ_AHEAD_MAX;
+    if (affordable && Date.now() - LIST.since > SETTLED &&
+        !wanted.length && LIST.pending.size === 0) {
       const rest = nextMissing(from, to);
       if (rest !== null) wanted.push(rest);
     }
@@ -3053,6 +3091,12 @@
              returning because its token was already gone. */
           const rows = res.rows.map(fromService);
           LIST.pending.delete(start);
+          // What this one cost, so the reading-ahead knows what a hundred more
+          // would. The service's own measure rather than the round trip: a
+          // window queued behind three others took as long as all four, and
+          // charging it for their time would stop the reading-ahead for a
+          // list that is actually cheap.
+          LIST.cost = res.took_us / 1000;
           rows.forEach((r, i) => LIST.rows.set(start + i, r));
           LIST.at.set(start, REV);
           repaint(true);
@@ -3340,6 +3384,9 @@
         LIST.exact = !res.capped;
         LIST.total = res.total;
         LIST.since = Date.now();
+        /* The first window of the new set, and therefore the first word on
+           what the rest of it would cost. */
+        LIST.cost = res.took_us / 1000;
         res.rows.forEach((r, i) => LIST.rows.set(i, fromService(r)));
         scrollEl.scrollTop = 0;
         FILES = res.rows.map(fromService);
@@ -4953,6 +5000,14 @@
     const mine = generation;
     const revision = REV;
     const refresh = ++rowRefresh;
+    /* **What this refresh is a refresh _of_.**
+     *
+     * Not decoration: `LIST.sort` and `LIST.desc` are the *landed* ordering,
+     * written when a search answers rather than when it is asked for — so
+     * between a click on a heading and that click's answer they still hold
+     * the old one, and this reads them in that gap. Recorded here, checked on
+     * the way back, exactly as `fillWindow` already does with its windows. */
+    const asked = { query: LIST.query, sort: LIST.sort, desc: LIST.desc };
     const [from, to] = visibleRange();
     const starts = [];
     for (let s = Math.floor(from / WINDOW) * WINDOW; s < to; s += WINDOW) starts.push(s);
@@ -4961,7 +5016,7 @@
 
     // Returned at the end so the throttle can charge for what this cost.
     return Promise.all(starts.map((s) =>
-      SERVICE.search(LIST.query, LIST.sort, LIST.desc, WINDOW, s).then((res) => [s, res])
+      SERVICE.search(asked.query, asked.sort, asked.desc, WINDOW, s).then((res) => [s, res])
     ))
       .then((pairs) => {
         /* The throttle limits starts, not finishes: two refreshes can overlap
@@ -4970,6 +5025,22 @@
            makes every answer from this one stale even if no newer fetch has
            started yet. */
         if (mine !== generation || refresh !== rowRefresh || revision !== REV) return;
+        /* **And it must still be the list this asked about.**
+         *
+         * `generation` does not cover this. It is raised when a search is
+         * *sent*, so a refresh that starts after the click and before the
+         * answer carries the new generation and the old ordering — and then
+         * merges rows in the previous order over the ones the click just put
+         * on screen. Measured in the running window: the heading turned to
+         * "Değişme ▼" and the list went on standing in path order, and stayed
+         * there, because nothing afterwards had any reason to ask again.
+         *
+         * That is the whole of "tarih sıralaması çalışmadı". It needs an index
+         * revision to land inside a gap of a few milliseconds, which on a
+         * machine watching two volumes is often, and never on an idle one —
+         * so it read as the sort being broken at random. */
+        if (asked.query !== LIST.query || asked.sort !== LIST.sort ||
+            asked.desc !== LIST.desc) return;
         const rows = new Map();
         for (const [s, res] of pairs) {
           res.rows.forEach((r, i) => rows.set(s + i, fromService(r)));

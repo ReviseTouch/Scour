@@ -1021,6 +1021,9 @@ pub fn run_with(
     // not the comparison, it is reconstructing a front-coded path per match to
     // then throw all but forty of them away.
     let mut keyed: Vec<(SortValue, u32)> = Vec::new();
+    /* Directories already rebuilt, for the one ordering that asks per row.
+       See `DirPaths`. */
+    let mut dir_paths = DirPaths::default();
 
     // The terms relevance scores against, folded, collected once.
     //
@@ -1153,7 +1156,7 @@ pub fn run_with(
             // verifier missed it because the test asked for an uncapped count,
             // where the two happen to agree.
             keyed.push((
-                sort_value(seg, row, name, want.sort, &score_terms, folders),
+                sort_value(seg, row, name, want.sort, &score_terms, folders, &mut dir_paths),
                 row as u32,
             ));
         }
@@ -1239,7 +1242,7 @@ pub fn run_with(
                 // Safe to pass no name: the stored order is `Modified` or an
                 // unscored `Relevance`, and neither reads one.
                 (
-                    sort_value(seg, row as usize, b"", want.sort, &score_terms, folders),
+                    sort_value(seg, row as usize, b"", want.sort, &score_terms, folders, &mut dir_paths),
                     row,
                 )
             })
@@ -1354,6 +1357,44 @@ pub(crate) fn key_is_exact(key: SortKey) -> bool {
     key != SortKey::Name
 }
 
+/// The directory paths this walk has already rebuilt, by directory number.
+///
+/// **Front coding is cheap to store and not cheap to read one row of.** A
+/// `DirTable` entry is its predecessor truncated and extended, so
+/// [`DirTable::get`] decodes forward from the nearest restart — up to
+/// `RESTART - 1` steps, two varints and a copy each — and allocates a `String`
+/// at the end of it. That is the right trade for a table read a few times and
+/// the wrong one for a table read once per row, which is exactly what ordering
+/// by path does.
+///
+/// This corpus is 2,241,762 rows in 257,167 directories: **every directory
+/// rebuilt 8.7 times over**, and a fresh allocation for each. Holding what has
+/// been rebuilt turns that back into once.
+///
+/// Sized to the table and filled as it goes, so a query that touches a corner
+/// of the tree pays for the corner. Empty for every other ordering — nothing
+/// but `Path` asks.
+#[derive(Default)]
+pub(crate) struct DirPaths(Vec<Option<Box<str>>>);
+
+impl DirPaths {
+    fn of<'a>(&'a mut self, seg: &Segment<'_>, id: u32) -> &'a str {
+        if self.0.is_empty() {
+            self.0.resize_with(seg.dirs.len(), || None);
+        }
+        let at = id as usize;
+        if at >= self.0.len() {
+            // A number the table does not hold. `get` says the same thing by
+            // returning nothing, and a row with no directory is its own name.
+            return "";
+        }
+        if self.0[at].is_none() {
+            self.0[at] = Some(seg.dirs.get(id).unwrap_or_default().into_boxed_str());
+        }
+        self.0[at].as_deref().unwrap_or_default()
+    }
+}
+
 /// `name` is the row's folded name, as the walk yields it.
 fn sort_value(
     seg: &Segment<'_>,
@@ -1362,6 +1403,7 @@ fn sort_value(
     key: SortKey,
     terms: &[Vec<u8>],
     folders: &[(u32, i64)],
+    dirs: &mut DirPaths,
 ) -> SortValue {
     match key {
         // Already folded, which is what the terms are, plus the directory's
@@ -1373,7 +1415,24 @@ fn sort_value(
         SortKey::Ext => SortValue::Head(head(ext_bytes(name))),
         SortKey::Path => {
             let raw = seg.names.get(row).unwrap_or_default();
-            SortValue::Text(seg.path(row, raw).into_bytes())
+            // The same join `Segment::path` makes, over a directory this walk
+            // may already have rebuilt. Written into one buffer rather than
+            // through `format!`, which allocates twice.
+            let dir = dirs.of(seg, seg.dir_id(row));
+            let mut out = String::with_capacity(dir.len() + 1 + raw.len());
+            match dir {
+                "" => out.push_str(raw),
+                "/" => {
+                    out.push('/');
+                    out.push_str(raw);
+                }
+                d => {
+                    out.push_str(d);
+                    out.push('/');
+                    out.push_str(raw);
+                }
+            }
+            SortValue::Text(out.into_bytes())
         }
         // **A folder sorts by what is under it**, when that is known. Its own
         // `Size` is its entry table — four kilobytes — so ordering by that put
