@@ -41,7 +41,19 @@ pub fn thumbnail(path: &str) -> Option<Picture> {
 ///
 /// Asked once per row of a page, so that the page requests only the pictures
 /// that exist rather than two hundred that mostly do not.
-pub fn has_thumbnail(path: &str) -> bool {
+///
+/// **`kind` is asked first because the answer is four `stat` calls.** A
+/// thumbnail is looked for in four size directories and a row that has none —
+/// which is nearly every row — pays for all four. On a machine where half the
+/// files are source and build output, most of those questions have a known
+/// answer: nothing thumbnails a `.rs` file, a directory or an ELF binary. The
+/// unknown kind is still asked, because a picture with an unhelpful name is
+/// exactly the case where the desktop knows better than the extension does.
+pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
+    use scour_core::Kind::*;
+    if matches!(kind, Dir | Code | Build | Exec | Archive) {
+        return false;
+    }
     thumbnail_path(path).is_some()
 }
 
@@ -82,13 +94,20 @@ fn read(p: &Path) -> Option<Picture> {
 }
 
 /// Where thumbnails live.
-fn cache_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".cache"))
+///
+/// Read from the environment once. It was read per row, which is two
+/// environment lookups and two `PathBuf`s to learn something that cannot
+/// change while the process runs.
+fn cache_dir() -> &'static Path {
+    static DIR: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cache"))
+    });
+    &DIR
 }
 
 /// `file://` and the path, escaped the way GLib escapes it.
@@ -121,9 +140,15 @@ fn md5_hex(input: &[u8]) -> String {
         9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
         15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
-    let k: Vec<u32> = (0..64)
-        .map(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32)
-        .collect();
+    /// The round constants, worked out once for the life of the process.
+    ///
+    /// They were built here, which meant sixty-four `sin()` and an allocation
+    /// **per call** — and this is called once per row of every answer. A page
+    /// of two hundred rows spent 12,800 `sin()` deciding two hundred booleans.
+    static K: std::sync::LazyLock<[u32; 64]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32)
+    });
+    let k = &*K;
 
     let mut msg = input.to_vec();
     let bits = (input.len() as u64).wrapping_mul(8);

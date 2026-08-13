@@ -440,8 +440,8 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         })),
                         // Whether a picture of this file already exists, so
                         // the page asks for the ones that do rather than for
-                        // two hundred that mostly do not. One `stat` a row.
-                        "thumb": icons::has_thumbnail(&h.path),
+                        // two hundred that mostly do not.
+                        "thumb": icons::has_thumbnail(&h.path, h.kind),
                     })
                 })
                 .collect();
@@ -1102,7 +1102,7 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 // the panel falls back to for the formats a browser cannot
                 // open at all — a `.docx`, a `.psd`, a video in a codec it
                 // does not have — and for those it is the only thing there is.
-                "thumb": icons::has_thumbnail(&entry.path),
+                "thumb": icons::has_thumbnail(&entry.path, entry.kind()),
                 // Whether there is a system previewer to hand this to, so the
                 // page offers the button only where it leads somewhere. On
                 // KDE, under Hyprland and on Windows there is nothing to
