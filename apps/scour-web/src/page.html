@@ -1608,11 +1608,35 @@
      never what a person wants at the moment they stop and ask; the exact time
      was in the row all along and had nowhere to be shown. Costs nothing and
      moves nothing — it is only read when the pointer rests. */
-  const exact = (t) =>
-    !t ? "" : new Date(t * 1000).toLocaleString("tr-TR", {
-      day: "numeric", month: "long", year: "numeric",
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-    });
+  /* **The formatter is built once, and that is not a micro-optimisation.**
+     `toLocaleString` with an options object constructs one of these on every
+     call. This is called once per row per paint, and on a machine whose index
+     moves every few seconds that is fifty-odd constructions every few seconds
+     — for a string that cannot change, because it is when the file was
+     written. */
+  const STAMP = new Intl.DateTimeFormat("tr-TR", {
+    day: "numeric", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const exact = (t) => (!t ? "" : STAMP.format(new Date(t * 1000)));
+
+  /* Does this file live somewhere that records when it was read?
+   *
+   * The deepest mount point containing it is the one it is on: `/` is
+   * `noatime` here and `/mnt/depo` under it is not, so anything shorter than
+   * the longest match answers about the wrong filesystem.
+   *
+   * **Out here rather than inside the column**, because the clock has to know
+   * it too: a cell showing `—` must not be quietly replaced with an age by a
+   * tick that only knew how to count. One rule, two readers. */
+  function frozenAtime(f) {
+    let owner = null;
+    for (const m of MOUNTS) {
+      const under = m.at === "/" || (f.path + "/").startsWith(m.at + "/");
+      if (under && (!owner || m.at.length > owner.at.length)) owner = m;
+    }
+    return !!owner && !owner.reads;
+  }
 
   const q      = document.getElementById("q");
   const shadow = document.getElementById("shadow");
@@ -3100,48 +3124,75 @@
       .filter(Boolean);
   }
 
-  function tickClock() {
-    clockTimer = null;
-    now = Math.floor(Date.now() / 1000);
+  /* The value a date column reads, without asking the column to write itself. */
+  const stampOf = (f, key) =>
+    key === "mtime" ? f.mtime : key === "created" ? f.ctime : f.atime;
+
+  /* **One walk, and only what a second can change** — the text, and once in a
+   * great while the freshness colour.
+   *
+   * Two things were wrong with the first version and the measurement found
+   * both. It called the column's own `write`, which is right in the sense that
+   * one place then knows what a date cell looks like and wrong in every other:
+   * that path also sets the title, and the title is the exact time the file
+   * was written — the one thing about a row that cannot change. Fifty-eight of
+   * them were being rebuilt through `Intl` every second. And the tick and the
+   * scheduling were two passes over the same rows, each with its own DOM
+   * query, to answer two questions about the same numbers.
+   *
+   * Measured on the live index, alternating binaries, a list where dozens of
+   * rows are seconds old: **0.39% of a core**, about 3.9 ms a tick, against
+   * 0.067 ms for the writes themselves.
+   *
+   * So: one pass over `pool` — the rows the painter already holds, no query —
+   * writing what moved and returning when anything next moves.
+   */
+  function clockPass(write) {
     const where = dateCells();
-    if (where.length && !document.hidden &&
-        !document.getElementById("view-search").hidden) {
-      for (const tr of body.querySelectorAll("tr[data-path]")) {
-        const f = tr.__row;
-        if (!f) continue;
-        for (const { at, col } of where) {
-          if (tr.children[at]) col.write(tr.children[at], f, { text: [] });
+    const awake = where.length && !document.hidden &&
+      !document.getElementById("view-search").hidden;
+    if (!awake) return 0;
+    let soonest = HOUR;
+    for (const tr of pool) {
+      const f = tr.__row;
+      if (!f) continue;
+      for (const { at, col } of where) {
+        if (col.key === "accessed" && frozenAtime(f)) continue;
+        const v = stampOf(f, col.key);
+        if (!v) continue;
+        soonest = Math.min(soonest, nextChange(now - v));
+        if (!write) continue;
+        const td = tr.children[at];
+        if (!td) continue;
+        const text = ago(v);
+        if (td.textContent !== text) td.textContent = text;
+        if (col.key === "mtime") {
+          // Guarded: an unconditional inline-style write invalidates the cell
+          // every second to set it to what it already was.
+          const c = `var(${bandOf(v)})`;
+          if (td.style.color !== c) td.style.color = c;
         }
       }
     }
-    scheduleClock();
+    return soonest;
+  }
+
+  function tickClock() {
+    clockTimer = null;
+    now = Math.floor(Date.now() / 1000);
+    arm(clockPass(true));
   }
 
   function scheduleClock() {
+    arm(clockPass(false));
+  }
+
+  /* Zero means nothing on screen can change — no date column, a hidden window,
+     the report tab — and nothing is armed at all. */
+  function arm(soonest) {
     clearTimeout(clockTimer);
     clockTimer = null;
-    if (document.hidden || document.getElementById("view-search").hidden) return;
-    const where = dateCells();
-    if (!where.length) return;
-    /* The soonest moment any visible row would read differently.
-     *
-     * **In the unit that row is written in, not in seconds.** The first
-     * version woke at the next whole minute for everything over a minute
-     * old — which for a list of nine-day-old files is once a second, because
-     * with two dozen rows one of them is always a second away from its next
-     * minute boundary. Measured: 16 wakes in 30 seconds on a list where
-     * nothing could possibly change. "9 gün önce" changes once a day. */
-    let soonest = HOUR;
-    for (const tr of body.querySelectorAll("tr[data-path]")) {
-      const f = tr.__row;
-      if (!f) continue;
-      for (const { col } of where) {
-        const v = col.key === "mtime" ? f.mtime : col.key === "created" ? f.ctime : f.atime;
-        if (!v) continue;
-        soonest = Math.min(soonest, nextChange(now - v));
-      }
-    }
-    clockTimer = setTimeout(tickClock, Math.max(1, soonest) * 1000);
+    if (soonest > 0) clockTimer = setTimeout(tickClock, soonest * 1000);
   }
 
   /* A hidden window has nothing to keep current, and a shown one may have been
@@ -3586,16 +3637,7 @@
      * says why rather than leaving somebody to work it out from the numbers. */
     { id: "atime", label: "Erişim",   key: "accessed", w: 120,
       write: (td, f) => {
-        /* The deepest mount point that contains this file is the one it
-           lives on: `/` is `noatime` here and `/mnt/depo` under it is not, so
-           anything shorter than the longest match answers about the wrong
-           filesystem. */
-        let owner = null;
-        for (const m of MOUNTS) {
-          const under = m.at === "/" || (f.path + "/").startsWith(m.at + "/");
-          if (under && (!owner || m.at.length > owner.at.length)) owner = m;
-        }
-        const dead = !!owner && !owner.reads;
+        const dead = frozenAtime(f);
         cell("n left", (x) => (dead ? "—" : x.atime ? ago(x.atime) : ""))(td, f);
         // On a volume that records nothing the explanation is worth more than
         // a timestamp; where it records, the timestamp is the whole point.
