@@ -32,6 +32,9 @@
     --ink-2:       #9aa5b1;
     --ink-3:       #63707e;
     --mark:        rgba(255, 210, 74, .17);
+    /* Selection. Blue where the match wash is yellow, because a row can be
+       both at once and the two have to stay legible over each other. */
+    --pick:        rgba(74, 158, 255, .15);
     --focus:       #4a9eff;
 
     --t0: #ffb020;  /* dakikalar */
@@ -70,6 +73,7 @@
       --ink-2:     #5c636c;
       --ink-3:     #8a9198;
       --mark:      rgba(226, 160, 0, .18);
+      --pick:      rgba(0, 98, 204, .13);
       --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
       --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
       --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
@@ -86,6 +90,7 @@
     --ink-2:     #5c636c;
     --ink-3:     #8a9198;
     --mark:      rgba(226, 160, 0, .18);
+    --pick:      rgba(0, 98, 204, .13);
     --t0: #d98600; --t1: #d4532a; --t2: #a8447a;
     --t3: #5f52ad; --t4: #2f6ba3; --t5: #97a1ac;
     --q-key: #2f6ba3; --q-val: #1a7a58; --q-glob: #6b3fa0;
@@ -101,6 +106,7 @@
     --ink-2:     #9aa5b1;
     --ink-3:     #63707e;
     --mark:      rgba(255, 210, 74, .17);
+    --pick:      rgba(74, 158, 255, .15);
     --t0: #ffb020; --t1: #ff7a45; --t2: #c2688f;
     --t3: #7a6fc4; --t4: #4a7fb5; --t5: #3b4a58;
     --q-key: #7fa9e0; --q-val: #6fc2a0; --q-glob: #b48ce0;
@@ -601,7 +607,41 @@
 
   tbody tr { border-bottom: 1px solid var(--line-soft); }
   tbody tr:hover { background: var(--panel-2); }
+  /* **A wash, and translucent for the same reason the match is.** A selected
+     row still has to answer "is the pointer on me" and "does my name match",
+     so all three stack rather than replace each other.
+   *
+     On the cells rather than on the row, which is what makes the stacking work
+     without a second rule for hover: a cell's background paints over its row's
+     by the ordinary rules, so this sits above `tr:hover` and shows it
+     through. */
+  tbody tr.sel td { background: var(--pick); }
   tbody td { padding: 0 calc(var(--u) * 3); height: var(--row); vertical-align: middle; }
+
+  /* What is selected, said in a line rather than left to be counted.
+     Between the list and the ribbon, and gone when nothing is selected — a bar
+     that is always there is a bar nobody reads. */
+  .selbar {
+    display: flex; align-items: center; gap: calc(var(--u) * 3);
+    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+    background: var(--panel-2);
+    font: 500 12px/1 var(--mono); color: var(--ink-2);
+    flex-wrap: wrap;
+  }
+  .selbar[hidden] { display: none; }
+  .selbar .n { color: var(--ink); font-weight: 650; }
+  .selbar .sum { color: var(--ink-3); }
+  .selbar .grow { flex: 1; }
+  .selbar button {
+    background: none; border: 1px solid var(--line); border-radius: 3px;
+    padding: calc(var(--u) * 1.25) calc(var(--u) * 2.5);
+    font: inherit; color: var(--ink-2); cursor: pointer;
+  }
+  .selbar button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .selbar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* The one that is about to open a pile of windows, waiting to be told again. */
+  .selbar button.asking { color: var(--q-not); border-color: var(--q-not); }
 
   /* The freshness rule — three pixels down the left of each row. The list is
      in date order, so an unbroken spectrum runs the length of the page. */
@@ -1244,6 +1284,10 @@
             reddetmez, tarama yapar.
           </div>
         </div>
+
+        <!-- Seçim şeridi. Boşken yok; ne seçildiğini ve onunla ne
+             yapılabileceğini söyler. -->
+        <div class="selbar" id="selbar" hidden></div>
 
         <div class="ribbon">
           <div class="ribbon-head">
@@ -2704,8 +2748,16 @@
     // rather than per row.
     const marks = parsed.text.join("\u0001");
     for (let i = from; i < to; i++) {
+      // Which row of the whole list this slot is showing. A shift-range is
+      // measured in these, and a slot shows a different one after every
+      // scroll — so it is written every paint rather than once.
+      pool[i - from].dataset.i = String(i);
       writeRow(pool[i - from], LIST.rows.get(i), cols, parsed, marks);
     }
+    // After the writes and never inside them: `writeRow` assigns `className`
+    // outright, and it returns early when a slot's file has not changed —
+    // which is exactly the case where its selection has.
+    paintSelection();
     if (keep) {
       const back = pool.find((tr) => tr.dataset.path === keep);
       if (back) back.focus({ preventScroll: true });
@@ -3040,6 +3092,11 @@
         if (mine !== generation) return;   // a newer keystroke won
         /* A new result set: everything cached belonged to the old one. */
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
+        /* And so did the selection. It is keyed by path so it would survive a
+           re-sort intact, which is right — but a *different query* is a
+           different set of files, and rows that are no longer on screen going
+           on being selected is how somebody copies a list they cannot see. */
+        clearSel();
         LIST.rows.clear();
         LIST.at.clear();
         for (const request of LIST.pending.values()) request.stop.abort();
@@ -3173,6 +3230,7 @@
     LIST.query = null;
     LIST.total = 0;
     LIST.exact = true;
+    clearSel();
     LIST.rows.clear();
     for (const request of LIST.pending.values()) request.stop.abort();
     LIST.pending.clear();
@@ -3769,6 +3827,190 @@
 
   const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
 
+  /* ------------------------------------------------------------------ *
+   * Seçim — more than one row at a time.
+   *
+   * Everything's staple and the one thing this list could not do: every
+   * action was about the row under the pointer, so "copy these eleven paths"
+   * meant eleven right-clicks.
+   *
+   * **Keyed by path, not by position.** The list is virtual and its positions
+   * move — it is sorted by time, so a file being written walks to the top and
+   * everything under it shifts down. A selection stored as row numbers would
+   * silently become a selection of different files the moment the index
+   * moved. The path is what a person picked.
+   *
+   * **What it can select is what the list has fetched.** That is a real limit
+   * and it is stated rather than hidden: a result set of eight hundred
+   * thousand is never all in memory, so `Ctrl+A` takes the windows that have
+   * arrived and the bar says how many that is. Anyone who wants all of
+   * something narrows the query, which is the tool's whole point.
+   * ------------------------------------------------------------------ */
+  const selbar = document.getElementById("selbar");
+  /* path -> the row object, because the bar adds up sizes and the menu needs
+     to know a folder from a file. */
+  const SEL = new Map();
+  /* Where a shift-range measures from. A list index, not a path: the anchor is
+     a position in the current ordering and means nothing once that changes. */
+  let selAnchor = null;
+
+  function clearSel() {
+    if (!SEL.size) return;
+    SEL.clear();
+    selAnchor = null;
+    paintSelection();
+    drawSelBar();
+  }
+
+  function pickRow(tr, keep) {
+    const p = pathOf(tr);
+    if (!p) return;
+    if (!keep) SEL.clear();
+    if (keep && SEL.has(p)) SEL.delete(p);
+    else SEL.set(p, tr.__row);
+  }
+
+  /* Every row between two positions, in whatever order they were clicked.
+   *
+   * Rows the list has not fetched cannot be selected — there is nothing to
+   * select — so the count in the bar is what was really taken rather than the
+   * width of the range. A gap only happens when somebody scrolls a long way
+   * fast and then shift-clicks; the bar showing 40 where the range spans 300
+   * is the honest reading of that. */
+  function selectRange(a, b) {
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    for (let i = lo; i <= hi; i++) {
+      const f = LIST.rows.get(i);
+      if (f) SEL.set(f.path + "/" + f.name, f);
+    }
+  }
+
+  /* The class the rows wear, put on after every paint.
+   *
+   * Not inside `writeRow`: that one returns early when the file in a slot has
+   * not changed, which is exactly the case where the selection *has*. And it
+   * assigns `className` outright, so this has to run after it or the mark is
+   * wiped by the next repaint. */
+  function paintSelection() {
+    for (const tr of body.querySelectorAll("tr[data-path]")) {
+      tr.classList.toggle("sel", SEL.has(tr.dataset.path));
+    }
+  }
+
+  function drawSelBar() {
+    const n = SEL.size;
+    selbar.hidden = n === 0;
+    if (!n) return;
+    let total = 0;
+    let dirs = 0;
+    for (const f of SEL.values()) {
+      if (!f) continue;
+      if (f.is_dir) dirs++;
+      else total += f.size > 0 ? f.size : 0;
+    }
+    /* Folders are counted, not weighed. What a folder holds is the `~` number
+       in the size column — the part of it this index has — and quietly adding
+       that into a total beside exact file sizes would make one number out of
+       two different kinds of claim. */
+    const parts = [`<span class="n">${fmt(n)}</span> seçili`];
+    if (n - dirs > 0) parts.push(`<span class="sum">${bytes(total)}</span>`);
+    if (dirs) parts.push(`<span class="sum">${fmt(dirs)} klasör</span>`);
+    const nFolders = foldersOf().length;
+    selbar.innerHTML =
+      parts.join(' <span class="sum">·</span> ') +
+      `<span class="grow"></span>` +
+      `<button type="button" data-sel="copy">Yolları kopyala</button>` +
+      `<button type="button" data-sel="folder"${asking ? ' class="asking"' : ""}>` +
+      (asking ? `${fmt(nFolders)} pencere açılsın mı?` : `Klasörlerini aç (${fmt(nFolders)})`) +
+      `</button>` +
+      `<button type="button" data-sel="clear">Bırak</button>`;
+  }
+
+  /* The folders a selection sits in, each one once.
+   *
+   * Eleven files from the same directory is one window, not eleven — and that
+   * is the ordinary shape of a selection, because a search that found them
+   * together usually found them together somewhere. */
+  const foldersOf = () => [...new Set([...SEL.values()].filter(Boolean).map((f) => f.path))];
+
+  /* **Opening windows is asked about past a handful.** A file manager window
+     is cheap and eight of them is not, and this is the one action here that
+     reaches out of the app and cannot be undone by pressing something again.
+     Under the threshold it simply happens: being asked about two windows is
+     its own kind of rude.
+   *
+   * The question is asked on the bar's own button whichever way it was
+   * reached, including from the row menu — a menu closes when it is clicked,
+   * so it has nowhere to put a question, and an action that behaves one way
+   * from a menu and another from a button is two actions. */
+  const OPEN_MANY = 5;
+  let asking = false;
+  let askTimer = null;
+
+  function askFolders() {
+    asking = true;
+    drawSelBar();
+    clearTimeout(askTimer);
+    // The question expires. A button left mid-question is a button that does
+    // something unexpected the next time somebody presses it.
+    askTimer = setTimeout(() => { asking = false; drawSelBar(); }, 5000);
+  }
+
+  function openFolders() {
+    const dirs = foldersOf();
+    if (dirs.length > OPEN_MANY && !asking) { askFolders(); return; }
+    asking = false;
+    clearTimeout(askTimer);
+    for (const d of dirs) launch(d, "folder");
+    drawSelBar();
+  }
+
+  function copySelected() {
+    const text = [...SEL.keys()].join("\n");
+    navigator.clipboard.writeText(text).then(
+      () => flash(`${fmt(SEL.size)} yol kopyalandı`),
+      () => flash("kopyalanamadı"));
+  }
+
+  selbar.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-sel]");
+    if (!btn) return;
+    if (btn.dataset.sel === "clear") clearSel();
+    else if (btn.dataset.sel === "copy") copySelected();
+    else openFolders();
+  });
+
+  /* Clicking picks. Plain replaces, `Ctrl` adds one, `Shift` takes the run. */
+  body.addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-path]");
+    if (!tr) { return; }
+    const i = Number(tr.dataset.i);
+    if (e.shiftKey && selAnchor !== null && Number.isFinite(i)) {
+      SEL.clear();
+      selectRange(selAnchor, i);
+    } else if (e.ctrlKey || e.metaKey) {
+      pickRow(tr, true);
+      selAnchor = i;
+    } else {
+      pickRow(tr, false);
+      selAnchor = i;
+    }
+    paintSelection();
+    drawSelBar();
+  });
+
+  body.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      SEL.clear();
+      for (const [, f] of LIST.rows) SEL.set(f.path + "/" + f.name, f);
+      paintSelection();
+      drawSelBar();
+      return;
+    }
+    if (e.key === "Escape" && SEL.size) { e.preventDefault(); clearSel(); }
+  });
+
   /* **The column decides which one is opened**, as Everything does it: the
      name is the file, the location is the folder it is in. A row is two
      answers to "where is it", and clicking one of them should give that one
@@ -3791,6 +4033,19 @@
       const at = rows.indexOf(row);
       const next = rows[at + (e.key === "ArrowDown" ? 1 : -1)];
       if (next) {
+        /* Held shift walks and takes the rows it walks over, which is what
+           every list does. The anchor is where the walk began, so reversing
+           direction gives the rows back rather than adding more. */
+        if (e.shiftKey) {
+          const i = Number(next.dataset.i);
+          if (selAnchor === null) selAnchor = Number(row.dataset.i);
+          if (Number.isFinite(i) && selAnchor !== null) {
+            SEL.clear();
+            selectRange(selAnchor, i);
+            paintSelection();
+            drawSelBar();
+          }
+        }
         next.focus();
         // Only when it is off the edge: `nearest` leaves the list still when
         // the row is already on screen, which is what a keyboard walk should
@@ -3819,11 +4074,32 @@
     const p = pathOf(tr);
     if (!p) return;
     e.preventDefault();
-    menu.innerHTML = [
-      ["Aç", "file"],
-      ["Klasörünü aç", "folder"],
-      ["Yolu kopyala", "copy"],
-    ].map(([label, act]) => `<button type="button" data-act="${act}">${label}</button>`).join("");
+    /* **Right-clicking outside the selection selects what was right-clicked.**
+       Otherwise the menu is about rows the pointer is not on, which is how
+       somebody copies eleven paths while looking at a twelfth. Inside it, the
+       selection stands — that is the whole point of having made one. */
+    if (!SEL.has(p)) {
+      pickRow(tr, false);
+      selAnchor = Number(tr.dataset.i);
+      paintSelection();
+      drawSelBar();
+    }
+    const many = SEL.size > 1;
+    menu.innerHTML = (many
+      ? [
+          [`${fmt(SEL.size)} yolu kopyala`, "copy"],
+          // Not "open them": opening a selection means as many programs as
+          // there are rows, and the bar's button is where that lives, behind
+          // a question. What a menu offers should be safe to press.
+          ["Klasörlerini aç", "folders"],
+          ["Seçimi bırak", "clear"],
+        ]
+      : [
+          ["Aç", "file"],
+          ["Klasörünü aç", "folder"],
+          ["Yolu kopyala", "copy"],
+        ]
+    ).map(([label, act]) => `<button type="button" data-act="${act}">${label}</button>`).join("");
     menu.dataset.path = p;
     menu.hidden = false;
     /* Kept on screen: near the pointer, but never past the edge. */
@@ -3838,9 +4114,17 @@
     if (!act) return;
     const p = menu.dataset.path;
     menu.hidden = true;
-    if (act === "copy") {
-      navigator.clipboard.writeText(p).then(() => flash("yol kopyalandı"),
-                                            () => flash("kopyalanamadı"));
+    if (act === "clear") {
+      clearSel();
+    } else if (act === "folders") {
+      openFolders();
+    } else if (act === "copy") {
+      // One row or the whole selection, and the same key order the bar copies
+      // in — insertion order, which is the order they were picked.
+      const text = SEL.size > 1 ? [...SEL.keys()].join("\n") : p;
+      const said = SEL.size > 1 ? `${fmt(SEL.size)} yol kopyalandı` : "yol kopyalandı";
+      navigator.clipboard.writeText(text).then(() => flash(said),
+                                               () => flash("kopyalanamadı"));
     } else {
       launch(p, act);
     }
