@@ -1574,14 +1574,42 @@
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + " " + u[i];
   };
+  /* **Seconds, but only for the first minute.**
+   *
+   * Under a minute everything said "1 dk önce", which is the one range where
+   * the difference matters: watching whether a file you just saved has reached
+   * the index is a question about seconds, and it was the only question this
+   * column could not answer.
+   *
+   * It stops at sixty on purpose. This page has one loud voice and it is
+   * freshness; a screenful of rows all counting up would be a second one, and
+   * a louder one. Above a minute nothing moves that did not move before.
+   *
+   * A number this fine needs its own clock — see `tickClock`. `now` used to be
+   * refreshed only when the index moved, which is invisible at minute
+   * granularity and wrong within a second at this one. */
   const ago = (mtime) => {
     const s = now - mtime;
+    // A file whose timestamp is in the future — clock skew, a copy with
+    // preserved times — is not "minus four seconds ago".
+    if (s < 1) return "az önce";
+    if (s < 60) return s + " sn önce";
     if (s < 3600) return Math.max(1, Math.round(s / 60)) + " dk önce";
     if (s < DAY) return Math.round(s / 3600) + " sa önce";
     if (s < 30 * DAY) return Math.round(s / DAY) + " gün önce";
     if (s < 365 * DAY) return Math.round(s / (30 * DAY)) + " ay önce";
     return Math.round(s / (365 * DAY)) + " yıl önce";
   };
+
+  /* The reading behind the reading. "4 gün önce" is what a list wants and
+     never what a person wants at the moment they stop and ask; the exact time
+     was in the row all along and had nowhere to be shown. Costs nothing and
+     moves nothing — it is only read when the pointer rests. */
+  const exact = (t) =>
+    !t ? "" : new Date(t * 1000).toLocaleString("tr-TR", {
+      day: "numeric", month: "long", year: "numeric",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
 
   const q      = document.getElementById("q");
   const shadow = document.getElementById("shadow");
@@ -2769,6 +2797,11 @@
     // outright, and it returns early when a slot's file has not changed —
     // which is exactly the case where its selection has.
     paintSelection();
+    /* And the clock's next wake, because scrolling changes which rows are on
+       screen and therefore when any of them next reads differently. Without
+       this, scrolling to a file saved a moment ago during a sixty-second sleep
+       leaves it saying the wrong number until that sleep ends. */
+    scheduleClock();
     if (keep) {
       const back = pool.find((tr) => tr.dataset.path === keep);
       if (back) back.focus({ preventScroll: true });
@@ -3006,6 +3039,115 @@
   let paintQueued = false;
   let dirty = false;          /* the rows changed, though the range did not */
   let painted = "";
+  /* ---------------- the clock behind "12 sn önce" ----------------
+   *
+   * `now` was refreshed in two places: when a live revision landed and when a
+   * search ran. Nothing else moved it. At minute granularity that is invisible
+   * for up to a minute and on a busy machine never noticed at all — the index
+   * here moves every few seconds, so the text was dragged along by accident.
+   * At second granularity the same arrangement is wrong within one second, and
+   * on a quiet machine it freezes altogether.
+   *
+   * **Not a fixed tick.** The service had one — ten times a second, firing
+   * whether or not there was anything to do — and it was replaced by a sleep
+   * to the next real deadline for reasons that were measured. The same shape
+   * applies here: wake when the soonest row's text would change, and not
+   * otherwise.
+   *
+   *   a row younger than a minute   →  the next second
+   *   nothing young, a date shown   →  the next minute
+   *   no date column, or hidden     →  no timer at all
+   *
+   * So a list of files last touched in March schedules nothing, and a window
+   * behind another window schedules nothing, which is most windows most of
+   * the time.
+   *
+   * Only the date cells are rewritten. A full repaint would not do it anyway:
+   * `writeRow` returns early when a slot's file has not changed, and what has
+   * changed here is not the file. */
+  let clockTimer = null;
+  const HOUR = 3600;
+
+  /* When `Math.round(s / unit)` next lands on a different number.
+   *
+   * Early is harmless — one extra rewrite of a cell that says the same thing —
+   * and late is the bug, so this rounds the boundary up. */
+  const nextRound = (s, unit) =>
+    Math.max(1, Math.ceil((Math.round(s / unit) + 0.5) * unit - s));
+
+  /* How long until this row's text is no longer what it says.
+   *
+   * One line per band of `ago`, and they have to stay in step: a band written
+   * in days that is watched in minutes wakes 1,440 times for nothing, and one
+   * written in seconds that is watched in minutes is wrong for 59 of them. */
+  function nextChange(s) {
+    if (s < 0) return Math.max(1, -s);          // a timestamp in the future
+    if (s < 60) return 1;                       // seconds, counted not rounded
+    if (s < HOUR) return nextRound(s, 60);
+    if (s < DAY) return nextRound(s, HOUR);
+    if (s < 30 * DAY) return nextRound(s, DAY);
+    if (s < 365 * DAY) return nextRound(s, 30 * DAY);
+    return nextRound(s, 365 * DAY);
+  }
+
+  function dateCells() {
+    const keys = new Set(["mtime", "created", "accessed"]);
+    return shownColumns()
+      .map((c, i) => (keys.has(c.key) ? { at: i + 1, col: c } : null))
+      .filter(Boolean);
+  }
+
+  function tickClock() {
+    clockTimer = null;
+    now = Math.floor(Date.now() / 1000);
+    const where = dateCells();
+    if (where.length && !document.hidden &&
+        !document.getElementById("view-search").hidden) {
+      for (const tr of body.querySelectorAll("tr[data-path]")) {
+        const f = tr.__row;
+        if (!f) continue;
+        for (const { at, col } of where) {
+          if (tr.children[at]) col.write(tr.children[at], f, { text: [] });
+        }
+      }
+    }
+    scheduleClock();
+  }
+
+  function scheduleClock() {
+    clearTimeout(clockTimer);
+    clockTimer = null;
+    if (document.hidden || document.getElementById("view-search").hidden) return;
+    const where = dateCells();
+    if (!where.length) return;
+    /* The soonest moment any visible row would read differently.
+     *
+     * **In the unit that row is written in, not in seconds.** The first
+     * version woke at the next whole minute for everything over a minute
+     * old — which for a list of nine-day-old files is once a second, because
+     * with two dozen rows one of them is always a second away from its next
+     * minute boundary. Measured: 16 wakes in 30 seconds on a list where
+     * nothing could possibly change. "9 gün önce" changes once a day. */
+    let soonest = HOUR;
+    for (const tr of body.querySelectorAll("tr[data-path]")) {
+      const f = tr.__row;
+      if (!f) continue;
+      for (const { col } of where) {
+        const v = col.key === "mtime" ? f.mtime : col.key === "created" ? f.ctime : f.atime;
+        if (!v) continue;
+        soonest = Math.min(soonest, nextChange(now - v));
+      }
+    }
+    clockTimer = setTimeout(tickClock, Math.max(1, soonest) * 1000);
+  }
+
+  /* A hidden window has nothing to keep current, and a shown one may have been
+     hidden for an hour. Both are the same event. */
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { clearTimeout(clockTimer); clockTimer = null; }
+    else tickClock();
+  });
+
   function repaint(rowsChanged) {
     if (rowsChanged) dirty = true;
     if (paintQueued) return;
@@ -3419,13 +3561,19 @@
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);
         td.style.color = `var(${bandOf(f.mtime)})`;
+        const t = exact(f.mtime);
+        if (td.title !== t) td.title = t;
       } },
     { id: "kind",  label: "Tür",      key: "kind",  w: 110,
       write: cell("kind", (f) => f.kind || "") },
     { id: "ext",   label: "Uzantı",   key: "ext",   w: 80,
       write: cell("kind", (f) => f.ext || "") },
     { id: "ctime", label: "Oluşturma", key: "created", w: 120,
-      write: cell("n left", (f) => (f.ctime ? ago(f.ctime) : "")) },
+      write: (td, f) => {
+        cell("n left", (x) => (x.ctime ? ago(x.ctime) : ""))(td, f);
+        const t = exact(f.ctime);
+        if (td.title !== t) td.title = t;
+      } },
     /* **A dash where nothing is recorded, not a stale number.**
      *
      * Checked against the mounts rather than assumed: `/mnt/depo` is
@@ -3446,10 +3594,12 @@
         }
         const dead = !!owner && !owner.reads;
         cell("n left", (x) => (dead ? "—" : x.atime ? ago(x.atime) : ""))(td, f);
+        // On a volume that records nothing the explanation is worth more than
+        // a timestamp; where it records, the timestamp is the whole point.
         const t = dead
           ? "bu birimde okuma zamanı kaydedilmiyor (noatime) — gösterilen sayı"
             + " dosyanın oluşturulduğu andan kalma olurdu"
-          : "";
+          : exact(f.atime);
         if (td.title !== t) td.title = t;
         td.style.color = dead ? "var(--ink-3)" : "";
       } },
