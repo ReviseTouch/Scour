@@ -1042,6 +1042,25 @@
   tbody tr.spacer, tbody tr.ghost { pointer-events: none; }
   tbody tr.spacer td, tbody tr.ghost td { padding: 0; border: 0; }
   tbody tr.ghost { height: 31px; }
+  /* **A row on its way looks like a row on its way.**
+   *
+   * It was blank — no text, no border, nothing — so a screenful of them was
+   * indistinguishable from a broken list, and that is what it was taken for.
+   * Fast scrolling reaches them every time: the hand moves further in a moment
+   * than the service can answer for, and the first window of a *new ordering*
+   * costs seconds because the engine has a whole order to prepare (measured on
+   * the live index: 2.1 s cold for `sort:name`, 24 ms once prepared).
+   *
+   * Two bars, where the two widest columns are. **Not animated**: this page has
+   * one moving thing and it is freshness, and a shimmer on sixty rows would be
+   * compositor work every frame for as long as a list is filling. Still enough
+   * to say the difference between "nothing here" and "not yet". */
+  tbody tr.ghost td:nth-child(2)::after,
+  tbody tr.ghost td:nth-child(3)::after {
+    content: ""; display: block; height: 8px; border-radius: 2px;
+    margin: 11px calc(var(--u) * 3); background: var(--line);
+  }
+  tbody tr.ghost td:nth-child(3)::after { background: var(--line-soft); }
   tbody tr.far td {
     padding: calc(var(--u) * 4) calc(var(--u) * 5);
     color: var(--ink-3); font-size: 12px;
