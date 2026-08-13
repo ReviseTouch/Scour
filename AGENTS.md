@@ -92,6 +92,9 @@ carries the `id` of the call it answers. Requests:
 | `await` | | `since` (the last `revision` seen), `timeout_ms` → a `Status`, returned when the index would answer differently or when the wait runs out; the revision in it says which. The one request allowed to take its time, and what makes a live list one blocked thread rather than 86,400 searches a day spent discovering that a desktop was idle. It is also what tells the service somebody is looking, which is what makes a change worth committing sooner than it would be for nobody |
 | `rescan` | ✓ | optional `path` to narrow it |
 | `maintain` | ✓ | `flush` / `idle` / `compact` / `rebuild` — `idle` is separate from `flush` because they happen at different rates: flushing is what a burst of changes needs every second, giving back the write buffer is what a machine sitting overnight needs once |
+| `duplicates` | | `under`, `min_size`, `read_budget`, `top` → files that share a size, and how many of those were **read** and proved identical. The two numbers always travel together: sharing a size is not being the same file, and a panel showing only the first would be telling somebody to delete database pages that happen to be the same length |
+| `settings` | | what a person has chosen — columns and their order, widths, sort, the queries they meant. Held here because the service is the only thing every frontend talks to, and because a browser loses `localStorage` when it is killed |
+| `set-settings` | ✓ | a **change**, not the whole object: what it does not name, it does not touch. That is what lets a window and a terminal be open at once without each erasing the fields the other understands, and what lets a field be added without every frontend learning about it first |
 | `syntax` | | the query language reference, as text |
 | `shutdown` | ✓ | |
 
@@ -146,10 +149,11 @@ Two rules that are not negotiable:
 * **Nothing mutating is exposed**, and that is enforced rather than described.
   Every tool goes through one `call`, and anything `Request::is_mutating`
   answers `true` for is refused there before it reaches the socket — so the
-  server is read-only because writes are stopped, not because the three tools
-  that could write were never written. `rescan`, `maintain` and `shutdown` stay
-  out of the tool list too, but the list is not what keeps the promise: the day
-  somebody adds a tenth tool, the guard already knows the answer.
+  server is read-only because writes are stopped, not because the four tools
+  that could write were never written. `rescan`, `maintain`, `set-settings` and
+  `shutdown` stay out of the tool list too, but the list is not what keeps the
+  promise: the day somebody adds a tenth tool, the guard already knows the
+  answer.
 
 Tool descriptions say what a tool is *for*, not what it does — a model choosing
 between `scour_search` and `scour_tree` is making the same decision a person
@@ -157,14 +161,14 @@ does, and the descriptions exist to make it easy.
 
 ### Browser — `scour-web`
 
-A bridge and only a bridge: one page and ten JSON routes, holding no index and
-linking no engine. Every route but two is a thin mapping onto a `scour-proto`
-request; `/api/kinds` and `/api/icon` answer from this machine, because the
-kinds a rail should offer come from `Kind::OFFERED` and a thumbnail is a file
-the desktop already made. **No HTTP framework and no async runtime** — axum
-would bring tokio, hyper and about a hundred crates to do what two hundred
-lines of `std::net` do, and `scour-mcp` is a separate binary precisely so the
-rest of the workspace stays free of one.
+A bridge and only a bridge: one page and fourteen JSON routes, holding no index
+and linking no engine. Every route but three reaches the service; `/api/kinds`,
+`/api/places` and `/api/icon` answer from this machine, because the kinds a rail
+should offer come from `Kind::OFFERED`, the folders somebody keeps things in are
+the desktop's own, and a thumbnail is a file the desktop already made. **No HTTP
+framework and no async runtime** — axum would bring tokio, hyper and about a
+hundred crates to do what two hundred lines of `std::net` do, and `scour-mcp` is
+a separate binary precisely so the rest of the workspace stays free of one.
 
 What is behind the port is an index of every file the user owns, so four things
 hold and none is a preference: **127.0.0.1 only**, with no flag to change it; a

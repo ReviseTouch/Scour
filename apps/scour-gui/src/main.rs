@@ -592,9 +592,16 @@ fn apply(
             if generation != state.borrow().generation {
                 return;
             }
-            // `misread` is not used here: this window colours the query line
-            // from `explain` while it is being typed, which reaches the reader
-            // before the count does.
+            // **`misread` is dropped, and nothing else picks it up.** This
+            // said the query line was coloured from `explain` while it was
+            // being typed, so a term the engine did not understand had already
+            // reached the reader by now. It is not: this crate never sends
+            // `Request::Explain`, and there is nowhere to put the answer if it
+            // did — the query line is one `TextInput` in one colour, because
+            // Slint has no range colouring for editable text (`ui/main.slint`
+            // on upstream #9560). So a bad term is silent here, and telling
+            // the reader about it is a feature this window does not have yet
+            // rather than one that arrived down another path.
             if let Response::Count {
                 total,
                 capped,
@@ -811,11 +818,32 @@ mod tests {
     }
 
     #[test]
-    fn every_offered_kind_has_a_word_in_every_shipped_language() {
-        for (tag, _) in scour_i18n::LANGUAGES {
-            let c = Catalogue::for_language(tag);
+    fn every_offered_kind_has_a_word_in_every_translated_language() {
+        // **This asked `!c.get(k.msgid()).is_empty()` and could not fail.**
+        // `get` falls back to the msgid, so it was true for every string in
+        // every language whether anybody had translated it or not — the rail
+        // could have come up entirely in English and this would still have
+        // been green. `has` asks the catalogue instead of asking for the text.
+        //
+        // Only the languages that claim to be translated: English has no
+        // catalogue because the msgid *is* the English, so every entry would
+        // be missing by construction. The assertion below is what stops that
+        // filter from quietly emptying the loop the way `get` emptied the
+        // check.
+        let translated: Vec<Catalogue> = scour_i18n::LANGUAGES
+            .iter()
+            .map(|(tag, _)| Catalogue::for_language(tag))
+            .filter(Catalogue::is_translated)
+            .collect();
+        assert!(!translated.is_empty(), "no shipped language is translated");
+        for c in translated {
             for k in scour_core::Kind::OFFERED {
-                assert!(!c.get(k.msgid()).is_empty(), "{tag} has no word for {k:?}");
+                assert!(
+                    c.has(k.msgid()),
+                    "{} has no word for {k:?} ({})",
+                    c.locale(),
+                    k.msgid()
+                );
             }
         }
     }

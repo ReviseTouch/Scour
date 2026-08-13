@@ -70,6 +70,22 @@ impl Catalogue {
         self.map.is_some_and(|m| !m.is_empty())
     }
 
+    /// Is this string in the catalogue, or is [`Catalog::get`] about to fall
+    /// back to the English?
+    ///
+    /// `get` cannot answer that, and should not: it hands back the msgid when
+    /// nothing is translated, which is the right answer for a caller showing
+    /// text and a useless one for a caller checking coverage. A test that asked
+    /// `!get(id).is_empty()` was true for every string in every language,
+    /// translated or not, and so could never fail.
+    ///
+    /// Presence rather than difference, because a correct translation is
+    /// sometimes identical to its msgid: Turkish spells `Video` the way English
+    /// does, and a check for a *different* string would call that a gap.
+    pub fn has(&self, msgid: &str) -> bool {
+        self.map.is_some_and(|m| m.contains_key(msgid))
+    }
+
     /// How many strings this catalogue carries.
     pub fn len(&self) -> usize {
         self.map.map_or(0, |m| m.len())
@@ -164,6 +180,21 @@ mod tests {
         let c = Catalogue::for_language("tr");
         let unknown = "Something nobody has translated yet";
         assert_eq!(c.get(unknown), unknown);
+    }
+
+    #[test]
+    fn presence_is_a_question_get_cannot_answer() {
+        let c = Catalogue::for_language("tr");
+        assert!(c.has("Folder"));
+        // The two `get` cannot tell apart: both come back as themselves.
+        assert!(!c.has("Something nobody has translated yet"));
+        assert!(
+            c.has("Video"),
+            "translated, and identical to its msgid — which is why coverage \
+             asks whether the entry is there and not whether it differs"
+        );
+        // English has no catalogue: the msgid is the string.
+        assert!(!Catalogue::english().has("Folder"));
     }
 
     #[test]

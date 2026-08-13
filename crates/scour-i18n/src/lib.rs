@@ -7,9 +7,19 @@
 //! * A string with no translation degrades to correct English, not to a bare
 //!   key like `status.entries.label` leaking into someone's terminal.
 //! * A translator reads `"The index is empty"` and not `msg_idx_empty_3`.
-//! * The user interface, when it arrives, uses Slint's own `@tr()`, which is
-//!   also gettext and also keyed by the source string — so the *same* `.po`
-//!   files serve both sides. One catalogue, not two that drift.
+//! * Every frontend asks the same question of the same catalogue, so there is
+//!   one set of `.po` files rather than two that drift.
+//!
+//! **The window asks this crate, not the toolkit.** This said the interface
+//! would use Slint's own `@tr()` — also gettext, also keyed by the source
+//! string — and that is not what was built. `@tr()` needs slint's `gettext`
+//! feature, which is libintl on every platform, and a `slint::init_translations!`
+//! pointing at compiled `.mo` files on disk; `apps/scour-gui` pins slint with
+//! default features and its `build.rs` is a bare `slint_build::compile`, so an
+//! `@tr()` there would hand back the English and nothing would say why. The
+//! window looks each string up here instead and sets it as a property — which
+//! is what keeps the promise below, because the catalogue is in the binary and
+//! a window with no `.mo` files beside it is still translated.
 //!
 //! Compiled in rather than loaded from disk because a search tool that cannot
 //! find its own translation files is a worse bug than an untranslated string,

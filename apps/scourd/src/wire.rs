@@ -67,7 +67,14 @@ pub fn build(config: &Config) -> Result<Engine> {
                     .max(config.service.commit_interval_ms),
             ),
             rebuild_threshold: config.index.rebuild_threshold,
-            result_limit: config.ui.result_limit.max(1_000),
+            // Raised to the browser window's fetch run and no further. That
+            // page asks for fixed runs of 200 rows and records the whole run as
+            // loaded, so a ceiling under it leaves rows that never arrive.
+            // Above it the number in the file is the owner's and is taken as
+            // written — this was `.max(1_000)`, which silently ignored every
+            // value below a thousand including `UiCfg`'s own default of 200, so
+            // the setting could not be believed at all.
+            result_limit: config.ui.result_limit.max(200),
             ..EngineOptions::default()
         },
     ))
@@ -106,6 +113,26 @@ fn open_index(dir: &std::path::Path) -> Result<NativeIndex> {
 /// other's bytes in `bytes_on_disk`.
 fn index_dir(config: &Config) -> std::path::PathBuf {
     config.index.dir.join("native")
+}
+
+/// The data directory *this* configuration points at.
+///
+/// The parent of the index, which is the same convention `main.rs` uses to
+/// decide where the kept settings go: everything one service writes about
+/// itself sits together, so `--config` moves all of it or none of it.
+///
+/// **It was `scour_config::data_dir()` below**, computed from `ProjectDirs`
+/// while the two entries beside it followed the configuration. A service
+/// started with `--config` therefore refused to index the real user's data
+/// directory — which it does not write, and which is somebody's files as far
+/// as it is concerned — while leaving its own unguarded, which is the loop the
+/// entry exists to prevent.
+fn data_dir(config: &Config) -> &std::path::Path {
+    config
+        .index
+        .dir
+        .parent()
+        .unwrap_or(config.index.dir.as_path())
 }
 
 /// The configured exclusions, plus the platform's own.
@@ -151,7 +178,7 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
         vec![
             config.index.dir.to_string_lossy().into_owned(),
             index_dir(config).to_string_lossy().into_owned(),
-            scour_config::data_dir().to_string_lossy().into_owned(),
+            data_dir(config).to_string_lossy().into_owned(),
         ],
     );
     merge(&mut o.exclude_paths, paths);
@@ -204,6 +231,28 @@ mod tests {
                 data.display()
             )),
             "the window's own browser cache is indexed: {:?}",
+            o.deny
+        );
+
+        // **And it is the configured directory, not the one `ProjectDirs`
+        // names.** This entry alone was `scour_config::data_dir()` while the
+        // two beside it followed the configuration, so a service started with
+        // `--config` guarded a directory it does not write and left the one it
+        // does write wide open — the wrong half of the promise, both ways
+        // round. Only the default was ever tested, and the default is the one
+        // case where the two answers agree.
+        let mut elsewhere = Config::default();
+        elsewhere.index.dir = "/srv/scour-elsewhere/index".into();
+        let o = scan_options(&elsewhere);
+        let rules = scour_source_fs::Rules::from_options(&o);
+        assert!(
+            rules.excludes_path("/srv/scour-elsewhere/app/Default/Cache/Cache_Data/x_0"),
+            "this service's own browser cache is indexed: {:?}",
+            o.deny
+        );
+        assert!(
+            !o.deny.iter().any(|p| std::path::Path::new(p) == data),
+            "a service living elsewhere still refuses the real data directory: {:?}",
             o.deny
         );
     }

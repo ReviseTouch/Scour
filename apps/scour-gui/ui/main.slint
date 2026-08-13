@@ -158,9 +158,15 @@ export component MainWindow inherits Window {
         // One `TextInput`, one colour, and that is not a shortcut: Slint's
         // text input has no range colouring at all — upstream #9560 puts
         // editable text out of scope — so the coloured chips the mockup shows
-        // need a second layer that does not exist yet. The field is painted by
-        // the *kind* of what is in it instead, which is one property from Rust
-        // and reads correctly at a glance.
+        // need a second layer that does not exist yet.
+        //
+        // **And one colour is all there is.** This said the field was "painted
+        // by the *kind* of what is in it instead, which is one property from
+        // Rust" — there is no such property and never was; `input.color` is
+        // `Theme.ink` whatever is typed. A mistyped field is searched for as
+        // text and this window says nothing about it, where the browser one
+        // marks it. Written down because a comment claiming a feature is how a
+        // gap stops being looked for.
         // ------------------------------------------------------------------
         Rectangle {
             height: 46px;

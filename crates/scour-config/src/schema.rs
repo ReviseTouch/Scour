@@ -209,6 +209,19 @@ impl Default for ServiceCfg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UiCfg {
+    /// The most rows one page may hold, whatever a caller asks for.
+    ///
+    /// A ceiling on the service rather than a preference of any one window: it
+    /// is what stops a client turning a keystroke into a million built rows.
+    ///
+    /// **Not honoured below 200.** `scourd` raises anything smaller, because
+    /// the browser window fetches in fixed runs of 200 rows and marks the whole
+    /// run as loaded — a page cut short leaves rows that never arrive and
+    /// nothing that would ask for them again.
+    ///
+    /// The default was 200 against a floor of 1,000, so the number in this file
+    /// did nothing for any value anyone was likely to write and the default
+    /// itself was unreachable. 1,000 is what the service has always used.
     pub result_limit: u32,
     /// BCP-47 tag, or empty for the system language.
     pub language: String,
@@ -217,7 +230,7 @@ pub struct UiCfg {
 impl Default for UiCfg {
     fn default() -> Self {
         Self {
-            result_limit: 200,
+            result_limit: 1_000,
             language: String::new(),
         }
     }
@@ -365,7 +378,7 @@ mod tests {
         assert_eq!(c.index.dir, IndexCfg::default().dir, "an omitted field");
         assert_eq!(c.sources[0].name, "work");
         assert!(c.sources[0].watch, "an omitted flag takes its default");
-        assert_eq!(c.ui.result_limit, 200);
+        assert_eq!(c.ui.result_limit, 1_000);
     }
 
     #[test]

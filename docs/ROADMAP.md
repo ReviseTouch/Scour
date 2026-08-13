@@ -481,16 +481,11 @@ a repository's text can be indexed, at what bytes per entry, against how long
 Small truths found while reading, none of them worth a commit of their own;
 each belongs to whichever phase next touches its file.
 
-* Six configuration keys are parsed and read by nothing: `scan.fast` (the
-  documentation claims it is the difference between one minute and ten),
-  `ui.language`, `ui.columns`, `service.maintain_every_hours`,
-  `content.max_file_mb`.
 * `/tmp` is in the Linux platform exclusions and cannot be removed, so a source
   rooted there indexes nothing and says nothing.
 * `scour_core::text::upper_tr` is defined, tested, and called from nowhere —
   and the GUI needs it, because CSS `text-transform: uppercase` spells
   "DEĞIŞTIRME".
-* `scour-i18n/src/lib.rs:10` says the UI uses Slint's `@tr()`. It will not.
 * `scour_query::describe` builds English with `format!`, so its output is not a
   lookupable msgid despite the doc comment saying it is. Explain will be
   English-only until that changes.
