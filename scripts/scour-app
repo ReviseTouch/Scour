@@ -49,6 +49,28 @@ fi
 # is killed does not tell its launcher.
 pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
 
+# **And the window that bridge belonged to.**
+#
+# Only the bridge was ended here, and the window was assumed gone because it
+# looked gone. It is not always: a window can be closed and its process outlive
+# it. Then this starts a second browser against the same profile, and a profile
+# has one owner — the new one comes up with **"Profiliniz açılırken bir sorun
+# oluştu. Bazı özellikler kullanılamayabilir"**, one dialog per attempt,
+# stacked. Meanwhile the old window is still on screen pointing at a token that
+# died with the old bridge, so one of the two windows says the service is
+# unreachable and the other is missing pieces.
+#
+# `stale_lock` below does not catch it: that is for a lock whose owner is dead,
+# and this owner is alive. So the old window is ended rather than assumed away.
+#
+# The pattern is this port's app URL and nothing else can carry it — not an
+# ordinary browser window, not another application. Deliberately narrower than
+# `--class=Scour`, which a future Slint window would also answer to.
+pkill -f -- "--app=http://127.0.0.1:$PORT/" 2>/dev/null || true
+# Chromium lets go of the profile as it goes; starting into it before it has is
+# the same failure by a shorter route.
+sleep 0.4
+
 # The token changes with every start, so an old window's link stops working —
 # which is the point of the token and also why the URL is read back rather than
 # assumed.
