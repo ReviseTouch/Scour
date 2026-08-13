@@ -973,6 +973,40 @@ pub fn kind_of(is_dir: bool, name: &str, mode: i64) -> Kind {
     Kind::File
 }
 
+/// Would *opening* this start a program rather than show it?
+///
+/// **A different question from [`kind_of`], and it has to be asked here.** A
+/// shell script is `Code` and would still run; a `.desktop` file is a text
+/// file the desktop executes. So this is not "what sort of thing is it" — it
+/// is "what happens if somebody double-clicks it", which is the question a
+/// frontend has to answer before it hands the path to the desktop.
+///
+/// **The execute bit only counts when the name says nothing**, which is what
+/// [`kind_of`] already does and what the frontend asking this did not. A
+/// bridge deciding by `mode & 0o111` alone treated every file on an `ntfs3`
+/// volume as a program, because `fmask=0022` gives all of them the bit —
+/// measured on this machine: every file under `/mnt/depo` is `0755`, so
+/// double-clicking a PDF there tried to *execute* it and failed with an exec
+/// format error. Half an index that could not be opened, from the one window
+/// built to open it.
+///
+/// The list below is the other half of the answer: names a desktop will run
+/// whatever the bit says. Being wrong towards "run" costs somebody a program
+/// they did not ask for; being wrong towards "show" costs a click. It is
+/// written to be wrong towards showing.
+pub fn runs_when_opened(name: &str, mode: i64) -> bool {
+    if kind_of(false, name, mode) == Kind::Exec {
+        return true;
+    }
+    matches!(
+        crate::text::DefaultFolder::of(ext_str(name)).as_str(),
+        // Executed by the desktop, or by the shell it hands them to.
+        "desktop" | "sh" | "bash" | "zsh" | "ksh" | "fish" | "ps1"
+        // Windows, where there is no bit to ask about.
+        | "scr" | "lnk" | "vbs" | "wsf" | "jar"
+    )
+}
+
 /// Permission bits in `drwxr-xr-x` form. Empty when `mode` is zero.
 pub fn mode_string(mode: i64) -> String {
     if mode == 0 {
@@ -1106,6 +1140,62 @@ mod tests {
         // The documented exception must not also be in the table, or which one
         // wins would depend on the order of two `if`s.
         assert!(table_lookup(EXT_TABLE, BIN_IS_BUILD.0).is_none());
+    }
+
+    /// **The bug this was written for is a mount option.**
+    ///
+    /// `/mnt/depo` on the author's machine is `ntfs3` with `fmask=0022`, so
+    /// every file on it is `0755` — a PDF, a zip, a Word document, all with
+    /// the execute bit. A frontend deciding "would opening this run something"
+    /// by that bit alone answered yes for all of them, and the window then
+    /// tried to *execute* a PDF and failed with an exec format error. Half an
+    /// index that could not be opened from the window built to open it.
+    ///
+    /// So the bit is the answer only where the name does not give one.
+    #[test]
+    fn an_execute_bit_on_a_document_does_not_make_it_a_program() {
+        for name in [
+            "License.pdf",
+            "notlar.docx",
+            "yedek.zip",
+            "resim.png",
+            "a.txt",
+        ] {
+            assert!(
+                !runs_when_opened(name, 0o755),
+                "{name} at 0755 must still be something to open, not to run"
+            );
+        }
+        // Where the name says nothing, the bit is all there is — and it is
+        // enough. This is the same rule `kind_of` uses for `Kind::Exec`.
+        assert!(runs_when_opened("scourd", 0o755));
+        assert!(!runs_when_opened("LICENSE", 0o644));
+    }
+
+    /// Anything the list calls a program is something opening would run, and
+    /// the two must not drift: the type column is drawn from one and the
+    /// double-click decided by the other.
+    #[test]
+    fn every_executable_kind_runs_when_opened() {
+        for name in [
+            "a.exe",
+            "a.msi",
+            "a.appimage",
+            "a.run",
+            "a.bat",
+            "a.cmd",
+            "a.com",
+        ] {
+            assert_eq!(kind_of(false, name, 0o644), Kind::Exec, "{name}");
+            assert!(runs_when_opened(name, 0o644), "{name}");
+        }
+        // And the ones that are not `Exec` and run anyway — without the bit,
+        // which is why this is a separate question rather than a field on
+        // `Kind`. A script is `Code` and a launcher is a text file.
+        for name in ["setup.sh", "start.desktop", "build.ps1", "thing.lnk"] {
+            assert_ne!(kind_of(false, name, 0o644), Kind::Exec, "{name}");
+            assert!(runs_when_opened(name, 0o644), "{name}");
+        }
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub use ast::{Ast, Cmp, Group, Match, NumField, TimeField};
 pub use change::Change;
 pub use entry::{
     Entry, EntryId, Key, Kind, Meta, SourceId, ext_of, ext_str, kind_of, mode_string, path_digest,
+    runs_when_opened,
 };
 pub use error::{Error, Result};
 pub use prefix::{PrefixSet, under};

@@ -28,7 +28,7 @@ pub use types::{
     IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Page, PrefixSet,
     Result, Role, ScanOptions, ScanReport, SearchRequest, SearchResponse, SortKey, SourceId,
     SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode, UsageRequest,
-    UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest, under,
+    UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest, runs_when_opened, under,
 };
 
 /// Say something, and carry on if nobody is listening.

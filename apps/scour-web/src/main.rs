@@ -1017,7 +1017,17 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     }
 
     let want_folder = req.param("what") == Some("folder") || entry.is_dir;
-    let runnable = !want_folder && http::is_runnable(p);
+    /* **Asked of the entry, not of the disk, and asked once.**
+     *
+     * This called a second rule that lived in this bridge, which re-`stat`ed
+     * the file for a mode bit the `Entry` above already carries, and which
+     * decided by that bit alone. Every file on an `ntfs3` volume mounted with
+     * `fmask=0022` has it — all of `/mnt/depo` on this machine is `0755` — so
+     * double-clicking a PDF there tried to *execute* it and came back as a 500.
+     *
+     * `scour_core::runs_when_opened` is the rule now, beside `kind_of`, which
+     * is where the knowledge about extensions already was. */
+    let runnable = !want_folder && scour_core::runs_when_opened(entry.name(), entry.meta.mode);
     // Running it is the file's own answer to "open"; showing where it lives is
     // what is left when that is not allowed.
     let run = runnable && may_run;
