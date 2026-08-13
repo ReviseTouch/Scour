@@ -595,6 +595,17 @@
   }
   thead th .grip:hover::after,
   thead th .grip.dragging::after { background: var(--q-key); top: 0; bottom: 0; }
+  /* Carrying a column somewhere else. The heading fades so the line is what
+     the eye follows — the line says where it lands, and the heading is only
+     what it came from. */
+  thead th.moving { opacity: .4; }
+  .dropline {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--t1); z-index: 6; pointer-events: none;
+  }
+  .dropline[hidden] { display: none; }
+  body.moving-col { cursor: grabbing; user-select: none; }
+  body.moving-col * { cursor: grabbing !important; }
   /* While a column is being dragged, nothing else reacts to the pointer —
      otherwise crossing a row selects text and crossing a header sorts. */
   body.resizing { cursor: col-resize; user-select: none; }
@@ -3716,11 +3727,112 @@
   document.querySelector("thead").addEventListener("click", (e) => {
     const th = e.target.closest("th[data-sort]");
     if (!th) return;
+    // A heading that was just carried somewhere else is not a heading that was
+    // clicked. Without this every reorder also re-sorted the list, which reads
+    // as the drag having done two things.
+    if (justMoved) return;
     if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
     else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "mtime" || th.dataset.sort === "size"; }
     keep();
     render();
   });
+
+  /* ---------------- kolon sırası ----------------
+   *
+   * Take a heading and put it somewhere else. The menu could already say
+   * *which* columns are shown and nothing could say **in what order** — the
+   * order was `COLUMNS`, a list in this file, the same for everybody.
+   *
+   * **The same pointer does three things on one strip**, so they are told
+   * apart by where and how far: the last nine pixels of a heading are the
+   * resize grip and never get here; a press that moves less than five pixels
+   * is a click and sorts; anything else is a carry. That threshold is the
+   * whole mechanism — without it a slightly shaky click would reorder the
+   * table, which is the sort of thing that makes people stop touching a
+   * heading at all. */
+  const DRAG_SLOP = 5;
+  let moving = null;      /* the heading being carried */
+  let movingFrom = 0;     /* where the press started, in page pixels */
+  let dropAt = -1;        /* the gap it would fall into, as an index */
+  let justMoved = false;  /* so the click that follows a carry does not sort */
+
+  const dropLine = document.createElement("div");
+  dropLine.className = "dropline";
+  dropLine.hidden = true;
+  document.querySelector(".results .scroll").appendChild(dropLine);
+
+  const headCells = () =>
+    [...document.querySelectorAll("#view-search thead th[data-col]")];
+
+  function showDrop(x) {
+    const cells = headCells();
+    let at = cells.length;
+    for (let i = 0; i < cells.length; i++) {
+      const r = cells[i].getBoundingClientRect();
+      if (x < r.left + r.width / 2) { at = i; break; }
+    }
+    dropAt = at;
+    /* The line sits on the edge the column would land against — the left edge
+       of the heading it goes before, or the right edge of the last one. Placed
+       against the scroller, which is what it is drawn inside, so a list
+       scrolled sideways still puts it where the pointer is. */
+    const host = document.querySelector(".results .scroll").getBoundingClientRect();
+    const edge = at < cells.length
+      ? cells[at].getBoundingClientRect().left
+      : cells[cells.length - 1].getBoundingClientRect().right;
+    dropLine.style.left = Math.round(edge - host.left +
+      document.querySelector(".results .scroll").scrollLeft) + "px";
+    dropLine.hidden = false;
+  }
+
+  document.querySelector("thead").addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".grip")) return;        /* that press is a resize */
+    const th = e.target.closest("th[data-col]");
+    if (!th) return;
+    moving = th;
+    movingFrom = e.clientX;
+    dropAt = -1;
+    justMoved = false;
+    th.setPointerCapture(e.pointerId);
+  });
+
+  document.querySelector("thead").addEventListener("pointermove", (e) => {
+    if (!moving) return;
+    if (!justMoved && Math.abs(e.clientX - movingFrom) < DRAG_SLOP) return;
+    if (!justMoved) {
+      justMoved = true;
+      moving.classList.add("moving");
+      document.body.classList.add("moving-col");
+    }
+    showDrop(e.clientX);
+  });
+
+  const endMove = () => {
+    if (!moving) return;
+    const th = moving;
+    moving = null;
+    dropLine.hidden = true;
+    th.classList.remove("moving");
+    document.body.classList.remove("moving-col");
+    if (justMoved && dropAt >= 0) {
+      const from = SHOWN.indexOf(th.dataset.col);
+      // Taking it out shifts everything after it one place left, so a gap to
+      // the right of where it started is one lower once it is gone.
+      let to = dropAt > from ? dropAt - 1 : dropAt;
+      if (from >= 0 && to !== from) {
+        const [id] = SHOWN.splice(from, 1);
+        SHOWN.splice(to, 0, id);
+        keep();
+        buildHeads();
+        render();
+      }
+    }
+    /* Cleared after the click this press is about to produce, not before it —
+       the click fires on the way out of the same gesture. */
+    setTimeout(() => { justMoved = false; }, 0);
+  };
+  document.querySelector("thead").addEventListener("pointerup", endMove);
+  document.querySelector("thead").addEventListener("pointercancel", endMove);
   /* **The box does not edit what is being typed, and it used to.**
    *
    * A `;` was rewritten to ` ; ` as it was entered. The reasoning was about
@@ -3813,9 +3925,18 @@
       } else if (SHOWN.includes(id)) {
         SHOWN = SHOWN.filter((x) => x !== id);
       } else {
-        // Added in the order the table lists them, not the order they were
-        // clicked: a column belongs where its neighbours expect it.
-        SHOWN = COLUMNS.filter((c) => SHOWN.includes(c.id) || c.id === id).map((c) => c.id);
+        /* Added where its neighbours would expect it — but **without
+           rearranging the ones already there**, which is what this used to do.
+           It rebuilt the whole list in `COLUMNS` order, and once headings
+           could be dragged that threw away the arrangement somebody had made
+           every time they showed one more column.
+         *
+           So: in front of the first shown column that comes after it in the
+           table's own order, and at the end when there is none. */
+        const rank = (x) => COLUMNS.findIndex((c) => c.id === x);
+        const at = SHOWN.findIndex((x) => rank(x) > rank(id));
+        if (at < 0) SHOWN = [...SHOWN, id];
+        else SHOWN = [...SHOWN.slice(0, at), id, ...SHOWN.slice(at)];
       }
       keep();
       buildHeads();
