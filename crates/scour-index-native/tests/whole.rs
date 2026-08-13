@@ -158,6 +158,127 @@ fn many_segments_answer_exactly_what_one_would() {
     );
 }
 
+/// Oldest-first is the same answer as before, now that it is a different walk.
+///
+/// **The gap this closes is why it went unnoticed.** The agreement test above
+/// checks `Modified` *descending* against brute force and every other key in
+/// both directions — but never `Modified` ascending, which is precisely the
+/// order that has just stopped visiting every match and started walking the
+/// stored one backwards.
+///
+/// Two things are checked and the second is the delicate one:
+///
+/// * the same queries agree with brute force, oldest-first;
+/// * a corpus where **thousands of files share one second** pages correctly.
+///   A backwards walk yields dates in order and paths *reversed* inside a
+///   date, because inside a segment the row number is the path order. A page
+///   whose edge falls inside such a group would otherwise be handed the last
+///   paths to choose from rather than the first, which is wrong in a way that
+///   looks entirely reasonable — the right dates, plausible names, and
+///   nothing in the page to say it is not the answer.
+#[test]
+fn oldest_first_is_the_answer_brute_force_gives() {
+    let f = Fixture::new(16_000, 2_000);
+    for q in [
+        "",
+        "rapor",
+        "ext:rs",
+        "kind:code",
+        "size:>1mb",
+        "under:/home/u/Projeler",
+        "dm:30d",
+        "zzzznothing",
+    ] {
+        f.check(q, SortKey::Modified, false);
+    }
+
+    // And the ties. One second, more files than a page, across four segments —
+    // so the group is split by segment as well as by page.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut all: Vec<Entry> = Vec::new();
+    for i in 0..400u64 {
+        // Names that sort the *other* way from the order they are written in,
+        // so a walk that keeps whichever it met first cannot pass by luck.
+        all.push(entry(
+            &format!("/t/{:04}.txt", 399 - i),
+            NOW - 5_000,
+            1_000 + i,
+        ));
+    }
+    // A little on either side of the tie, so the page edge lands inside it.
+    all.push(entry("/t/before.txt", NOW - 9_000, 1));
+    all.push(entry("/t/after.txt", NOW - 1_000, 2));
+    for part in all.chunks(100) {
+        let mut it = part.iter().cloned().map(Change::Upsert);
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+    let tied = Fixture {
+        _tmp: tmp,
+        index,
+        entries: all,
+    };
+    for limit in [1, 5, 40, 200, 402] {
+        assert_eq!(
+            tied.search("", SortKey::Modified, false, limit),
+            tied.expected("", SortKey::Modified, false, limit),
+            "oldest-first, first {limit}, disagrees where the dates tie"
+        );
+    }
+    // And every page of it, which is where the edge of a page meets the edge
+    // of the tie group.
+    for offset in [0, 1, 39, 40, 199, 200, 399] {
+        assert_eq!(
+            tied.paged("", SortKey::Modified, false, offset, 40),
+            tied.expected("", SortKey::Modified, false, offset + 40)[offset..].to_vec(),
+            "oldest-first page at {offset} disagrees where the dates tie"
+        );
+    }
+
+    /* **And the walk's own answer, not only the merge's.**
+     *
+     * `run_with` is public and has two ways out: the merge takes `ranked` and
+     * orders it itself, and a single-segment caller takes `hits` already
+     * ordered. Everything above goes through the first, so the second was
+     * uncovered — removing its sort changed nothing any test could see, which
+     * is how a guard becomes a hope. Its rows arrive in date order with the
+     * paths reversed inside a date, so without that sort a tie group comes
+     * back backwards.
+     */
+    let one = Fixture::new(600, 600);
+    // Folded into one, because this half is about the path a single segment
+    // takes on its own rather than about the merge.
+    one.index.maintain(Maintenance::Rebuild).expect("rebuild");
+    assert_eq!(one.index.stats().expect("stats").segments, 1);
+    let mut direct: Vec<String> = Vec::new();
+    one.index
+        .for_each_segment(&mut |_, seg| {
+            let plan = scour_index_native::Plan::compile(&parse_at("", NOW), seg).expect("plan");
+            let found = scour_index_native::run_with(
+                seg,
+                &plan,
+                scour_index_native::Wanted {
+                    sort: SortKey::Modified,
+                    descending: false,
+                    offset: 0,
+                    limit: 60,
+                    count_cap: 10_000_000,
+                    rank_only: false,
+                },
+                None,
+                &[],
+            );
+            direct = found.hits.into_iter().map(|h| h.path).collect();
+        })
+        .expect("segments");
+    assert_eq!(
+        direct,
+        one.expected("", SortKey::Modified, false, 60),
+        "the walk's own oldest-first page disagrees with brute force"
+    );
+}
+
 #[test]
 fn paging_across_segments_reconstructs_the_list() {
     // The offset belongs to the merged list, not to any one segment. Applying

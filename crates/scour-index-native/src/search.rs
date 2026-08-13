@@ -1063,10 +1063,47 @@ pub fn run_with(
     // holding. It is not a corner case either — it is what a search window
     // shows the instant it opens, and it cost 121 ms of full scan before this
     // line existed, on the one frame a person is actually watching for.
-    let stored_order = (want.sort == SortKey::Modified && want.descending)
+    let stored_forward = (want.sort == SortKey::Modified && want.descending)
         || (want.sort == SortKey::Relevance && want.descending && score_terms.is_empty());
+
+    // Whether the walk has to read names at all — decided here rather than
+    // below because the direction depends on it. The rest of the reasoning is
+    // at the walk.
+    let sort_reads_name =
+        !stored_forward && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
+    let by_row = !plan.needs_name() && !has_veto && !sort_reads_name;
+
+    /* **Oldest-first is the same walk backwards.**
+     *
+     * Rows are stored newest-first, so newest-first stops at the first page
+     * and oldest-first used to visit every match: measured through the bridge
+     * on 2.24 M rows, 60–82 ms against 1,321–2,168 ms, every run. It is also
+     * the order a window opens in as soon as somebody has clicked the heading
+     * once, so it was a three-second cold open and a list that could not keep
+     * up with a scroll.
+     *
+     * **Only when the walk does not read names.** The folded arena is read
+     * sequentially — that is why it stores no offsets — so there is no
+     * backwards over it. That leaves text queries walking forwards, which is
+     * the right way round anyway: a query with a word in it matches few rows,
+     * and it is the queries that match *everything* that cannot afford a full
+     * pass. An empty query, `kind:`, `size:`, `dm:` all qualify.
+     */
+    let backwards = want.sort == SortKey::Modified && !want.descending && by_row;
+    let stored_order = stored_forward || backwards;
     let need = want.offset + want.limit;
     let mut done = false;
+    /* The date the page ends on, once there is a page.
+     *
+     * A backwards walk yields dates in order but paths *reversed* within a
+     * date, because inside a segment the row number is the path order. The
+     * merge sorts ties by path, so a page whose edge falls inside a group of
+     * files sharing a second would otherwise be given the wrong members of it
+     * to choose from — the last paths rather than the first. So the walk keeps
+     * going to the end of that group and hands the whole of it over. On a
+     * corpus where thousands of files share a date — a checkout, an unpacked
+     * archive — that is the difference between right and plausible. */
+    let mut edge: Option<i64> = None;
 
     let mut visit = |row: usize, name: &[u8]| -> bool {
         visited += 1;
@@ -1079,7 +1116,23 @@ pub fn run_with(
             return true;
         }
         counted += 1;
-        if stored_order {
+        if backwards {
+            let when = seg.num(Field::Mtime, row);
+            if kept.len() < need {
+                kept.push(row as u32);
+                if kept.len() == need {
+                    edge = Some(when);
+                }
+            } else if edge == Some(when) {
+                // Still inside the group the page ends on. See `edge`.
+                kept.push(row as u32);
+            } else if counted >= want.count_cap {
+                // Past that group, and enough counted for the total to be
+                // honest. Both, for the reason the forward walk gives below.
+                done = true;
+                return false;
+            }
+        } else if stored_order {
             if kept.len() < need {
                 kept.push(row as u32);
             }
@@ -1121,29 +1174,51 @@ pub fn run_with(
     // sorted by name got the same key. The answer stayed right, because
     // everything then tied and `sort_hits` compared the real names, and the
     // cost was the whole corpus: 1,117,687 rows built to return forty.
-    let sort_reads_name =
-        !stored_order && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
-    let by_row = !plan.needs_name() && !has_veto && !sort_reads_name;
+    // `sort_reads_name` and `by_row` are decided above, where the direction
+    // needs them.
+    // The runs, coalesced first rather than as it goes: adjacent blocks are
+    // walked as one so a dense set costs no more seeking than a full walk
+    // would, and having them as a list is what lets the backwards walk take
+    // the same runs from the far end.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
     let mut i = 0usize;
-    'runs: while i < blocks.len() {
-        // Adjacent blocks are walked as one, so a dense set costs no more
-        // seeking than a full walk would.
+    while i < blocks.len() {
         let mut j = i;
         while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
             j += 1;
         }
-        let from = blocks[i] as usize * BLOCK;
-        let to = ((blocks[j] as usize + 1) * BLOCK).min(seg.rows());
+        runs.push((
+            blocks[i] as usize * BLOCK,
+            ((blocks[j] as usize + 1) * BLOCK).min(seg.rows()),
+        ));
+        i = j + 1;
+    }
+    if backwards {
+        runs.reverse();
+    }
+
+    'runs: for (from, to) in runs {
         if by_row {
-            for row in from..to {
-                if !visit(row, b"") {
-                    break 'runs;
+            if backwards {
+                for row in (from..to).rev() {
+                    if !visit(row, b"") {
+                        break 'runs;
+                    }
+                }
+            } else {
+                for row in from..to {
+                    if !visit(row, b"") {
+                        break 'runs;
+                    }
                 }
             }
         } else {
             let mut go = true;
             // The **folded** arena: a search matches folded text, and folding
             // it here instead was 24.4 ns of the 40.5 a row used to cost.
+            //
+            // Forwards only — this is the reader with no offsets, and it is
+            // why `backwards` is off whenever a name has to be read.
             seg.folded.walk_range(from, to, |row, name| {
                 go = visit(row, name);
                 go
@@ -1152,7 +1227,6 @@ pub fn run_with(
                 break 'runs;
             }
         }
-        i = j + 1;
     }
 
     // The candidates, each with what it sorts by. The stored order needs no
@@ -1211,7 +1285,11 @@ pub fn run_with(
             seg.names.get(row).map(|n| seg.hit(row, n))
         })
         .collect();
-    if !stored_order {
+    // **And the backwards walk sorts too.** Its rows arrive in date order with
+    // the paths reversed inside a date, because inside a segment the row
+    // number is the path order. `kept` is a page and a tie group, so this is a
+    // sort of dozens rather than of a corpus.
+    if !stored_order || backwards {
         // Within one segment the rows already carry their score in `keyed`;
         // this path is the one that did not sort, so it scores from scratch.
         let owned: Vec<String> = score_terms
