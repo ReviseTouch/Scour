@@ -214,6 +214,26 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{}{q}", label("history"));
             }
         }
+        Response::Preview(l) => {
+            println!(
+                "{}{}",
+                label("shape"),
+                if l.shape == "none" { "—" } else { &l.shape }
+            );
+            if !l.kind.is_empty() {
+                println!("{}{}", label("type"), l.kind);
+            }
+            println!("{}{}", label("size"), l.len);
+            if !l.head.is_empty() {
+                println!();
+                print!("{}", l.head);
+                if l.cut {
+                    // Said here rather than appended to the text, which would
+                    // put the note inside the file being previewed.
+                    println!("\n[…]");
+                }
+            }
+        }
         Response::Places(p) => {
             println!("{}{}", label("home"), p.home);
             for place in &p.places {

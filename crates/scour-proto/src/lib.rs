@@ -167,6 +167,20 @@ pub enum Request {
         #[serde(default)]
         cursor: Option<u32>,
     },
+    /// What can be shown of one file — and, when that is text, the head of it.
+    ///
+    /// **The decision, not the bytes.** Deciding needs the file's first eight
+    /// kilobytes and a table of extensions, and getting it wrong is invisible:
+    /// a frontend guessing from the name calls `notes.bak` unreadable and
+    /// `model.safetensors` text. Moving the bytes as well would be worse than
+    /// useless — a browser asks for a video a piece at a time and cannot seek
+    /// without ranged HTTP, so whoever speaks to the browser has to serve
+    /// them. A terminal interface needs nothing but this reply.
+    ///
+    /// Fenced like `stat`: only a path the index holds.
+    Preview {
+        path: String,
+    },
     /// Where this person keeps things, and what the volumes under them record.
     ///
     /// **Asked of the service because it runs where the files are.** Both
@@ -322,6 +336,7 @@ pub enum Response {
     Stat(Entry),
     Usage(UsageResponse),
     Places(scour_places::Places),
+    Preview(scour_preview::Look),
     Explain {
         /// The query as it was understood.
         description: String,
@@ -378,6 +393,7 @@ impl Request {
             | Request::Tree { .. }
             | Request::Stat { .. }
             | Request::Places {}
+            | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
             | Request::Settings {}
@@ -399,6 +415,7 @@ impl Request {
             Request::Tree { .. } => "tree",
             Request::Stat { .. } => "stat",
             Request::Places {} => "places",
+            Request::Preview { .. } => "preview",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",
             Request::Settings {} => "settings",

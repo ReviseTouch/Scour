@@ -4644,6 +4644,9 @@ dependencies = [
 [[package]]
 name = "scour-preview"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "scour-proto"
@@ -4651,6 +4654,7 @@ version = "0.1.0"
 dependencies = [
  "scour-core",
  "scour-places",
+ "scour-preview",
  "scour-settings",
  "serde",
  "serde_json",
@@ -4722,6 +4726,7 @@ dependencies = [
  "scour-index-native",
  "scour-ipc",
  "scour-places",
+ "scour-preview",
  "scour-proto",
  "scour-query",
  "scour-settings",

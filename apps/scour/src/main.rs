@@ -91,6 +91,8 @@ enum Command {
     Stat { path: String },
     /// This desktop's own folders, and which volumes record read times.
     Places,
+    /// What can be shown of a file, and the head of it when that is text.
+    Preview { path: String },
     /// What a folder weighs, and which of its children weigh the most.
     Du {
         /// Empty for everything indexed.
@@ -311,6 +313,7 @@ fn build(args: &Args) -> Result<Request> {
             cursor: None,
         },
         Some(Command::Places) => Request::Places {},
+        Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},

@@ -11,9 +11,12 @@ publish.workspace      = true
 [lints]
 workspace = true
 
-# **No dependencies, not even `scour-core`.** Nothing here knows what an index
-# is, what a `Kind` is, or that Scour exists: it answers "can this be shown,
-# and how much of it", which is a question about a file and a browser. That is
-# what makes it usable from the bridge, the window, or anything else that ever
-# needs to show a file — and what makes its tests need no fixtures.
+# **`serde` and nothing else, not even `scour-core`.** Nothing here knows what
+# an index is, what a `Kind` is, or that Scour exists: it answers "can this be
+# shown, and how much of it", which is a question about a file and a browser.
+# That is what makes it usable from the bridge, the window, or anything else
+# that ever needs to show a file — and what makes its tests need no fixtures.
+# `serde` arrived when the *decision* started crossing the wire, so that four
+# frontends stop each having their own idea of what is readable.
 [dependencies]
+serde = { workspace = true }

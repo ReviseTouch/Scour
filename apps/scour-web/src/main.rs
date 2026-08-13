@@ -418,7 +418,7 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     serde_json::json!({
                         "path": h.path,
                         "name": h.name(),
-                        "dir": parent_of(&h.path),
+                        "dir": h.parent(),
                         "ext": scour_core::ext_of(h.name()),
                         "size": h.meta.size,
                         "disk": h.meta.disk,
@@ -1070,12 +1070,33 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     // first, and then points an `<img>` or a `<video>` at the same URL, which
     // streams and seeks the way the browser wants to.
     if req.param("meta") == Some("1") {
-        let (what, kind) = shape.shown();
+        // **Asked, not decided here.** Whether a file can be shown needs its
+        // first eight kilobytes read and a table of extensions consulted, and
+        // this bridge was doing both — so a terminal interface or a Slint
+        // window would each have had their own idea of what `notes.bak` is.
+        // The service answers now; what stays here is the two facts that are
+        // about *this* frontend, and the bytes, which a browser wants ranged.
+        let look = match call(
+            client,
+            Request::Preview {
+                path: entry.path.clone(),
+            },
+        ) {
+            Ok(Response::Preview(l)) => l,
+            Ok(_) => {
+                http::fail(stream, "502 Bad Gateway", "unexpected reply");
+                return;
+            }
+            Err(e) => {
+                http::fail(stream, "502 Bad Gateway", &e);
+                return;
+            }
+        };
         http::json(
             stream,
             &serde_json::json!({
-                "shape": what,
-                "type": kind,
+                "shape": look.shape,
+                "type": look.kind,
                 "size": entry.meta.size,
                 // The picture somebody's file manager already made. It is what
                 // the panel falls back to for the formats a browser cannot
@@ -1275,24 +1296,9 @@ fn sort_of(s: Option<&str>) -> SortKey {
     }
 }
 
-fn parent_of(path: &str) -> &str {
-    match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((dir, _)) => dir,
-        None => "",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_parent_is_the_path_without_its_last_component() {
-        assert_eq!(parent_of("/home/u/a.rs"), "/home/u");
-        assert_eq!(parent_of("/a.rs"), "/");
-        assert_eq!(parent_of("bare"), "");
-    }
 
     #[test]
     fn two_tokens_from_one_process_are_not_the_same() {

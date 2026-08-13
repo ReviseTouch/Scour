@@ -134,6 +134,19 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        // No tool reaches this yet — see `tools.rs`. Rendered so that the
+        // day one does, it prints rather than panics.
+        Response::Preview(l) => {
+            let mut out = format!("{} · {} · {} bytes\n", l.shape, l.kind, l.len);
+            if !l.head.is_empty() {
+                out.push('\n');
+                out.push_str(&l.head);
+                if l.cut {
+                    out.push_str("\n[…]");
+                }
+            }
+            out
+        }
         Response::Places(p) => {
             let mut out = format!("home: {}\n", p.home);
             for place in &p.places {

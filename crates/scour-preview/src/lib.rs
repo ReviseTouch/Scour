@@ -183,6 +183,57 @@ impl Shape {
     }
 }
 
+/// What can be shown of one file, as an answer that crosses a wire.
+///
+/// **The decision, not the bytes.** Which of the two belongs in the protocol
+/// is the whole design of this: deciding needs the file's first eight
+/// kilobytes and a table of extensions, and getting it wrong is invisible — a
+/// frontend that guesses from the name alone will call `notes.bak` unreadable
+/// and `model.safetensors` text. Moving the *bytes* would be worse than
+/// useless: a browser asks for a video a piece at a time and cannot seek
+/// without ranged HTTP, so whoever is speaking to the browser has to serve
+/// them.
+///
+/// So the service says what a file is and hands over the head of it when that
+/// is the whole answer; a terminal interface needs nothing else, and a window
+/// points an `<img>` at its own transport.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct Look {
+    /// `text`, `image`, `audio`, `video`, `pdf`, or `none`.
+    pub shape: String,
+    /// The content type, empty when there is nothing to show.
+    pub kind: String,
+    /// The file's length in bytes.
+    pub len: u64,
+    /// For text, the head of it — up to [`TEXT_CAP`]. Empty otherwise.
+    pub head: String,
+    /// True when `head` stops short of the file's end.
+    ///
+    /// **Beside the text rather than appended to it**: a note added to the end
+    /// would be a note inside the file being previewed.
+    pub cut: bool,
+}
+
+/// Look at a file and say what can be shown of it.
+pub fn look_at(path: &std::path::Path, is_dir: bool) -> Look {
+    let shape = shape_of(path, is_dir);
+    let (what, kind) = shape.shown();
+    let mut look = Look {
+        shape: what.to_owned(),
+        kind: kind.to_owned(),
+        len: len_of(path).unwrap_or(0),
+        ..Look::default()
+    };
+    if shape == Shape::Text
+        && let Ok((head, whole, len)) = text_head(path)
+    {
+        look.head = head;
+        look.cut = !whole;
+        look.len = len;
+    }
+    look
+}
+
 /// The formats a browser draws, by extension.
 ///
 /// **Extension and not content**, on purpose: this is a question about the

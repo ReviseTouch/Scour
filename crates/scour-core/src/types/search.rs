@@ -133,6 +133,24 @@ impl Hit {
             None => &self.path,
         }
     }
+
+    /// The folder it sits in — the same answer [`Entry::parent`] gives.
+    ///
+    /// **Here because every frontend was deriving it.** A row is shown as a
+    /// name and a location, so a list without this needs each frontend to cut
+    /// the path itself; the browser bridge had its own `parent_of`, four lines
+    /// long and a duplicate of the one on `Entry`. One missing method, one
+    /// copy per frontend, and three chances to disagree about what the parent
+    /// of `/x` is.
+    ///
+    /// [`Entry::parent`]: crate::Entry::parent
+    pub fn parent(&self) -> &str {
+        match self.path.rfind('/') {
+            Some(0) => "/",
+            Some(i) => &self.path[..i],
+            None => "",
+        }
+    }
 }
 
 impl From<&Entry> for Hit {
@@ -391,6 +409,24 @@ mod tests {
             r.page.count_cap > r.page.limit,
             "counting past the page is the point of a cap"
         );
+    }
+
+    /// The two must agree: a row and an entry are the same file, and a list
+    /// that shows one location while `stat` reports another is a list nobody
+    /// can check.
+    #[test]
+    fn a_hit_and_an_entry_cut_a_path_the_same_way() {
+        for path in ["/a/b/c.txt", "/x", "bare", "/deep/er/still/f", ""] {
+            let entry = Entry {
+                id: EntryId::path_hash(crate::SourceId(0), path),
+                path: path.to_owned(),
+                is_dir: false,
+                meta: Meta::UNKNOWN,
+            };
+            let hit = Hit::from(&entry);
+            assert_eq!(hit.parent(), entry.parent(), "parent of {path:?}");
+            assert_eq!(hit.name(), entry.name(), "name of {path:?}");
+        }
     }
 
     #[test]

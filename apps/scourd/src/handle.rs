@@ -121,6 +121,16 @@ fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Respons
         // machine rather than about the index, and the service is asked
         // because it is the one thing every frontend already talks to.
         Request::Places {} => Response::Places(scour_places::look()),
+        // **`stat` first, and that is the fence.** Only a path the index holds
+        // may be looked at — the same rule `/api/open` follows, kept here so
+        // that a frontend cannot be the thing that remembers it.
+        Request::Preview { path } => {
+            let entry = engine.stat(&path)?;
+            Response::Preview(scour_preview::look_at(
+                std::path::Path::new(&entry.path),
+                entry.is_dir,
+            ))
+        }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);
             Response::Explain {
