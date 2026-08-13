@@ -135,10 +135,19 @@ pub enum Request {
     /// writes on a clean shutdown and loses when it is killed — measured both
     /// ways — and which a terminal interface cannot read at all.
     Settings {},
-    /// Replace them. The whole object, because a frontend that sent one field
-    /// would have to know what the others currently are anyway.
+    /// Change some of them.
+    ///
+    /// **Not the whole object, and it was.** The reasoning written here said
+    /// *a frontend that sent one field would have to know what the others
+    /// currently are anyway* — which is only true if it has to send them. It
+    /// does not: what a change does not name, it does not touch. That is what
+    /// lets a terminal and a window be open at once without each erasing what
+    /// the other understands, and what lets a field be added to
+    /// [`scour_settings::Settings`] without every frontend learning about it
+    /// first.
     SetSettings {
-        settings: scour_settings::Settings,
+        #[serde(default)]
+        change: scour_settings::Change,
     },
     /// Read a query back — as a sentence, as coloured pieces, and as what
     /// could be typed next. Nothing is run.

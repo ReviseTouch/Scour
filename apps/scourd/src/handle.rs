@@ -107,9 +107,11 @@ fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Respons
         // Written where the change happens rather than at shutdown. The whole
         // reason this moved out of the browser is that a process which is
         // killed never gets to write anything.
-        Request::SetSettings { settings } => {
+        Request::SetSettings { change } => {
             let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
-            *held = settings;
+            // Folded in rather than assigned. What the change does not name is
+            // what another frontend put there.
+            change.apply(&mut held);
             if let Err(e) = held.save(&kept.dir) {
                 scour_core::note!("scourd: settings could not be written: {e}");
             }

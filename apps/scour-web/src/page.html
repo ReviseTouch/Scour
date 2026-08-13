@@ -1663,7 +1663,12 @@
   const empty  = document.getElementById("empty");
   const bars   = document.getElementById("bars");
 
-  let sortKey = "mtime", sortDesc = true;
+  /* **The protocol's word for the order, throughout.** The page said `mtime`
+     and reached the right answer only through the bridge's `_ =>` fallthrough,
+     while writing that word into a settings file the CLI, the MCP server and
+     the Slint window all read as `modified`. One vocabulary; the column is
+     still `mtime`, because that is a column, not an order. */
+  let sortKey = "modified", sortDesc = true;
 
   // --- query parsing (mockup level; the real grammar is in scour-query)
   function parse(text) {
@@ -2472,7 +2477,13 @@
     if (!text || HISTORY[0] === text) return;
     HISTORY = [text, ...HISTORY.filter((h) => h !== text)].slice(0, 100);
     showPastAffordance();
-    keep();
+    /* The query, not the list. The service holds the history and applies the
+       cap — which is where it belongs, because the cap was written down in
+       `scour-settings` and never ran: the only writer sent a list it had
+       already trimmed, so every frontend would have had to know the number and
+       one that did not would grow the file without bound. The slice above is
+       this window keeping its own copy in step, not the rule. */
+    keep({ remember: text });
   }
   function acceptHint(i) {
     const h = hints[i];
@@ -3137,7 +3148,7 @@
   }
 
   function dateCells() {
-    const keys = new Set(["mtime", "created", "accessed"]);
+    const keys = new Set(["modified", "created", "accessed"]);
     return shownColumns()
       .map((c, i) => (keys.has(c.key) ? { at: i + 1, col: c } : null))
       .filter(Boolean);
@@ -3145,7 +3156,7 @@
 
   /* The value a date column reads, without asking the column to write itself. */
   const stampOf = (f, key) =>
-    key === "mtime" ? f.mtime : key === "created" ? f.ctime : f.atime;
+    key === "modified" ? f.mtime : key === "created" ? f.ctime : f.atime;
 
   /* **One walk, and only what a second can change** — the text, and once in a
    * great while the freshness colour.
@@ -3185,7 +3196,7 @@
         if (!td) continue;
         const text = ago(v);
         if (td.textContent !== text) td.textContent = text;
-        if (col.key === "mtime") {
+        if (col.key === "modified") {
           // Guarded: an unconditional inline-style write invalidates the cell
           // every second to set it to what it already was.
           const c = `var(${bandOf(v)})`;
@@ -3282,7 +3293,6 @@
 
   function render() {
     const text = q.value;
-    try { localStorage.setItem(Q_KEY, text); } catch {}
     /* Everything that depends only on the text happens now, at typing speed.
        The list catches up when the service answers, and the two being
        separate is why the caret never waits for a search. */
@@ -3547,14 +3557,12 @@
    *
    * Dragged from the edge of a heading, and remembered.
    *
-   * **Stored in the browser, and that is a decision with a shelf life.** This
-   * window is where the interface is being designed; the one that ships is
-   * Slint, and it will keep widths in `scour-config` beside `ui.columns`,
-   * which already exists. Writing them there now would mean a config-writing
-   * route in a bridge that is deliberately read-only, for a preference that
-   * will be re-read from somewhere else in a month. So: `localStorage`, under
-   * a profile that has a fixed path, and this comment saying where it goes
-   * when the window becomes the real one.
+   * **Kept by the service**, keyed by column id, beside everything else
+   * somebody has chosen. This comment used to say they were in the browser
+   * "until the window becomes the real one" and to point at a `ui.columns` in
+   * the config file that no longer exists; both outlived their arrangement by
+   * some months. A width is a preference, the service is what every frontend
+   * talks to, and a browser profile is a thing that gets deleted.
    *
    * `table-layout: fixed` is what makes a width mean anything — under `auto`
    * the browser re-decides on every render and a dragged column springs back
@@ -3630,7 +3638,7 @@
           : "";
         if (td.title !== t) td.title = t;
       } },
-    { id: "mtime", label: "Değişme",  key: "mtime", w: 120,
+    { id: "mtime", label: "Değişme",  key: "modified", w: 120,
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);
         td.style.color = `var(${bandOf(f.mtime)})`;
@@ -3677,28 +3685,30 @@
       write: cell("n", (f) => (f.disk > 0 ? bytes(f.disk) : "")) },
   ];
   const COL_DEFAULT = ["name", "path", "size", "mtime", "kind"];
-  const SHOWN_KEY = "scour.columns.shown.v1";
 
-  function loadShown() {
-    try {
-      const v = JSON.parse(localStorage.getItem(SHOWN_KEY) || "null");
-      const ok = Array.isArray(v) && v.every((id) => COLUMNS.some((c) => c.id === id));
-      return ok && v.length ? v : COL_DEFAULT.slice();
-    } catch { return COL_DEFAULT.slice(); }
-  }
-  let SHOWN = loadShown();
+  /* **The service holds these, and nothing here does.**
+   *
+   * There were two stores. `localStorage` kept the chosen columns and their
+   * widths under `scour.columns.shown.v1` and `scour.columns.v1`, and the
+   * service kept the same two things — so the page read the browser's copy at
+   * boot, drew with it, and then the service's reply arrived and won. Nothing
+   * had written the browser's copy since `scour-settings` landed, so what it
+   * held was whatever this profile happened to have in it the day the move
+   * happened. Dead data, read on every launch, and a second answer to a
+   * question that must have one for a terminal and a Slint window to agree
+   * with this one.
+   *
+   * Defaults until the reply lands. See `applySettings`. */
+  let SHOWN = COL_DEFAULT.slice();
   const shownColumns = () => SHOWN.map((id) => COLUMNS.find((c) => c.id === id)).filter(Boolean);
 
-  const WIDTH_KEY = "scour.columns.v1";
   const MIN_COL = 56;
-
-  function loadWidths() {
-    try {
-      const v = JSON.parse(localStorage.getItem(WIDTH_KEY) || "{}");
-      return v && typeof v === "object" ? v : {};
-    } catch { return {}; }
-  }
-  let WIDTHS = loadWidths();
+  /* **Keyed by column id**, the same names `SHOWN` uses — not by the sort key,
+     which is what this did. The two agree for seven columns and differ for
+     five (`ctime`/`created`, `atime`/`accessed`, `perm`/`mode`, `user`/`uid`,
+     `group`/`gid`), so half a layout came back after a restart and half did
+     not, and a width dragged in one frontend meant nothing in another. */
+  let WIDTHS = {};
 
   /* **A column always has a width, and the table never gives one up.**
    *
@@ -3721,7 +3731,7 @@
     let sum = 3 + 30;
     for (const th of document.querySelectorAll("thead th[data-col]")) {
       const col = COLUMNS.find((c) => c.id === th.dataset.col);
-      const w = WIDTHS[th.dataset.sort] || (col && col.w) || 120;
+      const w = WIDTHS[th.dataset.col] || (col && col.w) || 120;
       th.style.width = w + "px";
       sum += w;
     }
@@ -3735,24 +3745,36 @@
    * write per pixel would be a file rewritten a hundred times a second. A
    * quarter of a second after the hand stops is soon enough for something
    * nobody reads until the next launch. */
-  /* Settings that belong to no particular part of this file — the report's
-     panels, for one. Merged into what is sent, so a second closure can record
-     a preference without owning the whole object. */
-  let EXTRA = {};
+  /* **What is sent is what changed, and nothing else.**
+   *
+   * This used to send five named fields and everything in `EXTRA` on every
+   * save — the whole object, every time. That works exactly as long as this
+   * window is the only writer. The moment a terminal interface is open beside
+   * it, whatever the terminal understands and this page does not is erased by
+   * the next column drag here, and the reverse. The service folds a change in
+   * now (`scour_settings::Change`), so a field this page has never heard of
+   * survives it.
+   *
+   * `pending` accumulates until the debounce fires, so a drag that moves a
+   * column and then resizes it is one write of two fields rather than two
+   * writes of everything. */
+  let pending = {};
   let keepTimer = null;
-  function keep() {
+  function keep(change) {
+    Object.assign(pending, change || {});
     clearTimeout(keepTimer);
     keepTimer = setTimeout(() => {
-      SERVICE.saveSettings({
-        columns: SHOWN,
-        widths: WIDTHS,
-        sort: sortKey,
-        descending: sortDesc,
-        history: HISTORY,
-        ...EXTRA,
-      });
+      const change = pending;
+      pending = {};
+      if (Object.keys(change).length) SERVICE.saveSettings(change);
     }, 250);
   }
+
+  /* What this window remembers and no other frontend can act on: whether the
+     thumbnails are drawn, whether the notes are showing. Namespaced under
+     `web` in the settings, merged key by key, so saving one says nothing
+     about the others. */
+  const keepView = (patch) => keep({ view: { web: patch } });
 
   /* What the service handed back, applied to a window that has already drawn
      itself with defaults. The request is one round trip and the page must not
@@ -3764,22 +3786,37 @@
       if (ok.length) SHOWN = ok;
     }
     if (s.widths && typeof s.widths === "object") WIDTHS = { ...s.widths };
+    /* Validated against the column *keys*, which are now the protocol's own
+       words — so a settings file written by the Slint window, which says
+       `modified` as the CLI and the MCP server do, is accepted rather than
+       silently thrown away for not being this page's spelling of it. */
     if (s.sort && COLUMNS.some((c) => c.key === s.sort)) sortKey = s.sort;
     if (typeof s.descending === "boolean") sortDesc = s.descending;
     HISTORY = Array.isArray(s.history) ? s.history : [];
-    EXTRA = { dupes_open: !!s.dupes_open };
+    DUPES_OPEN = !!s.dupes_open;
+    VIEW = (s.view && s.view.web) || {};
+    applyView();
     showPastAffordance();
     buildHeads();
     applyWidths();
     render();
   }
 
+  /* This window's own corner of the settings, and what it does when it lands.
+     Held rather than read through, because the two closures in this file both
+     want it and only one of them owns the transport. */
+  let VIEW = {};
+  /* Shared rather than local: whether a duplicate hunt runs when the report
+     opens is a decision about Scour, and a terminal report would mean the
+     same thing by it. */
+  let DUPES_OPEN = false;
+
   /* Past queries, newest first. Filled by the service, added to only when a
      search was *meant* — see `remember`. */
   let HISTORY = [];
 
   function saveWidths() {
-    keep();
+    keep({ widths: WIDTHS });
   }
 
   /* One grip a heading, on its trailing edge. The last column has none: there
@@ -3872,7 +3909,7 @@
 
     const move = (ev) => {
       const w = Math.max(MIN_COL, Math.round(startW + ev.clientX - startX));
-      WIDTHS[th.dataset.sort] = w;
+      WIDTHS[th.dataset.col] = w;
       // Through `applyWidths` rather than straight onto the cell, so that the
       // table's declared minimum grows with the drag. Setting the style here
       // and the minimum nowhere is how a widened column used to start eating
@@ -3898,7 +3935,7 @@
     if (!grip) return;
     e.preventDefault();
     e.stopPropagation();
-    delete WIDTHS[grip.closest("th").dataset.sort];
+    delete WIDTHS[grip.closest("th").dataset.col];
     applyWidths();
     saveWidths();
     painted = "";
@@ -3946,8 +3983,8 @@
     // as the drag having done two things.
     if (justMoved) return;
     if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
-    else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "mtime" || th.dataset.sort === "size"; }
-    keep();
+    else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "modified" || th.dataset.sort === "size"; }
+    keep({ sort: sortKey, descending: sortDesc });
     render();
   });
 
@@ -4036,7 +4073,7 @@
       if (from >= 0 && to !== from) {
         const [id] = SHOWN.splice(from, 1);
         SHOWN.splice(to, 0, id);
-        keep();
+        keep({ columns: SHOWN });
         buildHeads();
         render();
       }
@@ -4152,7 +4189,7 @@
         if (at < 0) SHOWN = [...SHOWN, id];
         else SHOWN = [...SHOWN.slice(0, at), id, ...SHOWN.slice(at)];
       }
-      keep();
+      keep({ columns: SHOWN });
       buildHeads();
       render();
       colMenu.remove();
@@ -5111,8 +5148,14 @@
    * names is what it looked like. Off is one click, and it is a real off: the
    * rows are drawn again without the `<img>` at all rather than hidden by CSS,
    * so nothing is requested and nothing is decoded. */
-  const ICON_KEY = "scour.icons.v1";
-  let ICONS = localStorage.getItem(ICON_KEY) !== "0";
+  /* **Both of these were in `localStorage` and are not any more.** They are
+     the two settings this window has that no other frontend can act on — a
+     terminal draws no thumbnails and has no notes column — so they live under
+     `view.web` in the service's settings rather than in a typed field every
+     frontend would have to ignore. What that buys is what the browser could
+     never give: they survive the browser being killed, and they are in the
+     same place as everything else somebody has chosen. */
+  let ICONS = true;
   const iconBtn = document.getElementById("icons");
   function applyIcons() {
     iconBtn.setAttribute("aria-pressed", String(ICONS));
@@ -5121,28 +5164,37 @@
   }
   iconBtn.addEventListener("click", () => {
     ICONS = !ICONS;
-    try { localStorage.setItem(ICON_KEY, ICONS ? "1" : "0"); } catch {}
+    keepView({ icons: ICONS });
     applyIcons();
   });
   iconBtn.setAttribute("aria-pressed", String(ICONS));
 
   /* The notes, behind a button and remembered. */
-  const SIDE_KEY = "scour.side.v1";
+  let SIDE = false;
   const aboutBtn = document.getElementById("about");
   function applySide() {
-    const on = localStorage.getItem(SIDE_KEY) === "1";
-    document.body.classList.toggle("no-side", !on);
-    aboutBtn.setAttribute("aria-pressed", String(on));
+    document.body.classList.toggle("no-side", !SIDE);
+    aboutBtn.setAttribute("aria-pressed", String(SIDE));
     // The list's height changed with the layout, so what is drawn has to be
     // decided again — otherwise the window is right and the rows are stale.
     repaint(true);
   }
   aboutBtn.addEventListener("click", () => {
-    const on = localStorage.getItem(SIDE_KEY) === "1";
-    try { localStorage.setItem(SIDE_KEY, on ? "0" : "1"); } catch {}
+    SIDE = !SIDE;
+    keepView({ side: SIDE });
     applySide();
   });
   applySide();
+
+  /* What the service handed back for this window, once it lands. Defaults
+     until then — the window draws before the round trip, which is the whole
+     reason `applySettings` exists. */
+  function applyView() {
+    ICONS = VIEW.icons !== false;
+    SIDE = VIEW.side === true;
+    applyIcons();
+    applySide();
+  }
 
   /* **The window opens on your disk, not on your last keystroke.**
    *
@@ -5158,9 +5210,11 @@
    * `stats().entries` rather than from a walk. So the box is empty, the list
    * is your disk, and the first key you press starts the search.
    *
-   * The text is still saved. Nothing reads it yet; it is one line to bring
-   * back the day somebody wants the last query offered rather than run. */
-  const Q_KEY = "scour.q.v1";
+   * It used to be saved anyway, on every keystroke, "in case somebody wants
+   * the last query offered rather than run". Nothing ever read it, and a
+   * write per keystroke to a store this window no longer uses is not a line
+   * kept ready — it is a line nobody would find. The history has what was
+   * meant, which is the better thing to offer. */
   q.focus();
   q.select();
 
@@ -5227,10 +5281,12 @@
     kinds: () => KINDS,
     barEdges: () => BAR_EDGES,
     /* What the report remembers. It is a separate closure and cannot reach
-       `keep`, so it hands over a patch and this half saves it with the rest —
-       one settings object on the wire rather than two. */
-    prefs: () => EXTRA,
-    pref: (patch) => { Object.assign(EXTRA, patch); keep(); },
+       `keep`, so it hands over a change and this half sends it. */
+    prefs: () => ({ dupes_open: DUPES_OPEN }),
+    pref: (patch) => {
+      if ("dupes_open" in patch) DUPES_OPEN = !!patch.dupes_open;
+      keep(patch);
+    },
   };
 })();
 

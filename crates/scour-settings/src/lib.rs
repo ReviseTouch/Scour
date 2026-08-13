@@ -28,17 +28,45 @@
 //! and neither is wrong. One named field per thing a person can decide, and a
 //! frontend ignores the fields it has no use for: `widths` means nothing in a
 //! terminal, and a terminal leaving it alone is how it stays right for the
-//! window.
+//! window. *Leaving it alone* is the part that needed the section below.
 //!
 //! Every field is `#[serde(default)]`, so a file written by an older version
 //! loads and a field added later starts at its default rather than refusing
 //! the whole file. A settings file that fails to parse is a person's
 //! preferences silently reset.
+//!
+//! ## Written as changes, not as the whole object
+//!
+//! **"A frontend ignores the fields it has no use for" was not true.** It
+//! could not be: writing meant sending the whole object back, so a terminal
+//! that had never heard of `widths` would send the object it knew — without
+//! them — and the window's layout would be gone. The protocol said as much in
+//! its own words: *the whole object, because a frontend that sent one field
+//! would have to know what the others currently are anyway*. It does not, if
+//! it does not send them.
+//!
+//! So a write is a [`Change`]: the fields somebody set, and nothing else. Two
+//! frontends can be open at once, each writing what it understands, and
+//! neither erases the other. It is also what lets a field be added here
+//! without every frontend learning about it first.
+//!
+//! ## Shared, and frontend-local
+//!
+//! One named field per thing a *person* decides — which columns, what order,
+//! what they searched for. Those are about Scour and every frontend means the
+//! same thing by them.
+//!
+//! [`Settings::view`] is for what only one kind of window can mean: whether a
+//! side panel is open, how big a window was left, whether thumbnails are
+//! drawn. Free-form on purpose, and namespaced by frontend, because the reason
+//! to keep the shared fields typed — that two frontends must not invent two
+//! names for one idea — does not apply to a thing no other frontend reads.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// How many past queries are kept.
 ///
@@ -60,12 +88,28 @@ pub struct Settings {
     pub columns: Vec<String>,
     /// Width per column id, in pixels.
     ///
+    /// **By column id, the same names `columns` uses** — not by whatever a
+    /// frontend happens to call the thing it sorts by. The window keyed these
+    /// by sort key for a while, which agreed with the id for seven columns and
+    /// differed for five (`ctime`/`created`, `atime`/`accessed`,
+    /// `perm`/`mode`, `user`/`uid`, `group`/`gid`), so half a layout survived
+    /// a restart and half did not.
+    ///
     /// A terminal has no pixels and ignores this; it must also leave it alone
     /// rather than clearing it, or opening the terminal once would cost the
-    /// window its layout.
+    /// window its layout. That is now something a terminal gets for free — it
+    /// writes a [`Change`], and what it does not name it does not touch.
     #[serde(default)]
     pub widths: BTreeMap<String, u32>,
-    /// What the list is ordered by, as the protocol's own name for it.
+    /// What the list is ordered by, as **the protocol's own name** for it —
+    /// `modified`, not whatever a frontend calls that column.
+    ///
+    /// One vocabulary, and it has to be the protocol's, because this file is
+    /// read by frontends that do not share a column list. The window wrote
+    /// `mtime` here and validated what it read against its own columns, so a
+    /// file written by the Slint window — which says `modified`, the same word
+    /// the CLI and the MCP server use — was silently rejected and the sort
+    /// fell back to the default.
     #[serde(default)]
     pub sort: String,
     #[serde(default)]
@@ -88,6 +132,112 @@ pub struct Settings {
     /// frontend makes because only it knows what its keys mean.
     #[serde(default)]
     pub history: Vec<String>,
+    /// What one kind of window remembers and no other can read.
+    ///
+    /// Keyed by frontend — `web`, `slint`, `tui` — and free-form inside.
+    /// Whether a side panel is open, how large a window was left, whether
+    /// thumbnails are drawn: real preferences, but ones a terminal cannot act
+    /// on and must not be given a typed field for, because a typed field is a
+    /// promise that every frontend means the same thing by it.
+    ///
+    /// **Nothing here is read across the boundary.** A frontend that wants
+    /// another's setting is asking for a shared field, and should be given
+    /// one above.
+    #[serde(default)]
+    pub view: BTreeMap<String, Value>,
+}
+
+/// A change to the settings: the fields somebody set, and nothing else.
+///
+/// Absent is not "clear it" — absent is "I have no opinion about this", which
+/// is what makes it safe for two frontends to write at once. See the note at
+/// the top of this file for what the whole-object write cost.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Change {
+    pub columns: Option<Vec<String>>,
+    pub widths: Option<BTreeMap<String, u32>>,
+    pub sort: Option<String>,
+    pub descending: Option<bool>,
+    pub dupes_open: Option<bool>,
+    /// Replace the list outright. For clearing it, mostly.
+    pub history: Option<Vec<String>>,
+    /// Put one query at the front instead.
+    ///
+    /// **The cap belongs here rather than in the frontend**, and it was in the
+    /// frontend: [`HISTORY`] existed and nothing in the service ever applied
+    /// it, because the only writer sent a list it had already trimmed itself.
+    /// Every frontend would have had to know the number, and one that did not
+    /// would grow the file without bound.
+    pub remember: Option<String>,
+    /// Frontend-local state, merged into [`Settings::view`] under its name.
+    ///
+    /// Merged rather than replaced, key by key, so a window that saves "the
+    /// side panel is open" does not also say anything about its own size.
+    /// `null` removes a key — [RFC 7386]'s rule, because it is the one
+    /// convention people already know for this.
+    ///
+    /// [RFC 7386]: https://www.rfc-editor.org/rfc/rfc7386
+    pub view: BTreeMap<String, Value>,
+}
+
+impl Change {
+    /// Fold this into the settings.
+    pub fn apply(self, to: &mut Settings) {
+        if let Some(v) = self.columns {
+            to.columns = v;
+        }
+        if let Some(v) = self.widths {
+            to.widths = v;
+        }
+        if let Some(v) = self.sort {
+            to.sort = v;
+        }
+        if let Some(v) = self.descending {
+            to.descending = Some(v);
+        }
+        if let Some(v) = self.dupes_open {
+            to.dupes_open = v;
+        }
+        if let Some(v) = self.history {
+            to.history = v;
+            to.history.truncate(HISTORY);
+        }
+        if let Some(q) = self.remember {
+            to.remember(&q);
+        }
+        for (who, what) in self.view {
+            merge(to.view.entry(who).or_insert(Value::Null), what);
+        }
+    }
+
+    /// Is there anything in here to do?
+    pub fn is_empty(&self) -> bool {
+        *self == Change::default()
+    }
+}
+
+/// [RFC 7386] merge-patch: objects merge key by key, `null` removes, anything
+/// else replaces.
+///
+/// [RFC 7386]: https://www.rfc-editor.org/rfc/rfc7386
+fn merge(into: &mut Value, patch: Value) {
+    match patch {
+        Value::Object(fields) => {
+            if !into.is_object() {
+                *into = Value::Object(serde_json::Map::new());
+            }
+            let slot = into.as_object_mut().expect("just made one");
+            for (k, v) in fields {
+                if v.is_null() {
+                    slot.remove(&k);
+                } else {
+                    merge(slot.entry(k).or_insert(Value::Null), v);
+                }
+            }
+        }
+        other => *into = other,
+    }
 }
 
 impl Settings {
@@ -210,6 +360,122 @@ mod tests {
         s.remember("");
         s.remember("   ");
         assert!(s.history.is_empty());
+    }
+
+    /// **The thing the whole-object write could not do.**
+    ///
+    /// A terminal that has never heard of column widths saves what it does
+    /// know, and the window's layout is still there afterwards. Before this,
+    /// writing meant sending the whole object, so whatever the writer did not
+    /// carry was erased by the writing.
+    #[test]
+    fn one_frontend_saving_does_not_erase_another() {
+        let mut s = Settings::default();
+        Change {
+            columns: Some(vec!["name".into(), "size".into()]),
+            widths: Some(BTreeMap::from([("name".to_owned(), 240)])),
+            view: BTreeMap::from([("web".to_owned(), serde_json::json!({ "icons": true }))]),
+            ..Change::default()
+        }
+        .apply(&mut s);
+
+        // The terminal knows about sort and history and nothing else.
+        Change {
+            sort: Some("size".into()),
+            remember: Some("rapor".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+
+        assert_eq!(s.columns, ["name", "size"], "columns survived");
+        assert_eq!(s.widths.get("name"), Some(&240), "widths survived");
+        assert_eq!(s.view["web"]["icons"], serde_json::json!(true));
+        assert_eq!(s.sort, "size");
+        assert_eq!(s.history, ["rapor"]);
+    }
+
+    /// Frontend-local state merges key by key, and `null` takes one away.
+    #[test]
+    fn a_window_setting_one_thing_says_nothing_about_the_rest() {
+        let mut s = Settings::default();
+        Change {
+            view: BTreeMap::from([(
+                "web".to_owned(),
+                serde_json::json!({ "icons": true, "side": false }),
+            )]),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        Change {
+            view: BTreeMap::from([("web".to_owned(), serde_json::json!({ "side": true }))]),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.view["web"]["icons"], serde_json::json!(true), "untouched");
+        assert_eq!(s.view["web"]["side"], serde_json::json!(true), "changed");
+
+        Change {
+            view: BTreeMap::from([("web".to_owned(), serde_json::json!({ "icons": null }))]),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert!(
+            !s.view["web"]
+                .as_object()
+                .expect("object")
+                .contains_key("icons")
+        );
+        assert_eq!(
+            s.view["web"]["side"],
+            serde_json::json!(true),
+            "still there"
+        );
+
+        // And one frontend's corner is not another's.
+        Change {
+            view: BTreeMap::from([("tui".to_owned(), serde_json::json!({ "side": false }))]),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.view["web"]["side"], serde_json::json!(true));
+        assert_eq!(s.view["tui"]["side"], serde_json::json!(false));
+    }
+
+    /// An empty change is a change to nothing, not a reset.
+    #[test]
+    fn saying_nothing_changes_nothing() {
+        let mut s = Settings {
+            columns: vec!["name".into()],
+            sort: "modified".into(),
+            history: vec!["bir".into()],
+            ..Settings::default()
+        };
+        let before = s.clone();
+        assert!(Change::default().is_empty());
+        Change::default().apply(&mut s);
+        assert_eq!(s, before);
+    }
+
+    /// The cap is the service's job now, whatever a frontend sends.
+    #[test]
+    fn the_service_caps_the_history_whoever_writes_it() {
+        let mut s = Settings::default();
+        Change {
+            history: Some((0..HISTORY * 3).map(|i| format!("q{i}")).collect()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.history.len(), HISTORY);
+
+        let mut s = Settings::default();
+        for i in 0..HISTORY * 2 {
+            Change {
+                remember: Some(format!("q{i}")),
+                ..Change::default()
+            }
+            .apply(&mut s);
+        }
+        assert_eq!(s.history.len(), HISTORY);
     }
 
     #[test]

@@ -537,9 +537,12 @@ fn api_kinds(stream: &mut TcpStream) {
 /// process is killed — measured both ways — and a terminal interface cannot
 /// read it at all. See `scour-settings`.
 fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    // What arrives is a **change** — the fields the page set — not the whole
+    // object. Everything it does not name belongs to whoever put it there,
+    // which on a machine with a terminal interface open is somebody else.
     let request = match req.param("set") {
         Some(text) => match serde_json::from_str(text) {
-            Ok(settings) => Request::SetSettings { settings },
+            Ok(change) => Request::SetSettings { change },
             Err(e) => {
                 http::fail(
                     stream,
