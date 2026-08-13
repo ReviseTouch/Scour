@@ -214,6 +214,15 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{}{q}", label("history"));
             }
         }
+        Response::Places(p) => {
+            println!("{}{}", label("home"), p.home);
+            for place in &p.places {
+                println!("{}{}", label(&place.label), place.path);
+            }
+            for m in p.mounts.iter().filter(|m| !m.reads) {
+                println!("{}{}", label("noatime"), m.at);
+            }
+        }
         Response::Usage(u) => {
             println!(
                 "{:>10}  {:>10}  {:>9}  {}",

@@ -1,0 +1,19 @@
+[package]
+name        = "scour-places"
+description = "Where a person keeps things, and what the volumes under them record."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **`serde` and nothing else, not even `scour-core`.** Nothing here knows what
+# an index is: it reads two files a desktop writes and says what they mean,
+# which is a question about a machine. `serde` is here only because the answer
+# crosses the wire — the same shape `scour-settings` has.
+[dependencies]
+serde = { workspace = true }

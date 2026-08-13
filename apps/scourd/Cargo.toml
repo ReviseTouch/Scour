@@ -33,6 +33,7 @@ scour-dupes         = { workspace = true }
 scour-engine        = { workspace = true }
 scour-index-native  = { workspace = true }
 scour-settings      = { workspace = true }
+scour-places        = { workspace = true }
 scour-source-fs     = { workspace = true }
 anyhow              = { workspace = true }
 clap                = { workspace = true }

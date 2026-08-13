@@ -167,6 +167,15 @@ pub enum Request {
         #[serde(default)]
         cursor: Option<u32>,
     },
+    /// Where this person keeps things, and what the volumes under them record.
+    ///
+    /// **Asked of the service because it runs where the files are.** Both
+    /// halves were worked out in the browser bridge — `user-dirs.dirs` parsed
+    /// there, `/proc/self/mounts` read there — which is one frontend's copy of
+    /// a rule that four are meant to share. The same guess had already been
+    /// wrong a layer higher: the page shipped with `/home/hasan` written into
+    /// it. A frontend draws what it is told now.
+    Places {},
     /// The configured sources and what each can do.
     Sources {},
     Status {},
@@ -312,6 +321,7 @@ pub enum Response {
     },
     Stat(Entry),
     Usage(UsageResponse),
+    Places(scour_places::Places),
     Explain {
         /// The query as it was understood.
         description: String,
@@ -367,6 +377,7 @@ impl Request {
             | Request::Facets { .. }
             | Request::Tree { .. }
             | Request::Stat { .. }
+            | Request::Places {}
             | Request::Usage { .. }
             | Request::Duplicates { .. }
             | Request::Settings {}
@@ -387,6 +398,7 @@ impl Request {
             Request::Facets { .. } => "facets",
             Request::Tree { .. } => "tree",
             Request::Stat { .. } => "stat",
+            Request::Places {} => "places",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",
             Request::Settings {} => "settings",

@@ -289,6 +289,18 @@ impl Scour {
     }
 
     #[tool(
+        description = "Where this person keeps things — their Documents, Downloads and Pictures \
+                       folders under whatever names their desktop uses — and which volumes do \
+                       not record read times. Ask before guessing a path from a home directory, \
+                       and before reading anything into an 'accessed' date: on a volume mounted \
+                       `noatime` that date is when the file was created, not when it was last \
+                       looked at."
+    )]
+    fn scour_places(&self) -> String {
+        self.call(Request::Places {})
+    }
+
+    #[tool(
         description = "Summarise what a set of files consists of, grouped by type, by extension, \
                        or by the child folders of a directory. Answers 'what is in here' without \
                        listing anything."

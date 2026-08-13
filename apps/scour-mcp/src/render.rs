@@ -134,6 +134,28 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        Response::Places(p) => {
+            let mut out = format!("home: {}\n", p.home);
+            for place in &p.places {
+                out.push_str(&format!("{}\t{}\n", place.label, place.path));
+            }
+            // The volumes that record nothing, named — a model reading an
+            // access time off a `noatime` mount would be reading the day the
+            // file was made and calling it "last used".
+            let silent: Vec<&str> = p
+                .mounts
+                .iter()
+                .filter(|m| !m.reads)
+                .map(|m| m.at.as_str())
+                .collect();
+            if !silent.is_empty() {
+                out.push_str(&format!(
+                    "\nread times are not recorded under: {}\n",
+                    silent.join(", ")
+                ));
+            }
+            out
+        }
         Response::Usage(u) => {
             let mut out = String::new();
             let row = |out: &mut String, d: &scour_core::DirUsage| {

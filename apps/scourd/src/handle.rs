@@ -117,6 +117,10 @@ fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Respons
             }
             Response::Accepted
         }
+        // Answered without the engine, like `Syntax`: it is a fact about the
+        // machine rather than about the index, and the service is asked
+        // because it is the one thing every frontend already talks to.
+        Request::Places {} => Response::Places(scour_places::look()),
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);
             Response::Explain {

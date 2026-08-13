@@ -277,7 +277,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
         "/api/kinds" => api_kinds(&mut stream),
-        "/api/places" => api_places(&mut stream),
+        "/api/places" => api_places(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
@@ -564,80 +564,26 @@ fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-fn api_places(stream: &mut TcpStream) {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut places: Vec<serde_json::Value> = Vec::new();
-    if !home.is_empty() {
-        // `user-dirs.dirs` is `XDG_DOCUMENTS_DIR="$HOME/Belgeler"` a line, and
-        // the quoting and the `$HOME` are both part of the format.
-        let conf = std::path::Path::new(&home).join(".config/user-dirs.dirs");
-        let text = std::fs::read_to_string(&conf).unwrap_or_default();
-        for line in text.lines() {
-            let line = line.trim();
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            if !key.starts_with("XDG_") || !key.ends_with("_DIR") {
-                continue;
-            }
-            let path = value.trim().trim_matches('"').replace("$HOME", &home);
-            // The desktop's own name for it, which is the last component and
-            // is already in the owner's language.
-            let label = path.rsplit('/').next().unwrap_or_default().to_owned();
-            // `XDG_DESKTOP_DIR` is often the home itself on a headless setup,
-            // and a shortcut to everything is not a shortcut.
-            if label.is_empty() || path == home || !std::path::Path::new(&path).is_dir() {
-                continue;
-            }
-            places.push(serde_json::json!({ "label": label, "path": path }));
-        }
-        places.sort_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
-        places.dedup_by(|a, b| a["path"] == b["path"]);
+/// Where this person keeps things, and what the volumes under them record.
+///
+/// **Asked, not worked out.** Both halves used to be here: `user-dirs.dirs`
+/// parsed in this file, `/proc/self/mounts` read in this file. That is one
+/// frontend's copy of a rule four are meant to share — a terminal interface
+/// would parse the same file again, and the day one of them got the quoting
+/// wrong its sidebar would point at folders that are not there. The same guess
+/// was wrong once already at a higher layer: the page shipped with
+/// `/home/hasan` written into it, and the fix then moved the guess from
+/// JavaScript into this bridge rather than into the service. It is in the
+/// service now, in `scour-places`, where every frontend can reach it.
+fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
+    match call(client, Request::Places {}) {
+        Ok(Response::Places(p)) => match serde_json::to_value(&p) {
+            Ok(v) => http::json(stream, &v),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        },
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }
-    http::json(
-        stream,
-        &serde_json::json!({ "home": home, "places": places, "mounts": mounts() }),
-    );
-}
-
-/// Every mount point, and whether the kernel records reads on it.
-///
-/// **A column that shows a number nobody maintains is worse than an empty
-/// one.** With `noatime`, `st_atime` is written once — when the file is made —
-/// and never again, so a browser profile rewritten every second reports
-/// "accessed eleven days ago", which is the day the application was installed.
-/// Every one of those numbers is *true* and none of them answers the question
-/// the column's heading asks.
-///
-/// **All of them, not only the `noatime` ones**, because mount points nest and
-/// the deepest one owns the file: `/` is `noatime` on this machine while
-/// `/mnt/depo` under it is `relatime`, so a list of just the silent mounts
-/// would call the whole disk silent. That was the first version, and it marked
-/// every row.
-///
-/// Read once per run: mount options do not change while a window is open, and
-/// reopening it is the ordinary way to find out if they did. Empty on anything
-/// without `/proc/self/mounts` — the honest answer where this cannot be asked,
-/// and the column then behaves as it always did.
-fn mounts() -> Vec<serde_json::Value> {
-    let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|line| {
-            // `device point type options dump pass`, space separated, with
-            // octal escapes in the point. A path with a space in it is the
-            // only one that needs unescaping, and `\040` is the only escape
-            // that turns up.
-            let mut parts = line.split_whitespace();
-            let point = parts.nth(1)?.replace(r"\040", " ");
-            let opts = parts.nth(1)?;
-            Some(serde_json::json!({
-                "at": point,
-                "reads": !opts.split(',').any(|o| o == "noatime"),
-            }))
-        })
-        .collect()
 }
 
 /// How many match, exactly, however long that takes.

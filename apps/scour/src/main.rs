@@ -89,6 +89,8 @@ enum Command {
     },
     /// Everything known about one path.
     Stat { path: String },
+    /// This desktop's own folders, and which volumes record read times.
+    Places,
     /// What a folder weighs, and which of its children weigh the most.
     Du {
         /// Empty for everything indexed.
@@ -308,6 +310,7 @@ fn build(args: &Args) -> Result<Request> {
             // A command line has no caret, so there is nothing to complete.
             cursor: None,
         },
+        Some(Command::Places) => Request::Places {},
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},
