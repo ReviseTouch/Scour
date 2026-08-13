@@ -1057,10 +1057,63 @@
     object-fit: contain;
     vertical-align: -4px;
     margin-right: 7px;
+    display: inline-block;
     /* Nothing shifts while they arrive: the box is there from the first
        frame, whether or not the theme has anything to put in it. */
     flex: none;
   }
+
+  /* ---------------- the type glyphs ----------------
+   *
+   * **Drawn here rather than taken from the desktop**, and the desktop's were
+   * tried first. Adwaita's mimetype icons are what the bridge resolved: a blue
+   * rhombus for an executable, an all-but-blank page for a document, and at
+   * eighteen pixels on a dark list they read as coloured lint. Worse, they are
+   * a Linux answer — `find` looks under XDG icon directories, so on Windows
+   * and macOS every row got a 404 and an empty box where a picture should be.
+   *
+   * A mask rather than an `<img>`: the glyph is one CSS custom property and the
+   * colour is another, so a row that changes type changes a class name and
+   * nothing is fetched, decoded or parsed. Thumbnails still come down the wire
+   * as pictures, because those are the file itself.
+   *
+   * **Muted on purpose.** This page has one loud voice and it is freshness —
+   * the three-pixel rule down each row uses all the saturation there is. These
+   * sit under it: enough hue to sort a screenful at a glance, not enough to
+   * argue with the thing that is actually data. Most types are simply grey,
+   * and the shape carries the meaning. */
+  tbody td.name span.ico {
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / 18px 18px no-repeat;
+    mask: var(--g) center / 18px 18px no-repeat;
+  }
+  .k-folder { --k: #7d9bc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 4.4c0-.5.4-1 1-1h3l1.3 1.5H13c.6 0 1 .4 1 1v5.7c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z'/%3E%3C/svg%3E"); }
+  .k-file { --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M4 2.2h4.6L12 5.6v8.2H4z'/%3E%3Cpath d='M8.5 2.4v3.3h3.3'/%3E%3C/svg%3E"); }
+  .k-doc { --k: #9aa5b1;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M4 2.2h4.6L12 5.6v8.2H4z'/%3E%3Cpath d='M8.5 2.4v3.3h3.3'/%3E%3Cpath d='M6 8.4h4M6 10.6h4'/%3E%3C/svg%3E"); }
+  .k-code { --k: #7fbfa8;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.6 4.8 2.4 8l3.2 3.2M10.4 4.8 13.6 8l-3.2 3.2M9.2 3.6 6.8 12.4'/%3E%3C/svg%3E"); }
+  .k-image { --k: #b98fc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Crect x='2.2' y='3.2' width='11.6' height='9.6' rx='1.2'/%3E%3Ccircle cx='5.8' cy='6.5' r='1.1'/%3E%3Cpath d='M2.6 11.6 6.2 8.4l2.3 2.1 2.3-2.6 2.6 2.9'/%3E%3C/svg%3E"); }
+  .k-video { --k: #c48f9b;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' d='M2.2 3.6h11.6v8.8H2.2z'/%3E%3Cpath d='M6.7 6.1 10 8l-3.3 1.9z'/%3E%3C/svg%3E"); }
+  .k-media { --k: #c48f9b;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' d='M2.2 3.6h11.6v8.8H2.2z'/%3E%3Cpath d='M6.7 6.1 10 8l-3.3 1.9z'/%3E%3C/svg%3E"); }
+  .k-audio { --k: #8f9dc4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round' d='M6 11.4V4.1l5.4-1.3v7.1'/%3E%3Ccircle cx='4.6' cy='11.6' r='1.5'/%3E%3Ccircle cx='10' cy='10.1' r='1.5'/%3E%3C/svg%3E"); }
+  .k-archive { --k: #c4a87f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M2.4 5.6h11.2v7.2H2.4zM2.4 3.2h11.2v2.4H2.4z'/%3E%3Cpath d='M6.6 8.4h2.8'/%3E%3C/svg%3E"); }
+  .k-exec { --k: #c49a7f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round' stroke-linecap='round'%3E%3Crect x='2.2' y='3' width='11.6' height='10' rx='1.2'/%3E%3Cpath d='M4.8 6.9 6.6 8.6 4.8 10.3M8.4 10.4h3'/%3E%3C/svg%3E"); }
+  .k-data { --k: #7fb3c4;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3'%3E%3Cellipse cx='8' cy='4.3' rx='5' ry='1.9'/%3E%3Cpath d='M3 4.3v7.4c0 1 2.2 1.9 5 1.9s5-.9 5-1.9V4.3M3 8c0 1 2.2 1.9 5 1.9s5-.9 5-1.9'/%3E%3C/svg%3E"); }
+  .k-config { --k: #a3a97f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M2.6 5.4h10.8M2.6 10.6h10.8'/%3E%3Ccircle cx='6' cy='5.4' r='1.7' fill='%23000' stroke='none'/%3E%3Ccircle cx='10.2' cy='10.6' r='1.7' fill='%23000' stroke='none'/%3E%3C/svg%3E"); }
+  .k-font { --k: #c4b87f;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.6 12.8 8 3.2l4.4 9.6M5.4 9.4h5.2'/%3E%3C/svg%3E"); }
+  .k-build { --k: #8a8f99;
+    --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M8 2.4 13.4 5.2 8 8l-5.4-2.8z'/%3E%3Cpath d='M2.6 5.2v5.6L8 13.6l5.4-2.8V5.2M8 8v5.6'/%3E%3C/svg%3E"); }
 
   .rowmenu button:hover, .rowmenu button:focus-visible {
     background: var(--line-soft); color: var(--ink); outline: none;
@@ -2073,29 +2126,33 @@
     shadow.innerHTML = html;
   }
 
-  /* A picture for a row.
+  /* A picture for a row, when the file has one of its own.
    *
-   * **The thumbnail if one exists, the type icon otherwise**, and which it is
+   * **The thumbnail if one exists, a drawn glyph otherwise**, and which it is
    * was decided by the service — a page cannot ask the filesystem whether a
    * thumbnail is there, and asking the bridge per row would be two hundred
    * requests a screen. `thumb` comes back with the row, from one `stat`.
    *
-   * The type icons are shared by every row of the same kind, so a screenful of
-   * two hundred asks for about a dozen distinct URLs and the browser caches
-   * them for a day. That is the whole reason the icon route is the only
-   * cacheable one in the bridge.
-   *
-   * `onerror` empties the box rather than showing a broken image: a theme that
-   * has no drawing for something is an ordinary state, not a fault.
+   * This used to answer for types too, and the bridge would go looking through
+   * the desktop's icon theme. It does not any more: see the glyphs in the
+   * style block. The route is still the only cacheable one in the bridge,
+   * which now matters for a screenful of photographs rather than for a dozen
+   * repeated type icons.
    *
    * **Not `loading="lazy"`.** The list is already virtual — the rows in the
    * document are the rows on the screen — so deferring buys nothing, and it
    * cost something: a browser will not start a lazy load for a page it thinks
    * is not being looked at, and every picture stayed at zero by zero. */
   const iconUrl = (f) =>
-    f.thumb
-      ? `/api/icon?t=${TOKEN}&p=${encodeURIComponent(f.path + "/" + f.name)}`
-      : `/api/icon?t=${TOKEN}&k=${encodeURIComponent(f.ktoken || "file")}&e=${encodeURIComponent(f.ext || "")}`;
+    `/api/icon?t=${TOKEN}&p=${encodeURIComponent(f.path + "/" + f.name)}`;
+
+  /* The type tokens something is drawn for. Anything else — an old index
+     holding a discriminant this version dropped, a source that invents one —
+     falls back to the plain page rather than to no picture at all. */
+  const GLYPHS = new Set([
+    "folder", "file", "doc", "code", "image", "video", "media",
+    "audio", "archive", "exec", "data", "config", "font", "build",
+  ]);
 
   /* The name, written into a cell without going through HTML.
    *
@@ -2109,27 +2166,47 @@
    * `src` set only when it changes, and nothing is parsed at all.
    */
   function writeName(td, f, terms) {
-    let img = td.firstElementChild;
+    /* A thumbnail is a picture and has to be fetched; a type is a class name
+       and must not be. The two use different tags so that neither pays for the
+       other — a `<span>` never has a `src` to load or fail, and swapping the
+       tag only happens on the rows that change between the two, which is a
+       handful per scroll rather than one per row. */
+    let el = td.firstElementChild;
     if (ICONS) {
-      if (!img || img.tagName !== "IMG") {
-        img = new Image();
-        img.className = "ico";
-        img.alt = "";
-        img.onerror = () => { img.style.visibility = "hidden"; };
-        td.prepend(img);
+      const want = f.thumb ? "IMG" : "SPAN";
+      if (el && el.tagName !== want && el.classList.contains("ico")) {
+        el.remove();
+        el = null;
       }
-      const url = iconUrl(f);
-      if (img.getAttribute("src") !== url) {
-        img.style.visibility = "";
-        img.setAttribute("src", url);
+      if (!el || !el.classList.contains("ico")) {
+        el = f.thumb ? new Image() : document.createElement("span");
+        el.className = "ico";
+        if (f.thumb) {
+          el.alt = "";
+          // A thumbnail that has gone since the row was read is an ordinary
+          // state: the box stays, empty, and the row does not jump.
+          el.onerror = () => { el.style.visibility = "hidden"; };
+        }
+        td.prepend(el);
       }
-    } else if (img && img.tagName === "IMG") {
-      img.remove();
+      if (f.thumb) {
+        const url = iconUrl(f);
+        if (el.getAttribute("src") !== url) {
+          el.style.visibility = "";
+          el.setAttribute("src", url);
+        }
+      } else {
+        const cls = "ico k-" + (GLYPHS.has(f.ktoken) ? f.ktoken : "file");
+        if (el.className !== cls) el.className = cls;
+      }
+    } else if (el && el.classList.contains("ico")) {
+      el.remove();
+      el = null;
     }
     // Everything after the picture is this name, and it is rewritten whole —
     // the marked run moves with every keystroke.
     while (td.lastChild && td.lastChild !== td.firstElementChild) {
-      if (td.lastChild.nodeType === 1 && td.lastChild.tagName === "IMG") break;
+      if (td.lastChild.nodeType === 1 && td.lastChild.classList.contains("ico")) break;
       td.lastChild.remove();
     }
     const at = span(f.name, terms);

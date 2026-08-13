@@ -1,50 +1,35 @@
-//! A picture for a row.
+//! The picture a file already has.
 //!
-//! Two different things, and only the second is what makes a list stop looking
-//! like a spreadsheet:
+//! **The thumbnail, and nothing else.** The file manager writes one into
+//! `~/.cache/thumbnails` under the MD5 of the file's URI, and every desktop
+//! program reads them from there. Nothing is generated here — this only looks.
 //!
-//! * **The type icon** comes from the desktop's icon theme, which maps a kind
-//!   of file to a drawing. Adwaita ships twenty-seven of them and they are all
-//!   generic — there is no `application-pdf`, no `text-x-rust` — so what a
-//!   theme can actually draw is close to the taxonomy this index already has.
-//!   The specific name is tried first anyway, because Papirus and others do
-//!   ship hundreds and a user who installed one should see them.
-//! * **The thumbnail** is the real picture, and it already exists: the file
-//!   manager writes one into `~/.cache/thumbnails` under the MD5 of the file's
-//!   URI, and every desktop program reads them from there. Nothing is
-//!   generated here — this only looks.
+//! ## What used to be here
 //!
-//! **Nothing outside those two places is ever served.** An icon route that took
-//! a path and read it would be the file-reading hole the token and the origin
-//! check exist to prevent; the only paths that leave this module are ones it
-//! built itself, from a theme directory or from a hash.
+//! Type icons, resolved out of the desktop's icon theme: a kind and an
+//! extension became a list of names — `application-pdf`, `text-x-rust`,
+//! `image-x-generic` — and the first one any installed theme could draw was
+//! served. It worked, and what it drew was the problem. Adwaita's mimetype
+//! icons are a blue rhombus for an executable and a near-blank page for a
+//! document; at eighteen pixels on a dark list they read as coloured lint. And
+//! it was a Linux answer to a question every platform asks: the search was
+//! over XDG icon directories, so on Windows and macOS every row got a 404.
+//!
+//! The page draws its own now, as CSS masks — see the glyphs in `page.html`.
+//! Fourteen shapes, one per kind, no request and no theme. This module kept
+//! the half that cannot be drawn from a token, because it is the file itself.
+//!
+//! **Nothing outside the thumbnail cache is ever served.** An icon route that
+//! took a path and read it would be the file-reading hole the token and the
+//! origin check exist to prevent; the only paths that leave this module are
+//! ones it built itself, from a hash.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 /// What a browser is handed, and what it may keep.
 pub struct Picture {
     pub bytes: Vec<u8>,
     pub kind: &'static str,
-}
-
-/// The icon for a kind of file, from the desktop's own theme.
-///
-/// Cached by what was asked for rather than by what was found: the answer for
-/// `rs` is the same for every Rust file on the screen, and a list of two
-/// hundred rows asks for a dozen distinct things.
-pub fn for_kind(kind: &str, ext: &str) -> Option<Picture> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
-    let key = format!("{kind}\u{1}{ext}");
-    let found = {
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut held = cache.lock().ok()?;
-        held.entry(key)
-            .or_insert_with(|| names_for(kind, ext).iter().find_map(|n| find(n)))
-            .clone()
-    };
-    read(&found?)
 }
 
 /// The thumbnail somebody has already made for this file.
@@ -65,7 +50,7 @@ fn thumbnail_path(path: &str) -> Option<PathBuf> {
         return None;
     }
     let name = format!("{}.png", md5_hex(file_uri(path).as_bytes()));
-    let base = dirs().0.join("thumbnails");
+    let base = cache_dir().join("thumbnails");
     // Biggest first: this is drawn at 18 pixels and every one of them is
     // downscaled, so the sharper source wins and none of them is large.
     for size in ["x-large", "large", "normal", "xx-large"] {
@@ -96,137 +81,14 @@ fn read(p: &Path) -> Option<Picture> {
     })
 }
 
-/// `(cache, data)` — where thumbnails live, and where themes do.
-fn dirs() -> (PathBuf, Vec<PathBuf>) {
+/// Where thumbnails live.
+fn cache_dir() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let cache = std::env::var_os("XDG_CACHE_HOME")
+    std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".cache"));
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".local/share"));
-    (
-        cache,
-        vec![
-            data.join("icons"),
-            home.join(".icons"),
-            PathBuf::from("/usr/share/icons"),
-            PathBuf::from("/usr/local/share/icons"),
-        ],
-    )
-}
-
-/// The themes to look in, most specific first.
-///
-/// The user's choice comes from the desktop's own setting, asked once. Every
-/// theme is required to inherit from `hicolor`, which is where anything that
-/// installs an icon without a theme puts it.
-fn themes() -> &'static [String] {
-    static THEMES: OnceLock<Vec<String>> = OnceLock::new();
-    THEMES.get_or_init(|| {
-        let chosen = std::process::Command::new("gsettings")
-            .args(["get", "org.gnome.desktop.interface", "icon-theme"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().trim_matches('\'').to_owned())
-            .filter(|s| !s.is_empty() && !s.contains(' '));
-        let mut all = Vec::new();
-        if let Some(one) = chosen {
-            all.push(one);
-        }
-        for fallback in ["Adwaita", "Papirus", "breeze", "gnome", "hicolor"] {
-            if !all.iter().any(|t| t == fallback) {
-                all.push(fallback.to_owned());
-            }
-        }
-        all
-    })
-}
-
-/// Where a theme keeps an icon of a given name, in the order worth trying.
-fn find(name: &str) -> Option<PathBuf> {
-    let (_, roots) = dirs();
-    for root in &roots {
-        for theme in themes() {
-            let base = root.join(theme);
-            if !base.is_dir() {
-                continue;
-            }
-            // Scalable first: it is drawn at whatever size the row is.
-            for (dir, file) in [
-                (base.join("scalable/mimetypes"), format!("{name}.svg")),
-                (base.join("scalable/places"), format!("{name}.svg")),
-                (base.join("scalable/apps"), format!("{name}.svg")),
-            ] {
-                let p = dir.join(&file);
-                if p.is_file() {
-                    return Some(p);
-                }
-            }
-            for size in ["64x64", "48x48", "32x32", "24x24", "128x128", "16x16"] {
-                for where_ in ["mimetypes", "places", "apps"] {
-                    let p = base.join(size).join(where_).join(format!("{name}.png"));
-                    if p.is_file() {
-                        return Some(p);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// The icon names to try for a kind and an extension, most specific first.
-///
-/// The specific ones are there for themes that ship them; the generic one is
-/// what Adwaita actually has, and is never wrong.
-fn names_for(kind: &str, ext: &str) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    let specific: &[&str] = match ext {
-        "pdf" => &["application-pdf", "x-office-document"],
-        "doc" | "docx" | "odt" | "rtf" => &["x-office-document"],
-        "xls" | "xlsx" | "ods" | "csv" => &["x-office-spreadsheet"],
-        "ppt" | "pptx" | "odp" => &["x-office-presentation"],
-        "html" | "htm" | "xhtml" => &["text-html"],
-        "zip" | "tar" | "gz" | "xz" | "zst" | "7z" | "rar" | "bz2" => &["package-x-generic"],
-        "so" | "dll" | "dylib" => &["application-x-sharedlib"],
-        "iso" | "img" => &["application-x-cd-image", "media-optical"],
-        "torrent" => &["application-x-bittorrent"],
-        "epub" | "mobi" => &["x-office-document"],
-        _ => &[],
-    };
-    names.extend(specific.iter().map(|s| (*s).to_owned()));
-    // Then the theme's own name for the extension, which the specific themes
-    // do ship — `text-rust`, `text-x-python` and so on.
-    if !ext.is_empty() && ext.len() <= 12 && ext.chars().all(|c| c.is_ascii_alphanumeric()) {
-        names.push(format!("text-x-{ext}"));
-        names.push(format!("application-x-{ext}"));
-    }
-    names.extend(
-        match kind {
-            "folder" => ["inode-directory", "folder"].as_slice(),
-            "image" => &["image-x-generic"],
-            "video" => &["video-x-generic"],
-            "audio" => &["audio-x-generic"],
-            "media" => &["video-x-generic"],
-            "archive" => &["package-x-generic"],
-            "exec" => &["application-x-executable"],
-            "code" => &["text-x-script"],
-            "build" => &["application-x-addon", "text-x-generic"],
-            "config" => &["text-x-generic"],
-            "font" => &["font-x-generic"],
-            "doc" => &["x-office-document"],
-            "data" => &["application-x-generic"],
-            _ => &["text-x-generic"],
-        }
-        .iter()
-        .map(|s| (*s).to_owned()),
-    );
-    names.push("text-x-generic".to_owned());
-    names
+        .unwrap_or_else(|| home.join(".cache"))
 }
 
 /// `file://` and the path, escaped the way GLib escapes it.
@@ -336,18 +198,54 @@ mod tests {
         assert_eq!(file_uri("/a/b~c!d"), "file:///a/b~c!d");
     }
 
+    /// Every kind the engine can name has a drawing in the page.
+    ///
+    /// **This is the seam the icons moved across.** The glyphs are CSS now, so
+    /// nothing in Rust reads them and the compiler cannot notice a kind added
+    /// to [`scour_core::Kind`] with no shape to go with it — the row would get
+    /// the plain page and nobody would find out from a test. The page is a
+    /// string in this binary, so the test is to look in it.
+    ///
+    /// It checks the rule exists, not that the drawing is any good. That part
+    /// is a screenshot and a pair of eyes.
     #[test]
-    fn a_kind_always_has_something_to_draw() {
-        // Whatever the theme has or has not, the list of names to try ends
-        // with one every theme is required to ship.
-        for kind in [
-            "file", "folder", "code", "image", "archive", "doc", "exec", "media", "audio", "video",
-            "build", "data", "config", "font",
-        ] {
-            let names = names_for(kind, "");
-            assert_eq!(names.last().map(String::as_str), Some("text-x-generic"));
+    fn every_kind_the_engine_names_has_a_glyph_in_the_page() {
+        for kind in scour_core::Kind::ALL {
+            assert!(
+                has_rule(crate::PAGE, kind.token()),
+                "{} has no `.k-{}` rule in page.html",
+                kind.token(),
+                kind.token()
+            );
         }
-        // And a known extension is asked for by its own name first.
-        assert_eq!(names_for("doc", "pdf").first().unwrap(), "application-pdf");
+        // And the fallback the page reaches for when a token is one this
+        // version has never heard of.
+        assert!(has_rule(crate::PAGE, "file"));
+    }
+
+    /// Is there a `.k-<token>` selector, and not merely those characters?
+    ///
+    /// **A plain `contains` does not do this**, which the first version of the
+    /// test above found out the hard way: renaming `.k-font` to `.k-fontXX`
+    /// deletes the rule for fonts and leaves `.k-font` sitting inside the new
+    /// name, so the test passed over a page that had lost a glyph. The name
+    /// has to end where the selector ends.
+    fn has_rule(page: &str, token: &str) -> bool {
+        let needle = format!(".k-{token}");
+        page.match_indices(&needle).any(|(at, _)| {
+            page[at + needle.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+        })
+    }
+
+    #[test]
+    fn a_longer_name_is_not_the_rule_it_starts_with() {
+        assert!(has_rule(".k-font { --k: red; }", "font"));
+        assert!(has_rule(".k-font,.k-doc { }", "doc"));
+        assert!(!has_rule(".k-fontXX { --k: red; }", "font"));
+        assert!(!has_rule(".k-font-old { }", "font"));
+        assert!(!has_rule("nothing here", "font"));
     }
 }

@@ -461,26 +461,27 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// A picture for a row: the thumbnail somebody has already made, or the
-/// desktop's icon for that kind of file.
+/// The thumbnail somebody has already made for a file.
 ///
 /// **Cacheable, unlike everything else here.** The rest of these routes are
 /// about a filesystem being watched, where a cached answer is an answer that
-/// stopped being true; an icon is a file the theme installed. Without this a
-/// list of two hundred rows asks for the same drawing two hundred times.
+/// stopped being true; a thumbnail is a file in a cache directory, and the one
+/// picture on a page that a row genuinely has to fetch.
+///
+/// It answered for *type* icons too until the page learned to draw those
+/// itself — see `icons` for why that was a Linux answer to a question every
+/// platform asks. What is left takes a path and nothing else, so the route no
+/// longer has a branch where a missing parameter still produces a picture.
 fn api_icon(stream: &mut TcpStream, req: &http::Req) {
+    // A path is only ever hashed, never opened: what comes back is a file in
+    // the thumbnail cache or nothing. See `icons`.
     let picture = match req.param("p") {
-        // A path is only ever hashed, never opened: what comes back is a file
-        // in the thumbnail cache or nothing. See `icons`.
         Some(path) if !path.is_empty() => icons::thumbnail(path),
-        _ => icons::for_kind(
-            req.param("k").unwrap_or("file"),
-            &req.param("e").unwrap_or_default().to_ascii_lowercase(),
-        ),
+        _ => None,
     };
     match picture {
         Some(p) => http::cached(stream, p.kind, &p.bytes),
-        None => http::fail(stream, "404 Not Found", "no icon"),
+        None => http::fail(stream, "404 Not Found", "no thumbnail"),
     }
 }
 
