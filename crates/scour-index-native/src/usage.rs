@@ -47,7 +47,7 @@ use std::time::Instant;
 use scour_core::{AGE_BANDS, DirUsage, Result, UsageRequest, UsageResponse};
 
 use crate::columns::Field;
-use crate::search::Segment;
+use crate::search::{Plan, Segment, walk_matches};
 
 const DAY: i64 = 86_400;
 
@@ -124,7 +124,34 @@ impl<'a> Rollup<'a> {
     /// The directory numbers are resolved to paths once each rather than once
     /// per row — there are two orders of magnitude more rows than directories,
     /// and a path is a decode and an allocation.
-    pub fn add_segment(&mut self, seg: &Segment<'_>) {
+    ///
+    /// ## The two walks
+    ///
+    /// With no query this visits every row, because every row is wanted. With
+    /// one it hands the walk to [`walk_matches`] — the same narrowing a search
+    /// gets, trigram blocks and zone maps and all.
+    ///
+    /// That saves less than it sounds like it should, and knowing why matters
+    /// before anybody optimises the wrong half: **the row walk is not where
+    /// the report's time goes.** The directory loop below is, and it runs over
+    /// every wanted directory whatever was asked. Whole index, 2,228,623 rows
+    /// in 255,869 directories: 376 ms unfiltered, and still 243 ms for a query
+    /// that matches nothing at all. Scoping is the lever that works — the same
+    /// two under one folder are 57 ms and 13.9 ms.
+    ///
+    /// The unfiltered case keeps its own loop instead of running an empty plan
+    /// through the same door. An empty plan accepts every row, so the answer
+    /// would be identical; what it would add is a closure call and a block
+    /// list on the path that walks two million rows, and this is the path the
+    /// tab opens on.
+    ///
+    /// **Directories are entered whether or not they hold a match.** The
+    /// rollup's tree is the set of paths in `own`, and dropping the empty ones
+    /// would break it in a way that reads as a bug in the totals: a folder
+    /// missing between the scope and a match makes the match roll up into a
+    /// grandparent, so the headline counts bytes that no row beneath it
+    /// admits to. They cost a decode each and they sort to the bottom.
+    pub fn add_segment(&mut self, seg: &Segment<'_>) -> Result<()> {
         let n_dirs = seg.dirs.len();
         let mut per_dir = vec![Own::default(); n_dirs];
         let mut wanted = vec![true; n_dirs];
@@ -135,22 +162,18 @@ impl<'a> Rollup<'a> {
             }
         }
 
-        for row in 0..seg.rows() {
-            if !seg.is_alive(row) || seg.num_of(Field::IsDir, row) != 0 {
-                continue;
+        let plan = Plan::compile(&self.req.query, seg)?;
+        if plan.is_empty() {
+            for row in 0..seg.rows() {
+                if seg.is_alive(row) {
+                    charge(seg, row, &mut per_dir, &wanted, self.now);
+                }
             }
-            let d = seg.dir_id(row) as usize;
-            if d >= n_dirs || !wanted[d] {
-                continue;
-            }
-            // One name's share of a file that may have several.
-            let links = seg.num_of(Field::Links, row).max(1) as u64;
-            let bytes = seg.num_of(Field::Size, row).max(0) as u64 / links;
-            let o = &mut per_dir[d];
-            o.bytes += bytes;
-            o.disk += seg.num_of(Field::Disk, row).max(0) as u64 / links;
-            o.files += 1;
-            o.age[band(self.now - seg.num_of(Field::Mtime, row))] += bytes;
+        } else {
+            walk_matches(seg, &plan, |row| {
+                charge(seg, row, &mut per_dir, &wanted, self.now);
+                true
+            });
         }
 
         for (id, o) in per_dir.iter().enumerate() {
@@ -165,6 +188,7 @@ impl<'a> Rollup<'a> {
             };
             self.own.entry(path).or_default().add(o);
         }
+        Ok(())
     }
 
     /// Roll the own-totals up the tree and answer.
@@ -275,6 +299,33 @@ impl<'a> Rollup<'a> {
             took_us: started.elapsed().as_micros() as u64,
         })
     }
+}
+
+/// Add one row to the directory it sits in.
+///
+/// Shared by both walks so that a filtered report and an unfiltered one cannot
+/// drift apart in what they count — the whole promise of the filter is that it
+/// changes *which* rows are added and nothing about how.
+///
+/// A directory row is skipped: what a folder holds is the sum of the files
+/// beneath it, and a directory's own `size` is its entry table, which is not
+/// part of anything it contains.
+fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], now: i64) {
+    if seg.num_of(Field::IsDir, row) != 0 {
+        return;
+    }
+    let d = seg.dir_id(row) as usize;
+    if d >= per_dir.len() || !wanted[d] {
+        return;
+    }
+    // One name's share of a file that may have several.
+    let links = seg.num_of(Field::Links, row).max(1) as u64;
+    let bytes = seg.num_of(Field::Size, row).max(0) as u64 / links;
+    let o = &mut per_dir[d];
+    o.bytes += bytes;
+    o.disk += seg.num_of(Field::Disk, row).max(0) as u64 / links;
+    o.files += 1;
+    o.age[band(now - seg.num_of(Field::Mtime, row))] += bytes;
 }
 
 /// Is `path` **strictly** below `prefix`?

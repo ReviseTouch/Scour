@@ -894,6 +894,17 @@
   .crumb button:hover { color: var(--ink); text-decoration: underline; }
   .crumb button:last-child { color: var(--ink); font-weight: 650; }
   .crumb .s { color: var(--line); padding: 0 1px; }
+  /* The filter, said where the scope is said — the two together are what the
+     numbers below are about, and a reader who misses this reads a `du` figure
+     that is not one. Marked in the same yellow a matched name is. */
+  .crumb .filt {
+    display: inline-flex; align-items: center; gap: 3px;
+    margin-left: calc(var(--u) * 2); padding: 2px 3px 2px 6px;
+    border-radius: 3px; background: var(--mark); color: var(--ink-2);
+  }
+  .crumb .filt b { color: var(--ink); font-weight: 650; }
+  .crumb .filt button { color: var(--ink-3); padding: 0 3px; }
+  .crumb .filt button:hover { color: var(--ink); text-decoration: none; }
 
   .headline { display: flex; align-items: baseline; gap: calc(var(--u) * 5); flex-wrap: wrap;
               margin-bottom: calc(var(--u) * 4); }
@@ -1321,8 +1332,15 @@
       SERVICE.get("facets", { q, by: "kind,age", edges: edges.join(",") }),
     /* What a folder weighs, and its heaviest children. One walk of the index —
        96 ms over 658,360 files — and no filesystem access at all: the sizes and
-       the parent links are already there. */
-    usage: (path, top) => SERVICE.get("usage", { path, top: top || 24 }),
+       the parent links are already there.
+
+       `q` narrows it to the matching files. Cheaper, but not by the order of
+       magnitude the row counts suggest — the folder tree costs the same
+       whatever is asked, so the whole index is 376 ms unfiltered and 243 ms
+       for a query nothing answers. Scoping is what makes it quick: 57 ms and
+       13.9 ms for the same pair under one folder. An empty `q` is the `du`
+       question, unchanged. */
+    usage: (path, top, q) => SERVICE.get("usage", { path, top: top || 24, q: q || "" }),
     /* The same file, several times over, under one folder.
        `budget_mb: 0` reads nothing — 84 ms over thirty thousand candidates —
        and answers "which of these *might* be copies". Confirming means reading
@@ -4540,6 +4558,25 @@
   const crumb = document.getElementById("crumb");
   const kidsEl = document.getElementById("r-kids");
 
+  /* ---------------- the box above this tab ----------------
+   *
+   * **The search bar did not go anywhere when this tab opened, and for a while
+   * it did nothing here** — a live box over a report that ignored it, which is
+   * worse than no box, because the reader has no way to tell an ignored filter
+   * from one that matched everything.
+   *
+   * Read at draw time rather than tracked, so there is one answer to "what is
+   * the filter" and it is whatever is in the box. Not owned here: this tab
+   * borrows the search half's element and never writes to it except through
+   * the clear button, which dispatches `input` so the other half hears it too.
+   *
+   * Asking is not a cost: the rollup walks what the query walks, so a filter
+   * makes the report faster rather than slower — about a third off over the
+   * whole index, and four fifths off inside a folder. It is not free, which is
+   * why the redraw below waits rather than firing on every keystroke. */
+  const qBox = document.getElementById("q");
+  const filter = () => qBox.value.trim();
+
   /* The age spread, from bytes rather than percentages.
      `DirUsage.age` is six counts of bytes; the bar wants six widths. Computing
      the percentage here rather than sending it keeps the wire honest — a
@@ -4558,21 +4595,30 @@
   function breadcrumb() {
     const parts = scope.split("/").filter(Boolean);
     const home = `<button data-path="">tümü</button>`;
-    if (!parts.length) return `<span>tümü</span>`;
-    return home + parts.map((seg, i) => {
+    const where = !parts.length ? `<span>tümü</span>` : home + parts.map((seg, i) => {
       const path = "/" + parts.slice(0, i + 1).join("/");
       const last = i === parts.length - 1;
       const label = last ? `<span>${seg}</span>` : `<button data-path="${path}">${seg}</button>`;
       return `<span class="s">/</span>` + label;
     }).join("");
+    /* Beside the scope, because they are one sentence: these numbers are about
+       *this much of* this folder. `escape_` and not a template hole — a query
+       is text somebody typed, and `<b>` in it is a `<b>` to a browser. */
+    const f = filter();
+    return where + (f
+      ? `<span class="filt">süzgeç <b>${escape_(f)}</b>
+           <button id="unfilter" title="süzgeci kaldır" aria-label="süzgeci kaldır">×</button>
+         </span>`
+      : "");
   }
 
   async function drawReport() {
     const mine = ++drawing;
     crumb.innerHTML = breadcrumb();
+    const q = filter();
     let res;
     try {
-      res = await SERVICE.usage(scope, 24);
+      res = await SERVICE.usage(scope, 24, q);
     } catch (e) {
       if (mine !== drawing) return;
       console.error("scour: the report did not load:", e);
@@ -4590,16 +4636,36 @@
        `bytes` because showing the logical size and calling it disk usage is the
        standard lie — the engine's own words, and it stores both. */
     const stale = n.bytes ? Math.round(((n.age[4] + n.age[5]) / n.bytes) * 100) : 0;
-    const cut = res.child_count > res.children.length
-      ? ` · ${fmt(res.child_count)} klasörün en ağır ${res.children.length}'i`
+
+    /* Every child folder is in the answer, filter or no filter — the rollup
+       keeps them because its tree is the set of paths it holds, and a gap in
+       that tree strands a match's bytes in some grandparent. What a *reader*
+       wants from "where are my logs" is not twenty-one folders saying 0 B, so
+       the empty ones are dropped here, where dropping them costs nothing: they
+       are zero, so the rest still come to the root. */
+    const kids = q ? res.children.filter((c) => c.files > 0) : res.children;
+    const cut = q
+      ? (res.child_count
+          ? ` · ${fmt(res.child_count)} klasörün ${fmt(kids.length)}'inde eşleşme var`
+          : "")
+      : res.child_count > kids.length
+        ? ` · ${fmt(res.child_count)} klasörün en ağır ${kids.length}'i`
+        : "";
+    /* **Said in words, not only in a chip.** With a filter on, this figure is
+       what the matching files come to — not what the folder holds, and not what
+       `du` would answer. The two readings differ by orders of magnitude and
+       look identical, so the difference has to be written down where the
+       number is. */
+    const about = q
+      ? `<br>yalnız <b>eşleşen</b> dosyalar · klasörün tamamı değil`
       : "";
     document.getElementById("r-meta").innerHTML =
       `${fmt(n.files)} dosya · diskte ${bytes(n.disk)}<br>` +
       `<b>%${stale}</b>'i bir yıldan eski<br>` +
-      `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}`;
+      `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}${about}`;
 
     /* Already heaviest-first from the engine, which is what `top` cuts on. */
-    kidsEl.innerHTML = res.children.map((v) => `
+    kidsEl.innerHTML = kids.map((v) => `
       <tr>
         <td class="nmcell"><button data-path="${v.path}">${leafOf(v.path)} <span style="color:var(--ink-3)">›</span></button></td>
         <td class="stack-wrap">${stack(v.age, v.bytes)}</td>
@@ -4607,8 +4673,11 @@
         <td class="r">%${n.bytes ? ((v.bytes / n.bytes) * 100).toFixed(1) : "0,0"}</td>
         <td class="r">${fmt(v.files)}</td>
       </tr>`).join("") ||
-      `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">
-        Bu klasörün altında ayrıca gösterilecek klasör yok.</td></tr>`;
+      `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">${
+        q
+          ? "Bu kapsamda, alt klasörlerin hiçbirinde eşleşen dosya yok."
+          : "Bu klasörün altında ayrıca gösterilecek klasör yok."
+      }</td></tr>`;
 
     document.getElementById("agekey").innerHTML = AGE.map(([lbl, c]) =>
       `<span><i style="background:var(${c})"></i>${lbl}</span>`).join("");
@@ -4628,10 +4697,16 @@
     if (dupesOpen) drawDupes(0);
   }
 
-  /* The type breakdown, from the same faceting the search sidebar uses. */
+  /* The type breakdown, from the same faceting the search sidebar uses.
+   *
+   * The filter goes in too, and it has to: a panel beside a filtered headline
+   * that counts everything makes the reader trust whichever of the two they
+   * read second. Both take the scope as `under:` and the filter as itself —
+   * the terms are ANDed, so this is one query rather than a combination the
+   * page has to reason about. */
   async function drawKinds() {
     const el = document.getElementById("p-kind");
-    const q = scope ? `under:${scope}` : "";
+    const q = ((scope ? `under:${scope} ` : "") + filter()).trim();
     try {
       const res = await SERVICE.sidebar(q, barEdges());
       const g = (res.groups || []).find((x) => x.by === "kind");
@@ -4654,7 +4729,7 @@
      by size without walking, so this costs what any other query costs. */
   async function drawBiggest() {
     const el = document.getElementById("p-big");
-    const q = (scope ? `under:${scope} ` : "") + "file:";
+    const q = ((scope ? `under:${scope} ` : "") + "file: " + filter()).trim();
     try {
       const res = await SERVICE.search(q, "size", true, 8, 0);
       el.innerHTML = res.rows.map((r) => `
@@ -4710,7 +4785,13 @@
 
     sum.textContent =
       `${bytes(res.proven)} doğrulandı · ${bytes(res.waste)} aday · ` +
-      `${fmt(res.candidates)} dosya` + (res.read ? ` · ${bytes(res.read)} okundu` : "");
+      `${fmt(res.candidates)} dosya` + (res.read ? ` · ${bytes(res.read)} okundu` : "") +
+      /* **This panel does not take the filter, and says so.** A copy of a file
+         is a copy whether or not its name matches what was typed above, so
+         narrowing here would hide the other half of a pair and call the
+         remaining one unique. Sitting silently under a filtered headline it
+         would read as filtered, which is the thing to prevent. */
+      (filter() ? " · süzgeçten bağımsız" : "");
     /* The one sentence that must never be dropped: a partial answer that looks
        complete is what gets files deleted on a guess. */
     document.getElementById("d-note").innerHTML = res.unconfirmed
@@ -4796,6 +4877,32 @@
   document.querySelector(".report").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-path]");
     if (b) { scope = b.dataset.path; drawReport(); }
+    /* Clearing the filter empties the box for both halves, which is why it
+       goes through `input` rather than assigning and redrawing here: the
+       search tab is listening on the same element and has its own idea of
+       what to do about it. This tab's redraw comes back through that. */
+    if (e.target.closest("#unfilter")) {
+      qBox.value = "";
+      qBox.dispatchEvent(new Event("input"));
+    }
+  });
+
+  /* Retyping while the report is up redraws the report.
+   *
+   * Held off a quarter second, unlike the search box, which answers every
+   * keystroke. It can afford to: a keystroke there is one prepared query,
+   * where this is a roll-up over every matching row, and half-typed words —
+   * `r`, `ra`, `rap` — are the widest queries anybody ever sends. The guard
+   * `drawing` already discards the answer to a superseded draw.
+   *
+   * Nothing at all while the search tab is up: `show("report")` reads the box
+   * when the tab opens, so a filter typed on the other side is picked up then
+   * rather than kept in sync all along. */
+  let waiting = 0;
+  qBox.addEventListener("input", () => {
+    if (document.getElementById("view-report").hidden) return;
+    clearTimeout(waiting);
+    waiting = setTimeout(drawReport, 250);
   });
 
   function show(which) {

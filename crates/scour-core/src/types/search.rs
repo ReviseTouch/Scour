@@ -450,6 +450,24 @@ pub struct UsageRequest {
     pub path: String,
     /// How many children to name.
     pub top: u32,
+    /// Weigh only the files this matches. Empty — the default — weighs all of
+    /// them, which is the `du` question and the one this answered first.
+    ///
+    /// **A filtered total is not a disk-usage figure and must not be shown as
+    /// one.** It is what the matching files come to, arranged by folder: an
+    /// answer to "where do my photos sit", not to "what is on this disk". A
+    /// frontend that applies this owes its reader a word saying so.
+    ///
+    /// Asking is cheaper than not asking, but by less than it looks like it
+    /// should be. The rollup walks the rows a search walks rather than all of
+    /// them — and that is only the first of its two passes. The second one
+    /// builds the folder tree, which is the same tree whatever was asked, so
+    /// a query matching *nothing* still costs two thirds of the whole report.
+    /// Measured over 2.2 M rows: 376 ms unfiltered, 243 ms for a query nothing
+    /// answers, 224–332 ms for the rest. Scoping is the lever that works —
+    /// the same numbers under one folder are 57 ms and 13.6 ms.
+    #[serde(default)]
+    pub query: Ast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

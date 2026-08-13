@@ -680,12 +680,21 @@ impl Engine {
         )
     }
 
-    /// What a subtree weighs.
+    /// What a subtree weighs — all of it, or only the part a query names.
     ///
-    /// Straight through to the index: this is an aggregation over a layout,
-    /// and the engine has nothing to add to it but the request.
-    pub fn usage(&self, req: &scour_core::UsageRequest) -> Result<scour_core::UsageResponse> {
-        self.shared.index.usage(req)
+    /// Nearly straight through to the index: this is an aggregation over a
+    /// layout, and the engine has nothing to add to it but the reading of the
+    /// query. That reading belongs here for the same reason [`Engine::facets`]
+    /// does it — the parser answers to one layer, so a frontend sends the text
+    /// somebody typed and never a syntax tree it assembled itself.
+    ///
+    /// An empty query is the `du` question, answered exactly as before.
+    pub fn usage(&self, path: &str, top: u32, query: &str) -> Result<scour_core::UsageResponse> {
+        self.shared.index.usage(&scour_core::UsageRequest {
+            path: path.to_owned(),
+            top,
+            query: scour_query::parse(query),
+        })
     }
 
     /// The same file, several times over.

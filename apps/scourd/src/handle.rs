@@ -65,9 +65,7 @@ fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Respons
             root: engine.tree(&path, depth, limit)?,
         },
         Request::Stat { path } => Response::Stat(engine.stat(&path)?),
-        Request::Usage { path, top } => {
-            Response::Usage(engine.usage(&scour_core::UsageRequest { path, top })?)
-        }
+        Request::Usage { path, top, query } => Response::Usage(engine.usage(&path, top, &query)?),
         Request::Duplicates {
             under,
             min_size,

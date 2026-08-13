@@ -42,6 +42,40 @@ It stores nothing. Caching the two arrays would cost 20 bytes a directory —
 measurement says the 45 ms is in someone's way, and the same arrays would then
 have to be kept correct across every removal.
 
+### Built, and what the plan got wrong about the cost
+
+`UsageRequest` takes a query, so the report answers "where do my photos sit" as
+well as "what is in this folder". A frontend that passes one owes its reader a
+word: the figure is then what the *matching* files come to and is no longer
+comparable with `du`.
+
+```bash
+cargo run --release -p scour-index-native --example report <index-dir> [scope]
+```
+
+The plan expected a filter to be nearly free, on the reasoning that the rollup
+would then walk only the rows a search walks. It does — and that is not where
+the time goes. Measured over 2,228,623 rows in 255,869 directories:
+
+| | whole index | scoped to a folder |
+|---|---|---|
+| no filter | 376 ms | 57 ms |
+| `ext:rs` (12,944 rows) | 224 ms | 13.6 ms |
+| `kind:image` (210,508 rows) | 288 ms | 39.5 ms |
+| `dm:>1y` (1,629,313 rows) | 332 ms | 62.0 ms |
+| matching nothing | 243 ms | 13.9 ms |
+
+**A query that matches nothing still costs 243 ms.** Pass 1 is not the expensive
+half: pass 2 is, and it is the same work whatever was asked, because the tree is
+the same tree. Every directory is decoded to a `String`, hashed into the map
+that merges segments, and sorted — 255,869 of them, filter or no filter. A wide
+filter can even lose (`dm:>1y` matches 73% of rows and pays the plan on top).
+
+So a filter buys about a third, and scoping buys an order of magnitude. If the
+report is ever to be fast in the unscoped case, pass 2 is the thing to attack:
+the paths could be compared as segment-local ids and only materialised for the
+few rows that are answered with.
+
 Both `size` and `disk` are already columns, so "size" and "size on disk" are the
 same query with a different field.
 

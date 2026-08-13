@@ -14,7 +14,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use scour_core::{
-    Change, Entry, EntryId, FacetBy, FacetRequest, Index, Maintenance, Meta, Page, PrefixSet,
+    Ast, Change, Entry, EntryId, FacetBy, FacetRequest, Index, Maintenance, Meta, Page, PrefixSet,
     SearchRequest, SortKey, SourceId,
 };
 use scour_index_native::NativeIndex;
@@ -1927,6 +1927,7 @@ fn a_file_with_two_names_is_not_two_files_worth_of_disk() {
         .usage(&scour_core::UsageRequest {
             path: "/w".into(),
             top: 5,
+            query: Ast::default(),
         })
         .expect("usage");
     assert_eq!(usage.root.files, 2, "both names are findable");
@@ -2355,6 +2356,7 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
                 .usage(&scour_core::UsageRequest {
                     path: path.clone(),
                     top: 0,
+                    query: Ast::default(),
                 })
                 .expect("usage");
             assert_eq!(
@@ -2402,6 +2404,118 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
     index.maintain(Maintenance::Rebuild).expect("rebuild");
     let folded = agree("after a rebuild");
     assert_eq!(folded[0], (12_000, 4));
+}
+
+/// The report can be asked about part of a folder rather than all of it.
+///
+/// A query narrows *which rows are weighed* and changes nothing else: the tree
+/// is the same tree, a folder with no match is still in it, and the children
+/// still come to the root. That last one is the property worth a test —
+/// dropping the folders that hold no match would leave a match's bytes rolled
+/// into some grandparent, so the headline would count what no row beneath it
+/// admitted to, and every part of that reads as a bug in the totals.
+#[test]
+fn the_report_weighs_what_a_query_names_and_still_adds_up() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+
+    let file = |path: &str, ino: u64, disk: i64| Entry {
+        id: EntryId::inode(SourceId(0), 66_310, ino),
+        path: path.into(),
+        is_dir: false,
+        meta: Meta {
+            mtime: NOW,
+            size: disk,
+            disk,
+            links: 1,
+            ..Meta::UNKNOWN
+        },
+    };
+    // Made large, so that a version counting a directory's own row could not
+    // pass — and one of these folders is *named* for the query below, which is
+    // how that row reaches the rollup at all.
+    let dir = |path: &str, ino: u64| Entry {
+        id: EntryId::inode(SourceId(0), 66_310, ino),
+        path: path.into(),
+        is_dir: true,
+        meta: Meta {
+            mtime: NOW,
+            size: 99_000,
+            disk: 99_000,
+            ..Meta::UNKNOWN
+        },
+    };
+
+    // Two commits, so the rollup has to merge the same folder across segments.
+    let first = vec![
+        dir("/f", 1),
+        dir("/f/log", 2),
+        dir("/f/resim", 3),
+        dir("/f/bos", 4),
+        file("/f/log/a.log", 10, 1_000),
+        file("/f/log/b.txt", 11, 2_000),
+        file("/f/resim/c.log", 12, 4_000),
+        file("/f/resim/d.txt", 13, 8_000),
+    ];
+    let second = vec![
+        dir("/f/resim/derin", 5),
+        file("/f/resim/derin/e.log", 14, 16_000),
+        file("/f/bos/f.txt", 15, 32_000),
+    ];
+    for batch in [first, second] {
+        index
+            .apply(&mut batch.into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let weigh = |query: &str| {
+        index
+            .usage(&scour_core::UsageRequest {
+                path: "/f".into(),
+                top: 5,
+                query: scour_query::parse(query),
+            })
+            .expect("usage")
+    };
+
+    // The `du` question, unchanged: every file under /f.
+    let all = weigh("");
+    assert_eq!((all.root.disk, all.root.files), (63_000, 6), "no filter");
+
+    // The same folder, asked only about its logs. The extension filter and the
+    // bare word have to land on the same number: `log` matches three file names
+    // *and* the directory called `log`, whose 99,000 is not content.
+    for query in ["ext:log", "log"] {
+        let some = weigh(query);
+        assert_eq!(
+            (some.root.disk, some.root.files),
+            (21_000, 3),
+            "{query} weighs the matching files and nothing else"
+        );
+
+        // Every child still there, including the one with no match in it —
+        // and they come to the root exactly.
+        let kids: Vec<(&str, u64)> = some
+            .children
+            .iter()
+            .map(|c| (c.path.as_str(), c.disk))
+            .collect();
+        assert_eq!(
+            kids,
+            vec![("/f/resim", 20_000), ("/f/log", 1_000), ("/f/bos", 0)],
+            "{query}: the tree is the same tree"
+        );
+        assert_eq!(
+            some.children.iter().map(|c| c.disk).sum::<u64>(),
+            some.root.disk,
+            "{query}: the children come to the root"
+        );
+    }
+
+    // A query nothing answers weighs nothing, rather than falling back to all
+    // of it — which is what a filter quietly not being applied would look like.
+    assert_eq!(weigh("ext:yok").root.disk, 0, "no match, no bytes");
 }
 
 /// Sorting by size puts a folder where its number says it is.

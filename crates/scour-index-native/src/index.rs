@@ -2543,7 +2543,7 @@ impl Index for NativeIndex {
         let inner = self.inner.read();
         let mut rollup = Rollup::new(req, now);
         for live in &inner.segments {
-            rollup.add_segment(&live.view()?);
+            rollup.add_segment(&live.view()?)?;
         }
         rollup.finish(started)
     }

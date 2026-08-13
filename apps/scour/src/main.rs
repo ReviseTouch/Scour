@@ -96,6 +96,12 @@ enum Command {
         path: String,
         #[arg(long, short = 'n', default_value_t = 20)]
         top: u32,
+        /// Weigh only the files matching this query.
+        ///
+        /// The answer is then about those files and not about the disk — where
+        /// your photos sit, not what `du` would say.
+        #[arg(long, short = 'q', default_value = "")]
+        query: String,
     },
     /// The same file, several times over — largest saving first.
     ///
@@ -292,9 +298,10 @@ fn build(args: &Args) -> Result<Request> {
             read_budget: budget_mb * 1024 * 1024,
             top: *top,
         },
-        Some(Command::Du { path, top }) => Request::Usage {
+        Some(Command::Du { path, top, query }) => Request::Usage {
             path: path.clone(),
             top: *top,
+            query: query.clone(),
         },
         Some(Command::Explain { query }) => Request::Explain {
             query: join(query),

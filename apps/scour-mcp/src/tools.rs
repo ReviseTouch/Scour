@@ -83,6 +83,11 @@ pub struct UsageArgs {
     pub path: String,
     /// How many child folders to name. Default 20.
     pub top: Option<u32>,
+    /// Weigh only the files matching this query. Empty weighs all of them.
+    /// With a query the answer is about those files — "where do the videos
+    /// sit" — and is no longer what `du` would report for the folder.
+    #[serde(default)]
+    pub query: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -271,12 +276,15 @@ impl Scour {
                        how old the bytes are. Answers 'what is eating my disk' in \
                        milliseconds, over the index — do not walk the filesystem or shell out \
                        to du for this. Reports logical size and size on disk separately, and \
-                       counts a hard-linked file once."
+                       counts a hard-linked file once. Pass a query to weigh only part of it — \
+                       'kind:video', 'ext:log', 'dm:>1y' — which answers where a kind of file \
+                       sits rather than what the folder holds."
     )]
     fn scour_disk_usage(&self, Parameters(a): Parameters<UsageArgs>) -> String {
         self.call(Request::Usage {
             path: a.path,
             top: a.top.unwrap_or(20).min(200),
+            query: a.query,
         })
     }
 

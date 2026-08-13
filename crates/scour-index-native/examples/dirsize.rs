@@ -24,7 +24,7 @@
 
 use std::time::Instant;
 
-use scour_core::{Index, UsageRequest};
+use scour_core::{Ast, Index, UsageRequest};
 use scour_index_native::NativeIndex;
 
 /// What one segment contributes, laid out for O(1) subtree answers.
@@ -191,6 +191,7 @@ fn main() {
             .usage(&UsageRequest {
                 path: p.clone(),
                 top: 0,
+                query: Ast::default(),
             })
             .expect("usage");
         let (disk, files) = ask(p);
@@ -212,6 +213,7 @@ fn main() {
     let _ = index.usage(&UsageRequest {
         path: String::new(),
         top: 0,
+        query: Ast::default(),
     });
     println!("\nrapor (tum disk, tek sorgu) {:.1?}", began.elapsed());
 }

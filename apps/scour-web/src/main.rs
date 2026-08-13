@@ -744,6 +744,9 @@ fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Usage {
         path: req.param("path").unwrap_or_default().to_owned(),
         top: req.param("top").and_then(|s| s.parse().ok()).unwrap_or(24),
+        // Absent and empty mean the same thing here, which is why the page can
+        // send the box's contents without looking at them first.
+        query: req.param("q").unwrap_or_default().to_owned(),
     };
     match call(client, request) {
         Ok(Response::Usage(r)) => {

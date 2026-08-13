@@ -98,6 +98,12 @@ pub enum Request {
         path: String,
         #[serde(default = "default_usage_top")]
         top: u32,
+        /// Weigh only the files this matches. Empty weighs all of them, which
+        /// is the `du` question and what this answered before the field
+        /// existed — defaulted, so a caller written against that version still
+        /// asks it.
+        #[serde(default)]
+        query: String,
     },
     /// The same file, several times over.
     ///
