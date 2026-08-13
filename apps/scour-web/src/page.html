@@ -3417,11 +3417,33 @@
   }
   let WIDTHS = loadWidths();
 
+  /* **A column always has a width, and the table never gives one up.**
+   *
+   * Neither was true, and together they took the list apart in a narrow
+   * window. `COLUMNS[].w` was written down and then never read, so a column
+   * nobody had dragged had no width at all — and under `table-layout: fixed`
+   * an unspecified column is the first thing a browser takes space from when
+   * the total does not fit. At 900 pixels the *name* column was zero: the list
+   * showed paths and no names, and the headings had run into each other
+   * (`ADKONUM`, and three more piled up on the right).
+   *
+   * So: the default is used, and the table declares what it needs. Below that
+   * the surrounding `.scroll` — already `overflow: auto` — scrolls sideways,
+   * which is what a file manager does and what keeps a dragged width meaning
+   * the width somebody dragged it to.
+   *
+   * The two fixed cells are counted in: the three-pixel freshness rule and the
+   * thirty-pixel picker. Without them the last column loses their width. */
   function applyWidths() {
-    for (const th of document.querySelectorAll("thead th[data-sort]")) {
-      const w = WIDTHS[th.dataset.sort];
-      th.style.width = w ? w + "px" : "";
+    let sum = 3 + 30;
+    for (const th of document.querySelectorAll("thead th[data-col]")) {
+      const col = COLUMNS.find((c) => c.id === th.dataset.col);
+      const w = WIDTHS[th.dataset.sort] || (col && col.w) || 120;
+      th.style.width = w + "px";
+      sum += w;
     }
+    const table = document.querySelector(".results table");
+    if (table) table.style.minWidth = sum + "px";
   }
 
   /* Everything this window remembers, sent to the service.
@@ -3568,7 +3590,11 @@
     const move = (ev) => {
       const w = Math.max(MIN_COL, Math.round(startW + ev.clientX - startX));
       WIDTHS[th.dataset.sort] = w;
-      th.style.width = w + "px";
+      // Through `applyWidths` rather than straight onto the cell, so that the
+      // table's declared minimum grows with the drag. Setting the style here
+      // and the minimum nowhere is how a widened column used to start eating
+      // its neighbours instead of making the list wider.
+      applyWidths();
     };
     const up = () => {
       grip.classList.remove("dragging");
