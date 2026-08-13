@@ -617,13 +617,19 @@
      visible without shouting, and it stacks correctly over a selected row
      because it is an overlay rather than a replacement. */
   .name mark { background: var(--mark); color: inherit; padding: 1px 0; border-radius: 2px; }
+  /* **No width of its own.** This carried `max-width: 34ch`, left over from a
+     mockup whose columns could not be dragged. The cap is narrower than the
+     column's own default, so widening the column bought nothing: the path
+     stopped growing at thirty-four characters and the rest of the space stayed
+     empty with an ellipsis sitting in the middle of it. The cell is the
+     constraint — it is `table-layout: fixed` and the grip sets its width — so
+     this only has to agree to be cut at whatever that turns out to be. */
   .path {
     font: 400 11.5px/1 var(--mono);
     color: var(--ink-3);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 34ch;
   }
   .path b { color: var(--ink-2); font-weight: 400; }
   /* The date columns are right-aligned numbers everywhere else and left
