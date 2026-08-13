@@ -1590,10 +1590,13 @@
    * granularity and wrong within a second at this one. */
   const ago = (mtime) => {
     const s = now - mtime;
-    // A file whose timestamp is in the future — clock skew, a copy with
-    // preserved times — is not "minus four seconds ago".
-    if (s < 1) return "az önce";
-    if (s < 60) return s + " sn önce";
+    /* **One second is the floor, and it is the whole range too.** The first
+       version said "az önce" below one — and there is nothing below one
+       second to be vaguer about, so a word where the ladder already had a
+       number was a word that said less. The clamp still does the work it was
+       there for: a timestamp in the future — clock skew, a copy that kept its
+       times — reads as one second rather than as minus four. */
+    if (s < 60) return Math.max(1, s) + " sn önce";
     if (s < 3600) return Math.max(1, Math.round(s / 60)) + " dk önce";
     if (s < DAY) return Math.round(s / 3600) + " sa önce";
     if (s < 30 * DAY) return Math.round(s / DAY) + " gün önce";
