@@ -54,6 +54,7 @@ fn main() {
             // Least of three: the first pays for whatever of the map is not
             // resident, and nobody runs a window cold twice.
             let mut best = f64::MAX;
+            let mut built = 0u64;
             for _ in 0..3 {
                 let began = Instant::now();
                 let res = index
@@ -70,9 +71,11 @@ fn main() {
                     .expect("search");
                 let ms = began.elapsed().as_secs_f64() * 1000.0;
                 std::hint::black_box(res.hits.len());
+                built = built.max(res.rows_built);
                 best = best.min(ms);
             }
             row.push_str(&format!("  {best:8.1}"));
+            if offset == 0 { row.push_str(&format!(" [{built} kuruldu]")); }
         }
         println!("{row}   {label}");
     }
