@@ -9,7 +9,7 @@
 //! does, which is exactly why this file exists before the index is wired to
 //! anything.
 
-use scour_core::{Entry, SortKey};
+use scour_core::{Entry, EntryId, Meta, SortKey, SourceId};
 use scour_index_native::{
     ColumnBlocks, DirTable, NameArena, Plan, Segment, SegmentBytes, TrigramIndex, Wanted, build,
     run,
@@ -231,6 +231,172 @@ fn a_count_cap_never_changes_which_rows_win() {
     assert_eq!(by_size(10_000_000), want);
     assert_eq!(by_size(100), want, "a small cap must not change the answer");
     assert_eq!(by_size(1), want);
+}
+
+/// Ordering by a number opens a page of blocks, not all of them.
+///
+/// The claim: each block records the range of every column, so the blocks can
+/// be put in the order of what they can reach and abandoned once the page is
+/// beyond them. What has to survive it is the answer — every one of these is
+/// compared against the reference that looks at every entry.
+///
+/// `Kind` is the awkward one and is here for that. A handful of values covers
+/// the whole corpus, so a block that can only *equal* the worst row held is
+/// commonplace — and such a block is not out of reach, because the page breaks
+/// ties on the row and its rows may come first. A version that stopped on
+/// "equal" would return the right values from the wrong rows.
+#[test]
+fn a_numeric_order_opens_a_page_of_blocks_rather_than_all_of_them() {
+    let f = Fixture::new(50_000);
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
+    for (sort, desc) in [
+        (SortKey::Size, true),
+        (SortKey::Size, false),
+        (SortKey::Created, true),
+        (SortKey::Created, false),
+        (SortKey::Kind, true),
+        (SortKey::Kind, false),
+        (SortKey::Disk, true),
+        (SortKey::Mode, true),
+    ] {
+        // A cap the count reaches long before the selection does, which is the
+        // shape of every request the interface makes.
+        let found = run(
+            &seg,
+            &plan,
+            Wanted {
+                sort,
+                descending: desc,
+                offset: 0,
+                limit: 40,
+                count_cap: 200,
+                rank_only: false,
+            },
+        );
+        assert!(
+            found.early_exit,
+            "{sort:?} (desc={desc}) opened every block"
+        );
+        assert!(
+            found.rows_visited * 4 < seg.rows() as u64,
+            "{sort:?} (desc={desc}) visited {} of {} rows",
+            found.rows_visited,
+            seg.rows()
+        );
+        assert_eq!(
+            found.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+            f.expected("", sort, desc, 40),
+            "{sort:?} (desc={desc}) disagrees with brute force"
+        );
+        // Stopping the selection says nothing about the total. It is still the
+        // cap, and still a floor.
+        assert_eq!(found.total, 200, "{sort:?} (desc={desc}) miscounted");
+        assert!(found.capped);
+    }
+}
+
+/// A block that can only *equal* the page's worst row is still opened.
+///
+/// **The one-character version of this optimisation that is wrong.** Blocks are
+/// opened best first and the walk ends when the page's worst row beats
+/// everything the next block could hold — but "beats" may not be weakened to
+/// "is not beaten by". The page's second key is the row, so a block whose best
+/// merely ties the worst row held still displaces it whenever its rows come
+/// first.
+///
+/// The corpus is shaped to make that difference visible rather than to look
+/// like a disk. Dates fall by one a row, so a row number is known rather than
+/// guessed at. Every file is empty except twenty-five, one in each of the last
+/// twenty-five blocks — so those blocks are opened first, and the page fills
+/// with their *empty* rows, which live at the very end of the segment. Every
+/// remaining block ties them at zero, and every one of them holds earlier rows
+/// that belong in the page instead.
+///
+/// Stopping on the tie returns twenty-five eight-kilobyte files and fifteen
+/// empty ones: the right sizes, in the right order, and the wrong fifteen
+/// files. Only the reference can tell the two apart.
+#[test]
+fn a_block_that_only_ties_the_page_is_still_opened() {
+    let entries: Vec<Entry> = (0..4_000i64)
+        .map(|i| {
+            let path = format!("/t/{i:05}.bin");
+            Entry {
+                id: EntryId::path_hash(SourceId(0), &path),
+                path,
+                is_dir: false,
+                meta: Meta {
+                    mtime: NOW - i,
+                    // One a block, in the last quarter of the segment. A block
+                    // holds thirty-two rows — see `columns::BLOCK`, which this
+                    // deliberately depends on.
+                    size: if i >= 3_200 && i % 32 == 0 { 8_192 } else { 0 },
+                    ..Meta::UNKNOWN
+                },
+            }
+        })
+        .collect();
+    let f = Fixture {
+        bytes: build(&entries),
+        entries,
+    };
+    assert_eq!(
+        f.search("", SortKey::Size, true, 40),
+        f.expected("", SortKey::Size, true, 40),
+        "the tie at the edge of the page came from the wrong rows"
+    );
+    // The mirror, where zero is what every block can reach and the twenty-five
+    // large rows are the ones that must not be.
+    assert_eq!(
+        f.search("", SortKey::Size, false, 40),
+        f.expected("", SortKey::Size, false, 40)
+    );
+}
+
+/// The count is not what stops the selection, and a deep page proves it.
+///
+/// At an offset the page is twenty thousand rows wide, so the boundary that
+/// ends the walk is the twenty-thousandth best rather than the fortieth — and
+/// a bound taken from the wrong end of the selection would still look right at
+/// offset zero.
+#[test]
+fn a_deep_page_of_a_numeric_order_is_the_page_it_would_have_been() {
+    let f = Fixture::new(20_000);
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at("ext:rs", NOW), &seg).expect("compile");
+    let page = |sort: SortKey, desc: bool, offset: usize| {
+        run(
+            &seg,
+            &plan,
+            Wanted {
+                sort,
+                descending: desc,
+                offset,
+                limit: 20,
+                count_cap: 100,
+                rank_only: false,
+            },
+        )
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect::<Vec<_>>()
+    };
+    for sort in [SortKey::Size, SortKey::Created, SortKey::Kind] {
+        for desc in [true, false] {
+            let whole = f.expected("ext:rs", sort, desc, 1_000);
+            for offset in [0, 19, 200, 500] {
+                if offset + 20 > whole.len() {
+                    continue;
+                }
+                assert_eq!(
+                    page(sort, desc, offset),
+                    whole[offset..offset + 20],
+                    "{sort:?} (desc={desc}) at {offset}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
