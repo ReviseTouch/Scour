@@ -1353,6 +1353,41 @@ fn head(bytes: &[u8]) -> u128 {
 /// Only the name is abbreviated. An extension is at most twelve bytes — that
 /// is what makes it an extension — so sixteen holds all of it, and sorting
 /// `ext:rs` by extension stops being a single tie group of seventy thousand.
+///
+/// ## The path is not on this list, and it was tried twice
+///
+/// Ordering by path is the dearest sort there is, and abbreviating its key the
+/// way the name's is abbreviated is the obvious way to make it cheap. It was
+/// written — `Head` of the first sixteen bytes of the joined path, `Path` added
+/// to the exception here — and it fails twice over.
+///
+/// **It answers the wrong question.** Saying a key is inexact does not say what
+/// it is inexact *about*. The merge in `index.rs` resolves an equal key by
+/// comparing the two rows' **folded names**, because until now the only
+/// inexact key was the name and that was the whole truth of it. Give it a path
+/// key and it silently orders the tie group by name: on a corpus where
+/// `/home/u/.cache/M` is sixteen bytes exactly, every row under it tied, and
+/// the page came back alphabetical by file name inside a directory prefix.
+/// Two tests caught it — `many_segments_answer_exactly_what_one_would` and
+/// `a_rebuild_folds_everything_into_one_segment_and_changes_no_answer` — and
+/// they caught it as "several segments disagree with one", which is not what it
+/// was: one segment was wrong too, in the same way, and the reference was what
+/// disagreed.
+///
+/// **And it is not even reliably faster.** Sixteen bytes of a *path* is mostly
+/// the directory, and paths share directories by the hundred thousand, so the
+/// boundary tie group is unbounded in a way a name's never is. Measured on
+/// 2,234,580 rows against its own baseline in the same run, path descending:
+/// 661 ms became 588 at offset 0 and **1,101 at offset 19,800**, where the
+/// exact key holds 670. The offset that was worth optimising is the one it made
+/// worse.
+///
+/// What the sort actually cost was reading each row's spelled name — see
+/// [`DirPaths::spelled`]. Fixing that keeps the key exact and takes 665 ms to
+/// 424, at every offset.
+///
+/// Anyone who wants to try the abbreviated key again has to teach the merge
+/// what the key is an abbreviation *of*, first.
 pub(crate) fn key_is_exact(key: SortKey) -> bool {
     key != SortKey::Name
 }
@@ -1374,24 +1409,62 @@ pub(crate) fn key_is_exact(key: SortKey) -> bool {
 /// Sized to the table and filled as it goes, so a query that touches a corner
 /// of the tree pays for the corner. Empty for every other ordering — nothing
 /// but `Path` asks.
+///
+/// The *name* half of the same join is here for the same reason, and turned out
+/// to be the larger of the two. See [`DirPaths::spelled`].
 #[derive(Default)]
-pub(crate) struct DirPaths(Vec<Option<Box<str>>>);
+pub(crate) struct DirPaths {
+    dirs: Vec<Option<Box<str>>>,
+    /// Where the last row's spelled name was found. See [`crate::names::Reader`].
+    names: crate::names::Reader,
+}
 
 impl DirPaths {
     fn of<'a>(&'a mut self, seg: &Segment<'_>, id: u32) -> &'a str {
-        if self.0.is_empty() {
-            self.0.resize_with(seg.dirs.len(), || None);
+        if self.dirs.is_empty() {
+            self.dirs.resize_with(seg.dirs.len(), || None);
         }
         let at = id as usize;
-        if at >= self.0.len() {
+        if at >= self.dirs.len() {
             // A number the table does not hold. `get` says the same thing by
             // returning nothing, and a row with no directory is its own name.
             return "";
         }
-        if self.0[at].is_none() {
-            self.0[at] = Some(seg.dirs.get(id).unwrap_or_default().into_boxed_str());
+        if self.dirs[at].is_none() {
+            self.dirs[at] = Some(seg.dirs.get(id).unwrap_or_default().into_boxed_str());
         }
-        self.0[at].as_deref().unwrap_or_default()
+        self.dirs[at].as_deref().unwrap_or_default()
+    }
+
+    /// The row's name as the filesystem spells it, read forward.
+    ///
+    /// **Not [`NameArena::get`]**, which restarts from the block offset and so
+    /// pays up to thirty-one NUL scans for a name the previous call left it one
+    /// scan short of. A path sort asks once a matching row, in row order, and
+    /// on 2,234,580 rows that difference measured **320 ms of 665** — the
+    /// largest single item in the sort, and larger than the key allocation
+    /// everyone assumed it was behind. That allocation is real and is worth
+    /// 73 ms; this was worth four times as much and needed no change to what a
+    /// key *is*, which is why it went first.
+    ///
+    /// The folded name the walk already carries cannot stand in for it: a path
+    /// is ordered as it is *spelled*, both by [`sort_hits`] and by the
+    /// brute-force reference, and `B` sorts before `a` spelled where it sorts
+    /// after folded.
+    ///
+    /// What is left to take, in order of what it is worth: the 73 ms of per-row
+    /// `String` (one arena a segment, keyed by offset and length — exact, but
+    /// the comparator in `index.rs` has to be able to reach the arena, so
+    /// `SortValue`, `Ranked` and the merge all move), and then a stored
+    /// path-order column, which makes this a k-way merge and costs a rebuild.
+    ///
+    /// [`Test::PathHas`] builds a whole path a row as well, and pays the same
+    /// block scan. It is not given a reader because `evaluate` carries no cache
+    /// to keep one in, and a `path:` query is narrowed by the trigram filter
+    /// first, so few rows reach it. If that stops being true, this is the thing
+    /// to reach for.
+    fn spelled<'a>(&mut self, seg: &Segment<'a>, row: usize) -> &'a str {
+        self.names.at(&seg.names, row)
     }
 }
 
@@ -1414,7 +1487,9 @@ fn sort_value(
         SortKey::Name => SortValue::Head(head(name)),
         SortKey::Ext => SortValue::Head(head(ext_bytes(name))),
         SortKey::Path => {
-            let raw = seg.names.get(row).unwrap_or_default();
+            // The name first, and it has to be: `of` hands back a borrow of
+            // the cache, so the reader cannot be asked while that is held.
+            let raw = dirs.spelled(seg, row);
             // The same join `Segment::path` makes, over a directory this walk
             // may already have rebuilt. Written into one buffer rather than
             // through `format!`, which allocates twice.
