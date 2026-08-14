@@ -4166,3 +4166,99 @@ CPU was 31 jiffies (1.03%), including the worker handling that activity. The
 window was then reopened and the open measurement above was taken. Suppressing
 the refresh would change the documented live-window semantics, so runtime
 behaviour was not changed.
+
+## 2026-08-15 — a list ordered by a number was still walking every match
+
+`8530cd7` stopped a size-sorted page building a row per match. It did not stop
+it *visiting* one: the stored row order is `(mtime desc, path asc)`, so
+`sort:modified` descending terminates at the first page and every other order
+went to the end of the corpus to find out which forty won.
+
+What was there to use is the zone map. A block already stores the true minimum
+and maximum of every column — `ColumnWriter::seal` writes them, and the numeric
+filters have read them for a while — so the blocks can be put in the order of
+what each could contribute and opened best first. Once the page's worst row
+beats everything the next block could hold, nothing left can enter the page.
+
+### The instrument
+
+A copy, so the running service is neither blocked nor believed. Both binaries
+were built from the same example and run alternately, five to eight rounds
+each, because another agent's `cargo build` was on the machine and a spike that
+hits one side only is a lie. Each cell is the least seen; the example itself
+takes the least of three per call.
+
+```bash
+cp -a ~/.local/share/scour/index /tmp/scour-topk/idx
+rm -f /tmp/scour-topk/idx/index.lock
+cargo run --release -p scour-index-native --example searchcost -- /tmp/scour-topk/idx/native
+```
+
+2,234,587 rows, 4 segments, empty query, a page of 200. Milliseconds.
+
+| order | offset 0 | 2 000 | 19 800 |
+|---|---|---|---|
+| modified ↓ (stored order) | 0.5 → 0.5 | 0.7 → 0.7 | 2.9 → 2.9 |
+| modified ↑ (backwards) | 0.6 → 0.5 | 0.8 → 0.7 | 2.8 → 2.7 |
+| name ↓ | 144.3 → 145.6 | 145.7 → 140.8 | 145.5 → 148.3 |
+| **size ↓** | **118.9 → 2.8** | **117.5 → 4.8** | **118.0 → 16.1** |
+| **size ↑** | **113.5 → 2.1** | **118.8 → 2.9** | **116.6 → 6.8** |
+| **created ↓** | **89.0 → 2.1** | **93.5 → 2.3** | **91.0 → 5.7** |
+| **kind ↓** | **102.5 → 2.0** | **97.9 → 2.7** | **104.6 → 10.0** |
+| path ↓ | 670.9 → 652.0 | 645.7 → 636.7 | 651.8 → 647.8 |
+| relevance ↓ | 0.5 → 0.6 | 0.7 → 0.8 | 2.3 → 2.3 |
+
+`name` and `path` are the control and they are meant to be flat: no stored
+number bounds a name, so those still walk everything. They are somebody else's
+change.
+
+### With the folder-size table built
+
+Sorted by size a directory is ordered by what is *under* it, which its own
+`Size` column knows nothing about — so the block's range has to be widened by
+the rollups of the directory rows it holds before it can be used as a bound.
+That is a looser bound, and a service that has shown anybody a folder size is
+in this state where a fresh process is not. Same command with `warm` as the
+third argument:
+
+| order | offset 0 | 2 000 | 19 800 |
+|---|---|---|---|
+| size ↓ | 130.8 → 3.6 | 133.1 → 6.6 | 130.6 → 16.4 |
+| size ↑ | 132.5 → 3.0 | 135.1 → 4.1 | **130.8 → 30.9** |
+
+The bold cell is the weakest result here and the reason is the widening: an
+empty folder rolls up to nought, so ascending, a great many blocks look as
+though they could reach the smallest value and the order barely separates them.
+Four times faster rather than forty, and still right.
+
+### What it costs where it cannot pay
+
+The ordering is a pass over the candidate blocks — a range read each and a sort
+— and it saves nothing until there is a page for a block to be out of reach
+of. Built eagerly it charged `rapor` sorted by size **9.6–10.9 ms against
+8.6–9.0**, thirty thousand blocks ordered to skip none of them, because a term
+the trigram filter has already narrowed matches fewer rows than the walk needs
+before it can bound anything.
+
+So it is built lazily: the walk starts in block order like every other one and
+reorders what is left the moment the page first fills. That needed the walk to
+go a block at a time rather than in coalesced runs, since a run here is the
+whole index — measured at no cost, 142–148 ms against 148–154 on the same
+`name ↓` full scan.
+
+What remains is a query that matches **more than a page and fewer than the
+count cap**: the page stops early, the count does not, and the ordering is paid
+for nothing. Eight interleaved rounds on `rapor`, page of 200:
+
+| order | before | after |
+|---|---|---|
+| size ↓ | 8.4 | 8.2 |
+| size ↑ | 7.6 | 8.6 |
+| created ↓ | 7.4 | 9.1 |
+| kind ↓ | 7.5 | 8.3 |
+| relevance ↓ (control) | 8.9 | 8.6 |
+
+Up to 1.7 ms on a query already under ten, against a hundred and fifteen saved
+on the ones that match everything. It was left there rather than guarded,
+because every guard that would catch it needs to guess the number of matches
+before walking, and guessing low would throw away the whole result.

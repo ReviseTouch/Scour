@@ -6,9 +6,16 @@
 //! forty matches. On the common query the walk never gets past the first
 //! page's worth of rows.
 //!
-//! When it *cannot* stop early — sorting by size, say — it walks everything.
-//! That is a linear pass over memory-mapped columns at gigabytes a second,
-//! and the arithmetic says single-digit milliseconds at a million entries.
+//! Sorting by another *number* stops early too, for a different reason. Each
+//! block records the minimum and maximum of every column, so the blocks can be
+//! put in the order of what they can reach and opened best first — and once
+//! the page's worst row beats everything the next block could hold, there is
+//! nothing left to look at. See [`zone_order`].
+//!
+//! Sorting by text is what still walks everything: no stored number bounds a
+//! name. That is a linear pass over memory-mapped columns at gigabytes a
+//! second, and the arithmetic says single-digit milliseconds at a million
+//! entries.
 //!
 //! ## Cheap first
 //!
@@ -26,6 +33,8 @@
 //! a query that matches very few rows out of ten million still walks all ten
 //! million when it cannot terminate early. That is the case a trigram layer
 //! would fix, and it can be added without changing any of these files.
+
+use std::cell::Cell;
 
 use memchr::memmem::Finder;
 use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Kind, Match, Meta, SortKey, SourceId};
@@ -930,11 +939,18 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
 
 /// What a search asks for, and what it is allowed to spend.
 ///
-/// `count_cap` bounds the walk **only for the stored order**. Every other
-/// order has to visit every match before it can name the top forty, so there
-/// the cap bounds the reported total and nothing else. That asymmetry is the
-/// honest shape of the trade and is why [`Found::early_exit`] is reported
-/// rather than assumed.
+/// `count_cap` bounds the walk **only once the page has been decided** —
+/// which is immediately for the stored order, and for a numeric order as soon
+/// as [`zone_order`] runs out of blocks that could reach the page. Sorted by a
+/// name or a path it never does: those have to visit every match before they
+/// can name the top forty, so there the cap bounds the reported total and
+/// nothing else.
+///
+/// The two are separate obligations and conflating them is a known way to be
+/// wrong: the page may stop early, the count may not, and a version that let
+/// the cap stop the selection returned "the largest forty among the five
+/// hundred newest". [`Found::early_exit`] is reported rather than assumed for
+/// the same reason.
 #[derive(Debug, Clone, Copy)]
 pub struct Wanted {
     pub sort: SortKey,
@@ -968,6 +984,10 @@ pub struct Found {
     pub total: u64,
     pub capped: bool,
     /// Whether the walk was able to stop early.
+    ///
+    /// Two ways to earn it and no others: the stored order stops as soon as it
+    /// has a page and a believable total, and a numeric order stops as soon as
+    /// the blocks it has not opened cannot reach the page.
     pub early_exit: bool,
     pub rows_visited: u64,
     /// Rows built into a `Hit` — the expensive part, since each reconstructs a
@@ -1009,7 +1029,11 @@ pub fn run_with(
 ) -> Found {
     let has_veto = conceals.is_some();
     let mut fold = Folded::new();
-    let mut counted = 0usize;
+    // A `Cell` rather than a plain counter because the block loop below reads
+    // it while the closure that increments it is alive. Shared, not borrowed:
+    // `get`/`set` on a `usize` compile to the same load and store a captured
+    // `&mut` would.
+    let counted = Cell::new(0usize);
     let mut visited = 0u64;
     // Row numbers, not rows: four bytes each until the page is decided, which
     // is what keeps a query matching a million entries from building a million
@@ -1096,6 +1120,33 @@ pub fn run_with(
     let stored_order = stored_forward || backwards;
     let need = want.offset + want.limit;
     let mut done = false;
+
+    /* **A number the rows are not stored in can still stop early.**
+     *
+     * Not because of the row order — there is nothing to exploit there — but
+     * because every block already records the minimum and maximum of every
+     * column. Put the blocks in the order of what they can reach, open them
+     * best first, and the page is decided long before the corpus has been
+     * looked at. See [`zone_order`] for the ordering and [`out_of_reach`] for
+     * the rule that ends it.
+     *
+     * `need == 0` is a count and nothing else, so there is no page to bound
+     * and the walk is only an obligation to the total. */
+    let bounded = !stored_order && need > 0 && sort_field(want.sort).is_some();
+    /* The worst row the page currently holds, once it holds a page of them.
+     *
+     * In the block order's key space, where smaller is better whichever
+     * direction was asked for — see [`zone_key`]. `None` until enough matches
+     * have been seen to fill the page, because until then nothing is out of
+     * reach of anything. */
+    let worst: Cell<Option<(i64, u32)>> = Cell::new(None);
+    /* Set when no unopened block can reach the page.
+     *
+     * What it licenses is narrow and worth stating: from here the walk cannot
+     * change *which* rows are returned, so the only thing left to walk for is
+     * the count — and the count may stop at `count_cap`. Before it is set, the
+     * cap must not stop anything. */
+    let closed = Cell::new(false);
     /* The date the page ends on, once there is a page.
      *
      * A backwards walk yields dates in order but paths *reversed* within a
@@ -1118,7 +1169,7 @@ pub fn run_with(
         {
             return true;
         }
-        counted += 1;
+        counted.set(counted.get() + 1);
         if backwards {
             let when = seg.num(Field::Mtime, row);
             if kept.len() < need {
@@ -1129,7 +1180,7 @@ pub fn run_with(
             } else if edge == Some(when) {
                 // Still inside the group the page ends on. See `edge`.
                 kept.push(row as u32);
-            } else if counted >= want.count_cap {
+            } else if counted.get() >= want.count_cap {
                 // Past that group, and enough counted for the total to be
                 // honest. Both, for the reason the forward walk gives below.
                 done = true;
@@ -1142,11 +1193,11 @@ pub fn run_with(
             // Both conditions must hold: enough rows for the page, and enough
             // counted for the total to be honest. Stopping on the first alone
             // is what made the engine this replaces report a page and a lie.
-            if kept.len() >= need && counted >= want.count_cap {
+            if kept.len() >= need && counted.get() >= want.count_cap {
                 done = true;
                 return false;
             }
-        } else {
+        } else if !closed.get() {
             // Any other order has to see every match before it knows which
             // forty win, so the count cap must not stop the walk here.
             //
@@ -1159,6 +1210,35 @@ pub fn run_with(
                 sort_value(seg, row, name, want.sort, &score_terms, folders, &mut dir_paths),
                 row as u32,
             ));
+            // **A page's worth, not a corpus's.**
+            //
+            // Only when the blocks were ordered by what they can reach, for
+            // two reasons. The selection is what tells that walk when to stop,
+            // so it has to exist before the last match has been seen. And
+            // throwing rows away is only safe when the key is the whole
+            // answer: an abbreviated name key ties rows that are not equal,
+            // and `narrow` keeps that whole group for a real comparison —
+            // which is exactly what truncating here would destroy.
+            //
+            // Compacting at `need` and again at twice it costs one selection
+            // per `need` matches, which is amortised constant, and leaves the
+            // boundary sitting at `need - 1` where the next block can be
+            // measured against it. The first is worth doing on its own: it is
+            // what gives the walk a bound to stop on at all.
+            if bounded && (keyed.len() == need || keyed.len() == 2 * need) {
+                keyed.select_nth_unstable_by(need - 1, page_order(want.descending));
+                keyed.truncate(need);
+                if let (SortValue::Num(v), at) = &keyed[need - 1] {
+                    worst.set(Some((zone_key(*v, want.descending), *at)));
+                }
+            }
+        } else if counted.get() >= want.count_cap {
+            // The page can no longer change and the total is believed. Both,
+            // and in that order: `closed` is the block loop's statement that
+            // nothing left can reach the page, and the cap is what makes the
+            // number beside it honest.
+            done = true;
+            return false;
         }
         true
     };
@@ -1179,58 +1259,150 @@ pub fn run_with(
     // cost was the whole corpus: 1,117,687 rows built to return forty.
     // `sort_reads_name` and `by_row` are decided above, where the direction
     // needs them.
-    // The runs, coalesced first rather than as it goes: adjacent blocks are
-    // walked as one so a dense set costs no more seeking than a full walk
-    // would, and having them as a list is what lets the backwards walk take
-    // the same runs from the far end.
-    let mut runs: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0usize;
-    while i < blocks.len() {
-        let mut j = i;
-        while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
-            j += 1;
-        }
-        runs.push((
-            blocks[i] as usize * BLOCK,
-            ((blocks[j] as usize + 1) * BLOCK).min(seg.rows()),
-        ));
-        i = j + 1;
-    }
-    if backwards {
-        runs.reverse();
-    }
-
-    'runs: for (from, to) in runs {
+    //
+    // `rev` is only ever asked for by the backwards walk, which is only ever
+    // on when no name has to be read — the folded arena stores no offsets, so
+    // there is no walking it from the far end.
+    let mut walk = |from: usize, to: usize, rev: bool| -> bool {
         if by_row {
-            if backwards {
+            if rev {
                 for row in (from..to).rev() {
                     if !visit(row, b"") {
-                        break 'runs;
+                        return false;
                     }
                 }
             } else {
                 for row in from..to {
                     if !visit(row, b"") {
-                        break 'runs;
+                        return false;
                     }
                 }
             }
-        } else {
-            let mut go = true;
-            // The **folded** arena: a search matches folded text, and folding
-            // it here instead was 24.4 ns of the 40.5 a row used to cost.
+            return true;
+        }
+        let mut go = true;
+        // The **folded** arena: a search matches folded text, and folding
+        // it here instead was 24.4 ns of the 40.5 a row used to cost.
+        seg.folded.walk_range(from, to, |row, name| {
+            go = visit(row, name);
+            go
+        });
+        go
+    };
+
+    // Whether any candidate block was left unopened, which is what
+    // [`Found::early_exit`] reports. `visit` sets `done` when the count cap
+    // ends a walk; this catches the other way out, where the block order ran
+    // out of anything in reach and the total was already believed.
+    let mut skipped = false;
+    match sort_field(want.sort).filter(|_| bounded) {
+        // **Best block first.** The blocks are opened in the order of what
+        // their stored maximum — or minimum, ascending — says they could
+        // contribute, and the walk ends the moment the page's worst row beats
+        // everything the next one could hold.
+        //
+        // Nothing about *which* rows win is different here. Every row that is
+        // opened goes through the same `visit`: the same liveness bit, the
+        // same conditions, the same veto, and the same selection. What changes
+        // is only how many blocks are opened at all.
+        Some(field) => {
+            /* **The ordering is built when it can pay for itself, and not
+             * before.**
+             *
+             * It costs a pass over the candidate blocks — a range read each
+             * and a sort — and it saves nothing until there is a page for a
+             * block to be out of reach *of*. A term the trigram filter has
+             * already narrowed to fewer matches than a page never gets one,
+             * and building the order anyway measured 9.6–10.9 ms against
+             * 8.6–9.0 on `rapor` sorted by size: a pass over thirty thousand
+             * blocks, spent to skip none of them.
+             *
+             * So the walk starts in block order like every other one, and
+             * reorders what is left of the candidates the moment the page
+             * first fills.
+             *
+             * A block at a time rather than in coalesced runs, because the
+             * check belongs between blocks and a run here is the whole index.
+             * It costs nothing measurable: `walk_range` reaches a block
+             * boundary through the offset table, and the same corpus walked
+             * one block at a time against runs of thousands measured 142–148
+             * ms against 148–154. */
+            let mut order: Vec<(i64, u32)> = Vec::new();
+            let mut ordered = false;
+            let mut at = 0usize;
+            let mut stopped = false;
+            loop {
+                if !ordered && worst.get().is_some() {
+                    order = zone_order(seg, field, want.descending, &blocks[at..], folders);
+                    ordered = true;
+                    at = 0;
+                }
+                let block = if ordered {
+                    let Some(&(reach, block)) = order.get(at) else {
+                        break;
+                    };
+                    if out_of_reach(worst.get(), reach, block) {
+                        break;
+                    }
+                    block
+                } else {
+                    let Some(&block) = blocks.get(at) else {
+                        break;
+                    };
+                    block
+                };
+                at += 1;
+                let from = block as usize * BLOCK;
+                let to = ((block as usize + 1) * BLOCK).min(seg.rows());
+                stopped = !walk(from, to, false);
+                if stopped {
+                    break;
+                }
+            }
+            let mut left: Vec<u32> = if ordered {
+                order[at..].iter().map(|&(_, b)| b).collect()
+            } else {
+                blocks[at..].to_vec()
+            };
+            // **The count is a separate obligation, and this is where it is
+            // paid.** The page is settled; the total printed beside it is not,
+            // and no shortcut here may be allowed to guess at it. So what is
+            // left of the blocks is walked for the count alone — back in block
+            // order, because from here the reads are sequential again and
+            // there is no reason to keep jumping.
             //
-            // Forwards only — this is the reader with no offsets, and it is
-            // why `backwards` is off whenever a name has to be read.
-            seg.folded.walk_range(from, to, |row, name| {
-                go = visit(row, name);
-                go
-            });
-            if !go {
-                break 'runs;
+            // `closed` is what tells `visit` that these rows can only be
+            // counted, never selected, which is also what lets `count_cap`
+            // stop the walk at last.
+            if !stopped && counted.get() < want.count_cap {
+                closed.set(true);
+                left.sort_unstable();
+                for (from, to) in runs_of(&left, seg.rows()) {
+                    if !walk(from, to, false) {
+                        break;
+                    }
+                }
+            } else {
+                skipped = !left.is_empty();
+            }
+        }
+        // Every other order walks the candidates as it always did: forwards,
+        // in row order, or from the far end when the stored order is being
+        // read backwards.
+        None => {
+            let mut runs = runs_of(&blocks, seg.rows());
+            if backwards {
+                runs.reverse();
+            }
+            for (from, to) in runs {
+                if !walk(from, to, backwards) {
+                    break;
+                }
             }
         }
     }
+
+    let done = done || skipped;
 
     // The candidates, each with what it sorts by. The stored order needs no
     // selection — the rows arrived in it — but it still has to say what it
@@ -1269,9 +1441,9 @@ pub fn run_with(
                     row,
                 })
                 .collect(),
-            total: counted.min(want.count_cap) as u64,
-            capped: counted >= want.count_cap,
-            early_exit: stored_order && done,
+            total: counted.get().min(want.count_cap) as u64,
+            capped: counted.get() >= want.count_cap,
+            early_exit: done,
             rows_visited: visited,
             ..Found::default()
         };
@@ -1310,9 +1482,9 @@ pub fn run_with(
 
     Found {
         hits,
-        total: counted.min(want.count_cap) as u64,
-        capped: counted >= want.count_cap,
-        early_exit: stored_order && done,
+        total: counted.get().min(want.count_cap) as u64,
+        capped: counted.get() >= want.count_cap,
+        early_exit: done,
         rows_visited: visited,
         rows_built,
         ..Found::default()
@@ -1546,6 +1718,145 @@ fn sort_value(
     }
 }
 
+/// The column a numeric order reads, when there is one.
+///
+/// These are the keys whose value is a number a row already stores, which is
+/// what lets the zone map — the minimum and maximum of a block, written when
+/// the segment was — say what a block could contribute to a page without
+/// decoding any of it. `Name`, `Ext` and `Path` are text, and `Relevance` is a
+/// property of the query rather than of the row, so no stored column bounds
+/// any of them.
+///
+/// `Size` is here even though a *directory* sorts by what is under it rather
+/// than by its own column: [`zone_order`] widens the block's range to cover
+/// the rollups, so the bound stays a bound. See the note there.
+fn sort_field(key: SortKey) -> Option<Field> {
+    Some(match key {
+        SortKey::Size => Field::Size,
+        SortKey::Modified => Field::Mtime,
+        SortKey::Created => Field::Ctime,
+        SortKey::Accessed => Field::Atime,
+        SortKey::Disk => Field::Disk,
+        SortKey::Mode => Field::Mode,
+        SortKey::Uid => Field::Uid,
+        SortKey::Gid => Field::Gid,
+        SortKey::Kind => Field::Kind,
+        SortKey::Name | SortKey::Ext | SortKey::Path | SortKey::Relevance => return None,
+    })
+}
+
+/// A sort value as the block order reads it: **smaller is better**, whichever
+/// direction was asked for.
+///
+/// The complement rather than the negation, because `-i64::MIN` is not an
+/// `i64` and a `ctime` is whatever the filesystem put there. `!v` reverses the
+/// order of every `i64` — `a < b` exactly when `!a > !b` — and cannot
+/// overflow, so descending and ascending become the same comparison and
+/// [`out_of_reach`] needs no direction at all.
+fn zone_key(value: i64, desc: bool) -> i64 {
+    if desc { !value } else { value }
+}
+
+/// The candidate blocks in the order a numeric sort wants them, best first,
+/// each with what it can reach.
+///
+/// This is the whole of the optimisation. A block records the minimum and
+/// maximum of every column, so the best a block can offer a descending sort is
+/// its maximum and an ascending one its minimum — and sorting the blocks on
+/// that puts the page's rows in the first few. Seventy thousand blocks on this
+/// index, and the pass decodes not one row.
+///
+/// Ties on the reach are broken by the block number, ascending, and that is
+/// load-bearing rather than tidy. The page's second key is the row, so two
+/// rows with the same value are separated by which comes first — and stopping
+/// is only sound if every block still unopened holds rows *after* the ones
+/// already held. Sorting `kind` puts a hundred thousand rows at one value;
+/// without this the walk would return the right values from the wrong rows.
+///
+/// **`Size` is not simply the `Size` column.** A directory sorts by what is
+/// under it — see [`sort_value`] — which its own column knows nothing about,
+/// so the column's range is widened by the rollups of the directory rows the
+/// block holds. A looser bound, not a wrong one: it can only pull a block
+/// earlier than it needed to be. `folders` is sorted by row and the blocks
+/// ascend, so one cursor walks it once instead of a binary search per block.
+fn zone_order(
+    seg: &Segment<'_>,
+    field: Field,
+    desc: bool,
+    blocks: &[u32],
+    folders: &[(u32, i64)],
+) -> Vec<(i64, u32)> {
+    let rollups = field == Field::Size && !folders.is_empty();
+    let mut at = 0usize;
+    let mut out: Vec<(i64, u32)> = Vec::with_capacity(blocks.len());
+    for &block in blocks {
+        // A block the header cannot describe is one nothing may be concluded
+        // about, so it reaches everything and is opened first.
+        let (lo, hi) = seg
+            .cols
+            .block_range(field, block as usize)
+            .unwrap_or((i64::MIN, i64::MAX));
+        let mut reach = if desc { hi } else { lo };
+        if rollups {
+            let from = block as usize * BLOCK;
+            let to = from + BLOCK;
+            while at < folders.len() && (folders[at].0 as usize) < from {
+                at += 1;
+            }
+            let mut j = at;
+            while j < folders.len() && (folders[j].0 as usize) < to {
+                reach = if desc {
+                    reach.max(folders[j].1)
+                } else {
+                    reach.min(folders[j].1)
+                };
+                j += 1;
+            }
+        }
+        out.push((zone_key(reach, desc), block));
+    }
+    // The derived order on the pair is already the one wanted — reach first,
+    // block number to break it — which is why the key is complemented rather
+    // than compared through a closure that has to ask the direction per
+    // comparison. Seventy thousand pairs, sorted in about a millisecond.
+    out.sort_unstable();
+    out
+}
+
+/// Can any row of this block still reach the page?
+///
+/// `worst` is the worst row the page currently holds and `reach` the best this
+/// block could hold, both in [`zone_key`] space where smaller is better. So no
+/// row here can displace anything when the page's worst already beats the
+/// block's best — or when they are equal and every row here comes later, which
+/// is the case the row tie-break decides.
+///
+/// Because [`zone_order`] sorts by reach and then by block, one block being
+/// out of reach means every block after it is too.
+fn out_of_reach(worst: Option<(i64, u32)>, reach: i64, block: u32) -> bool {
+    match worst {
+        // Not a page yet, so nothing to be out of reach of.
+        None => false,
+        Some((held, row)) => {
+            held < reach || (held == reach && (row as usize) < block as usize * BLOCK)
+        }
+    }
+}
+
+/// The order a page is chosen in: the sort value, then the row.
+///
+/// The row number is the second key, and it is not a formality: rows are
+/// stored newest-first with the path breaking *that*, so ordering ties by row
+/// is ordering them the way the final sort will. It also makes the comparison
+/// total, which is what removes the tie group.
+///
+/// Removing it matters. Sorting by `kind` puts a hundred thousand rows at the
+/// same value, and keeping that whole group — which breaking ties on the path
+/// required — cost 73 ms where this costs four.
+fn page_order(desc: bool) -> impl Fn(&(SortValue, u32), &(SortValue, u32)) -> std::cmp::Ordering {
+    move |a, b| if desc { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) }.then(a.1.cmp(&b.1))
+}
+
 /// The rows that can still reach the page, given only their sort values.
 ///
 /// The whole tie group at the boundary comes too, and that is not a nicety: the
@@ -1565,17 +1876,7 @@ fn narrow(
     if keyed.len() <= need {
         return keyed;
     }
-    // The row number is the second key, and it is not a formality: rows are
-    // stored newest-first with the path breaking *that*, so ordering ties by
-    // row is ordering them the way the final sort will. It also makes the
-    // comparison total, which is what removes the tie group.
-    //
-    // Removing it matters. Sorting by `kind` puts a hundred thousand rows at
-    // the same value, and keeping that whole group — which breaking ties on
-    // the path required — cost 73 ms where this costs four.
-    let cmp = |a: &(SortValue, u32), b: &(SortValue, u32)| {
-        if desc { b.0.cmp(&a.0) } else { a.0.cmp(&b.0) }.then(a.1.cmp(&b.1))
-    };
+    let cmp = page_order(desc);
     // Selection, not a sort: finding which forty win out of two hundred
     // thousand does not require ordering the rest, and `sort_hits` orders the
     // survivors anyway.
@@ -1620,6 +1921,28 @@ pub(crate) fn blocks_worth_opening(seg: &Segment<'_>, plan: &Plan) -> Vec<u32> {
             .filter(|&b| seg.block_alive(b as usize) && plan.block_possible(seg, b as usize))
             .collect(),
     }
+}
+
+/// Adjacent blocks as row ranges.
+///
+/// Coalesced first rather than as the walk goes, so a dense set costs no more
+/// seeking than a full walk would, and having them as a list is what lets the
+/// backwards walk take the same runs from the far end.
+fn runs_of(blocks: &[u32], rows: usize) -> Vec<(usize, usize)> {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0usize;
+    while i < blocks.len() {
+        let mut j = i;
+        while j + 1 < blocks.len() && blocks[j + 1] == blocks[j] + 1 {
+            j += 1;
+        }
+        runs.push((
+            blocks[i] as usize * BLOCK,
+            ((blocks[j] as usize + 1) * BLOCK).min(rows),
+        ));
+        i = j + 1;
+    }
+    runs
 }
 
 /// Every matching row of one segment, narrowed the same way a search is.

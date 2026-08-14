@@ -279,6 +279,208 @@ fn oldest_first_is_the_answer_brute_force_gives() {
     );
 }
 
+/// A numeric order stops opening blocks, and stops at the right place.
+///
+/// **The failure this guards is a plausible page.** Ordering by a number no
+/// longer visits every match: a block carries the range of every column, so
+/// the blocks are opened in the order of what each can reach and abandoned
+/// once the page is beyond all of them. Three things decide whether that is
+/// still the same list, and each has its own half of this test.
+///
+/// * **The tie group at the edge.** Sizes and dates tie in the thousands on a
+///   real disk, and the page breaks a tie on the row — so a block that can
+///   only *equal* the worst row held may still displace it, when its rows come
+///   first. Here every value is shared by a thousand files whose names sort
+///   the opposite way from the order they were written in, so nothing can pass
+///   by luck.
+/// * **The count**, which is a separate obligation. Deciding the page says
+///   nothing about the total printed beside it, and a cap allowed to stop the
+///   selection returns "the largest forty among the first hundred" — the
+///   mistake this engine has already made once.
+/// * **The offset**, because the list pages to twenty thousand.
+#[test]
+fn a_numeric_order_stops_where_the_page_really_ends() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut all: Vec<Entry> = Vec::new();
+    for i in 0..4_000u64 {
+        let n = i as i64;
+        all.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 1_000 + i),
+            path: format!("/t/{:05}.bin", 3_999 - i),
+            is_dir: false,
+            meta: Meta {
+                // Four sizes, seven creation dates, three block counts, and
+                // one kind for all of them — every one a tie group wider than
+                // a page.
+                size: (n % 4) * 4_096,
+                ctime: NOW - (n % 7) * 1_000,
+                disk: (n % 3) * 4_096,
+                mtime: NOW - (n % 11) * 1_000,
+                ..Meta::UNKNOWN
+            },
+        });
+    }
+    for part in all.chunks(400) {
+        let mut it = part.iter().cloned().map(Change::Upsert);
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+    let f = Fixture {
+        _tmp: tmp,
+        index,
+        entries: all,
+    };
+    assert!(f.index.stats().expect("stats").segments >= 8);
+
+    for sort in [
+        SortKey::Size,
+        SortKey::Created,
+        SortKey::Disk,
+        SortKey::Kind,
+        SortKey::Modified,
+    ] {
+        for desc in [true, false] {
+            for &(offset, limit) in &[(0, 40), (39, 3), (200, 40), (1_999, 40), (3_960, 40)] {
+                assert_eq!(
+                    f.paged("", sort, desc, offset, limit),
+                    f.expected("", sort, desc, offset + limit)[offset..].to_vec(),
+                    "{sort:?} (desc={desc}) at {offset}+{limit} disagrees with brute force"
+                );
+            }
+        }
+    }
+
+    // The cap bounds the total and never the page. `ext:bin` rather than the
+    // empty query on purpose: an empty one takes the total from the segment's
+    // own live count and never hands the cap to the walk at all, which is
+    // exactly where this would look fine while being wrong.
+    let want = f.expected("ext:bin", SortKey::Size, true, 40);
+    for cap in [1u32, 40, 100, 10_000_000] {
+        let res = f
+            .index
+            .search(&SearchRequest {
+                query: parse_at("ext:bin", NOW),
+                sort: SortKey::Size,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 40,
+                    count_cap: cap,
+                },
+            })
+            .expect("search");
+        assert_eq!(
+            res.hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
+            want,
+            "a count cap of {cap} changed which forty won"
+        );
+        assert_eq!(res.total, u64::from(cap).min(4_000), "cap {cap}");
+        assert_eq!(res.capped, cap <= 4_000, "cap {cap}");
+    }
+}
+
+/// A folder still sorts by what is under it once blocks are being skipped.
+///
+/// **The trap the block order sets for `sort:size`.** A directory sorts by its
+/// rollup and not by its `Size` column, so the column's range is not a bound
+/// on what the block can reach — and a block ordered by a range that does not
+/// cover its own rows is a block that gets skipped. Here the largest folder in
+/// the index sits in a block of nothing but tiny files, so a bound taken from
+/// the column alone would put that block last and drop the folder off a page
+/// it should be leading.
+#[test]
+fn the_largest_folder_survives_a_walk_that_skips_blocks() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut all: Vec<Entry> = vec![Entry {
+        id: EntryId::inode(SourceId(0), 66_310, 1),
+        path: "/big".into(),
+        is_dir: true,
+        meta: Meta {
+            mtime: NOW,
+            size: 4_096,
+            disk: 4_096,
+            ..Meta::UNKNOWN
+        },
+    }];
+    // Newest, so they share the first block with the folder's own row and
+    // leave its stored range saying nothing but "four kilobytes".
+    for i in 0..40u64 {
+        all.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 100 + i),
+            path: format!("/small/{i:04}.txt"),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW,
+                size: 10,
+                disk: 4_096,
+                ..Meta::UNKNOWN
+            },
+        });
+    }
+    // And a few thousand rows of real size underneath it, older, so they fill
+    // every block after the first.
+    for i in 0..5_000u64 {
+        all.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, 10_000 + i),
+            path: format!("/big/{i:05}.bin"),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW - 1_000,
+                size: 1_000_000 + i as i64,
+                disk: 1_000_000 + i as i64,
+                ..Meta::UNKNOWN
+            },
+        });
+    }
+    index
+        .apply(&mut all.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+    index.subtree_sizes(&[]).expect("warm the folder sizes");
+
+    let page: Vec<String> = index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Size,
+            descending: true,
+            page: Page::new(0, 40),
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    assert_eq!(
+        page.first().map(String::as_str),
+        Some("/big"),
+        "the folder holds five gigabytes and has to lead the page: {:?}",
+        &page[..5.min(page.len())]
+    );
+
+    // Ascending is the mirror and gets the mirror's bound: the folder is now
+    // the *last* thing that could reach the page, and the tiny files lead it.
+    let up: Vec<String> = index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Size,
+            descending: false,
+            page: Page::new(0, 40),
+        })
+        .expect("search")
+        .hits
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+    assert!(
+        !up.contains(&"/big".to_string()),
+        "five gigabytes is not among the forty smallest: {:?}",
+        &up[..5.min(up.len())]
+    );
+    assert!(up.iter().all(|p| p.starts_with("/small/")));
+}
+
 #[test]
 fn paging_across_segments_reconstructs_the_list() {
     // The offset belongs to the merged list, not to any one segment. Applying
@@ -1707,7 +1909,15 @@ fn the_stored_order_still_stops_early_with_several_segments() {
         "stopping early must not change which forty"
     );
 
-    // And an order it cannot serve says so rather than pretending.
+    // And so does an order the row layout says nothing about, for the other
+    // reason: the blocks are opened in the order of the largest size each one
+    // holds, so once forty rows beat everything the next block could contain
+    // there is nothing left to open.
+    //
+    // **This assertion used to be the opposite**, and read "an order it cannot
+    // serve says so rather than pretending". It was true then. What has to
+    // stay true either way is the line below it: a cap may bound the total,
+    // never the result.
     let res = f
         .index
         .search(&SearchRequest {
@@ -1721,7 +1931,7 @@ fn the_stored_order_still_stops_early_with_several_segments() {
             },
         })
         .expect("search");
-    assert!(!res.fast_path);
+    assert!(res.fast_path, "the zone map should have ended this walk");
     assert_eq!(
         res.hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>(),
         f.expected("", SortKey::Size, true, 40),
