@@ -148,6 +148,9 @@ impl<'a> NameArena<'a> {
     }
 
     /// One name, by row. Costs a jump plus at most `BLOCK` NUL scans.
+    ///
+    /// For **one** row. A caller inside the crate asking in row order wants
+    /// `Reader`, which is this with the block scan removed.
     pub fn get(&self, row: usize) -> Option<&'a str> {
         if row >= self.rows {
             return None;
@@ -206,6 +209,90 @@ impl<'a> NameArena<'a> {
             }
             at += n + 1;
         }
+    }
+}
+
+/// A place in an arena, kept between reads.
+///
+/// Crate-internal: the only caller is the path sort in `search.rs`.
+///
+/// [`NameArena::get`] starts at the nearest block offset every time, so it
+/// costs up to `BLOCK` NUL scans — sixteen on average. That is the right shape
+/// for the two hundred rows a page shows, and the wrong one for a caller that
+/// wants *every* matching row's spelled name in row order. **Ordering by path
+/// is that caller**, and on this machine — 2,234,580 rows — the repeated block
+/// scan measured **320 ms of the 665 the whole sort cost**, more than the
+/// walk, the keys and the selection put together. (Priced by building the key
+/// out of the folded name the walk already carries — the wrong answer and the
+/// right measurement: the sort fell to 268 ms.)
+///
+/// So this remembers where the last row began. A row ahead of it is reached by
+/// scanning on from there, which for a forward walk is one NUL scan. Anything
+/// else — a jump backwards, or a new run of blocks — falls back to the block
+/// offset, exactly as `get` does. Path descending, offset 0: **665 ms becomes
+/// 424**, and the same at every offset a list can scroll to. It does not
+/// recover the whole 320 because the one scan and the UTF-8 check it still does
+/// are not free.
+///
+/// It is never more work than `get`: the two distances are compared and the
+/// shorter one taken. That guard is for cost, not for correctness — removing it
+/// leaves every answer intact and only makes a backwards jump dear, which is
+/// why the test that covers this type is about agreement with `get` rather than
+/// about which branch was taken.
+///
+/// Holds no arena, only a position, so that whatever owns one across a query
+/// needs no lifetime of its own. Handing it a *different* arena costs
+/// correctness nothing — the position is then simply wrong and repaired by the
+/// same block offset `get` would have used — but it is not something any caller
+/// should want, and none does.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Reader {
+    /// Where `row` begins. Meaningless until `placed`.
+    at: usize,
+    row: usize,
+    placed: bool,
+}
+
+impl Reader {
+    /// The name of `row`, spelled as the filesystem spells it.
+    ///
+    /// Empty for a row the arena does not hold, or one whose bytes are not
+    /// UTF-8 — which is the answer `NameArena::get(row).unwrap_or_default()`
+    /// gives, and it has to be, because that is what the path a row *shows* is
+    /// built from. A key that disagreed with the shown path would order rows by
+    /// something nobody can see.
+    pub(crate) fn at<'a>(&mut self, arena: &NameArena<'a>, row: usize) -> &'a str {
+        if row >= arena.rows {
+            return "";
+        }
+        // Whichever start is nearer: on from the last row, or the block offset.
+        let from_block = row % BLOCK;
+        let (mut at, steps) = match row.checked_sub(self.row) {
+            Some(ahead) if self.placed && ahead <= from_block => (self.at, ahead),
+            _ => match arena.block_start(row / BLOCK) {
+                Some(a) => (a, from_block),
+                None => return "",
+            },
+        };
+        for _ in 0..steps {
+            let Some(rest) = arena.bytes.get(at..) else {
+                return "";
+            };
+            let Some(n) = memchr::memchr(0, rest) else {
+                return "";
+            };
+            at += n + 1;
+        }
+        let Some(rest) = arena.bytes.get(at..) else {
+            return "";
+        };
+        let Some(n) = memchr::memchr(0, rest) else {
+            return "";
+        };
+        self.at = at;
+        self.row = row;
+        self.placed = true;
+        std::str::from_utf8(&rest[..n]).unwrap_or_default()
     }
 }
 
@@ -479,6 +566,42 @@ mod tests {
             false
         });
         assert_eq!(first, Some((257, "n257".to_owned())));
+    }
+
+    #[test]
+    fn a_reader_answers_whatever_get_would_have_answered() {
+        // The reader exists to skip the block scan, which means it carries a
+        // position between calls — and a position is a thing that can be
+        // wrong. Its only defence is that it must agree with `get` on every
+        // order the rows can be asked for, so that is what is checked: the
+        // forward walk it is built for, but also backwards, block boundaries
+        // both ways, repeats, and the far ends.
+        let names: Vec<String> = (0..400).map(|i| format!("n{i}_dosya.rs")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let bytes = build(&refs);
+        let arena = NameArena::open(&bytes).expect("open");
+
+        let want = |row: usize| arena.get(row).unwrap_or_default();
+        let orders: Vec<Vec<usize>> = vec![
+            // What a path sort does, and the only order that is fast.
+            (0..400).collect(),
+            (0..400).rev().collect(),
+            // Runs of blocks with gaps, which is what a narrowed walk hands it.
+            (0..400).step_by(32).collect(),
+            (0..400).step_by(33).collect(),
+            // Astride every block boundary, forwards and back.
+            (30..40).chain(62..72).chain((30..40).rev()).collect(),
+            // The same row twice, and the ends.
+            vec![7, 7, 7, 399, 0, 399, 0, 32, 31, 32],
+            // Rows the arena does not hold sit between rows it does.
+            vec![5, 400, 6, 4_000, 7],
+        ];
+        for order in orders {
+            let mut r = Reader::default();
+            for row in order {
+                assert_eq!(r.at(&arena, row), want(row), "row {row}");
+            }
+        }
     }
 
     #[test]

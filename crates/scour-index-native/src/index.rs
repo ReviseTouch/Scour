@@ -2217,6 +2217,16 @@ impl Index for NativeIndex {
         let mut dirs: HashMap<(u32, u32), String> = HashMap::new();
         let mut cmp = |a: &Candidate, b: &Candidate| {
             let mut o = a.key.cmp(&b.key);
+            // **This resolves the *name* key and nothing else.** `exact` says
+            // the key is an abbreviation; it does not say what of, and the
+            // answer is hardcoded here because `Name` has been the only one.
+            //
+            // Adding a second inexact key without changing this line is a full
+            // day's work to find. `Path` was added to `key_is_exact`'s
+            // exceptions once and the tie group — every row sharing sixteen
+            // bytes of path, which is most of a directory — came back ordered
+            // by file name. It looks entirely reasonable in a page of results.
+            // See the note at `search::key_is_exact`.
             if o.is_eq() && !exact {
                 let folded = |c: &Candidate| {
                     views
