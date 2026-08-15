@@ -95,9 +95,16 @@ The path order is the one part of a segment that may be **absent**, and the
 version was deliberately not bumped. An index written before this exists is
 read exactly as it was — a search sorted by path builds its keys the way it
 always did — and gains the file the next time each segment is folded. The
-alternative was `Error::IndexOutdated`, a discard, and a rescan of 2.2 M files
-across two volumes; folding the existing index reads no filesystem at all and
-is the 8.7 s above.
+alternative was `Error::IndexOutdated`, a discard, and a rescan.
+
+What that would have cost is not measured here, and deliberately: pricing it
+means walking the owner's disks, one of which is NTFS. The reference point is
+the 2026-08-03 run below — **a first scan of 1,197,514 entries on `/home/hasan`,
+NVMe, at 6.7 s wall**. This index is 2,235,402 entries across two volumes, the
+second of them ntfs3, where a walk costs more per entry than either half of that
+comparison. Folding the existing index instead reads no filesystem at all and is
+the 8.7 s above — and, unlike a rescan, it is not a period with an empty search
+box in front of it.
 
 A file that is *present and does not describe the segment* is refused as
 damage, on the same argument the live bitmap is: both are written whole, so a
