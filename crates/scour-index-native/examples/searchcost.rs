@@ -35,19 +35,22 @@ use scour_index_native::NativeIndex;
 /// The numeric keys are here in both directions, and `kind` is here because it
 /// is the awkward one: a hundred thousand rows share a value, so it is where a
 /// selection that leans on the key being distinct falls apart. `name` and
-/// `path` are the two the zone map cannot bound at all, and they are the
-/// control — a change that only claims to speed up numbers has to leave them
-/// where they were.
-const ORDERS: [(SortKey, bool, &str); 9] = [
+/// `path` are the two the zone map cannot bound at all; their persisted row
+/// lists are exercised here in both relevant directions.
+const ORDERS: [(SortKey, bool, &str); 13] = [
     (SortKey::Modified, true, "modified ↓ (stored order)"),
     (SortKey::Modified, false, "modified ↑ (backwards)"),
     (SortKey::Name, true, "name ↓"),
+    (SortKey::Name, false, "name ↑"),
+    (SortKey::Ext, true, "extension ↓"),
+    (SortKey::Ext, false, "extension ↑"),
     (SortKey::Size, true, "size ↓"),
     (SortKey::Size, false, "size ↑"),
     (SortKey::Created, true, "created ↓"),
     (SortKey::Kind, true, "kind ↓"),
     (SortKey::Path, true, "path ↓"),
     (SortKey::Relevance, true, "relevance ↓"),
+    (SortKey::Relevance, false, "relevance ↑"),
 ];
 
 /// The offsets a window actually reaches: the first screen, a page down, and

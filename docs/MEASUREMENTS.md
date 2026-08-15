@@ -4591,3 +4591,130 @@ SCOUR_APP_PORT=7688 SCOUR_APP_DEBUG=9344 XDG_DATA_HOME=/var/tmp/scour-emptyfix-h
   scripts/scour-app &
 cargo test --release -p scour-web the_length_of_the_list_and_the_empty_message
 ```
+
+## 2026-08-15 — status was a directory walk
+
+`NativeIndex::stats()` had stopped walking every indexed row, but still called
+`read_dir`, `metadata` and `len` for every file in the index directory on every
+request. `status()` calls it too, as does every completed `await`, so this was a
+filesystem metadata walk in a path intended to report already-known numbers.
+
+On the running service — 2,236,507 entries and 19–22 segments during the run —
+2,000 valid `stats` messages over one persistent socket took **1.041 s wall**
+and advanced the service by **1.030 s CPU**, about **520 µs per request**. The
+CPU figure includes any other service work during that second; the matching
+wall time is the stronger result here.
+
+```sh
+pid=$(pgrep -n -x scourd); hz=$(getconf CLK_TCK)
+read -r _ _ _ _ _ _ _ _ _ _ _ _ _ u0 s0 _ < /proc/$pid/stat
+a=$(date +%s%N)
+seq 1 2000 | awk '{printf "{\"id\":%d,\"op\":\"stats\"}\n",$1}' \
+  | nc -U /run/user/$(id -u)/scour/scour.sock | head -n 2000 >/dev/null
+b=$(date +%s%N)
+read -r _ _ _ _ _ _ _ _ _ _ _ _ _ u1 s1 _ < /proc/$pid/stat
+printf 'wall_ns=%s service_cpu_ms=%s\n' "$((b-a))" \
+  "$((((u1+s1-u0-s0)*1000)/hz))"
+```
+
+The replacement caches the summed file-length total between controlled
+mutations. It does not redefine the number as “published segment bytes”:
+background writes are marked active, a concurrent read still walks and counts
+their files, and a failed write leaves the cache dirty so its partial orphan is
+included by the next quiet read. Replacements and erases invalidate it too.
+`maintain` deliberately keeps direct before/after directory walks.
+
+The internal cost harness uses 220 files, close to the 19–22 segment live
+layout. With warm metadata, 2,000 old walks took **267.774 ms** and 2,000 quiet
+cached reads took **1.047 ms**: **133.9 µs to 0.52 µs per read, 256× less**.
+This isolates the operation removed from `stats`; it is not presented as a
+post-deployment end-to-end number. The live socket measurement must be repeated
+after the new service is installed.
+
+```sh
+cargo test -p scour-index-native --lib cached_directory_byte_cost \
+  -- --ignored --nocapture
+```
+
+## 2026-08-15 — the copied-index average hid the live Name tail
+
+The 49 ms Name number near the start of this document belongs to an isolated
+copy. It did not describe the running service. With 2.237 million live rows,
+ordinary empty-query Name pages took **53.561–72.410 ms**, while six of fifty
+calls took **1.449–1.576 s** of server time. Five of those slow calls bracketed
+a `pending_removals` transition from 2 or 4 to zero; the sixth transition began
+and ended between the two status samples. An earlier 60-call probe saw as much
+as **2.434 s outside the socket**, which includes queue and IPC time.
+
+The pending-removal overlay used to spell a full path for every accepted row.
+The replacement compiles the removal paths once per segment into directory-row
+ranges and exact parent/name exclusions. These are deliberately pre-change live
+numbers; the post-change tail still has to be measured after the new daemon is
+installed. A copied-index result must not be substituted for that measurement.
+
+```sh
+for i in $(seq 1 50); do
+  s0=$(target/release/scour --json stats)
+  j=$(target/release/scour --json search --sort name --limit 200 --count-cap 1000)
+  s1=$(target/release/scour --json stats)
+  printf '%02d pending=%s-%s took=%sus\n' "$i" \
+    "$(printf '%s' "$s0" | jq -r .pending_removals)" \
+    "$(printf '%s' "$s1" | jq -r .pending_removals)" \
+    "$(printf '%s' "$j" | jq -r .took_us)"
+done
+```
+
+## 2026-08-15 — Name and extension have persisted orders
+
+`seg-*.norder` and `seg-*.eorder` use the same position-stream shape as the
+stored path order. On the isolated 2,236,577-row reflink copy each file is
+**9,225,885 bytes (8.80 MiB)**: four bytes and one tie bit per row, plus the
+count. Missing files select the legacy scan; a present malformed file is index
+corruption rather than a silent fallback.
+
+The extension control on that copy changed at offset zero from **60.1 to 0.6
+ms** descending and **56.5 to 0.5 ms** ascending. At offset 19,800 it changed
+from about **61 ms to 3.8–4.0 ms**. Name must be remeasured with the final
+prefix-compatible arena build before an after-number is recorded.
+
+```sh
+cp -a --reflink=always \
+  ~/.local/share/scour/index-backup-before-perf-20260815/native \
+  ~/.local/share/scour/index-bench-orders-20260815
+target/release/examples/compact_cost \
+  ~/.local/share/scour/index-bench-orders-20260815 rebuild
+target/release/examples/searchcost \
+  ~/.local/share/scour/index-bench-orders-20260815
+```
+
+## 2026-08-15 — fanotify's directory map uses a packed path arena
+
+The allocator probe models the **255,769** directories watched by the live
+service, with 74.0 bytes per path. Retained heap changed from **46,049,776 to
+33,031,200 bytes** (−13,018,576, **−28.3%**) and retained path allocations from
+255,769 to **19**. Two build pairs were 101.64 → 69.77 ms and 110.58 → 82.40
+ms. Lookup did regress: 2,046,152 operations changed from 156.5/156.7 ms to
+214.6/196.3 ms, about 19–28 ns extra per lookup. This is a synthetic allocator
+probe, not a claim about process RSS.
+
+The same probe measured a leaf rename at **6.056 ms**, a whole-tree rebase at
+**16.438 ms**, and relearning an existing directory at 213 ns. Those rename
+times are milliseconds, not seconds.
+
+```sh
+cargo test -p scour-source-fs directory_map_memory_probe --release -- \
+  --ignored --nocapture --test-threads=1
+```
+
+## 2026-08-15 — the Slint list is bounded at every depth
+
+This is a deterministic bound, not a frame-time benchmark. The first request
+asks only for visible rows, grows to at most **256**, then slides by **128**
+while anchoring the visible and selected global rows. Both the Rust hit buffer
+and the Slint model therefore retain at most 256 rows regardless of depth. The
+test covers the 0 → 128 → 0 transition, including returning from a partial last
+window; an empty speculative forward page keeps the previous page visible.
+
+```sh
+cargo test -p scour-gui list_growth_is_demand_driven_and_bounded
+```

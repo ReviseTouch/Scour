@@ -349,6 +349,11 @@ impl ApplyReport {
 pub struct IndexStats {
     pub entries: u64,
     pub dirs: u64,
+    /// Sum of file lengths in the index directory, including an in-flight or
+    /// orphaned file that no published segment names yet.
+    ///
+    /// This is the index's logical byte footprint, not allocated filesystem
+    /// blocks: sparse files and transparent compression can make `du` differ.
     pub bytes_on_disk: u64,
     pub segments: u32,
     /// Entries indexed since the last rebuild.

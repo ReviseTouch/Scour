@@ -1,10 +1,10 @@
 //! The rows of a segment, in path order.
 //!
 //! Rows are stored newest-first, which is what makes "the newest two hundred"
-//! a read of two hundred rows. Every other order has to earn its page some
-//! other way, and each of them does: a number is bounded by the zone map, a
-//! name is walked out of the folded arena at gigabytes a second. **Ordering by
-//! path had neither.**
+//! a read of two hundred rows. Numeric orders earn their page through zone
+//! maps. Before the text orders were persisted, a name could at least be
+//! walked out of the folded arena at gigabytes a second. **A path had neither
+//! that locality nor a numeric bound.**
 //!
 //! It could not use the zone map, because no stored number bounds a path. It
 //! could not use the arena either, because a path is a *directory joined to a

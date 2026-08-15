@@ -12,10 +12,11 @@
 //! the page's worst row beats everything the next block could hold, there is
 //! nothing left to look at. See [`zone_order`].
 //!
-//! Sorting by text is what still walks everything: no stored number bounds a
-//! name. That is a linear pass over memory-mapped columns at gigabytes a
-//! second, and the arithmetic says single-digit milliseconds at a million
-//! entries.
+//! Name, extension and path have no useful numeric bound, so their row orders
+//! are stored beside each segment. A broad query can then read positions until
+//! its page is full. A text query still walks the folded arena sequentially
+//! after the trigram filter narrows it; jumping through random names would
+//! surrender the locality the arena was designed for.
 //!
 //! ## Cheap first
 //!
@@ -41,6 +42,8 @@ use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Kind, Match, Meta, SortKey, Sour
 
 use crate::columns::{BLOCK, ColumnBlocks, Field};
 use crate::dirs::{DirScope, DirTable};
+use crate::extension_order::ExtensionOrder;
+use crate::name_order::NameOrder;
 use crate::names::{Folded, NameArena};
 use crate::order::PathOrder;
 use crate::trigram::TrigramIndex;
@@ -57,16 +60,51 @@ pub struct Segment<'a> {
     pub cols: ColumnBlocks<'a>,
     pub dirs: DirTable<'a>,
     pub tri: TrigramIndex<'a>,
-    /// The rows in ascending path order. **The only stored order other than
-    /// the row numbering itself**, and what lets a page ordered by path be a
-    /// read of two hundred rows instead of a key built for every match.
+    /// The rows in ascending path order, which lets a page ordered by path be
+    /// a read of two hundred rows instead of a key built for every match.
     ///
     /// `None` for a segment written before it existed, and that costs
     /// correctness nothing: the walk falls back to building a key a match, as
     /// every index did until now. See [`crate::order`].
     pub porder: Option<PathOrder<'a>>,
+    /// The rows in ascending folded-name order. Missing on legacy segments;
+    /// those use the keyed full walk and produce the same answer.
+    pub norder: Option<NameOrder<'a>>,
+    /// The rows in ascending folded-extension order. Missing on legacy
+    /// segments, which fall back to the keyed full walk.
+    pub eorder: Option<ExtensionOrder<'a>>,
     /// One bit a row, set when the row is still live.
     pub alive: &'a [u8],
+}
+
+/// Either persisted text order; both have the same grouped-row operations.
+#[derive(Clone, Copy)]
+enum GroupedPositions<'a> {
+    Name(NameOrder<'a>),
+    Extension(ExtensionOrder<'a>),
+}
+
+impl GroupedPositions<'_> {
+    fn rows(self) -> usize {
+        match self {
+            GroupedPositions::Name(order) => order.rows(),
+            GroupedPositions::Extension(order) => order.rows(),
+        }
+    }
+
+    fn at(self, i: usize) -> Option<u32> {
+        match self {
+            GroupedPositions::Name(order) => order.at(i),
+            GroupedPositions::Extension(order) => order.at(i),
+        }
+    }
+
+    fn group_at_or_before(self, i: usize) -> Option<usize> {
+        match self {
+            GroupedPositions::Name(order) => order.group_at_or_before(i),
+            GroupedPositions::Extension(order) => order.group_at_or_before(i),
+        }
+    }
 }
 
 impl<'a> Segment<'a> {
@@ -491,12 +529,26 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     memchr::memmem::find(haystack, needle)
 }
 
-/// The extension of a name, as bytes, by the same rule as `scour_core`.
-fn ext_bytes(name: &[u8]) -> &[u8] {
-    match name.iter().rposition(|&b| b == b'.') {
-        Some(i) if i > 0 && i + 1 < name.len() && name.len() - i - 1 <= 12 => &name[i + 1..],
-        _ => b"",
-    }
+/// The complete folded extension, with eligibility read from the spelling.
+fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a [u8] {
+    let spelled = seg.names.get(row).unwrap_or_default();
+    crate::extension_order::folded_extension(spelled.as_bytes(), folded)
+}
+
+/// Compare complete folded extensions without allocating either one.
+pub(crate) fn compare_extensions(
+    a: &Segment<'_>,
+    a_row: usize,
+    b: &Segment<'_>,
+    b_row: usize,
+) -> std::cmp::Ordering {
+    let a_folded = a.folded.get(a_row).unwrap_or_default();
+    let b_folded = b.folded.get(b_row).unwrap_or_default();
+    folded_extension(a, a_row, a_folded.as_bytes()).cmp(folded_extension(
+        b,
+        b_row,
+        b_folded.as_bytes(),
+    ))
 }
 
 /// Can `cmp value` hold for any number in `[lo, hi]`?
@@ -924,7 +976,7 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             // A directory has no extension, so `ext:` never matches one. The
             // column read is the cheap half of this test and only happens for
             // a name that already looked like a match.
-            let ext = ext_bytes(name);
+            let ext = folded_extension(seg, row, name);
             !ext.is_empty()
                 && list.iter().any(|e| e.as_bytes() == ext)
                 && (*dirs || seg.num(Field::IsDir, row) == 0)
@@ -951,9 +1003,9 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
 /// `count_cap` bounds the walk **only once the page has been decided** —
 /// which is immediately for the stored order, and for a numeric order as soon
 /// as [`zone_order`] runs out of blocks that could reach the page. Sorted by a
-/// name or a path it never does: those have to visit every match before they
-/// can name the top forty, so there the cap bounds the reported total and
-/// nothing else.
+/// a text order without its persisted row list it never does: that fallback
+/// has to visit every match before it can name the top forty, so there the cap
+/// bounds the reported total and nothing else.
 ///
 /// The two are separate obligations and conflating them is a known way to be
 /// wrong: the page may stop early, the count may not, and a version that let
@@ -1128,7 +1180,10 @@ pub fn run_with(
     // shows the instant it opens, and it cost 121 ms of full scan before this
     // line existed, on the one frame a person is actually watching for.
     let stored_forward = (want.sort == SortKey::Modified && want.descending)
-        || (want.sort == SortKey::Relevance && want.descending && score_terms.is_empty());
+        // With nothing to score, both relevance directions are one equal-key
+        // group. Direction reverses only the primary key; the public tie order
+        // stays newest-first/path-first, which is exactly the stored row order.
+        || (want.sort == SortKey::Relevance && score_terms.is_empty());
 
     // How many rows the page can possibly reach. Zero is a count and nothing
     // else, which several decisions below turn on.
@@ -1150,7 +1205,7 @@ pub fn run_with(
      * as the row numbering answers "the newest two hundred". No key is built
      * for a row that is not on the page, which is the whole of the 303 ms.
      *
-     * Three conditions, and each of them is protecting something:
+     * Two conditions, and each of them is protecting something:
      *
      * **The walk must not need names.** The folded arena stores no offsets and
      * is read sequentially; `porder` visits rows in an order that has nothing
@@ -1168,24 +1223,44 @@ pub fn run_with(
      * Every text query narrows through `needs_name` above; what is left here
      * is `size:`, `kind:`, `dm:`, `under:` and the empty query.
      *
-     * **No veto.** A concealed row is rare and transient, and the fallback is
-     * correct; keeping the two apart is worth more than the case is. */
+     * A veto is allowed. Position order is still the right order after rows
+     * are removed from it; the folded name is fetched only for the positions
+     * visited so a general veto receives the same input as the ordinary walk. */
     let n_blocks = seg.rows().div_ceil(BLOCK);
     let path_stream = want.sort == SortKey::Path
         && need > 0
         && !plan.needs_name()
-        && !has_veto
         && seg.porder.is_some_and(|o| o.rows() == seg.rows())
         && blocks.len().saturating_mul(2) >= n_blocks;
+    // The name equivalent of `path_stream`. Its order is folded at build time,
+    // exactly as both the keyed walk and the cross-segment merge compare it.
+    // A query that itself reads names stays on the sequential arena walk; the
+    // trigram filter normally narrows that query, while jumping through the
+    // name arena in sorted-row order would discard its locality.
+    let name_stream = want.sort == SortKey::Name
+        && need > 0
+        && !plan.needs_name()
+        && seg.norder.is_some_and(|o| o.rows() == seg.rows())
+        && blocks.len().saturating_mul(2) >= n_blocks;
+    // Extensions have the same grouped tie semantics as names, but far fewer
+    // primary values. Persisting the positions is what avoids a corpus walk;
+    // the boundary map keeps descending order from reversing the large ties.
+    let extension_stream = want.sort == SortKey::Ext
+        && need > 0
+        && !plan.needs_name()
+        && seg.eorder.is_some_and(|o| o.rows() == seg.rows())
+        && blocks.len().saturating_mul(2) >= n_blocks;
+    let text_stream = name_stream || extension_stream;
+    let position_stream = path_stream || text_stream;
 
     // Whether the walk has to read names at all — decided here rather than
     // below because the direction depends on it. The rest of the reasoning is
     // at the walk.
     //
-    // A streamed path order reads none: the order is stored, so the name is
-    // wanted only for the rows that end up on the page.
+    // A streamed text order reads none during the walk: the order is stored,
+    // so a name is wanted only for rows that end up as merge candidates.
     let sort_reads_name = !stored_forward
-        && !path_stream
+        && !position_stream
         && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
     let by_row = !plan.needs_name() && !has_veto && !sort_reads_name;
 
@@ -1210,7 +1285,7 @@ pub fn run_with(
     // rows arrive already in the order that was asked for, so there is nothing
     // to select and no boundary to keep — which is also what removes the tie
     // group, since two rows at one position is not a thing `porder` can hold.
-    let stored_order = stored_forward || backwards || path_stream;
+    let stored_order = stored_forward || backwards || position_stream;
     /* The length that triggers the next trim of `keyed`. A page's worth to
      * begin with, because the first trim is what produces a boundary at all;
      * after that, twice whatever the trim left — so every trim is paid for by
@@ -1421,7 +1496,60 @@ pub fn run_with(
     // ends a walk; this catches the other way out, where the block order ran
     // out of anything in reach and the total was already believed.
     let mut skipped = false;
-    if let Some(positions) = seg.porder.filter(|_| path_stream) {
+    let grouped_positions = seg
+        .norder
+        .filter(|_| name_stream)
+        .map(GroupedPositions::Name)
+        .or_else(|| {
+            seg.eorder
+                .filter(|_| extension_stream)
+                .map(GroupedPositions::Extension)
+        });
+    if let Some(positions) = grouped_positions {
+        /* Ascending text keys are the position list as written. Descending
+         * reads primary-key groups from the end but each group forwards. The
+         * direction changes only the primary key; ties remain newest-first and
+         * then path-first in both directions. */
+        if want.descending {
+            let mut end = positions.rows();
+            while end > 0 {
+                let Some(start) = positions.group_at_or_before(end - 1) else {
+                    break;
+                };
+                for i in start..end {
+                    let Some(row) = positions.at(i) else {
+                        continue;
+                    };
+                    let name = if has_veto {
+                        seg.folded.get(row as usize).unwrap_or_default().as_bytes()
+                    } else {
+                        b""
+                    };
+                    if !visit(row as usize, name) {
+                        end = 0;
+                        break;
+                    }
+                }
+                if end > 0 {
+                    end = start;
+                }
+            }
+        } else {
+            for i in 0..positions.rows() {
+                let Some(row) = positions.at(i) else {
+                    continue;
+                };
+                let name = if has_veto {
+                    seg.folded.get(row as usize).unwrap_or_default().as_bytes()
+                } else {
+                    b""
+                };
+                if !visit(row as usize, name) {
+                    break;
+                }
+            }
+        }
+    } else if let Some(positions) = seg.porder.filter(|_| path_stream) {
         /* **The page is the first `need` positions that survive.**
          *
          * Read in order and stop — the same bargain the row numbering makes
@@ -1450,7 +1578,12 @@ pub fn run_with(
             let Some(row) = positions.at(at) else {
                 continue;
             };
-            if !visit(row as usize, b"") {
+            let name = if has_veto {
+                seg.folded.get(row as usize).unwrap_or_default().as_bytes()
+            } else {
+                b""
+            };
+            if !visit(row as usize, name) {
                 break;
             }
         }
@@ -1579,14 +1712,19 @@ pub fn run_with(
     let ranked: Vec<(SortValue, u32)> = if stored_order {
         kept.iter()
             .map(|&row| {
-                // Safe to pass no name: the stored order is `Modified`, an
-                // unscored `Relevance`, or a streamed `Path`, and none of the
-                // three reads the folded name the walk would have yielded.
+                // A streamed text order needs a merge key only for the page,
+                // so these are random arena reads for `need` rows rather than
+                // a sequential read and key build for the whole corpus.
+                let name = if text_stream {
+                    seg.folded.get(row as usize).unwrap_or_default().as_bytes()
+                } else {
+                    b""
+                };
                 (
                     sort_value(
                         seg,
                         row as usize,
-                        b"",
+                        name,
                         want.sort,
                         &score_terms,
                         folders,
@@ -1651,7 +1789,7 @@ pub fn run_with(
     // which read backwards is the other way round. Every caller that merges
     // segments takes `rank_only` and never reaches this, so what it costs is a
     // sort of `need` rows in a test.
-    if !stored_order || backwards || path_stream {
+    if !stored_order || backwards || position_stream {
         // Within one segment the rows already carry their score in `keyed`;
         // this path is the one that did not sort, so it scores from scratch.
         let owned: Vec<String> = score_terms
@@ -1689,10 +1827,9 @@ pub fn run_with(
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SortValue {
     Num(i64),
-    /// The first sixteen bytes, big-endian. Exact for an extension, which is
-    /// at most twelve bytes by definition; abbreviated for a name, where
-    /// equality means "might be equal" and the boundary group has to be kept
-    /// and compared for real.
+    /// The first sixteen bytes, big-endian. Abbreviated for names and for the
+    /// rare extension whose Unicode fold grows past sixteen bytes; equality
+    /// means "might be equal" and the boundary group is compared in full.
     Head(u128),
     Text(Vec<u8>),
 }
@@ -1709,9 +1846,10 @@ fn head(bytes: &[u8]) -> u128 {
 
 /// Is this key exact, or only the beginning of one?
 ///
-/// Only the name is abbreviated. An extension is at most twelve bytes — that
-/// is what makes it an extension — so sixteen holds all of it, and sorting
-/// `ext:rs` by extension stops being a single tie group of seventy thousand.
+/// Names are abbreviated. Extensions usually fit too, but eligibility is
+/// twelve bytes in the original spelling and Unicode folding can expand those
+/// bytes beyond sixteen. Both therefore keep their boundary group and the
+/// cross-segment merge compares the complete key for equal heads.
 ///
 /// ## The path is not on this list, and it was tried twice
 ///
@@ -1723,8 +1861,9 @@ fn head(bytes: &[u8]) -> u128 {
 /// **It answers the wrong question.** Saying a key is inexact does not say what
 /// it is inexact *about*. The merge in `index.rs` resolves an equal key by
 /// comparing the two rows' **folded names**, because until now the only
-/// inexact key was the name and that was the whole truth of it. Give it a path
-/// key and it silently orders the tie group by name: on a corpus where
+/// inexact key was the name and that was the whole truth of it. The extension
+/// case now names its own resolver; give this a path key and it would silently
+/// order the tie group by name: on a corpus where
 /// `/home/u/.cache/M` is sixteen bytes exactly, every row under it tied, and
 /// the page came back alphabetical by file name inside a directory prefix.
 /// Two tests caught it — `many_segments_answer_exactly_what_one_would` and
@@ -1753,7 +1892,7 @@ fn head(bytes: &[u8]) -> u128 {
 /// until the page is full, and the key — still the whole path, still exact —
 /// is built for the two hundred rows that were kept. See [`crate::order`].
 pub(crate) fn key_is_exact(key: SortKey) -> bool {
-    key != SortKey::Name
+    !matches!(key, SortKey::Name | SortKey::Ext)
 }
 
 /// The directory paths this walk has already rebuilt, by directory number.
@@ -1922,7 +2061,7 @@ fn sort_value_into(
             SortValue::Num(relevance(name, terms, seg.dirs.steps(seg.dir_id(row))))
         }
         SortKey::Name => SortValue::Head(head(name)),
-        SortKey::Ext => SortValue::Head(head(ext_bytes(name))),
+        SortKey::Ext => SortValue::Head(head(folded_extension(seg, row, name))),
         // Answered above, where the buffer it is built in can be reused.
         SortKey::Path => unreachable!("the path key is written, not returned"),
         // **A folder sorts by what is under it**, when that is known. Its own
@@ -1969,7 +2108,8 @@ fn sort_value_into(
 /// the segment was — say what a block could contribute to a page without
 /// decoding any of it. `Name`, `Ext` and `Path` are text, and `Relevance` is a
 /// property of the query rather than of the row, so no stored column bounds
-/// any of them.
+/// any of them. Broad text orders use their persisted positions; this keyed
+/// path remains for legacy segments and name-reading queries.
 ///
 /// `Size` is here even though a *directory* sorts by what is under it rather
 /// than by its own column: [`zone_order`] widens the block's range to cover
@@ -2183,11 +2323,12 @@ fn narrow(keyed: &mut Vec<(SortValue, u32)>, need: usize, desc: bool, exact: boo
 /// right one: the page's worst can only improve, so an old boundary rejects
 /// less than the current one would, never more.
 ///
-/// **Ties are kept when the key is an abbreviation.** Two rows agreeing on
-/// sixteen bytes of name are not equal, and which of them wins is settled later
-/// against the full folded name — by `sort_hits` here, by the comparator in
-/// `index.rs` across segments. Dropping them here is exactly the deterministic,
-/// plausible, wrong page that [`narrow`]'s boundary group exists to prevent.
+/// **Ties are kept when the key is an abbreviation.** Two names or folded
+/// extensions agreeing on sixteen bytes are not necessarily equal, and which
+/// one wins is settled later against the complete key — by `sort_hits` here,
+/// by the comparator in `index.rs` across segments. Dropping them here is the
+/// deterministic, plausible, wrong page that [`narrow`]'s boundary group
+/// exists to prevent.
 ///
 /// The comparison is [`page_order`]'s, spelled out against a borrowed key so
 /// that nothing has to be cloned to ask. The two disagreeing is the failure
@@ -2412,7 +2553,9 @@ mod tests {
     }
 
     #[test]
-    fn the_byte_extension_is_the_one_the_core_defines() {
+    fn the_folded_extension_is_the_one_the_core_defines() {
+        use scour_core::text::{DefaultFolder, Folder};
+
         for name in [
             "main.rs",
             "a.tar.gz",
@@ -2423,9 +2566,11 @@ mod tests {
             "UPPER.PDF",
             "İstanbul.TXT",
         ] {
+            let folded = DefaultFolder.fold(name);
+            let want = scour_core::ext_of(name);
             assert_eq!(
-                ext_bytes(name.as_bytes()),
-                scour_core::ext_str(name).as_bytes(),
+                crate::extension_order::folded_extension(name.as_bytes(), folded.as_bytes()),
+                want.as_bytes(),
                 "{name:?}"
             );
         }

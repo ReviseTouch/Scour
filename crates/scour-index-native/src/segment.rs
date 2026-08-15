@@ -17,7 +17,9 @@ use scour_core::{Entry, Error, Result, SourceId};
 use crate::build::SegmentBytes;
 use crate::columns::ColumnBlocks;
 use crate::dirs::DirTable;
+use crate::extension_order::ExtensionOrder;
 use crate::ids::IdMap;
+use crate::name_order::NameOrder;
 use crate::names::NameArena;
 use crate::order::PathOrder;
 use crate::search::Segment;
@@ -26,19 +28,20 @@ use crate::trigram::TrigramIndex;
 /// The pieces a segment is made of, and the extension each is stored under.
 const PARTS: [&str; 7] = ["names", "cols", "dirs", "ids", "tgrams", "tpost", "fnames"];
 
-/// The one piece a segment may be without.
+/// The persisted row orders a segment may be without.
 ///
 /// **Absent means older, not damaged**, and that distinction is the whole
-/// reason this is not in [`PARTS`]. Every index written before the path order
-/// existed has these seven files and no eighth, and it answers every query
-/// correctly without one — a search sorted by path builds its keys the way it
-/// always did. So an old index is not thrown away and rescanned: it keeps
-/// working, and each segment gains the file the next time it is folded.
+/// reason these are not in [`PARTS`]. Each is independently optional: a search
+/// whose segment lacks its order builds keys the way it always did. So an old
+/// or partly compacted index is not thrown away and rescanned; each segment
+/// gains the current files the next time it is folded.
 ///
 /// What is *not* tolerated is a file that is there and wrong. A length that
 /// does not match the rows is refused at [`Live::assemble`], exactly as a short
 /// live bitmap is, because both are written whole.
 const PORDER: &str = "porder";
+const NORDER: &str = "norder";
+const EORDER: &str = "eorder";
 
 fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
     dir.join(format!("seg-{number:08}.{ext}"))
@@ -49,8 +52,8 @@ fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
 /// **The second case is what lets a change be searchable before it is
 /// durable.** Those were the same thing here, and the cost of conflating them
 /// was measured: a search could not see a new file until a commit, and a commit
-/// writes seven files and calls `fsync` about ten times — 22.5 ms whether it
-/// carries one row or a hundred and twenty-eight. Freshness was therefore
+/// writes and syncs a whole segment — 22.5 ms whether it carries one row or a
+/// hundred and twenty-eight. Freshness was therefore
 /// bought in units of a whole segment write, and at a five-second clock that
 /// was the single largest thing an idle service did.
 ///
@@ -72,7 +75,7 @@ impl std::ops::Deref for Part {
     }
 }
 
-/// An opened segment: six parts and one bitmap that is not.
+/// An opened segment: immutable mapped parts and one mutable bitmap.
 #[derive(Debug)]
 pub struct Live {
     pub number: u64,
@@ -84,6 +87,12 @@ pub struct Live {
     maps: Vec<Part>,
     /// The rows in path order, for a segment written since [`PORDER`] existed.
     porder: Option<Part>,
+    /// The rows in folded-name order, for a segment written since [`NORDER`]
+    /// existed.
+    norder: Option<Part>,
+    /// The rows in folded-extension order, for a segment written since
+    /// [`EORDER`] existed.
+    eorder: Option<Part>,
     alive: Vec<u8>,
     rows: usize,
     /// How many of those rows are directories.
@@ -137,6 +146,12 @@ impl Live {
         if !bytes.porder.is_empty() {
             write_synced(&part_path(dir, number, PORDER), &bytes.porder)?;
         }
+        if !bytes.norder.is_empty() {
+            write_synced(&part_path(dir, number, NORDER), &bytes.norder)?;
+        }
+        if !bytes.eorder.is_empty() {
+            write_synced(&part_path(dir, number, EORDER), &bytes.eorder)?;
+        }
         write_synced(&part_path(dir, number, "alive"), &bytes.alive)?;
         Live::open(dir, number, generation)
     }
@@ -163,14 +178,30 @@ impl Live {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(Error::io(&e, &p.to_string_lossy())),
         };
+        let p = part_path(dir, number, NORDER);
+        let norder = match std::fs::File::open(&p) {
+            Ok(f) => Some(Part::Mapped(
+                unsafe { Mmap::map(&f) }.map_err(|e| Error::io(&e, &p.to_string_lossy()))?,
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(Error::io(&e, &p.to_string_lossy())),
+        };
+        let p = part_path(dir, number, EORDER);
+        let eorder = match std::fs::File::open(&p) {
+            Ok(f) => Some(Part::Mapped(
+                unsafe { Mmap::map(&f) }.map_err(|e| Error::io(&e, &p.to_string_lossy()))?,
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(Error::io(&e, &p.to_string_lossy())),
+        };
         let p = part_path(dir, number, "alive");
         let alive = std::fs::read(&p).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
-        Live::assemble(number, generation, maps, porder, alive)
+        Live::assemble(number, generation, maps, porder, norder, eorder, alive)
     }
 
     /// A segment that was never written, and may never be.
     ///
-    /// The same bytes `write` would have put in seven files, kept in memory
+    /// The same bytes `write` would have put in segment files, kept in memory
     /// instead. It is a real segment to every reader — same format, same
     /// trigram filter, same zone maps — and the only thing it is not is
     /// durable. See [`Part`] for why that distinction had to be made.
@@ -185,7 +216,17 @@ impl Live {
             Part::Owned(bytes.fnames.clone()),
         ];
         let porder = (!bytes.porder.is_empty()).then(|| Part::Owned(bytes.porder.clone()));
-        Live::assemble(number, generation, maps, porder, bytes.alive.clone())
+        let norder = (!bytes.norder.is_empty()).then(|| Part::Owned(bytes.norder.clone()));
+        let eorder = (!bytes.eorder.is_empty()).then(|| Part::Owned(bytes.eorder.clone()));
+        Live::assemble(
+            number,
+            generation,
+            maps,
+            porder,
+            norder,
+            eorder,
+            bytes.alive.clone(),
+        )
     }
 
     /// Check the pieces agree with each other and count what a search needs.
@@ -199,6 +240,8 @@ impl Live {
         generation: u64,
         maps: Vec<Part>,
         porder: Option<Part>,
+        norder: Option<Part>,
+        eorder: Option<Part>,
         alive: Vec<u8>,
     ) -> Result<Live> {
         let rows = NameArena::open(&maps[0])
@@ -250,6 +293,42 @@ impl Live {
                 }
             }
         }
+        // Missing is a legacy segment and uses the keyed name walk. Present
+        // but short is damage: streaming it would silently omit rows.
+        if let Some(p) = &norder {
+            match NameOrder::open(p) {
+                Some(o) if o.rows() == rows => {}
+                found => {
+                    return Err(Error::IndexCorrupt {
+                        detail: format!(
+                            "seg-{number:08}.{NORDER} holds {} rows, expected {rows}",
+                            found.map_or_else(
+                                || "an unreadable number of".to_owned(),
+                                |o| o.rows().to_string()
+                            )
+                        ),
+                    });
+                }
+            }
+        }
+        // Extension order has the same optional-versus-damaged contract. A
+        // mixed index streams current segments and keys legacy ones.
+        if let Some(p) = &eorder {
+            match ExtensionOrder::open(p) {
+                Some(o) if o.rows() == rows => {}
+                found => {
+                    return Err(Error::IndexCorrupt {
+                        detail: format!(
+                            "seg-{number:08}.{EORDER} holds {} rows, expected {rows}",
+                            found.map_or_else(
+                                || "an unreadable number of".to_owned(),
+                                |o| o.rows().to_string()
+                            )
+                        ),
+                    });
+                }
+            }
+        }
         let dirs = ColumnBlocks::open(&maps[1])
             .map(|cols| {
                 (0..rows)
@@ -262,6 +341,8 @@ impl Live {
             generation,
             maps,
             porder,
+            norder,
+            eorder,
             alive,
             rows,
             dirs,
@@ -274,6 +355,8 @@ impl Live {
         for ext in PARTS
             .iter()
             .chain(std::iter::once(&PORDER))
+            .chain(std::iter::once(&NORDER))
+            .chain(std::iter::once(&EORDER))
             .chain(std::iter::once(&"alive"))
         {
             // A missing file is the desired state, so a failure to remove one
@@ -397,6 +480,8 @@ impl Live {
             // Validated once when the segment was opened, so this cannot fail
             // in a way `assemble` would not already have refused.
             porder: self.porder.as_deref().and_then(PathOrder::open),
+            norder: self.norder.as_deref().and_then(NameOrder::open),
+            eorder: self.eorder.as_deref().and_then(ExtensionOrder::open),
             alive: &self.alive,
         })
     }

@@ -6,8 +6,8 @@
 //! A second argument of `rebuild` folds everything into one segment instead of
 //! folding the eligible groups. That is the heavier of the two and the one
 //! worth being able to price: it is what somebody with an existing index runs
-//! to give it a stored path order, and it reads the index rather than the
-//! filesystem.
+//! to give it the current stored text orders, and it reads the index rather
+//! than the filesystem.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

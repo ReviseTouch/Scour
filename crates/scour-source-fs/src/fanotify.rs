@@ -115,6 +115,138 @@ struct DirKey {
     ino: u64,
 }
 
+/// One path in [`PathArena`].
+///
+/// The field order keeps this at eight bytes. A path that `symlink_metadata`
+/// accepted on Linux is far below `u16::MAX`, a chunk is one MiB, and 65,536
+/// chunks would already mean 64 GiB of directory names. Keeping the slot small
+/// matters because `HashMap` reserves it once per directory, including spare
+/// buckets.
+#[derive(Debug, Clone, Copy)]
+struct PathSlot {
+    start: u32,
+    chunk: u16,
+    len: u16,
+}
+
+const _: () = assert!(std::mem::size_of::<PathSlot>() == 8);
+
+/// Paths in coarse allocations rather than one allocator object a directory.
+///
+/// A single growing `Vec` would briefly need both the old and new allocation
+/// whenever it grows. Fixed-size chunks keep peak memory bounded, waste less
+/// than one chunk at the end, and never move bytes that an existing slot names.
+#[derive(Debug, Default)]
+struct PathArena {
+    chunks: Vec<Vec<u8>>,
+    stale_bytes: usize,
+}
+
+impl PathArena {
+    const CHUNK: usize = 1024 * 1024;
+
+    fn push(&mut self, path: &str) -> PathSlot {
+        self.push_parts(path, "")
+    }
+
+    fn push_parts(&mut self, prefix: &str, suffix: &str) -> PathSlot {
+        let len = prefix.len() + suffix.len();
+        let needs_chunk = self
+            .chunks
+            .last()
+            .is_none_or(|chunk| chunk.capacity() - chunk.len() < len);
+        if needs_chunk {
+            self.chunks.push(Vec::with_capacity(Self::CHUNK.max(len)));
+        }
+        let chunk = self.chunks.len() - 1;
+        let bytes = &mut self.chunks[chunk];
+        let start = bytes.len();
+        bytes.extend_from_slice(prefix.as_bytes());
+        bytes.extend_from_slice(suffix.as_bytes());
+        PathSlot {
+            start: start.try_into().expect("path arena chunk exceeds 4 GiB"),
+            chunk: chunk.try_into().expect("path arena exceeds 65,536 chunks"),
+            len: len.try_into().expect("a stat-able Linux path fits in u16"),
+        }
+    }
+
+    /// Append a path made from a new prefix and a suffix already in the arena.
+    ///
+    /// No temporary `String` per descendant: when source and destination share
+    /// a chunk, `extend_from_within` copies by offsets; otherwise the chunks are
+    /// borrowed separately. The capacity check happens before either branch,
+    /// so appending to the source chunk cannot invalidate its range.
+    fn push_rebased(&mut self, old: PathSlot, suffix_start: usize, prefix: &str) -> PathSlot {
+        let source_chunk = old.chunk as usize;
+        let source_start = old.start as usize + suffix_start;
+        let source_end = old.start as usize + old.len as usize;
+        let len = prefix.len() + source_end - source_start;
+        let needs_chunk = self
+            .chunks
+            .last()
+            .is_none_or(|chunk| chunk.capacity() - chunk.len() < len);
+        if needs_chunk {
+            self.chunks.push(Vec::with_capacity(Self::CHUNK.max(len)));
+        }
+        let target_chunk = self.chunks.len() - 1;
+        let start = self.chunks[target_chunk].len();
+        if source_chunk == target_chunk {
+            let bytes = &mut self.chunks[target_chunk];
+            bytes.extend_from_slice(prefix.as_bytes());
+            bytes.extend_from_within(source_start..source_end);
+        } else {
+            let (sources, target) = self.chunks.split_at_mut(target_chunk);
+            let source = &sources[source_chunk][source_start..source_end];
+            let target = &mut target[0];
+            target.extend_from_slice(prefix.as_bytes());
+            target.extend_from_slice(source);
+        }
+        PathSlot {
+            start: start.try_into().expect("path arena chunk exceeds 4 GiB"),
+            chunk: target_chunk
+                .try_into()
+                .expect("path arena exceeds 65,536 chunks"),
+            len: len.try_into().expect("a stat-able Linux path fits in u16"),
+        }
+    }
+
+    fn get(&self, slot: PathSlot) -> &str {
+        let start = slot.start as usize;
+        let end = start + slot.len as usize;
+        // SAFETY: the arena's append methods copy valid UTF-8 from `&str` or
+        // another valid arena range; slots name only the exact appended bytes.
+        unsafe { std::str::from_utf8_unchecked(&self.chunks[slot.chunk as usize][start..end]) }
+    }
+
+    fn used_bytes(&self) -> usize {
+        self.chunks.iter().map(Vec::len).sum()
+    }
+
+    fn should_compact(&self) -> bool {
+        Self::should_compact_at(self.stale_bytes, self.used_bytes())
+    }
+
+    fn should_compact_at(stale_bytes: usize, used_bytes: usize) -> bool {
+        stale_bytes >= Self::CHUNK && stale_bytes >= used_bytes / 4
+    }
+}
+
+/// Where the part below `prefix` starts, with a component boundary.
+///
+/// `/a/b` therefore owns `/a/b/child` but not `/a/bc`. The root is special:
+/// its descendants already carry the separator that has to follow a new root.
+fn descendant_suffix_start(path: &str, prefix: &str) -> Option<usize> {
+    if path == prefix {
+        return Some(path.len());
+    }
+    if prefix == "/" && path.starts_with('/') {
+        return Some(0);
+    }
+    path.strip_prefix(prefix)
+        .filter(|suffix| suffix.starts_with('/'))
+        .map(|_| prefix.len())
+}
+
 /// The inode number a file handle carries, by filesystem.
 ///
 /// The layouts are not documented as stable and are read here anyway, because
@@ -157,13 +289,25 @@ fn handle_ino(fh_type: i32, bytes: &[u8]) -> Option<u64> {
 /// Held in memory rather than in the index. The index used to carry an inode a
 /// row and it was removed for a measured reason — 19 MB of a 200 MB index, on
 /// 2.09 million rows, to answer a question the path already answered. What is
-/// needed here is not that: the event names a *directory*, and directories are
-/// 8.6 files apart, so the same information costs about 6 MB of memory and
-/// nothing on disk. If the cost of rebuilding it at startup ever shows up in a
-/// measurement, that is the moment to reconsider — not before.
+/// needed here is narrower: one key and one path per directory. Paths are
+/// packed because hundreds of thousands of separate `String` allocations cost
+/// both allocator metadata and a 24-byte value in every occupied or reserved
+/// hash bucket. The ignored `directory_map_memory_probe` test measures the
+/// complete allocator footprint and lookup cost at live-machine scale.
 #[derive(Debug, Default)]
 struct DirMap {
-    by_key: HashMap<DirKey, String>,
+    by_key: HashMap<DirKey, PathSlot>,
+    paths: PathArena,
+    /// Device candidates an event's inode is looked up against.
+    ///
+    /// The event gives an inode but not a device — btrfs reports the
+    /// superblock's fsid on every event whatever subvolume it came from — so the
+    /// inode is offered to each device this source actually covers.
+    ///
+    /// There are only a handful, but deriving them from `by_key` is not cheap:
+    /// on this machine it copied and sorted 103,000 or 152,000 keys every time a
+    /// directory was created. Keep the unique list as entries arrive instead.
+    devices: Vec<u64>,
 }
 
 impl DirMap {
@@ -189,7 +333,7 @@ impl DirMap {
             if !md.is_dir() {
                 continue;
             }
-            map.insert(&md, text);
+            map.insert(&md, &text);
             let Ok(rd) = std::fs::read_dir(&dir) else {
                 continue;
             };
@@ -202,15 +346,103 @@ impl DirMap {
         map
     }
 
-    fn insert(&mut self, md: &std::fs::Metadata, path: String) {
+    fn insert(&mut self, md: &std::fs::Metadata, path: &str) {
         use std::os::unix::fs::MetadataExt;
-        self.by_key.insert(
+        self.insert_key(
             DirKey {
                 dev: md.dev(),
                 ino: md.ino(),
             },
             path,
         );
+    }
+
+    fn insert_key(&mut self, key: DirKey, path: &str) {
+        let dev = key.dev;
+        if !self.devices.contains(&dev) {
+            self.devices.push(dev);
+        }
+        let Some(old) = self.by_key.get(&key).copied() else {
+            let slot = self.paths.push(path);
+            self.by_key.insert(key, slot);
+            return;
+        };
+        if self.paths.get(old) == path {
+            return;
+        }
+
+        // A directory keeps `(dev, ino)` across a rename. Every descendant's
+        // fanotify handle keeps its key too, but its spelled path changes with
+        // the parent; updating only this one entry leaves all later events from
+        // below it resolving to the old tree. One owned prefix keeps the arena
+        // free of a temporary allocation per descendant.
+        let old_prefix = self.paths.get(old).to_owned();
+        let moved = self.rebase_paths(&old_prefix, path);
+        debug_assert!(moved != 0);
+    }
+
+    /// Rewrite one path and every component-bounded descendant below it.
+    fn rebase_paths(&mut self, old_prefix: &str, new_prefix: &str) -> usize {
+        let mut moved = 0usize;
+        let mut old_bytes = 0usize;
+        let mut new_bytes = 0usize;
+        for slot in self.by_key.values().copied() {
+            let path = self.paths.get(slot);
+            if let Some(suffix) = descendant_suffix_start(path, old_prefix) {
+                moved += 1;
+                old_bytes += path.len();
+                new_bytes += new_prefix.len() + path.len() - suffix;
+            }
+        }
+        if moved == 0 {
+            return 0;
+        }
+
+        // Appending a large moved tree and compacting afterwards briefly keeps
+        // the old paths, their rewritten copies and the compacted arena — three
+        // copies at the worst possible rename. If this update already crosses
+        // the compaction threshold, rebuild directly into the final arena and
+        // keep the peak to the old and new copies.
+        let compact = PathArena::should_compact_at(
+            self.paths.stale_bytes + old_bytes,
+            self.paths.used_bytes() + new_bytes,
+        );
+        if compact {
+            self.compact_rebased_paths(old_prefix, new_prefix);
+            return moved;
+        }
+
+        let (by_key, paths) = (&mut self.by_key, &mut self.paths);
+        for slot in by_key.values_mut() {
+            let old = *slot;
+            let suffix = {
+                let path = paths.get(old);
+                descendant_suffix_start(path, old_prefix)
+            };
+            if let Some(suffix) = suffix {
+                *slot = paths.push_rebased(old, suffix, new_prefix);
+                paths.stale_bytes += old.len as usize;
+            }
+        }
+        debug_assert!(!self.paths.should_compact());
+        moved
+    }
+
+    /// Reclaim stale paths while applying a large subtree rename.
+    ///
+    /// Built directly from the old arena rather than after appending moved
+    /// paths to it, which avoids a third simultaneous copy at peak.
+    fn compact_rebased_paths(&mut self, old_prefix: &str, new_prefix: &str) {
+        let old = std::mem::take(&mut self.paths);
+        let mut fresh = PathArena::default();
+        for slot in self.by_key.values_mut() {
+            let path = old.get(*slot);
+            *slot = match descendant_suffix_start(path, old_prefix) {
+                Some(suffix) => fresh.push_parts(new_prefix, &path[suffix..]),
+                None => fresh.push(path),
+            };
+        }
+        self.paths = fresh;
     }
 
     /// Record a directory that appeared after the map was built.
@@ -224,29 +456,15 @@ impl DirMap {
         if let Ok(md) = std::fs::symlink_metadata(path)
             && md.is_dir()
         {
-            self.insert(&md, path.to_owned());
+            self.insert(&md, path);
         }
     }
 
-    fn path_of(&self, ino: u64, dev_candidates: &[u64]) -> Option<&str> {
-        dev_candidates
+    fn path_of(&self, ino: u64) -> Option<&str> {
+        self.devices
             .iter()
-            .find_map(|&dev| self.by_key.get(&DirKey { dev, ino }))
-            .map(String::as_str)
-    }
-
-    /// Every device number the walk saw.
-    ///
-    /// The event gives an inode but not a device — btrfs reports the
-    /// superblock's fsid on every event whatever subvolume it came from, which
-    /// was measured and is the reason the fsid cannot be used to tell them
-    /// apart. So the inode is looked up against each device this source
-    /// actually covers, which is seven numbers here, not two million.
-    fn devices(&self) -> Vec<u64> {
-        let mut v: Vec<u64> = self.by_key.keys().map(|k| k.dev).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
+            .find_map(|&dev| self.by_key.get(&DirKey { dev, ino }).copied())
+            .map(|slot| self.paths.get(slot))
     }
 }
 
@@ -426,7 +644,6 @@ struct Sub {
     sink: Arc<dyn ChangeSink>,
     roots: Vec<std::path::PathBuf>,
     map: DirMap,
-    devices: Vec<u64>,
     /// Cleared when the handle is dropped. The entry stays in the list — an
     /// index has to keep meaning what it meant — and is simply skipped.
     live: Arc<AtomicBool>,
@@ -510,7 +727,6 @@ pub fn try_start(
     let roots: Vec<std::path::PathBuf> = source.roots().to_vec();
     let rules = Arc::new(Rules::from_options(opts));
     let map = DirMap::build(&roots, &rules);
-    let devices = map.devices();
     let live = Arc::new(AtomicBool::new(true));
     let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
 
@@ -531,7 +747,6 @@ pub fn try_start(
         sink,
         roots,
         map,
-        devices,
         live: Arc::clone(&live),
         uncovered: Arc::clone(&uncovered),
     });
@@ -668,9 +883,7 @@ fn drain(fd: OwnedFd) {
                 if !s.live.load(Ordering::Relaxed) {
                     return None;
                 }
-                s.map
-                    .path_of(ev.parent_ino, &s.devices)
-                    .map(|d| (i, d.to_owned()))
+                s.map.path_of(ev.parent_ino).map(|d| (i, d.to_owned()))
             }) else {
                 continue;
             };
@@ -692,7 +905,6 @@ fn drain(fd: OwnedFd) {
             let s = &mut subs[i];
             if fresh && is_dir {
                 s.map.learn(&full);
-                s.devices = s.map.devices();
             }
             let md = crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
             // A write through a mapping produces no event at all, so a path
@@ -733,6 +945,340 @@ fn note_new_mounts(fresh: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reproduce the userspace cost of the directory map at the scale of the
+    /// two live sources on the development machine.
+    ///
+    /// Run alone so allocator readings do not include another test:
+    ///
+    /// `cargo test -p scour-source-fs directory_map_memory_probe --release -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "diagnostic allocator and latency probe"]
+    fn directory_map_memory_probe() {
+        const DIRS: usize = 255_769;
+
+        fn path(n: usize) -> String {
+            let branch = n % 41;
+            let project = (n / 41) % 997;
+            let depth = (n / (41 * 997)) % 7;
+            format!(
+                "/home/hasan/Projeler/project-{project:03}/src/component-{branch:02}/depth-{depth}/directory-{n:06}"
+            )
+        }
+
+        fn key(n: usize) -> DirKey {
+            DirKey {
+                dev: if n & 1 == 0 { 42 } else { 84 },
+                ino: n as u64 + 10,
+            }
+        }
+
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        fn heap_bytes() -> usize {
+            let info = unsafe { libc::mallinfo2() };
+            info.uordblks + info.hblkhd
+        }
+
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        fn heap_bytes() -> usize {
+            0
+        }
+
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        fn trim_heap() {
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        }
+
+        #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+        fn trim_heap() {}
+
+        let started = Instant::now();
+        let mut old_startup = HashMap::new();
+        let mut old_startup_devices = Vec::new();
+        for n in 0..DIRS {
+            let key = key(n);
+            if !old_startup_devices.contains(&key.dev) {
+                old_startup_devices.push(key.dev);
+            }
+            old_startup.insert(key, path(n));
+        }
+        let old_build = started.elapsed();
+        std::hint::black_box(&old_startup);
+        drop(old_startup);
+        trim_heap();
+
+        let started = Instant::now();
+        let mut packed_startup = DirMap::default();
+        for n in 0..DIRS {
+            packed_startup.insert_key(key(n), &path(n));
+        }
+        let packed_build = started.elapsed();
+        std::hint::black_box(&packed_startup);
+        drop(packed_startup);
+        trim_heap();
+
+        let paths: Vec<String> = (0..DIRS).map(path).collect();
+        let keys: Vec<DirKey> = (0..DIRS).map(key).collect();
+        let path_bytes: usize = paths.iter().map(String::len).sum();
+        let average = path_bytes as f64 / DIRS as f64;
+
+        trim_heap();
+        let before = heap_bytes();
+        let mut old: HashMap<DirKey, String> = HashMap::new();
+        let mut old_devices = Vec::new();
+        for (key, path) in keys.iter().copied().zip(&paths) {
+            if !old_devices.contains(&key.dev) {
+                old_devices.push(key.dev);
+            }
+            old.insert(key, path.clone());
+        }
+        let old_heap = heap_bytes().saturating_sub(before);
+        let old_capacity = old.capacity();
+        let old_path_capacity: usize = old.values().map(String::capacity).sum();
+        let started = Instant::now();
+        for round in 0..8usize {
+            for n in 0..DIRS {
+                let at = (n.wrapping_mul(104_729) + round * 65_537) % DIRS;
+                let ino = keys[at].ino;
+                std::hint::black_box(
+                    old_devices
+                        .iter()
+                        .find_map(|&dev| old.get(&DirKey { dev, ino }))
+                        .map(String::as_str),
+                );
+            }
+        }
+        let old_lookup = started.elapsed();
+        drop(old);
+        trim_heap();
+
+        let before = heap_bytes();
+        let mut packed = DirMap::default();
+        for (key, path) in keys.iter().copied().zip(&paths) {
+            packed.insert_key(key, path);
+        }
+        let packed_heap = heap_bytes().saturating_sub(before);
+        let packed_capacity = packed.by_key.capacity();
+        let packed_path_capacity: usize = packed.paths.chunks.iter().map(Vec::capacity).sum();
+        let packed_chunks = packed.paths.chunks.len();
+        let started = Instant::now();
+        for round in 0..8usize {
+            for n in 0..DIRS {
+                let at = (n.wrapping_mul(104_729) + round * 65_537) % DIRS;
+                std::hint::black_box(packed.path_of(keys[at].ino));
+            }
+        }
+        let packed_lookup = started.elapsed();
+
+        let root = DirKey {
+            dev: 42,
+            ino: u64::MAX,
+        };
+        packed.insert_key(root, "/home/hasan/Projeler");
+        let rename_map_capacity = packed.by_key.capacity();
+        let rename_devices = packed.devices.clone();
+        let rename_before_capacity: usize = packed.paths.chunks.iter().map(Vec::capacity).sum();
+        let rename_before_used = packed.paths.used_bytes();
+        let started = Instant::now();
+        packed.insert_key(root, "/home/hasan/Workspace");
+        let rename = started.elapsed();
+        let rename_after_capacity: usize = packed.paths.chunks.iter().map(Vec::capacity).sum();
+        let rename_after_used = packed.paths.used_bytes();
+        let rename_after_stale = packed.paths.stale_bytes;
+        let leaf_at = DIRS / 2;
+        let leaf = paths[leaf_at].replacen("/home/hasan/Projeler", "/home/hasan/Workspace", 1);
+        let renamed_leaf = format!("{leaf}-renamed");
+        let leaf_before_used = packed.paths.used_bytes();
+        let started = Instant::now();
+        packed.insert_key(keys[leaf_at], &renamed_leaf);
+        let leaf_rename = started.elapsed();
+        let leaf_after_used = packed.paths.used_bytes();
+        let leaf_after_stale = packed.paths.stale_bytes;
+        let started = Instant::now();
+        packed.insert_key(keys[leaf_at], &renamed_leaf);
+        let duplicate_learn = started.elapsed();
+
+        println!("directories={DIRS} path_bytes={path_bytes} average_path={average:.1}B");
+        println!(
+            "strings heap={old_heap}B map_capacity={old_capacity} path_capacity={old_path_capacity}B retained_path_allocations={DIRS} startup_build={old_build:?} lookup={old_lookup:?}"
+        );
+        println!(
+            "packed  heap={packed_heap}B map_capacity={packed_capacity} path_capacity={packed_path_capacity}B retained_path_allocations={packed_chunks} startup_build={packed_build:?} lookup={packed_lookup:?}"
+        );
+        println!(
+            "saved={}B ({:.1}%)",
+            old_heap.saturating_sub(packed_heap),
+            100.0 * old_heap.saturating_sub(packed_heap) as f64 / old_heap.max(1) as f64
+        );
+        println!(
+            "subtree rename={rename:?} map_capacity={rename_map_capacity} path_used={rename_before_used}B->{rename_after_used}B retained_capacity={rename_before_capacity}B->{rename_after_capacity}B transient_path_capacity_ceiling={}B stale={}B",
+            rename_before_capacity + rename_after_capacity,
+            rename_after_stale,
+        );
+        println!(
+            "leaf rename={leaf_rename:?} path_used={leaf_before_used}B->{leaf_after_used}B stale={leaf_after_stale}B duplicate_learn={duplicate_learn:?}",
+        );
+
+        assert_eq!(packed.by_key.len(), DIRS + 1);
+        assert_eq!(packed.by_key.capacity(), rename_map_capacity);
+        assert_eq!(packed.devices, rename_devices);
+        assert_eq!(
+            packed.path_of(keys[leaf_at].ino),
+            Some(renamed_leaf.as_str())
+        );
+        assert_eq!(packed.paths.used_bytes(), leaf_after_used);
+        assert_eq!(packed.paths.stale_bytes, leaf_after_stale);
+    }
+
+    #[test]
+    fn a_directory_map_keeps_one_device_candidate_per_device() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = tempfile::tempdir().expect("temporary directory");
+        let first = root.path().join("first");
+        let second = root.path().join("second");
+        std::fs::create_dir(&first).expect("first directory");
+        std::fs::create_dir(&second).expect("second directory");
+
+        let mut map = DirMap::default();
+        map.learn(&path::from_path(&first));
+        map.learn(&path::from_path(&second));
+        let bytes = map.paths.used_bytes();
+        // Learning an already known directory must not grow either table.
+        map.learn(&path::from_path(&first));
+
+        let first_md = std::fs::symlink_metadata(&first).expect("first metadata");
+        assert_eq!(map.devices, [first_md.dev()]);
+        assert_eq!(map.by_key.len(), 2);
+        assert_eq!(map.paths.used_bytes(), bytes);
+        assert_eq!(map.paths.stale_bytes, 0);
+        assert_eq!(
+            map.path_of(first_md.ino()),
+            Some(path::from_path(&first).as_str())
+        );
+    }
+
+    #[test]
+    fn a_renamed_directory_replaces_its_path_without_growing_the_key_map() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = tempfile::tempdir().expect("temporary directory");
+        let before = root.path().join("before");
+        let after = root.path().join("after");
+        std::fs::create_dir(&before).expect("directory");
+
+        let before_text = path::from_path(&before);
+        let after_text = path::from_path(&after);
+        let md = std::fs::symlink_metadata(&before).expect("metadata");
+        let mut map = DirMap::default();
+        map.learn(&before_text);
+        std::fs::rename(&before, &after).expect("rename directory");
+        map.learn(&after_text);
+
+        assert_eq!(map.by_key.len(), 1);
+        assert_eq!(map.path_of(md.ino()), Some(after_text.as_str()));
+        assert_eq!(map.paths.stale_bytes, before_text.len());
+        assert_eq!(map.paths.used_bytes(), before_text.len() + after_text.len());
+    }
+
+    #[test]
+    fn a_renamed_directory_rebases_nested_paths_at_component_boundaries() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let parent = temporary.path().join("a");
+        let before = parent.join("b");
+        let child = before.join("child");
+        let grandchild = child.join("nested");
+        let sibling_prefix = parent.join("bc").join("untouched");
+        let after = parent.join("moved-tree");
+        std::fs::create_dir_all(&grandchild).expect("nested tree");
+        std::fs::create_dir_all(&sibling_prefix).expect("prefix sibling");
+
+        let root_ino = std::fs::symlink_metadata(&before).expect("root").ino();
+        let child_ino = std::fs::symlink_metadata(&child).expect("child").ino();
+        let grandchild_ino = std::fs::symlink_metadata(&grandchild)
+            .expect("grandchild")
+            .ino();
+        let sibling_ino = std::fs::symlink_metadata(&sibling_prefix)
+            .expect("sibling")
+            .ino();
+        let mut map = DirMap::default();
+        for directory in [&before, &child, &grandchild, &sibling_prefix] {
+            map.learn(&path::from_path(directory));
+        }
+
+        let keys = map.by_key.len();
+        let capacity = map.by_key.capacity();
+        let devices = map.devices.clone();
+        std::fs::rename(&before, &after).expect("rename tree");
+        let after_text = path::from_path(&after);
+        map.learn(&after_text);
+
+        assert_eq!(map.path_of(root_ino), Some(after_text.as_str()));
+        assert_eq!(
+            map.path_of(child_ino),
+            Some(path::from_path(&after.join("child")).as_str())
+        );
+        assert_eq!(
+            map.path_of(grandchild_ino),
+            Some(path::from_path(&after.join("child/nested")).as_str())
+        );
+        assert_eq!(
+            map.path_of(sibling_ino),
+            Some(path::from_path(&sibling_prefix).as_str()),
+            "a byte prefix without a component boundary is not a descendant"
+        );
+        assert_eq!(map.by_key.len(), keys);
+        assert_eq!(map.by_key.capacity(), capacity);
+        assert_eq!(map.devices, devices);
+
+        let bytes = map.paths.used_bytes();
+        let stale = map.paths.stale_bytes;
+        let chunks = map.paths.chunks.len();
+        map.learn(&after_text);
+        assert_eq!(map.paths.used_bytes(), bytes);
+        assert_eq!(map.paths.stale_bytes, stale);
+        assert_eq!(map.paths.chunks.len(), chunks);
+        assert_eq!(map.by_key.len(), keys);
+    }
+
+    #[test]
+    fn replaced_paths_are_compacted_without_changing_lookups() {
+        const DIRS: usize = 20_000;
+
+        let mut map = DirMap::default();
+        let root = DirKey {
+            dev: 42,
+            ino: DIRS as u64,
+        };
+        map.insert_key(root, "/home/hasan/old-tree");
+        for ino in 0..DIRS {
+            let path = format!(
+                "/home/hasan/old-tree/component-{ino:05}/a-directory-name-long-enough-to-fill-the-arena"
+            );
+            map.insert_key(
+                DirKey {
+                    dev: 42,
+                    ino: ino as u64,
+                },
+                &path,
+            );
+        }
+        map.insert_key(root, "/home/hasan/new-tree");
+
+        assert_eq!(map.by_key.len(), DIRS + 1);
+        assert!(map.paths.stale_bytes < PathArena::CHUNK);
+        assert_eq!(map.path_of(root.ino), Some("/home/hasan/new-tree"));
+        for ino in 0..DIRS {
+            let expected = format!(
+                "/home/hasan/new-tree/component-{ino:05}/a-directory-name-long-enough-to-fill-the-arena"
+            );
+            assert_eq!(map.path_of(ino as u64), Some(expected.as_str()));
+        }
+    }
 
     #[test]
     fn a_handle_is_read_by_its_type_and_its_length_together() {

@@ -11,8 +11,8 @@
 
 use scour_core::{Entry, EntryId, Meta, SortKey, SourceId};
 use scour_index_native::{
-    ColumnBlocks, DirTable, NameArena, PathOrder, Plan, Segment, SegmentBytes, TrigramIndex,
-    Wanted, build, run,
+    ColumnBlocks, DirTable, ExtensionOrder, NameArena, NameOrder, PathOrder, Plan, Segment,
+    SegmentBytes, TrigramIndex, Wanted, build, run,
 };
 use scour_mock::{MockOptions, brute_force, generate};
 use scour_query::parse_at;
@@ -46,6 +46,8 @@ impl Fixture {
             dirs: DirTable::open(&self.bytes.dirs).expect("dirs"),
             tri: TrigramIndex::open(&self.bytes.tri_dict, &self.bytes.tri_post).expect("tri"),
             porder: PathOrder::open(&self.bytes.porder),
+            norder: NameOrder::open(&self.bytes.norder),
+            eorder: ExtensionOrder::open(&self.bytes.eorder),
             alive: &self.bytes.alive,
         }
     }
@@ -199,6 +201,39 @@ fn the_newest_page_stops_almost_immediately() {
     );
     assert!(!all.early_exit);
     assert_eq!(all.rows_visited as usize, seg.rows());
+}
+
+#[test]
+fn empty_relevance_has_one_tie_order_in_both_directions() {
+    let f = Fixture::new(50_000);
+    let ascending = f.search("", SortKey::Relevance, false, 50);
+    let descending = f.search("", SortKey::Relevance, true, 50);
+    assert_eq!(ascending, descending);
+    assert_eq!(
+        ascending,
+        f.expected("", SortKey::Relevance, false, 50),
+        "the stored tie order must be the brute-force order"
+    );
+
+    let seg = f.segment();
+    let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
+    let found = run(
+        &seg,
+        &plan,
+        Wanted {
+            sort: SortKey::Relevance,
+            descending: false,
+            offset: 0,
+            limit: 50,
+            count_cap: 200,
+            rank_only: false,
+        },
+    );
+    assert!(
+        found.rows_visited < 500,
+        "an equal relevance key should read a page, not {} rows",
+        found.rows_visited
+    );
 }
 
 #[test]
@@ -483,6 +518,8 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
         dirs: DirTable::open(&f.bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&f.bytes.tri_dict, &f.bytes.tri_post).expect("tri"),
         porder: PathOrder::open(&f.bytes.porder),
+        norder: NameOrder::open(&f.bytes.norder),
+        eorder: ExtensionOrder::open(&f.bytes.eorder),
         alive: &alive,
     };
     let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
@@ -778,6 +815,8 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),
         porder: PathOrder::open(&bytes.porder),
+        norder: NameOrder::open(&bytes.norder),
+        eorder: ExtensionOrder::open(&bytes.eorder),
         alive: &bytes.alive,
     };
     let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");

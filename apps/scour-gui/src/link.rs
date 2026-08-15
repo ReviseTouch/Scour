@@ -12,7 +12,11 @@
 //! for. Without the split a twenty-millisecond facet count sits in front of the
 //! next search.
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc::{Receiver, Sender, channel},
+};
 
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
@@ -25,7 +29,7 @@ pub const TYPING_CAP: u32 = 1_000;
 
 /// What the window asks for.
 pub enum Ask {
-    /// A search and its facets, tagged with the keystroke that caused them.
+    /// A search, tagged with the interaction that caused it.
     ///
     /// The tag is what makes a stale answer droppable. Without it a slow reply
     /// to `re` arrives after a fast one to `rapor` and the list goes backwards
@@ -33,18 +37,20 @@ pub enum Ask {
     /// search-as-you-type box can have.
     Search {
         generation: u64,
+        query_revision: u64,
         query: String,
         sort: String,
         descending: bool,
+        offset: u32,
         limit: u32,
     },
     Facets {
-        generation: u64,
+        query_revision: u64,
         query: String,
     },
     /// How many match, exactly, once the typing has stopped.
     Count {
-        generation: u64,
+        query_revision: u64,
         query: String,
     },
     Stop,
@@ -57,11 +63,11 @@ pub enum Got {
         reply: Box<Response>,
     },
     Facets {
-        generation: u64,
+        query_revision: u64,
         reply: Box<Response>,
     },
     Count {
-        generation: u64,
+        query_revision: u64,
         reply: Box<Response>,
     },
     /// The service answered, and the answer was no.
@@ -71,56 +77,104 @@ pub enum Got {
     /// engine cannot serve — leaves a perfectly good connection open, and
     /// throwing it away and reconnecting on every keystroke of `ra` would be
     /// a reconnect storm caused by nothing.
-    Refused { generation: u64, why: String },
+    Refused {
+        revision: ReplyRevision,
+        why: String,
+    },
     /// The service could not be reached, with the reason as a sentence.
     Down(String),
     /// It could, after having been down.
     Up,
 }
 
+/// The freshness domain of a rejected request.
+///
+/// Ordering changes advance a search generation without changing the matching
+/// set. Keeping that generation separate from the query revision prevents a
+/// late facet/count error from being mistaken for the current search error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplyRevision {
+    Search(u64),
+    Query(u64),
+}
+
 pub struct Link {
-    ask: Sender<Ask>,
+    fast: Sender<Ask>,
+    slow: Sender<Ask>,
+    freshness: Freshness,
+}
+
+/// The newest work the UI can still use.
+///
+/// Dropping a stale reply protects correctness but saves no work. These two
+/// counters are visible to both lanes, so a request waiting behind one slow
+/// call can be discarded before it reaches the service. At most the call that
+/// was already in flight when a key was pressed remains unavoidable.
+#[derive(Clone, Default)]
+struct Freshness {
+    search: Arc<AtomicU64>,
+    query: Arc<AtomicU64>,
+}
+
+impl Freshness {
+    fn note(&self, ask: &Ask) {
+        if let Ask::Search {
+            generation,
+            query_revision,
+            ..
+        } = ask
+        {
+            self.search.fetch_max(*generation, Ordering::Release);
+            self.query.fetch_max(*query_revision, Ordering::Release);
+        }
+    }
+
+    fn accepts(&self, ask: &Ask) -> bool {
+        match ask {
+            Ask::Search { generation, .. } => *generation == self.search.load(Ordering::Acquire),
+            Ask::Facets { query_revision, .. } | Ask::Count { query_revision, .. } => {
+                *query_revision == self.query.load(Ordering::Acquire)
+            }
+            Ask::Stop => true,
+        }
+    }
 }
 
 impl Link {
     /// Start the two lanes. `sink` is called from the worker threads.
     pub fn start(addr: String, sink: impl Fn(Got) + Send + Clone + 'static) -> Link {
-        let (tx, rx) = channel::<Ask>();
         let (fast_tx, fast_rx) = channel::<Ask>();
         let (slow_tx, slow_rx) = channel::<Ask>();
+        let freshness = Freshness::default();
 
-        // One router, so that the window has a single sender and does not have
-        // to know which lane a request belongs on.
-        std::thread::spawn(move || {
-            for ask in rx {
-                let done = matches!(ask, Ask::Stop);
-                let to = match ask {
-                    Ask::Facets { .. } | Ask::Count { .. } => &slow_tx,
-                    _ => &fast_tx,
-                };
-                if to.send(ask).is_err() || done {
-                    let _ = slow_tx.send(Ask::Stop);
-                    let _ = fast_tx.send(Ask::Stop);
-                    break;
-                }
-            }
-        });
-
-        spawn_lane(addr.clone(), fast_rx, sink.clone());
-        spawn_lane(addr, slow_rx, sink);
-        Link { ask: tx }
+        spawn_lane(addr.clone(), fast_rx, sink.clone(), freshness.clone(), true);
+        spawn_lane(addr, slow_rx, sink, freshness.clone(), false);
+        Link {
+            fast: fast_tx,
+            slow: slow_tx,
+            freshness,
+        }
     }
 
     pub fn send(&self, ask: Ask) {
+        // Publish the new generation before enqueueing it. A worker looking at
+        // an older queued request can then skip it even if the router has not
+        // forwarded the new message yet.
+        self.freshness.note(&ask);
+        let lane = match &ask {
+            Ask::Facets { .. } | Ask::Count { .. } => &self.slow,
+            _ => &self.fast,
+        };
         // A closed channel means the lane died, and the window finds out from
         // the `Down` event rather than from a panic here.
-        let _ = self.ask.send(ask);
+        let _ = lane.send(ask);
     }
 }
 
 impl Drop for Link {
     fn drop(&mut self) {
-        let _ = self.ask.send(Ask::Stop);
+        let _ = self.fast.send(Ask::Stop);
+        let _ = self.slow.send(Ask::Stop);
     }
 }
 
@@ -133,15 +187,29 @@ enum Lane {
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
-fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'static) {
+fn spawn_lane(
+    addr: String,
+    rx: Receiver<Ask>,
+    sink: impl Fn(Got) + Send + 'static,
+    freshness: Freshness,
+    coalesce: bool,
+) {
     std::thread::spawn(move || {
         let mut client: Option<Client> = None;
         let mut was_down = false;
-        for ask in rx {
+        for first in &rx {
+            let ask = if coalesce {
+                newest_queued(first, &rx)
+            } else {
+                first
+            };
             let ask = match ask {
                 Ask::Stop => break,
                 other => other,
             };
+            if !freshness.accepts(&ask) {
+                continue;
+            }
             // Reconnect lazily rather than on a timer: the only moment the
             // window cares whether the service is up is when it has something
             // to ask.
@@ -163,13 +231,21 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                     }
                 }
             }
+            // Connecting can take longer than a key interval. Recheck at the
+            // last point before the service call so that work superseded while
+            // reconnecting is not paid for either.
+            if !freshness.accepts(&ask) {
+                continue;
+            }
             let Some(c) = client.as_mut() else { continue };
-            let (generation, request, facets) = match ask {
+            let (revision, request, facets) = match ask {
                 Ask::Search {
                     generation,
+                    query_revision: _,
                     query,
                     sort,
                     descending,
+                    offset,
                     limit,
                 } => (
                     generation,
@@ -178,7 +254,7 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                         sort: sort_of(&sort),
                         descending,
                         page: scour_core::Page {
-                            offset: 0,
+                            offset,
                             limit,
                             // **Small, and this is the single largest thing a
                             // keystroke used to cost.** The cap is how many
@@ -196,16 +272,22 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                     },
                     Lane::Search,
                 ),
-                Ask::Facets { generation, query } => (
-                    generation,
+                Ask::Facets {
+                    query_revision,
+                    query,
+                } => (
+                    query_revision,
                     Request::Facets {
                         query,
                         by: vec![scour_core::FacetBy::Kind],
                     },
                     Lane::Facets,
                 ),
-                Ask::Count { generation, query } => (
-                    generation,
+                Ask::Count {
+                    query_revision,
+                    query,
+                } => (
+                    query_revision,
                     Request::Count {
                         query,
                         cap: 10_000_000,
@@ -218,9 +300,18 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                 Ok(reply) => {
                     let reply = Box::new(reply);
                     sink(match facets {
-                        Lane::Facets => Got::Facets { generation, reply },
-                        Lane::Count => Got::Count { generation, reply },
-                        Lane::Search => Got::Search { generation, reply },
+                        Lane::Facets => Got::Facets {
+                            query_revision: revision,
+                            reply,
+                        },
+                        Lane::Count => Got::Count {
+                            query_revision: revision,
+                            reply,
+                        },
+                        Lane::Search => Got::Search {
+                            generation: revision,
+                            reply,
+                        },
                     });
                 }
                 Err(e) => {
@@ -237,8 +328,12 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
                         was_down = true;
                         sink(Got::Down(e.to_string()));
                     } else {
+                        let revision = match facets {
+                            Lane::Search => ReplyRevision::Search(revision),
+                            Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
+                        };
                         sink(Got::Refused {
-                            generation,
+                            revision,
                             why: e.to_string(),
                         });
                     }
@@ -246,6 +341,22 @@ fn spawn_lane(addr: String, rx: Receiver<Ask>, sink: impl Fn(Got) + Send + 'stat
             }
         }
     });
+}
+
+/// Collapse the interactive backlog to its last intent.
+///
+/// The atomic guard catches a newer search that has not reached this channel
+/// yet. Draining here handles the ordinary case in one pass and releases the
+/// superseded query strings immediately.
+fn newest_queued(mut ask: Ask, rx: &Receiver<Ask>) -> Ask {
+    while let Ok(next) = rx.try_recv() {
+        let stop = matches!(next, Ask::Stop);
+        ask = next;
+        if stop {
+            break;
+        }
+    }
+    ask
 }
 
 fn sort_of(name: &str) -> scour_core::SortKey {
@@ -258,5 +369,67 @@ fn sort_of(name: &str) -> scour_core::SortKey {
         "ext" => SortKey::Ext,
         "kind" => SortKey::Kind,
         _ => SortKey::Relevance,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn search(generation: u64, query_revision: u64) -> Ask {
+        Ask::Search {
+            generation,
+            query_revision,
+            query: String::new(),
+            sort: "modified".into(),
+            descending: true,
+            offset: 0,
+            limit: 20,
+        }
+    }
+
+    #[test]
+    fn only_the_newest_queued_search_reaches_the_service() {
+        let freshness = Freshness::default();
+        let old = search(1, 1);
+        freshness.note(&old);
+        assert!(freshness.accepts(&old));
+
+        let newest = search(3, 3);
+        freshness.note(&newest);
+        assert!(!freshness.accepts(&old));
+        assert!(freshness.accepts(&newest));
+        assert!(!freshness.accepts(&search(2, 2)));
+    }
+
+    #[test]
+    fn an_interactive_backlog_is_coalesced_to_one_message() {
+        let (tx, rx) = channel();
+        tx.send(search(2, 2)).expect("queue second search");
+        tx.send(search(3, 3)).expect("queue third search");
+        let newest = newest_queued(search(1, 1), &rx);
+        assert!(matches!(newest, Ask::Search { generation: 3, .. }));
+        assert!(rx.try_recv().is_err(), "the backlog was drained");
+    }
+
+    #[test]
+    fn sorting_does_not_expire_background_work_for_the_same_query() {
+        let freshness = Freshness::default();
+        let sorted = search(7, 2);
+        freshness.note(&sorted);
+
+        assert!(freshness.accepts(&Ask::Facets {
+            query_revision: 2,
+            query: "rapor".into(),
+        }));
+        assert!(!freshness.accepts(&Ask::Count {
+            query_revision: 1,
+            query: "old".into(),
+        }));
+    }
+
+    #[test]
+    fn rejected_requests_keep_their_freshness_domain() {
+        assert_ne!(ReplyRevision::Search(7), ReplyRevision::Query(7));
     }
 }

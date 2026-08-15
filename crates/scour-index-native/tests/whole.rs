@@ -232,6 +232,337 @@ fn the_stored_path_order_is_the_order_brute_force_gives() {
     );
 }
 
+/// Ordering by name is a stored order too, and its shortcut is held to the
+/// public reference rather than to another implementation detail.
+///
+/// These are exactly the queries that may stream the order: none has to read a
+/// name to decide whether a row matches. Text queries keep the sequential name
+/// walk after the trigram filter narrows their blocks.
+#[test]
+fn the_stored_name_order_is_the_order_brute_force_gives() {
+    let f = Fixture::new(16_000, 2_000);
+    for q in [
+        "",
+        "kind:code",
+        "size:>1k",
+        "dm:30d",
+        "under:/home/u/Projeler",
+        "parent:/home/u",
+        "!kind:code",
+        "is:dir",
+    ] {
+        for desc in [false, true] {
+            f.check(q, SortKey::Name, desc);
+            let whole = brute_force(&f.entries, &parse_at(q, NOW), SortKey::Name, desc, 400);
+            if whole.len() > 300 {
+                let want: Vec<String> = whole[300..].iter().map(|h| h.path.clone()).collect();
+                assert_eq!(
+                    f.paged(q, SortKey::Name, desc, 300, 100),
+                    want,
+                    "{q:?} by name (desc={desc}) at 300+100 disagrees with brute force"
+                );
+            }
+        }
+    }
+
+    let res = f
+        .index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Name,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 50,
+                count_cap: 200,
+            },
+        })
+        .expect("search");
+    assert!(
+        res.rows_visited < f.entries.len() as u64 / 4,
+        "a stored name order should read a page, not a corpus: {} rows of {}",
+        res.rows_visited,
+        f.entries.len()
+    );
+}
+
+/// Extension order is persisted for the broad list shown by the GUI.
+///
+/// Extensions have only a modest number of values, so most rows tie. The
+/// order therefore has to preserve both the primary extension and the public
+/// newest-first/path-first tie order while still stopping after a page.
+#[test]
+fn the_stored_extension_order_is_the_order_brute_force_gives() {
+    let f = Fixture::new(16_000, 2_000);
+    for q in [
+        "",
+        "kind:code",
+        "size:>1k",
+        "dm:30d",
+        "under:/home/u/Projeler",
+        "parent:/home/u",
+        "!kind:code",
+        "is:dir",
+    ] {
+        for desc in [false, true] {
+            f.check(q, SortKey::Ext, desc);
+            let whole = brute_force(&f.entries, &parse_at(q, NOW), SortKey::Ext, desc, 400);
+            if whole.len() > 300 {
+                let want: Vec<String> = whole[300..].iter().map(|h| h.path.clone()).collect();
+                assert_eq!(
+                    f.paged(q, SortKey::Ext, desc, 300, 100),
+                    want,
+                    "{q:?} by extension (desc={desc}) at 300+100 disagrees with brute force"
+                );
+            }
+        }
+    }
+
+    let res = f
+        .index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Ext,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 50,
+                count_cap: 200,
+            },
+        })
+        .expect("search");
+    assert!(
+        res.rows_visited < f.entries.len() as u64 / 4,
+        "a stored extension order should read a page, not a corpus: {} rows of {}",
+        res.rows_visited,
+        f.entries.len()
+    );
+}
+
+/// Reversing a name order must not reverse the rows that share one name.
+///
+/// The primary direction changes, while ties remain newest-first and then
+/// path-first. Names tie often enough that this is not a corner case: files
+/// such as `Cargo.toml`, `index.js`, and `README` occur throughout a tree.
+#[test]
+fn descending_stored_name_order_keeps_the_public_tie_order() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let variants = ["REPORT.TXT", "Report.Txt", "report.txt"];
+    let entries: Vec<Entry> = (0..600u64)
+        .map(|i| {
+            entry(
+                &format!("/d{i:04}/{}", variants[i as usize % variants.len()]),
+                NOW - (i % 19) as i64,
+                10_000 + i,
+            )
+        })
+        .collect();
+    for part in entries.chunks(100) {
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    for desc in [false, true] {
+        for &(offset, limit) in &[(0usize, 40usize), (170, 80), (500, 50)] {
+            let got: Vec<String> = index
+                .search(&SearchRequest {
+                    query: parse_at("", NOW),
+                    sort: SortKey::Name,
+                    descending: desc,
+                    page: Page {
+                        offset: offset as u32,
+                        limit: limit as u32,
+                        count_cap: 10_000,
+                    },
+                })
+                .expect("search")
+                .hits
+                .into_iter()
+                .map(|h| h.path)
+                .collect();
+            let whole = brute_force(
+                &entries,
+                &parse_at("", NOW),
+                SortKey::Name,
+                desc,
+                offset + limit,
+            );
+            let want: Vec<String> = whole[offset..].iter().map(|h| h.path.clone()).collect();
+            assert_eq!(
+                got, want,
+                "name ties changed at {offset}+{limit} (desc={desc})"
+            );
+        }
+    }
+}
+
+#[test]
+fn descending_stored_extension_order_keeps_the_public_tie_order() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let variants = ["RS", "Rs", "rs"];
+    let entries: Vec<Entry> = (0..600u64)
+        .map(|i| {
+            entry(
+                &format!(
+                    "/d{:04}/file{:04}.{}",
+                    599 - i,
+                    i,
+                    variants[i as usize % variants.len()]
+                ),
+                NOW - (i % 19) as i64,
+                20_000 + i,
+            )
+        })
+        .collect();
+    for part in entries.chunks(100) {
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    for desc in [false, true] {
+        for &(offset, limit) in &[(0usize, 40usize), (170, 80), (500, 50)] {
+            let got: Vec<String> = index
+                .search(&SearchRequest {
+                    query: parse_at("", NOW),
+                    sort: SortKey::Ext,
+                    descending: desc,
+                    page: Page {
+                        offset: offset as u32,
+                        limit: limit as u32,
+                        count_cap: 10_000,
+                    },
+                })
+                .expect("search")
+                .hits
+                .into_iter()
+                .map(|h| h.path)
+                .collect();
+            let whole = brute_force(
+                &entries,
+                &parse_at("", NOW),
+                SortKey::Ext,
+                desc,
+                offset + limit,
+            );
+            let want: Vec<String> = whole[offset..].iter().map(|h| h.path.clone()).collect();
+            assert_eq!(
+                got, want,
+                "extension ties changed at {offset}+{limit} (desc={desc})"
+            );
+        }
+    }
+}
+
+#[test]
+fn folded_extension_rules_survive_a_multi_segment_merge() {
+    use scour_core::text::{DefaultFolder, Folder};
+
+    // Both are twelve bytes before folding and eighteen afterwards. Their
+    // first sixteen folded bytes are identical, so a merge that treats the
+    // `Head` as exact — or resolves it with the whole name — gets the page
+    // boundary wrong.
+    let common = "Ⱥ".repeat(5);
+    let grown_a = format!("{common}Ⱥ");
+    let grown_b = format!("{common}Ⱦ");
+    assert_eq!(grown_a.len(), 12);
+    assert_eq!(grown_b.len(), 12);
+    let folded_a = DefaultFolder.fold(&grown_a);
+    let folded_b = DefaultFolder.fold(&grown_b);
+    assert_eq!(&folded_a.as_bytes()[..16], &folded_b.as_bytes()[..16]);
+    assert_ne!(folded_a, folded_b);
+
+    // Seven dotless i characters contract from fourteen raw bytes to seven.
+    // They remain ineligible; an ASCII suffix with the same folded spelling is
+    // eligible and lets the extension filter expose any post-fold decision.
+    let contracted = "ı".repeat(7);
+    let eligible = "iiiiiii";
+    let mut entries = Vec::new();
+    for i in 0..250u64 {
+        let ext = match i % 5 {
+            0 | 3 => grown_a.as_str(),
+            1 => grown_b.as_str(),
+            2 => contracted.as_str(),
+            _ => eligible,
+        };
+        entries.push(entry(
+            &format!("/fold/d{:03}/file{i:03}.{ext}", 249 - i),
+            NOW - ((i * 37) % 29) as i64,
+            50_000 + i,
+        ));
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    for part in entries.chunks(17) {
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+
+    for desc in [false, true] {
+        for &(offset, limit) in &[(0usize, 25usize), (35, 30), (80, 35), (130, 40), (210, 25)] {
+            let got: Vec<String> = index
+                .search(&SearchRequest {
+                    query: parse_at("", NOW),
+                    sort: SortKey::Ext,
+                    descending: desc,
+                    page: Page {
+                        offset: offset as u32,
+                        limit: limit as u32,
+                        count_cap: 10_000,
+                    },
+                })
+                .expect("search")
+                .hits
+                .into_iter()
+                .map(|hit| hit.path)
+                .collect();
+            let whole = brute_force(
+                &entries,
+                &parse_at("", NOW),
+                SortKey::Ext,
+                desc,
+                offset + limit,
+            );
+            let want: Vec<String> = whole[offset..].iter().map(|hit| hit.path.clone()).collect();
+            assert_eq!(
+                got, want,
+                "folded extension merge changed at {offset}+{limit} (desc={desc})"
+            );
+        }
+    }
+
+    let query = parse_at("ext:iiiiiii", NOW);
+    let got: Vec<String> = index
+        .search(&SearchRequest {
+            query: query.clone(),
+            sort: SortKey::Ext,
+            descending: false,
+            page: Page::new(0, 1_000),
+        })
+        .expect("extension filter")
+        .hits
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect();
+    let want: Vec<String> = brute_force(&entries, &query, SortKey::Ext, false, 1_000)
+        .into_iter()
+        .map(|hit| hit.path)
+        .collect();
+    assert_eq!(got, want);
+    assert!(
+        got.iter().all(|path| path.ends_with(".iiiiiii")),
+        "a contracted over-limit extension passed the raw-length rule"
+    );
+}
+
 /// Oldest-first is the same answer as before, now that it is a different walk.
 ///
 /// **The gap this closes is why it went unnoticed.** The agreement test above
@@ -841,6 +1172,201 @@ fn a_commit_that_cannot_be_written_keeps_what_it_was_carrying() {
     assert_eq!(hits.total, 1);
 }
 
+/// A failed bitmap replacement must leave enough state for the next commit.
+///
+/// The first attempt has already killed the row in memory, so asking the same
+/// removal to run again reports zero. Without a separate dirty-bitmap stamp,
+/// the retry then writes nothing and a restart resurrects the file.
+#[test]
+fn a_failed_alive_write_retries_the_pending_removal() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let victim = "/home/u/retry-removal.txt";
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut rows = (0..200u64).map(|i| {
+            let path = if i == 77 {
+                victim.to_owned()
+            } else {
+                format!("/home/u/keep-{i:03}.txt")
+            };
+            Change::Upsert(entry(&path, NOW + i as i64, i))
+        });
+        index.apply(&mut rows).expect("apply");
+        index.commit().expect("commit");
+
+        index
+            .apply(&mut std::iter::once(Change::RemoveSubtree {
+                path: victim.into(),
+            }))
+            .expect("remove");
+
+        let alive = std::fs::read_dir(tmp.path())
+            .expect("read_dir")
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "alive"))
+            .expect("alive file");
+        let saved = tmp.path().join("saved-alive");
+        std::fs::rename(&alive, &saved).expect("move alive aside");
+        std::fs::create_dir(&alive).expect("block alive replacement");
+
+        assert!(
+            index.commit().is_err(),
+            "a directory accepted a bitmap rename"
+        );
+        assert_eq!(index.stats().expect("stats").pending_removals, 1);
+        assert!(
+            !index
+                .search(&SearchRequest {
+                    query: parse_at("retry-removal", NOW),
+                    page: Page::new(0, 10),
+                    ..Default::default()
+                })
+                .expect("search after failed commit")
+                .hits
+                .iter()
+                .any(|hit| hit.path == victim),
+            "the failed durable write undid the in-memory removal"
+        );
+
+        std::fs::remove_dir(&alive).expect("remove blocker");
+        std::fs::rename(&saved, &alive).expect("restore old bitmap");
+        index.commit().expect("retry");
+        assert_eq!(index.stats().expect("stats").pending_removals, 0);
+    }
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    let found = index
+        .search(&SearchRequest {
+            query: parse_at("retry-removal", NOW),
+            page: Page::new(0, 10),
+            ..Default::default()
+        })
+        .expect("search after reopen");
+    assert!(found.hits.is_empty(), "the restart resurrected {victim}");
+    assert_eq!(index.stats().expect("stats").entries, 199);
+}
+
+/// `forget` bypasses the ordinary removal overlay, but its bitmap has the same
+/// durability rule: a failed replacement must remain work for the next call.
+#[test]
+fn forget_retries_a_failed_alive_write_and_survives_reopen() {
+    fn all_paths(index: &NativeIndex) -> Vec<String> {
+        index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                page: Page::new(0, 10),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect()
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let kept = Entry {
+            id: EntryId::path_hash(SourceId(1), "/w/kept.txt"),
+            path: "/w/kept.txt".into(),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW + 1,
+                size: 2,
+                ..Meta::UNKNOWN
+            },
+        };
+        index
+            .apply(
+                &mut [
+                    Change::Upsert(entry("/w/forgotten.txt", NOW, 1)),
+                    Change::Upsert(kept),
+                ]
+                .into_iter(),
+            )
+            .expect("apply");
+        index.commit().expect("commit");
+
+        let alive = tmp.path().join("seg-00000001.alive");
+        let saved = tmp.path().join("saved-forget-alive");
+        std::fs::rename(&alive, &saved).expect("move bitmap aside");
+        std::fs::create_dir(&alive).expect("block bitmap replacement");
+
+        assert!(index.forget(SourceId(0)).is_err());
+        assert_eq!(all_paths(&index), ["/w/kept.txt"]);
+
+        std::fs::remove_dir(&alive).expect("remove blocker");
+        std::fs::rename(&saved, &alive).expect("restore old bitmap");
+        assert_eq!(index.forget(SourceId(0)).expect("retry forget"), 0);
+    }
+
+    let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(all_paths(&reopened), ["/w/kept.txt"]);
+}
+
+/// A failed sweep must restore its unchanged-row stamps as well as its dirty
+/// bitmap. Otherwise retrying deletes both the missing row and the row the walk
+/// explicitly saw.
+#[test]
+fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
+    fn all_paths(index: &NativeIndex) -> Vec<String> {
+        index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                page: Page::new(0, 10),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect()
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let keeper = entry("/w/keeper.txt", NOW, 1);
+        index
+            .apply(
+                &mut [
+                    Change::Upsert(keeper.clone()),
+                    Change::Upsert(entry("/w/missing.txt", NOW + 1, 2)),
+                ]
+                .into_iter(),
+            )
+            .expect("apply");
+        index.commit().expect("commit");
+
+        let generation = index.begin_generation().expect("generation");
+        index
+            .apply(&mut std::iter::once(Change::Upsert(keeper)))
+            .expect("stamp keeper");
+        index.commit().expect("commit stamp");
+
+        let alive = tmp.path().join("seg-00000001.alive");
+        let saved = tmp.path().join("saved-sweep-alive");
+        std::fs::rename(&alive, &saved).expect("move bitmap aside");
+        std::fs::create_dir(&alive).expect("block bitmap replacement");
+        assert!(
+            index
+                .sweep(SourceId(0), "/w", generation, &PrefixSet::default())
+                .is_err()
+        );
+
+        std::fs::remove_dir(&alive).expect("remove blocker");
+        std::fs::rename(&saved, &alive).expect("restore old bitmap");
+        index
+            .sweep(SourceId(0), "/w", generation, &PrefixSet::default())
+            .expect("retry sweep");
+    }
+
+    let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(all_paths(&reopened), ["/w/keeper.txt"]);
+}
+
 #[test]
 fn one_source_cannot_sweep_away_another_source_rows() {
     // Two sources whose roots overlap — a home directory and a project
@@ -890,20 +1416,68 @@ fn a_removal_is_invisible_before_it_is_written() {
     // The one thing that may not wait for a commit. Deleting a file and still
     // seeing it reads as a broken program, so the removal takes effect in the
     // overlay first and in the files afterwards.
-    let f = Fixture::new(2_000, 2_000);
-    let victim = f.search("", SortKey::Modified, true, 1)[0].clone();
+    let f = Fixture::new(20_000, 20_000);
+    let victim = f
+        .entries
+        .iter()
+        .find(|entry| !entry.is_dir)
+        .expect("a file")
+        .path
+        .clone();
 
     f.index
         .apply(&mut std::iter::once(Change::RemoveSubtree {
             path: victim.clone(),
         }))
         .expect("apply");
-    let after = f.search("", SortKey::Modified, true, 5);
-    assert!(!after.contains(&victim), "{victim} is still visible");
+    let remaining: Vec<Entry> = f
+        .entries
+        .iter()
+        .filter(|entry| entry.path != victim)
+        .cloned()
+        .collect();
+    for sort in [SortKey::Name, SortKey::Ext] {
+        let pending = f
+            .index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort,
+                descending: false,
+                page: Page {
+                    offset: 0,
+                    limit: 50,
+                    count_cap: 200,
+                },
+            })
+            .expect("search while removal is pending");
+        assert!(
+            !pending.hits.iter().any(|hit| hit.path == victim),
+            "{victim} is still visible"
+        );
+        assert!(
+            pending.rows_visited < f.entries.len() as u64 / 4,
+            "one pending removal disabled the stored {sort:?} order: {} rows of {}",
+            pending.rows_visited,
+            f.entries.len()
+        );
+        let want: Vec<String> = brute_force(&remaining, &parse_at("", NOW), sort, false, 50)
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect();
+        assert_eq!(
+            pending
+                .hits
+                .iter()
+                .map(|hit| hit.path.clone())
+                .collect::<Vec<_>>(),
+            want,
+            "the stored {sort:?} order and pending-removal veto disagree with brute force"
+        );
+    }
     assert_eq!(f.index.stats().expect("stats").pending_removals, 1);
 
     f.index.commit().expect("commit");
-    let after = f.search("", SortKey::Modified, true, 5);
+    let after = f.search("", SortKey::Name, false, 50);
     assert!(
         !after.contains(&victim),
         "{victim} came back after the commit"
@@ -2156,6 +2730,37 @@ fn facets_count_what_a_search_would_have_returned() {
         "a child is one component, not a path: {:?}",
         children.facets
     );
+
+    // The same pending-removal overlay as search, compiled into directory
+    // ranges rather than a spelled path built for every matching row.
+    let kinds = |index: &NativeIndex| {
+        index
+            .facets(&FacetRequest {
+                query: parse_at("", NOW),
+                by: vec![FacetBy::Kind],
+            })
+            .expect("kind facets")
+            .facets
+            .into_iter()
+            .map(|facet| facet.count)
+            .sum::<u64>()
+    };
+    let before = kinds(&f.index);
+    let victim = f
+        .entries
+        .iter()
+        .find(|entry| !entry.is_dir)
+        .expect("a file")
+        .path
+        .clone();
+    f.index
+        .apply(&mut std::iter::once(Change::RemoveSubtree { path: victim }))
+        .expect("remove before facets");
+    assert_eq!(
+        kinds(&f.index),
+        before - 1,
+        "a pending removal stayed in the sidebar"
+    );
 }
 
 #[test]
@@ -2417,6 +3022,263 @@ fn an_index_written_without_a_path_order_answers_the_same_way() {
             "without the order the walk has nothing to stop it: {walked} against {visited}"
         );
     }
+}
+
+/// Name-order files are an optional acceleration, independently per segment.
+///
+/// An upgrade therefore has three ordinary states: all current segments,
+/// current and legacy segments mixed, and an entirely legacy index. Every one
+/// must answer identically; only the number of rows visited may change.
+#[test]
+fn segments_with_and_without_a_name_order_answer_one_name_list() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 12_000,
+        now: NOW,
+        ..Default::default()
+    });
+    let page = |index: &NativeIndex, desc: bool, offset: usize, limit: usize| {
+        let res = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Name,
+                descending: desc,
+                page: Page {
+                    offset: offset as u32,
+                    limit: limit as u32,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        (
+            res.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+            res.rows_visited,
+        )
+    };
+
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for part in fs.entries.chunks(1_500) {
+            index
+                .apply(&mut part.iter().cloned().map(Change::Upsert))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+    }
+
+    let mut orders: Vec<std::path::PathBuf> = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "norder"))
+        .collect();
+    orders.sort();
+    assert!(orders.len() >= 4, "the fixture wrote too few name orders");
+
+    let with_order = {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("open current index");
+        [page(&index, false, 300, 80), page(&index, true, 300, 80)]
+    };
+
+    // Every other segment is legacy: both paths must contribute to one merge.
+    for p in orders.iter().step_by(2) {
+        std::fs::remove_file(p).expect("remove alternating name order");
+    }
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("open mixed index");
+        for (i, desc) in [false, true].into_iter().enumerate() {
+            let (got, _) = page(&index, desc, 300, 80);
+            assert_eq!(
+                got, with_order[i].0,
+                "mixed name order changed (desc={desc})"
+            );
+        }
+    }
+
+    // Remove the rest: an index from before the feature still opens and falls
+    // back to the full keyed walk.
+    for p in orders.iter().skip(1).step_by(2) {
+        std::fs::remove_file(p).expect("remove remaining name order");
+    }
+    let index = NativeIndex::open_or_create(tmp.path()).expect("open legacy index");
+    for (i, desc) in [false, true].into_iter().enumerate() {
+        let (got, walked) = page(&index, desc, 300, 80);
+        assert_eq!(
+            got, with_order[i].0,
+            "legacy name order changed (desc={desc})"
+        );
+        let reference: Vec<String> =
+            brute_force(&fs.entries, &parse_at("", NOW), SortKey::Name, desc, 380)[300..]
+                .iter()
+                .map(|h| h.path.clone())
+                .collect();
+        assert_eq!(
+            got, reference,
+            "legacy name order disagrees with brute force"
+        );
+        assert!(
+            walked > with_order[i].1,
+            "without name orders the walk should do more work: {walked} against {}",
+            with_order[i].1
+        );
+    }
+}
+
+#[test]
+fn segments_with_and_without_an_extension_order_answer_one_extension_list() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 12_000,
+        now: NOW,
+        ..Default::default()
+    });
+    let page = |index: &NativeIndex, desc: bool, offset: usize, limit: usize| {
+        let res = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Ext,
+                descending: desc,
+                page: Page {
+                    offset: offset as u32,
+                    limit: limit as u32,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        (
+            res.hits.into_iter().map(|h| h.path).collect::<Vec<_>>(),
+            res.rows_visited,
+        )
+    };
+
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for part in fs.entries.chunks(1_500) {
+            index
+                .apply(&mut part.iter().cloned().map(Change::Upsert))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+    }
+
+    let mut orders: Vec<std::path::PathBuf> = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "eorder"))
+        .collect();
+    orders.sort();
+    assert!(
+        orders.len() >= 4,
+        "the fixture wrote too few extension orders"
+    );
+
+    let with_order = {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("open current index");
+        [page(&index, false, 300, 80), page(&index, true, 300, 80)]
+    };
+
+    for p in orders.iter().step_by(2) {
+        std::fs::remove_file(p).expect("remove alternating extension order");
+    }
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("open mixed index");
+        for (i, desc) in [false, true].into_iter().enumerate() {
+            let (got, _) = page(&index, desc, 300, 80);
+            assert_eq!(
+                got, with_order[i].0,
+                "mixed extension order changed (desc={desc})"
+            );
+        }
+    }
+
+    for p in orders.iter().skip(1).step_by(2) {
+        std::fs::remove_file(p).expect("remove remaining extension order");
+    }
+    let index = NativeIndex::open_or_create(tmp.path()).expect("open legacy index");
+    for (i, desc) in [false, true].into_iter().enumerate() {
+        let (got, walked) = page(&index, desc, 300, 80);
+        assert_eq!(
+            got, with_order[i].0,
+            "legacy extension order changed (desc={desc})"
+        );
+        let reference: Vec<String> =
+            brute_force(&fs.entries, &parse_at("", NOW), SortKey::Ext, desc, 380)[300..]
+                .iter()
+                .map(|h| h.path.clone())
+                .collect();
+        assert_eq!(
+            got, reference,
+            "legacy extension order disagrees with brute force"
+        );
+        assert!(
+            walked > with_order[i].1,
+            "without extension orders the walk should do more work: {walked} against {}",
+            with_order[i].1
+        );
+    }
+}
+
+#[test]
+fn a_name_order_that_does_not_describe_the_segment_is_refused() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut it = (0..200).map(|i| Change::Upsert(entry(&format!("/a/f{i}.rs"), NOW, i)));
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let order = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "norder"))
+        .expect("a name order was written");
+    let whole = std::fs::read(&order).expect("read");
+    std::fs::write(&order, &whole[..whole.len() - 1]).expect("truncate");
+
+    match NativeIndex::open_or_create(tmp.path()) {
+        Err(scour_core::Error::IndexCorrupt { detail }) => {
+            assert!(detail.contains("norder"), "unhelpful detail: {detail}");
+        }
+        other => panic!("expected damage, got {other:?}"),
+    }
+
+    std::fs::remove_file(&order).expect("remove");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("open as legacy");
+    assert_eq!(index.stats().expect("stats").entries, 200);
+}
+
+#[test]
+fn an_extension_order_that_does_not_describe_the_segment_is_refused() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut it = (0..200).map(|i| Change::Upsert(entry(&format!("/a/f{i}.rs"), NOW, i)));
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+
+    let order = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "eorder"))
+        .expect("an extension order was written");
+    let whole = std::fs::read(&order).expect("read");
+    std::fs::write(&order, &whole[..whole.len() - 1]).expect("truncate");
+
+    match NativeIndex::open_or_create(tmp.path()) {
+        Err(scour_core::Error::IndexCorrupt { detail }) => {
+            assert!(detail.contains("eorder"), "unhelpful detail: {detail}");
+        }
+        other => panic!("expected damage, got {other:?}"),
+    }
+
+    std::fs::remove_file(&order).expect("remove");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("open as legacy");
+    assert_eq!(index.stats().expect("stats").entries, 200);
 }
 
 /// Half the segments having a path order is the ordinary state, not a corner.
@@ -3334,5 +4196,66 @@ fn a_folder_sorts_by_the_number_it_shows() {
         up.hits.last().expect("rows").path,
         "/big",
         "the biggest is last when the order is reversed"
+    );
+}
+
+#[test]
+fn reported_disk_bytes_follow_publication_erasure_and_rebuild() {
+    fn physical_bytes(dir: &std::path::Path) -> u64 {
+        std::fs::read_dir(dir)
+            .expect("index directory")
+            .flatten()
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|metadata| metadata.len())
+            .sum()
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    assert_eq!(
+        index.stats().expect("empty stats").bytes_on_disk,
+        physical_bytes(tmp.path())
+    );
+
+    for (path, ino) in [("/w/a.rs", 1), ("/w/b.rs", 2), ("/w/c.rs", 3)] {
+        index
+            .apply(&mut [Change::Upsert(entry(path, NOW, ino))].into_iter())
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    assert_eq!(
+        index.stats().expect("published stats").bytes_on_disk,
+        physical_bytes(tmp.path()),
+        "published segment files and the manifest all count"
+    );
+
+    index
+        .apply(
+            &mut [Change::RemoveSubtree {
+                path: "/w/a.rs".into(),
+            }]
+            .into_iter(),
+        )
+        .expect("remove");
+    index.commit().expect("commit removal");
+    assert_eq!(
+        index.stats().expect("erased stats").bytes_on_disk,
+        physical_bytes(tmp.path()),
+        "an erased segment must leave the cached physical total too"
+    );
+
+    let rebuilt = index
+        .maintain(Maintenance::Rebuild)
+        .expect("rebuild remaining segments");
+    let physical = physical_bytes(tmp.path());
+    assert_eq!(rebuilt.bytes_after, physical);
+    assert_eq!(
+        index.stats().expect("rebuilt stats").bytes_on_disk,
+        physical
+    );
+    assert_eq!(
+        index.stats().expect("cached stats").bytes_on_disk,
+        physical,
+        "a second quiet read must preserve the exact result"
     );
 }

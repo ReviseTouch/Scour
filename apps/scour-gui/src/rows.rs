@@ -2,13 +2,12 @@
 //!
 //! Everything here is formatting, and it is all on this side of the language
 //! boundary on purpose. A `.slint` file that formats a size has to know about
-//! binary units and about the catalogue; one that computes a highlight has to
-//! fold Turkish text. Both would be a second implementation of something that
+//! binary units; one that computes a highlight has to fold Turkish text. Both
+//! would be a second implementation of something that
 //! already exists in `scour-core`, and the two would drift.
 
 use humansize::{BINARY, format_size};
-use scour_core::{Catalog, Hit, Kind, text::Folder};
-use scour_i18n::Catalogue;
+use scour_core::{Hit, Kind, text::Folder};
 
 use crate::Row;
 
@@ -78,26 +77,19 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
 }
 
 /// One hit, formatted.
-pub fn row_of(h: &Hit, terms: &[String], now: i64, cat: &Catalogue) -> Row {
-    let name = h.name().to_owned();
-    let folder = match h.path.rfind('/') {
-        Some(0) => "/".to_owned(),
-        Some(i) => h.path[..i].to_owned(),
-        None => String::new(),
-    };
-    let (pre, hit, post) = split_at_match(&name, terms);
+pub fn row_of(h: &Hit, terms: &[String], now: i64) -> Row {
+    let (pre, hit, post) = split_at_match(h.name(), terms);
     Row {
         pre: pre.into(),
         hit: hit.into(),
         post: post.into(),
-        folder: folder.into(),
+        folder: h.parent().into(),
         size: if h.is_dir {
             slint::SharedString::new()
         } else {
             format_size(h.meta.size.max(0) as u64, BINARY).into()
         },
         stamp: stamp(h.meta.mtime).into(),
-        kind: cat.get(h.kind.msgid()).as_ref().into(),
         is_dir: h.is_dir,
         age: band(now, h.meta.mtime),
     }

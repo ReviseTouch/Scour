@@ -4,11 +4,14 @@
 // are not the same colours lightened: a dark interface reads by luminance and
 // a light one by hue, so each was chosen against its own ground.
 //
-// `Theme.dark` is set from Rust, because the platform's preference is not
-// something `.slint` can ask about.
+// Slint already receives the platform colour scheme from its window backend.
+// Binding to that avoids a synchronous `gsettings` process at start and keeps
+// an open window in step when the desktop changes.
+
+import { Palette } from "std-widgets.slint";
 
 export global Theme {
-    in property <bool> dark: true;
+    in property <bool> dark: Palette.color-scheme != ColorScheme.light;
 
     // --- surfaces ---------------------------------------------------------
     out property <brush> ground: dark ? #0d1117 : #f7f5f0;

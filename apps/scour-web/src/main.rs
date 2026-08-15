@@ -1372,4 +1372,208 @@ mod tests {
             assert!(body.contains(needle), "`setTotal` does not have {needle}");
         }
     }
+
+    #[test]
+    fn the_first_search_does_not_wait_for_the_kind_taxonomy() {
+        let boot = PAGE
+            .find("  q.focus();\n  q.select();")
+            .expect("page.html has no list boot sequence");
+        let body = &PAGE[boot..];
+        let search = body
+            .find("\n  render();")
+            .expect("the boot sequence does not start a search");
+        let kinds = body
+            .find("SERVICE.get(\"kinds\", {})")
+            .expect("the boot sequence does not load kinds");
+        assert!(
+            search < kinds,
+            "the first search is still gated on the kind taxonomy"
+        );
+        assert!(
+            !body[kinds..].contains(".finally(render)"),
+            "loading kinds starts another search instead of repainting locally"
+        );
+    }
+
+    #[test]
+    fn sorting_does_not_recount_query_facets() {
+        assert!(
+            PAGE.contains("const queryChanged = LIST.query !== text;"),
+            "render does not distinguish a new query from a new ordering"
+        );
+        assert!(
+            PAGE.contains(
+                "if (queryChanged) {\n          sidebarCost = 0;\n          sidebarSoon();"
+            ),
+            "every ordering change still schedules the facet walk"
+        );
+        assert!(
+            PAGE.contains("ours !== sidebarGeneration || text !== q.value"),
+            "facet answers are still invalidated by sort-only generations"
+        );
+        assert!(
+            !PAGE.contains("sidebar(LIST.query, generation)"),
+            "a facet request is still coupled to the row ordering generation"
+        );
+    }
+
+    #[test]
+    fn sorting_keeps_the_exact_total_of_the_same_query() {
+        let start = PAGE
+            .find("function render() {")
+            .expect("no render function");
+        let end = PAGE[start..]
+            .find("\n  /* The service has answered.")
+            .map(|at| start + at)
+            .expect("render function has no end marker");
+        let render = &PAGE[start..end];
+
+        for needle in [
+            "const keepExact = !queryChanged && LIST.exact && res.capped;",
+            "if (!keepExact) setTotal(res.total, !res.capped);",
+        ] {
+            assert!(
+                render.contains(needle),
+                "a capped sort can discard the query's exact total: missing {needle}"
+            );
+        }
+        assert!(
+            PAGE.contains("const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + \"+\";"),
+            "the meter still reads the capped sort reply instead of query-scoped state"
+        );
+    }
+
+    #[test]
+    fn every_rendered_row_fact_invalidates_the_live_row_cache() {
+        let start = PAGE
+            .find("const stamp = f ? [")
+            .expect("row stamp is absent");
+        let end = PAGE[start..]
+            .find("].join(\"\\u0001\")")
+            .map(|at| start + at)
+            .expect("row stamp has no end");
+        let stamp = &PAGE[start..end];
+
+        for field in [
+            "f.path",
+            "f.name",
+            "f.mtime",
+            "f.size",
+            "f.fresh",
+            "f.is_dir",
+            "f.thumb",
+            "f.ktoken",
+            "f.kind",
+            "f.ext",
+            "f.ctime",
+            "f.atime",
+            "f.perm",
+            "f.user",
+            "f.group",
+            "f.disk",
+            "f.items",
+            "under.disk",
+            "under.files",
+        ] {
+            assert!(stamp.contains(field), "row stamp omits {field}");
+        }
+    }
+
+    #[test]
+    fn local_column_changes_do_not_search_again() {
+        let heads = PAGE
+            .find("function buildHeads() {")
+            .expect("column heading builder is absent");
+        let heads_end = PAGE[heads..]
+            .find("\n  function columnMenu()")
+            .map(|at| heads + at)
+            .expect("column heading builder has no end marker");
+        assert!(
+            PAGE[heads..heads_end].contains("tr.__stamp = \"\""),
+            "a same-width reorder leaves body cells in their old columns"
+        );
+
+        let moved = PAGE
+            .find("const endMove = () => {")
+            .expect("column move handler is absent");
+        let moved_end = PAGE[moved..]
+            .find("document.querySelector(\"thead\").addEventListener(\"pointerup\"")
+            .map(|at| moved + at)
+            .expect("column move handler has no end marker");
+        assert!(
+            !PAGE[moved..moved_end].contains("render();"),
+            "moving a local column searches and discards the row cache"
+        );
+
+        let picked = PAGE
+            .find("colMenu.addEventListener(\"click\"")
+            .expect("column picker handler is absent");
+        let picked_end = PAGE[picked..]
+            .find("\n  });\n\n  const pathOf")
+            .map(|at| picked + at)
+            .expect("column picker handler has no end marker");
+        assert!(
+            !PAGE[picked..picked_end].contains("render();"),
+            "showing a local column searches and discards the row cache"
+        );
+    }
+
+    #[test]
+    fn stale_sidebar_work_is_stopped_before_the_service_call() {
+        let start = PAGE
+            .find("function sidebar(text) {")
+            .expect("sidebar function is absent");
+        let body = &PAGE[start..];
+        let guard = body
+            .find("if (text !== q.value) return Promise.resolve();")
+            .expect("sidebar has no preflight query guard");
+        let call = body
+            .find("SERVICE.sidebar(text, BAR_EDGES)")
+            .expect("sidebar service call is absent");
+        assert!(
+            guard < call,
+            "the stale guard runs only after paying for facets"
+        );
+        assert!(
+            PAGE.contains("LIST.query !== null && LIST.query === q.value"),
+            "the quiet timer can start work for rows a new query has replaced"
+        );
+        assert!(
+            PAGE.contains("ours === sidebarGeneration && text === q.value"),
+            "a stale facet walk can poison the current query's refresh budget"
+        );
+    }
+
+    #[test]
+    fn late_local_metadata_repaints_without_searching() {
+        let start = PAGE
+            .find("SERVICE.get(\"places\", {})")
+            .expect("places request is absent");
+        let end = PAGE[start..]
+            .find("SERVICE.get(\"kinds\", {})")
+            .map(|at| start + at)
+            .expect("places request has no end marker");
+        let places = &PAGE[start..end];
+        for needle in [
+            "syncFacets(parse(q.value))",
+            "tr.__stamp = \"\"",
+            "repaint(true)",
+        ] {
+            assert!(places.contains(needle), "places does not apply {needle}");
+        }
+        assert!(
+            !places.contains("render();"),
+            "local place metadata starts another index search"
+        );
+    }
+
+    #[test]
+    fn the_first_count_does_not_claim_the_index_has_zero_entries() {
+        assert!(PAGE.contains("let TOTAL_KNOWN = false;"));
+        assert!(
+            PAGE.contains("TOTAL_KNOWN ? shown + \" / \" + fmt(TOTAL) : shown"),
+            "the first search still prints an unknown denominator as zero"
+        );
+        assert!(PAGE.contains("TOTAL_KNOWN = true;"));
+    }
 }

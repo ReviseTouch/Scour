@@ -95,6 +95,27 @@ impl NameWriter {
         pack(self.rows, &self.folded_blocks, &self.folded)
     }
 
+    /// Finish both arenas without copying either name payload.
+    ///
+    /// A rebuild holds the spelling and folded spelling at the same time. The
+    /// prefix layout used by the public single-arena finishers allocates a
+    /// second full buffer for each; at millions of rows that made four copies
+    /// coexist near the end of a build. Moving each owned payload right inside
+    /// its allocation preserves that exact format without the full-size copy.
+    pub(crate) fn finish_both(self) -> (Vec<u8>, Vec<u8>) {
+        let NameWriter {
+            bytes,
+            blocks,
+            rows,
+            folded,
+            folded_blocks,
+        } = self;
+        (
+            pack_in_place(rows, &blocks, bytes),
+            pack_in_place(rows, &folded_blocks, folded),
+        )
+    }
+
     /// The spelled names as they were pushed: NUL-terminated, in row order.
     ///
     /// Before packing, because the one caller — [`crate::order`], ordering a
@@ -103,6 +124,14 @@ impl NameWriter {
     /// has just written.
     pub(crate) fn spelled(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// The folded names as they were pushed: NUL-terminated, in row order.
+    ///
+    /// Used while building the persisted name order, before this same buffer
+    /// is packed into the arena searches map.
+    pub(crate) fn folded(&self) -> &[u8] {
+        &self.folded
     }
 }
 
@@ -115,6 +144,20 @@ fn pack(rows: usize, blocks: &[u32], bytes: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(bytes);
     out
+}
+
+fn pack_in_place(rows: usize, blocks: &[u32], mut bytes: Vec<u8>) -> Vec<u8> {
+    let header_len = 8 + blocks.len() * 4;
+    let payload_len = bytes.len();
+    bytes.reserve(header_len);
+    bytes.resize(payload_len + header_len, 0);
+    bytes.rotate_right(header_len);
+    bytes[0..4].copy_from_slice(&(rows as u32).to_le_bytes());
+    bytes[4..8].copy_from_slice(&(blocks.len() as u32).to_le_bytes());
+    for (slot, offset) in bytes[8..header_len].chunks_exact_mut(4).zip(blocks) {
+        slot.copy_from_slice(&offset.to_le_bytes());
+    }
+    bytes
 }
 
 /// The arena, read in place out of a mapped file.
@@ -531,6 +574,26 @@ mod tests {
             assert_eq!(arena.get(i), Some(*want), "row {i}");
         }
         assert_eq!(arena.get(300), None);
+    }
+
+    #[test]
+    fn in_place_arenas_keep_the_prefix_layout_byte_for_byte() {
+        let names: Vec<String> = (0..300).map(|i| format!("İstanbul_{i}.TXT")).collect();
+        let mut writer = NameWriter::new();
+        for name in &names {
+            writer.push(name);
+        }
+        let expected_spelled = writer.finish();
+        let expected_folded = writer.finish_folded();
+        let (spelled, folded) = writer.finish_both();
+        assert_eq!(spelled, expected_spelled);
+        assert_eq!(folded, expected_folded);
+        let spelled = NameArena::open(&spelled).expect("spelling");
+        let folded = NameArena::open(&folded).expect("fold");
+        for (row, name) in names.iter().enumerate() {
+            assert_eq!(spelled.get(row), Some(name.as_str()));
+            assert_eq!(folded.get(row), Some(DefaultFolder.fold(name).as_str()));
+        }
     }
 
     #[test]

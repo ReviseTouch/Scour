@@ -57,11 +57,14 @@
 
 mod build;
 mod columns;
+mod directory_bytes;
 mod dirs;
 mod durable;
+mod extension_order;
 mod ids;
 mod index;
 mod lock;
+mod name_order;
 mod names;
 mod order;
 mod search;
@@ -74,8 +77,10 @@ pub(crate) mod varint;
 pub use build::{SegmentBytes, build, build_sorted};
 pub use columns::{ColumnBlocks, ColumnWriter, Field};
 pub use dirs::{DirScope, DirTable, DirWriter};
+pub use extension_order::ExtensionOrder;
 pub use ids::{IdMap, IdWriter, digest};
 pub use index::NativeIndex;
+pub use name_order::NameOrder;
 pub use names::{Folded, NameArena, NameWriter};
 pub use order::PathOrder;
 pub use search::{Found, Plan, Segment, Wanted, run, run_with};

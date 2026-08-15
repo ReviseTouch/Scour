@@ -1409,6 +1409,13 @@
 <script>
 (function () {
   let TOTAL = 0;   /* from /api/status, once the page is up */
+  let TOTAL_KNOWN = false;
+  /* The search is deliberately sent before status. Until status lands there
+     is no meaningful denominator: `1000+ / 0` says the whole index is empty
+     while its first page is visibly proving otherwise. A genuinely empty
+     index still says `0 / 0` once status has made that fact known. */
+  const withIndexTotal = (shown) =>
+    TOTAL_KNOWN ? shown + " / " + fmt(TOTAL) : shown;
 
   // Real measurements (docs/MEASUREMENTS.md, 1,217,362 entries, 40 rows, count cap 500).
   const MEASURED = {
@@ -3064,9 +3071,21 @@
      * there — but a live refresh repaints the same rows several times a second
      * on a machine whose index keeps moving, and a repaint that changes
      * nothing should cost nothing. */
-    const stamp = f
-      ? `${f.path}/${f.name}\u0001${f.mtime}\u0001${f.size}\u0001${f.fresh || 0}`
-      : "";
+    /* Every fact a visible cell can read. A live refresh replaces the row
+       object, but it may leave its path, mtime and size unchanged: chmod,
+       chown and an access-time update are the ordinary examples. The old
+       four-field stamp made every other enabled column silently stale.
+
+       External display state (HOME, MOUNTS, the chosen columns and translated
+       kinds) invalidates the stamps where that state changes. */
+    const under = f && f.under;
+    const stamp = f ? [
+      f.path, f.name, f.mtime, f.size, f.fresh || 0,
+      f.is_dir ? 1 : 0, f.thumb ? 1 : 0, f.ktoken || "", f.kind || "",
+      f.ext || "", f.ctime || 0, f.atime || 0, f.perm || "",
+      f.user || "", f.group || "", f.disk || 0, f.items || 0,
+      under ? under.disk : "", under ? under.files : "",
+    ].join("\u0001") : "";
     if (tr.__stamp === stamp && tr.__marks === marks) {
       return;
     }
@@ -3592,6 +3611,10 @@
 
   function render() {
     const text = q.value;
+    /* Facets describe the matching set, not its order. Keep that distinction
+       before the search lands: by then `LIST.query` has moved to `text` and
+       there is no longer a way to tell a new query from a re-sort. */
+    const queryChanged = LIST.query !== text;
     /* Everything that depends only on the text happens now, at typing speed.
        The list catches up when the service answers, and the two being
        separate is why the caret never waits for a search. */
@@ -3625,13 +3648,20 @@
     SERVICE.search(text, sortKey, sortDesc, WINDOW, 0, typingSearch.signal)
       .then((res) => {
         if (mine !== generation) return;   // a newer keystroke won
+        /* Facets and an exact total belong to the matching set, not its order.
+           A sort-only search still answers under the typing cap; replacing a
+           known exact total with that floor would leave the meter at `1000+`
+           forever, because sort-only work deliberately does not recount the
+           sidebar below. A genuinely new query, or an uncapped fresher answer,
+           is authoritative. */
+        const keepExact = !queryChanged && LIST.exact && res.capped;
         /* A new result set: everything cached belonged to the old one. */
         LIST.query = text; LIST.sort = sortKey; LIST.desc = sortDesc;
         /* And so did the selection. It is keyed by path so it would survive a
            re-sort intact, which is right — but a *different query* is a
            different set of files, and rows that are no longer on screen going
            on being selected is how somebody copies a list they cannot see. */
-        clearSel();
+        if (queryChanged) clearSel();
         clearRows();
         for (const request of LIST.pending.values()) request.stop.abort();
         LIST.pending.clear();
@@ -3639,7 +3669,7 @@
            the sweeps inside it have nothing to look at yet and `clearRows`
            has just emptied `LIST.at`, so they are no-ops here. Said in one
            place all the same; see `setTotal`. */
-        setTotal(res.total, !res.capped);
+        if (!keepExact) setTotal(res.total, !res.capped);
         LIST.since = Date.now();
         /* The first window of the new set, and therefore the first word on
            what the rest of it would cost. */
@@ -3649,15 +3679,24 @@
            date and asked the service for the same two hundred rows again —
            one wasted request per keystroke, every keystroke. */
         SHOWING = REV;
-        putRows(0, res.rows.map(fromService), false);
+        const rows = res.rows.map(fromService);
+        putRows(0, rows, false);
         LIST.at.set(0, SHOWING);
         scrollEl.scrollTop = 0;
-        FILES = res.rows.map(fromService);
+        FILES = rows;
         lastMeter = res;
+        /* The new rows and the old sidebar must never describe two different
+           matching sets. Keep the taxonomy in place, but blank its old counts
+           until the quiet, query-scoped answer arrives. */
+        if (queryChanged) clearSidebarCounts();
         draw(text, parse(text), FILES, res);
-        /* And everything else about this result set — but not on this
-           keystroke. See `sidebarSoon`. */
-        sidebarSoon();
+        /* And everything else about a *new matching set* — but not on this
+           keystroke. A sort changes only the order, so asking the index to
+           count the same facets again would be pure work. See `sidebarSoon`. */
+        if (queryChanged) {
+          sidebarCost = 0;
+          sidebarSoon();
+        }
       })
       .catch((e) => {
         // Abandoned on purpose, by the next keystroke. Not a service that
@@ -3684,11 +3723,13 @@
        for was the one case it was hidden in — which is a good argument for
        there being a single place rather than four. */
 
-    /* The meter, and it is the service's own arithmetic rather than the
-       page's. `total` is capped by the count cap, which is why a large one
-       reads `10000+` instead of a number the engine did not actually reach. */
-    const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
-    document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+    /* The meter is the service's arithmetic rather than the page's. Read the
+       query-scoped state, not necessarily this capped search reply:
+       A sort-only response deliberately preserves the exact total that the
+       sidebar already paid for, while a new broad query still reads `1000+`
+       instead of claiming a number the engine did not actually reach. */
+    const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
+    document.getElementById("count").textContent = withIndexTotal(shown);
     document.getElementById("ms").textContent =
       (res.took_us / 1000).toFixed(2).replace(".", ",") + " ms";
     document.getElementById("rows").textContent = fmt(res.rows_visited) + " satır okundu";
@@ -3722,21 +3763,38 @@
    * least that long again. Someone who stops at `r` still pays for `r` —
    * they asked a broad question — but they pay once. */
   const sidebarSoon = afterQuiet(() => {
-    if (LIST.query !== null) sidebar(LIST.query, generation);
+    /* The timer belongs to the query whose rows scheduled it. A newer query
+       can be in flight for longer than this quiet period; checking only after
+       the facet reply would still spend the whole old walk before dropping it. */
+    if (LIST.query !== null && LIST.query === q.value) sidebar(LIST.query);
   }, 220);
 
   let sidebarGeneration = 0;
   /* What the last one cost, so the live refresh can decline to repeat it.
      Reset by a new query, because a new query's cost is its own. */
   let sidebarCost = 0;
-  function sidebar(text, mine) {
+  function sidebar(text) {
+    /* The live-refresh caller can race a keystroke too. This guard is before
+       the service call because a stale answer costs CPU even when it is never
+       painted. JavaScript cannot change `q.value` between this check and the
+       synchronous construction of the request. */
+    if (text !== q.value) return Promise.resolve();
     const ours = ++sidebarGeneration;
     const began = Date.now();
-    const charge = () => { sidebarCost = Date.now() - began; };
+    /* A stale walk must not poison the current query's refresh budget. An old
+       broad query can finish after a newer narrow one and otherwise make the
+       narrow query look expensive for the rest of its lifetime. */
+    const charge = () => {
+      if (ours === sidebarGeneration && text === q.value)
+        sidebarCost = Date.now() - began;
+    };
     return SERVICE.sidebar(text, BAR_EDGES)
       .then((res) => {
         charge();
-        if (ours !== sidebarGeneration || mine !== generation) return;
+        /* A re-sort advances `generation`, but it does not change these
+           counts. Only a newer facet request or different query makes this
+           answer stale. */
+        if (ours !== sidebarGeneration || text !== q.value) return;
 
         /* **The scrollbar's real size, and with it where the list ends.**
          *
@@ -3749,7 +3807,7 @@
         setTotal(res.total, !res.capped);
         repaint(true);
         const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
-        document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+        document.getElementById("count").textContent = withIndexTotal(shown);
 
         for (const g of res.groups) {
           const by = Object.fromEntries(g.facets.map((f) => [f.key, f.count]));
@@ -3856,6 +3914,15 @@
      and then it wins over the numbers baked in above — those exist only so the
      rail is not blank for the instant before it arrives. */
   let KIND_COUNTS = null;
+
+  function clearSidebarCounts() {
+    /* Do nothing on the first query: the rail is already an honest blank and
+       painting twenty-four zero bars would only create start-up movement. */
+    if (KIND_COUNTS === null) return;
+    KIND_COUNTS = null;
+    syncFacets(parse(q.value));
+    paintBars(Array(BAR_COUNT).fill(0), false);
+  }
 
   function syncFacets(p) {
     const count = ([, key]) => (KIND_COUNTS ? (KIND_COUNTS[key] || 0) : null);
@@ -4100,6 +4167,8 @@
      wait for it — a blank window while a socket answers is worse than a
      window whose columns settle a moment later. */
   function applySettings(s) {
+    const oldSort = sortKey;
+    const oldDescending = sortDesc;
     if (Array.isArray(s.columns) && s.columns.length) {
       const ok = s.columns.filter((id) => COLUMNS.some((c) => c.id === id));
       if (ok.length) SHOWN = ok;
@@ -4118,7 +4187,10 @@
     showPastAffordance();
     buildHeads();
     applyWidths();
-    render();
+    /* The list has already started with the defaults. Only an ordering that
+       actually differs needs another service search; columns, widths and
+       view options were applied locally above. */
+    if (sortKey !== oldSort || sortDesc !== oldDescending) render();
   }
 
   /* This window's own corner of the settings, and what it does when it lands.
@@ -4180,8 +4252,12 @@
     fitGrips();
     applyWidths();
     syncHeads();
-    /* A column can add or remove the horizontal scrollbar, which changes the
-       list's client height without resizing the window. */
+    /* A reorder keeps the same number of cells, so the pool's shape check will
+       not rebuild them. Invalidate their content explicitly: otherwise the
+       headings move locally while every value remains in its old column. A
+       column can also add or remove the horizontal scrollbar, which changes
+       the list's client height without resizing the window. */
+    for (const tr of pool) tr.__stamp = "";
     painted = "";
     repaint(true);
   }
@@ -4394,7 +4470,6 @@
         SHOWN.splice(to, 0, id);
         keep({ columns: SHOWN });
         buildHeads();
-        render();
       }
     }
     /* Cleared after the click this press is about to produce, not before it —
@@ -4510,7 +4585,6 @@
       }
       keep({ columns: SHOWN });
       buildHeads();
-      render();
       colMenu.remove();
       colMenu = null;
     });
@@ -5143,6 +5217,7 @@
   /* The index's size, for the "x / y" meter. */
   function applyStatus(s) {
     TOTAL = s.entries;
+    TOTAL_KNOWN = true;
     let moved = false;
     const note = document.getElementById("path-note");
     if (note) {
@@ -5155,9 +5230,9 @@
        keep up with typing; the exact number arrives with the sidebar a moment
        later, and a heartbeat that rewrote the line from the capped one put
        `1.000+` back over it every ten seconds. */
-    if (LIST.total) {
+    if (LIST.query !== null) {
       const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
-      document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
+      document.getElementById("count").textContent = withIndexTotal(shown);
     }
     /* **The status sentence is in a wrapping `auto` row above the list**, so a
        longer one takes a line from the rows and they have to be laid out
@@ -5362,7 +5437,7 @@
     if (LIST.query === null) return;
     if (sidebarCost > SIDEBAR_LIVE_UNDER_MS) return;
     // Returned so the throttle above can charge for what it cost.
-    return sidebar(LIST.query, generation);
+    return sidebar(LIST.query);
   }
 
   const rowsSoon = atMostEvery(refreshRows, 400);
@@ -5489,6 +5564,10 @@
   q.select();
 
   buildHeads();
+  /* Start the useful request immediately. Taxonomy, places, settings and
+     status decorate the window when they arrive; none is a prerequisite for
+     asking the service for its first page. */
+  render();
   /* One status to start from — the revision in it is what the wait is
      measured against — and after that the waiting loop is the heartbeat.
      There is no interval any more: a reply arrives whenever the index moves
@@ -5514,6 +5593,12 @@
       HOME = res.home || "";
       MOUNTS = res.mounts || [];
       SCOPES = (res.places || []).map((p) => [p.label, p.path, null]);
+      /* Places affect both the scope rail and how paths/access times already
+         on screen are rendered. They are local display data, so repaint them
+         without asking the index for the same rows again. */
+      syncFacets(parse(q.value));
+      for (const tr of pool) tr.__stamp = "";
+      repaint(true);
     })
     .catch(() => {});
 
@@ -5521,9 +5606,19 @@
     .then((res) => {
       KINDS = res.kinds.map((k) => [k.label, k.token]);
       KIND_KEY = Object.fromEntries(res.kinds.map((k) => [k.token, k.label]));
+      /* Rows may have beaten this local request. Bring their labels and the
+         rail up to date without searching the index again. */
+      for (const f of LIST.rows.values()) {
+        f.kind = f.is_dir ? "Klasör" : (KIND_KEY[f.ktoken] || "Diğer");
+      }
+      for (const f of FILES) {
+        f.kind = f.is_dir ? "Klasör" : (KIND_KEY[f.ktoken] || "Diğer");
+      }
+      syncFacets(parse(q.value));
+      for (const tr of pool) tr.__stamp = "";
+      repaint(true);
     })
-    .catch(() => {})
-    .finally(render);
+    .catch(() => {});
 
   /* What the report is allowed to reach in here.
    *

@@ -8,10 +8,10 @@
 
 import { Theme, Fonts } from "theme.slint";
 
-// Re-exported so Rust can reach the global — the platform's light/dark
-// preference is not something `.slint` can ask about.
+// Re-exported for the generated Rust API; its colours follow Slint's platform
+// palette directly.
 export { Theme }
-import { ScrollView, ListView } from "std-widgets.slint";
+import { ListView } from "std-widgets.slint";
 
 // One result. Flat, and deliberately: a struct of strings is what crosses the
 // language boundary cheaply, and the formatting was done in Rust where the
@@ -30,7 +30,6 @@ export struct Row {
     folder: string,
     size: string,
     stamp: string,
-    kind: string,
     is-dir: bool,
     // Which age band the row falls in, 0 (minutes) to 5 (older).
     age: int,
@@ -129,6 +128,7 @@ export component MainWindow inherits Window {
     /// strings allocated here, so asking for two hundred to draw twenty was
     /// paying nine tenths of that for nothing.
     out property <int> visible-rows: max(20, Math.floor(list.height / Theme.row-height) + 12);
+    in-out property <length> scroll-y <=> list.viewport-y;
     // The query as Rust folded it back — set only when Rust changes the text
     // itself (a facet click), never on every keystroke, or the caret jumps.
     in-out property <string> query;
@@ -142,9 +142,23 @@ export component MainWindow inherits Window {
     callback copy-path(int);
     callback facet-clicked(string);
     callback sort-by(string);
+    // direction: -1 for the preceding window, +1 for the following one.
+    // first-visible anchors the same global row after the bounded model slides.
+    callback need-page(int, int);
+
+    changed visible-rows => {
+        if (root.rows.length > 0 && root.visible-rows > root.rows.length) {
+            root.need-page(1, max(0,
+                Math.floor((0px - list.viewport-y) / Theme.row-height)));
+        }
+    }
 
     public function focus-query() {
         input.focus();
+    }
+
+    public function anchor-row(row: int) {
+        list.viewport-y = 0px - max(row, 0) * Theme.row-height;
     }
 
     forward-focus: input;
@@ -211,10 +225,26 @@ export component MainWindow inherits Window {
                     key-pressed(e) => {
                         if (e.text == Key.DownArrow) {
                             root.selected = min(root.selected + 1, root.rows.length - 1);
+                            if ((root.selected + 1) * Theme.row-height + list.viewport-y
+                                > list.visible-height) {
+                                list.viewport-y = list.visible-height
+                                    - (root.selected + 1) * Theme.row-height;
+                            }
+                            if (root.rows.length > 0 && root.selected >= root.rows.length - 4) {
+                                root.need-page(1, max(0,
+                                    Math.floor((0px - list.viewport-y) / Theme.row-height)));
+                            }
                             return accept;
                         }
                         if (e.text == Key.UpArrow) {
                             root.selected = max(root.selected - 1, 0);
+                            if (root.selected * Theme.row-height + list.viewport-y < 0px) {
+                                list.viewport-y = 0px - root.selected * Theme.row-height;
+                            }
+                            if (root.selected <= 3) {
+                                root.need-page(-1, max(0,
+                                    Math.floor((0px - list.viewport-y) / Theme.row-height)));
+                            }
                             return accept;
                         }
                         if (e.text == Key.Return) {
@@ -338,7 +368,7 @@ export component MainWindow inherits Window {
                         spacing: 8px;
 
                         TouchArea {
-                            clicked => { root.sort-by("relevance"); }
+                            clicked => { root.sort-by("name"); }
                             Text {
                                 x: 0;
                                 text: @tr("Name");
@@ -379,6 +409,18 @@ export component MainWindow inherits Window {
                 }
 
                 list := ListView {
+                    scrolled => {
+                        let first = max(0,
+                            Math.floor((0px - self.viewport-y) / Theme.row-height));
+                        if (self.viewport-height > self.visible-height
+                            && 0px - self.viewport-y + self.visible-height
+                                >= self.viewport-height - 4 * Theme.row-height) {
+                            root.need-page(1, first);
+                        } else if (0px - self.viewport-y <= 4 * Theme.row-height) {
+                            root.need-page(-1, first);
+                        }
+                    }
+
                     for row[i] in root.rows: Rectangle {
                         height: Theme.row-height;
                         background: i == root.selected ? Theme.selection

@@ -28,7 +28,7 @@ use scour_i18n::Catalogue;
 use scour_proto::Response;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use link::{Ask, Got, Link};
+use link::{Ask, Got, Link, ReplyRevision};
 
 /// The interface, as `slint-build` generated it.
 ///
@@ -117,17 +117,49 @@ fn t(cat: &Catalogue, msgid: &str) -> slint::SharedString {
 /// existed.
 const DEBOUNCE_MS: u64 = 0;
 
-/// The most rows that will be asked for, however tall the window is.
+/// Give non-interactive work one ordinary gap between keys to become stale.
 ///
-/// The count itself comes from the window — `visible-rows`, which is what fits
-/// plus a dozen to scroll into — because only the window knows how tall it is
-/// and it changes when somebody drags the edge. This is only the ceiling, so
-/// that a maximised window on a tall screen cannot turn one keystroke into a
-/// thousand rebuilt paths.
-const PAGE_MAX: u32 = 120;
+/// Rows still leave immediately. Only the exact total and sidebar wait, so a
+/// typing burst pays for them once for the finished query instead of once per
+/// prefix.
+const BACKGROUND_IDLE_MS: u64 = 200;
+
+/// The most rows retained by the window, however far somebody scrolls.
+///
+/// The first request still comes from `visible-rows`, because only the window
+/// knows how tall it is. Reaching its end grows it to this bounded window;
+/// reaching either edge after that slides the window through the result set.
+/// Thus row 257 is reachable without retaining every row before it.
+const PAGE_MAX: u32 = 256;
+
+/// Half a window stays on screen across a page turn.
+///
+/// The overlap is what makes a page boundary feel like scrolling rather than
+/// like pressing Next, while keeping both the model and `State::hits` bounded.
+const PAGE_STRIDE: u32 = PAGE_MAX / 2;
 
 struct State {
     generation: u64,
+    /// Changes only when the matching set changes, not when its order does.
+    query_revision: u64,
+    /// The query revision whose sidebar and exact count were scheduled.
+    background_query: Option<u64>,
+    /// The query revision whose fallback count was scheduled.
+    ///
+    /// Facets already carry a total. A separate count is useful only when the
+    /// facet walk reached its own cap, and must still be sent at most once.
+    count_query: Option<u64>,
+    /// An exact count remains valid across sort changes.
+    exact_count: Option<ExactCount>,
+    /// Rows currently requested for the bounded model.
+    row_limit: u32,
+    /// Offset of the bounded window currently on screen.
+    page_offset: u32,
+    /// A resize or page turn waiting for its rows.
+    page_move: Option<PageMove>,
+    /// Count information carried by the last search page.
+    page_total: u64,
+    page_capped: bool,
     /// When the keystroke behind the request in flight was typed.
     ///
     /// The only latency that matters is this one — engine time is a fraction
@@ -144,17 +176,127 @@ struct State {
     down: bool,
 }
 
+#[derive(Clone, Copy)]
+struct ExactCount {
+    query_revision: u64,
+    total: u64,
+    capped: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PageMove {
+    /// The initial visible slice is growing in place.
+    Expand,
+    /// The bounded window is moving while keeping one visible row anchored.
+    Slide {
+        offset: u32,
+        anchor_global: u32,
+        selected_global: Option<u32>,
+    },
+}
+
+impl State {
+    fn advance_query(&mut self) {
+        self.generation += 1;
+        self.query_revision += 1;
+        self.background_query = None;
+        self.count_query = None;
+        self.exact_count = None;
+        self.page_move = None;
+    }
+
+    fn advance_order(&mut self) {
+        self.generation += 1;
+    }
+
+    /// Mark the query-scoped work as scheduled, once per matching set.
+    fn start_background(&mut self) -> bool {
+        if self.background_query == Some(self.query_revision) {
+            return false;
+        }
+        self.background_query = Some(self.query_revision);
+        true
+    }
+
+    fn start_count(&mut self) -> bool {
+        if self.count_query == Some(self.query_revision) {
+            return false;
+        }
+        self.count_query = Some(self.query_revision);
+        true
+    }
+
+    /// Prepare a bounded page move. Returns the page to request.
+    fn move_page(
+        &mut self,
+        direction: i32,
+        first_visible: u32,
+        selected: i32,
+        loaded: usize,
+    ) -> Option<(u32, u32)> {
+        if self.page_move.is_some() || (direction > 0 && loaded < self.row_limit as usize) {
+            return None;
+        }
+        if self.row_limit < PAGE_MAX {
+            if direction <= 0 {
+                return None;
+            }
+            self.row_limit = PAGE_MAX;
+            self.advance_order();
+            self.page_move = Some(PageMove::Expand);
+            return Some((self.page_offset, PAGE_MAX));
+        }
+
+        let offset = match direction.cmp(&0) {
+            std::cmp::Ordering::Greater => {
+                let end = u64::from(self.page_offset) + loaded as u64;
+                if !self.page_capped && end >= self.page_total {
+                    return None;
+                }
+                self.page_offset.checked_add(PAGE_STRIDE)?
+            }
+            std::cmp::Ordering::Less if self.page_offset > 0 => {
+                self.page_offset.saturating_sub(PAGE_STRIDE)
+            }
+            _ => return None,
+        };
+        let anchor_global = self.page_offset.saturating_add(first_visible);
+        let selected_global = u32::try_from(selected)
+            .ok()
+            .map(|row| self.page_offset.saturating_add(row));
+        self.advance_order();
+        self.page_move = Some(PageMove::Slide {
+            offset,
+            anchor_global,
+            selected_global,
+        });
+        Some((offset, PAGE_MAX))
+    }
+}
+
 fn main() -> Result<()> {
     // From the process starting to the first row on screen. The one number a
     // person sees before they have typed anything, and the only one the
     // window's own start-up appears in.
     let launched = std::time::Instant::now();
-    let cat = Rc::new(Catalogue::for_language(&language()));
+    // One read serves both the language and the socket. This used to load and
+    // parse the same config file twice before the first request left.
+    let config = scour_config::Config::load_or_default().0;
+    let cat = Rc::new(Catalogue::for_language(&language(&config)));
     let window = MainWindow::new().context("the window could not be created")?;
     trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
         generation: 0,
+        query_revision: 0,
+        background_query: None,
+        count_query: None,
+        exact_count: None,
+        row_limit: 20,
+        page_offset: 0,
+        page_move: None,
+        page_total: 0,
+        page_capped: false,
         typed_at: None,
         shown: 0,
         query: String::new(),
@@ -169,12 +311,11 @@ fn main() -> Result<()> {
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
     window.set_rows(ModelRc::from(rows.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
-    window.global::<Theme>().set_dark(prefers_dark());
     window.set_hint(t(&cat, "type to search"));
     window.set_meter(t(&cat, "connecting…"));
     window.set_scope_label(t(&cat, "Everything"));
 
-    let addr = scour_config::Config::load_or_default().0.socket();
+    let addr = config.socket();
 
     // The bridge from the worker threads to the UI thread.
     //
@@ -213,16 +354,20 @@ fn main() -> Result<()> {
     {
         let state = state.clone();
         let link = link.clone();
+        let facets = facets.clone();
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
             trace(&format!("query-changed {text:?}"));
             let generation = {
                 let mut s = state.borrow_mut();
                 s.query = text.to_string();
-                s.generation += 1;
+                s.advance_query();
                 s.typed_at = Some(std::time::Instant::now());
                 s.generation
             };
+            // Counts from the previous matching set are worse than an empty
+            // rail while the new, delayed facet walk is in flight.
+            facets.set_vec(Vec::new());
             if let Some(w) = weak.upgrade() {
                 w.set_busy(true);
             }
@@ -256,6 +401,7 @@ fn main() -> Result<()> {
     {
         let state = state.clone();
         let link = link.clone();
+        let facets = facets.clone();
         let weak = window.as_weak();
         window.on_facet_clicked(move |token| {
             let token = token.to_string();
@@ -268,8 +414,9 @@ fn main() -> Result<()> {
                 } else {
                     Some(token.clone())
                 };
-                s.generation += 1;
+                s.advance_query();
             }
+            facets.set_vec(Vec::new());
             let rows = match weak.upgrade() {
                 Some(w) => {
                     let s = state.borrow();
@@ -300,7 +447,7 @@ fn main() -> Result<()> {
                     // first, and the name reads best A to Z.
                     s.descending = s.sort != "name" && s.sort != "path";
                 }
-                s.generation += 1;
+                s.advance_order();
             }
             let rows = match weak.upgrade() {
                 Some(w) => {
@@ -310,6 +457,36 @@ fn main() -> Result<()> {
                 None => 60,
             };
             dispatch(&state, &link, rows);
+        });
+    }
+
+    // --- bounded scrolling ------------------------------------------------
+    {
+        // The first request is only what fits. Its first edge expands a single
+        // time; later edges slide a fixed-size overlapping window. The number
+        // of retained paths and Slint strings therefore never depends on how
+        // deep somebody scrolls.
+        let state = state.clone();
+        let link = link.clone();
+        let weak = window.as_weak();
+        window.on_need_page(move |direction, first_visible| {
+            let request = {
+                let mut s = state.borrow_mut();
+                let selected = weak.upgrade().map_or(0, |w| w.get_selected());
+                let loaded = s.hits.len();
+                s.move_page(direction, first_visible.max(0) as u32, selected, loaded)
+            };
+            let Some((offset, limit)) = request else {
+                return;
+            };
+            if let Some(w) = weak.upgrade() {
+                w.set_busy(true);
+            }
+            trace(&format!(
+                "move result window to {offset}..{}",
+                offset + limit
+            ));
+            send_search(&state, &link, offset, limit);
         });
     }
 
@@ -415,17 +592,58 @@ fn main() -> Result<()> {
 /// nobody had finished asking. It goes out once the search it belongs to has
 /// actually been shown — see [`apply`].
 fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: u32) {
-    let (generation, query, sort, descending) = {
+    let limit = rows.clamp(20, PAGE_MAX);
+    {
+        let mut s = state.borrow_mut();
+        s.row_limit = limit;
+        s.page_offset = 0;
+        s.page_move = None;
+    }
+    send_search(state, link, 0, limit);
+}
+
+fn send_search(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: u32) {
+    let (generation, query_revision, query, sort, descending) = {
         let s = state.borrow();
-        (s.generation, full_query(&s), s.sort.clone(), s.descending)
+        (
+            s.generation,
+            s.query_revision,
+            full_query(&s),
+            s.sort.clone(),
+            s.descending,
+        )
     };
     link.send(Ask::Search {
         generation,
+        query_revision,
         sort: order_for(&query, &sort),
         query,
         descending,
-        limit: rows.clamp(20, PAGE_MAX),
+        offset,
+        limit,
     });
+}
+
+fn schedule_background(
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    query_revision: u64,
+    query: String,
+) {
+    let state = Rc::clone(state);
+    let link = Rc::clone(link);
+    slint::Timer::single_shot(
+        std::time::Duration::from_millis(BACKGROUND_IDLE_MS),
+        move || {
+            if state.borrow().query_revision != query_revision {
+                return;
+            }
+            link.send(Ask::Facets {
+                query_revision,
+                query,
+            });
+        },
+    );
 }
 
 /// Below how many characters a term stops narrowing anything.
@@ -490,13 +708,28 @@ fn apply(
 ) {
     match got {
         Got::Down(why) => {
-            state.borrow_mut().down = true;
+            let mut s = state.borrow_mut();
+            s.down = true;
+            s.page_move = None;
             w.set_busy(false);
             w.set_meter(format!("{} — {why}", cat.get("the service is not running")).into());
         }
-        Got::Refused { generation, why } => {
-            if generation != state.borrow().generation {
-                return;
+        Got::Refused { revision, why } => {
+            match revision {
+                ReplyRevision::Search(generation) if generation == state.borrow().generation => {
+                    state.borrow_mut().page_move = None;
+                }
+                ReplyRevision::Search(_) => return,
+                ReplyRevision::Query(query_revision) => {
+                    if query_revision != state.borrow().query_revision {
+                        return;
+                    }
+                    // Facets and the exact count are optional refinements of a
+                    // list that is already visible. Their failure must not
+                    // clear the busy state or replace the search's meter.
+                    trace(&format!("background request refused: {why}"));
+                    return;
+                }
             }
             // Shown rather than swallowed. Most of these are "that term is too
             // short for the index to answer", and an empty list with no reason
@@ -529,12 +762,31 @@ fn apply(
             };
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
+            let selected = w.get_selected();
+            let scroll_y = w.get_scroll_y();
             let fresh: Vec<Row> = r
                 .hits
                 .iter()
-                .map(|h| rows::row_of(h, &terms, now, cat))
+                .map(|h| rows::row_of(h, &terms, now))
                 .collect();
             let n = fresh.len();
+            let refused_forward_page = {
+                let s = state.borrow();
+                n == 0
+                    && matches!(
+                        s.page_move,
+                        Some(PageMove::Slide { offset, .. }) if offset > s.page_offset
+                    )
+            };
+            if refused_forward_page {
+                let mut s = state.borrow_mut();
+                s.shown = generation;
+                s.page_total = r.total;
+                s.page_capped = r.capped;
+                s.page_move = None;
+                w.set_busy(false);
+                return;
+            }
             rows.set_vec(fresh);
             if let Some(t) = FIRST.with(std::cell::Cell::take) {
                 trace(&format!(
@@ -550,34 +802,73 @@ fn apply(
                     .map(|t| t.elapsed().as_secs_f64() * 1000.0)
                     .unwrap_or(0.0)
             ));
-            {
+            let (query_revision, query, ask_background, exact_count, page_move) = {
                 let mut s = state.borrow_mut();
                 s.shown = generation;
+                s.page_total = r.total;
+                s.page_capped = r.capped;
+                if !r.capped {
+                    s.exact_count = Some(ExactCount {
+                        query_revision: s.query_revision,
+                        total: r.total,
+                        capped: false,
+                    });
+                }
                 s.hits = r.hits;
+                let page_move = s.page_move.take();
+                if let Some(PageMove::Slide { offset, .. }) = page_move {
+                    s.page_offset = offset;
+                }
+                let query_revision = s.query_revision;
+                let ask_background = s.start_background();
+                (
+                    query_revision,
+                    full_query(&s),
+                    ask_background,
+                    s.exact_count.filter(|c| c.query_revision == query_revision),
+                    page_move,
+                )
+            };
+            match page_move {
+                Some(PageMove::Expand) => {
+                    w.set_selected(selected.max(0).min(n.saturating_sub(1) as i32));
+                    w.set_scroll_y(scroll_y);
+                }
+                Some(PageMove::Slide {
+                    offset,
+                    anchor_global,
+                    selected_global,
+                }) => {
+                    let last = n.saturating_sub(1) as u32;
+                    let anchor = anchor_global.saturating_sub(offset).min(last);
+                    let selected = selected_global
+                        .and_then(|global| global.checked_sub(offset))
+                        .filter(|&local| local < n as u32)
+                        .unwrap_or(anchor);
+                    w.set_selected(selected as i32);
+                    w.invoke_anchor_row(anchor as i32);
+                }
+                None => {
+                    w.set_selected(0);
+                    w.set_scroll_y(0.0);
+                }
             }
-            w.set_selected(0);
             w.set_busy(false);
             // Now, and only now, the sidebar. A facet count costs about what
             // the search did, and asking for it beside every keystroke doubled
             // the work to answer a question the user had not finished typing.
             // This one belongs to a result already on screen.
-            {
-                let s = state.borrow();
-                let query = full_query(&s);
-                link.send(Ask::Facets {
-                    generation,
-                    query: query.clone(),
-                });
-                // And the exact total, only if the fast answer was cut short.
-                if r.capped {
-                    link.send(Ask::Count { generation, query });
-                }
+            if ask_background {
+                schedule_background(state, link, query_revision, query);
             }
+            let (total, capped) = exact_count
+                .map(|c| (c.total, c.capped))
+                .unwrap_or((r.total, r.capped));
             w.set_meter(
                 format!(
                     "{}{} {} · {:.1} ms",
-                    r.total,
-                    if r.capped { "+" } else { "" },
+                    total,
+                    if capped { "+" } else { "" },
                     cat.get("matches"),
                     r.took_us as f64 / 1000.0
                 )
@@ -588,8 +879,11 @@ fn apply(
         // stop to compute. It arrives after the list is already on screen, so
         // the meter tightens from `1000+` to a number rather than waiting for
         // one.
-        Got::Count { generation, reply } => {
-            if generation != state.borrow().generation {
+        Got::Count {
+            query_revision,
+            reply,
+        } => {
+            if query_revision != state.borrow().query_revision {
                 return;
             }
             // **`misread` is dropped, and nothing else picks it up.** This
@@ -608,6 +902,11 @@ fn apply(
                 misread: _,
             } = *reply
             {
+                state.borrow_mut().exact_count = Some(ExactCount {
+                    query_revision,
+                    total,
+                    capped,
+                });
                 w.set_meter(
                     format!(
                         "{total}{} {}",
@@ -618,8 +917,11 @@ fn apply(
                 );
             }
         }
-        Got::Facets { generation, reply } => {
-            if generation != state.borrow().generation {
+        Got::Facets {
+            query_revision,
+            reply,
+        } => {
+            if query_revision != state.borrow().query_revision {
                 return;
             }
             let Response::Facets(f) = *reply else { return };
@@ -638,6 +940,36 @@ fn apply(
                 });
             }
             facets.set_vec(fresh);
+            let count_query = {
+                let mut s = state.borrow_mut();
+                if f.capped {
+                    s.start_count().then(|| full_query(&s))
+                } else {
+                    s.exact_count = Some(ExactCount {
+                        query_revision,
+                        total: f.total,
+                        capped: false,
+                    });
+                    None
+                }
+            };
+            w.set_meter(
+                format!(
+                    "{}{} {}",
+                    f.total,
+                    if f.capped { "+" } else { "" },
+                    cat.get("matches")
+                )
+                .into(),
+            );
+            // The facet walk already counted the same rows. Only its own
+            // safety cap makes a second pass necessary.
+            if let Some(query) = count_query {
+                link.send(Ask::Count {
+                    query_revision,
+                    query,
+                });
+            }
         }
     }
 }
@@ -718,38 +1050,15 @@ fn open(path: &str) {
 }
 
 /// The language the catalogue should speak.
-fn language() -> String {
-    let cfg = scour_config::Config::load_or_default().0;
+fn language(cfg: &scour_config::Config) -> String {
     if !cfg.ui.language.is_empty() {
-        return cfg.ui.language;
+        return cfg.ui.language.clone();
     }
     std::env::var("LC_ALL")
         .or_else(|_| std::env::var("LC_MESSAGES"))
         .or_else(|_| std::env::var("LANG"))
         .map(|v| v.split(['_', '.']).next().unwrap_or("en").to_owned())
         .unwrap_or_else(|_| "en".into())
-}
-
-/// Is the desktop asking for a dark interface?
-///
-/// Read once at start and not watched. A theme that changes while the window
-/// is open is a real thing and a rare one; a portal subscription to catch it is
-/// a dependency and a background task, and this is not the release to spend
-/// them on.
-fn prefers_dark() -> bool {
-    // The GNOME/GTK convention, which every desktop this is likely to run on
-    // now honours. Anything unreadable means dark, which is what the palette
-    // was designed against first.
-    match std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        Ok(o) => {
-            let v = String::from_utf8_lossy(&o.stdout);
-            !v.contains("prefer-light")
-        }
-        Err(_) => true,
-    }
 }
 
 #[cfg(test)]
@@ -777,6 +1086,15 @@ mod tests {
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             generation: 0,
+            query_revision: 0,
+            background_query: None,
+            count_query: None,
+            exact_count: None,
+            row_limit: 20,
+            page_offset: 0,
+            page_move: None,
+            page_total: 0,
+            page_capped: false,
             typed_at: None,
             shown: 0,
             query: "rapor".into(),
@@ -791,6 +1109,131 @@ mod tests {
         assert_eq!(full_query(&s), "rapor kind:image");
         s.query = "  ".into();
         assert_eq!(full_query(&s), "kind:image");
+    }
+
+    #[test]
+    fn sorting_reuses_query_scoped_sidebar_and_count_work() {
+        let mut s = State {
+            generation: 4,
+            query_revision: 2,
+            background_query: None,
+            count_query: None,
+            exact_count: Some(ExactCount {
+                query_revision: 2,
+                total: 45,
+                capped: false,
+            }),
+            row_limit: 40,
+            page_offset: 0,
+            page_move: None,
+            page_total: 45,
+            page_capped: false,
+            typed_at: None,
+            shown: 4,
+            query: "rapor".into(),
+            sort: "modified".into(),
+            descending: true,
+            facet: None,
+            hits: Vec::new(),
+            down: false,
+        };
+
+        assert!(s.start_background());
+        assert!(s.start_count());
+        assert!(
+            !s.start_count(),
+            "one capped facet answer gets one fallback"
+        );
+        s.advance_order();
+        assert!(!s.start_background(), "a sort did not change the matches");
+        assert_eq!(s.query_revision, 2);
+        assert_eq!(s.exact_count.map(|c| c.total), Some(45));
+
+        s.advance_query();
+        assert!(s.start_background(), "a new query needs new facets");
+        assert!(
+            s.start_count(),
+            "a new query may need its own fallback count"
+        );
+        assert!(s.exact_count.is_none());
+    }
+
+    #[test]
+    fn every_visible_header_requests_its_own_sort_key() {
+        let ui = include_str!("../ui/main.slint");
+        for (label, key) in [("Name", "name"), ("Size", "size"), ("Modified", "modified")] {
+            let label_at = ui
+                .find(&format!("text: @tr(\"{label}\")"))
+                .unwrap_or_else(|| panic!("no {label} header"));
+            let click_at = ui[..label_at]
+                .rfind("clicked =>")
+                .unwrap_or_else(|| panic!("the {label} header is not clickable"));
+            let click = &ui[click_at..label_at];
+            assert!(
+                click.contains(&format!("root.sort-by(\"{key}\")")),
+                "the {label} header does not request {key}: {click}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_growth_is_demand_driven_and_bounded() {
+        let mut s = State {
+            generation: 1,
+            query_revision: 1,
+            background_query: None,
+            count_query: None,
+            exact_count: None,
+            row_limit: 32,
+            page_offset: 0,
+            page_move: None,
+            page_total: 2_000,
+            page_capped: true,
+            typed_at: None,
+            shown: 1,
+            query: String::new(),
+            sort: "modified".into(),
+            descending: true,
+            facet: None,
+            hits: Vec::new(),
+            down: false,
+        };
+
+        assert!(
+            s.move_page(1, 0, 0, 12).is_none(),
+            "a short result has no next screen"
+        );
+        assert_eq!(s.row_limit, 32);
+        assert_eq!(s.move_page(1, 20, 8, 32), Some((0, PAGE_MAX)));
+        assert_eq!(s.row_limit, PAGE_MAX);
+        assert_eq!(s.page_move, Some(PageMove::Expand));
+
+        // Simulate that expanded page landing, then slide in both directions.
+        s.page_move = None;
+        assert_eq!(
+            s.move_page(1, 220, 230, PAGE_MAX as usize),
+            Some((PAGE_STRIDE, PAGE_MAX))
+        );
+        assert_eq!(
+            s.page_move,
+            Some(PageMove::Slide {
+                offset: PAGE_STRIDE,
+                anchor_global: 220,
+                selected_global: Some(230),
+            })
+        );
+        s.page_offset = PAGE_STRIDE;
+        s.page_move = None;
+        assert_eq!(
+            s.move_page(-1, 2, 3, 17),
+            Some((0, PAGE_MAX)),
+            "a partial last window must still be able to move backwards"
+        );
+        s.page_move = None;
+        assert_eq!(
+            s.move_page(-1, 2, 3, PAGE_MAX as usize),
+            Some((0, PAGE_MAX))
+        );
     }
 
     #[test]

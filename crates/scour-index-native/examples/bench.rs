@@ -6,7 +6,8 @@ use std::time::Instant;
 
 use scour_core::SortKey;
 use scour_index_native::{
-    ColumnBlocks, DirTable, NameArena, PathOrder, Plan, Segment, TrigramIndex, Wanted, build, run,
+    ColumnBlocks, DirTable, ExtensionOrder, NameArena, NameOrder, PathOrder, Plan, Segment,
+    TrigramIndex, Wanted, build, run,
 };
 use scour_mock::{MockOptions, generate};
 use scour_query::parse_at;
@@ -40,6 +41,8 @@ fn main() {
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),
         porder: PathOrder::open(&bytes.porder),
+        norder: NameOrder::open(&bytes.norder),
+        eorder: ExtensionOrder::open(&bytes.eorder),
         alive: &bytes.alive,
     };
 
@@ -58,6 +61,8 @@ fn main() {
         ("*.pdf", SortKey::Modified, true),
         ("size:>1mb", SortKey::Modified, true),
         ("ab", SortKey::Modified, true),
+        ("", SortKey::Name, false),
+        ("", SortKey::Name, true),
         ("ext:rs", SortKey::Size, true),
         ("ext:rs", SortKey::Name, false),
     ];

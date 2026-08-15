@@ -1,9 +1,8 @@
 //! Turning entries into the files of a segment.
 //!
-//! One pass to intern directories and collect names, one sort, one pass to
-//! write the columns. The sort is the whole design being established: rows come
-//! out newest-first, and everything downstream — early exit, the narrow `mtime`
-//! blocks — is a consequence of it.
+//! One pass to intern directories and collect names, one pass to write the
+//! columns. Rows come out newest-first; compact row lists record the text
+//! orders that cannot be bounded by numeric zone maps.
 
 use scour_core::Entry;
 
@@ -31,11 +30,18 @@ pub struct SegmentBytes {
     /// what makes ordering by path cost what ordering by date costs. See
     /// [`crate::order`].
     pub porder: Vec<u8>,
+    /// The rows in folded-name order. Four bytes and one tie-boundary bit per
+    /// row; absent only for a segment built before the order existed.
+    pub norder: Vec<u8>,
+    /// The rows in folded-extension order, in the same grouped format as the
+    /// name order. Optional so older segments remain readable.
+    pub eorder: Vec<u8>,
 }
 
 impl SegmentBytes {
     pub fn total(&self) -> usize {
         self.names.len()
+            + self.fnames.len()
             + self.cols.len()
             + self.dirs.len()
             + self.ids.len()
@@ -43,6 +49,8 @@ impl SegmentBytes {
             + self.tri_post.len()
             + self.alive.len()
             + self.porder.len()
+            + self.norder.len()
+            + self.eorder.len()
     }
 }
 
@@ -106,7 +114,6 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         // what every index written before this did.
         None => Vec::new(),
     };
-
     let mut cols = ColumnWriter::new();
     let mut ids = IdWriter::new();
     let mut rows = 0usize;
@@ -132,10 +139,21 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         cols.push(r);
     });
 
+    // Names are already folded once in `NameWriter`; sorting those bytes here
+    // means a query never folds or sorts the corpus again. `dir_of` is dead
+    // after the column pass, so its allocation becomes the sort's row list
+    // instead of adding another four bytes per row to rebuild peak memory.
+    let (norder, order) = crate::name_order::build_reusing(rows, names.folded(), dir_of);
+    let eorder = crate::extension_order::build(rows, names.spelled(), names.folded(), order);
+
     let (tri_dict, tri_post) = tri.finish();
+    // Consume the two arenas together. Their block tables are appended in
+    // place, so finishing a multi-million-row segment does not briefly hold a
+    // second full copy of both the spelling and its fold.
+    let (name_bytes, folded_bytes) = names.finish_both();
     SegmentBytes {
-        fnames: names.finish_folded(),
-        names: names.finish(),
+        fnames: folded_bytes,
+        names: name_bytes,
         cols: cols.finish(),
         dirs: dir_bytes,
         ids: ids.finish(),
@@ -144,6 +162,8 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         // Every row starts alive. A removal clears a bit; nothing is rewritten.
         alive: alive_bits(rows),
         porder,
+        norder,
+        eorder,
     }
 }
 
@@ -168,6 +188,8 @@ mod tests {
     use super::*;
     use crate::columns::ColumnBlocks;
     use crate::dirs::DirTable;
+    use crate::extension_order::ExtensionOrder;
+    use crate::name_order::NameOrder;
     use crate::names::NameArena;
     use crate::order::PathOrder;
     use crate::search::Segment;
@@ -229,6 +251,8 @@ mod tests {
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
             porder: PathOrder::open(&b.porder),
+            norder: NameOrder::open(&b.norder),
+            eorder: ExtensionOrder::open(&b.eorder),
             alive: &b.alive,
         };
         let got = seg.entry(0).expect("row 0");
@@ -250,6 +274,8 @@ mod tests {
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
             porder: PathOrder::open(&b.porder),
+            norder: NameOrder::open(&b.norder),
+            eorder: ExtensionOrder::open(&b.eorder),
             alive: &b.alive,
         };
         assert_eq!(seg.entry(0).expect("row").path, "/lonely.txt");
