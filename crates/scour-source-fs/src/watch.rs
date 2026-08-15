@@ -136,6 +136,32 @@ pub fn start(
 /// prompted all of this, is five.
 const SPLIT_DEPTH: u32 = 6;
 
+/// How many uncovered subtrees are named before the list starts counting.
+///
+/// **This list has no natural end.** [`WatchHandle::cover`] is called for every
+/// directory the engine discovers, and every call appends whatever could not be
+/// watched — so on a machine that has run out of inotify watches, *each new
+/// directory adds an entry that no later call removes*. The entries are
+/// distinct paths, so the `dedup` below does nothing for them. Measured on this
+/// machine: two sources want 511,116 watches against a per-user ceiling of
+/// 524,288, which is 97.5% of the whole allowance — the failure mode is one
+/// `git clone` away, and the list would then grow one path per directory
+/// created for as long as the service runs.
+///
+/// What it is for survives the cap. The list is a diagnostic, read by
+/// `scourd`'s start-up line, which reduces it to the one shared prefix a person
+/// can act on — 191 Waydroid directories became `~/.local/share/waydroid/data`.
+/// A thousand examples answer that question exactly as well as a million, and
+/// cost about 100 KB instead of being unbounded.
+const MAX_SKIPPED: usize = 1_024;
+
+/// Remember an uncovered subtree, up to [`MAX_SKIPPED`] of them.
+fn remember(skipped: &mut Vec<String>, path: String) {
+    if skipped.len() < MAX_SKIPPED {
+        skipped.push(path);
+    }
+}
+
 /// Watch `dir` and everything under it, going around what cannot be watched.
 ///
 /// Returns whether anything at all was watched beneath it.
@@ -175,7 +201,7 @@ fn cover(
     // Out of patience. Readable, so a walk can still cover what a watch will
     // not — say so and let the engine schedule it.
     if depth >= SPLIT_DEPTH {
-        skipped.push(path::from_path(dir));
+        remember(skipped, path::from_path(dir));
         if std::fs::read_dir(dir).is_ok() {
             sink.emit(Change::Rescan {
                 path: path::from_path(dir),
@@ -192,7 +218,7 @@ fn cover(
     // one worker thread took a query from 14 ms to 51 seconds. A subtree
     // nobody can read is not pending work. It is recorded and left alone.
     let Ok(children) = std::fs::read_dir(dir) else {
-        skipped.push(path::from_path(dir));
+        remember(skipped, path::from_path(dir));
         return false;
     };
     // The directory itself, without its contents, so that a file created
@@ -478,6 +504,11 @@ impl WatchHandle for FsWatch {
             held.extend(skipped);
             held.sort_unstable();
             held.dedup();
+            // **After the dedup, because the dedup is not a bound.** These are
+            // distinct paths — one per directory that could not be watched — so
+            // nothing here collapses them and the list only ever grew. See
+            // [`MAX_SKIPPED`].
+            held.truncate(MAX_SKIPPED);
         }
     }
 
@@ -557,6 +588,54 @@ mod tests {
                 path: "/home/u/Projeler".into()
             }]
         );
+    }
+
+    #[test]
+    fn the_uncovered_list_stops_growing_instead_of_growing_forever() {
+        // **The list had no end.** `cover` is called once per directory the
+        // engine discovers, and each call appends whatever could not be
+        // watched. The entries are distinct paths, so the `dedup` beside them
+        // collapses nothing; on a machine that has exhausted its inotify
+        // watches — 511,116 wanted against 524,288 allowed here, 97.5% — every
+        // new directory would add one and none would ever be removed.
+        //
+        // Driven through the retained list the way `WatchHandle::cover` fills
+        // it, rather than through a real watcher, because the failure is about
+        // what is kept and not about what the kernel said.
+        let held: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        for round in 0..40 {
+            let batch: Vec<String> = (0..200)
+                .map(|i| format!("/home/u/proje/paket-{round:03}/altdizin-{i:03}"))
+                .collect();
+            let mut guard = held.lock().expect("the list");
+            guard.extend(batch);
+            guard.sort_unstable();
+            guard.dedup();
+            guard.truncate(MAX_SKIPPED);
+        }
+        let n = held.lock().expect("the list").len();
+        assert_eq!(
+            n, MAX_SKIPPED,
+            "8,000 distinct uncovered subtrees were kept as {n}, not {MAX_SKIPPED}"
+        );
+    }
+
+    #[test]
+    fn a_refused_subtree_is_still_named_when_there_are_few_of_them() {
+        // The cap must not cost the ordinary case anything: 191 Waydroid
+        // directories is the real report this list exists for, and it is far
+        // below the ceiling.
+        let mut skipped = Vec::new();
+        for i in 0..191 {
+            remember(&mut skipped, format!("/home/u/.local/share/waydroid/{i}"));
+        }
+        assert_eq!(skipped.len(), 191, "an ordinary report was truncated");
+
+        // And past the ceiling it stops rather than refusing or panicking.
+        for i in 0..MAX_SKIPPED * 2 {
+            remember(&mut skipped, format!("/home/u/başka/{i}"));
+        }
+        assert_eq!(skipped.len(), MAX_SKIPPED);
     }
 
     #[test]
