@@ -1314,4 +1314,62 @@ mod tests {
         assert_eq!(sort_of(None), SortKey::Modified);
         assert_eq!(sort_of(Some("size")), SortKey::Size);
     }
+
+    /// How long the list is, and whether it says "nothing matched", move together.
+    ///
+    /// **A structural test, on purpose.** The rule it guards is a rule about
+    /// the *page*, and the page is JavaScript compiled in as a string —
+    /// nothing in this toolchain runs it and there is no browser in the suite
+    /// to run it in. So what can be checked from here is that the shape which
+    /// makes the bug impossible is still the shape.
+    /// `every_kind_the_engine_names_has_a_glyph_in_the_page` in `icons.rs` is
+    /// the same trade for the same reason.
+    ///
+    /// What it stands in for: `LIST.total` was moved by four things — the
+    /// search that lands on a keystroke, a window of rows carrying a total the
+    /// count cap did not cut, going offline, and the count refresh. Three of
+    /// them also wrote `empty.hidden`; the count refresh did not. Whenever it
+    /// got there first — which is what happens while the rows are on a long
+    /// leash, and `atMostEvery` gives them `cost x COST` — the branch in
+    /// `fillWindow` that hides the message was then skipped for having nothing
+    /// left to change, and "Eşleşme yok" stayed on screen over a list with a
+    /// row in it. Measured in the running window: the count said `1` at
+    /// 13.6 s, the row was drawn at 14.9 s, and the message was still there
+    /// thirty seconds later. See docs/MEASUREMENTS.md.
+    ///
+    /// So: one writer each. A second one is how this happened.
+    #[test]
+    fn the_length_of_the_list_and_the_empty_message_have_one_writer() {
+        for (what, needle) in [
+            ("empty.hidden", "empty.hidden ="),
+            ("LIST.total", "LIST.total ="),
+            ("LIST.exact", "LIST.exact ="),
+        ] {
+            let n = PAGE.matches(needle).count();
+            assert_eq!(
+                n, 1,
+                "{what} is assigned in {n} places in page.html rather than 1 — \
+                 each of them has to move the others, so they belong in `setTotal`"
+            );
+        }
+        // And that the one place is `setTotal`, rather than the three lines
+        // having ended up somewhere only half the callers pass through.
+        let at = PAGE
+            .find("function setTotal(")
+            .expect("page.html has no `setTotal`");
+        let body = &PAGE[at..];
+        let body = &body[..body.find("\n  }").expect("`setTotal` does not end")];
+        for needle in [
+            "LIST.total =",
+            "LIST.exact =",
+            "empty.hidden =",
+            // The two sweeps decide what the cache may still be trusted for
+            // once the length has moved, which is the same fact. A caller that
+            // had to remember them separately is the caller that forgot.
+            "dropBeyond()",
+            "dropShort()",
+        ] {
+            assert!(body.contains(needle), "`setTotal` does not have {needle}");
+        }
+    }
 }

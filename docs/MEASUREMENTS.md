@@ -4340,7 +4340,8 @@ blank frame at any of twenty-four samples, twice.
 on a string nothing matched, creating a file that matches it moved the counter
 to `1 / 2.235.320` and drew no row — identically on both binaries. It is
 recorded here because it was found while checking this change and it is not
-this change.
+this change. *(Explained and fixed on 2026-08-15; see "the counter and the
+rows were on different clocks" below.)*
 
 ```sh
 SCOUR_APP_PORT=7699 SCOUR_APP_DEBUG=9333 XDG_DATA_HOME=/var/tmp/scour-idle-home \
@@ -4374,4 +4375,99 @@ leash there is one.
 
 ```sh
 cargo test --release -p scour-engine an_expensive_ordering
+```
+
+## 2026-08-15 — the counter and the rows were on different clocks
+
+Reported: *"with the query on a string nothing matches, creating a matching
+file moves the counter to `1 / 2.235.320` and draws no row."* Recorded above
+under the 187eefa merge as older than that change and not understood. It is two
+faults at one seam, and neither is in the empty-result path the note pointed
+at.
+
+**The counter is not on the clock and the rows are.** `LIST.total` is moved by
+four things. Three are events — the search that lands on a keystroke, a window
+of rows carrying a total the count cap did not cut, going offline. The fourth
+is `reviseCounts`, on `countsSoon = atMostEvery(reviseCounts, 3000)`. The rows
+are on `rowsSoon = atMostEvery(refreshRows, 400)`, and `atMostEvery` charges
+`floor = max(ms, spent * COST)` — so the rows wait ten times whatever the last
+window cost, and one window of a path-sorted list is seconds. Both throttles
+are made once at module scope, so **the wait the rows are serving when the
+query changes is the previous query's price**; a no-match query's own windows
+are cheap and cannot shorten a leash that is already running.
+
+Measured in the running window against the owner's `scourd`, 2,235,893 entries:
+list on folder order showing everything, then a query nothing matches, then a
+matching file created under `~/.cache`.
+
+| | count says 1 | first window of rows | gap |
+|---|---|---|---|
+| before, leg 1 | 13,621 ms | 14,940 ms | 1,319 ms |
+| before, leg 2 | 2,452 ms | 15,059 ms | **12,607 ms** |
+| after, leg 1 | 1,549 ms | 1,567 ms | **18 ms** |
+
+The gap is the leash, so it is as long as the last window was dear. In leg 2
+the counter read `1` over an empty list for twelve and a half seconds.
+
+**And the message under the empty list was never taken down.** `empty.hidden`
+was written by three of the four things that move `LIST.total`, and the count
+refresh was the one that was not. So when the count got there first,
+`fillWindow`'s answer arrived with `res.total === LIST.total`, the branch that
+hides the message was skipped for having nothing left to change, and "Eşleşme
+yok" stayed on the screen **over a row**, until the query changed. Observed at
+8 s and again at 33 s on both before-legs.
+
+**What changed.** `setTotal` is now the only thing that moves `LIST.total`,
+`LIST.exact` and `empty.hidden`, and it also runs the two sweeps that say what
+the cache may still be trusted for. The second of those is new: `dropBeyond`
+drops the rows past the end once the count says where the end is, and
+`dropShort` is its growing half — a window that came back *short* came back
+short because the list ended inside it, so a count saying it does not makes
+that window out of date however recently it was fetched. Only the stamp goes,
+never the rows, which puts the window in the class `fillWindow` fetches on the
+frame rather than the class that waits for the clock. That is the 18 ms above.
+
+**The ordinary live refresh survives, checked rather than assumed** — it is the
+regression this could plausibly cause. Newest-first, a list already holding 13
+rows, another matching file created: at **row 1 after 555 ms, with the arrival
+highlight**, the count following at 605 ms and the sizer 403 → 434 px. The
+defect's own case draws its row with the highlight too — 3,976 ms, message
+hidden in the same 50 ms sample, count at 4,430 ms — and no ghost row appears
+at any sample in either.
+
+**A warning worth more than the fix.** Two rounds were thrown away, and the
+first "reproduction" was wrong, because **a window nobody is looking at gets no
+frames and the page then draws nothing at all** — with `document.hidden` false
+and `visibilityState` "visible" throughout. Measured on this desktop, GNOME
+Wayland and XWayland alike, `scripts/scour-app` as it ships:
+`requestAnimationFrame` not fired in 2,000 ms. Every paint is coalesced to a
+frame, so the list freezes on whatever it last drew while the counter — written
+outside the painter — goes on moving. In one such round the list was still
+showing the *previous* query's 78 rows and a 620,000 px scrollbar while the
+counter said `1`. That is indistinguishable by eye from this defect, and it is
+probably how the original note came to say "drew no row". Neither
+`--disable-backgrounding-occluded-windows` nor `Page.bringToFront` brings the
+frames back; `Page.startScreencast` does, which is why this was measured over
+one CDP connection with a screencast running rather than with separate
+`scripts/probe` calls. **A probe that checks `document.hidden` is not checking
+whether the page can draw. Ask it for a frame.**
+
+Not fixed, deliberately, and each is a decision rather than an oversight:
+
+- **The leash still crosses a query change.** `sidebarCost` is reset by a new
+  query because "a new query's cost is its own"; `rowsSoon`'s `floor` is not,
+  and that is what makes the gap seconds rather than 400 ms. `dropShort` makes
+  the gap stop mattering for a change the count can see, so this is now a
+  question about cost rather than about correctness.
+- **The page pays full price for a window it cannot draw.** While the frames
+  are stopped it keeps `/api/wait` open — which is what makes the service commit
+  on the burst clock instead of batching — and goes on refetching rows nobody
+  will see. `document.hidden` is what it decides that on, and on this desktop
+  `document.hidden` does not mean what the page needs it to mean.
+
+```sh
+# One connection, screencast running, so the window has a frame clock at all.
+SCOUR_APP_PORT=7688 SCOUR_APP_DEBUG=9344 XDG_DATA_HOME=/var/tmp/scour-emptyfix-home \
+  scripts/scour-app &
+cargo test --release -p scour-web the_length_of_the_list_and_the_empty_message
 ```

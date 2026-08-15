@@ -2779,6 +2779,73 @@
     for (const s of [...LIST.at.keys()]) if (s >= end) LIST.at.delete(s);
   }
 
+  /* **And the windows the exact count has just contradicted.**
+   *
+   * `dropBeyond` is the shrinking half of this and has been here a while: once
+   * the count says where the list ends, the rows past the end are not rows.
+   * The growing half was missing, and it is the half somebody sees. A window
+   * that came back *short* came back short because the list ended inside it —
+   * so if the count now says it does not, that window is out of date however
+   * recently it was fetched.
+   *
+   * Which matters because the count and the rows are on different leashes.
+   * `countsSoon` waits three seconds. `rowsSoon` waits `max(400 ms, what the
+   * last refresh cost x COST)` and is made once at module scope, so the wait
+   * it is holding when the query changes is the *previous* query's price — and
+   * one window of a path-sorted list is seconds (2,463.6 ms measured, see
+   * docs/MEASUREMENTS.md). Measured in the running window: list on folder
+   * order showing everything, then a query nothing matched, then a matching
+   * file created. `/api/facets` said `total=1` at 13.6 s; the first window of
+   * rows was not asked for until 14.9 s, because the rows were still serving
+   * out a 13.35 s leash the empty query had bought. For that second and a
+   * third the screen read `1 / 2.235.938` over a list with nothing in it.
+   *
+   * Only the stamp is dropped, never the rows. `fillWindow` fetches a
+   * *missing* window on the frame and makes an *out-of-date* one wait for the
+   * clock — so removing the stamp is precisely what moves this window into the
+   * class that does not wait, and what is on screen stays on screen until the
+   * answer lands.
+   *
+   * The test is one row rather than a count: `putRows` clears the whole window
+   * and then writes an answer's rows contiguously from `start`, so a window
+   * that came back with n rows holds exactly `start`..`start+n-1` and the last
+   * row it ought to hold is the only one worth asking about. That keeps this
+   * at one lookup per cached window — a hundred of them at `REACH` — rather
+   * than one per row. */
+  function dropShort() {
+    /* A capped count is a floor, not a length, and contradicts nothing. */
+    if (!LIST.exact) return;
+    const end = reach();
+    for (const start of [...LIST.at.keys()]) {
+      if (start >= end) continue;              /* dropBeyond's half */
+      const last = start + Math.min(WINDOW, end - start) - 1;
+      if (!LIST.rows.has(last)) LIST.at.delete(start);
+    }
+  }
+
+  /* **The one way to say how long the list is.**
+   *
+   * `empty.hidden` is derived from this and used to be written by whoever
+   * happened to move `LIST.total`. Three of the four did: the search that
+   * lands on a keystroke, a window of rows carrying a total the count cap did
+   * not cut, and going offline. The fourth is the count refresh, which walks
+   * the matching set on its own leash and moved `LIST.total` without a word
+   * about the message — and when it got there first, the branch in
+   * `fillWindow` that hides the message was skipped for having nothing left to
+   * change. The screen then said "Eşleşme yok" over a list with a row in it,
+   * and went on saying it until the query changed.
+   *
+   * So the two are moved together or not at all. `dropBeyond` and `dropShort`
+   * come along for the same reason: what the cache may still be trusted for is
+   * a fact about the length, and every caller had to remember it separately. */
+  function setTotal(total, exact) {
+    LIST.total = total;
+    LIST.exact = exact;
+    empty.hidden = LIST.total !== 0;
+    dropBeyond();
+    dropShort();
+  }
+
   const scrollEl = document.querySelector(".scroll");
 
   /* Which rows the viewport is over, plus a margin so a flick does not show
@@ -3146,10 +3213,18 @@
        window: the answer stamps `LIST.at`, so it is not asked again until the
        clock moves.
      *
-     * It is not enough on its own, and that is not new. Measured on both
-     * binaries: with the query on something nothing matched, creating a file
-     * that does match moved the counter to `1 / 2.235.320` and drew no row.
-     * Whatever that is, it is older than this change and is not this. */
+     * It was not enough on its own, and the reason turned out to be nothing to
+     * do with this line. The note that stood here said: with the query on
+     * something nothing matched, creating a file that does match moved the
+     * counter to `1 / 2.235.320` and drew no row, identically on both
+     * binaries. It did — because *this* is on the clock and the counter is
+     * not. `SHOWING` moves only when `refreshRows` runs, and `rowsSoon` waits
+     * `max(400 ms, what the last refresh cost x COST)` — seconds of it, if the
+     * list was on folder order a moment ago — while `countsSoon` keeps its
+     * three. Measured in the running window: the count said `1` at 2.5 s and
+     * the first window of rows was not asked for until 15.1 s. See
+     * `dropShort`, which is what now says that a count contradicting the rows
+     * makes those rows missing rather than merely old. */
     if (first >= to && LIST.at.get(0) !== SHOWING && !LIST.pending.has(0)) wanted.push(0);
     /* Nearest the middle of the window first. */
     const eye = (from + to) / 2;
@@ -3272,10 +3347,7 @@
            * typing, and taking the capped number would snap the scrollbar back
            * to 1.000 every time a file changed. */
           if (!res.capped && (!LIST.exact || LIST.total !== res.total)) {
-            LIST.total = res.total;
-            LIST.exact = true;
-            empty.hidden = LIST.total !== 0;
-            dropBeyond();
+            setTotal(res.total, true);
           }
           if (refreshing) now = Math.floor(Date.now() / 1000);  /* "5 dk önce" moves */
           repaint(true);
@@ -3563,8 +3635,11 @@
         clearRows();
         for (const request of LIST.pending.values()) request.stop.abort();
         LIST.pending.clear();
-        LIST.exact = !res.capped;
-        LIST.total = res.total;
+        /* Before `putRows` below, which is what fills the cache this reads —
+           the sweeps inside it have nothing to look at yet and `clearRows`
+           has just emptied `LIST.at`, so they are no-ops here. Said in one
+           place all the same; see `setTotal`. */
+        setTotal(res.total, !res.capped);
         LIST.since = Date.now();
         /* The first window of the new set, and therefore the first word on
            what the rest of it would cost. */
@@ -3603,9 +3678,11 @@
        even where the file is the same — the marked letters moved. */
     for (const tr of pool) tr.__stamp = "";
     repaint(true);
-    /* Shown when nothing matched — and it was the wrong way round, so the one
-       case the message exists for was the one case it was hidden in. */
-    empty.hidden = LIST.total !== 0;
+    /* "Eşleşme yok" is not decided here any more; `setTotal` is the one place
+       that moves the length and the message together. This used to write it
+       and got it the wrong way round once — the one case the message exists
+       for was the one case it was hidden in — which is a good argument for
+       there being a single place rather than four. */
 
     /* The meter, and it is the service's own arithmetic rather than the
        page's. `total` is capped by the count cap, which is why a large one
@@ -3661,10 +3738,15 @@
         charge();
         if (ours !== sidebarGeneration || mine !== generation) return;
 
-        /* The scrollbar's real size, and with it where the list ends. */
-        LIST.total = res.total;
-        LIST.exact = !res.capped;
-        dropBeyond();
+        /* **The scrollbar's real size, and with it where the list ends.**
+         *
+         * And this is the one that gets there first when the rows are on a
+         * long leash, which is why it goes through `setTotal` rather than
+         * writing the two fields itself. See `dropShort`: a count that says
+         * the list is longer than the rows we hold is a count that says those
+         * rows are stale, and saying so here is what puts the window back in
+         * the class `fillWindow` fetches on the frame. */
+        setTotal(res.total, !res.capped);
         repaint(true);
         const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
         document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
@@ -3700,14 +3782,15 @@
        Once cost half an hour of looking at a healthy daemon. */
     console.error("scour:", err);
     LIST.query = null;
-    LIST.total = 0;
-    LIST.exact = true;
     clearSel();
     clearRows();
     for (const request of LIST.pending.values()) request.stop.abort();
     LIST.pending.clear();
     body.innerHTML = "";
-    empty.hidden = false;
+    /* Which shows the message, as the line that used to be here did: a length
+       of nought is a length of nought however it was arrived at, and the
+       sentence under the list is what says the service is the reason. */
+    setTotal(0, true);
     painted = "";
     repaint(true);
     document.getElementById("count").textContent = "—";
