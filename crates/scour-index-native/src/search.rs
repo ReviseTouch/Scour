@@ -1039,12 +1039,40 @@ pub fn run_with(
     // is what keeps a query matching a million entries from building a million
     // strings.
     let mut kept: Vec<u32> = Vec::new();
-    // The same idea for the orders that have to see everything: a sort value
-    // and a row number, never a row. Materialising each match to sort it was
-    // measured at 16.5 ms where this measures a fraction of it — the cost is
-    // not the comparison, it is reconstructing a front-coded path per match to
-    // then throw all but forty of them away.
+    /* **A page's worth of candidates, not a corpus's.**
+     *
+     * A sort value and a row number, never a row: materialising each match to
+     * sort it was measured at 16.5 ms where this measures a fraction of it —
+     * the cost is not the comparison, it is reconstructing a front-coded path
+     * per match to then throw all but forty of them away.
+     *
+     * And it holds `need` of them and not one per match. It grew per match
+     * until now, which is 2,234,583 entries on a real index: a `SortValue` is
+     * 32 bytes because one of its shapes is a `Vec`, so the buffer alone was
+     * ~90 MB, and doubling it meant holding the old copy and the new one at
+     * once. Sorted by path each entry also owned a string, and that measured
+     * 559 MB of peak RSS against a 190 MB index — which in the service, where
+     * glibc keeps freed arenas, is the gigabyte the owner reported.
+     *
+     * [`narrow`] is the trim, and it is the same call that decides the page at
+     * the end. That is deliberate: a separate bounded structure is a second
+     * place for the boundary tie group to be got wrong, and the group is the
+     * whole difficulty here — see the note there. */
     let mut keyed: Vec<(SortValue, u32)> = Vec::new();
+    /* The worst row the page holds, in key space, as of the last trim.
+     *
+     * What a text key gets instead of a zone map: no stored number bounds a
+     * name, so no *block* can be skipped, but the row in hand can be — see
+     * [`out_of_page`]. Left `None` under [`zone_order`], where the same
+     * boundary is already carried by `worst` and rejecting rows here would
+     * only make that one staler. */
+    let mut bar: Option<(SortValue, u32)> = None;
+    /* The key of the row being looked at, refilled rather than rebuilt.
+     *
+     * Ordering by path builds a string a row; the buffer inside this is the
+     * one that gets built into, and only a row that beats `bar` is copied out
+     * of it. */
+    let mut scratch = SortValue::Num(0);
     /* Directories already rebuilt, for the one ordering that asks per row.
        See `DirPaths`. */
     let mut dir_paths = DirPaths::default();
@@ -1119,6 +1147,17 @@ pub fn run_with(
     let backwards = want.sort == SortKey::Modified && !want.descending && by_row;
     let stored_order = stored_forward || backwards;
     let need = want.offset + want.limit;
+    /* The length that triggers the next trim of `keyed`. A page's worth to
+     * begin with, because the first trim is what produces a boundary at all;
+     * after that, twice whatever the trim left — so every trim is paid for by
+     * that many pushes and the amortised cost per row stays constant. */
+    let mut trim_at = need;
+    /* Is the sort key the whole answer, or only the start of one?
+     *
+     * The single most dangerous question on this walk, and it is asked here so
+     * that the trim and the final selection cannot answer it differently. See
+     * [`key_is_exact`]. */
+    let exact = key_is_exact(want.sort);
     let mut done = false;
 
     /* **A number the rows are not stored in can still stop early.**
@@ -1206,30 +1245,59 @@ pub fn run_with(
             // which is a plausible-looking answer to a different question. The
             // verifier missed it because the test asked for an uncapped count,
             // where the two happen to agree.
-            keyed.push((
-                sort_value(seg, row, name, want.sort, &score_terms, folders, &mut dir_paths),
-                row as u32,
-            ));
+            //
+            // **A count is not a page.** With nothing to fill there is nothing
+            // to key, and `/api/count` sorted by name built one per match — a
+            // string per match, ordering by path — for `narrow` to throw every
+            // one of them away. The row is already counted above; this only
+            // declines to key it, so the total and the walk are untouched.
+            if need == 0 {
+                return true;
+            }
+            sort_value_into(
+                &mut scratch,
+                seg,
+                row,
+                name,
+                want.sort,
+                &score_terms,
+                folders,
+                &mut dir_paths,
+            );
+            // Rejected before it is kept, which for a path is before its
+            // string is copied out of the buffer it was built in.
+            if out_of_page(&bar, &scratch, row as u32, want.descending, exact) {
+                return true;
+            }
+            keyed.push((scratch.clone(), row as u32));
             // **A page's worth, not a corpus's.**
             //
-            // Only when the blocks were ordered by what they can reach, for
-            // two reasons. The selection is what tells that walk when to stop,
-            // so it has to exist before the last match has been seen. And
-            // throwing rows away is only safe when the key is the whole
+            // Throwing rows away is only safe when the key is the whole
             // answer: an abbreviated name key ties rows that are not equal,
-            // and `narrow` keeps that whole group for a real comparison —
-            // which is exactly what truncating here would destroy.
+            // and the whole tied group has to survive for a real comparison.
+            // That is `narrow`'s job and the reason the trim *is* `narrow`
+            // rather than a truncation written out again here.
             //
-            // Compacting at `need` and again at twice it costs one selection
-            // per `need` matches, which is amortised constant, and leaves the
-            // boundary sitting at `need - 1` where the next block can be
-            // measured against it. The first is worth doing on its own: it is
-            // what gives the walk a bound to stop on at all.
-            if bounded && (keyed.len() == need || keyed.len() == 2 * need) {
-                keyed.select_nth_unstable_by(need - 1, page_order(want.descending));
-                keyed.truncate(need);
-                if let (SortValue::Num(v), at) = &keyed[need - 1] {
-                    worst.set(Some((zone_key(*v, want.descending), *at)));
+            // One selection per `need` pushes is amortised constant, and it
+            // leaves the boundary sitting at `need - 1` — where the next block
+            // is measured against it under [`zone_order`], and the next row
+            // under [`out_of_page`].
+            if keyed.len() >= trim_at {
+                narrow(&mut keyed, need, want.descending, exact);
+                trim_at = keyed.len().saturating_mul(2);
+                if bounded {
+                    if let (SortValue::Num(v), at) = &keyed[need - 1] {
+                        worst.set(Some((zone_key(*v, want.descending), *at)));
+                    }
+                } else {
+                    // **The row gate, and only where the block gate cannot
+                    // run.** Under `zone_order` the boundary is refreshed
+                    // every `need` *matches*; rejecting rows here would make
+                    // it every `need` *improvements* instead, which on a walk
+                    // that opens the best block first is far rarer — a staler
+                    // `worst` skips fewer blocks, and that is the optimisation
+                    // this must not pay for.
+                    bar = Some(keyed[need - 1].clone());
                 }
             }
         } else if counted.get() >= want.count_cap {
@@ -1420,7 +1488,10 @@ pub fn run_with(
             })
             .collect()
     } else {
-        narrow(keyed, need, want.descending, key_is_exact(want.sort))
+        // The last of the trims the walk has been making all along, and the
+        // only one on a buffer that never reached `trim_at`.
+        narrow(&mut keyed, need, want.descending, exact);
+        keyed
     };
 
     // **Keys and row numbers, for a caller that has other segments to merge
@@ -1641,6 +1712,9 @@ impl DirPaths {
 }
 
 /// `name` is the row's folded name, as the walk yields it.
+///
+/// For a caller holding one row rather than walking a corpus. The walk uses
+/// [`sort_value_into`], which reuses the buffer a path key is built in.
 fn sort_value(
     seg: &Segment<'_>,
     row: usize,
@@ -1650,7 +1724,77 @@ fn sort_value(
     folders: &[(u32, i64)],
     dirs: &mut DirPaths,
 ) -> SortValue {
-    match key {
+    let mut out = SortValue::Num(0);
+    sort_value_into(&mut out, seg, row, name, key, terms, folders, dirs);
+    out
+}
+
+/// The same, written into a value the walk hands back on the next row.
+///
+/// **Only the path key cares**, and it is the one that matters: its key is a
+/// string, so a fresh one per row is an allocation per row — 2,234,583 of them
+/// on an unfiltered query, of which two hundred are kept. The buffer that
+/// arrives in `out` is emptied and refilled instead, and [`out_of_page`] reads
+/// it in place; a row that beats the page's worst is cloned out of it and
+/// nothing else is.
+///
+/// Every other key is a number that replaces what was there, so `out` is just
+/// where it lands.
+///
+/// **A number does not need the round trip, and taking it out is not worth the
+/// branch.** Sending an `i64` through memory to be copied back looks like work
+/// the orders that were already fast are paying for nothing, so the walk was
+/// given a second arm that called [`sort_value`] and pushed the result
+/// outright. Interleaved against this one on the orders that visit the most
+/// rows — `size`, `kind` and `created` at offset 19,800, where a page is twenty
+/// thousand rows — the two were indistinguishable: 19.3 ms against 19.4, 13.0
+/// against 12.7, 7.2 against 7.4, each the best of two on a busy machine. The
+/// arm was removed and this note left in its place.
+// One argument over the limit, and it is the buffer this whole function exists
+// for. Gathering them into a struct would put a lifetime on the walk's hottest
+// call for the sake of a count.
+#[allow(clippy::too_many_arguments)]
+fn sort_value_into(
+    out: &mut SortValue,
+    seg: &Segment<'_>,
+    row: usize,
+    name: &[u8],
+    key: SortKey,
+    terms: &[Vec<u8>],
+    folders: &[(u32, i64)],
+    dirs: &mut DirPaths,
+) {
+    if key == SortKey::Path {
+        // Take back whatever buffer the last row was built in. A row keyed by
+        // something else, or the first row of a walk, starts with none.
+        let mut buf = match std::mem::replace(out, SortValue::Num(0)) {
+            SortValue::Text(b) => b,
+            _ => Vec::new(),
+        };
+        buf.clear();
+        // The name first, and it has to be: `of` hands back a borrow of the
+        // cache, so the reader cannot be asked while that is held.
+        let raw = dirs.spelled(seg, row).as_bytes();
+        // The same join `Segment::path` makes, over a directory this walk may
+        // already have rebuilt. Written into the buffer rather than through
+        // `format!`, which allocates twice.
+        let dir = dirs.of(seg, seg.dir_id(row));
+        match dir {
+            "" => buf.extend_from_slice(raw),
+            "/" => {
+                buf.push(b'/');
+                buf.extend_from_slice(raw);
+            }
+            d => {
+                buf.extend_from_slice(d.as_bytes());
+                buf.push(b'/');
+                buf.extend_from_slice(raw);
+            }
+        }
+        *out = SortValue::Text(buf);
+        return;
+    }
+    *out = match key {
         // Already folded, which is what the terms are, plus the directory's
         // recorded distance — one byte read.
         SortKey::Relevance => {
@@ -1658,29 +1802,8 @@ fn sort_value(
         }
         SortKey::Name => SortValue::Head(head(name)),
         SortKey::Ext => SortValue::Head(head(ext_bytes(name))),
-        SortKey::Path => {
-            // The name first, and it has to be: `of` hands back a borrow of
-            // the cache, so the reader cannot be asked while that is held.
-            let raw = dirs.spelled(seg, row);
-            // The same join `Segment::path` makes, over a directory this walk
-            // may already have rebuilt. Written into one buffer rather than
-            // through `format!`, which allocates twice.
-            let dir = dirs.of(seg, seg.dir_id(row));
-            let mut out = String::with_capacity(dir.len() + 1 + raw.len());
-            match dir {
-                "" => out.push_str(raw),
-                "/" => {
-                    out.push('/');
-                    out.push_str(raw);
-                }
-                d => {
-                    out.push_str(d);
-                    out.push('/');
-                    out.push_str(raw);
-                }
-            }
-            SortValue::Text(out.into_bytes())
-        }
+        // Answered above, where the buffer it is built in can be reused.
+        SortKey::Path => unreachable!("the path key is written, not returned"),
         // **A folder sorts by what is under it**, when that is known. Its own
         // `Size` is its entry table — four kilobytes — so ordering by that put
         // every folder behind every file larger than a block, and on a page of
@@ -1715,7 +1838,7 @@ fn sort_value(
         SortKey::Uid => SortValue::Num(seg.num(Field::Uid, row)),
         SortKey::Gid => SortValue::Num(seg.num(Field::Gid, row)),
         SortKey::Disk => SortValue::Num(seg.num(Field::Disk, row)),
-    }
+    };
 }
 
 /// The column a numeric order reads, when there is one.
@@ -1864,35 +1987,108 @@ fn page_order(desc: bool) -> impl Fn(&(SortValue, u32), &(SortValue, u32)) -> st
 /// still displace it. Cutting at exactly `need` would return a page that is
 /// deterministic, plausible, and not the one brute force produces — timestamps
 /// tie in the thousands on a real filesystem.
-fn narrow(
-    mut keyed: Vec<(SortValue, u32)>,
-    need: usize,
-    desc: bool,
-    exact: bool,
-) -> Vec<(SortValue, u32)> {
-    if need == 0 || keyed.is_empty() {
-        return Vec::new();
+///
+/// ## Also the trim, which is why it is idempotent
+///
+/// The walk calls this every so often on a buffer it is still filling, and then
+/// once more at the end. Applying it repeatedly has to be the same as applying
+/// it once to everything, and it is, for a reason worth writing down: **the
+/// page's worst row only ever improves**. So the boundary at the end is at
+/// least as good as the boundary at any earlier trim, and a row this dropped
+/// then — worse in value than the boundary of the moment — is worse than the
+/// final boundary too. It can be in neither the page nor the group tied with
+/// its edge.
+///
+/// The `need` best are kept whatever else happens, which is what makes the
+/// first half of that true; the tie group is kept by *value* and not by the
+/// row that breaks it, which is what makes the second half true. Keeping only
+/// the rows that tie with the boundary **and** beat it on the row number would
+/// be tighter, and wrong: the boundary improves, and a row it ties with today
+/// may be the boundary itself tomorrow.
+///
+/// In place rather than by value because the walk calls it inside the loop —
+/// `split_off` allocated a second vector every time it was asked.
+fn narrow(keyed: &mut Vec<(SortValue, u32)>, need: usize, desc: bool, exact: bool) {
+    if need == 0 {
+        keyed.clear();
+        return;
     }
-    if keyed.len() <= need {
-        return keyed;
+    // Fewer than a page: nothing to choose between, and no boundary to be had.
+    if keyed.len() < need {
+        return;
     }
-    let cmp = page_order(desc);
     // Selection, not a sort: finding which forty win out of two hundred
     // thousand does not require ordering the rest, and `sort_hits` orders the
     // survivors anyway.
+    //
+    // Run even at exactly `need`, where it selects nothing: what it leaves at
+    // `need - 1` is the worst row of the page, and both `worst` and `bar` are
+    // read from there the moment a page first exists.
     let k = need - 1;
-    keyed.select_nth_unstable_by(k, cmp);
+    keyed.select_nth_unstable_by(k, page_order(desc));
     if exact {
         keyed.truncate(need);
-        return keyed;
+        return;
     }
     // An abbreviated key only says the first sixteen bytes agree. The rows
     // that share them still have to be compared properly, and there are few
     // of them.
+    //
+    // Gathered by swapping rather than by filtering into a second vector: this
+    // runs inside the walk now. The order the survivors end up in does not
+    // matter — every caller sorts or selects again.
     let boundary = keyed[k].0.clone();
-    let rest: Vec<(SortValue, u32)> = keyed.split_off(need);
-    keyed.extend(rest.into_iter().filter(|(v, _)| *v == boundary));
-    keyed
+    let mut end = need;
+    for i in need..keyed.len() {
+        if keyed[i].0 == boundary {
+            keyed.swap(end, i);
+            end += 1;
+        }
+    }
+    keyed.truncate(end);
+}
+
+/// Can this row still reach the page, given the worst row the page holds?
+///
+/// The text key's answer to [`out_of_reach`], and it saves something different.
+/// A zone map bounds a whole *block* by numbers the segment stored, and no such
+/// number exists for a name — so nothing here skips a block, and the walk is
+/// the same walk. What it skips is the **keeping**: the 32 bytes a candidate
+/// occupies, and, ordering by path, the string it owns. On an unfiltered query
+/// that is 2,234,583 of each, to return two hundred.
+///
+/// `bar` is the boundary as of the last trim, and may be several thousand rows
+/// out of date. That is safe in one direction only, and the direction is the
+/// right one: the page's worst can only improve, so an old boundary rejects
+/// less than the current one would, never more.
+///
+/// **Ties are kept when the key is an abbreviation.** Two rows agreeing on
+/// sixteen bytes of name are not equal, and which of them wins is settled later
+/// against the full folded name — by `sort_hits` here, by the comparator in
+/// `index.rs` across segments. Dropping them here is exactly the deterministic,
+/// plausible, wrong page that [`narrow`]'s boundary group exists to prevent.
+///
+/// The comparison is [`page_order`]'s, spelled out against a borrowed key so
+/// that nothing has to be cloned to ask. The two disagreeing is the failure
+/// this is written next to it to avoid.
+fn out_of_page(
+    bar: &Option<(SortValue, u32)>,
+    key: &SortValue,
+    row: u32,
+    desc: bool,
+    exact: bool,
+) -> bool {
+    let Some((held, at)) = bar else {
+        // No page yet, so nothing to be out of.
+        return false;
+    };
+    match if desc { held.cmp(key) } else { key.cmp(held) } {
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Greater => true,
+        // Equal on the key: the row number is what `page_order` breaks it
+        // with, and it may only be trusted when the key is the whole answer.
+        std::cmp::Ordering::Equal => exact && row > *at,
+    }
 }
 
 /// Deterministic ordering, with an explicit tie-break on the path.

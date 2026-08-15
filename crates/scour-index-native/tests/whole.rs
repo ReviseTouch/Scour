@@ -279,6 +279,101 @@ fn oldest_first_is_the_answer_brute_force_gives() {
     );
 }
 
+/// A page that ends inside a tie on sixteen bytes is still the page.
+///
+/// **The one group a bounded selection cannot drop.** Ordering by name no
+/// longer keeps a candidate per match — the walk holds a page's worth and
+/// rejects the rest as it goes — and the name key is the first *sixteen* bytes
+/// of the folded name, an abbreviation. So two rows that tie on it are not
+/// equal, and which of them wins is decided later against the full name. A
+/// selection that keeps only the best `need` returns a page that is
+/// deterministic, plausible, and not the one brute force gives, the moment its
+/// edge falls inside such a group.
+///
+/// Nothing above forces that. `many_segments_answer_exactly_what_one_would`
+/// compares every key against brute force, but on generated names the boundary
+/// landing inside a sixteen-byte tie is luck. Here two hundred names agree on
+/// their first sixteen bytes and differ afterwards, twenty sort before them and
+/// twenty after, and the page is asked for at every edge of the group.
+///
+/// Written in the reverse of the order they sort in, so a selection that keeps
+/// whichever row it met first cannot pass by accident. Split across segments,
+/// because the group is then resolved by the merge comparator in `index.rs` as
+/// well as by `narrow` — the two are the same rule written twice, and the
+/// second is hardcoded to compare folded *names*.
+///
+/// Sorted by path as well, where the key is exact and the group must **not** be
+/// kept: `key_is_exact` has had `Path` added to it once already.
+#[test]
+fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut all: Vec<Entry> = Vec::new();
+    for i in 0..20u64 {
+        all.push(entry(&format!("/t/aaa_{i:03}.rs"), NOW - 5_000, 10_000 + i));
+        all.push(entry(&format!("/t/zzz_{i:03}.rs"), NOW - 5_000, 20_000 + i));
+    }
+    // `sozlesme_arsivi_` is sixteen bytes exactly, so the key sees that and
+    // nothing else. The dates repeat every third file, so the tie-break behind
+    // the name is exercised too.
+    for i in 0..200u64 {
+        let n = 199 - i;
+        all.push(entry(
+            &format!("/t/sozlesme_arsivi_{n:03}.rs"),
+            NOW - 5_000 - (n as i64 % 3),
+            30_000 + i,
+        ));
+    }
+    // The same names spelled differently, in another directory: the key is over
+    // the *folded* name, so these join the group and half of them tie with a
+    // lowercase one exactly.
+    for i in 0..50u64 {
+        let n = 49 - i;
+        all.push(entry(
+            &format!("/u/SOZLESME_ARSIVI_{n:03}.rs"),
+            NOW - 5_000 - (n as i64 % 3),
+            40_000 + i,
+        ));
+    }
+    for part in all.chunks(40) {
+        let mut it = part.iter().cloned().map(Change::Upsert);
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+    }
+    let f = Fixture {
+        _tmp: tmp,
+        index,
+        entries: all,
+    };
+    assert!(
+        f.index.stats().expect("stats").segments >= 7,
+        "the fixture is supposed to be fragmented"
+    );
+
+    for sort in [SortKey::Name, SortKey::Path] {
+        for desc in [true, false] {
+            // Every edge of the group: just before it, its first row, inside
+            // it, its last row, and past it.
+            for limit in [1, 19, 20, 21, 25, 120, 269, 270, 290] {
+                assert_eq!(
+                    f.search("", sort, desc, limit),
+                    f.expected("", sort, desc, limit),
+                    "first {limit} by {sort:?} (desc={desc}) disagrees where sixteen bytes tie"
+                );
+            }
+            // And the pages of it, where the edge of a page meets the edge of
+            // the group from the other side.
+            for offset in [0, 1, 19, 20, 39, 120, 250, 289] {
+                assert_eq!(
+                    f.paged("", sort, desc, offset, 20),
+                    f.expected("", sort, desc, offset + 20)[offset..].to_vec(),
+                    "page at {offset} by {sort:?} (desc={desc}) disagrees where sixteen bytes tie"
+                );
+            }
+        }
+    }
+}
+
 /// A numeric order stops opening blocks, and stops at the right place.
 ///
 /// **The failure this guards is a plausible page.** Ordering by a number no
