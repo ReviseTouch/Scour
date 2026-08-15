@@ -145,6 +145,12 @@ struct Shared {
     prepared: RwLock<Option<Prepared>>,
     /// When one was last asked for, so misses cannot queue one each.
     prepared_at: Mutex<Instant>,
+    /// How long that one has to stand before another may be asked for, in
+    /// microseconds. Written by the preparing thread out of what its last walk
+    /// cost — see [`PREPARE_COST`] — and read by [`Engine::search`]. Atomic
+    /// rather than behind `prepared_at`'s lock because the reader is on the
+    /// path every search takes and the writer runs once a walk.
+    prepare_floor: AtomicU64,
     /// Asks the preparing thread for a query's full ordered page. Bounded and
     /// tiny: only the newest request matters, and an older one still in the
     /// channel is work nobody wants done.
@@ -200,12 +206,45 @@ struct Prepared {
 /// ever one.
 const PREPARE: u32 = 20_000;
 
-/// How often an ordering may be built.
+/// How often an ordering may be built, at the very least.
 ///
-/// Not a tuning knob so much as a ceiling on waste: the walk costs about a
-/// tenth of a second on a broad query, so once every two seconds is at most a
-/// twentieth of a core spent on speculation.
+/// A floor and not the whole rule. It used to be the whole rule, justified by
+/// "the walk costs about a tenth of a second on a broad query, so once every
+/// two seconds is at most a twentieth of a core spent on speculation" — which
+/// is true of the *stored* order and of nothing else. This file's own
+/// measurements of one window of two hundred rows span 3.2 ms sorted by
+/// modification time and 2,463.6 ms sorted by path, and a walk of twenty
+/// thousand is dearer again. At the top of that range a flat two seconds is
+/// not a twentieth of a core, it is most of one.
+///
+/// It is also work that is thrown away. `prepare_loop` drops the result if the
+/// index moved while it was walking, and a window being looked at holds
+/// `watchers > 0`, which puts the commit clock on
+/// [`EngineOptions::commit_watched`] — about a second. So a walk that takes
+/// longer than that can essentially never survive, and repeating it every two
+/// seconds is a core spent producing nothing.
+///
+/// See [`PREPARE_COST`] for what is charged instead.
 const PREPARE_EVERY: Duration = Duration::from_secs(2);
+
+/// What a walk buys the next one: it waits at least this many times what the
+/// last one took.
+///
+/// The page solved the same problem for itself and the shape is taken from it
+/// — `atMostEvery` in `page.html` charges `floor = max(ms, spent * COST)` with
+/// `COST = 10`, after a three-second count refresh on a broad query was
+/// measured at 930 ms of the service each time, "a third of a core, spent on a
+/// number nobody was reading". The same number here for the same reason: a
+/// speculative walk can then never take more than about a tenth of a machine,
+/// however dear it is, and a cheap one is unaffected because the floor above
+/// still applies.
+///
+/// Deliberately without a ceiling. A walk that costs 2.4 s backs off to
+/// twenty-four, and that is the right answer rather than a regrettable one:
+/// at that price the ordering is discarded before it lands every single time,
+/// so nothing is lost by not building it, and the deep page it would have made
+/// cheap costs the same 2.4 s either way.
+const PREPARE_COST: u32 = 10;
 
 /// How many of the biggest files are considered for duplication.
 ///
@@ -290,6 +329,7 @@ impl Engine {
             watchers: AtomicU32::new(0),
             prepared: RwLock::new(None),
             prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
+            prepare_floor: AtomicU64::new(PREPARE_EVERY.as_micros() as u64),
             prepare: prepare_tx,
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
@@ -540,9 +580,15 @@ impl Engine {
         // scan is running it is speculation thrown away before it lands: the
         // index moves, the ordering goes with it, and the thread starts over.
         // Measured at 27% of a core in exactly that state.
+        // **And not until the last walk has been paid for.** The floor is what
+        // that walk cost times `PREPARE_COST`, never less than `PREPARE_EVERY`
+        // — so an ordering that is cheap to build stays as live as it was, and
+        // one that is dear is built at a bounded share of the machine instead
+        // of a fixed interval that knows nothing about the price.
+        let floor = Duration::from_micros(self.shared.prepare_floor.load(Ordering::Relaxed));
         if page.offset == 0
             || self.shared.scanning.load(Ordering::Acquire)
-            || self.shared.prepared_at.lock().elapsed() < PREPARE_EVERY
+            || self.shared.prepared_at.lock().elapsed() < floor
         {
             return self.shared.index.search(&SearchRequest {
                 query: scour_query::parse(query),
@@ -849,6 +895,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
             return;
         }
         let at = shared.revision.load(Ordering::Acquire);
+        let began = Instant::now();
         let found = shared.index.search(&SearchRequest {
             query: scour_query::parse(&job.query),
             sort: job.sort,
@@ -859,6 +906,15 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
                 count_cap: job.count_cap,
             },
         });
+        // **Charged whether or not it is kept.** A walk that is thrown away
+        // below cost exactly as much as one that is used, and it is the thrown
+        // away ones this is here to slow down: with a window open the index
+        // moves about once a second, so a walk longer than that never survives
+        // and would otherwise be repeated for as long as the window is open.
+        let floor = PREPARE_EVERY.max(began.elapsed() * PREPARE_COST);
+        shared
+            .prepare_floor
+            .store(floor.as_micros() as u64, Ordering::Relaxed);
         let Ok(found) = found else { continue };
         if shared.revision.load(Ordering::Acquire) != at {
             continue;

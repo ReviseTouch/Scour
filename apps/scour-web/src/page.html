@@ -2637,7 +2637,37 @@
   const LIST = {
     query: null, sort: null, desc: null,
     total: 0,                /* what the scrollbar is sized by */
-    rows: new Map(),         /* index -> row, only what has been fetched */
+    /* **Index to row, for every window that has been fetched and not thrown
+     * away** — which is up to `REACH` of them, not "only the rows on screen".
+     *
+     * A comment here used to say the opposite: "only the rows that are on
+     * screen; everything cached outside the viewport is dropped". Nothing ever
+     * dropped anything, and it must not: the reading-ahead below deliberately
+     * fetches the whole reachable list on a cheap ordering, and a cache that
+     * evicted what it had just read ahead into would ask for it again for as
+     * long as the window stayed open.
+     *
+     * So the bound is `REACH` rows — twenty thousand, a few megabytes — and it
+     * is cleared when the query changes. The one thing that *is* deleted is
+     * the tail past the end of the list once the exact count says where the
+     * end is; see `dropBeyond`. */
+    rows: new Map(),         /* index -> row, for every window fetched */
+    /* **Every path the cache holds, and how many rows hold it.**
+     *
+     * One question is asked of the cache whenever a window is refreshed — "is
+     * this a file that has just turned up?" — and it used to be answered by
+     * rebuilding a set over the whole thing:
+     * `new Set([...LIST.rows.values()].map(fullPath))`. Three passes and about
+     * sixty thousand allocations over a map that reaches twenty thousand
+     * entries once the reading-ahead has run, to decide something about the
+     * two hundred rows on screen.
+     *
+     * Kept in step with `rows` instead, by `putRows` and `dropRows`, which are
+     * the only two things that write to either. Counted rather than a plain
+     * set because a file that moves one place down is briefly at two indices —
+     * one window has been refetched and its neighbour has not — and the last
+     * row to let go of a path is what makes it unknown again. */
+    seen: new Map(),         /* path -> how many rows hold it */
     pending: new Map(),      /* start -> the exact request in flight */
     exact: false,            /* has the exact count landed yet */
     since: 0,                /* when this result set landed */
@@ -2659,9 +2689,95 @@
      * was that the whole map was replaced on every revision; once the page
      * started reading ahead, that meant discarding twenty thousand rows and
      * asking for them again — **1.26 times a second on this machine, which is
-     * what held the daemon at 100% CPU with nobody touching it.** */
-    at: new Map(),           /* window start -> the revision it came from */
+     * what held the daemon at 100% CPU with nobody touching it.**
+     *
+     * Stamped with `SHOWING` rather than `REV`, which is what puts the live
+     * refresh on a leash without putting a *missing* window on one. See
+     * `refreshRows`. An entry here also means "this window has been fetched",
+     * including one that came back empty — `rows` cannot say that, and asking
+     * `rows` was how the reading-ahead came to request the same empty window
+     * for ever on a list shorter than it thought. */
+    at: new Map(),           /* window start -> the revision it was fetched at */
   };
+
+  /* ---------------- the row cache, and the only two doors into it ----------
+   *
+   * Everything that writes to `LIST.rows` goes through `putRows`, and
+   * everything that removes from it through `dropRows`, so that `LIST.seen`
+   * cannot drift from what the cache actually holds. `seen` is what answers
+   * "is this file one that has just turned up?" in constant time; the version
+   * before this rebuilt a set over the whole cache to answer it, once per
+   * index revision, which on this machine is about once a second. */
+
+  const fullPath = (f) => f.path + "/" + f.name;
+
+  /* One window's worth of rows, replacing whatever was at those indices.
+   *
+   * `mark` says whether this is a *refresh* of a window the page already had.
+   * Only then can a row be an arrival: a window arriving for the first time
+   * has no "a moment ago" to be compared with, every row in it is new to this
+   * page and none of them is new to the disk — and marking those would flash
+   * the whole list the first time the reading-ahead ran. */
+  function putRows(start, rows, mark) {
+    const at = Date.now();
+    if (mark) {
+      /* Aged out here as well as on the timer below, because the timer only
+         gets to run when the refreshes stop. On a busy machine they do not:
+         rescheduling it on every refresh kept rows highlighted for **7.8 s**
+         against a 1.8 s intent. */
+      for (const [p, when] of arrivals) if (when <= at - FRESH_MS) arrivals.delete(p);
+      /* Asked before the swap below, while `seen` still describes the list as
+         it was a moment ago. */
+      for (const f of rows) {
+        const p = fullPath(f);
+        if (!LIST.seen.has(p) && !arrivals.has(p)) arrivals.set(p, at);
+      }
+    }
+    /* The whole window, not only what came back. A window that comes back
+       short is a list that has shrunk, and the rows past the new end are not
+       rows any more. */
+    dropRows(start, WINDOW);
+    rows.forEach((f, i) => {
+      const p = fullPath(f);
+      /* The moment it arrived, not a flag: the row is redrawn several times
+         while it is highlighted and the fade has to carry on from where it was
+         rather than start again. */
+      if (arrivals.has(p)) f.fresh = arrivals.get(p);
+      LIST.rows.set(start + i, f);
+      LIST.seen.set(p, (LIST.seen.get(p) || 0) + 1);
+    });
+    if (mark && arrivals.size) armFresh();
+  }
+
+  function dropRows(start, count) {
+    for (let i = start; i < start + count; i++) {
+      const f = LIST.rows.get(i);
+      if (!f) continue;
+      LIST.rows.delete(i);
+      const p = fullPath(f);
+      const n = LIST.seen.get(p);
+      if (n > 1) LIST.seen.set(p, n - 1);
+      else LIST.seen.delete(p);
+    }
+  }
+
+  function clearRows() {
+    LIST.rows.clear();
+    LIST.seen.clear();
+    LIST.at.clear();
+  }
+
+  /* Rows past the end of the list, once the exact count has said where the end
+     is. `visibleRange` clamps to `reach()`, so these can never be painted and
+     never asked for again — and their paths would otherwise sit in `seen` for
+     the life of the query, which is what decides whether a file that comes
+     back counts as an arrival. */
+  function dropBeyond() {
+    const end = reach();
+    if (LIST.rows.size <= end) return;
+    for (const i of [...LIST.rows.keys()]) if (i >= end) dropRows(i, 1);
+    for (const s of [...LIST.at.keys()]) if (s >= end) LIST.at.delete(s);
+  }
 
   const scrollEl = document.querySelector(".scroll");
 
@@ -2999,35 +3115,71 @@
       const tries = step === 0 ? [here] : [here + step * WINDOW, here - step * WINDOW];
       for (const start of tries) {
         if (start < 0 || start >= end) continue;
-        if (!LIST.rows.has(start) && !LIST.pending.has(start)) return start;
+        /* `at` rather than `rows`: a window that came back empty is fetched,
+           and asking `rows` about it answered "missing" for ever. On a list
+           whose reachable length is a guess until the exact count lands —
+           which is every list, for the first fifth of a second — that was a
+           request a frame, at the same offset, until the count arrived. */
+        if (!LIST.at.has(start) && !LIST.pending.has(start)) return start;
       }
     }
     return null;
   }
 
   function fillWindow() {
-    if (LIST.query === null) return;          /* the first search has not landed */
+    if (LIST.query === null) return Promise.resolve();  /* no search has landed */
     const [from, to] = visibleRange();
 
-    /* Anything in flight that the screen has left behind. */
-    for (const [start, request] of LIST.pending) {
-      if (start + WINDOW <= from || start >= to) {
-        request.stop.abort();
-        LIST.pending.delete(start);
-      }
-    }
-
-
+    const first = Math.floor(from / WINDOW) * WINDOW;
     const wanted = [];
-    for (let start = Math.floor(from / WINDOW) * WINDOW; start < to; start += WINDOW) {
+    for (let start = first; start < to; start += WINDOW) {
       if (LIST.pending.has(start)) continue;
       // On screen, out of date is as good as missing. Off screen it is not.
-      if (LIST.rows.has(start) && LIST.at.get(start) === REV) continue;
+      if (LIST.at.get(start) === SHOWING) continue;
       wanted.push(start);
     }
+    /* **A list with nothing in it still has to be asked about.** `reach()` is
+       zero once the exact count says nothing matched, so the range is `[0, 0]`
+       and the loop above covers no window at all. Carried over from the
+       refresh this replaced, which had the same line for the same reason
+       (`if (!starts.length) starts.push(0)`). Once per revision like any other
+       window: the answer stamps `LIST.at`, so it is not asked again until the
+       clock moves.
+     *
+     * It is not enough on its own, and that is not new. Measured on both
+     * binaries: with the query on something nothing matched, creating a file
+     * that does match moved the counter to `1 / 2.235.320` and drew no row.
+     * Whatever that is, it is older than this change and is not this. */
+    if (first >= to && LIST.at.get(0) !== SHOWING && !LIST.pending.has(0)) wanted.push(0);
     /* Nearest the middle of the window first. */
     const eye = (from + to) / 2;
     wanted.sort((a, b) => Math.abs(a + WINDOW / 2 - eye) - Math.abs(b + WINDOW / 2 - eye));
+
+    /* **Anything in flight that the screen has left behind — except the one
+     * window the reading-ahead started, which is off the screen on purpose.**
+     *
+     * That exception was missing and it cost exactly double. The reading-ahead
+     * asks for a window at row nineteen thousand; the next call of this
+     * function — one frame later, or from the answer to the window before it —
+     * saw a request outside the viewport and abandoned it, and the
+     * reading-ahead then asked for the same window again. Measured in the
+     * running window on an untouched list, the offsets asked for came back
+     *
+     *     19000 abort, 19000 abort, 19000 ok, 19200 abort, 19200 ok,
+     *     19400 ok, 19600 abort, 19600 ok, 19800 abort, 19800 ok
+     *
+     * — every one of those aborts a page of the index the service had already
+     * built and nobody read.
+     *
+     * It is still let go of the moment the screen wants something, which is
+     * what the abandoning was for: a request nobody is waiting for holding one
+     * of the six connections a browser opens to an origin. */
+    for (const [start, request] of LIST.pending) {
+      const behind = start + WINDOW <= from || start >= to;
+      if (request.ahead ? !wanted.length : !behind) continue;
+      request.stop.abort();
+      LIST.pending.delete(start);
+    }
 
     /* **And only once the query has stopped changing.** Reading ahead is for a
        list somebody is looking at; a result set one keystroke old is about to
@@ -3058,22 +3210,30 @@
      * The rows on screen are still fetched at any price — that is what was
      * asked for. This governs only the rows nobody has looked at. */
     const affordable = LIST.cost <= READ_AHEAD_MAX;
+    let ahead = null;
     if (affordable && Date.now() - LIST.since > SETTLED &&
         !wanted.length && LIST.pending.size === 0) {
-      const rest = nextMissing(from, to);
-      if (rest !== null) wanted.push(rest);
+      ahead = nextMissing(from, to);
+      if (ahead !== null) wanted.push(ahead);
     }
 
+    const started = [];
     for (const start of wanted.slice(0, Math.max(0, INFLIGHT - LIST.pending.size))) {
       const request = {
         generation,
         query: LIST.query,
         sort: LIST.sort,
         desc: LIST.desc,
+        /* The revision this answer will be current as of. Recorded at the ask
+           rather than read at the answer, so a refresh that starts while this
+           one is in flight leaves the window correctly out of date instead of
+           stamping it with a revision it was never fetched at. */
+        rev: SHOWING,
+        ahead: start === ahead,
         stop: new AbortController(),
       };
       LIST.pending.set(start, request);
-      SERVICE.search(request.query, request.sort, request.desc, WINDOW, start, request.stop.signal)
+      started.push(SERVICE.search(request.query, request.sort, request.desc, WINDOW, start, request.stop.signal)
         .then((res) => {
           /* Clearing an old result set does not cancel its fetch. Compare the
              request object before deleting: an old answer for window 400 must
@@ -3097,8 +3257,27 @@
           // charging it for their time would stop the reading-ahead for a
           // list that is actually cheap.
           LIST.cost = res.took_us / 1000;
-          rows.forEach((r, i) => LIST.rows.set(start + i, r));
-          LIST.at.set(start, REV);
+          /* A window that was already here is being *refreshed*, and what is
+             in it now that was not in the cache a moment ago is a file that
+             turned up. See `putRows` for why a first fetch is not marked. */
+          const refreshing = LIST.at.has(start);
+          putRows(start, rows, refreshing);
+          LIST.at.set(start, request.rev);
+          /* **The exact total, off any window that carries one.**
+           *
+           * This came here with the live refresh that used to be a second
+           * fetcher: it is the one thing that fetcher did that this one did
+           * not. Only when the engine reached the end of the matching set — a
+           * search answers under a count cap so that it can keep up with
+           * typing, and taking the capped number would snap the scrollbar back
+           * to 1.000 every time a file changed. */
+          if (!res.capped && (!LIST.exact || LIST.total !== res.total)) {
+            LIST.total = res.total;
+            LIST.exact = true;
+            empty.hidden = LIST.total !== 0;
+            dropBeyond();
+          }
+          if (refreshing) now = Math.floor(Date.now() / 1000);  /* "5 dk önce" moves */
           repaint(true);
           /* A slot has just come free, and the screen may be somewhere else
              now. Asking again here is what keeps a still list filling in
@@ -3113,8 +3292,12 @@
           // Not silent. A failed window remains a ghost until another event
           // chooses a retry policy, but it must not masquerade as a draw.
           console.error("scour: a window did not load:", e);
-        });
+        }));
     }
+    /* What this call set going, so a caller that is paying for it can be
+       charged — `refreshRows` is the one that does. Every branch above is
+       already caught, so this settles rather than rejects. */
+    return Promise.all(started);
   }
 
   /* **One door into the painter, and it opens on a frame.**
@@ -3377,8 +3560,7 @@
            different set of files, and rows that are no longer on screen going
            on being selected is how somebody copies a list they cannot see. */
         clearSel();
-        LIST.rows.clear();
-        LIST.at.clear();
+        clearRows();
         for (const request of LIST.pending.values()) request.stop.abort();
         LIST.pending.clear();
         LIST.exact = !res.capped;
@@ -3387,7 +3569,13 @@
         /* The first window of the new set, and therefore the first word on
            what the rest of it would cost. */
         LIST.cost = res.took_us / 1000;
-        res.rows.forEach((r, i) => LIST.rows.set(i, fromService(r)));
+        /* **And this window is current.** Without saying so, `fillWindow` found
+           window zero present but unstamped one frame later, called it out of
+           date and asked the service for the same two hundred rows again —
+           one wasted request per keystroke, every keystroke. */
+        SHOWING = REV;
+        putRows(0, res.rows.map(fromService), false);
+        LIST.at.set(0, SHOWING);
         scrollEl.scrollTop = 0;
         FILES = res.rows.map(fromService);
         lastMeter = res;
@@ -3473,9 +3661,10 @@
         charge();
         if (ours !== sidebarGeneration || mine !== generation) return;
 
-        /* The scrollbar's real size. */
+        /* The scrollbar's real size, and with it where the list ends. */
         LIST.total = res.total;
         LIST.exact = !res.capped;
+        dropBeyond();
         repaint(true);
         const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
         document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
@@ -3514,7 +3703,7 @@
     LIST.total = 0;
     LIST.exact = true;
     clearSel();
-    LIST.rows.clear();
+    clearRows();
     for (const request of LIST.pending.values()) request.stop.abort();
     LIST.pending.clear();
     body.innerHTML = "";
@@ -4871,11 +5060,13 @@
   /* The index's size, for the "x / y" meter. */
   function applyStatus(s) {
     TOTAL = s.entries;
+    let moved = false;
     const note = document.getElementById("path-note");
     if (note) {
       const mb = (s.index_bytes / 1048576).toFixed(1).replace(".", ",");
-      note.textContent = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
+      const text = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
         + (s.scanning ? " · taranıyor" : "");
+      if (text !== note.textContent) { note.textContent = text; moved = true; }
     }
     /* `LIST`, not the search reply. The search answers under a cap so it can
        keep up with typing; the exact number arrives with the sidebar a moment
@@ -4885,8 +5076,16 @@
       const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
       document.getElementById("count").textContent = shown + " / " + fmt(TOTAL);
     }
-    /* The status sentence is in a wrapping `auto` row above the list. */
-    repaint(true);
+    /* **The status sentence is in a wrapping `auto` row above the list**, so a
+       longer one takes a line from the rows and they have to be laid out
+       again. That is the whole reason there is a repaint here.
+     *
+     * What it is not is a heartbeat. This runs for every reply to `/api/wait`,
+     * and most of those say what the last one said — including the
+     * twenty-five-second timeouts, which mean *nothing changed*. An
+     * unconditional `repaint(true)` marked the rows dirty, redrew the pool and
+     * ran `fillWindow` for each of them. */
+    if (moved) repaint(true);
   }
 
   /* ------------------------------------------------------------------ *
@@ -4913,7 +5112,15 @@
    * again puts it wherever the current sort says it belongs, which for the
    * default one is the top, with no rule here that says so.
    * ------------------------------------------------------------------ */
-  let REV = 0;                 /* the revision the rows on screen reflect */
+  let REV = 0;                 /* the newest revision the service has told us of */
+  /* **The revision the visible windows are being kept at**, which is not the
+     same thing and is the whole leash. `fillWindow` refetches a window whose
+     stamp is not this, and only `refreshRows` moves this up to `REV` — so a
+     window that is *missing* is still fetched on the frame it is scrolled to,
+     while one that is merely *out of date* waits for the clock. Without the
+     split, a scan — which commits continuously — would have the list refetching
+     itself as fast as the network allowed for as long as it ran. */
+  let SHOWING = 0;
   let missedWhileAway = false; /* something changed while the window was hidden */
   let freshTimer = null;
   /* Paths that were not in the list a moment ago, and when they turned up.
@@ -4988,146 +5195,55 @@
     };
   }
 
-  const fullPath = (f) => f.path + "/" + f.name;
-  let rowRefresh = 0;
+  /* The highlight marks the arrival, not the row, so it is taken off on its
+     own clock rather than by whatever redraws next. */
+  function armFresh() {
+    clearTimeout(freshTimer);
+    freshTimer = setTimeout(() => {
+      const cut = Date.now() - FRESH_MS;
+      let any = false;
+      for (const [p, when] of arrivals) if (when <= cut) { arrivals.delete(p); any = true; }
+      for (const f of LIST.rows.values()) {
+        if (f.fresh && !arrivals.has(fullPath(f))) { delete f.fresh; any = true; }
+      }
+      if (any) repaint(true);
+    }, FRESH_MS);
+  }
 
-  /* The rows, and only the rows that are on screen.
-     Everything cached outside the viewport is dropped rather than kept: it is
-     stale by definition, and `fillWindow` fetches it again the moment it is
-     scrolled to. */
-  function reviseRows() {
-    if (LIST.query === null) return;          /* the first search has not landed */
-    const mine = generation;
-    const revision = REV;
-    const refresh = ++rowRefresh;
-    /* **What this refresh is a refresh _of_.**
-     *
-     * Not decoration: `LIST.sort` and `LIST.desc` are the *landed* ordering,
-     * written when a search answers rather than when it is asked for — so
-     * between a click on a heading and that click's answer they still hold
-     * the old one, and this reads them in that gap. Recorded here, checked on
-     * the way back, exactly as `fillWindow` already does with its windows. */
-    const asked = { query: LIST.query, sort: LIST.sort, desc: LIST.desc };
-    const [from, to] = visibleRange();
-    const starts = [];
-    for (let s = Math.floor(from / WINDOW) * WINDOW; s < to; s += WINDOW) starts.push(s);
-    if (!starts.length) starts.push(0);
-    const before = new Set([...LIST.rows.values()].map(fullPath));
-
-    // Returned at the end so the throttle can charge for what this cost.
-    return Promise.all(starts.map((s) =>
-      SERVICE.search(asked.query, asked.sort, asked.desc, WINDOW, s).then((res) => [s, res])
-    ))
-      .then((pairs) => {
-        /* The throttle limits starts, not finishes: two refreshes can overlap
-           when a window takes more than 400 ms. The older one must not put an
-           older ordering back after the newer one, and a later index revision
-           makes every answer from this one stale even if no newer fetch has
-           started yet. */
-        if (mine !== generation || refresh !== rowRefresh || revision !== REV) return;
-        /* **And it must still be the list this asked about.**
-         *
-         * `generation` does not cover this. It is raised when a search is
-         * *sent*, so a refresh that starts after the click and before the
-         * answer carries the new generation and the old ordering — and then
-         * merges rows in the previous order over the ones the click just put
-         * on screen. Measured in the running window: the heading turned to
-         * "Değişme ▼" and the list went on standing in path order, and stayed
-         * there, because nothing afterwards had any reason to ask again.
-         *
-         * That is the whole of "tarih sıralaması çalışmadı". It needs an index
-         * revision to land inside a gap of a few milliseconds, which on a
-         * machine watching two volumes is often, and never on an idle one —
-         * so it read as the sort being broken at random. */
-        if (asked.query !== LIST.query || asked.sort !== LIST.sort ||
-            asked.desc !== LIST.desc) return;
-        const rows = new Map();
-        for (const [s, res] of pairs) {
-          res.rows.forEach((r, i) => rows.set(s + i, fromService(r)));
-          /* The total, but only when it is the real one. A search answers
-             under a count cap so that it can keep up with typing, and taking
-             the capped number here would snap the scrollbar back to 1.000
-             every time a file changed. The exact one comes with the sidebar. */
-          if (s === starts[0] && !res.capped) { LIST.total = res.total; LIST.exact = true; }
-        }
-        /* What arrived, remembered by path and by wall clock rather than by
-           "was it in the last batch". A busy machine refreshes this several
-           times a second, and marking against the previous batch meant the
-           highlight lived until the next refresh — measured at 400 ms against
-           a 1.6 s animation, so it flickered instead of fading. */
-        const at = Date.now();
-        /* Aged out here as well as on the timer below, because the timer only
-           gets to run when the refreshes stop. On a busy machine they do not:
-           rescheduling it on every refresh kept rows highlighted for **7.8 s**
-           against a 1.8 s intent, which is the same mistake as the flicker
-           and the other way round. */
-        for (const [p, when] of arrivals) if (when <= at - FRESH_MS) arrivals.delete(p);
-        for (const f of rows.values()) {
-          const p = fullPath(f);
-          if (!before.has(p) && !arrivals.has(p)) arrivals.set(p, at);
-          /* The moment it arrived, not a flag: the row is redrawn several
-             times while it is highlighted and the fade has to carry on from
-             where it was rather than start again. */
-          if (arrivals.has(p)) f.fresh = arrivals.get(p);
-        }
-        // **Replace only what this was actually about.**
-        //
-        // The windows were chosen when the request went out. If the list has
-        // been scrolled since, replacing the map wholesale throws away the
-        // rows the viewport is showing *now* and puts back the ones it was
-        // showing then — so the screen goes blank and stays blank until the
-        // next revision refetches it. On a machine whose index moves every
-        // second that is a permanent flicker while scrolling, and on a quiet
-        // one it never comes back at all.
-        /* **Merge, never replace.** This has authority over the windows it
-           asked for and none over the others. Replacing the map threw away
-           everything the page had read ahead, and the reading-ahead then asked
-           for all of it again — on a machine whose index moves once a second,
-           for ever. The windows it did fetch are stamped with this revision;
-           the rest keep the one they came from and are fetched again when the
-           eye reaches them. */
-        for (const [i, f] of rows) LIST.rows.set(i, f);
-        for (const start of starts) LIST.at.set(start, REV);
-        /* These starts have just been supplied by this refresh. Supersede only
-           their ordinary window requests; clearing every pending start also
-           cancelled the viewport the user had scrolled to in the meantime. */
-        for (const start of starts) {
-          const request = LIST.pending.get(start);
-          if (!request) continue;
-          request.stop.abort();          /* its answer is already here */
-          LIST.pending.delete(start);
-        }
-        now = Math.floor(Date.now() / 1000);  /* "5 dk önce" has to keep moving */
-        repaint(true);
-        // **And fetch whatever the viewport is now missing.**
-        //
-        // The windows above were chosen when the request went out. A scroll
-        // between then and now leaves this holding rows for where the list
-        // *was*, and the scroll that would have filled the new position has
-        // already happened — so without this the rows under the cursor stay
-        // blank until the index happens to change again, which on a quiet
-        // machine is never. That is what "the lazy loading stopped working"
-        // looks like from the outside.
-        fillWindow();
-        empty.hidden = LIST.total !== 0;
-        /* The highlight marks the arrival, not the row, so it is taken off on
-           its own clock. */
-        clearTimeout(freshTimer);
-        freshTimer = setTimeout(() => {
-          const cut = Date.now() - FRESH_MS;
-          let any = false;
-          for (const [p, when] of arrivals) if (when <= cut) { arrivals.delete(p); any = true; }
-          for (const f of LIST.rows.values()) {
-            if (f.fresh && !arrivals.has(fullPath(f))) { delete f.fresh; any = true; }
-          }
-          if (any) repaint(true);
-        }, FRESH_MS);
-      })
-      .catch((e) => {
-        if (mine === generation && refresh === rowRefresh && revision === REV) {
-          console.error("scour: live rows did not load:", e);
-        }
-      });
+  /* **Keeping a visible window current is `fillWindow`'s job and nobody
+   * else's.**
+   *
+   * There were two of these, and they did the same work twice. `reviseRows`
+   * refetched the visible windows whenever the index moved, and `fillWindow`
+   * refetched them one frame later from `paintWindow` — because `reviseRows`
+   * registered nothing in `LIST.pending` and stamped `LIST.at` only when its
+   * answer came back, so for that frame the window looked neither in flight
+   * nor current. Then `reviseRows` aborted `fillWindow`'s copy, after the
+   * service had already built the page. Measured on an untouched window, the
+   * offsets asked for were **all of them offset zero, 2.55 and 2.75 a second
+   * over two forty-second rounds, thirteen and fifteen of them abandoned** —
+   * about two requests per index revision for a list that changes once.
+   *
+   * Two smaller repairs were tried first and neither is the answer:
+   *
+   *   - Registering `reviseRows`' requests in `LIST.pending` did not reduce
+   *     the duplicates at all — 5 of 12 became 9 of 18. `reviseRows` was on a
+   *     400 ms leash and `fillWindow` runs on the frame, so `fillWindow` still
+   *     went first and `reviseRows` still asked again.
+   *   - Removing `fillWindow`'s staleness rule made the duplicates vanish and
+   *     would have taken the live refresh with it. Nothing proved that it did
+   *     not, which is why it was reverted rather than shipped.
+   *
+   * So the second fetcher is gone rather than arbitrated with. What it did
+   * that nothing else did — marking which rows had just turned up, and taking
+   * the exact total off an answer the count cap did not cut — moved into
+   * `fillWindow` with it. What is left here is the leash and the two lines
+   * that arm it. */
+  function refreshRows() {
+    if (LIST.query === null) return;           /* the first search has not landed */
+    SHOWING = REV;
+    // Returned so the throttle above can charge for what this cost.
+    return fillWindow();
   }
 
   /* The exact count, the kind rail and the histogram.
@@ -5166,7 +5282,7 @@
     return sidebar(LIST.query, generation);
   }
 
-  const rowsSoon = atMostEvery(reviseRows, 400);
+  const rowsSoon = atMostEvery(refreshRows, 400);
   const countsSoon = atMostEvery(reviseCounts, 3000);
 
   function indexMoved() {
