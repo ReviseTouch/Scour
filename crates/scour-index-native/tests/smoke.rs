@@ -11,8 +11,8 @@
 
 use scour_core::{Entry, EntryId, Meta, SortKey, SourceId};
 use scour_index_native::{
-    ColumnBlocks, DirTable, NameArena, Plan, Segment, SegmentBytes, TrigramIndex, Wanted, build,
-    run,
+    ColumnBlocks, DirTable, NameArena, PathOrder, Plan, Segment, SegmentBytes, TrigramIndex,
+    Wanted, build, run,
 };
 use scour_mock::{MockOptions, brute_force, generate};
 use scour_query::parse_at;
@@ -45,6 +45,7 @@ impl Fixture {
             cols: ColumnBlocks::open(&self.bytes.cols).expect("cols"),
             dirs: DirTable::open(&self.bytes.dirs).expect("dirs"),
             tri: TrigramIndex::open(&self.bytes.tri_dict, &self.bytes.tri_post).expect("tri"),
+            porder: PathOrder::open(&self.bytes.porder),
             alive: &self.bytes.alive,
         }
     }
@@ -481,6 +482,7 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
         cols: ColumnBlocks::open(&f.bytes.cols).expect("cols"),
         dirs: DirTable::open(&f.bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&f.bytes.tri_dict, &f.bytes.tri_post).expect("tri"),
+        porder: PathOrder::open(&f.bytes.porder),
         alive: &alive,
     };
     let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");
@@ -775,6 +777,7 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),
         tri: TrigramIndex::open(&bytes.tri_dict, &bytes.tri_post).expect("tri"),
+        porder: PathOrder::open(&bytes.porder),
         alive: &bytes.alive,
     };
     let plan = Plan::compile(&parse_at("", NOW), &seg).expect("compile");

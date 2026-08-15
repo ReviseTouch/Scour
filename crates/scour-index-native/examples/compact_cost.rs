@@ -2,6 +2,12 @@
 //!
 //! Diagnostic rather than a benchmark harness. It mutates the index passed to
 //! it, so use a copy: compaction replaces eligible segment groups in place.
+//!
+//! A second argument of `rebuild` folds everything into one segment instead of
+//! folding the eligible groups. That is the heavier of the two and the one
+//! worth being able to price: it is what somebody with an existing index runs
+//! to give it a stored path order, and it reads the index rather than the
+//! filesystem.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,7 +19,11 @@ use scour_index_native::NativeIndex;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::env::args_os()
         .nth(1)
-        .ok_or("usage: compact_cost <index>")?;
+        .ok_or("usage: compact_cost <index> [compact|rebuild]")?;
+    let level = match std::env::args().nth(2).as_deref() {
+        Some("rebuild") => Maintenance::Rebuild,
+        _ => Maintenance::Compact,
+    };
     let index = NativeIndex::open_or_create(std::path::Path::new(&dir))?;
     let before = memory();
     let running = Arc::new(AtomicBool::new(true));
@@ -30,14 +40,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let wall = Instant::now();
     let cpu = thread_cpu();
-    let report = index.maintain(Maintenance::Compact)?;
+    let report = index.maintain(level)?;
     let cpu = thread_cpu().saturating_sub(cpu);
     let wall = wall.elapsed();
     running.store(false, Ordering::Relaxed);
     let _ = sampler.join();
     let after = memory();
     println!(
-        "compact: {:.1} ms wall / {:.1} ms CPU · anonymous {:.1} MiB before, {:.1} MiB peak, {:.1} MiB after · {} segments",
+        "{level:?}: {:.1} ms wall / {:.1} ms CPU · anonymous {:.1} MiB before, {:.1} MiB peak, {:.1} MiB after · {} segments",
         millis(wall),
         millis(cpu),
         before.1 as f64 / 1024.0,

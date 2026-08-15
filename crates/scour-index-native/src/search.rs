@@ -42,6 +42,7 @@ use scour_core::{Ast, Cmp, Entry, EntryId, Hit, Kind, Match, Meta, SortKey, Sour
 use crate::columns::{BLOCK, ColumnBlocks, Field};
 use crate::dirs::{DirScope, DirTable};
 use crate::names::{Folded, NameArena};
+use crate::order::PathOrder;
 use crate::trigram::TrigramIndex;
 
 /// The files a search reads, opened together.
@@ -56,6 +57,14 @@ pub struct Segment<'a> {
     pub cols: ColumnBlocks<'a>,
     pub dirs: DirTable<'a>,
     pub tri: TrigramIndex<'a>,
+    /// The rows in ascending path order. **The only stored order other than
+    /// the row numbering itself**, and what lets a page ordered by path be a
+    /// read of two hundred rows instead of a key built for every match.
+    ///
+    /// `None` for a segment written before it existed, and that costs
+    /// correctness nothing: the walk falls back to building a key a match, as
+    /// every index did until now. See [`crate::order`].
+    pub porder: Option<PathOrder<'a>>,
     /// One bit a row, set when the row is still live.
     pub alive: &'a [u8],
 }
@@ -1121,11 +1130,63 @@ pub fn run_with(
     let stored_forward = (want.sort == SortKey::Modified && want.descending)
         || (want.sort == SortKey::Relevance && want.descending && score_terms.is_empty());
 
+    // How many rows the page can possibly reach. Zero is a count and nothing
+    // else, which several decisions below turn on.
+    let need = want.offset + want.limit;
+
+    // Which blocks are worth opening at all. Two filters, and both can only
+    // remove: the trigram index says which blocks could contain the text, and
+    // the zone map says which could satisfy the numbers. What survives is
+    // walked exactly as it always was.
+    //
+    // Hoisted above the walk because how much of the segment survived is what
+    // decides whether the path order can be streamed — see `path_stream`.
+    let blocks = blocks_worth_opening(seg, plan);
+
+    /* **Ordering by path is a stored order too, when the segment has one.**
+     *
+     * `porder` lists the rows in path order, so the page is the first `need`
+     * of them that are live and match — read in order, stop when full, exactly
+     * as the row numbering answers "the newest two hundred". No key is built
+     * for a row that is not on the page, which is the whole of the 303 ms.
+     *
+     * Three conditions, and each of them is protecting something:
+     *
+     * **The walk must not need names.** The folded arena stores no offsets and
+     * is read sequentially; `porder` visits rows in an order that has nothing
+     * to do with row numbers, so there is no walking it. This is the same
+     * condition the backwards walk lives under, for the same reason.
+     *
+     * **The filters must not have narrowed anything much.** Streaming ignores
+     * the block filter — it may, since both filters can only remove rows a
+     * test would reject anyway — but a query the trigram index or the zone map
+     * has cut to a handful of blocks would then read the whole order to find
+     * its few matches, where the ordinary walk reads the handful. So it is
+     * taken only when at least half the blocks survived, which bounds the
+     * worst case at twice the rows the ordinary walk would visit and leaves
+     * the case it exists for — a window opened on everything — untouched.
+     * Every text query narrows through `needs_name` above; what is left here
+     * is `size:`, `kind:`, `dm:`, `under:` and the empty query.
+     *
+     * **No veto.** A concealed row is rare and transient, and the fallback is
+     * correct; keeping the two apart is worth more than the case is. */
+    let n_blocks = seg.rows().div_ceil(BLOCK);
+    let path_stream = want.sort == SortKey::Path
+        && need > 0
+        && !plan.needs_name()
+        && !has_veto
+        && seg.porder.is_some_and(|o| o.rows() == seg.rows())
+        && blocks.len().saturating_mul(2) >= n_blocks;
+
     // Whether the walk has to read names at all — decided here rather than
     // below because the direction depends on it. The rest of the reasoning is
     // at the walk.
-    let sort_reads_name =
-        !stored_forward && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
+    //
+    // A streamed path order reads none: the order is stored, so the name is
+    // wanted only for the rows that end up on the page.
+    let sort_reads_name = !stored_forward
+        && !path_stream
+        && matches!(want.sort, SortKey::Name | SortKey::Ext | SortKey::Path);
     let by_row = !plan.needs_name() && !has_veto && !sort_reads_name;
 
     /* **Oldest-first is the same walk backwards.**
@@ -1145,8 +1206,11 @@ pub fn run_with(
      * pass. An empty query, `kind:`, `size:`, `dm:` all qualify.
      */
     let backwards = want.sort == SortKey::Modified && !want.descending && by_row;
-    let stored_order = stored_forward || backwards;
-    let need = want.offset + want.limit;
+    // A streamed path order belongs here and not beside the keyed orders: the
+    // rows arrive already in the order that was asked for, so there is nothing
+    // to select and no boundary to keep — which is also what removes the tie
+    // group, since two rows at one position is not a thing `porder` can hold.
+    let stored_order = stored_forward || backwards || path_stream;
     /* The length that triggers the next trim of `keyed`. A page's worth to
      * begin with, because the first trim is what produces a boundary at all;
      * after that, twice whatever the trim left — so every trim is paid for by
@@ -1311,12 +1375,6 @@ pub fn run_with(
         true
     };
 
-    // Which blocks are worth opening at all. Two filters, and both can only
-    // remove: the trigram index says which blocks could contain the text, and
-    // the zone map says which could satisfy the numbers. What survives is
-    // walked exactly as it always was.
-    let blocks = blocks_worth_opening(seg, plan);
-
     // Nothing here reads a name, so nothing here reads the arena.
     //
     // The *sort* has to be asked too, and forgetting to was a real bug: the
@@ -1363,109 +1421,141 @@ pub fn run_with(
     // ends a walk; this catches the other way out, where the block order ran
     // out of anything in reach and the total was already believed.
     let mut skipped = false;
-    match sort_field(want.sort).filter(|_| bounded) {
-        // **Best block first.** The blocks are opened in the order of what
-        // their stored maximum — or minimum, ascending — says they could
-        // contribute, and the walk ends the moment the page's worst row beats
-        // everything the next one could hold.
-        //
-        // Nothing about *which* rows win is different here. Every row that is
-        // opened goes through the same `visit`: the same liveness bit, the
-        // same conditions, the same veto, and the same selection. What changes
-        // is only how many blocks are opened at all.
-        Some(field) => {
-            /* **The ordering is built when it can pay for itself, and not
-             * before.**
-             *
-             * It costs a pass over the candidate blocks — a range read each
-             * and a sort — and it saves nothing until there is a page for a
-             * block to be out of reach *of*. A term the trigram filter has
-             * already narrowed to fewer matches than a page never gets one,
-             * and building the order anyway measured 9.6–10.9 ms against
-             * 8.6–9.0 on `rapor` sorted by size: a pass over thirty thousand
-             * blocks, spent to skip none of them.
-             *
-             * So the walk starts in block order like every other one, and
-             * reorders what is left of the candidates the moment the page
-             * first fills.
-             *
-             * A block at a time rather than in coalesced runs, because the
-             * check belongs between blocks and a run here is the whole index.
-             * It costs nothing measurable: `walk_range` reaches a block
-             * boundary through the offset table, and the same corpus walked
-             * one block at a time against runs of thousands measured 142–148
-             * ms against 148–154. */
-            let mut order: Vec<(i64, u32)> = Vec::new();
-            let mut ordered = false;
-            let mut at = 0usize;
-            let mut stopped = false;
-            loop {
-                if !ordered && worst.get().is_some() {
-                    order = zone_order(seg, field, want.descending, &blocks[at..], folders);
-                    ordered = true;
-                    at = 0;
-                }
-                let block = if ordered {
-                    let Some(&(reach, block)) = order.get(at) else {
-                        break;
-                    };
-                    if out_of_reach(worst.get(), reach, block) {
-                        break;
-                    }
-                    block
-                } else {
-                    let Some(&block) = blocks.get(at) else {
-                        break;
-                    };
-                    block
-                };
-                at += 1;
-                let from = block as usize * BLOCK;
-                let to = ((block as usize + 1) * BLOCK).min(seg.rows());
-                stopped = !walk(from, to, false);
-                if stopped {
-                    break;
-                }
-            }
-            let mut left: Vec<u32> = if ordered {
-                order[at..].iter().map(|&(_, b)| b).collect()
-            } else {
-                blocks[at..].to_vec()
+    if let Some(positions) = seg.porder.filter(|_| path_stream) {
+        /* **The page is the first `need` positions that survive.**
+         *
+         * Read in order and stop — the same bargain the row numbering makes
+         * for a date, and the reason this file exists. What it gives up is
+         * locality: consecutive positions are rows scattered through the
+         * segment, so every liveness bit and every column read is a jump.
+         * That is paid for many times over by not making the read at all —
+         * whole table, page of two hundred, this is 200 rows against
+         * 2,235,402.
+         *
+         * The blocks the filters chose are ignored here, which is sound
+         * because both filters can only *remove* rows `accepts` would have
+         * rejected anyway — never add one. What they would have saved is
+         * bounded by the condition on `path_stream` above.
+         *
+         * Descending is the same positions read from the far end, and unlike
+         * the backwards date walk it needs no tie group carried along: two
+         * rows never share a position.
+         */
+        let n = positions.rows();
+        for i in 0..n {
+            let at = if want.descending { n - 1 - i } else { i };
+            // A position naming a row this segment does not hold is damage the
+            // reader has already refused to pass on; skipping it keeps the
+            // rest of the order readable.
+            let Some(row) = positions.at(at) else {
+                continue;
             };
-            // **The count is a separate obligation, and this is where it is
-            // paid.** The page is settled; the total printed beside it is not,
-            // and no shortcut here may be allowed to guess at it. So what is
-            // left of the blocks is walked for the count alone — back in block
-            // order, because from here the reads are sequential again and
-            // there is no reason to keep jumping.
-            //
-            // `closed` is what tells `visit` that these rows can only be
-            // counted, never selected, which is also what lets `count_cap`
-            // stop the walk at last.
-            if !stopped && counted.get() < want.count_cap {
-                closed.set(true);
-                left.sort_unstable();
-                for (from, to) in runs_of(&left, seg.rows()) {
-                    if !walk(from, to, false) {
-                        break;
-                    }
-                }
-            } else {
-                skipped = !left.is_empty();
+            if !visit(row as usize, b"") {
+                break;
             }
         }
-        // Every other order walks the candidates as it always did: forwards,
-        // in row order, or from the far end when the stored order is being
-        // read backwards.
-        None => {
-            let mut runs = runs_of(&blocks, seg.rows());
-            if backwards {
-                runs.reverse();
+    }
+    // **Best block first.** The blocks are opened in the order of what
+    // their stored maximum — or minimum, ascending — says they could
+    // contribute, and the walk ends the moment the page's worst row beats
+    // everything the next one could hold.
+    //
+    // Nothing about *which* rows win is different here. Every row that is
+    // opened goes through the same `visit`: the same liveness bit, the
+    // same conditions, the same veto, and the same selection. What changes
+    // is only how many blocks are opened at all.
+    else if let Some(field) = sort_field(want.sort).filter(|_| bounded) {
+        /* **The ordering is built when it can pay for itself, and not
+         * before.**
+         *
+         * It costs a pass over the candidate blocks — a range read each
+         * and a sort — and it saves nothing until there is a page for a
+         * block to be out of reach *of*. A term the trigram filter has
+         * already narrowed to fewer matches than a page never gets one,
+         * and building the order anyway measured 9.6–10.9 ms against
+         * 8.6–9.0 on `rapor` sorted by size: a pass over thirty thousand
+         * blocks, spent to skip none of them.
+         *
+         * So the walk starts in block order like every other one, and
+         * reorders what is left of the candidates the moment the page
+         * first fills.
+         *
+         * A block at a time rather than in coalesced runs, because the
+         * check belongs between blocks and a run here is the whole index.
+         * It costs nothing measurable: `walk_range` reaches a block
+         * boundary through the offset table, and the same corpus walked
+         * one block at a time against runs of thousands measured 142–148
+         * ms against 148–154. */
+        let mut order: Vec<(i64, u32)> = Vec::new();
+        let mut ordered = false;
+        let mut at = 0usize;
+        let mut stopped = false;
+        loop {
+            if !ordered && worst.get().is_some() {
+                order = zone_order(seg, field, want.descending, &blocks[at..], folders);
+                ordered = true;
+                at = 0;
             }
-            for (from, to) in runs {
-                if !walk(from, to, backwards) {
+            let block = if ordered {
+                let Some(&(reach, block)) = order.get(at) else {
+                    break;
+                };
+                if out_of_reach(worst.get(), reach, block) {
                     break;
                 }
+                block
+            } else {
+                let Some(&block) = blocks.get(at) else {
+                    break;
+                };
+                block
+            };
+            at += 1;
+            let from = block as usize * BLOCK;
+            let to = ((block as usize + 1) * BLOCK).min(seg.rows());
+            stopped = !walk(from, to, false);
+            if stopped {
+                break;
+            }
+        }
+        let mut left: Vec<u32> = if ordered {
+            order[at..].iter().map(|&(_, b)| b).collect()
+        } else {
+            blocks[at..].to_vec()
+        };
+        // **The count is a separate obligation, and this is where it is
+        // paid.** The page is settled; the total printed beside it is not,
+        // and no shortcut here may be allowed to guess at it. So what is
+        // left of the blocks is walked for the count alone — back in block
+        // order, because from here the reads are sequential again and
+        // there is no reason to keep jumping.
+        //
+        // `closed` is what tells `visit` that these rows can only be
+        // counted, never selected, which is also what lets `count_cap`
+        // stop the walk at last.
+        if !stopped && counted.get() < want.count_cap {
+            closed.set(true);
+            left.sort_unstable();
+            for (from, to) in runs_of(&left, seg.rows()) {
+                if !walk(from, to, false) {
+                    break;
+                }
+            }
+        } else {
+            skipped = !left.is_empty();
+        }
+    }
+    // Every other order walks the candidates as it always did: forwards,
+    // in row order, or from the far end when the stored order is being
+    // read backwards.
+    else {
+        let mut runs = runs_of(&blocks, seg.rows());
+        if backwards {
+            runs.reverse();
+        }
+        for (from, to) in runs {
+            if !walk(from, to, backwards) {
+                break;
             }
         }
     }
@@ -1476,13 +1566,32 @@ pub fn run_with(
     // selection — the rows arrived in it — but it still has to say what it
     // sorts by, because whoever merges this segment with another cannot see
     // the row order that made it true.
+    /* **And this is where a streamed path order pays for itself twice.**
+     *
+     * A key is built here for the rows that were *kept* and for no others —
+     * `need` of them, not one per match — and for `Path` that key is the real
+     * joined path, exactly as it always was. So the merge across segments
+     * compares paths and needs to learn nothing: positions are a segment's own
+     * and never leave it, and `key_is_exact`, `narrow` and the comparator in
+     * `index.rs` are all untouched by any of this.
+     *
+     * That is the difference between 2,235,402 keys and two hundred. */
     let ranked: Vec<(SortValue, u32)> = if stored_order {
         kept.iter()
             .map(|&row| {
-                // Safe to pass no name: the stored order is `Modified` or an
-                // unscored `Relevance`, and neither reads one.
+                // Safe to pass no name: the stored order is `Modified`, an
+                // unscored `Relevance`, or a streamed `Path`, and none of the
+                // three reads the folded name the walk would have yielded.
                 (
-                    sort_value(seg, row as usize, b"", want.sort, &score_terms, folders, &mut dir_paths),
+                    sort_value(
+                        seg,
+                        row as usize,
+                        b"",
+                        want.sort,
+                        &score_terms,
+                        folders,
+                        &mut dir_paths,
+                    ),
                     row,
                 )
             })
@@ -1535,7 +1644,14 @@ pub fn run_with(
     // the paths reversed inside a date, because inside a segment the row
     // number is the path order. `kept` is a page and a tie group, so this is a
     // sort of dozens rather than of a corpus.
-    if !stored_order || backwards {
+    //
+    // **So does a streamed path order**, and for one case only: two rows can
+    // spell the same path — one path under two sources is two rows — and the
+    // stored order breaks that tie by row where `sort_hits` breaks it by date,
+    // which read backwards is the other way round. Every caller that merges
+    // segments takes `rank_only` and never reaches this, so what it costs is a
+    // sort of `need` rows in a test.
+    if !stored_order || backwards || path_stream {
         // Within one segment the rows already carry their score in `keyed`;
         // this path is the one that did not sort, so it scores from scratch.
         let owned: Vec<String> = score_terms
@@ -1631,6 +1747,11 @@ fn head(bytes: &[u8]) -> u128 {
 ///
 /// Anyone who wants to try the abbreviated key again has to teach the merge
 /// what the key is an abbreviation *of*, first.
+///
+/// **And the rest of the cost is gone by storing the order rather than the
+/// key.** A segment lists its rows in path order, the walk reads that list
+/// until the page is full, and the key — still the whole path, still exact —
+/// is built for the two hundred rows that were kept. See [`crate::order`].
 pub(crate) fn key_is_exact(key: SortKey) -> bool {
     key != SortKey::Name
 }
