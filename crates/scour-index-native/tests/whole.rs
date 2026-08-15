@@ -2419,6 +2419,86 @@ fn an_index_written_without_a_path_order_answers_the_same_way() {
     }
 }
 
+/// Half the segments having a path order is the ordinary state, not a corner.
+///
+/// **What an existing index looks like for as long as it takes to compact.**
+/// The old segments have no order and the ones a watcher commits do, so a
+/// search hands the merge candidates chosen two different ways — streamed out
+/// of a stored order in one segment, keyed per match in the next — and it has
+/// to be unable to tell. It is, by construction: positions never leave the
+/// segment that holds them, and what every segment hands over is the whole
+/// path either way. Construction is what the last three attempts on this file
+/// were also confident about, so it is measured against brute force instead.
+#[test]
+fn segments_with_and_without_a_path_order_merge_into_one_list() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 12_000,
+        now: NOW,
+        ..Default::default()
+    });
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for part in fs.entries.chunks(1_500) {
+            index
+                .apply(&mut part.iter().cloned().map(Change::Upsert))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+    }
+
+    // Every other one, so both kinds are in the merge and neither is first.
+    let mut orders: Vec<std::path::PathBuf> = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "porder"))
+        .collect();
+    orders.sort();
+    assert!(
+        orders.len() >= 4,
+        "the fixture is supposed to be fragmented"
+    );
+    for p in orders.iter().step_by(2) {
+        std::fs::remove_file(p).expect("remove");
+    }
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    for desc in [false, true] {
+        for &(offset, limit) in &[(0usize, 60usize), (300, 40), (2_000, 25)] {
+            let got: Vec<String> = index
+                .search(&SearchRequest {
+                    query: parse_at("", NOW),
+                    sort: SortKey::Path,
+                    descending: desc,
+                    page: Page {
+                        offset: offset as u32,
+                        limit: limit as u32,
+                        count_cap: 10_000_000,
+                    },
+                })
+                .expect("search")
+                .hits
+                .into_iter()
+                .map(|h| h.path)
+                .collect();
+            let whole = brute_force(
+                &fs.entries,
+                &parse_at("", NOW),
+                SortKey::Path,
+                desc,
+                offset + limit,
+            );
+            let want: Vec<String> = whole[offset..].iter().map(|h| h.path.clone()).collect();
+            assert_eq!(
+                got, want,
+                "a mixed index disagrees with brute force by path \
+                 (desc={desc}) at {offset}+{limit}"
+            );
+        }
+    }
+}
+
 /// A path order that is there and wrong is damage, not an older index.
 ///
 /// The two are told apart by one thing — whether the file exists — so the case
