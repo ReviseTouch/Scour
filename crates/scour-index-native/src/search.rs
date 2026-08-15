@@ -1083,7 +1083,7 @@ pub fn run_with(
      * of it. */
     let mut scratch = SortValue::Num(0);
     /* Directories already rebuilt, for the one ordering that asks per row.
-       See `DirPaths`. */
+    See `DirPaths`. */
     let mut dir_paths = DirPaths::default();
 
     // The terms relevance scores against, folded, collected once.
