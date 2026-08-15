@@ -3,6 +3,126 @@
 Numbers, with the command that produced them. A claim without one of these is
 an opinion.
 
+## 2026-08-15 — the path order, stored
+
+Ordering by path was the last expensive order: **291 ms** against 0.6 for the
+stored date order, on a page of two hundred out of 2,235,402 rows. Two rounds of
+work on the *key* had already landed and the key was no longer the cost. What
+was left had been isolated by stubbing the pieces out in turn:
+
+| | ms |
+|---|---|
+| the walk alone | 31 |
+| + reading each row's spelled name | 102 |
+| + resolving that row's directory | 202 |
+| + joining and comparing | free |
+
+Two reads a **match**, and no cleverness in the key removes them — an
+abbreviated key was written twice and refused twice, for reasons kept at
+`search::key_is_exact`.
+
+So the order is stored instead of derived: `seg-*.porder`, four bytes a row,
+listing the rows in ascending path order. A page is then the first `need`
+positions that are live and match, which is the bargain the row numbering
+already makes for a date.
+
+### The instrument
+
+A copy of the live index, rebuilt into one segment so that both binaries could
+be pointed at exactly the same bytes — the old one ignores a file it does not
+know about, so the comparison is one index and two builds rather than two
+indexes.
+
+```bash
+cp -a ~/.local/share/scour/index /var/tmp/idx && rm -f /var/tmp/idx/native/index.lock
+cargo run --release -p scour-index-native --example compact_cost -- /var/tmp/idx/native rebuild
+cargo run --release -p scour-index-native --example searchcost -- /var/tmp/idx/native
+```
+
+Least of three per cell, binaries alternated, two rounds each.
+
+### What it bought
+
+Whole table, page of two hundred, `path ↓`:
+
+| offset | before | after |
+|---|---|---|
+| 0 | 284.0 / 280.8 ms | **0.9 / 1.2** |
+| 2 000 | 302.5 / 298.0 | **1.7 / 1.4** |
+| 19 800 | 319.7 / 309.1 | **7.4 / 7.4** |
+
+Which is the date order's own cost: `modified ↓` measures 0.6–0.9 at offset 0 on
+the same runs. Every other order is unchanged — `modified` 0.6, `name` 49,
+`size` 2.8, `created` 2.1, `kind` 2.2, `relevance` 0.6, each within the noise of
+its own baseline.
+
+**Peak resident size fell with it: 184 MB to 128.** Not a side effect worth
+being surprised by — the old path sort built a key per match, and a path key
+owns a string, so the benchmark was allocating and discarding 2,235,402 of them.
+
+Filtered queries, same index, `path ↓` at offset 0:
+
+| query | before | after | |
+|---|---|---|---|
+| `depth:>3` | 365.5 ms | **17.4** | streams |
+| `kind:code` | 79.3 | **11.6** | streams |
+| `depth:>40` (matches nothing) | 68.9 | **57.1** | streams; the worst case |
+| `rapor` | 20.0 | 20.1 | falls back — a text query walks the folded arena |
+| `ext:rs` | 3.7 | 4.3 | falls back |
+
+`depth:>40` is the case worth having measured: it narrows no block and matches
+nothing, so the whole order is read to find that out, and its positions are
+scattered through the segment where the ordinary walk is sequential. It is
+still not a regression, because the ordinary walk was reading names it no
+longer has to.
+
+### What it cost
+
+**Disk: 8,941,612 bytes on this index — 4.000 bytes a row, 4.60% of the
+segment.** The estimate before it was written was ~9 MB and it is exactly that,
+because the file is one `u32` a row and nothing else.
+
+**A rebuild: 8.7 s wall, 8.5 s CPU, 433 MiB anonymous peak**, for 2,235,402 rows
+folded into one segment. The ordering is a sort of `u32` row numbers against a
+comparator that reads the flattened directory prefixes and the name arena, both
+of which are already in memory at that moment in the build; the directory table
+is decoded once for the whole sort rather than once per comparison, which is
+what `DirTable::join_prefixes` exists for.
+
+### The format
+
+The path order is the one part of a segment that may be **absent**, and the
+version was deliberately not bumped. An index written before this exists is
+read exactly as it was — a search sorted by path builds its keys the way it
+always did — and gains the file the next time each segment is folded. The
+alternative was `Error::IndexOutdated`, a discard, and a rescan.
+
+What that would have cost is not measured here, and deliberately: pricing it
+means walking the owner's disks, one of which is NTFS. The reference point is
+the 2026-08-03 run below — **a first scan of 1,197,514 entries on `/home/hasan`,
+NVMe, at 6.7 s wall**. This index is 2,235,402 entries across two volumes, the
+second of them ntfs3, where a walk costs more per entry than either half of that
+comparison. Folding the existing index instead reads no filesystem at all and is
+the 8.7 s above — and, unlike a rescan, it is not a period with an empty search
+box in front of it.
+
+A file that is *present and does not describe the segment* is refused as
+damage, on the same argument the live bitmap is: both are written whole, so a
+length that says otherwise is a truncated write. Tested both ways in
+`whole.rs`.
+
+### Measured and rejected
+
+**A rank column** — the inverse of this, a row's *position* in path order, as
+another `Field` with a zone map. It fits the existing machinery exactly and
+needs no new file. It was rejected on the arithmetic rather than by measurement:
+a block holds thirty-two rows adjacent in *date* order, so their positions in
+path order are thirty-two numbers scattered across the whole corpus, every
+block's recorded range is nearly the whole range, and a range that admits
+everything skips nothing. It would have turned a built key into a column read —
+worth something, roughly the 31 ms of walk plus a read — and left the walk
+visiting all 2.2 M rows. The stored order visits two hundred.
+
 ## 2026-08-09 — where the idle worker's time goes, and what a wider window would buy
 
 The watcher was measured at 0.029% of a core and closed. What was left was

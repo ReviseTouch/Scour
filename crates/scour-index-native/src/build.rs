@@ -27,6 +27,10 @@ pub struct SegmentBytes {
     pub tri_dict: Vec<u8>,
     pub tri_post: Vec<u8>,
     pub alive: Vec<u8>,
+    /// The rows in ascending path order — four bytes a row, and the whole of
+    /// what makes ordering by path cost what ordering by date costs. See
+    /// [`crate::order`].
+    pub porder: Vec<u8>,
 }
 
 impl SegmentBytes {
@@ -38,6 +42,7 @@ impl SegmentBytes {
             + self.tri_dict.len()
             + self.tri_post.len()
             + self.alive.len()
+            + self.porder.len()
     }
 }
 
@@ -72,14 +77,35 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     let mut dirs = DirWriter::new();
     let mut names = NameWriter::new();
     let mut tri = TrigramWriter::new();
-    let mut provisional: Vec<u32> = Vec::new();
+    let mut dir_of: Vec<u32> = Vec::new();
     pass(&mut |e: &Entry| {
-        provisional.push(dirs.intern(e.parent()));
+        dir_of.push(dirs.intern(e.parent()));
         let name = e.name();
         names.push(name);
         tri.push(name.as_bytes());
     });
     let (dir_bytes, remap) = dirs.finish();
+    // Provisional until here — the table is sorted when it is written, so the
+    // numbers `intern` handed out are not the ones a row stores. Remapped in
+    // place rather than into a second vector: it is four bytes a row and the
+    // path order below wants the final numbers, not the ones the walk saw.
+    for id in &mut dir_of {
+        *id = remap[*id as usize];
+    }
+
+    // **The path order, built here and nowhere else.** This is the one moment
+    // the sorted directory table and every spelled name are both in hand and
+    // neither has been packed, so the order costs a sort of what is already in
+    // memory. Reconstructing it later would mean decoding a front-coded
+    // directory per row, which is the cost this file exists to remove — see
+    // [`crate::order`].
+    let porder = match crate::dirs::DirTable::open(&dir_bytes) {
+        Some(table) => crate::order::build(&table, &dir_of, names.spelled()),
+        // A table this cannot read is a segment nothing will open either. No
+        // order is written, and a search falls back to building keys, which is
+        // what every index written before this did.
+        None => Vec::new(),
+    };
 
     let mut cols = ColumnWriter::new();
     let mut ids = IdWriter::new();
@@ -89,7 +115,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         rows += 1;
         ids.push(e.id.source, &e.path, i as u32);
         let mut r = [0i64; Field::ALL.len()];
-        r[Field::DirId.index()] = remap[provisional[i] as usize] as i64;
+        r[Field::DirId.index()] = dir_of[i] as i64;
         r[Field::Size.index()] = e.meta.size;
         r[Field::Mtime.index()] = e.meta.mtime;
         r[Field::Ctime.index()] = e.meta.ctime;
@@ -117,6 +143,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         tri_post,
         // Every row starts alive. A removal clears a bit; nothing is rewritten.
         alive: alive_bits(rows),
+        porder,
     }
 }
 
@@ -142,6 +169,7 @@ mod tests {
     use crate::columns::ColumnBlocks;
     use crate::dirs::DirTable;
     use crate::names::NameArena;
+    use crate::order::PathOrder;
     use crate::search::Segment;
     use crate::trigram::TrigramIndex;
     use scour_core::{EntryId, Meta, SourceId};
@@ -200,6 +228,7 @@ mod tests {
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
+            porder: PathOrder::open(&b.porder),
             alive: &b.alive,
         };
         let got = seg.entry(0).expect("row 0");
@@ -220,6 +249,7 @@ mod tests {
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
             tri: TrigramIndex::open(&b.tri_dict, &b.tri_post).expect("tri"),
+            porder: PathOrder::open(&b.porder),
             alive: &b.alive,
         };
         assert_eq!(seg.entry(0).expect("row").path, "/lonely.txt");

@@ -94,6 +94,16 @@ impl NameWriter {
     pub fn finish_folded(&self) -> Vec<u8> {
         pack(self.rows, &self.folded_blocks, &self.folded)
     }
+
+    /// The spelled names as they were pushed: NUL-terminated, in row order.
+    ///
+    /// Before packing, because the one caller — [`crate::order`], ordering a
+    /// segment's rows by path while it is being built — reads them in row order
+    /// and would otherwise have to open the packed arena to read back what it
+    /// has just written.
+    pub(crate) fn spelled(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 fn pack(rows: usize, blocks: &[u32], bytes: &[u8]) -> Vec<u8> {

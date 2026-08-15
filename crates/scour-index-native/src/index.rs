@@ -1059,7 +1059,7 @@ impl NativeIndex {
         // **The number is claimed under the write lock, before anything is
         // built.** Reading `next_segment` under the read lock is not reserving
         // it: a commit takes the write lock meanwhile, claims the same number
-        // in `take_staged`, and writes its eight files over the ones this fold
+        // in `take_staged`, and writes its nine files over the ones this fold
         // is about to write — or has already written and mapped.
         //
         // Found by the test below rather than reasoned about. With a writer
@@ -1635,6 +1635,7 @@ fn segment_storage(bytes: &crate::build::SegmentBytes) -> usize {
         + bytes.tri_dict.capacity()
         + bytes.tri_post.capacity()
         + bytes.alive.capacity()
+        + bytes.porder.capacity()
 }
 
 #[cfg(feature = "memory-trace")]
@@ -1712,7 +1713,7 @@ fn trace_commit(
 /// Remove segment files the manifest does not name.
 ///
 /// Two things leave them behind, and the manifest is the answer to both: a
-/// crash between the first of a segment's eight files and the last leaves a
+/// crash between the first of a segment's nine files and the last leaves a
 /// partial set nothing will ever open, and a bug — since fixed — wrote back the
 /// bitmap of a segment that had just been erased. On the live index that was
 /// **182 orphan segments against 55 real ones**, and because `bytes_on_disk` is

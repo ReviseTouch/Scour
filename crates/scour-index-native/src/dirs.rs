@@ -322,6 +322,65 @@ impl<'a> DirTable<'a> {
         out
     }
 
+    /// What every row's name is appended to, flattened, in table order.
+    ///
+    /// A path is a directory joined to a name, and [`crate::search::Segment`]
+    /// makes that join with a separator unless the directory is empty or is the
+    /// root. So a path *is* one of these followed by a name, and two rows can
+    /// be ordered by their paths without either being built — see
+    /// [`crate::order`].
+    ///
+    /// Materialised because ordering a segment by path compares millions of
+    /// pairs and a front-coded row cannot be compared without being decoded
+    /// first. One sequential pass, exactly as [`DirTable::depths`] does it: a
+    /// row is its predecessor truncated and extended, so the whole table costs
+    /// the length of the suffixes. 257,167 directories are 13 MB flattened,
+    /// held for the length of one sort and then dropped.
+    ///
+    /// The offsets carry a final entry at the end, so `at[i]..at[i + 1]` is
+    /// always the whole of one directory, and there are always `len() + 1` of
+    /// them however far the decode got.
+    pub fn join_prefixes(&self) -> (Vec<u8>, Vec<u32>) {
+        let mut out: Vec<u8> = Vec::new();
+        let mut offsets: Vec<u32> = Vec::with_capacity(self.count + 1);
+        let mut path = String::new();
+        let mut at = self.restart_at(0).unwrap_or(0);
+        for _ in 0..self.count {
+            let Some((shared, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let Some((rest, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let rest = rest as usize;
+            path.truncate(shared as usize);
+            let Some(bytes) = self.rows.get(at..at + rest) else {
+                break;
+            };
+            let Ok(suffix) = std::str::from_utf8(bytes) else {
+                break;
+            };
+            path.push_str(suffix);
+            at += rest;
+            offsets.push(out.len() as u32);
+            out.extend_from_slice(path.as_bytes());
+            // The separator the join uses, and the two directories it does not:
+            // a row with no directory is its own name, and one at the root is
+            // `/` and then its name.
+            if !path.is_empty() && path != "/" {
+                out.push(b'/');
+            }
+        }
+        // A decode that stopped short leaves the rest of the table pointing at
+        // nothing, which orders those rows first rather than reading past the
+        // buffer. Damage is refused where the segment is opened, not here.
+        offsets.resize(self.count, out.len() as u32);
+        offsets.push(out.len() as u32);
+        (out, offsets)
+    }
+
     /// Every directory number at or beneath `prefix`.
     ///
     /// **Not one range**, and the reason is a mistake worth recording. A

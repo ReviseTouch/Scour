@@ -158,6 +158,80 @@ fn many_segments_answer_exactly_what_one_would() {
     );
 }
 
+/// Ordering by path is a stored order now, and it has to be the same order.
+///
+/// **The change this is the gate for.** A segment lists its rows in path order
+/// when it is written, so a page ordered by path is a read of two hundred
+/// positions instead of a key built for every match — measured on 2,235,402
+/// rows, whole table, page of two hundred: **291 ms becomes 0.8**, and the peak
+/// resident size of the same benchmark falls from 184 MB to 120 because the
+/// discarded keys were two million strings.
+///
+/// What could go wrong is not subtle and is completely invisible to that
+/// measurement: a stored order that is not the order. So every query that
+/// reaches it is checked against brute force, in both directions, and at an
+/// offset — a stored order that is right at the front and wrong further in is
+/// exactly what a page of the first fifty would not show.
+///
+/// The queries are the ones that reach it: none reads a name, because the
+/// folded arena is walked sequentially and positions are not sequential. Every
+/// text query narrows through the trigram filter instead and keeps the walk it
+/// always had.
+#[test]
+fn the_stored_path_order_is_the_order_brute_force_gives() {
+    let f = Fixture::new(16_000, 2_000);
+    for q in [
+        "",
+        "kind:code",
+        "size:>1k",
+        "dm:30d",
+        "under:/home/u/Projeler",
+        "parent:/home/u",
+        "!kind:code",
+        "is:dir",
+    ] {
+        for desc in [false, true] {
+            f.check(q, SortKey::Path, desc);
+            // Deep enough to be past the first page and its boundary. The
+            // reference is asked for the whole prefix and sliced, because
+            // `brute_force` takes a limit and not an offset.
+            let whole = brute_force(&f.entries, &parse_at(q, NOW), SortKey::Path, desc, 400);
+            if whole.len() > 300 {
+                let want: Vec<String> = whole[300..].iter().map(|h| h.path.clone()).collect();
+                assert_eq!(
+                    f.paged(q, SortKey::Path, desc, 300, 100),
+                    want,
+                    "{q:?} by path (desc={desc}) at 300+100 disagrees with brute force"
+                );
+            }
+        }
+    }
+
+    // And the point of it: the walk stops. Without the stored order this
+    // visits every row of every segment to find out which two hundred paths
+    // come first, and the answer is identical either way — which is why the
+    // cost has to be asserted and not just the list.
+    let res = f
+        .index
+        .search(&SearchRequest {
+            query: parse_at("", NOW),
+            sort: SortKey::Path,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 50,
+                count_cap: 200,
+            },
+        })
+        .expect("search");
+    assert!(
+        res.rows_visited < f.entries.len() as u64 / 4,
+        "a stored path order should read a page, not a corpus: {} rows of {}",
+        res.rows_visited,
+        f.entries.len()
+    );
+}
+
 /// Oldest-first is the same answer as before, now that it is a different walk.
 ///
 /// **The gap this closes is why it went unnoticed.** The agreement test above
@@ -1210,7 +1284,7 @@ fn segment_files(dir: &std::path::Path) -> Vec<String> {
 #[test]
 fn an_index_forgets_files_the_manifest_never_named() {
     // The other way orphans appear, and the one no ordering fixes: a segment is
-    // eight files written one at a time, and a kill in the middle leaves a
+    // nine files written one at a time, and a kill in the middle leaves a
     // partial set. Safe to remove because the manifest is written before
     // anything is unlinked and rewritten before anything is added, so a file it
     // does not name is a file nothing can reach.
@@ -2254,6 +2328,216 @@ fn an_index_from_another_version_is_outdated_and_not_damaged() {
     );
     // Discarding what is not there is the state being asked for, not an error.
     NativeIndex::discard(&tmp.path().join("nothing-here")).expect("discard nothing");
+}
+
+/// An index written before the path order existed is read, not thrown away.
+///
+/// **The format decision, tested from the outside.** The path order is the one
+/// part of a segment that may be missing, and that is what lets an existing
+/// index keep working: a rescan of two million files across two volumes is a
+/// long time to be without a search box, and nothing about the seven files that
+/// were already there has changed meaning. So the version is not bumped, the
+/// old segments are read exactly as they were, and each one gains the file the
+/// next time it is folded — which is a read of the index rather than of the
+/// disk.
+///
+/// Simulated by deleting what an older build would never have written. Both
+/// halves are asserted, and the second is the one that says the fallback is
+/// really being taken rather than the file quietly reappearing:
+///
+/// * every answer is the same as with the order present, and the same as brute
+///   force;
+/// * the walk visits every row again, because without the order there is
+///   nothing to stop it.
+#[test]
+fn an_index_written_without_a_path_order_answers_the_same_way() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 6_000,
+        now: NOW,
+        ..Default::default()
+    });
+    let page = |index: &NativeIndex, desc: bool| -> (Vec<String>, u64) {
+        let res = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Path,
+                descending: desc,
+                page: Page {
+                    offset: 40,
+                    limit: 60,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        (
+            res.hits.into_iter().map(|h| h.path).collect(),
+            res.rows_visited,
+        )
+    };
+
+    // The same page in both directions, with the order present: what it holds
+    // and what it cost to find out.
+    let with_order = {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for part in fs.entries.chunks(2_000) {
+            index
+                .apply(&mut part.iter().cloned().map(Change::Upsert))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+        [page(&index, false), page(&index, true)]
+    };
+
+    let mut removed = 0;
+    for entry in std::fs::read_dir(tmp.path()).expect("read_dir").flatten() {
+        if entry.file_name().to_string_lossy().ends_with(".porder") {
+            std::fs::remove_file(entry.path()).expect("remove");
+            removed += 1;
+        }
+    }
+    assert!(removed > 0, "the fixture wrote no path order to remove");
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen without the path order");
+    for (i, desc) in [false, true].into_iter().enumerate() {
+        let (want, visited) = &with_order[i];
+        let (got, walked) = page(&index, desc);
+        assert_eq!(&got, want, "path (desc={desc}) changed without the order");
+        let reference: Vec<String> =
+            brute_force(&fs.entries, &parse_at("", NOW), SortKey::Path, desc, 100)[40..]
+                .iter()
+                .map(|h| h.path.clone())
+                .collect();
+        assert_eq!(
+            got, reference,
+            "path (desc={desc}) disagrees with brute force"
+        );
+        assert!(
+            walked > *visited,
+            "without the order the walk has nothing to stop it: {walked} against {visited}"
+        );
+    }
+}
+
+/// Half the segments having a path order is the ordinary state, not a corner.
+///
+/// **What an existing index looks like for as long as it takes to compact.**
+/// The old segments have no order and the ones a watcher commits do, so a
+/// search hands the merge candidates chosen two different ways — streamed out
+/// of a stored order in one segment, keyed per match in the next — and it has
+/// to be unable to tell. It is, by construction: positions never leave the
+/// segment that holds them, and what every segment hands over is the whole
+/// path either way. Construction is what the last three attempts on this file
+/// were also confident about, so it is measured against brute force instead.
+#[test]
+fn segments_with_and_without_a_path_order_merge_into_one_list() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 12_000,
+        now: NOW,
+        ..Default::default()
+    });
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for part in fs.entries.chunks(1_500) {
+            index
+                .apply(&mut part.iter().cloned().map(Change::Upsert))
+                .expect("apply");
+            index.commit().expect("commit");
+        }
+    }
+
+    // Every other one, so both kinds are in the merge and neither is first.
+    let mut orders: Vec<std::path::PathBuf> = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "porder"))
+        .collect();
+    orders.sort();
+    assert!(
+        orders.len() >= 4,
+        "the fixture is supposed to be fragmented"
+    );
+    for p in orders.iter().step_by(2) {
+        std::fs::remove_file(p).expect("remove");
+    }
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    for desc in [false, true] {
+        for &(offset, limit) in &[(0usize, 60usize), (300, 40), (2_000, 25)] {
+            let got: Vec<String> = index
+                .search(&SearchRequest {
+                    query: parse_at("", NOW),
+                    sort: SortKey::Path,
+                    descending: desc,
+                    page: Page {
+                        offset: offset as u32,
+                        limit: limit as u32,
+                        count_cap: 10_000_000,
+                    },
+                })
+                .expect("search")
+                .hits
+                .into_iter()
+                .map(|h| h.path)
+                .collect();
+            let whole = brute_force(
+                &fs.entries,
+                &parse_at("", NOW),
+                SortKey::Path,
+                desc,
+                offset + limit,
+            );
+            let want: Vec<String> = whole[offset..].iter().map(|h| h.path.clone()).collect();
+            assert_eq!(
+                got, want,
+                "a mixed index disagrees with brute force by path \
+                 (desc={desc}) at {offset}+{limit}"
+            );
+        }
+    }
+}
+
+/// A path order that is there and wrong is damage, not an older index.
+///
+/// The two are told apart by one thing — whether the file exists — so the case
+/// that has to be nailed down is the file that exists and does not describe the
+/// segment. Reading it anyway would produce a page that is ordered, plausible
+/// and short of whatever the file stopped before, which is the class of failure
+/// this crate keeps a brute-force reference to catch. It is refused instead,
+/// and as damage rather than as a version, because nothing about it is old.
+#[test]
+fn a_path_order_that_does_not_describe_the_segment_is_refused() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        let mut it = (0..200).map(|i| Change::Upsert(entry(&format!("/a/f{i}.rs"), NOW, i)));
+        index.apply(&mut it).expect("apply");
+        index.commit().expect("commit");
+        assert_eq!(index.stats().expect("stats").entries, 200);
+    }
+
+    let order = std::fs::read_dir(tmp.path())
+        .expect("read_dir")
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|e| e == "porder"))
+        .expect("a path order was written");
+    let whole = std::fs::read(&order).expect("read");
+    std::fs::write(&order, &whole[..whole.len() - 4]).expect("truncate");
+
+    match NativeIndex::open_or_create(tmp.path()) {
+        Err(scour_core::Error::IndexCorrupt { detail }) => {
+            assert!(detail.contains("porder"), "unhelpful detail: {detail}");
+        }
+        other => panic!("expected damage, got {other:?}"),
+    }
+
+    // And the file being gone is the other thing entirely: the index opens.
+    std::fs::remove_file(&order).expect("remove");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert_eq!(index.stats().expect("stats").entries, 200);
 }
 
 #[test]
