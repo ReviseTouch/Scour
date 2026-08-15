@@ -4262,3 +4262,116 @@ Up to 1.7 ms on a query already under ten, against a hundred and fifteen saved
 on the ones that match everything. It was left there rather than guarded,
 because every guard that would catch it needs to guess the number of matches
 before walking, and guessing low would throw away the whole result.
+
+## 2026-08-15 — an untouched window asked for the same rows twice
+
+Two things in `page.html` owned the job of keeping the visible window current,
+and they both did it. `reviseRows` refetched on every index revision without
+registering anything in `LIST.pending`; `fillWindow` ran one frame later from
+`paintWindow`, found the window neither in flight nor stamped, and fetched it
+again; `reviseRows` then aborted `fillWindow`'s copy after the service had
+already built the page.
+
+**How it was measured.** `scripts/scour-app` on port 7699 with
+`SCOUR_APP_DEBUG=9333` and `XDG_DATA_HOME` pointed at a scratch browser
+profile, against the *owner's* running `scourd` — 2.23 M entries, two watched
+sources. `scripts/probe` wrapped `window.fetch` inside the page rather than
+attaching CDP's Network domain, because an abandoned request is still a request
+the service answered and only the caller can tell it from one that was read.
+Bytes came from Resource Timing. Two forty-second stretches back to back per
+launch, binaries alternated, `scourd` CPU sampled once a second from
+`/proc/<pid>/stat`.
+
+**Put the list on newest-first, and check that it stayed there.** The saved
+sort here was `path`, and `applySettings` lands a round trip after the window
+draws and ends in `render()` — so a heading click that goes in first is undone
+silently a moment later. Three rounds were thrown away to that. It costs twice
+over: a path window is 2.5 s of the service against 3 ms, so the reading-ahead
+switches itself off and the refresh throttle stretches to twenty-odd seconds,
+and the list then looks idle when it is only expensive. It is also what once
+had a probe reporting the live refresh broken when it was not.
+
+Five rounds on the shipped binaries, alternating, every leg reported:
+
+| | `/api/search`/s | abandoned | back to back (<150 ms) | MB/s | scourd |
+|---|---|---|---|---|---|
+| before A, leg 1 | 2.55 | 13 | — | 0.170 | 2.28% |
+| before A, leg 2 | 2.75 | 15 | — | 0.182 | 2.27% |
+| before B, leg 1 | 2.20 | 8 | 32/88 | 0.153 | 1.67% |
+| before B, leg 2 | 2.25 | 6 | 36/90 | 0.165 | 4.64% |
+| before C, leg 1 | 4.25 | 34 | 75/170 | 0.275 | 4.48% |
+| before C, leg 2 | 2.52 | 12 | 49/101 | 0.175 | 1.81% |
+| after A, leg 1 | **1.40** | 0 | 0/56 | 0.108 | 1.39% |
+| after A, leg 2 | **1.30** | 0 | 0/52 | 0.100 | 1.53% |
+| after B, leg 1 | **1.25** | 0 | 0/50 | 0.097 | 3.53% |
+| after B, leg 2 | **1.32** | 0 | 0/53 | 0.103 | 1.43% |
+
+One search per reply to `/api/wait` afterwards, against about two before:
+`search 56 / wait 60`, `52/53`, `50/53`, `53/64`. **The CPU column is the
+noisiest of the five and says so** — this machine was in use throughout, and
+1.67% and 4.64% are the same binary in the same round, as are 1.39% and 3.53%.
+Request count and bytes are what carry the result; CPU is reported because it
+was asked for and because a single run of it would have lied in either
+direction.
+
+**And the reading-ahead was asking for every window twice.** The abandoning
+sweep — "anything in flight that the screen has left behind" — did not exempt
+the one window the reading-ahead had just started, and that window is off the
+screen by definition. So it was abandoned by the next frame and asked for
+again. The steady-state rounds above never see this because the reading-ahead
+has finished by then, so it was measured on its own by re-running the query
+through the page's own `input` handler and counting for forty seconds:
+
+| filling in the reachable list | requests | for how many windows | abandoned |
+|---|---|---|---|
+| before | 282, 282 | 99 | 86, 79 |
+| after | **144, 154, 154** | 99 | **2, 4, 3** |
+
+1.74 and 1.75 read-ahead requests per window before; 1.02, 1.04 and 1.03 after.
+
+**The live refresh still works, checked in a real window.** A file created
+under `~/.cache` — a watched source — with the list on newest-first: found at
+row 1 after **1,253 ms** on the old binary, and after **1,501 / 1,502 / 501
+ms** at rows 1, 5 and 1 on the new one, with the arrival highlight on every
+time. A wheel gesture 40,000 px down the same list drew 76 of 76 rows with no
+blank frame at any of twenty-four samples, twice.
+
+**One thing that does not work and did not work before either.** With the query
+on a string nothing matched, creating a file that matches it moved the counter
+to `1 / 2.235.320` and drew no row — identically on both binaries. It is
+recorded here because it was found while checking this change and it is not
+this change.
+
+```sh
+SCOUR_APP_PORT=7699 SCOUR_APP_DEBUG=9333 XDG_DATA_HOME=/var/tmp/scour-idle-home \
+  scripts/scour-app &
+scripts/probe setup.js     # settings first, then newest-first, confirmed twice
+scripts/probe measure.js   # two 40 s stretches, fetch wrapped inside the page
+```
+
+## 2026-08-15 — an ordering nobody could keep, rebuilt on a clock
+
+`prepare_loop` walks up to `PREPARE` = 20,000 hits and throws the result away
+if the index moved while it was walking. A window open on the list holds
+`watchers > 0`, which puts the commit clock on `commit_watched`, so the index
+moves about once a second — and `PREPARE_EVERY` was a flat two seconds
+justified by a comment assuming the walk costs "about a tenth of a second".
+That is true of the stored order and of nothing else: the same file measures
+3.2 ms for one window sorted by modification time and 2,463.6 ms sorted by
+path.
+
+The leash is now the one the page already uses on itself — `atMostEvery`
+charges `floor = max(ms, spent * COST)` — so a walk buys `PREPARE_COST` (10)
+times its own length of quiet, never less than the two seconds it had.
+
+Proved by a test rather than by a stopwatch, because the machine this was
+written on is in use and its `scourd` may not be restarted:
+`an_expensive_ordering_is_not_rebuilt_on_a_clock` gives the engine an index
+whose 20,000-hit walk costs 400 ms, holds a waiter so the commit clock is the
+watched one, and asks for deep pages for three seconds against an index that is
+moving. On the flat interval the walks began at **181 ms and 2,185 ms**; on the
+leash there is one.
+
+```sh
+cargo test --release -p scour-engine an_expensive_ordering
+```

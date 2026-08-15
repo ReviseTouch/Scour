@@ -1004,3 +1004,179 @@ fn a_term_the_parser_could_not_read_is_reported_with_the_answer() {
         .expect("facets");
     assert!(!grouped.misread.is_empty(), "a facet dropped the warning");
 }
+
+/// An index whose *ordering* walk is expensive, and a note of when each one
+/// began.
+///
+/// Only the walk is slowed. Ordinary pages go straight through, which is what
+/// makes the test below about the speculation and nothing else: the engine
+/// asks for twenty thousand hits when it is building an ordering and for a
+/// screenful when it is answering a question.
+#[derive(Debug)]
+struct Slow {
+    inner: Arc<NativeIndex>,
+    walk: Duration,
+    began: Instant,
+    /// Milliseconds after `began` at which each ordering walk started.
+    walks: RwLock<Vec<u64>>,
+}
+
+impl scour_core::Index for Slow {
+    fn apply(
+        &self,
+        changes: &mut dyn Iterator<Item = scour_core::Change>,
+    ) -> scour_core::Result<scour_core::ApplyReport> {
+        self.inner.apply(changes)
+    }
+    fn begin_generation(&self) -> scour_core::Result<u64> {
+        self.inner.begin_generation()
+    }
+    fn sweep(
+        &self,
+        source: SourceId,
+        under: &str,
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> scour_core::Result<u64> {
+        self.inner.sweep(source, under, generation, spare)
+    }
+    fn abandon_generation(&self, g: u64) -> scour_core::Result<()> {
+        self.inner.abandon_generation(g)
+    }
+    fn commit(&self) -> scour_core::Result<()> {
+        self.inner.commit()
+    }
+    fn maintain(
+        &self,
+        level: scour_core::Maintenance,
+    ) -> scour_core::Result<scour_core::MaintReport> {
+        self.inner.maintain(level)
+    }
+    fn search(
+        &self,
+        req: &scour_core::SearchRequest,
+    ) -> scour_core::Result<scour_core::SearchResponse> {
+        // The engine keeps twenty thousand hits hot; nothing else asks for a
+        // page that size.
+        if req.page.limit >= 20_000 {
+            self.walks
+                .write()
+                .push(self.began.elapsed().as_millis() as u64);
+            std::thread::sleep(self.walk);
+        }
+        self.inner.search(req)
+    }
+    fn facets(
+        &self,
+        req: &scour_core::FacetRequest,
+    ) -> scour_core::Result<scour_core::FacetResponse> {
+        self.inner.facets(req)
+    }
+    fn stats(&self) -> scour_core::Result<scour_core::IndexStats> {
+        self.inner.stats()
+    }
+}
+
+/// **A dear ordering is rebuilt at a share of the machine, not on a clock.**
+///
+/// The interval used to be a flat two seconds, justified by a walk costing
+/// "about a tenth of a second" — which is true of the stored order and of
+/// nothing else; the same file measures 2,463.6 ms for one window sorted by
+/// path, and a walk of twenty thousand is dearer again. The walk is also
+/// discarded whenever the index moves, and a machine with a window open on it
+/// moves about once a second. So the expensive case was the one where every
+/// walk was both dear and thrown away, repeated for as long as the window
+/// stayed open.
+///
+/// Here the walk costs 400 ms, so nothing may ask for another inside four
+/// seconds. Three seconds of deep pages against a moving index is one walk
+/// where the fixed interval gave two.
+#[test]
+fn an_expensive_ordering_is_not_rebuilt_on_a_clock() {
+    let dir = tempfile::tempdir().expect("temp");
+    let real = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let fs = generate(&MockOptions {
+        files: 400,
+        ..Default::default()
+    });
+    let source = MemSource::new(fs.entries);
+    let slow = Arc::new(Slow {
+        inner: Arc::clone(&real),
+        walk: Duration::from_millis(400),
+        began: Instant::now(),
+        walks: RwLock::new(Vec::new()),
+    });
+    let engine = Engine::new(
+        vec![source.clone()],
+        Arc::clone(&slow) as Arc<dyn scour_core::Index>,
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    // Watching, because that is what gives the source somewhere to send a
+    // change — and a moving index is the whole point: an ordering built
+    // against one revision is refused by the next, so every walk below is one
+    // that answers nothing.
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+    settle(&f, |f| !f.engine.status().scanning);
+    slow.walks.write().clear();
+
+    // **Somebody is looking.** That is not decoration either: it is what puts
+    // the commit clock on `commit_watched` instead of batching for fifteen
+    // seconds, so the index moves about once a second and every ordering built
+    // below is stale within one. It is also the only state in which any of
+    // this is a problem — a machine nobody is watching commits rarely enough
+    // that a walk survives.
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let walks = std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut seen = 0;
+            while !stop.load(Ordering::Relaxed) {
+                seen = f
+                    .engine
+                    .await_change(seen, Duration::from_millis(250))
+                    .revision;
+            }
+        });
+
+        // A page past the first is what wants an ordering; a page at the top of
+        // its results never asks for one.
+        let deep = Page::new(50, 20);
+        let from = Instant::now();
+        let mut n = 0u64;
+        while from.elapsed() < Duration::from_secs(3) {
+            n += 1;
+            let mut e = f.source.entries.read()[0].clone();
+            e.path = format!("/mock/moving-{n}.txt");
+            e.id = scour_core::EntryId::path_hash(SourceId(0), &e.path);
+            f.source.changed(Change::Upsert(e));
+            let _ = f
+                .engine
+                .search("", SortKey::Modified, true, deep)
+                .expect("search");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let walks = slow.walks.read().clone();
+        stop.store(true, Ordering::Relaxed);
+        walks
+    });
+
+    assert!(
+        f.engine.status().revision > 0,
+        "the index has to move for this to be measuring anything"
+    );
+    assert_eq!(
+        walks.len(),
+        1,
+        "a 400 ms walk buys four seconds of quiet, so three seconds of deep \
+         pages must not start a second one. Walks began at {walks:?} ms"
+    );
+}
