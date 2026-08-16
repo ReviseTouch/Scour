@@ -137,51 +137,22 @@
     height: 100%;
     box-sizing: border-box;
     display: grid;
-    /* The prose beside the tool rather than above it: it is read once and the
-       tool is used every day, so it must not cost the tool any height. */
-    grid-template-columns: minmax(0, 1fr) 34ch;
+    /* **One column, and the help no longer takes one.** The prose used to sit
+       beside the tool in a second 34ch track, which meant opening it re-laid
+       out the table: every column narrowed, and at any ordinary window width
+       the list gained a horizontal scrollbar it did not have a moment before.
+       The help is an overlay now and the window has one thing in it. */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    gap: calc(var(--u) * 5);
     align-items: stretch;
   }
 
-  /* Placed rather than ordered. The note comes first in the markup — it is
-     the page's introduction and a reader without CSS should meet it first —
-     and it belongs in the second column on screen. */
   .app  { grid-column: 1; grid-row: 1; }
-  /* Everything that explains, in one column that scrolls by itself: the note
-     and the legend are both prose about the tool rather than part of it. */
-  .side {
-    grid-column: 2; grid-row: 1;
-    overflow-y: auto;
-    min-height: 0;
-    border-left: 1px solid var(--line);
-    padding-left: calc(var(--u) * 4);
-    display: flex;
-    flex-direction: column;
-    gap: calc(var(--u) * 5);
-  }
 
-  /* Narrow enough that the note has nowhere to go: it goes back on top, and
-     keeps its own scrollbar so it still cannot push the tool off screen. */
-  @media (max-width: 1040px) {
-    .wrap { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-    .side { grid-column: 1; grid-row: 1; max-height: 22vh;
-            border-left: 0; padding-left: 0; }
-    .app  { grid-column: 1; grid-row: 2; }
-  }
-
-  .note { color: var(--ink-2); font-size: 13px; line-height: 1.55; }
-  .note h1 {
-    font-size: 15px;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-    font-weight: 650;
-    color: var(--ink);
-    margin: 0 0 calc(var(--u) * 2);
-  }
-  .note p { margin: 0 0 calc(var(--u) * 2); }
-  .note b { color: var(--ink); font-weight: 620; }
+  /* `.note` used to wrap the panel's opening prose. The panel styles its own
+     now — `.help` below — and the one rule worth carrying over is this, which
+     the `<b>` in the "permission" paragraph still depends on. */
+  .help b { color: var(--ink); font-weight: 620; }
 
   /* ---------------- uygulama penceresi ---------------- */
   .app {
@@ -661,10 +632,41 @@
   /* The one that is about to open a pile of windows, waiting to be told again. */
   .selbar button.asking { color: var(--q-not); border-color: var(--q-not); }
 
-  /* The freshness rule — three pixels down the left of each row. The list is
-     in date order, so an unbroken spectrum runs the length of the page. */
-  td.age { padding: 0; width: 3px; }
-  td.age i { display: block; width: 3px; height: var(--row); }
+  /* ---------------- the mark column ----------------
+   *
+   * The freshness rule — three pixels down the left of each row. The list is
+   * in date order, so an unbroken spectrum runs the length of the page. The
+   * type glyph now shares the cell with it; see `writeMark`.
+   *
+   * **The column was already this wide.** It was written `width: 3px` and it
+   * measured thirty: a heading's own padding is 24px of that and the fixed
+   * table handed it the rest. So twenty-seven pixels of every row were blank
+   * and had been since the rule was added — which is the gap that was asked
+   * about, and the reason moving the glyph in costs no width at all. The name
+   * text lands 25px further left and no other column moves.
+   *
+   * **The rule keeps the edge, the glyph takes the middle.** Absolutely
+   * positioned rather than a block in the flow, so that it is exactly as tall
+   * as the cell however the row rounds. `height: var(--row)` was a second
+   * opinion about a height this file has one hard-won rule about (see
+   * `paintWindow`): a flat 30px against a cell measured at 29.4 inside a row
+   * measured at 30.6, so how much of the row a segment covered depended on
+   * the fraction that row happened to start at. `top: 0; bottom: 0` asks the
+   * cell instead of guessing.
+   *
+   * What this does *not* close is the line between segments, and that is the
+   * row's own `border-bottom` rather than a gap — measured at 1px before this
+   * change and 1px after. Left alone deliberately: the spectrum the design
+   * note claims is a progression of colour down the list, which survives a
+   * hairline, and taking the border away here would take it away from the
+   * one column that has it and leave the rows below looking unruled.
+   *
+   * Rejected: shrinking this back to three pixels when the glyphs are off.
+   * The toggle lives in the heading now and would have nowhere to sit, and
+   * every column in the table would jump sideways on a click that was
+   * supposed to be about pictures. */
+  td.age { padding: 0 0 0 3px; width: 30px; position: relative; text-align: center; }
+  td.age i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
 
   .name { font: 500 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
   /* **A wash, not a highlighter.** This used to be solid yellow with near-black
@@ -909,15 +911,87 @@
     overflow-wrap: anywhere;
   }
 
-  /* ---------------- notlar ---------------- */
-  .legend {
-    max-width: 1180px;
-    margin: calc(var(--u) * 7) auto 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: calc(var(--u) * 5);
+  /* ---------------- the help panel ----------------
+   *
+   * Over the window rather than beside it. `fixed` because it is anchored to
+   * a button by measurement (see `placeHelp`) and the page itself never
+   * scrolls, so viewport coordinates are the button's coordinates.
+   *
+   * It is deliberately not modal: nothing behind it is disabled and it does
+   * not dim the window. Somebody reading "what can I type" wants to type it,
+   * and a help that has to be dismissed before the box will take a keystroke
+   * is a help you close before you have finished reading it. */
+  .help {
+    position: fixed;
+    z-index: 60;
+    width: min(430px, calc(100vw - 40px));
+    max-height: min(560px, calc(100vh - 120px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.55;
   }
-  .legend section { border-top: 2px solid var(--line); padding-top: calc(var(--u) * 3); }
+  .help[hidden] { display: none; }
+  .help-head { display: flex; align-items: baseline; gap: calc(var(--u) * 3); }
+  .help h1 {
+    flex: 1;
+    font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+    font-weight: 650; color: var(--ink); margin: 0;
+  }
+  .help-head button {
+    background: none; border: 0; padding: 0 calc(var(--u));
+    color: var(--ink-3); font-size: 17px; line-height: 1; cursor: pointer;
+  }
+  .help-head button:hover { color: var(--ink); }
+  .help-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .help h2 {
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    font-weight: 650; color: var(--ink-3);
+    margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+  }
+  .help-lead { margin: 0 0 calc(var(--u) * 3); font-size: 12.5px; }
+  .help code {
+    font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); background: var(--panel-2);
+    padding: 1px 4px; border-radius: 2px;
+  }
+  /* Two columns of text, and the left one is grammar: it is the thing being
+     named, so it gets the monospace and the ink. `grid` rather than a real
+     `<dl>` flow, so the descriptions line up against the longest term instead
+     of against each other. */
+  .help-fields, .help-keys {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: calc(var(--u) * 1.5) calc(var(--u) * 4);
+    margin: 0;
+    align-items: baseline;
+  }
+  .help-fields dt, .help-keys dt {
+    font: 500 11.5px/1.4 var(--mono);
+    color: var(--ink);
+    white-space: nowrap;
+  }
+  .help-fields dd, .help-keys dd {
+    margin: 0; font-size: 12.5px; color: var(--ink-2);
+  }
+
+  /* ---------------- the design notes, inside the help ---------------- */
+  /* **One column.** This was `repeat(auto-fit, minmax(240px, 1fr))` with a
+     1180px cap — the shape it had when this page was a full-width artifact
+     being shown off. Dropped into a 34ch sidebar, the 240px minimum was wider
+     than the track it was in, so the notes laid themselves out sideways and
+     three and a half of the five sat off the right edge behind a horizontal
+     scrollbar. It is prose in a narrow panel now, which is one column. */
+  .legend { display: flex; flex-direction: column; gap: calc(var(--u) * 4); }
+  .legend section { padding-top: 0; }
   .legend h3 {
     margin: 0 0 calc(var(--u) * 1.5);
     font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
@@ -1030,11 +1104,11 @@
   .panel .line em { font-style: normal; color: var(--ink-3); }
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
 
-  /* The prose is read once and the tool is used every day, so the tool gets
-     the width and the prose gets a button. Hidden by default now that this is
-     a window rather than a page being shown off. */
-  body.no-side .side { display: none; }
-  body.no-side .wrap { grid-template-columns: minmax(0, 1fr); }
+  /* The `?` in the meter bar. The tool gets the width and the explaining gets
+     a button, which is what this always said; what has changed is that the
+     button now opens something over the window rather than a column beside it,
+     so pressing it no longer costs the width it was protecting. `margin-left:
+     auto` still pushes it to the end of that flex bar. */
   .about {
     background: none; border: 1px solid var(--line); color: var(--ink-3);
     width: 18px; height: 18px; border-radius: 9px; cursor: pointer;
@@ -1132,16 +1206,20 @@
   thead th:not([data-sort]):not(.pick) { cursor: default; }
   tbody td.mono { font: 400 11.5px/1 var(--mono); color: var(--ink-2); }
 
-  /* The picture in front of a name.
+  /* The picture beside a name, in the column of its own to the left of it.
      Eighteen pixels in a thirty-one pixel row, so a thumbnail reads as an
      image without the row growing; `contain` because a photograph is not
-     square and cropping one to a tile is a lie about what is in it. */
-  tbody td.name .ico {
+     square and cropping one to a tile is a lie about what is in it.
+
+     `display: block` with automatic side margins rather than an inline-block:
+     a table cell centres its content box vertically for `vertical-align:
+     middle`, so this needs no baseline nudge, and the old `vertical-align:
+     -4px` was tuned against text that is no longer in the same cell. */
+  tbody td.age .ico {
     width: 18px; height: 18px;
     object-fit: contain;
-    vertical-align: -4px;
-    margin-right: 7px;
-    display: inline-block;
+    display: block;
+    margin: 0 auto;
     /* Nothing shifts while they arrive: the box is there from the first
        frame, whether or not the theme has anything to put in it. */
     flex: none;
@@ -1166,11 +1244,32 @@
    * sit under it: enough hue to sort a screenful at a glance, not enough to
    * argue with the thing that is actually data. Most types are simply grey,
    * and the shape carries the meaning. */
-  tbody td.name span.ico {
+  tbody td.age span.ico {
     background-color: var(--k, var(--ink-3));
     -webkit-mask: var(--g) center / 18px 18px no-repeat;
     mask: var(--g) center / 18px 18px no-repeat;
   }
+
+  /* **The switch for the glyphs, in the heading of the column they fill.**
+     It was in the meter bar beside the language menu — which is where this
+     window keeps the things that are about the *window* — and a picture in
+     every row is about a column. Over the thing it controls, so the question
+     "what are these and how do I stop them" has its answer in the place it is
+     asked.
+
+     The heading gives up its padding: `thead th` carries 24px of it, which is
+     most of a thirty-pixel column, and a button cannot be centred in what is
+     left. */
+  thead th.mark { width: 30px; padding: 0; text-align: center; }
+  thead th.mark button {
+    background: none; border: 1px solid transparent; border-radius: 3px;
+    width: 20px; height: 20px; padding: 0; cursor: pointer;
+    color: var(--ink-3); font: 600 11px/1 var(--sans);
+    vertical-align: middle;
+  }
+  thead th.mark button:hover { color: var(--ink); border-color: var(--line); }
+  thead th.mark button[aria-pressed="true"] { color: var(--q-key); }
+  thead th.mark button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .k-folder { --k: #7d9bc4;
     --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 4.4c0-.5.4-1 1-1h3l1.3 1.5H13c.6 0 1 .4 1 1v5.7c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1z'/%3E%3C/svg%3E"); }
   .k-file { --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M4 2.2h4.6L12 5.6v8.2H4z'/%3E%3Cpath d='M8.5 2.4v3.3h3.3'/%3E%3C/svg%3E"); }
@@ -1219,12 +1318,48 @@
        `-html` where the sentence has markup inside it, `-title`/`-aria`/`-ph`
        for the three attributes that are read aloud or hovered. Anything a
        screen reader speaks is a string like any other. -->
-  <aside class="side">
-    <div class="note">
+  <!-- **The help, and what it is for.**
+
+       This was an `<aside>` in the page grid: pressing `?` gave a third of the
+       window to prose and re-laid out the table underneath it, so reading a
+       note cost you the thing the note was about. It also carried the artifact
+       layout it was born with — `.legend` is a `repeat(auto-fit, minmax(240px,
+       1fr))` grid built for a full-width page — which inside a 34ch column
+       overflowed sideways: one and a half of the five notes were readable and
+       the rest were off the right edge, behind a horizontal scrollbar. Both of
+       those are visible in a screenshot and neither was ever about the words.
+
+       So: a panel over the list, anchored under the button that opens it,
+       changing no column and no row. And what it opens with is what somebody
+       pressing `?` in a search box is actually asking — what can I type — with
+       the design notes kept underneath it, because they answer a real question
+       too, just not that one. See `applySide` and `placeHelp`. -->
+  <div class="help" id="help" hidden role="dialog" data-t-aria="Help">
+    <div class="help-head">
       <h1 data-t="Scour · the interface"></h1>
-      <p id="blurb" data-t-html="This page is wired to the running service: every keystroke goes to &lt;code&gt;scourd&lt;/code&gt;, and every row and every number below comes back from it. That is not a speed figure for the interface but a &lt;b&gt;permission&lt;/b&gt;: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."></p>
-      <p data-t="Everything below is live — type, and click the filters and the headings."></p>
+      <button type="button" id="help-x" data-t-title="close" data-t-aria="close">×</button>
     </div>
+
+    <h2 data-t="What you can type"></h2>
+    <p class="help-lead" data-t-html="A word on its own matches the name. Put &lt;code&gt;!&lt;/code&gt; in front of any term to exclude it, and write several to mean all of them at once."></p>
+    <!-- Built from `FIELDS`, which is the table the completions come from and
+         the one the engine's own grammar is checked against. Written out here
+         instead, it would be a second list to keep in step — and this file has
+         paid for that twice already, once with the kind taxonomy and once with
+         the rail. A field added there appears here for nothing. -->
+    <dl class="help-fields" id="help-fields"></dl>
+
+    <h2 data-t="Keys"></h2>
+    <dl class="help-keys">
+      <dt>Enter</dt><dd data-t="open what is selected"></dd>
+      <dt>↑ ↓</dt><dd data-t="move through the list"></dd>
+      <dt>Alt + ↓</dt><dd data-t="past searches"></dd>
+      <dt>Ctrl + A</dt><dd data-t="select everything"></dd>
+      <dt>Esc</dt><dd data-t="clear the selection"></dd>
+    </dl>
+
+    <h2 data-t="Why it looks like this"></h2>
+    <p class="help-lead" id="blurb" data-t-html="Every keystroke goes to &lt;code&gt;scourd&lt;/code&gt;, and every row and every number comes back from it. That is not a speed figure but a &lt;b&gt;permission&lt;/b&gt;: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."></p>
     <div class="legend">
       <section>
         <h3 data-t="The freshness ruler"></h3>
@@ -1247,7 +1382,7 @@
         <p data-t-html="The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a &lt;code&gt;dm:&lt;/code&gt; term to the query. Possible only because filter counts take microseconds."></p>
       </section>
     </div>
-  </aside>
+  </div>
 
   <div class="app">
     <div class="query">
@@ -1292,12 +1427,13 @@
       <span id="rows"></span>
       <span class="sep">·</span>
       <span id="path-note" data-t="connecting…"></span>
-      <button type="button" id="icons" class="about" aria-pressed="true"
-              data-t-title="icons" data-t-aria="turn icons on or off">◨</button>
+      <!-- The glyph switch used to be here. It is in the heading of the column
+           it fills now: this bar is for what is true of the whole window, and
+           a picture in every row is true of one column. -->
       <button type="button" id="about" class="about" aria-pressed="false"
-              data-t-title="design notes" data-t-aria="show the design notes">?</button>
-      <!-- The language menu. Beside the two other things in this bar that
-           change how the window looks rather than what it is looking at. -->
+              data-t-title="help" data-t-aria="show the help">?</button>
+      <!-- The language menu. Beside the other thing in this bar that changes
+           how the window looks rather than what it is looking at. -->
       <button type="button" id="lang" class="about" aria-haspopup="menu"
               aria-expanded="false" data-t-title="language"
               data-t-aria="choose the language">文</button>
@@ -1323,9 +1459,16 @@
           <div class="sizer" id="sizer"></div>
           <table>
             <thead>
-              <!-- Built from `COLUMNS`; the markup carries only the age
-                   ruler, which is not a column but a three-pixel edge. -->
-              <tr id="heads"><th style="width:3px" aria-hidden="true"></th></tr>
+              <!-- Built from `COLUMNS`, except for this first cell, which is
+                   written here and *kept* across every rebuild: it holds the
+                   glyph switch, and a button that is thrown away and made
+                   again loses the listener on it. See `buildHeads`. -->
+              <tr id="heads">
+                <th class="mark" id="markhead">
+                  <button type="button" id="icons" aria-pressed="true"
+                          data-t-title="icons" data-t-aria="turn icons on or off">◨</button>
+                </th>
+              </tr>
             </thead>
             <tbody id="rows-body"></tbody>
           </table>
@@ -2516,6 +2659,69 @@
     "audio", "archive", "exec", "data", "config", "font", "build",
   ]);
 
+  /* The first cell: the freshness rule, and the type glyph beside it.
+   *
+   * Both belong to the row rather than to any column, which is why this is
+   * called from `writeRow` and not from a column's `write` — the glyph used to
+   * be prepended inside the name cell by `writeName`, and a cell that holds a
+   * picture *and* a name has to sort out which of its children are which on
+   * every repaint. Here the rule is `<i>` and the glyph is whatever comes
+   * after it, and neither has to look at the other.
+   *
+   * **Off means the element is not there.** A screenful of hidden nodes is
+   * still a screenful of nodes to lay out on every scroll, and the point of
+   * the switch is that a list of names costs what a list of names costs. So
+   * this removes rather than hides, which is what it did before the move and
+   * is the behaviour worth keeping.
+   *
+   * A thumbnail is a picture and has to be fetched; a type is a class name and
+   * must not be. The two use different tags so that neither pays for the other
+   * — a `<span>` never has a `src` to load or fail — and swapping the tag only
+   * happens on the rows that change between the two, a handful per scroll
+   * rather than one per row. */
+  function writeMark(td, f) {
+    /* The rule is first and stays first: `writeRow` reaches for it as
+       `firstElementChild`, and a ghost row keeps it when everything else in
+       the row is emptied. */
+    let rule = td.firstElementChild;
+    if (!rule || rule.tagName !== "I") {
+      rule = document.createElement("i");
+      td.prepend(rule);
+    }
+    let el = rule.nextElementSibling;
+    if (!f || !ICONS) {
+      if (el) el.remove();
+      return rule;
+    }
+    const want = f.thumb ? "IMG" : "SPAN";
+    if (el && el.tagName !== want) {
+      el.remove();
+      el = null;
+    }
+    if (!el) {
+      el = f.thumb ? new Image() : document.createElement("span");
+      el.className = "ico";
+      if (f.thumb) {
+        el.alt = "";
+        // A thumbnail that has gone since the row was read is an ordinary
+        // state: the box stays, empty, and the row does not jump.
+        el.onerror = () => { el.style.visibility = "hidden"; };
+      }
+      td.append(el);
+    }
+    if (f.thumb) {
+      const url = iconUrl(f);
+      if (el.getAttribute("src") !== url) {
+        el.style.visibility = "";
+        el.setAttribute("src", url);
+      }
+    } else {
+      const cls = "ico k-" + (GLYPHS.has(f.ktoken) ? f.ktoken : "file");
+      if (el.className !== cls) el.className = cls;
+    }
+    return rule;
+  }
+
   /* The name, written into a cell without going through HTML.
    *
    * This used to build a string — the picture's tag and the name with a
@@ -2528,49 +2734,10 @@
    * `src` set only when it changes, and nothing is parsed at all.
    */
   function writeName(td, f, terms) {
-    /* A thumbnail is a picture and has to be fetched; a type is a class name
-       and must not be. The two use different tags so that neither pays for the
-       other — a `<span>` never has a `src` to load or fail, and swapping the
-       tag only happens on the rows that change between the two, which is a
-       handful per scroll rather than one per row. */
-    let el = td.firstElementChild;
-    if (ICONS) {
-      const want = f.thumb ? "IMG" : "SPAN";
-      if (el && el.tagName !== want && el.classList.contains("ico")) {
-        el.remove();
-        el = null;
-      }
-      if (!el || !el.classList.contains("ico")) {
-        el = f.thumb ? new Image() : document.createElement("span");
-        el.className = "ico";
-        if (f.thumb) {
-          el.alt = "";
-          // A thumbnail that has gone since the row was read is an ordinary
-          // state: the box stays, empty, and the row does not jump.
-          el.onerror = () => { el.style.visibility = "hidden"; };
-        }
-        td.prepend(el);
-      }
-      if (f.thumb) {
-        const url = iconUrl(f);
-        if (el.getAttribute("src") !== url) {
-          el.style.visibility = "";
-          el.setAttribute("src", url);
-        }
-      } else {
-        const cls = "ico k-" + (GLYPHS.has(f.ktoken) ? f.ktoken : "file");
-        if (el.className !== cls) el.className = cls;
-      }
-    } else if (el && el.classList.contains("ico")) {
-      el.remove();
-      el = null;
-    }
-    // Everything after the picture is this name, and it is rewritten whole —
-    // the marked run moves with every keystroke.
-    while (td.lastChild && td.lastChild !== td.firstElementChild) {
-      if (td.lastChild.nodeType === 1 && td.lastChild.classList.contains("ico")) break;
-      td.lastChild.remove();
-    }
+    // The whole cell is this name, and it is rewritten whole — the marked run
+    // moves with every keystroke. The picture used to live in front of it and
+    // is in the mark column now; see `writeMark`.
+    td.replaceChildren();
     const at = span(f.name, terms);
     if (!at) {
       td.append(f.name);
@@ -3326,6 +3493,11 @@
         // The throw landed in a `catch` that exists for a fetch failing, so
         // the list simply stopped filling after two rows and said nothing.
         for (let i = 1; i < tr.children.length; i++) tr.children[i].textContent = "";
+        // The glyph does have to go: a row waiting for its file must not wear
+        // the picture of the one that was in the slot before it. The rule
+        // keeps its colour, as it always has — a ghost is a row on its way,
+        // not a row that is wrong.
+        writeMark(tr.children[0], null);
       }
       return;
     }
@@ -3340,11 +3512,7 @@
       tr.dataset.path = full;
       tr.title = full;
     }
-    let dot = tr.children[0].firstElementChild;
-    if (!dot) {
-      dot = document.createElement("i");
-      tr.children[0].appendChild(dot);
-    }
+    const dot = writeMark(tr.children[0], f);
     dot.style.background = `var(${bandOf(f.mtime)})`;
     for (let c = 0; c < cols.length; c++) {
       cols[c].write(tr.children[c + 1], f, parsed);
@@ -4502,10 +4670,16 @@
    * which is what a file manager does and what keeps a dragged width meaning
    * the width somebody dragged it to.
    *
-   * The two fixed cells are counted in: the three-pixel freshness rule and the
-   * thirty-pixel picker. Without them the last column loses their width. */
+   * The two fixed cells are counted in: the mark column and the picker.
+   * Without them the last column loses their width.
+   *
+   * **Thirty rather than three for the first of them, which is what it always
+   * measured.** It was declared `width: 3px` and rendered at thirty — a
+   * heading's own padding — so this sum has been twenty-seven pixels short of
+   * the table it describes for as long as it has existed. The declaration says
+   * thirty now and so does this, and they agree with the ruler. */
   function applyWidths() {
-    let sum = 3 + 30;
+    let sum = 30 + 30;
     for (const th of document.querySelectorAll("thead th[data-col]")) {
       const col = COLUMNS.find((c) => c.id === th.dataset.col);
       const w = WIDTHS[th.dataset.col] || (col && col.w) || 120;
@@ -4610,8 +4784,14 @@
   function buildHeads() {
     const row = document.getElementById("heads");
     const cols = shownColumns();
+    /* **Kept, not rebuilt.** The mark heading holds the glyph switch, and this
+       function runs on every column change and every language change — an
+       `innerHTML` that included it would hand back a button with no listener
+       on it, so the switch would work until the first time somebody added a
+       column. Detached first so the assignment below cannot take it. */
+    const mark = document.getElementById("markhead");
+    mark.remove();
     row.innerHTML =
-      `<th style="width:3px" aria-hidden="true"></th>` +
       cols
         .map(
           (c) =>
@@ -4625,6 +4805,9 @@
       // already is when the question "why is this column here" comes up.
       `<th class="pick"><button type="button" id="pick" title="${escape_(T("columns"))}"
          aria-label="${escape_(T("choose the columns"))}">⋮</button></th>`;
+    // Back at the front, with its button and its listener intact, and before
+    // the numbering below — which counts across the row and has to see it.
+    row.prepend(mark);
     /* **Numbered downwards, left to right, and that is not decoration.**
      *
      * Each sticky heading is its own stacking context, so a grip's `z-index`
@@ -5961,21 +6144,91 @@
   });
   iconBtn.setAttribute("aria-pressed", String(ICONS));
 
-  /* The notes, behind a button and remembered. */
+  /* The help, behind a button and remembered.
+   *
+   * `SIDE` and the `view.side` it is stored under keep their names: the
+   * setting means "is the explaining thing open", which is still what it
+   * means, and renaming it would make every window that has already saved a
+   * preference forget it for nothing. */
   let SIDE = false;
   const aboutBtn = document.getElementById("about");
-  function applySide() {
-    document.body.classList.toggle("no-side", !SIDE);
-    aboutBtn.setAttribute("aria-pressed", String(SIDE));
-    // The list's height changed with the layout, so what is drawn has to be
-    // decided again — otherwise the window is right and the rows are stale.
-    repaint(true);
+  const helpBox = document.getElementById("help");
+
+  /* The fields, from the table the parser and the completions already share.
+     Rebuilt on a language change because `about` is a msgid; the terms
+     themselves are grammar and are never translated — `kind:` finds images in
+     a Turkish window, which is the whole reason `FIELDS` splits the two. */
+  function buildHelpFields() {
+    const dl = document.getElementById("help-fields");
+    const out = [];
+    for (const f of FIELDS) {
+      const dt = document.createElement("dt");
+      dt.textContent = f.eg || f.name;
+      const dd = document.createElement("dd");
+      dd.textContent = T(f.about);
+      out.push(dt, dd);
+    }
+    dl.replaceChildren(...out);
   }
-  aboutBtn.addEventListener("click", () => {
+
+  /* Under the button that opens it, and inside the window.
+   *
+   * Measured rather than positioned by constant: the button sits at the end of
+   * a bar whose height depends on the font and on how the meter wrapped, and a
+   * panel that is nearly under its button is worse than one that is obviously
+   * not. `getBoundingClientRect` here is a read at the top of a click, which
+   * is the cheap moment for one — nothing has been written to the DOM yet.
+   *
+   * The clamp is what makes it survive a narrow window: at 980px the panel is
+   * wider than the space to the right of the button, so it slides left until
+   * it fits rather than hanging off the edge. */
+  function placeHelp() {
+    const b = aboutBtn.getBoundingClientRect();
+    const w = helpBox.offsetWidth;
+    const left = Math.max(10, Math.min(b.right - w, innerWidth - w - 10));
+    helpBox.style.left = `${Math.round(left)}px`;
+    helpBox.style.top = `${Math.round(b.bottom + 8)}px`;
+  }
+
+  function applySide() {
+    aboutBtn.setAttribute("aria-pressed", String(SIDE));
+    helpBox.hidden = !SIDE;
+    /* No `repaint` any more, and that is the point of the change rather than
+       an oversight: the panel is an overlay, so the list is exactly as tall
+       and as wide as it was a moment ago and every row already on screen is
+       still the right row. Opening the help used to re-lay out the table. */
+    if (SIDE) placeHelp();
+  }
+  aboutBtn.addEventListener("click", (e) => {
+    // Otherwise the document listener below sees this click as "outside" and
+    // closes the panel in the same tick it was opened in.
+    e.stopPropagation();
     SIDE = !SIDE;
     keepView({ side: SIDE });
     applySide();
   });
+  document.getElementById("help-x").addEventListener("click", () => {
+    SIDE = false;
+    keepView({ side: SIDE });
+    applySide();
+  });
+  // A click anywhere else, and Escape. Both are what a panel over a window is
+  // expected to answer to, and neither was available when it was a column.
+  document.addEventListener("click", (e) => {
+    if (SIDE && !e.target.closest("#help")) {
+      SIDE = false;
+      keepView({ side: SIDE });
+      applySide();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && SIDE) {
+      SIDE = false;
+      keepView({ side: SIDE });
+      applySide();
+    }
+  });
+  addEventListener("resize", () => { if (SIDE) placeHelp(); });
   applySide();
 
   /* What the service handed back for this window, once it lands. Defaults
@@ -6084,6 +6337,10 @@
     buildFormatters();
     applyMarkup(document);
     buildLangMenu();
+    /* The help's field list is generated rather than written in the markup,
+       so `applyMarkup` above cannot reach it: `about` is a msgid and has just
+       changed language like everything else. */
+    buildHelpFields();
     buildHeads();               // the headings, and the picker's title
     syncFacets(parse(q.value)); // the three rails
     drawSelBar();               // the selection bar, if anything is selected
@@ -6162,14 +6419,42 @@
    * through this page's memory. The cancel reaches all the way now: closing
    * the download stops the walk in the service, measured at zero further CPU
    * within 500 ms. */
-  document.getElementById("csv").addEventListener("click", () => {
-    const p = new URLSearchParams({
-      q: q.value,
-      cols: SHOWN.join(","),
-      t: TOKEN,
+  /* **The button this belongs to is not in the page, and that threw.**
+   *
+   * `a7789d8` added this listener, the route and the writer; its own message
+   * says "A button in the meter bar downloads what the query matched", and no
+   * such button was ever added — `id="csv"` appears nowhere in this file.
+   * `getElementById` therefore returned null and this line threw, and because
+   * the whole window is one inline script, **this was the last line of it that
+   * ever ran**. Everything below was dead, silently:
+   *
+   *   * `loadLanguage("")`, so the catalogue was never fetched. All 31 of the
+   *     window's `data-t` elements stayed empty — including every word of the
+   *     design notes, which is why the `?` opened a blank column.
+   *   * the language menu, so `文` did nothing.
+   *   * `window.SCOUR`, which the report tab reaches the bridge through — so
+   *     every figure on that tab was a dash again. Its own comment, a few
+   *     dozen lines below this one, describes that exact failure shipping
+   *     once already and going unnoticed *because it looks like the service
+   *     being down*. It had come back by a different road.
+   *
+   * Guarded rather than given a button: where the export belongs is a design
+   * decision and this pass was asked for three others. The route, the writer
+   * and this handler all still work the moment something with `id="csv"`
+   * exists. What must not happen again is a missing element taking the rest of
+   * the window with it, so the guard is the fix and the button is a question.
+   */
+  const csvBtn = document.getElementById("csv");
+  if (csvBtn) {
+    csvBtn.addEventListener("click", () => {
+      const p = new URLSearchParams({
+        q: q.value,
+        cols: SHOWN.join(","),
+        t: TOKEN,
+      });
+      location.href = `/api/csv?${p}`;
     });
-    location.href = `/api/csv?${p}`;
-  });
+  }
 
   const langBtn = document.getElementById("lang");
   const langMenu = document.createElement("div");

@@ -251,16 +251,59 @@ msgstr "geçmiş"
 # sentence is one msgid rather than three pieces the page joins up.
 # ---------------------------------------------------------------------
 
-# --- the browser window: the design notes down the left ---
+# --- the browser window: the help panel behind `?` ---
+#
+# It was a column down the right that said only *why* the window looks as it
+# does. It is a panel over the window now, and it opens with what somebody
+# pressing `?` in a search box is asking — what can I type — with the design
+# notes kept underneath. The field list itself is not here: it is generated
+# from `FIELDS`, whose `about:` lines are the msgids further down.
+
+msgid "Help"
+msgstr "Yardım"
+
+msgid "help"
+msgstr "yardım"
+
+msgid "show the help"
+msgstr "yardımı göster"
+
+msgid "close"
+msgstr "kapat"
+
+msgid "What you can type"
+msgstr "Neler yazabilirsiniz"
+
+# `!` is grammar and stays `!` in every language; only the sentence around it
+# is translated.
+msgid "A word on its own matches the name. Put <code>!</code> in front of any term to exclude it, and write several to mean all of them at once."
+msgstr "Tek başına bir kelime ada bakar. Bir terimi dışlamak için başına <code>!</code> koyun; birden çok terim yazmak hepsinin birden geçerli olması demektir."
+
+msgid "Keys"
+msgstr "Tuşlar"
+
+msgid "open what is selected"
+msgstr "seçili olanı açar"
+
+msgid "move through the list"
+msgstr "listede gezinir"
+
+msgid "select everything"
+msgstr "hepsini seçer"
+
+msgid "clear the selection"
+msgstr "seçimi kaldırır"
+
+msgid "Why it looks like this"
+msgstr "Neden böyle görünüyor"
 
 msgid "Scour · the interface"
 msgstr "Scour · arayüz"
 
-msgid "This page is wired to the running service: every keystroke goes to <code>scourd</code>, and every row and every number below comes back from it. That is not a speed figure for the interface but a <b>permission</b>: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."
-msgstr "Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor, aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu."
-
-msgid "Everything below is live — type, and click the filters and the headings."
-msgstr "Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın."
+# The panel floats over the window rather than sitting beside it, so the older
+# wording — "the page", "every row below" — described a layout that is gone.
+msgid "Every keystroke goes to <code>scourd</code>, and every row and every number comes back from it. That is not a speed figure but a <b>permission</b>: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."
+msgstr "Her tuş <code>scourd</code>'a gidiyor, her satır ve her sayı oradan geliyor. Bu bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu."
 
 msgid "The freshness ruler"
 msgstr "Tazelik cetveli"
