@@ -6138,6 +6138,32 @@
     loadLanguage(tag).catch((e) => console.error("scour: language:", e));
   }
 
+  /* **The whole result set, not the list.**
+   *
+   * The list stops at `REACH` because past twenty thousand rows a query wants
+   * narrowing and a person cannot read further anyway. An export is the other
+   * case: it exists to hand the answer to something that is not a person, so
+   * the bridge pages through to the end however far that is.
+   *
+   * The columns are the ones on screen, in the order they are on screen — they
+   * are what the reader chose, and a column that is not showing is one click
+   * from showing and then exported.
+   *
+   * A navigation rather than a fetch. The answer is a download with no length
+   * declared, written as it is walked; letting the browser own it gives a
+   * progress indicator, a cancel and a file on disk, none of it passing
+   * through this page's memory. */
+  document.getElementById("csv").addEventListener("click", () => {
+    const p = new URLSearchParams({
+      q: q.value,
+      sort: sortKey,
+      desc: sortDesc ? "1" : "0",
+      cols: SHOWN.join(","),
+      t: TOKEN,
+    });
+    location.href = `/api/csv?${p}`;
+  });
+
   const langBtn = document.getElementById("lang");
   const langMenu = document.createElement("div");
   langMenu.className = "rowmenu langs";

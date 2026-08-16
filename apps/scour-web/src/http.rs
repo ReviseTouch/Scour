@@ -151,6 +151,35 @@ pub fn cached(stream: &mut TcpStream, kind: &str, body: &[u8]) {
     let _ = stream.flush();
 }
 
+/// Headers for an answer whose length is not known when it starts.
+///
+/// **No `Content-Length`, and that is the point.** An export walks the whole
+/// matching set — two million rows here — and the only way to know its length
+/// in advance is to build it all in memory first, which is the thing being
+/// avoided. HTTP/1.1 allows a body that ends when the connection does, and
+/// `Connection: close` is already what this server says, so the browser reads
+/// until EOF. Chunked encoding would work too and buys nothing here: there is
+/// no keep-alive to preserve.
+///
+/// `filename` turns it into a download rather than something the browser tries
+/// to display. It is quoted and stripped of the two characters that could end
+/// the header early; everything else a filesystem allows is legal in it.
+pub fn attachment(stream: &mut TcpStream, kind: &str, filename: &str) {
+    let safe: String = filename
+        .chars()
+        .filter(|c| *c != '"' && *c != '\r' && *c != '\n')
+        .collect();
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {kind}\r\n\
+         Content-Disposition: attachment; filename=\"{safe}\"\r\n\
+         Cache-Control: no-store\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(head.as_bytes());
+}
+
 pub fn json(stream: &mut TcpStream, value: &serde_json::Value) {
     respond(
         stream,
