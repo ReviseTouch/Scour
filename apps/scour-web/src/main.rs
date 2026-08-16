@@ -1471,6 +1471,75 @@ mod tests {
         );
     }
 
+    /// The page knows every kind the engine does, and no kind it does not.
+    ///
+    /// **The rail above depends on this and nothing said so.** `without` only
+    /// strips a `kind:` term it believes is one, and what it believes comes
+    /// from the page's own copy of the query grammar — `KIND_VALUES` plus
+    /// `KIND_ALIASES`, read by `accepts`. That copy was the mockup's eight
+    /// values and had never been told that `Kind` gained Audio, Video, Build,
+    /// Data, Config and Font. So for five of the thirteen kinds `without`
+    /// found nothing to strip, the rail was counted through its own filter
+    /// after all, and twelve of thirteen rows read zero — the exact defect
+    /// [`a_rail_is_not_counted_through_its_own_filter`] was written to prevent,
+    /// arrived at by a route that test could not see.
+    ///
+    /// Reproduced in the window on `kind:data`, `kind:config`, `kind:audio`,
+    /// `kind:font` and `kind:build`; `kind:image` and `kind:doc` were fine
+    /// because they were in the mockup's list, and `kind:video` was fine by
+    /// accident because the word is the same in Turkish.
+    ///
+    /// Both directions, because both are drift. A token the page does not know
+    /// is a rail of zeros. A spelling the page accepts and the engine does not
+    /// is the opposite mistake: `without` would strip a term the engine reads
+    /// as plain text, and the rail would then be counted over a wider set than
+    /// the one the box describes.
+    #[test]
+    fn the_page_takes_the_engines_kind_vocabulary() {
+        fn values(name: &str) -> Vec<String> {
+            let at = PAGE
+                .find(&format!("const {name} = ["))
+                .unwrap_or_else(|| panic!("the page has no {name}"));
+            let open = PAGE[at..].find('[').expect("no opening bracket") + at;
+            let close = PAGE[open..].find(']').expect("no closing bracket") + open;
+            PAGE[open + 1..close]
+                .split(',')
+                .map(|s| s.trim().trim_matches('"').to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }
+
+        let offered = values("KIND_VALUES");
+        let aliases = values("KIND_ALIASES");
+
+        // Every kind the rail offers can be typed, because the rail's own
+        // buttons put exactly these tokens in the box.
+        let engine: Vec<&str> = scour_core::Kind::OFFERED
+            .iter()
+            .map(|k| k.token())
+            .collect();
+        assert_eq!(
+            offered, engine,
+            "the page's kind values are not Kind::OFFERED through Kind::token"
+        );
+
+        // And nothing here is a spelling the engine has never heard of.
+        for v in offered.iter().chain(aliases.iter()) {
+            assert!(
+                scour_core::Kind::from_name(v).is_some(),
+                "the page accepts kind:{v}, which the engine does not parse"
+            );
+        }
+
+        // `accepts` reads both lists, or half of this proves nothing.
+        assert!(
+            PAGE.contains(
+                "case \"kind\": return KIND_VALUES.includes(v) || KIND_ALIASES.includes(v);"
+            ),
+            "accepts() no longer answers for kind: from the two lists this test checks"
+        );
+    }
+
     #[test]
     fn sorting_keeps_the_exact_total_of_the_same_query() {
         let start = PAGE

@@ -1775,7 +1775,69 @@
     { name: "da",      alias: ["accessed"],                takes: "time",  about: "en son ne zaman okundu",                         eg: "da:>2026-01-01" },
     { name: "content", alias: ["text", "icerik", "içerik"],takes: "text",  about: "belge içeriği bunu içeriyor (içerik indeksliyse)", eg: "content:invoice" },
   ];
-  const KIND_VALUES = ["folder", "file", "code", "image", "doc", "media", "archive", "exec"];
+  /* The values `kind:` takes, in the order a list should show them.
+   *
+   * **This is `Kind::OFFERED` through `Kind::token`** — the same thirteen
+   * `/api/kinds` sends and `scour-query`'s own `KIND_VALUES` offers. It used
+   * to be eight, from the mockup: `folder file code image doc media archive
+   * exec`. Five of the engine's kinds were missing — `data`, `config`,
+   * `audio`, `font`, `build` — and `media` was in, which the engine still
+   * parses but no longer produces.
+   *
+   * What that cost is the reason for the length of this comment. This list is
+   * not only what the completion menu offers. `accepts` is the page's answer
+   * to "can this field read this value", and two things that reach the screen
+   * ask it: `parse`, where a value it cannot read makes the whole term plain
+   * text, and `without`, which strips a rail's own term before counting the
+   * rail. So a kind missing from here did two visible things at once. The
+   * clicked row did not read as pressed, because `parse` never set `p.kind`.
+   * And `without` found nothing to strip, returned null, and the kind rail was
+   * counted through `kind:data` — which answers with the one key that matched,
+   * so the other twelve rows settled at zero.
+   *
+   * Measured in the window rather than argued: clicking Veri made ONE facet
+   * call, `q=kind:data`, and `KIND_COUNTS` came back `{data: 209320}`;
+   * clicking Görsel made TWO, the second `q=`, and `KIND_COUNTS` came back
+   * with all thirteen keys. The five the owner named — Veri, Yapılandırma,
+   * Ses, Yazı tipi, Derleme çıktısı — are exactly the five that were missing
+   * here. `video` escaped only by accident: the word is spelled the same in
+   * both languages and so was already in the Turkish list below.
+   *
+   * The box's colours were never wrong, and that is worth saying because it is
+   * why this went unnoticed: they come from `/api/explain` over the wire, so
+   * `kind:veri` read back correctly in the reading line while the rail beside
+   * it went to zeros.
+   *
+   * The comment above the field table already predicted this — "the day the
+   * two tables drift, the box says something the engine never said". It drifted
+   * because `Kind` gained Audio, Video, Build, Data, Config and Font and this
+   * copy did not. `the_page_takes_the_engines_kind_vocabulary` is what now
+   * fails when it drifts again, rather than a rail full of zeros. */
+  const KIND_VALUES = ["folder", "code", "doc", "image", "data", "config",
+                       "archive", "exec", "audio", "video", "font", "build", "file"];
+  /* Every other spelling `Kind::from_name` takes, copied literally from it,
+     including the ones only folding tells apart. Accepted but not offered, and
+     the difference is deliberate on both sides of the wire: `media` is retired
+     and still parses so that a query somebody wrote down keeps working, and
+     `text` is a group alias with no kind of its own. Offering either would
+     invite new queries into a spelling the taxonomy is moving away from. */
+  const KIND_ALIASES = [
+    "dir", "klasor", "klasör",
+    "source", "kod", "kaynak",
+    "img", "pic", "gorsel", "görsel", "resim",
+    "arsiv", "arşiv", "zip",
+    "document", "belge",
+    "exe", "bin", "executable", "calistirilabilir", "çalıştırılabilir",
+    "ses", "muzik", "müzik",
+    "film",
+    "media", "medya",
+    "derleme", "cikti", "çıktı",
+    "veri",
+    "conf", "settings", "ayar", "yapilandirma", "yapılandırma",
+    "yazitipi", "yazıtipi",
+    "dosya",
+    "text", "metin",
+  ];
   const TIME_VALUES = ["today", "yesterday", "7d", "30d", "1y"];
 
   /* Turkish folding — the same rule as the engine's `DefaultFolder`: dotted
@@ -1800,10 +1862,7 @@
       case "ext":  return v.split(";").some((e) => e.replace(/^\./, "").length > 0);
       case "size": return SIZE_RE.test(v);
       case "time": return TIME_RE.test(v);
-      case "kind": return KIND_VALUES.includes(v) ||
-                          ["klasor", "klasör", "kod", "gorsel", "görsel", "arsiv", "arşiv",
-                           "belge", "dosya", "medya", "video", "ses", "img", "pic",
-                           "exe", "bin", "zip"].includes(v);
+      case "kind": return KIND_VALUES.includes(v) || KIND_ALIASES.includes(v);
     }
     return false;
   }
@@ -3796,13 +3855,16 @@
    *
    * `field()` rather than a prefix match, so the aliases resolve: `tür:görsel`
    * and `type:image` are the same term as `kind:image`, and `modified:` is
-   * `dm:`. `toggleTerm` splits on the first colon instead and therefore does
-   * not see the Turkish spellings — not fixed here, because that is a
-   * different defect and this change is not the place to smuggle it in.
+   * `dm:`. `toggleTerm` compares the same way, as of the commit after this
+   * one; this comment used to say it did not, and said so for one commit
+   * longer than it was true.
    *
    * A term the parser cannot read is plain text to the engine (see `parse`),
    * so `kind:nope` is a name search and stays: taking it out would change
-   * which rows the rail counts.
+   * which rows the rail counts. **`accepts` is what decides that**, and its
+   * kind vocabulary being five short of the engine's is exactly how this
+   * function came to return null for `kind:data` and leave the rail counted
+   * through its own filter. See `KIND_VALUES`.
    *
    * Null when there was nothing to take out, which is what tells the caller
    * this rail needs no question of its own. */
