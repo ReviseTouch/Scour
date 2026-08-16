@@ -68,6 +68,28 @@ enum Command {
         #[arg(long, default_value_t = 100_000)]
         count_cap: u32,
     },
+    /// Write everything that matches to a spreadsheet.
+    ///
+    /// The whole matching set, not a page of it — 2.24 M rows on this machine
+    /// — written as it is walked. Nothing is held here or in the service, so
+    /// the size of the answer is bounded by the disk it goes to and by
+    /// nothing else.
+    ///
+    /// Rows arrive in the index's own order, which is not a sort by any
+    /// column. Sort the file afterwards, or open it in something that sorts.
+    Export {
+        query: Vec<String>,
+        /// Where to write it. Left out, it goes to standard output, which is
+        /// what makes `scour export … | wc -l` work.
+        #[arg(long, short)]
+        out: Option<std::path::PathBuf>,
+        /// The columns, comma-separated, in the order they should appear.
+        ///
+        /// One of `name path full ext size disk mtime ctime atime kind perm
+        /// user group items`. The default five are what the window shows.
+        #[arg(long, short)]
+        columns: Option<String>,
+    },
     /// How many files match.
     Count { query: Vec<String> },
     /// Group the matching files.
@@ -219,6 +241,24 @@ fn main() -> Result<()> {
         format!("no Scour service is listening on {addr}. Start one with `scourd`.")
     })?;
 
+    // Before `build`, because an export is not one request-and-reply and has
+    // nowhere to put itself in the flow below: its answer is a run of frames
+    // that go to a file or a pipe as they arrive, and `--json` printing a
+    // pretty tree of two hundred megabytes is not a thing anybody wants.
+    if let Some(Command::Export {
+        query,
+        out,
+        columns,
+    }) = &args.command
+    {
+        return run_export(
+            &mut client,
+            &query.join(" "),
+            out.as_deref(),
+            columns.as_deref(),
+        );
+    }
+
     let request = build(&args)?;
     // The query text has to survive the call, for two things. `explain` prints
     // it back with its own colouring — and **any** answer may carry a warning
@@ -238,6 +278,99 @@ fn main() -> Result<()> {
         return Ok(());
     }
     render::human(&reply, echo.as_deref())
+}
+
+/// Write an export where it was asked for, a frame at a time.
+///
+/// **The escaping is not here**, and that is the point of the whole change:
+/// the service produced these bytes with `scour_export`, the same code the
+/// browser bridge now relays, so a file written by this and a file downloaded
+/// from the window are the same file. A second implementation of RFC 4180 in
+/// the terminal is a second chance to get it wrong, and the way it goes wrong
+/// is a spreadsheet that opens.
+///
+/// Buffered, because a frame is 128 KB of CSV and an unbuffered `write_all`
+/// per frame is a syscall per frame — which is fine, and being explicit about
+/// it costs a line. The flush is checked: an export that fills the disk must
+/// not exit zero.
+fn run_export(
+    client: &mut Client,
+    query: &str,
+    out: Option<&std::path::Path>,
+    columns: Option<&str>,
+) -> Result<()> {
+    use std::io::Write;
+
+    let columns: Vec<String> = columns
+        .map(|c| {
+            c.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut sink: Box<dyn Write> = match out {
+        Some(p) => Box::new(std::io::BufWriter::new(
+            std::fs::File::create(p).with_context(|| format!("cannot write {}", p.display()))?,
+        )),
+        None => Box::new(std::io::BufWriter::new(std::io::stdout().lock())),
+    };
+
+    // Set when a write fails, so that the reason survives the `false` that
+    // stops the stream — the service is told nothing but "stop", and without
+    // this a full disk would look like a successful export of however many
+    // rows fitted.
+    let mut failed: Option<std::io::Error> = None;
+    let done = client.stream(
+        Request::Export {
+            query: query.to_owned(),
+            columns,
+        },
+        |piece| match piece {
+            scour_proto::Response::ExportChunk { csv } => match sink.write_all(csv.as_bytes()) {
+                Ok(()) => true,
+                Err(e) => {
+                    failed = Some(e);
+                    false
+                }
+            },
+            // Nothing else is sent as a piece of an export. Ignoring one is
+            // safer than refusing: a service newer than this binary may have
+            // something to add, and an export that still writes its rows is
+            // better than one that stops because of a frame it did not know.
+            _ => true,
+        },
+    );
+    // **A closed pipe is not an error**, and Rust makes it look like one: it
+    // ignores `SIGPIPE` at start-up, so `scour export | head` — the first thing
+    // anybody types at a two-million-row export — comes back with `Broken pipe
+    // (os error 32)` where every other tool on the machine exits quietly. The
+    // reader got what it asked for and stopped, which is exactly the case the
+    // whole stream is built to handle.
+    if let Some(e) = failed {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            return Ok(());
+        }
+        return Err(e).context("the export could not be written");
+    }
+    let done = done?;
+    if let Err(e) = sink.flush() {
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(e).context("the export could not be written");
+        }
+        return Ok(());
+    }
+    drop(sink);
+    // The row count, on stderr so that it does not land in the file or in
+    // whatever the pipe feeds. It is what `scour count` prints for the same
+    // query, and the pair is the only check a reader has that the file is
+    // whole.
+    if let scour_proto::Response::ExportDone { rows } = done {
+        eprintln!("{rows}");
+    }
+    Ok(())
 }
 
 fn build(args: &Args) -> Result<Request> {
@@ -291,6 +424,11 @@ fn build(args: &Args) -> Result<Request> {
             limit: *limit,
         },
         Some(Command::Stat { path }) => Request::Stat { path: path.clone() },
+        // Handled before this is reached — an export is a run of frames, not a
+        // request and a reply, and `main` sends it itself. Unreachable rather
+        // than a silent fallback: if this ever runs, the early return above has
+        // been removed and a wrong request is worse than a crash.
+        Some(Command::Export { .. }) => unreachable!("an export is streamed in main"),
         Some(Command::Dupes {
             under,
             min_mb,

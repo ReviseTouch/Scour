@@ -397,6 +397,14 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
         }
         Response::Accepted => println!("{}", t("accepted")),
         Response::Text { text } => println!("{text}"),
+        // An export does not arrive here. Its pieces go to the file or the
+        // pipe as they come — see `run_export` in `main.rs` — and passing one
+        // through the pretty-printer would put it on stdout a second time.
+        //
+        // Named rather than covered by a wildcard: this match is what makes
+        // whoever adds the next response variant decide how it looks, and one
+        // `_` would retire that for every variant after it.
+        Response::ExportChunk { .. } | Response::ExportDone { .. } => {}
     }
     Ok(())
 }

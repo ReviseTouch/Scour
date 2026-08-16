@@ -4882,3 +4882,103 @@ refresh off to half as many rounds. Sampling the rail every frame through a
 query change, the window in which the previous query's numbers are still on
 screen was **26.8 → 28.8 ms** — unchanged, and pre-existing: it is the gap
 between the keystroke and the search reply that runs `clearSidebarCounts`.
+
+## 2026-08-16 — the export was quadratic because it was in the wrong process
+
+`a7789d8` put `/api/csv` in the browser bridge, where the only way to reach the
+whole result set was to page the service. A page costs what it takes to walk to
+its offset, so the total is quadratic:
+
+| offset | ms |
+|---|---|
+| 0 | 2.1 |
+| 100,000 | 25.3 |
+| 500,000 | 65.5 |
+| 1,000,000 | 117.6 |
+
+Half a million rows took **71 seconds**; the whole index wrote 1.4 M lines in
+**ten minutes** and had not finished, which is why that version stopped at half
+a million and said so in a trailer.
+
+Moved into the service as `Request::Export` — one request, one walk, rows
+written as they are produced.
+
+**The corpus.** A copy of the live index, `cp -a --reflink=auto`, served by a
+`scourd` of its own on a socket of its own with `watch = false` and
+`scan.on_start = false`, so nothing moves under the measurement. 2,248,592
+rows, 3 segments, 213 MiB. **Every number below is that copy, not the live
+index.**
+
+Three things had to be right before the copy behaved at all, and each produced
+a plausible wrong number first:
+
+* **Both sources have to be named in the config.** Rows carry a source id, and
+  a source that is no longer configured has its rows forgotten at startup. A
+  config naming only `home` opened the copy and answered **889,527** rows where
+  the service it came from answers 2,240,389 — the missing 1.35 M were
+  `/mnt/depo`'s, erased on open. It reads exactly like a torn copy and is not
+  one.
+* **The default is a watched home directory**, not no sources. The first run
+  had a live watcher applying real changes into the copy: 2,240,275 rows became
+  2,248,599 and the segments went 4 → 5 between two counts.
+* **A copy is a snapshot of a disk, not of a service.** Even settled, counts
+  differed from the live service's by a few thousand until the staged rows
+  committed.
+
+**What it costs.** Writing to a file on the same machine:
+
+| | rows | wall | bytes |
+|---|---|---|---|
+| whole index, `scour export` | 2,248,592 | **3.60 s** | 332,793,596 |
+| whole index, `/api/csv` | 2,248,592 | **3.75 s** | 332,790,966 |
+
+Against ten-minutes-and-unfinished, and against 71 s for the half million the
+old version could reach. The bridge's extra 0.15 s is the HTTP hop and the JSON
+frames.
+
+**What it costs in memory**, which is the number that decides whether the shape
+is right. `RssAnon + VmSwap`, sampled every 50 ms, because glibc keeps freed
+arenas and plain RSS is not the number:
+
+| process | before | after | peak during |
+|---|---|---|---|
+| service | 46,016 kB | 51,096 kB | 51,040 kB |
+| bridge | 524 kB | 456 kB | 524 kB |
+
+`VmHWM` did not move: 216,504 kB for the service across the whole run — it is
+dominated by the mapped index — and 4,676 → 4,628 kB for the bridge. **The
+bridge holds nothing.** It ended a 317 MB download using less than it started
+with, which is what a relay looks like. The service's five megabytes are the
+128 KB frame buffer and what the allocator kept around it.
+
+For comparison, the shape that was rejected without being written: ordering the
+whole set needs a key per match held until the last match is seen, and a
+`SortValue` is 32 bytes because one of its shapes is a `Vec`. On this corpus
+that is ~90 MB for the buffer alone and **559 MB of peak RSS** sorted by path —
+measured further up this file, and the regression this week's work removed. See
+`NativeIndex::scan` for what an ordered stream would take instead.
+
+**Counts, against the engine's own**, four shapes including one that matches
+nothing:
+
+| query | `scour count` | export rows |
+|---|---|---|
+| `kind:font` | 6,490 | 6,490 |
+| `kind:archive` | 12,209 | 12,209 |
+| `ext:rs size:>1mb` | 12 | 12 |
+| `zzz-nothing-matches-this` | 0 | 0 |
+
+The empty export is 30 bytes: the byte-order mark and the heading row. A
+spreadsheet with no rows says "nothing matched"; a zero-byte download says the
+export broke.
+
+**The bytes are unchanged.** `kind:font` fetched from `/api/csv` on a bridge
+built at `a7789d8` and on one built now, both pointed at the same service:
+1,117,358 bytes each, and identical line for line once sorted. Only the order
+differs, which is the one thing that changed. Same headers, same `ef bb bf`.
+
+**A cancelled download stops the walk.** Killing `curl` 0.4 s into a
+whole-index download: the service spent 40 ticks during it and **zero** in the
+two seconds after, against the ~350 a full export costs. The refusal travels
+from the failed socket write through `Client::stream` and `Engine::export` into
+`Index::scan`, which abandons the walk.

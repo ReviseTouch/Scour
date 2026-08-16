@@ -25,6 +25,11 @@ scour-query       = { workspace = true }
 # the same bytes. Here rather than in the index because the index's job is to
 # say which files there are, and this one's is what to do with that list.
 scour-dupes       = { workspace = true }
+# Also not about search: it takes rows and answers what they look like as a
+# file something else can open. Here, and only here, because the service is the
+# one thing all four frontends talk to — four copies of RFC 4180 quoting is
+# four chances for a spreadsheet to open and be quietly wrong.
+scour-export      = { workspace = true }
 crossbeam-channel = { workspace = true }
 parking_lot       = { workspace = true }
 

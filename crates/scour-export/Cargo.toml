@@ -1,0 +1,21 @@
+# The result set, as a file something else can read.
+#
+# **`scour-core` and nothing more.** What arrives is a `Hit` and a list of
+# column names; what leaves is bytes. Nothing here knows what an index, a
+# socket or an HTTP request is — which is the whole point of moving it out of
+# the browser bridge, where the same code would have had to be written a second
+# time for the terminal and a third for the window.
+[package]
+name         = "scour-export"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+publish      = false
+
+[dependencies]
+scour-core = { workspace = true }
+
+[lints]
+workspace = true

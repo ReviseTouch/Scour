@@ -238,7 +238,7 @@ fn main() -> Result<()> {
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();
     server.serve(
-        move |req| {
+        move |req, emit| {
             if matches!(req, scour_proto::Request::Shutdown {}) {
                 handler_stop.store(true, Ordering::Relaxed);
                 // Setting the flag is not enough: the accept loop is blocked
@@ -255,7 +255,7 @@ fn main() -> Result<()> {
                     let _ = scour_ipc::Client::connect(&addr);
                 });
             }
-            handle::dispatch(&handler_engine, &kept, req)
+            handle::dispatch(&handler_engine, &kept, req, emit)
         },
         Arc::clone(&stop),
     );

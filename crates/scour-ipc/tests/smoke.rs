@@ -22,6 +22,12 @@ struct Running {
     addr: String,
     stop: Arc<AtomicBool>,
     calls: Arc<AtomicU64>,
+    /// Pieces the stand-in export managed to write before the reader went.
+    ///
+    /// The only way a test can see the thing that matters about a cancelled
+    /// download: that the *service* stopped producing, rather than running to
+    /// the end and writing into a socket nobody was reading.
+    wrote: Arc<AtomicU64>,
     _dir: tempfile::TempDir,
 }
 
@@ -31,14 +37,38 @@ impl Running {
         let addr = addr(&dir);
         let stop = Arc::new(AtomicBool::new(false));
         let calls = Arc::new(AtomicU64::new(0));
+        let wrote = Arc::new(AtomicU64::new(0));
         let server = Server::bind(&addr).expect("bind");
         {
-            let (stop, calls) = (Arc::clone(&stop), Arc::clone(&calls));
+            let (stop, calls, wrote) = (Arc::clone(&stop), Arc::clone(&calls), Arc::clone(&wrote));
             std::thread::spawn(move || {
                 server.serve(
-                    move |req| {
+                    move |req, emit| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         match req {
+                            // A stand-in export. The first column names how
+                            // many pieces to write and the query is what goes
+                            // in each, so a test can ask for far more frames
+                            // than any buffer holds without needing an index.
+                            Request::Export { query, columns } => {
+                                let want: u64 =
+                                    columns.first().and_then(|c| c.parse().ok()).unwrap_or(3);
+                                let mut sent = 0;
+                                for _ in 0..want {
+                                    if emit
+                                        .piece(Response::ExportChunk { csv: query.clone() })
+                                        .is_err()
+                                    {
+                                        // The reader is gone. Stopping here is
+                                        // the whole of what a cancelled
+                                        // download costs the service.
+                                        break;
+                                    }
+                                    sent += 1;
+                                    wrote.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Outcome::Ok(Response::ExportDone { rows: sent })
+                            }
                             Request::Syntax {} => Outcome::Ok(Response::Text {
                                 text: "hello".into(),
                             }),
@@ -68,7 +98,15 @@ impl Running {
             addr,
             stop,
             calls,
+            wrote,
             _dir: dir,
+        }
+    }
+
+    fn export(want: u64) -> Request {
+        Request::Export {
+            query: "row\r\n".into(),
+            columns: vec![want.to_string()],
         }
     }
 }
@@ -227,6 +265,152 @@ fn a_request_without_an_end_is_refused_rather_than_buffered() {
         })
         .expect("call");
     assert!(matches!(reply, Response::Explain { .. }));
+}
+
+#[test]
+fn an_answer_may_arrive_in_pieces() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    let mut got = String::new();
+    let done = c
+        .stream(Running::export(2_000), |piece| {
+            if let Response::ExportChunk { csv } = piece {
+                got.push_str(&csv);
+            }
+            true
+        })
+        .expect("stream");
+    assert_eq!(done, Response::ExportDone { rows: 2_000 });
+    assert_eq!(got.matches("row").count(), 2_000);
+    assert_eq!(s.wrote.load(Ordering::Relaxed), 2_000);
+}
+
+/// The connection is still usable afterwards, which is what makes the pieces a
+/// message rather than a mode.
+#[test]
+fn a_finished_stream_leaves_the_connection_where_it_found_it() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    c.stream(Running::export(50), |_| true).expect("stream");
+    assert_eq!(
+        c.call(Request::Syntax {}).expect("call after a stream"),
+        Response::Text {
+            text: "hello".into()
+        }
+    );
+}
+
+/// A request answered in pieces is refused by `call` rather than half-read.
+///
+/// The failure this prevents is the one that does not look like a failure:
+/// reading the first piece as the whole answer leaves the rest in the buffer,
+/// and the *next* request on that connection is answered by the leftovers. A
+/// search box would show the wrong files and nothing anywhere would error.
+#[test]
+fn a_streamed_answer_is_refused_by_the_call_that_cannot_read_it() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    let err = c.call(Running::export(5)).unwrap_err();
+    assert_eq!(err.code(), "config");
+
+    // And the connection was never written to, so it still works.
+    assert!(matches!(
+        c.call(Request::Syntax {}).expect("call"),
+        Response::Text { .. }
+    ));
+    assert_eq!(
+        s.calls.load(Ordering::Relaxed),
+        1,
+        "the refused request never reached the service"
+    );
+}
+
+/// A reader that goes away mid-export — an ordinary cancelled download.
+///
+/// **What must not happen is the service carrying on.** It is walking a
+/// matching set that can be two million rows, and a walk that runs to the end
+/// writing into a socket nobody is reading is a minute of a core and a
+/// connection thread spent on an answer that has no reader. So the assertion
+/// is not that the client survived — it is that the *service* stopped, which
+/// `wrote` is what sees.
+///
+/// Ten thousand pieces against a client that takes five, so that the stop
+/// happens far from either end. The socket buffer absorbs some number of
+/// pieces after the reader has gone, which is why the bound below is generous:
+/// what is being tested is that it is bounded at all.
+#[test]
+fn a_reader_that_goes_away_stops_the_service_producing() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    let mut seen = 0;
+    let err = c
+        .stream(Running::export(10_000), |_| {
+            seen += 1;
+            seen < 5
+        })
+        .unwrap_err();
+    assert_eq!(err.code(), "unreachable");
+    assert_eq!(seen, 5);
+
+    // Drop the connection, which is what a cancelled download is: there is no
+    // cancel message, and inventing one would mean a client that dies without
+    // sending it leaves the service producing for ever.
+    drop(c);
+
+    // The service notices on its next write. Give it a moment — this is the
+    // one thing here that is not synchronous.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.wrote.load(Ordering::Relaxed) >= 10_000 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let wrote = s.wrote.load(Ordering::Relaxed);
+    assert!(
+        wrote < 10_000,
+        "the service wrote all {wrote} pieces to a socket nobody was reading"
+    );
+
+    // Nothing is left holding the service: a new client is served normally.
+    let mut fresh = Client::connect(&s.addr).expect("reconnect");
+    assert!(matches!(
+        fresh.call(Request::Syntax {}).expect("call"),
+        Response::Text { .. }
+    ));
+}
+
+/// A connection abandoned mid-stream is never reused.
+///
+/// The frames nobody read are still in flight, so the next request on it would
+/// be answered by the tail of the last one. Refusing to send costs a
+/// `connect`, which is what a cancelled download should cost.
+#[test]
+fn an_abandoned_stream_poisons_only_its_own_connection() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    let _ = c.stream(Running::export(10_000), |_| false);
+    let err = c.call(Request::Syntax {}).unwrap_err();
+    assert_eq!(err.code(), "unreachable");
+
+    let mut fresh = Client::connect(&s.addr).expect("reconnect");
+    assert!(matches!(
+        fresh.call(Request::Syntax {}).expect("call"),
+        Response::Text { .. }
+    ));
+}
+
+/// An export that matches nothing is still an answer, not a silence.
+#[test]
+fn a_stream_with_no_pieces_still_ends_properly() {
+    let s = Running::start();
+    let mut c = Client::connect(&s.addr).expect("connect");
+    let mut pieces = 0;
+    let done = c
+        .stream(Running::export(0), |_| {
+            pieces += 1;
+            true
+        })
+        .expect("stream");
+    assert_eq!(pieces, 0);
+    assert_eq!(done, Response::ExportDone { rows: 0 });
 }
 
 /// The address as `interprocess` wants it — the same rule `Server::name` uses,

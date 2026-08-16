@@ -32,7 +32,8 @@ use std::time::Instant;
 use parking_lot::RwLock;
 use scour_core::{
     ApplyReport, Change, Entry, Error, Facet, FacetBy, FacetRequest, FacetResponse, Hit, Index,
-    IndexStats, Kind, MaintReport, Maintenance, Result, SearchRequest, SearchResponse, SourceId,
+    IndexStats, Kind, MaintReport, Maintenance, Result, ScanRequest, SearchRequest, SearchResponse,
+    SourceId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2592,6 +2593,71 @@ impl Index for NativeIndex {
             // stamps this on the way out.
             misread: Vec::new(),
         })
+    }
+
+    /// Every matching row, built one at a time and handed over.
+    ///
+    /// The same walk `facets` uses — [`NativeIndex::for_each_match`], which
+    /// visits each segment's matching rows once — with the row built into a
+    /// [`Hit`] instead of counted. Nothing is collected: the caller is writing
+    /// bytes out as they arrive, and the only state this holds is the row in
+    /// hand.
+    ///
+    /// ## The read lock is held for the whole walk, and that is a decision
+    ///
+    /// An export of this index takes seconds, not milliseconds, and `apply`
+    /// wants the write lock — so a scan in progress delays the watcher's next
+    /// commit until it finishes. Taken deliberately, because the alternative
+    /// is worse in a way that is invisible: releasing the lock between
+    /// segments would let a commit renumber rows underneath the walk, and the
+    /// walk would then skip rows or emit them twice with nothing in the output
+    /// to say so.
+    ///
+    /// It is also strictly better than what it replaces. Paging through a live
+    /// index has exactly that defect — a row written during the export shifts
+    /// everything after it by one — and the browser bridge documented it as
+    /// inherent. It was inherent *to paging*. One walk under one lock is a
+    /// consistent snapshot of the index as of when it started.
+    ///
+    /// ## The order is the index's own
+    ///
+    /// Rows arrive newest-first within a segment and the segments in the order
+    /// the manifest lists them. This is not a global sort by anything, and
+    /// the request does not pretend to offer one.
+    ///
+    /// **What an ordered stream would take**, since it is the obvious next
+    /// question and it was worked out rather than guessed. Each segment can
+    /// already produce its matches in a sorted order for four of the nine sort
+    /// keys — row order *is* `(mtime desc, path asc)`, see `build::rows`, and
+    /// `porder`, `norder` and `eorder` hold the other three — so a k-way merge
+    /// over the segments would stream those, and k is four on this index. The
+    /// per-segment row lists are `u32`s: 8.9 MB for 2.24 M matches, which is
+    /// nothing.
+    ///
+    /// What stopped it being done here is the tie groups, not the merge. The
+    /// paged comparator in [`NativeIndex::search`] breaks a tie on the key with
+    /// the date and then with the path, both in a fixed direction — so
+    /// `sort:modified` **ascending** is not the row list reversed, it is the
+    /// row list reversed with each equal-date run reversed back. Every sort
+    /// key has a version of that, an export that gets one wrong looks
+    /// plausible, and `tests/whole.rs` is the only thing that would catch it.
+    /// That is its own change, with its own brute-force comparison, and
+    /// smuggling it in beside a transport change is how the four wrong
+    /// optimisations this week got as far as they did.
+    fn scan(&self, req: &ScanRequest, f: &mut dyn FnMut(&Hit) -> bool) -> Result<u64> {
+        let inner = self.inner.read();
+        let mut rows = 0u64;
+        self.for_each_match(&inner, &req.query, |seg, row| {
+            let Some(name) = seg.names.get(row) else {
+                // A row whose name cannot be read is not a row anybody can be
+                // shown. Skipped rather than aborting the export: one damaged
+                // row should not cost the other two million.
+                return true;
+            };
+            rows += 1;
+            f(&seg.hit(row, name))
+        })?;
+        Ok(rows)
     }
 
     /// Every question about the matching set, from **one** walk of it.

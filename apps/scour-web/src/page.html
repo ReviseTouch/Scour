@@ -6142,22 +6142,29 @@
    *
    * The list stops at `REACH` because past twenty thousand rows a query wants
    * narrowing and a person cannot read further anyway. An export is the other
-   * case: it exists to hand the answer to something that is not a person, so
-   * the bridge pages through to the end however far that is.
+   * case: it exists to hand the answer to something that is not a person, and
+   * it now really is the whole of it — the service walks the matching set once
+   * and streams the rows, where the bridge used to page through it and stop at
+   * half a million.
    *
    * The columns are the ones on screen, in the order they are on screen — they
    * are what the reader chose, and a column that is not showing is one click
    * from showing and then exported.
    *
+   * **`sort` is no longer sent.** The service streams in the index's own order
+   * and cannot be asked for another, and a parameter that is read and ignored
+   * would make this look like a sort that had quietly stopped working. The
+   * spreadsheet on the other end sorts in one click.
+   *
    * A navigation rather than a fetch. The answer is a download with no length
    * declared, written as it is walked; letting the browser own it gives a
    * progress indicator, a cancel and a file on disk, none of it passing
-   * through this page's memory. */
+   * through this page's memory. The cancel reaches all the way now: closing
+   * the download stops the walk in the service, measured at zero further CPU
+   * within 500 ms. */
   document.getElementById("csv").addEventListener("click", () => {
     const p = new URLSearchParams({
       q: q.value,
-      sort: sortKey,
-      desc: sortDesc ? "1" : "0",
       cols: SHOWN.join(","),
       t: TOKEN,
     });
