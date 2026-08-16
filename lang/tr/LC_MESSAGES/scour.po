@@ -237,3 +237,554 @@ msgstr "sıralama"
 
 msgid "history"
 msgstr "geçmiş"
+
+# ---------------------------------------------------------------------
+# The browser window (`apps/scour-web/src/page.html`).
+#
+# Reached through `/api/strings`, which hands the whole of this file over
+# once: a browser cannot link `scour-i18n` and one request per label would
+# be a hundred and fifty requests. Everything else here is asked for a
+# string at a time by a program that can.
+#
+# `{name}` is substituted by the page. A placeholder may move — Turkish
+# writes `%38` where English writes `38%` — which is the reason the whole
+# sentence is one msgid rather than three pieces the page joins up.
+# ---------------------------------------------------------------------
+
+# --- the browser window: the design notes down the left ---
+
+msgid "Scour · the interface"
+msgstr "Scour · arayüz"
+
+msgid "This page is wired to the running service: every keystroke goes to <code>scourd</code>, and every row and every number below comes back from it. That is not a speed figure for the interface but a <b>permission</b>: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."
+msgstr "Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor, aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu."
+
+msgid "Everything below is live — type, and click the filters and the headings."
+msgstr "Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın."
+
+msgid "The freshness ruler"
+msgstr "Tazelik cetveli"
+
+msgid "The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column."
+msgstr "Her satırın solundaki üç piksel, dosyanın ne zaman değiştiğini renkle söylüyor. Motor satırları zaten tarih sırasında sakladığı için liste boyunca kesintisiz bir tayf çıkıyor: sıcak sarı az önce, soğuk arduvaz yıllar önce. Kolona bakmadan \"burası taze bölge\" görünüyor."
+
+msgid "The query is the interface"
+msgstr "Sorgu arayüzün kendisi"
+
+msgid "Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: <code>kind:</code> <code>under:</code> <code>dm:</code>. Clicking a filter adds the term to the <em>text</em>, not to a hidden state."
+msgstr "Kutucuk yok. Metin yazıldığı gibi duruyor — kopyalanabilir, MCP'ye yapıştırılabilir — ama tanınan terimler renkleniyor: <code>kind:</code> <code>under:</code> <code>dm:</code>. Süzgeçe tıklamak terimi <em>yazıya</em> ekliyor, gizli bir duruma değil."
+
+msgid "The measurement is not hidden"
+msgstr "Ölçüm gizlenmiyor"
+
+# The figures inside are an example, so they are written the way the language
+# writes figures: `4,864` here and `4.864` there.
+msgid "<code>0.29 ms · 4,864 rows read</code> — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so."
+msgstr "<code>0,29 ms · 4.864 satır okundu</code> — motorun raporladığı gerçek sayılar. Hızlı olduğunu söylemek yerine ne kadar iş yaptığını gösteriyor; bir gün yavaşlarsa bunu ilk arayüz söyler."
+
+msgid "The report: bytes by age"
+msgstr "Rapor: yaşa göre dağılım"
+
+msgid "Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; <b>25 GB nobody has touched in a year</b> does. No tool has this, TreeSize included, because none of them has a date per row to hand."
+msgstr "Her klasörün çubuğu, baytlarının ne kadarının taze ne kadarının bayat olduğunu gösteriyor. Boyut tek başına ne sileceğini söylemiyor; <b>bir yıldır kimsenin dokunmadığı 25 GB</b> söylüyor. TreeSize dâhil hiçbir araçta yok, çünkü hiçbirinde satır başına tarih elde değil."
+
+msgid "The time ribbon"
+msgstr "Zaman şeridi"
+
+msgid "The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a <code>dm:</code> term to the query. Possible only because filter counts take microseconds."
+msgstr "Sonuç kümesinin tarih dağılımı, her tuşta yeniden çiziliyor. Bir çubuğa tıklamak sorguya <code>dm:</code> terimi ekliyor. Yalnızca süzgeç sayıları mikrosaniye sürdüğü için mümkün."
+
+# --- the query box ---
+
+msgid "Query"
+msgstr "Sorgu"
+
+# The field names in it are grammar and are not translated; only the words
+# around them are.
+msgid "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb"
+msgstr "dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb"
+
+msgid "past searches (Alt+↓)"
+msgstr "önceki aramalar (Alt+↓)"
+
+msgid "past searches"
+msgstr "önceki aramalar"
+
+msgid "Suggestions"
+msgstr "Öneriler"
+
+msgid "Stop excluding this"
+msgstr "Dışlamayı kaldır"
+
+msgid "Exclude this term"
+msgstr "Bu terimi dışla"
+
+msgid "Remove this term"
+msgstr "Terimi kaldır"
+
+# --- the meter ---
+
+msgid "connecting…"
+msgstr "bağlanıyor…"
+
+msgid "{n} rows read"
+msgstr "{n} satır okundu"
+
+msgid "index {mb} MB · {sources} sources · {watching} watched"
+msgstr "indeks {mb} MB · {sources} kaynak · {watching} izleniyor"
+
+msgid " · scanning"
+msgstr " · taranıyor"
+
+msgid "connection refused — the key in the link is not this run's"
+msgstr "bağlantı reddedildi — bağlantıdaki anahtar bu koşuya ait değil"
+
+msgid "the service cannot be reached — is scourd running?"
+msgstr "servise ulaşılamıyor — scourd çalışıyor mu?"
+
+msgid "the service cannot be reached"
+msgstr "servise ulaşılamıyor"
+
+msgid "icons"
+msgstr "simgeler"
+
+msgid "turn icons on or off"
+msgstr "simgeleri aç veya kapat"
+
+msgid "design notes"
+msgstr "tasarım notları"
+
+msgid "show the design notes"
+msgstr "tasarım notlarını göster"
+
+# The language menu. `language` is already above, among the field labels.
+msgid "choose the language"
+msgstr "dili seç"
+
+# --- the two tabs, and the filter rail ---
+
+msgid "Search"
+msgstr "Ara"
+
+msgid "Report"
+msgstr "Rapor"
+
+msgid "Filters"
+msgstr "Süzgeçler"
+
+msgid "Kind"
+msgstr "Tür"
+
+msgid "Scope"
+msgstr "Kapsam"
+
+msgid "Size"
+msgstr "Boyut"
+
+# A kind the taxonomy has no name for. Reached when a row arrives before
+# `/api/kinds` does, and if the engine ever sends a token this build has not
+# heard of.
+msgid "Other"
+msgstr "Diğer"
+
+# --- the list ---
+
+msgid "No matches. Two letters like <code>ab</code> work too — the trigram index does not refuse them, it scans."
+msgstr "Eşleşme yok. <code>ab</code> gibi iki harf de çalışır — trigram indeksi reddetmez, tarama yapar."
+
+msgid "the first {reach} rows · of {total} matches. Narrow the search to go further."
+msgstr "ilk {reach} satır · {total} eşleşmeden. Daha ilerisi için aramayı daraltın."
+
+# --- how long ago. Six rungs rather than one string with the unit put in:
+# a unit is not a word that survives being lifted out of one language's
+# sentence and dropped into another's. ---
+
+msgid "{n} sec ago"
+msgstr "{n} sn önce"
+
+msgid "{n} min ago"
+msgstr "{n} dk önce"
+
+msgid "{n} hr ago"
+msgstr "{n} sa önce"
+
+msgid "{n} days ago"
+msgstr "{n} gün önce"
+
+msgid "{n} months ago"
+msgstr "{n} ay önce"
+
+msgid "{n} years ago"
+msgstr "{n} yıl önce"
+
+# --- the columns. The same words the preview panel's facts use, and
+# deliberately the same msgids: two names for one field is how a window
+# stops agreeing with itself. ---
+
+msgid "Name"
+msgstr "Ad"
+
+msgid "Location"
+msgstr "Konum"
+
+msgid "Modified"
+msgstr "Değişme"
+
+msgid "Extension"
+msgstr "Uzantı"
+
+msgid "Created"
+msgstr "Oluşturma"
+
+msgid "Accessed"
+msgstr "Erişim"
+
+msgid "Mode"
+msgstr "İzinler"
+
+msgid "Owner"
+msgstr "Sahip"
+
+msgid "Group"
+msgstr "Grup"
+
+msgid "On disk"
+msgstr "Diskte"
+
+msgid "Contents"
+msgstr "İçindekiler"
+
+msgid "{n} items"
+msgstr "{n} öge"
+
+msgid "indexed size · {n} files"
+msgstr "indekslenen boyut · {n} dosya"
+
+msgid "what is excluded (target, node_modules…) is not counted — see the settings"
+msgstr "dışlananlar (target, node_modules…) sayılmaz — ayarlarda"
+
+msgid "this volume does not record reads (noatime) — the number shown would be left over from when the file was created"
+msgstr "bu birimde okuma zamanı kaydedilmiyor (noatime) — gösterilen sayı dosyanın oluşturulduğu andan kalma olurdu"
+
+msgid "this column cannot be sorted by"
+msgstr "bu kolona göre sıralanamıyor"
+
+msgid "choose the columns"
+msgstr "kolonları seç"
+
+msgid "Back to the default"
+msgstr "Varsayılana dön"
+
+msgid "drag · double-click to reset"
+msgstr "sürükle · çift tıkla sıfırla"
+
+# --- the time ribbon under the list ---
+
+msgid "Time distribution"
+msgstr "Zaman dağılımı"
+
+msgid "by when the results last changed — click to filter to a range"
+msgstr "sonuçların değişme tarihine göre — tıklayın, aralık süzgeci olur"
+
+msgid "2 years ago"
+msgstr "2 yıl önce"
+
+msgid "1 year"
+msgstr "1 yıl"
+
+msgid "6 months"
+msgstr "6 ay"
+
+msgid "1 month"
+msgstr "1 ay"
+
+msgid "1 week"
+msgstr "1 hafta"
+
+msgid "today"
+msgstr "bugün"
+
+msgid "older than {days} days"
+msgstr "{days} günden eski"
+
+msgid "up to {days} days"
+msgstr "{days} güne kadar"
+
+msgid "{n} results · {span}"
+msgstr "{n} sonuç · {span}"
+
+# With a leading space: it is appended to the title above.
+msgid " (sampled)"
+msgstr " (örneklenmiş)"
+
+msgid "{n} results, older than {days} days"
+msgstr "{n} sonuç, {days} günden eski"
+
+msgid "{n} results, the last {days} days"
+msgstr "{n} sonuç, son {days} gün"
+
+# --- the selection, and what can be done with it ---
+
+# The count carries its own markup, so that a language is free to put the
+# number somewhere other than the front.
+msgid "<span class=\"n\">{n}</span> selected"
+msgstr "<span class=\"n\">{n}</span> seçili"
+
+msgid "<span class=\"sum\">{n} folders</span>"
+msgstr "<span class=\"sum\">{n} klasör</span>"
+
+msgid "Copy the paths"
+msgstr "Yolları kopyala"
+
+msgid "Open {n} windows?"
+msgstr "{n} pencere açılsın mı?"
+
+msgid "Open their folders ({n})"
+msgstr "Klasörlerini aç ({n})"
+
+msgid "Drop it"
+msgstr "Bırak"
+
+msgid "Copy {n} paths"
+msgstr "{n} yolu kopyala"
+
+msgid "Open their folders"
+msgstr "Klasörlerini aç"
+
+msgid "Drop the selection"
+msgstr "Seçimi bırak"
+
+msgid "Open"
+msgstr "Aç"
+
+msgid "Open its folder"
+msgstr "Klasörünü aç"
+
+msgid "Copy the path"
+msgstr "Yolu kopyala"
+
+msgid "{n} paths copied"
+msgstr "{n} yol kopyalandı"
+
+msgid "path copied"
+msgstr "yol kopyalandı"
+
+msgid "could not copy"
+msgstr "kopyalanamadı"
+
+msgid "could not open: {why}"
+msgstr "açılamadı: {why}"
+
+# --- the preview panel ---
+
+msgid "Preview"
+msgstr "Önizleme"
+
+msgid "open in the system previewer"
+msgstr "sistem önizleyicisinde aç"
+
+msgid "close (Space)"
+msgstr "kapat (Boşluk)"
+
+msgid "close the preview"
+msgstr "önizlemeyi kapat"
+
+msgid "Length"
+msgstr "Süre"
+
+msgid "Dimensions"
+msgstr "Boyutlar"
+
+msgid "A folder — what is in it is in the list."
+msgstr "Klasör — içindekiler listede."
+
+msgid "the first {shown} — the file is {total}"
+msgstr "ilk {shown} — dosya {total}"
+
+msgid "This kind of file cannot be shown in a browser."
+msgstr "Bu dosya türü tarayıcıda gösterilemiyor."
+
+msgid "Previewing is off (--no-preview)."
+msgstr "Önizleme kapalı (--no-preview)."
+
+msgid "It could not be previewed."
+msgstr "Önizlenemedi."
+
+# --- the report tab ---
+
+msgid "everything"
+msgstr "tümü"
+
+msgid "filter"
+msgstr "süzgeç"
+
+msgid "remove the filter"
+msgstr "süzgeci kaldır"
+
+msgid "By age"
+msgstr "Yaşa göre dağılım"
+
+msgid "Share"
+msgstr "Pay"
+
+msgid "Files"
+msgstr "Dosya"
+
+msgid "By kind"
+msgstr "Türe göre"
+
+msgid "Largest files"
+msgstr "En büyük dosyalar"
+
+msgid "Search in this folder"
+msgstr "Bu klasörde ara"
+
+msgid "From the report into the search: an <code>under:</code> term is added to the query and the search tab opens with the same scope."
+msgstr "Rapordan aramaya geçiş: sorguya <code>under:</code> terimi eklenir, arama sekmesi aynı kapsamla açılır."
+
+msgid "{files} files · {disk} on disk"
+msgstr "{files} dosya · diskte {disk}"
+
+# Turkish writes the sign in front of the number, which is the whole reason
+# the placeholder is inside the string rather than glued to it.
+msgid "<b>{percent}%</b> of it older than a year"
+msgstr "<b>%{percent}</b>'i bir yıldan eski"
+
+msgid "{shown} of {total} folders have a match"
+msgstr "{total} klasörün {shown} tanesinde eşleşme var"
+
+msgid "the heaviest {shown} of {total} folders"
+msgstr "{total} klasörün en ağır {shown} tanesi"
+
+msgid "only the <b>matching</b> files · not the whole folder"
+msgstr "yalnız <b>eşleşen</b> dosyalar · klasörün tamamı değil"
+
+msgid "In this scope, none of the subfolders has a matching file."
+msgstr "Bu kapsamda, alt klasörlerin hiçbirinde eşleşen dosya yok."
+
+msgid "There are no further folders to show under this one."
+msgstr "Bu klasörün altında ayrıca gösterilecek klasör yok."
+
+# The report's six age bands. `today` is above, in the ribbon's scale —
+# one word, one entry, both places.
+msgid "this week"
+msgstr "bu hafta"
+
+msgid "this month"
+msgstr "bu ay"
+
+# Spelled out, and `6 months` above is not: the ribbon's is an axis tick
+# reading "six months ago" and this is a band meaning "within six months".
+msgid "six months"
+msgstr "6 ay"
+
+msgid "this year"
+msgstr "bu yıl"
+
+msgid "older"
+msgstr "daha eski"
+
+# --- the duplicates panel ---
+
+msgid "Duplicate files"
+msgstr "Yinelenen dosyalar"
+
+msgid "Confirm by reading"
+msgstr "Okuyarak doğrula"
+
+msgid "show"
+msgstr "göster"
+
+msgid "hide"
+msgstr "gizle"
+
+msgid "reading…"
+msgstr "okunuyor…"
+
+msgid "Being the same size is not being the same file. Below is a list of candidates by size; <b>nothing should be deleted before it is confirmed</b>."
+msgstr "Aynı boyutta olmak aynı dosya olmak değildir. Aşağısı boyuta göre aday listesidir; <b>doğrulanmadan hiçbir şey silinmemeli</b>."
+
+msgid "Being the same size is not being the same file. <b>{n} groups were not confirmed by reading</b> — those are candidates, not duplicates."
+msgstr "Aynı boyutta olmak aynı dosya olmak değildir. <b>{n} grup okunarak doğrulanmadı</b> — onlar aday, yinelenen değil."
+
+msgid "All of them were compared by reading."
+msgstr "Hepsi okunarak karşılaştırıldı."
+
+msgid "{proven} confirmed · {waste} candidate · {n} files"
+msgstr "{proven} doğrulandı · {waste} aday · {n} dosya"
+
+msgid "{n} read"
+msgstr "{n} okundu"
+
+msgid "independent of the filter"
+msgstr "süzgeçten bağımsız"
+
+msgid "{n} more"
+msgstr "{n} tane daha"
+
+msgid "no duplicates in this scope"
+msgstr "bu kapsamda yinelenen yok"
+
+msgid "do not look at anything smaller than this"
+msgstr "bu boyuttan küçükleri hiç bakma"
+
+# --- the query language's one-line descriptions. The field names and their
+# aliases are NOT here: the engine parses those, so `tür:` has to keep
+# finding images in an English window. Only the sentence is a sentence. ---
+
+msgid "the extension is this, or one of these separated by ;"
+msgstr "uzantı bu, ya da ; ile ayrılmış bunlardan biri"
+
+msgid "the whole path contains this"
+msgstr "tam yol bunu içeriyor"
+
+msgid "under this folder, at any depth"
+msgstr "bu klasörün altında, herhangi bir derinlikte"
+
+msgid "directly inside this folder, one level"
+msgstr "doğrudan bu klasörün içinde, bir seviye"
+
+msgid "files only"
+msgstr "yalnız dosyalar"
+
+msgid "folders only"
+msgstr "yalnız klasörler"
+
+msgid "size, in binary units, comparison optional"
+msgstr "boyut, ikili birimlerle, karşılaştırma isteğe bağlı"
+
+msgid "the rough kind of file"
+msgstr "kaba dosya türü"
+
+msgid "when it last changed"
+msgstr "en son ne zaman değişti"
+
+msgid "when it was created"
+msgstr "ne zaman oluşturuldu"
+
+msgid "when it was last read"
+msgstr "en son ne zaman okundu"
+
+msgid "the document's contents contain this (if contents are indexed)"
+msgstr "belge içeriği bunu içeriyor (içerik indeksliyse)"
+
+# The singular of the three rungs whose noun is a whole word, and of the status
+# line's source count. Turkish spells both the same — a noun after a numeral
+# does not inflect — so these look redundant here and are not: they exist so
+# that English does not read "1 years ago" on every third row.
+#
+# The general fix is `msgid_plural`, which `po.rs` does not carry and says so.
+# It would buy Turkish nothing, which is why it has not been added for two
+# languages; the day a third arrives that needs it, that is the change.
+
+msgid "1 day ago"
+msgstr "1 gün önce"
+
+msgid "1 month ago"
+msgstr "1 ay önce"
+
+msgid "1 year ago"
+msgstr "1 yıl önce"
+
+msgid "index {mb} MB · 1 source · {watching} watched"
+msgstr "indeks {mb} MB · 1 kaynak · {watching} izleniyor"

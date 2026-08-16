@@ -33,4 +33,4 @@
 mod catalogue;
 mod po;
 
-pub use catalogue::{Catalogue, LANGUAGES, system_language};
+pub use catalogue::{Catalogue, LANGUAGES, choose, system_language};

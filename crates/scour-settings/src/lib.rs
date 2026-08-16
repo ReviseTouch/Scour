@@ -123,6 +123,30 @@ pub struct Settings {
     /// click away and it stays where it was put.
     #[serde(default)]
     pub dupes_open: bool,
+    /// What language the interface speaks, as a BCP-47 tag. Empty means
+    /// "nobody has chosen", which is not the same as English.
+    ///
+    /// **A typed field rather than a corner of [`Settings::view`]**, because it
+    /// is the definition of a shared field: a person who switches the window to
+    /// English has said something about *Scour*, and a terminal opened
+    /// afterwards should already be in English. Put in `view.web` it would have
+    /// been one window's private opinion, and the second frontend would have
+    /// grown its own.
+    ///
+    /// Empty is load-bearing and is why this is not defaulted to `"en"` or to
+    /// `"tr"`. A tag written here is an explicit choice and outranks everything;
+    /// with nothing here the frontend falls back to `config.toml`'s `ui.language`
+    /// and then to the environment's `LANG`, which is the POSIX answer and the
+    /// one the CLI and the Slint window already give. Writing a default in
+    /// would make every machine's first run claim a decision nobody made — and
+    /// on this machine, where `LANG=tr_TR.UTF-8`, it would be the wrong one half
+    /// the time. `scour_i18n::choose` is the single place that order lives.
+    ///
+    /// Not validated here. An unknown tag degrades to English one string at a
+    /// time in `scour-i18n`, and a settings file that refuses to load because
+    /// somebody typed `tr-` is worse than a window in the wrong language.
+    #[serde(default)]
+    pub language: String,
     /// Past queries, most recent first.
     ///
     /// **Only queries somebody meant.** A search box runs a query per
@@ -160,6 +184,13 @@ pub struct Change {
     pub sort: Option<String>,
     pub descending: Option<bool>,
     pub dupes_open: Option<bool>,
+    /// A BCP-47 tag, or `""` to hand the decision back to the config file and
+    /// the environment.
+    ///
+    /// `None` is "I have no opinion", as everywhere else here — which is what
+    /// lets the window change the language while a terminal is writing its
+    /// sort order, and neither undoes the other.
+    pub language: Option<String>,
     /// Replace the list outright. For clearing it, mostly.
     pub history: Option<Vec<String>>,
     /// Put one query at the front instead.
@@ -198,6 +229,9 @@ impl Change {
         }
         if let Some(v) = self.dupes_open {
             to.dupes_open = v;
+        }
+        if let Some(v) = self.language {
+            to.language = v;
         }
         if let Some(v) = self.history {
             to.history = v;
@@ -392,6 +426,54 @@ mod tests {
         assert_eq!(s.view["web"]["icons"], serde_json::json!(true));
         assert_eq!(s.sort, "size");
         assert_eq!(s.history, ["rapor"]);
+    }
+
+    /// **A language chosen in one window survives another window saving.**
+    ///
+    /// The same property as the test above, asserted separately because the
+    /// language is the field most likely to be written by a frontend that knows
+    /// nothing else: a terminal interface has no columns and no widths, and if
+    /// its save carried the whole object the window's language would go back to
+    /// unset every time somebody ran `scour settings`.
+    #[test]
+    fn a_language_survives_another_frontend_saving() {
+        let mut s = Settings::default();
+        Change {
+            language: Some("en".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.language, "en");
+
+        // Somebody else, writing a field that has nothing to do with language.
+        Change {
+            sort: Some("size".into()),
+            remember: Some("rapor".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.language, "en", "still English");
+
+        // And back to "nobody has chosen", which is a choice a menu can offer
+        // and is not the same as choosing English.
+        Change {
+            language: Some(String::new()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert!(s.language.is_empty());
+    }
+
+    /// A settings file written before this field existed still loads, and the
+    /// language it does not mention is unset rather than wrong.
+    #[test]
+    fn a_file_from_before_the_language_existed_is_not_in_english() {
+        let s: Settings =
+            serde_json::from_str(r#"{"columns":["name"],"sort":"modified"}"#).expect("parse");
+        assert!(
+            s.language.is_empty(),
+            "unset, so the environment still decides"
+        );
     }
 
     /// Frontend-local state merges key by key, and `null` takes one away.

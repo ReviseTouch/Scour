@@ -94,6 +94,60 @@ impl Catalogue {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Every msgid and its translation.
+    ///
+    /// For the one frontend that cannot link this crate. A browser cannot call
+    /// [`Catalog::get`] per string, and asking a bridge per string would be one
+    /// request per label; the whole Turkish catalogue is a few kilobytes, so it
+    /// is handed over once and looked up in the page with the same rule this
+    /// implements — present means translated, absent means the msgid is already
+    /// the answer.
+    ///
+    /// Empty for English, which is not an oversight: English has no catalogue
+    /// because the msgid *is* the English, and a page that receives nothing
+    /// falls back to the msgids it already has written into it.
+    pub fn entries(&self) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+        self.map
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+}
+
+/// Which language to speak, given what the person chose and what the machine
+/// says — the one place the order lives.
+///
+/// Most explicit first:
+///
+/// 1. `chosen` — [`scour_settings::Settings::language`], written by whichever
+///    frontend last offered a menu. A person who picked English in the window
+///    meant it in the terminal too.
+/// 2. `configured` — `config.toml`'s `ui.language`, for a machine that wants
+///    one answer without a menu having been opened.
+/// 3. The environment, via [`system_language`]. POSIX order, and the answer
+///    every other program on the machine gives.
+/// 4. English.
+///
+/// **Written down once because it was on its way to being written down three
+/// times.** `scour-gui` had a private copy that read `LC_ALL`/`LC_MESSAGES`/
+/// `LANG` itself and disagreed with this crate in two ways — it did not consult
+/// `SCOUR_LANG`, so the one variable that exists to switch a single program did
+/// nothing for the window, and it did not skip `C`/`POSIX`, so a session with
+/// `LANG=C` asked for a language called "C". A third frontend would have
+/// written a third.
+///
+/// Empty strings are skipped rather than treated as a choice: "" is what
+/// `Settings::language` holds before anybody decides, and what `ui.language`
+/// ships as.
+pub fn choose(chosen: &str, configured: &str) -> String {
+    for candidate in [chosen, configured] {
+        let candidate = candidate.trim();
+        if !candidate.is_empty() {
+            return candidate.to_owned();
+        }
+    }
+    system_language()
 }
 
 impl Default for Catalogue {
@@ -207,6 +261,30 @@ mod tests {
     }
 
     #[test]
+    fn a_catalogue_can_be_handed_over_whole() {
+        let c = Catalogue::for_language("tr");
+        let all: HashMap<_, _> = c.entries().collect();
+        assert_eq!(all.len(), c.len());
+        assert_eq!(all.get("Folder").copied(), Some("Klasör"));
+        // English has nothing to hand over, and that is the correct amount:
+        // the msgid is already the string.
+        assert_eq!(Catalogue::english().entries().count(), 0);
+    }
+
+    /// The two steps of [`choose`] that do not touch the environment. The
+    /// third is asserted inside the environment test below, which is one test
+    /// on purpose — these variables are process-wide and the test runner is
+    /// threaded.
+    #[test]
+    fn an_explicit_choice_outranks_a_config_file() {
+        assert_eq!(choose("en", "tr"), "en", "the person's own choice");
+        assert_eq!(choose("", "tr"), "tr", "then the config file");
+        // Whitespace is not a choice, and neither is "".
+        assert_eq!(choose("  ", "tr"), "tr");
+        assert_eq!(choose("tr", ""), "tr");
+    }
+
+    #[test]
     fn the_environment_is_read_in_posix_order() {
         // Serialised by running in one test: these are process-wide.
         let saved: Vec<_> = ["SCOUR_LANG", "LC_ALL", "LC_MESSAGES", "LANG"]
@@ -222,6 +300,11 @@ mod tests {
         assert_eq!(system_language(), "en_GB", "LC_ALL wins");
         unsafe { std::env::set_var("SCOUR_LANG", "tr") };
         assert_eq!(system_language(), "tr", "one program can be switched alone");
+
+        // `choose`'s last step, here rather than in its own test because these
+        // variables belong to the process and the runner is threaded.
+        assert_eq!(choose("", ""), "tr", "nothing chosen: the environment");
+        assert_eq!(choose("en", ""), "en", "a choice still outranks it");
 
         // The POSIX "no locale" values are not a language.
         for (k, _) in &saved {
