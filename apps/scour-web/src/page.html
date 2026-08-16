@@ -706,6 +706,126 @@
   .empty { padding: calc(var(--u) * 12); text-align: center; color: var(--ink-3); font-size: 13px; }
   .empty code { font-family: var(--mono); color: var(--ink-2); }
 
+  /* ---------------- the grid, which is the same list ----------------
+   *
+   * Two of the three shapes are a grid of tiles, and the change is arithmetic
+   * rather than machinery: the same `<tr>` per row, the same pool, the same
+   * spacer and the same sizer. What moves is that a line holds `PER_ROW` of
+   * them instead of one. See the block above `TILE` in the script for the
+   * whole of the sum.
+   *
+   * **The tile's height here and `TILE[…].h` there are one number.** They are
+   * written twice because one of them has to be a declaration and the other
+   * has to be arithmetic, and `the_tile_the_page_draws_is_the_tile_it_counts`
+   * fails the build if they drift.
+   *
+   * The heading row **stays**, and that is not an oversight. It is the sort
+   * control — clicking a heading is the only way to order this list — and it
+   * carries the picture switch and the column picker as well. Hidden, a grid
+   * would be a list nobody could sort. What it gives up is its widths, which
+   * describe columns that are not underneath it any more; see `applyWidths`. */
+  body.grid[data-view="icons"] { --tile-h: 104px; --pic: 56px; --nm: 11px; }
+  body.grid[data-view="large"] { --tile-h: 172px; --pic: 120px; --nm: 12px; }
+  /* **The gutter is reserved whether or not there is a bar.**
+   *
+   * `PER_ROW` is `floor(clientWidth / tile width)`, so without this the width
+   * would depend on the list's own height: more across → fewer lines → a
+   * shorter list → no scrollbar → a wider scroller → more across. That is the
+   * sizer's feedback loop wearing a different hat, and it is cut here rather
+   * than reasoned about. */
+  body.grid .scroll { scrollbar-gutter: stable; }
+  body.grid .results table { display: block; }
+  body.grid .results thead { display: block; }
+  body.grid .results thead tr { display: flex; align-items: stretch; }
+  body.grid .results thead th { width: auto; flex: 0 0 auto; }
+  /* Nothing to drag: the widths mean nothing while the tiles are showing. */
+  body.grid .results thead th .grip { display: none; }
+  body.grid #rows-body { display: grid; gap: 0; }
+  body.grid #rows-body > tr { display: block; border-bottom: 0; }
+  body.grid #rows-body > tr.spacer,
+  body.grid #rows-body > tr.far { grid-column: 1 / -1; }
+  body.grid #rows-body > tr.ghost { height: auto; }
+  body.grid #rows-body > tr > td { display: block; padding: 0; }
+  body.grid #rows-body > tr.spacer > td { height: 0; }
+  /* One tile: the freshness rule down its left edge, a picture, a name.
+     `height` is the pitch and the whole outer box — no margin, no gap — so
+     that `lines * pitch` is the height the list actually occupies. The air
+     between tiles is padding inside them.
+
+     Written out to the same depth as the rule above rather than as
+     `body.grid td.tile`, which is what it was: that one loses on specificity,
+     the cell stayed `display: block`, and an inline `<span>` takes no width or
+     height — so every glyph was 0×0 and a grid of pictures had none in it. */
+  body.grid #rows-body > tr > td.tile {
+    position: relative;
+    height: var(--tile-h);
+    /* **The border is what separates one tile's rule from the next one's.**
+       Transparent, and inside the box — `box-sizing` is `border-box`, so the
+       outer height is still exactly `--tile-h` and the pitch is still stated.
+       Without it the rules of a whole column abut into one unbroken orange
+       line and read as a table border rather than as eight marks. The detail
+       list solves the same problem with its own `border-bottom`, which is
+       visible there because a list wants ruling and a grid does not. */
+    border-bottom: 1px solid transparent;
+    padding: calc(var(--u) * 2) calc(var(--u) * 2) 0;
+    display: flex; flex-direction: column; align-items: center;
+    gap: calc(var(--u) * 1.5);
+    overflow: hidden;
+  }
+  /* **The ruler keeps its three pixels and its edge.** In the table an
+     unbroken spectrum runs the length of the page; in a grid it runs down
+     each column instead, which is less of a picture but is the same fact in
+     the same place — and losing it to save three pixels of a hundred-pixel
+     tile would be giving up the one thing on this screen that is nowhere
+     else. `top: 0; bottom: 0` asks the cell rather than guessing, for the
+     reason `td.age i` does. */
+  body.grid td.tile > i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  body.grid td.tile .ico {
+    width: var(--pic); height: var(--pic);
+    object-fit: contain;
+    flex: none;
+  }
+  body.grid td.tile span.ico {
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / var(--pic) var(--pic) no-repeat;
+    mask: var(--g) center / var(--pic) var(--pic) no-repeat;
+  }
+  /* Two lines and then an ellipsis. A name is what tells two thumbnails
+     apart, so it is not cut at one line; and it is not allowed a third,
+     because the tile's height is the pitch and the pitch is stated. */
+  body.grid td.tile .nm {
+    font: 500 var(--nm)/1.35 var(--mono);
+    color: var(--ink);
+    text-align: center;
+    width: 100%;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  body.grid td.tile .nm mark { background: var(--mark); color: inherit; border-radius: 2px; }
+  body.grid tbody tr:hover td.tile { background: var(--panel-2); }
+  body.grid tbody tr:focus-visible { outline: none; }
+  body.grid tbody tr:focus-visible td.tile { outline: 2px solid var(--focus); outline-offset: -2px; }
+  /* The end-of-list note is a line of prose, not a tile. */
+  body.grid #rows-body > tr.far > td { height: auto; }
+
+  /* The three shapes, as three buttons. In the meter bar because that is
+     where this window keeps what is true of the *window* rather than of what
+     it is looking at — the same argument that moved the picture switch out of
+     here and into the column it fills. */
+  .views { display: flex; gap: 2px; }
+  .views button {
+    background: none; border: 1px solid var(--line); color: var(--ink-3);
+    width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
+    font: 600 11px/1 var(--sans); padding: 0;
+  }
+  .views button:hover { color: var(--ink); border-color: var(--ink-3); }
+  .views button[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
+  .views button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
   /* ---------------- the time ribbon ---------------- */
   .ribbon {
     border-top: 1px solid var(--line);
@@ -998,6 +1118,17 @@
     color: var(--ink); font-weight: 650;
   }
   .legend p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
+  /* The maker, at the foot of the panel. Quiet on purpose: it is a fact about
+     the program, not a banner, and it sits below the last note the way a
+     colophon sits below the text. */
+  .made {
+    margin: calc(var(--u) * 5) 0 0;
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+    font-size: 11.5px; color: var(--ink-3);
+  }
+  .made a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .made a:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
   .legend code {
     font-family: var(--mono); font-size: 11.5px;
     color: var(--ink); background: var(--panel-2);
@@ -1382,6 +1513,18 @@
         <p data-t-html="The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a &lt;code&gt;dm:&lt;/code&gt; term to the query. Possible only because filter counts take microseconds."></p>
       </section>
     </div>
+
+    <!-- **Who made it, said once and quietly.**
+         A search window is not a landing page, so this is a line at the foot
+         of the panel that already answers "what is this" rather than anything
+         on the window itself. It is in the help because the help is where the
+         window explains itself, and nowhere else because there is nowhere
+         else it would be information rather than decoration.
+
+         The link is inside the msgid, with the `<a>` and all: a language does
+         not have to put the maker after the verb, and Turkish does not. Same
+         reason the selection bar's count carries its own `<span>`. -->
+    <p class="made" data-t-html="Made by &lt;a href=&quot;https://revisetouch.com&quot; target=&quot;_blank&quot; rel=&quot;noreferrer&quot;&gt;revisetouch.com&lt;/a&gt;"></p>
   </div>
 
   <div class="app">
@@ -1439,6 +1582,18 @@
       <button type="button" id="lang" class="about" aria-haspopup="menu"
               aria-expanded="false" data-t-title="language"
               data-t-aria="choose the language">文</button>
+      <!-- The shape of the list. Three buttons rather than one that cycles:
+           a cycling button is a button whose next state you have to remember,
+           and these say which one you are in. `data-view` is the word the
+           service stores; see `scour_settings::Settings::layout`. -->
+      <div class="views" id="views" role="group" data-t-aria="how the results are shown">
+        <button type="button" data-view="detail" aria-pressed="true"
+                data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
+        <button type="button" data-view="icons" aria-pressed="false"
+                data-t-title="icon grid" data-t-aria="show the results as an icon grid">▦</button>
+        <button type="button" data-view="large" aria-pressed="false"
+                data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
+      </div>
     </div>
 
     <div class="tabs" role="tablist">
@@ -2690,7 +2845,13 @@
       rule = document.createElement("i");
       td.prepend(rule);
     }
+    /* **Only the picture, and a tile keeps something else here.** In the table
+       the rule's next sibling is the glyph or nothing at all; a tile also
+       holds its name, and taking *that* away when the pictures were switched
+       off left a grid of empty boxes. Asked by class rather than by tag,
+       because the glyph is a `<span>` and a thumbnail is an `<img>`. */
     let el = rule.nextElementSibling;
+    if (el && !el.classList.contains("ico")) el = null;
     if (!f || !ICONS) {
       if (el) el.remove();
       return rule;
@@ -2709,7 +2870,9 @@
         // state: the box stays, empty, and the row does not jump.
         el.onerror = () => { el.style.visibility = "hidden"; };
       }
-      td.append(el);
+      // Straight after the rule rather than at the end of the cell: in a tile
+      // the name is already there and the picture goes above it.
+      rule.after(el);
     }
     if (f.thumb) {
       const url = iconUrl(f);
@@ -3005,7 +3168,71 @@
    * land on its edge or not; actual rows are measured only as a conservative
    * clearance bound for the table below. */
   const ROW_H = 31;
-  let rowPx = ROW_H;         /* largest row seen; table clearance only */
+
+  /* ---------------- the three shapes, and the whole of the sum ------------
+   *
+   * A file browser offers a table of rows and a grid of pictures; this had one
+   * of the two. What changes between them is **arithmetic and not machinery**:
+   * the list is still virtual, the nodes are still reused rather than rebuilt,
+   * and the height is still stated rather than summed. One item per line
+   * becomes n per line, and that is all of it.
+   *
+   * So every number below is written in **lines**, and the detail list is the
+   * case where a line holds one item. Substituting `PER_ROW = 1` and
+   * `lineH() = ROW_H` turns each expression back into exactly the one that was
+   * here before, which is the point: the shape that works is not being rewritten
+   * to make room for two that are new.
+   *
+   *   items       reach()                    what the list may hold, ≤ REACH
+   *   per line    PER_ROW                    1 in `detail`
+   *   lines       ceil(reach() / PER_ROW)
+   *   pitch       lineH(), or MAX_PX / lines when the ceiling is in the way
+   *   sizer       round(lines * pitch)       the only thing that reaches that far
+   *   first line  floor(scrollTop / pitch) - margin, clamped to lines - drawn
+   *   drawn       ceil(clientHeight / pitch) + 2 * margin      (lines)
+   *   first item  firstLine * PER_ROW
+   *   last item   min(reach(), (firstLine + drawn) * PER_ROW)
+   *   spacer      round(firstLine * pitch), clamped so the drawn lines fit
+   *
+   * `from` is a multiple of `PER_ROW` by construction, which is what puts a
+   * tile in the column it belongs to. `visibleRange` still answers in *items*,
+   * so every part of this page that fetches, caches, selects, highlights or
+   * counts is untouched by any of it.
+   *
+   * The two things that had to be new are `PER_ROW` — a width, which is a
+   * layout read and therefore dangerous here — and the tile's own height. Both
+   * are handled the way `ROW_H` is: see `measurePerRow` for how the loop a
+   * width could close is cut, and `TILE` for why its height is a decision. */
+
+  /* One tile, in the same logical coordinates `ROW_H` is in, and for the same
+   * reason: **these are decisions and not measurements.**
+   *
+   * `w` is a minimum. The grid is `repeat(PER_ROW, minmax(0, 1fr))`, so tiles
+   * stretch into whatever is left over — but the *count* is stated by the page
+   * rather than left to `auto-fill`, because a browser that fitted one more
+   * across than this arithmetic believes would put every tile after the first
+   * line at the wrong index, and nothing would say so.
+   *
+   * `h` is the pitch and the tile's whole outer box: no margin, no row gap, the
+   * air is padding inside it. The style sheet declares the same number as
+   * `--tile-h`, and `the_tile_the_page_draws_is_the_tile_it_counts` fails the
+   * build if the two ever drift apart. */
+  const TILE = {
+    icons: { w: 132, h: 104 },
+    large: { w: 204, h: 172 },
+  };
+  const MODES = ["detail", "icons", "large"];
+  /* Which of the three is showing. The service holds it — see `applySettings`
+     — and it is `detail` until that answer lands, because the window draws
+     before the round trip. */
+  let MODE = "detail";
+  const grid = () => MODE !== "detail";
+
+  /* The largest line each shape has been seen to draw. A clearance bound for
+     the table and nothing else, never the logical pitch. Kept per shape
+     because a 31-pixel row and a 188-pixel tile must not share a maximum, and
+     seeded at the stated pitch so it is usable before anything is drawn. */
+  const linePx = { detail: ROW_H, icons: TILE.icons.h, large: TILE.large.h };
   let headPx = ROW_H;        /* largest heading seen; likewise */
   /* **A browser will not make an element taller than about 33.5 million
      pixels**, and 2.1 M rows at 31px want 66 M. Past the ceiling the scroll
@@ -3030,6 +3257,22 @@
    * already in memory. All the margin buys is drawing slightly ahead of the
    * edge, and twenty is more than a frame's worth of scrolling. */
   const MARGIN = 20;
+
+  /* Extra *lines* drawn either side of the viewport in a grid.
+   *
+   * **Counted in nodes rather than in pixels**, which is the lesson `MARGIN`
+   * records. Twenty rows either side is forty nodes to write on every scroll;
+   * two lines either side is `2 * PER_ROW`, which is the same order at any
+   * width this window is used at. In pixels it is 208 for `icons` and 344 for
+   * `large`, and a paint happens on the frame the scroll does, so the headroom
+   * only ever has to cover one frame's travel.
+   *
+   * Deriving it from MARGIN's 620 pixels was worked out and rejected: that is
+   * six lines of `icons`, which at ten across is a hundred and twenty extra
+   * tiles — each one carrying an `<img>` — against the detail list's forty
+   * rows. The margin is not what stops blanks in either shape; the rows are
+   * fetched two hundred at a time and kept. */
+  const GRID_MARGIN = 2;
 
   const LIST = {
     query: null, sort: null, desc: null,
@@ -3269,15 +3512,49 @@
     return LIST.exact ? Math.min(LIST.total, REACH) : REACH;
   };
 
-  /* Pixels per logical row until the set is too tall to draw, then whatever
+  /* **How many tiles fit across, read once a frame and never oftener.**
+   *
+   * A width is a layout read, which is the thing this file is careful about —
+   * so the loop one could close is *cut* rather than reasoned about. Left
+   * alone, `PER_ROW` would depend on how tall the list is: more across → fewer
+   * lines → a shorter list → no scrollbar → a wider scroller → more across.
+   * That is the sizer's own bug wearing a different hat. `scrollbar-gutter:
+   * stable`, set on `.scroll` whenever the grid is showing, reserves the bar's
+   * width whether or not there is a bar, so `clientWidth` is a fact about the
+   * window rather than about what is in it.
+   *
+   * Taken at the top of the frame beside the row-height sample, where the
+   * layout is settled and a read costs nothing. Everything downstream uses the
+   * number instead of asking again — `fillWindow` runs outside a frame and
+   * must not measure anything at all. */
+  let PER_ROW = 1;
+  function measurePerRow() {
+    PER_ROW = grid()
+      ? Math.max(1, Math.floor(scrollEl.clientWidth / TILE[MODE].w))
+      : 1;
+  }
+
+  /* How many lines the list is, and how tall one of them is. In `detail` these
+     are `reach()` and `ROW_H`, which is what makes every expression below the
+     one that was here before. */
+  const lines = () => Math.ceil(reach() / PER_ROW);
+  const lineH = () => (grid() ? TILE[MODE].h : ROW_H);
+
+  /* Pixels per logical line until the set is too tall to draw, then whatever
      fits. A painted row never feeds this number back into the scrollbar. */
-  const pitch = () => (reach() * ROW_H > MAX_PX ? MAX_PX / reach() : ROW_H);
+  const pitch = () => (lines() * lineH() > MAX_PX ? MAX_PX / lines() : lineH());
+
+  /* The margin, in lines. `MARGIN` is already a count of lines in the shape
+     where a line is a row. */
+  const marginLines = () => (grid() ? GRID_MARGIN : MARGIN);
 
   function visibleRange() {
     const p = pitch();
-    const count = Math.ceil(scrollEl.clientHeight / p) + MARGIN * 2;
+    const m = marginLines();
+    const rows = lines();
+    const count = Math.ceil(scrollEl.clientHeight / p) + m * 2;
     const end = reach();
-    const wanted = Math.max(0, Math.floor(scrollEl.scrollTop / p) - MARGIN);
+    const wanted = Math.max(0, Math.floor(scrollEl.scrollTop / p) - m);
     /* `end` can move before Chromium has clamped the old `scrollTop`: an exact
        count can land during a thumb drag, or live updates can remove the tail.
        Without this clamp the range is `[19000, 1500]`; the painter then pops
@@ -3286,8 +3563,11 @@
        Clamping to the last *full* window also keeps the pool size from losing
        one row at a time at the bottom, where removing an anchor candidate is
        exactly the wrong response to a scroll. */
-    const first = Math.min(wanted, Math.max(0, end - count));
-    return [first, Math.min(end, first + count)];
+    const first = Math.min(wanted, Math.max(0, rows - count));
+    /* Out in items, because that is what every reader of this wants: a window
+       to fetch, a row to select, a slot to write. The multiplication is the
+       only place the two coordinate systems meet. */
+    return [first * PER_ROW, Math.min(end, (first + count) * PER_ROW)];
   }
 
   /* Draw the window that is on screen, after one top spacer.
@@ -3333,11 +3613,45 @@
     return tr;
   }
 
+  /* One tile's worth of nodes, made once.
+   *
+   * Still a `<tr>`, and that is the whole reason a grid cost as little as it
+   * did: selection, the row menu, the keyboard walk, the double-click and the
+   * shift-range all reach for `closest("tr")` and `tr[data-path]`, and none of
+   * them had to learn a second kind of node. What the grid changes is `display`
+   * and the arithmetic above it.
+   *
+   * Two children: the freshness rule and the name. The picture is not made
+   * here — `writeMark` owns it in both shapes and puts it directly after the
+   * rule — which is why the name is reached through `__nm` rather than by
+   * position. */
+  function makeTile() {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    const td = document.createElement("td");
+    td.className = "tile";
+    const rule = document.createElement("i");
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    td.append(rule, nm);
+    tr.append(td);
+    tr.__nm = nm;
+    return tr;
+  }
+
+  /* Which shape the pool is made of, so a change of shape can throw it away. */
+  let poolShape = "detail";
+  /* What the sizer and the spacer were last *told*, which is not the same as
+     what they would say if asked. See the note in `paintWindow`. */
+  let sizedTo = -1;
+  let spacedTo = -1;
+
   function paintWindow() {
     const [from, to] = visibleRange();
     const p = pitch();
     const cols = shownColumns();
     const parsed = parse(q.value);
+    const tiles = grid();
 
     /* The shape first: one spacer with the right height, and enough rows after
        it. Only a resize or a column change gets past the `while`s. */
@@ -3345,15 +3659,37 @@
       body.replaceChildren(spTop, farRow);
       pool = [];
     }
+    /* **A tile and a row are different nodes.** The cell-count check below
+       cannot tell them apart — a tile has one cell and so would a one-column
+       table — and rows laid out as a grid are a screenful of thin strips.
+       Thrown away rather than rewritten in place because changing shape is a
+       click, which happens once, and not a scroll, which happens every frame. */
+    if (poolShape !== MODE) {
+      for (const tr of pool) tr.remove();
+      pool = [];
+      poolShape = MODE;
+    }
     while (pool.length < to - from) {
-      const tr = makeRow();
+      const tr = tiles ? makeTile() : makeRow();
       pool.push(tr);
       body.insertBefore(tr, farRow);
     }
     while (pool.length > to - from) {
       pool.pop().remove();
     }
-    if (pool.length && pool[0].children.length !== cols.length + 1) {
+    /* **How many across, said by the page rather than found out from it.**
+       `auto-fill` would let the browser decide, and a browser that fitted one
+       more than `PER_ROW` believes would put every tile after the first line
+       at the wrong index with nothing to say so. */
+    if (tiles) {
+      const across = `repeat(${PER_ROW}, minmax(0, 1fr))`;
+      if (body.style.gridTemplateColumns !== across) {
+        body.style.gridTemplateColumns = across;
+      }
+    } else if (body.style.gridTemplateColumns) {
+      body.style.gridTemplateColumns = "";
+    }
+    if (!tiles && pool.length && pool[0].children.length !== cols.length + 1) {
       for (const tr of pool) {
         tr.innerHTML =
           `<td class="age"><i></i></td>` + cols.map(() => "<td></td>").join("");
@@ -3398,17 +3734,40 @@
     if (farRow.hidden === far) farRow.hidden = !far;
 
     [spTop, farRow].forEach(widen);
-    const tall = Math.round(reach() * p);
-    const tallCss = `${tall}px`;
-    if (sizer.style.height !== tallCss) sizer.style.height = tallCss;
+    const tall = Math.round(lines() * p);
+    /* **Remembered rather than read back off the element.**
+     *
+     * This compared `sizer.style.height` with the string it was about to
+     * write, which works only while the number is short. Chromium
+     * re-serialises a CSS length to six significant figures, so a height of
+     * `1146724px` — a narrow window, large tiles, three across, six thousand
+     * lines — reads back as `1.14672e+06px`. The comparison then failed every
+     * time and the sizer's height was rewritten on **every frame**: the same
+     * value, but a style write that dirties the one element whose height is
+     * the scrollable extent, every frame, for as long as the window is open.
+     * Nothing here was ever a measurement of the element, so nothing has to
+     * ask it what it made of what it was told. */
+    if (sizedTo !== tall) {
+      sizedTo = tall;
+      sizer.style.height = `${tall}px`;
+    }
     /* Everything the table holds besides the spacer, generously: the headings,
-       the rows at the largest they round to, the notice if it is showing, and
+       the lines at the largest they round to, the notice if it is showing, and
        a few pixels over. The spacer stops there, so whatever the table does
-       with its own layout it stays inside what `.sizer` already claimed. */
-    const inside = headPx + (to - from) * (rowPx + 0.5) + (far ? rowPx + 12 : 0) + 4;
-    const topCss = `${Math.max(0, Math.min(tall - inside, Math.round(from * p)))}px`;
-    if (spTop.firstElementChild.style.height !== topCss) {
-      spTop.firstElementChild.style.height = topCss;
+       with its own layout it stays inside what `.sizer` already claimed.
+
+       Counted in lines, and the end-of-list note is measured against a *row*
+       in both shapes because that is what it is — a line of prose, not a
+       tile. */
+    const drawn = Math.ceil((to - from) / PER_ROW);
+    const inside =
+      headPx + drawn * (linePx[MODE] + 0.5) + (far ? linePx.detail + 12 : 0) + 4;
+    const above = Math.max(0, Math.min(tall - inside, Math.round((from / PER_ROW) * p)));
+    // Remembered, for the reason the sizer's height is: the spacer runs to
+    // seven figures at the far end of a grid too.
+    if (spacedTo !== above) {
+      spacedTo = above;
+      spTop.firstElementChild.style.height = `${above}px`;
     }
     if (far) {
       const note = T(
@@ -3494,12 +3853,13 @@
         // next time the row held a file the dot was not there to be coloured.
         // The throw landed in a `catch` that exists for a fetch failing, so
         // the list simply stopped filling after two rows and said nothing.
-        for (let i = 1; i < tr.children.length; i++) tr.children[i].textContent = "";
+        if (tr.__nm) tr.__nm.textContent = "";
+        else for (let i = 1; i < tr.children.length; i++) tr.children[i].textContent = "";
         // The glyph does have to go: a row waiting for its file must not wear
         // the picture of the one that was in the slot before it. The rule
         // keeps its colour, as it always has — a ghost is a row on its way,
         // not a row that is wrong.
-        writeMark(tr.children[0], null);
+        writeMark(tr.firstElementChild, null);
       }
       return;
     }
@@ -3514,8 +3874,20 @@
       tr.dataset.path = full;
       tr.title = full;
     }
-    const dot = writeMark(tr.children[0], f);
+    // `firstElementChild` rather than `children[0]`: a row's first cell holds
+    // the rule and the glyph, and a tile's only cell holds the rule, the
+    // glyph and the name. Same call, same two elements, one place.
+    const dot = writeMark(tr.firstElementChild, f);
     dot.style.background = `var(${bandOf(f.mtime)})`;
+    /* A tile is a picture and a name and no columns at all — the columns are
+       still there, they are what the headings sort by and what the detail
+       list shows. Which of them a person has chosen says nothing about what a
+       tile should hold, and forcing `name` to be shown so that a tile could
+       borrow its cell would have been the shape deciding the settings. */
+    if (tr.__nm) {
+      writeName(tr.__nm, f, parsed.text);
+      return;
+    }
     for (let c = 0; c < cols.length; c++) {
       cols[c].write(tr.children[c + 1], f, parsed);
     }
@@ -3956,13 +4328,17 @@
        * tried and was wrong: the first paint has nothing in its rows yet, an
        * empty row is not the height of a full one, and a number taken then is
        * kept forever. It is cheaper to ask every time than to be wrong once. */
+      /* And how many tiles fit across, for the same reason and at the same
+         cost: the layout is settled here and both reads are free. Before the
+         range is asked for, because the range is computed from it. */
+      measurePerRow();
       const sample = pool.find((tr) => tr.dataset.path) || pool[0];
       if (sample) {
         const h = sample.getBoundingClientRect().height;
         /* A clearance bound can grow, never oscillate. In particular it does
            not become the logical pitch: device-pixel rounding is paint output,
            not list state. */
-        if (h > rowPx) { rowPx = h; painted = ""; }
+        if (h > linePx[MODE]) { linePx[MODE] = h; painted = ""; }
       }
       // The header sits inside the table and is as much of its height as any
       // row is. Read here for the same reason and at the same cost.
@@ -4681,6 +5057,22 @@
    * the table it describes for as long as it has existed. The declaration says
    * thirty now and so does this, and they agree with the ruler. */
   function applyWidths() {
+    const table = document.querySelector(".results table");
+    /* **A grid has no columns to be wide.** The headings stay — they are the
+       sort control — but a width describes a column of cells, and under a
+       grid there are none. Left declared, the table's `min-width` is the sum
+       of columns nothing is drawn in, which is a sideways scrollbar over
+       tiles that fit; and `PER_ROW` is read from a width, so a scroller that
+       scrolls sideways would be one more thing feeding a layout number back
+       into the arithmetic. Cleared here and restored the moment the detail
+       list comes back, because `WIDTHS` is untouched by any of it. */
+    if (grid()) {
+      for (const th of document.querySelectorAll("thead th[data-col]")) {
+        th.style.width = "";
+      }
+      if (table) table.style.minWidth = "";
+      return;
+    }
     let sum = 30 + 30;
     for (const th of document.querySelectorAll("thead th[data-col]")) {
       const col = COLUMNS.find((c) => c.id === th.dataset.col);
@@ -4688,7 +5080,6 @@
       th.style.width = w + "px";
       sum += w;
     }
-    const table = document.querySelector(".results table");
     if (table) table.style.minWidth = sum + "px";
   }
 
@@ -4754,6 +5145,12 @@
     showPastAffordance();
     buildHeads();
     applyWidths();
+    /* **A shared field, so it is read from the top of the settings rather than
+       from `view.web`.** An empty string is "nobody has chosen" and is not the
+       same as `detail`; a word this version has never heard of is somebody
+       else's frontend, and falls back rather than blanking the list. After the
+       headings, because it decides whether they carry widths. */
+    if (typeof s.layout === "string" && MODES.includes(s.layout)) applyMode(s.layout);
     /* The list has already started with the defaults. Only an ordering that
        actually differs needs another service search; columns, widths and
        view options were applied locally above. */
@@ -6146,6 +6543,65 @@
   });
   iconBtn.setAttribute("aria-pressed", String(ICONS));
 
+  /* ---------------- changing the shape ----------------
+   *
+   * **What is kept across the change is the item, not the pixel.** Row 12,000
+   * is line 12,000 in the table and line 1,200 in a grid ten across, so the
+   * scroll position means a different thing on each side of the switch;
+   * carrying it over unchanged would land somebody ten times too far down.
+   * So: read which item is at the top, change everything, put that item back
+   * at the top.
+   *
+   * **And the extent is stated before the position is written.** A browser
+   * clamps `scrollTop` to the extent it has *now*, and the sizer still says
+   * what the old shape needed — going from `large` at five across to `detail`
+   * makes the list twice as long, and the position would be clipped to the
+   * shorter one and then never recovered. So the sizer is set here, from the
+   * row count, exactly as `paintWindow` sets it a frame later. It is still a
+   * decision and not a measurement; it is only made a moment earlier.
+   *
+   * This is the one place in this file that writes `scrollTop`, and it is
+   * allowed to because it runs from a click. Nothing on the painting path may
+   * do it — see the note in `paintWindow` about eight hundred steps in five
+   * seconds. */
+  const viewBox = document.getElementById("views");
+  const viewBtns = [...viewBox.querySelectorAll("button")];
+
+  /* Which item the viewport starts on, in the shape that is showing now. */
+  const topItem = () =>
+    Math.min(reach(), Math.floor(scrollEl.scrollTop / pitch()) * PER_ROW);
+
+  function applyMode(next) {
+    const at = topItem();
+    MODE = MODES.includes(next) ? next : "detail";
+    for (const b of viewBtns) {
+      b.setAttribute("aria-pressed", String(b.dataset.view === MODE));
+    }
+    /* Both, because the style sheet needs one selector for "is this a grid"
+       and another for "which of the two". */
+    document.body.classList.toggle("grid", grid());
+    document.body.dataset.view = MODE;
+    applyWidths();
+    // Forces the layout the two lines above asked for, which is what makes
+    // the width below the new one rather than the old.
+    measurePerRow();
+    sizedTo = Math.round(lines() * pitch());
+    sizer.style.height = `${sizedTo}px`;
+    scrollEl.scrollTop = Math.round(Math.floor(at / PER_ROW) * pitch());
+    /* Every slot is about to hold a different kind of node, so nothing a slot
+       remembers about what it showed is worth anything. */
+    for (const tr of pool) tr.__stamp = "";
+    painted = "";
+    repaint(true);
+  }
+
+  viewBox.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-view]");
+    if (!b || b.dataset.view === MODE) return;
+    applyMode(b.dataset.view);
+    keep({ layout: MODE });
+  });
+
   /* The help, behind a button and remembered.
    *
    * `SIDE` and the `view.side` it is stored under keep their names: the
@@ -6232,6 +6688,10 @@
   });
   addEventListener("resize", () => { if (SIDE) placeHelp(); });
   applySide();
+  // The shape the window opens in, before the settings land. This is what
+  // puts `data-view` on the body and the pressed state on the buttons; the
+  // service's answer runs it again with whatever was chosen last time.
+  applyMode(MODE);
 
   /* What the service handed back for this window, once it lands. Defaults
      until then — the window draws before the round trip, which is the whole

@@ -1995,6 +1995,128 @@ mod tests {
         );
     }
 
+    /// **The tile the page counts by is the tile the style sheet draws.**
+    ///
+    /// The grid's whole arithmetic rests on one number per shape: the
+    /// scrollable extent is `lines * pitch` and `pitch` is `TILE[…].h`. The
+    /// style sheet has to declare the same height, because `.sizer` is the
+    /// only thing in the scroller that reaches that far and the tiles have to
+    /// fit under what it claims. Two numbers, in two languages, in one file —
+    /// the exact shape of the last two defects here, so they are pinned
+    /// together rather than eyeballed.
+    #[test]
+    fn the_tile_the_page_draws_is_the_tile_it_counts() {
+        /// `h: 104` out of the `TILE` table, for one shape.
+        fn counted(shape: &str) -> u32 {
+            let table = PAGE.find("const TILE = {").expect("no TILE table");
+            let end = table + PAGE[table..].find("};").expect("TILE has no end");
+            let at = table
+                + PAGE[table..end]
+                    .find(&format!("{shape}: {{"))
+                    .unwrap_or_else(|| panic!("TILE has no {shape}"));
+            let h = at + PAGE[at..end].find("h: ").expect("no height") + 3;
+            PAGE[h..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|n| n.parse().ok())
+                .expect("height is not a number")
+        }
+
+        /// `--tile-h: 104px` out of the style rule for one shape.
+        fn drawn(shape: &str) -> u32 {
+            let rule = format!("body.grid[data-view=\"{shape}\"] {{");
+            let at = PAGE
+                .find(&rule)
+                .unwrap_or_else(|| panic!("no style rule for {shape}"));
+            let h = at + PAGE[at..].find("--tile-h:").expect("no --tile-h") + 9;
+            PAGE[h..]
+                .trim_start()
+                .split("px")
+                .next()
+                .and_then(|n| n.trim().parse().ok())
+                .expect("--tile-h is not a number of pixels")
+        }
+
+        for shape in ["icons", "large"] {
+            assert_eq!(
+                counted(shape),
+                drawn(shape),
+                "{shape}: the arithmetic and the style sheet disagree about the tile's height"
+            );
+        }
+    }
+
+    /// **One place writes the scroll position, and it is not the painter.**
+    ///
+    /// The extent is stated rather than summed precisely so that a paint can
+    /// never move the position: an extent that moves makes the browser correct
+    /// the position, a correction fires a scroll, a scroll paints — eight
+    /// hundred steps in five seconds, recorded in the note above
+    /// `paintWindow`. A second shape meant adding the first legitimate write
+    /// of `scrollTop` in this file, from a click, and this is what keeps it
+    /// the only one.
+    #[test]
+    fn nothing_on_the_painting_path_moves_the_scroll_position() {
+        // The two writes that are allowed are both from something a person
+        // did: a new query goes back to the top, and changing shape keeps the
+        // item that was at the top. Neither runs from a frame.
+        for (open, close) in [
+            (
+                "function paintWindow() {",
+                "\n  /* One row, rewritten in place.",
+            ),
+            ("function repaint(rowsChanged) {", "\n  const onScroll ="),
+            ("function fillWindow() {", "\n  let paintQueued"),
+            ("function visibleRange() {", "\n  /* Draw the window"),
+        ] {
+            let at = PAGE
+                .find(open)
+                .unwrap_or_else(|| panic!("the page no longer has `{open}`"));
+            let end = at
+                + PAGE[at..]
+                    .find(close)
+                    .unwrap_or_else(|| panic!("`{open}` has no end marker"));
+            assert!(
+                !PAGE[at..end].contains("scrollTop ="),
+                "`{open}` writes the scroll position; that is the loop the sizer exists to break"
+            );
+        }
+
+        // **And the extent is not read back off the element it was written
+        // to.** Chromium re-serialises a CSS length to six significant
+        // figures, so `1146724px` — a narrow window with large tiles — comes
+        // back as `1.14672e+06px`, the guard misses, and the height of the one
+        // element that *is* the scrollable extent is rewritten on every frame.
+        for asking in [
+            "sizer.style.height !==",
+            "firstElementChild.style.height !==",
+        ] {
+            assert!(
+                !PAGE.contains(asking),
+                "the list asks the DOM what it made of a height it wrote: `{asking}`"
+            );
+        }
+
+        let mode = PAGE
+            .find("function applyMode(next) {")
+            .expect("applyMode is absent");
+        let end = mode
+            + PAGE[mode..]
+                .find("\n  viewBox.addEventListener")
+                .expect("applyMode has no end marker");
+        let body = &PAGE[mode..end];
+        let sized = body
+            .find("sizer.style.height")
+            .expect("applyMode no longer states the extent");
+        let moved = body.find("scrollEl.scrollTop =").expect("checked above");
+        // Stated before written, or the browser clamps the new position to the
+        // extent the shape that is going away needed.
+        assert!(
+            sized < moved,
+            "applyMode writes the scroll position before it states the extent"
+        );
+    }
+
     #[test]
     fn every_rendered_row_fact_invalidates_the_live_row_cache() {
         let start = PAGE
