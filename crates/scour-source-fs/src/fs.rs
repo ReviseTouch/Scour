@@ -108,6 +108,37 @@ impl Medium {
         }
     }
 
+    /// How many threads are worth walking on when the consumer is **not** the
+    /// limit.
+    ///
+    /// [`Medium::threads`] answers for the scan, and its answer is held down by
+    /// what is behind it: the channel fills, a walker blocks holding a directory
+    /// it owes, and "a faster consumer would make this number four again". The
+    /// fanotify directory map walks the same tree into a hash-map insert
+    /// measured at 213 ns, so nothing behind it fills. Measured warm on this
+    /// machine, `/mnt/depo`'s 152,530 directories: **1.10 s** on the scan's two
+    /// threads, **0.33 s** on eight, **0.22 s** on sixteen — the device was
+    /// still scaling at sixteen.
+    ///
+    /// Eight rather than sixteen is not the fastest number and is not meant to
+    /// be. This walk runs when the service starts, which on a desktop is while
+    /// the rest of the session is also coming up, and taking eighty per cent of
+    /// twenty cores to save a further tenth of a second of a start-up nobody is
+    /// waiting on is the trade [`crate::scan`]'s `stand_aside` exists to refuse.
+    ///
+    /// The device's own opinion survives intact, and that is the half that must
+    /// not be lost: a spinning disk wants one reader whoever is asking, because
+    /// every concurrent reader there is a seek rather than a queue slot.
+    pub fn walk_threads(self, cores: usize) -> usize {
+        match self {
+            Medium::Spinning => 1,
+            // Bounded by round trips rather than by the device, so the consumer
+            // was never what capped this one.
+            Medium::Network => 4,
+            Medium::Solid | Medium::Memory | Medium::Unknown => (cores / 2).clamp(2, 8),
+        }
+    }
+
     /// How long to let filesystem events settle before acting on them.
     ///
     /// A network mount reports changes late and in bursts, and each reaction

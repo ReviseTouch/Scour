@@ -4718,3 +4718,101 @@ window; an empty speculative forward page keeps the previous page visible.
 ```sh
 cargo test -p scour-gui list_growth_is_demand_driven_and_bounded
 ```
+
+## 2026-08-16 — the double walk at start-up is real, and it is not inotify's
+
+A review listed "a double directory walk at first start — the inotify setup runs
+before the scan; 15.1 s measured over 342,000 directories" and proposed merging
+the two passes. The premise had to be checked before the fix, because **this
+machine does not run inotify**. `watch::start` returns from `fanotify::try_start`
+before `notify` is constructed at all, so the recursive watch that walks a tree
+to install one watch per directory is never built here. The 15.1 s is a real
+number about a real mechanism — it is the cost of *installing* 342,000 watches,
+recorded further up this file, and already answered by moving watching to a
+thread of its own. It is not this machine's cost and it is not a walk.
+
+**There are still two passes, for a different and unavoidable reason.** A
+fanotify event names its parent directory by file handle, never by path, so
+`DirMap::build` walks every root to learn which `(dev, ino)` is which directory
+— 103,524 under `/home/hasan` and 152,530 under `/mnt/depo`, which is the pair
+`scourd`'s start-up line prints. Resolving a handle on demand instead is
+`open_by_handle_at`, which wants `CAP_DAC_READ_SEARCH`; this process is
+deliberately built to hold no capability. The pass cannot be dropped, and it is
+over exactly the directories the scan then walks again.
+
+Measured before anything was changed, alternating map-walk then scan-walk in one
+process, warm after a first cold round:
+
+| | directories | entries | map walk | scan walk |
+|---|---|---|---|---|
+| `/home/hasan` | 103,524 | 896,274 | **0.80 s** | 1.17 s |
+| `/mnt/depo` | 152,530 | 1,350,627 | **1.03 s** | 1.73 s |
+
+Cold, on the first touch of each tree: 4.46 s and **15.69 s**. The second pass
+was 59–69% of the scan's own walk, and it ran to completion inside
+`start_watching` before the scan was so much as queued.
+
+### Merging the two passes was rejected, and not for want of trying
+
+The scan could feed the map — it stats every directory it visits — but three
+things stop it, and none is about speed. `scan.on_start = false` is a supported
+configuration with a test of its own, and under it there is no scan to feed the
+map at all, leaving a watcher that resolves nothing. The map would then have to
+be filled from inside the walker's visitor across the global `SUBS` lock, once
+per directory, against the reader thread holding the same lock to process
+events. And an event for a directory the scan has not yet reached is **dropped,
+not escalated** — deliberately, because escalating turns ordinary traffic into a
+storm — so every directory would carry a window in which its changes are lost.
+That window is the hole `scan.on_start` exists to close, and a merge that opens
+it is worth less than the second walk. A true single pass needs `Source::watch`
+and `Source::scan` to become one call, which is a change to the trait and to the
+engine's ordering contract, and is not attempted here.
+
+### What was done instead: the second pass is no longer single-threaded
+
+It reads the same directories the scan reads, and the scan reads them on several
+threads. `DirMap::build` now uses the same `ignore` parallel walker, streaming
+batches into the map while the walk runs rather than joining a quarter of a
+million paths into a vector first — the packed arena's 13 MB saving must not
+come back as a build-time peak on a machine that swaps. Its walkers take the
+same `nice` and idle I/O class as the scan's.
+
+Eight threads rather than the scan's two, and the difference is the consumer,
+not the device: the scan is capped by an index that cannot take more, and this
+walk's consumer is a hash-map insert at 213 ns. `Medium::walk_threads` keeps the
+device's opinion and drops the consumer's cap, so a spinning disk still gets one
+reader. Eight is not the fastest — sixteen was 0.19 s and 0.22 s — but this runs
+while the rest of the session is coming up.
+
+Three rounds, alternating old and new within each round, at the shipped setting
+of eight threads on twenty cores:
+
+| | serial | parallel ×8 | |
+|---|---|---|---|
+| `/home/hasan`, 103,524 dirs | 1.087 / 1.275 / 1.007 s | **0.312 / 0.494 / 0.296 s** | 2.6–3.5× |
+| `/mnt/depo`, 152,530 dirs | 1.561 / 1.696 / 1.248 s | **0.364 / 0.397 / 0.349 s** | 3.6–4.3× |
+
+Cold, on the first touch: `/mnt/depo` 6.71 s → **0.378 s**, `/home/hasan` 2.37 s
+→ **0.274 s**. Both sources together, warm, the two passes cost about 2.4 s of
+start-up before and about 0.70 s after.
+
+**What is not measured: `scourd`'s own start-up wall clock under fanotify.**
+Reaching that path needs the descriptor the privileged helper hands over, and
+nothing here runs as root. The claim made is narrower and is the whole of the
+change's effect: `DirMap::build` is synchronous inside `start_watching`, nothing
+else on that path was touched, so the start-up delta is the walk delta above.
+The end-to-end number stays unproven.
+
+Both walks agree on the directory count exactly — 103,524 and 152,530, asserted
+inside the probe — and two tests hold what the counts imply. Deleting the `Drop`
+on `DirBatch`, which is what flushes each thread's last partial buffer, fails
+`the_parallel_walk_finds_every_directory_the_stack_walk_found` with 2,801 of
+2,801 directories lost, and fails the ordering test beside it.
+
+```sh
+SCOUR_WALK_ROOTS=/home/hasan SCOUR_WALK_ROUNDS=3 SCOUR_WALK_THREADS=2:4:8:16 \
+  cargo test -p scour-source-fs --release directory_map_walk_cost_probe -- \
+  --ignored --nocapture --test-threads=1
+cargo test -p scour-source-fs --release the_parallel_walk_finds_every_directory
+cargo test -p scour-source-fs --release a_directory_that_appears_during_the_walk
+```
