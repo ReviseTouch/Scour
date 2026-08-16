@@ -40,6 +40,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ignore::WalkBuilder;
 use scour_core::{Change, ChangeSink, Result, ScanOptions, SourceId, WatchHandle};
 
 use crate::path;
@@ -347,6 +348,59 @@ struct DirMap {
     devices: Vec<u64>,
 }
 
+/// How many directories a walker thread gathers before handing them over.
+///
+/// The same shape as the scan's, and for the same reason: a send per directory
+/// on a bounded channel drained by one thread is a queue that is always full,
+/// which cost that walk 9.5 context switches a file until it was batched.
+const DIR_BATCH: usize = 512;
+
+/// How many batches may be in the air. This is the whole of the extra memory
+/// the parallel walk costs over the stack walk it replaced — threads times
+/// batch, not a quarter of a million paths held twice.
+const DIR_IN_FLIGHT: usize = 64;
+
+/// One walker thread's outgoing buffer of directories.
+struct DirBatch {
+    tx: crossbeam_channel::Sender<Vec<(DirKey, String)>>,
+    buf: Vec<(DirKey, String)>,
+}
+
+impl DirBatch {
+    fn new(tx: crossbeam_channel::Sender<Vec<(DirKey, String)>>) -> DirBatch {
+        DirBatch {
+            tx,
+            buf: Vec::with_capacity(DIR_BATCH),
+        }
+    }
+
+    /// Returns false once the far end is gone, which is a walk to abandon.
+    fn push(&mut self, key: DirKey, path: String) -> bool {
+        self.buf.push((key, path));
+        self.buf.len() < DIR_BATCH || self.flush()
+    }
+
+    fn flush(&mut self) -> bool {
+        if self.buf.is_empty() {
+            return true;
+        }
+        let full = std::mem::replace(&mut self.buf, Vec::with_capacity(DIR_BATCH));
+        self.tx.send(full).is_ok()
+    }
+}
+
+/// The tail of a thread's last batch.
+///
+/// `ignore` gives a visitor no way to say it has finished, but it does drop the
+/// box when the thread ends — so this is where the remainder goes. Without it
+/// the map loses up to [`DIR_BATCH`] directories a thread, and a directory
+/// missing from the map is one whose every event resolves to nothing.
+impl Drop for DirBatch {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
 impl DirMap {
     /// Walk the roots and record what each directory is.
     ///
@@ -356,30 +410,126 @@ impl DirMap {
     /// the queue when it finishes. The mark here is always already in place —
     /// the helper set it before this process existed — so the walk is safe by
     /// construction.
-    fn build(roots: &[std::path::PathBuf], rules: &Rules) -> DirMap {
+    ///
+    /// **This is a second pass over the tree the scan also walks, and it is not
+    /// the one a reviewer looked for.** The recorded double walk belongs to
+    /// inotify, which holds one watch per directory and must enumerate the tree
+    /// to install them — 342,000 of them, 15.1 s. None of that runs here:
+    /// [`crate::watch::start`] returns from [`try_start`] before `notify` is
+    /// ever built. What this backend needs the tree for is different and
+    /// unavoidable: an event names its parent directory by file handle, not by
+    /// path, so without this map every event resolves to nothing. Resolving a
+    /// handle on demand instead is `open_by_handle_at`, which wants
+    /// `CAP_DAC_READ_SEARCH` — the one capability this process is careful not
+    /// to have.
+    ///
+    /// So the pass stays. What it does not have to stay is **single-threaded**:
+    /// it reads exactly the directories the scan reads, and the scan reads them
+    /// on several threads. Measured on this machine, warm, alternating in one
+    /// process: `/mnt/depo`'s 152,530 directories went from 1.03 s to 0.19 s,
+    /// and `/home/hasan`'s 103,524 from 0.80 s to 0.16 s. Cold, `/mnt/depo`
+    /// went from 15.7 s to 4.7 s. See `docs/MEASUREMENTS.md`.
+    ///
+    /// The walk's own thread count is decided here rather than taken from
+    /// [`crate::fs::Medium`], and the difference is the consumer. The scan is
+    /// held to two threads because the index behind it cannot take more —
+    /// "a faster consumer would make this number four again", says that
+    /// comment. This walk's consumer is a hash-map insert at 213 ns, so the
+    /// disk is the only thing left to saturate.
+    fn build(roots: &[std::path::PathBuf], rules: &Rules, threads: usize) -> DirMap {
         let mut map = DirMap::default();
-        let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
-        while let Some(dir) = stack.pop() {
-            let text = path::from_path(&dir);
-            if rules.excludes_path(&text) {
-                continue;
-            }
-            let Ok(md) = std::fs::symlink_metadata(&dir) else {
-                continue;
-            };
-            if !md.is_dir() {
-                continue;
-            }
-            map.insert(&md, &text);
-            let Ok(rd) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for e in rd.flatten() {
-                if e.file_type().is_ok_and(|t| t.is_dir()) {
-                    stack.push(e.path());
+        let Some((first, rest)) = roots.split_first() else {
+            return map;
+        };
+
+        let mut builder = WalkBuilder::new(first);
+        for r in rest {
+            builder.add(r);
+        }
+        builder
+            // `ignore` is used here as a concurrent directory walk and nothing
+            // else, exactly as in the scan: a rule about what belongs in an
+            // index is not a rule about what a watcher can resolve.
+            .standard_filters(false)
+            // The stack walk that came before this filtered no name, so nor
+            // does this: a change under `~/.config` is a change.
+            .hidden(false)
+            // `symlink_metadata` and `DirEntry::file_type` both refused to
+            // descend a link, and the map must agree with the walk about that
+            // or an event resolves to a path no scan ever produces.
+            .follow_links(false)
+            .same_file_system(false)
+            .threads(threads);
+
+        // Drained while the walk runs rather than collected and merged
+        // afterwards. The whole point of the packed arena is that a quarter of
+        // a million separate `String`s is 13 MB nobody needs; holding them all
+        // once more in a joining vector would put that peak straight back, on a
+        // machine where the invariant is `RssAnon + VmSwap`.
+        let (tx, rx) = crossbeam_channel::bounded::<Vec<(DirKey, String)>>(DIR_IN_FLIGHT);
+        std::thread::scope(|scope| {
+            let walker_tx = tx.clone();
+            scope.spawn(move || {
+                builder.build_parallel().run(|| {
+                    let mut batch = DirBatch::new(walker_tx.clone());
+                    // On the first entry rather than here, because `ignore`
+                    // builds the visitor on the thread that spawns the workers
+                    // and this would otherwise make that one polite instead.
+                    let mut polite = false;
+                    Box::new(move |result| {
+                        if !polite {
+                            polite = true;
+                            // The same nice value and idle I/O class the scan's
+                            // walkers take. Eight threads reading a disk at
+                            // start-up is worth having only if it yields to the
+                            // session coming up beside it, and neither costs
+                            // anything on an idle machine.
+                            crate::scan::stand_aside();
+                        }
+                        let Ok(de) = result else {
+                            // A directory that cannot be read resolves no
+                            // events, which is what the stack walk's silent
+                            // `continue` also meant.
+                            return ignore::WalkState::Continue;
+                        };
+                        if !de.file_type().is_some_and(|t| t.is_dir()) {
+                            return ignore::WalkState::Continue;
+                        }
+                        let text = path::from_path(de.path());
+                        if rules.excludes_path(&text) {
+                            // Pruned, not merely skipped: the stack walk never
+                            // pushed an excluded directory's children either,
+                            // and a watcher that resolves what the scan
+                            // discards is how a `cargo test` under an unscanned
+                            // build tree took a query from 8 ms to 13 seconds.
+                            return ignore::WalkState::Skip;
+                        }
+                        let Ok(md) = de.metadata() else {
+                            return ignore::WalkState::Continue;
+                        };
+                        use std::os::unix::fs::MetadataExt;
+                        let key = DirKey {
+                            dev: md.dev(),
+                            ino: md.ino(),
+                        };
+                        if batch.push(key, text) {
+                            ignore::WalkState::Continue
+                        } else {
+                            ignore::WalkState::Quit
+                        }
+                    })
+                });
+            });
+            // The senders are dropped when the visitors are, which is what ends
+            // the loop below — so this clone has to go with them or it never
+            // ends. Each visitor's own tail is flushed by [`DirBatch`]'s `Drop`.
+            drop(tx);
+            for batch in rx {
+                for (key, text) in batch {
+                    map.insert_key(key, &text);
                 }
             }
-        }
+        });
         map
     }
 
@@ -794,6 +944,24 @@ impl Drop for FanWatch {
     }
 }
 
+/// How many threads to walk the tree for the directory map on.
+///
+/// The scan's answer, asked the same way, because the question is about the
+/// device and not about what the walk is for: a spinning disk turns every extra
+/// reader into a seek whoever is asking. An explicit `scan.threads` is honoured
+/// for the same reason it is honoured by the scan — somebody who set it meant
+/// this disk, not that walk.
+fn walk_threads(source: &FsSource, opts: &ScanOptions) -> usize {
+    if opts.threads != 0 {
+        return opts.threads;
+    }
+    source.medium().walk_threads(
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4),
+    )
+}
+
 /// Subscribe to the one reader, or say this mechanism is not available here.
 ///
 /// `None` means "not this one" rather than "no watching": the caller falls back
@@ -813,7 +981,7 @@ pub fn try_start(
 
     let roots: Vec<std::path::PathBuf> = source.roots().to_vec();
     let rules = Arc::new(Rules::from_options(opts));
-    let map = DirMap::build(&roots, &rules);
+    let map = DirMap::build(&roots, &rules, walk_threads(source, opts));
     let live = Arc::new(AtomicBool::new(true));
     let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
 
@@ -1186,6 +1354,155 @@ mod tests {
         );
     }
 
+    /// What the directory map's **own walk** costs against a real tree.
+    ///
+    /// This backend does not walk to establish the watch — the mark covers the
+    /// superblock and the helper set it before this process existed — but it
+    /// does walk to learn which directory an event's file handle names. That is
+    /// a second pass over the same tree the scan walks, and this measures it
+    /// beside the scan's own parallel walk of the same roots so the two can be
+    /// compared rather than guessed at.
+    ///
+    /// ```text
+    /// SCOUR_WALK_ROOTS=/home/hasan cargo test -p scour-source-fs --release \
+    ///   directory_map_walk_cost_probe -- --ignored --nocapture --test-threads=1
+    /// ```
+    #[test]
+    #[ignore = "diagnostic walk-cost probe against a real tree"]
+    fn directory_map_walk_cost_probe() {
+        let roots: Vec<std::path::PathBuf> = std::env::var("SCOUR_WALK_ROOTS")
+            .unwrap_or_else(|_| "/home/hasan".into())
+            .split(':')
+            .filter(|s| !s.is_empty())
+            .map(std::path::PathBuf::from)
+            .collect();
+        let rounds: usize = std::env::var("SCOUR_WALK_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+
+        // The rules scourd actually runs with, or the walk prunes nothing and
+        // the number is of a scan nobody performs.
+        let (paths, dirs, files) = crate::rules::platform_defaults();
+        let opts = ScanOptions {
+            hidden: true,
+            follow_symlinks: false,
+            skip_metadata: false,
+            threads: 0,
+            exclude_paths: paths,
+            exclude_dirs: dirs,
+            exclude_files: files,
+            ..Default::default()
+        };
+        let rules = Arc::new(Rules::from_options(&opts));
+
+        /// Counts and holds nothing, so the reading is the walk's.
+        #[derive(Default)]
+        struct Count {
+            entries: u64,
+            bytes: u64,
+        }
+        impl scour_core::EntrySink for Count {
+            fn push(&mut self, e: scour_core::Entry) -> scour_core::Flow {
+                self.entries += 1;
+                self.bytes += e.path.len() as u64;
+                scour_core::Flow::Continue
+            }
+        }
+
+        /// The stack walk this replaced, kept here as the explicit control.
+        ///
+        /// An A/B against an unset variable is not an A/B — the repository has
+        /// been caught by that once — so the old shape stays in the probe that
+        /// retired it rather than in a git revision nobody will rebuild.
+        fn build_serial(roots: &[std::path::PathBuf], rules: &Rules) -> DirMap {
+            let mut map = DirMap::default();
+            let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
+            while let Some(dir) = stack.pop() {
+                let text = path::from_path(&dir);
+                if rules.excludes_path(&text) {
+                    continue;
+                }
+                let Ok(md) = std::fs::symlink_metadata(&dir) else {
+                    continue;
+                };
+                if !md.is_dir() {
+                    continue;
+                }
+                map.insert(&md, &text);
+                let Ok(rd) = std::fs::read_dir(&dir) else {
+                    continue;
+                };
+                for e in rd.flatten() {
+                    if e.file_type().is_ok_and(|t| t.is_dir()) {
+                        stack.push(e.path());
+                    }
+                }
+            }
+            map
+        }
+
+        let source = FsSource::new(SourceId(0), "probe", roots.clone());
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        // The shipped setting by default, so an ordinary run of this probe
+        // measures what the service does rather than a sweep of what it could.
+        let threads: Vec<usize> = std::env::var("SCOUR_WALK_THREADS")
+            .map(|v| v.split(':').filter_map(|s| s.parse().ok()).collect())
+            .unwrap_or_else(|_| vec![walk_threads(&source, &opts)]);
+        println!(
+            "roots {roots:?} · medium {} · {cores} cores · the map walk ships on \
+             {} thread(s), the scan on {}",
+            source.medium().label(),
+            walk_threads(&source, &opts),
+            source.medium().threads(cores),
+        );
+        for round in 0..rounds {
+            // Alternating within the round, because this machine drifts more
+            // than 10% across a day and two numbers taken an hour apart are two
+            // different machines.
+            let began = Instant::now();
+            let serial = build_serial(&roots, &rules);
+            let serial_took = began.elapsed();
+            let serial_dirs = serial.by_key.len();
+            drop(serial);
+
+            let mut parallel = String::new();
+            for &t in &threads {
+                let began = Instant::now();
+                let map = DirMap::build(&roots, &rules, t);
+                let took = began.elapsed();
+                let dirs = map.by_key.len();
+                drop(map);
+                assert_eq!(
+                    dirs, serial_dirs,
+                    "the parallel walk found {dirs} directories against the stack walk's \
+                     {serial_dirs} — the two do not agree about the tree"
+                );
+                parallel += &format!(
+                    " · parallel×{t} {:.3} s ({:.1}×)",
+                    took.as_secs_f64(),
+                    serial_took.as_secs_f64() / took.as_secs_f64(),
+                );
+            }
+
+            let mut sink = Count::default();
+            let began = Instant::now();
+            let report = scour_core::Source::scan(&source, &opts, &mut sink);
+            let scan_took = began.elapsed();
+            let _ = report;
+
+            println!(
+                "round {round}: {serial_dirs} dirs · serial {:.3} s{parallel} · \
+                 scan {} entries in {:.3} s",
+                serial_took.as_secs_f64(),
+                sink.entries,
+                scan_took.as_secs_f64(),
+            );
+        }
+    }
+
     /// What the directory map costs in **process anonymous memory**, which is a
     /// different question from what it costs in allocations.
     ///
@@ -1471,6 +1788,191 @@ mod tests {
         );
         assert_eq!(packed.paths.used_bytes(), leaf_after_used);
         assert_eq!(packed.paths.stale_bytes, leaf_after_stale);
+    }
+
+    /// A tree wide and deep enough that several walker threads end with a
+    /// partly filled buffer. Returns every directory it made, including `root`.
+    fn plant(root: &std::path::Path, breadth: usize, depth: usize) -> Vec<std::path::PathBuf> {
+        let mut made = vec![root.to_path_buf()];
+        let mut frontier = vec![root.to_path_buf()];
+        for level in 0..depth {
+            let mut next = Vec::new();
+            for parent in &frontier {
+                for n in 0..breadth {
+                    let dir = parent.join(format!("d{level}-{n}"));
+                    std::fs::create_dir(&dir).expect("directory");
+                    // A file beside it, so the walk has to reject something as
+                    // well as accept something.
+                    std::fs::write(dir.join("dosya.txt"), b"x").expect("file");
+                    made.push(dir.clone());
+                    next.push(dir);
+                }
+            }
+            frontier = next;
+        }
+        made
+    }
+
+    #[test]
+    fn the_parallel_walk_finds_every_directory_the_stack_walk_found() {
+        // **A directory missing from this map is a directory whose every event
+        // resolves to nothing**, so the walk that fills it has to be complete
+        // in a way an index can afford not to be: the scan can miss a file and
+        // find it next time, and this cannot, because "next time" is the next
+        // full scan and everything in between is invisible.
+        //
+        // The failure this guards is the one the batching introduced. Each
+        // walker thread gathers `DIR_BATCH` directories before sending, and
+        // `ignore` gives a visitor no way to say it has finished — so without
+        // the `Drop` on `DirBatch` every thread silently drops its last partial
+        // buffer. The tree is deliberately not a multiple of the batch, so most
+        // threads end holding one.
+        let root = tempfile::tempdir().expect("temporary directory");
+        let made = plant(root.path(), 7, 4);
+        assert!(
+            made.len() > DIR_BATCH,
+            "the tree must be larger than one batch to test the tail, {} is not",
+            made.len()
+        );
+
+        let rules = Rules::from_options(&ScanOptions::default());
+        let roots = vec![root.path().to_path_buf()];
+        let parallel = DirMap::build(&roots, &rules, 8);
+
+        let mut lost = Vec::new();
+        for dir in &made {
+            use std::os::unix::fs::MetadataExt;
+            let md = std::fs::symlink_metadata(dir).expect("metadata");
+            if parallel.path_of(md.ino()) != Some(path::from_path(dir).as_str()) {
+                lost.push(path::from_path(dir));
+            }
+        }
+        assert!(
+            lost.is_empty(),
+            "{} of {} directories are in no map and would resolve no event; \
+             the first is {:?}",
+            lost.len(),
+            made.len(),
+            lost.first()
+        );
+        assert_eq!(
+            parallel.by_key.len(),
+            made.len(),
+            "the walk recorded a different number of directories than exist"
+        );
+        // One thread and eight must agree about the tree, or the thread count
+        // is a correctness setting rather than a speed one.
+        let single = DirMap::build(&roots, &rules, 1);
+        assert_eq!(single.by_key.len(), parallel.by_key.len());
+    }
+
+    #[test]
+    fn a_directory_that_appears_during_the_walk_is_still_reachable() {
+        // **The hole `scan.on_start` exists to close, checked on this backend.**
+        //
+        // On inotify the race is real and was fixed by ordering: a directory
+        // walked before it is watched is one whose contents change unheard. On
+        // fanotify the mark is on the superblock and the helper set it before
+        // this process existed, so coverage never depends on this walk — what
+        // depends on it is *resolution*, and an event naming a directory this
+        // map has never heard of is dropped rather than escalated.
+        //
+        // So the guarantee to hold is this: whatever appears while the walk is
+        // running, no event about it is lost. It is held by two things
+        // together, and both are checked here — the new directory's **parent**
+        // is in the map whichever side of the walk it was created on, and
+        // `learn` puts the new directory itself in on the strength of that
+        // parent's event. The events themselves cannot be lost meanwhile
+        // because they are queued by a mark that predates the process, and the
+        // subscription is not registered until the walk has finished.
+        let root = tempfile::tempdir().expect("temporary directory");
+        let made = plant(root.path(), 6, 3);
+        let rules = Rules::from_options(&ScanOptions::default());
+        let roots = vec![root.path().to_path_buf()];
+
+        // Created *while the walk runs*, in directories that already existed —
+        // which is the only shape this race has, because a parent that did not
+        // exist when the walk began has a parent that did.
+        let parents: Vec<std::path::PathBuf> = made.iter().skip(1).step_by(3).cloned().collect();
+        assert!(parents.len() > 8, "too few parents to race against");
+        let racing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let born: Vec<std::path::PathBuf> = {
+            let theirs = std::sync::Arc::clone(&racing);
+            let parents = parents.clone();
+            let creator = std::thread::spawn(move || {
+                let mut born = Vec::new();
+                let mut n = 0usize;
+                while theirs.load(Ordering::Relaxed) || n < parents.len() {
+                    let parent = &parents[n % parents.len()];
+                    let dir = parent.join(format!("gec-{n}"));
+                    if std::fs::create_dir(&dir).is_ok() {
+                        std::fs::write(dir.join("icerik.txt"), b"x").expect("file");
+                        born.push(dir);
+                    }
+                    n += 1;
+                    if n > 4_000 {
+                        break;
+                    }
+                }
+                born
+            });
+            let map = DirMap::build(&roots, &rules, 8);
+            racing.store(false, Ordering::Relaxed);
+            let born = creator.join().expect("the creating thread");
+
+            // Every directory that was there before the walk began is in the
+            // map. That is what makes the rest of this reachable.
+            for dir in &made {
+                use std::os::unix::fs::MetadataExt;
+                let md = std::fs::symlink_metadata(dir).expect("metadata");
+                assert_eq!(
+                    map.path_of(md.ino()),
+                    Some(path::from_path(dir).as_str()),
+                    "a directory that existed before the walk is missing from the map"
+                );
+            }
+
+            // And every directory born during it is either already in the map
+            // or resolvable through its parent — never neither, which is the
+            // hole.
+            let mut map = map;
+            for dir in &born {
+                use std::os::unix::fs::MetadataExt;
+                let text = path::from_path(dir);
+                let md = std::fs::symlink_metadata(dir).expect("metadata");
+                if map.path_of(md.ino()) == Some(text.as_str()) {
+                    continue;
+                }
+                let parent = dir.parent().expect("a created directory has a parent");
+                let parent_md = std::fs::symlink_metadata(parent).expect("parent metadata");
+                assert_eq!(
+                    map.path_of(parent_md.ino()),
+                    Some(path::from_path(parent).as_str()),
+                    "neither {text} nor its parent is in the map, so its create \
+                     event resolves to nothing and everything below it is invisible"
+                );
+                // Which is exactly what the reader does with that event.
+                map.learn(&text);
+                assert_eq!(
+                    map.path_of(md.ino()),
+                    Some(text.as_str()),
+                    "the parent's event did not bring {text} into the map"
+                );
+                // And now a file created inside it resolves too.
+                let child = dir.join("icerik.txt");
+                let child_parent = map.path_of(md.ino()).expect("the learned directory");
+                assert_eq!(
+                    format!("{child_parent}/icerik.txt"),
+                    path::from_path(&child),
+                    "a file in the new directory resolves to the wrong path"
+                );
+            }
+            born
+        };
+        assert!(
+            !born.is_empty(),
+            "nothing was created during the walk, so nothing was raced"
+        );
     }
 
     #[test]

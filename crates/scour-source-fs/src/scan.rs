@@ -52,7 +52,7 @@ const IN_FLIGHT: usize = 64;
 /// Neither costs anything on an idle machine: a nice value only decides who
 /// yields when two want the same core, and the idle I/O class only defers when
 /// something else wants the disk. Measured that way before it shipped.
-fn stand_aside() {
+pub(crate) fn stand_aside() {
     // SAFETY: both are ordinary syscalls on the calling thread, and a failure
     // to become polite is not a failure to scan — so neither result is checked
     // beyond ignoring it.
@@ -309,6 +309,17 @@ impl FsSource {
     /// Whether `st_mode` is the file's own rather than the mount's.
     pub fn real_modes(&self) -> bool {
         self.traits.real_modes
+    }
+
+    /// What the mounts under the roots are like to read.
+    ///
+    /// The fanotify backend walks the same tree for a different reason — see
+    /// `DirMap::build` — and has to make the same decision about concurrency
+    /// that the scan makes here. A spinning disk is the case that matters: it
+    /// wants one reader whatever the walk is for, and asking the medium is how
+    /// that stays true in both places.
+    pub(crate) fn medium(&self) -> crate::fs::Medium {
+        self.medium
     }
 }
 
