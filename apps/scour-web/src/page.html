@@ -1434,6 +1434,8 @@
               data-t-title="help" data-t-aria="show the help">?</button>
       <!-- The language menu. Beside the other thing in this bar that changes
            how the window looks rather than what it is looking at. -->
+      <button type="button" id="csv" class="about"
+              data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
       <button type="button" id="lang" class="about" aria-haspopup="menu"
               aria-expanded="false" data-t-title="language"
               data-t-aria="choose the language">文</button>
@@ -6423,7 +6425,8 @@
    *
    * `a7789d8` added this listener, the route and the writer; its own message
    * says "A button in the meter bar downloads what the query matched", and no
-   * such button was ever added — `id="csv"` appears nowhere in this file.
+   * such button was added — and the guard below stays, because a listener
+   * that ends the script is a defect whatever the reason it fires.
    * `getElementById` therefore returned null and this line threw, and because
    * the whole window is one inline script, **this was the last line of it that
    * ever ran**. Everything below was dead, silently:

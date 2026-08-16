@@ -831,3 +831,9 @@ msgstr "1 yıl önce"
 
 msgid "index {mb} MB · 1 source · {watching} watched"
 msgstr "indeks {mb} MB · 1 kaynak · {watching} izleniyor"
+
+msgid "export as CSV"
+msgstr "CSV olarak dışa aktar"
+
+msgid "export the whole result as CSV"
+msgstr "tüm sonucu CSV olarak dışa aktar"
