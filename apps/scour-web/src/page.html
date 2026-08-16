@@ -3773,6 +3773,52 @@
   /* What the last one cost, so the live refresh can decline to repeat it.
      Reset by a new query, because a new query's cost is its own. */
   let sidebarCost = 0;
+
+  /* The query with one control's own terms taken out of it.
+   *
+   * **A filter rail must not be counted through its own filter.** The service
+   * answers a facet with the keys that matched and no others, so under
+   * `kind:image` the kind group comes back `[{image: 210551}]` — every other
+   * row in the rail then reads `0`, which is true and useless. A rail exists
+   * to answer "what would I get if I switched to that instead", and that
+   * question is about the query WITHOUT the term this rail put there.
+   * Measured on the live index: `scour facets "kind:image" --by kind` returns
+   * exactly one key. The age chart has it worse — `dm:27d` left 21 of its 24
+   * bars at zero, so the control for widening the range was the part that had
+   * been erased.
+   *
+   * Only a rail's OWN terms come out. A scope or a size stays in, because
+   * switching kind while keeping the scope really does give the scoped count —
+   * that rail is already right and was never part of this.
+   *
+   * `field()` rather than a prefix match, so the aliases resolve: `tür:görsel`
+   * and `type:image` are the same term as `kind:image`, and `modified:` is
+   * `dm:`. `toggleTerm` splits on the first colon instead and therefore does
+   * not see the Turkish spellings — not fixed here, because that is a
+   * different defect and this change is not the place to smuggle it in.
+   *
+   * A term the parser cannot read is plain text to the engine (see `parse`),
+   * so `kind:nope` is a name search and stays: taking it out would change
+   * which rows the rail counts.
+   *
+   * Null when there was nothing to take out, which is what tells the caller
+   * this rail needs no question of its own. */
+  function without(text, names) {
+    const toks = tokenise(text);
+    const kept = toks.filter((tok) => {
+      if (/^\s+$/.test(tok)) return true;
+      const bare = tok.startsWith("!") ? tok.slice(1) : tok;
+      const sp = fieldSplit(bare);
+      const f = sp && field(sp[0]);
+      return !(f && names.includes(f.name) && accepts(f, sp[1]));
+    });
+    /* Compared by count, not by text: dropping a term leaves the space that
+       was beside it, and a query that differs from itself only by a double
+       space would ask the service the same question twice. */
+    if (kept.length === toks.length) return null;
+    return kept.join("").trim();
+  }
+
   function sidebar(text) {
     /* The live-refresh caller can race a keystroke too. This guard is before
        the service call because a stale answer costs CPU even when it is never
@@ -3788,46 +3834,101 @@
       if (ours === sidebarGeneration && text === q.value)
         sidebarCost = Date.now() - began;
     };
-    return SERVICE.sidebar(text, BAR_EDGES)
-      .then((res) => {
-        charge();
-        /* A re-sort advances `generation`, but it does not change these
-           counts. Only a newer facet request or different query makes this
-           answer stale. */
-        if (ours !== sidebarGeneration || text !== q.value) return;
+    /* A re-sort advances `generation`, but it does not change these counts.
+       Only a newer facet request or different query makes an answer stale. */
+    const current = () => ours === sidebarGeneration && text === q.value;
 
-        /* **The scrollbar's real size, and with it where the list ends.**
-         *
-         * And this is the one that gets there first when the rows are on a
-         * long leash, which is why it goes through `setTotal` rather than
-         * writing the two fields itself. See `dropShort`: a count that says
-         * the list is longer than the rows we hold is a count that says those
-         * rows are stale, and saying so here is what puts the window back in
-         * the class `fillWindow` fetches on the frame. */
-        setTotal(res.total, !res.capped);
-        repaint(true);
-        const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
-        document.getElementById("count").textContent = withIndexTotal(shown);
+    const forKind = without(text, ["kind"]);
+    const forAge = without(text, ["dm"]);
 
-        for (const g of res.groups) {
-          const by = Object.fromEntries(g.facets.map((f) => [f.key, f.count]));
-          if (g.by === "kind") {
-            KIND_COUNTS = by;
-            syncFacets(parse(q.value));
-          } else if (g.by === "age") {
-            const counts = BAR_EDGES.map((e) => by[String(e)] || 0).reverse();
-            /* Anything older than the last edge belongs to the last bar rather
-               than to nothing. Two years is where the scale ends, not where
-               the files do. */
-            counts[0] += by.older || 0;
-            paintBars(counts, res.capped);
-          }
-        }
-      })
-      .catch((e) => {
-        charge();
-        console.error("scour: sidebar did not draw:", e);
-      });
+    /* One request per DISTINCT query. With no filter of either kind on — the
+     * ordinary case, and the one every keystroke goes through — all three
+     * questions are about the same rows and this is the single call it has
+     * always been. A second is paid for only by somebody who has clicked a
+     * filter, and a third only by somebody who has clicked both.
+     *
+     * **Every call keeps `by=kind,age`, and that is load-bearing rather than
+     * lazy.** `NativeIndex::facets` picks its scan cap from the questions
+     * asked: `AGE_SCAN_CAP` (unbounded) when any age band is wanted,
+     * `FACET_SCAN_CAP` (200,000 rows) otherwise. So asking the stripped query
+     * for `by=kind` alone — the obvious way to write this — silently moves
+     * the rail onto the sampled path, and the sample is not proportional. It
+     * is simply the first 200,000 rows the walk reaches. Measured against the
+     * exact answer on the empty query: images came back 210,551 exact against
+     * 1,430 sampled (0.007 of the true share where a proportional sample
+     * would be 0.089, a twelvefold understatement) while video came back
+     * 3.1x overstated. That would have replaced thirteen honest zeros with
+     * thirteen plausible wrong numbers, which is the worse of the two.
+     *
+     * The extra group is close to free anyway: the walk is the cost and the
+     * counting is not — `facets` was made to answer several questions from
+     * one walk for exactly that reason. */
+    const asked = new Map();
+    const ask = (which) => {
+      if (!asked.has(which)) asked.set(which, SERVICE.sidebar(which, BAR_EDGES));
+      return asked.get(which);
+    };
+    const inForce = ask(text);
+    const kindFrom = forKind === null ? inForce : ask(forKind);
+    const ageFrom = forAge === null ? inForce : ask(forAge);
+
+    const groupOf = (res, by) => (res.groups || []).find((g) => g.by === by);
+
+    /* **The total and the scrollbar belong to the query actually in force**,
+     * and to no stripped one. A rail counts what switching would give; the
+     * meter under the list counts what is in the list. Reading the total off
+     * the broader walk would say `2.238.902` over two hundred thousand rows.
+     *
+     * **The scrollbar's real size, and with it where the list ends.**
+     *
+     * And this is the one that gets there first when the rows are on a
+     * long leash, which is why it goes through `setTotal` rather than
+     * writing the two fields itself. See `dropShort`: a count that says
+     * the list is longer than the rows we hold is a count that says those
+     * rows are stale, and saying so here is what puts the window back in
+     * the class `fillWindow` fetches on the frame. */
+    const total = inForce.then((res) => {
+      if (!current()) return;
+      setTotal(res.total, !res.capped);
+      repaint(true);
+      const shown = res.capped ? fmt(res.total) + "+" : fmt(res.total);
+      document.getElementById("count").textContent = withIndexTotal(shown);
+    });
+
+    /* Each group is drawn as its own answer lands rather than after all of
+       them. Waiting for the slowest would hold the rail blank for the length
+       of the broadest walk, which is the one a filtered query adds. The
+       staleness guard is per-answer, so nothing this paints belongs to a
+       query that has since been replaced. */
+    const kinds = kindFrom.then((res) => {
+      if (!current()) return;
+      const g = groupOf(res, "kind");
+      if (!g) return;
+      KIND_COUNTS = Object.fromEntries(g.facets.map((f) => [f.key, f.count]));
+      syncFacets(parse(q.value));
+    });
+
+    const ages = ageFrom.then((res) => {
+      if (!current()) return;
+      const g = groupOf(res, "age");
+      if (!g) return;
+      const by = Object.fromEntries(g.facets.map((f) => [f.key, f.count]));
+      const counts = BAR_EDGES.map((e) => by[String(e)] || 0).reverse();
+      /* Anything older than the last edge belongs to the last bar rather
+         than to nothing. Two years is where the scale ends, not where
+         the files do. */
+      counts[0] += by.older || 0;
+      paintBars(counts, res.capped);
+    });
+
+    /* Charged for the whole set, not for the first answer back. The live
+       refresh declines to repeat a sidebar dearer than `SIDEBAR_LIVE_UNDER_MS`
+       and `afterQuiet` waits out whatever the last one cost; both would be
+       reading a third of the true price if this charged for one call. */
+    return Promise.all([total, kinds, ages]).then(charge, (e) => {
+      charge();
+      console.error("scour: sidebar did not draw:", e);
+    });
   }
 
   /* The service could not be reached. Say which, rather than showing an empty
@@ -3910,9 +4011,13 @@
       <span class="nm">${label}</span><span class="ct">${count === null || count === undefined ? "" : fmt(count)}</span></button>`;
   }
 
-  /* What the service last counted, by kind token. Null until the first reply,
-     and then it wins over the numbers baked in above — those exist only so the
-     rail is not blank for the instant before it arrives. */
+  /* What the service last counted, by kind token — **under the query with its
+     `kind:` term taken out**, which is not always the query in force. See
+     `without`: the number on a row is what that row would give if it were
+     clicked, so a row can and should read more than the list is showing.
+     Null until the first reply, and then it wins over the numbers baked in
+     above — those exist only so the rail is not blank for the instant before
+     it arrives. */
   let KIND_COUNTS = null;
 
   function clearSidebarCounts() {
