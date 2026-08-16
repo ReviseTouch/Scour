@@ -1407,13 +1407,67 @@ mod tests {
             ),
             "every ordering change still schedules the facet walk"
         );
+        // The same guard the negated form used to spell. It reads the sidebar's
+        // own generation and the box, and neither moves for a re-sort; it is
+        // written once and shared because there are now up to three answers to
+        // admit or drop rather than one, and three copies of a staleness test
+        // is how two of them drift.
         assert!(
-            PAGE.contains("ours !== sidebarGeneration || text !== q.value"),
+            PAGE.contains("const current = () => ours === sidebarGeneration && text === q.value;"),
             "facet answers are still invalidated by sort-only generations"
         );
         assert!(
             !PAGE.contains("sidebar(LIST.query, generation)"),
             "a facet request is still coupled to the row ordering generation"
+        );
+    }
+
+    /// A rail counts what switching to one of its rows would give, so it is
+    /// counted with its own term taken out.
+    ///
+    /// Reported as "selecting one filter zeroes the counts of all the others",
+    /// and it did: the service answers a facet with the keys that matched and
+    /// no others, so under `kind:image` the kind group came back as one key and
+    /// the other twelve rows read `0`. Reproduced in the window — twelve of
+    /// thirteen rows at zero — and worse on the age chart, where `dm:27d` left
+    /// 21 of 24 bars flat, erasing the control for widening the range.
+    #[test]
+    fn a_rail_is_not_counted_through_its_own_filter() {
+        for needle in [
+            "const forKind = without(text, [\"kind\"]);",
+            "const forAge = without(text, [\"dm\"]);",
+        ] {
+            assert!(
+                PAGE.contains(needle),
+                "the sidebar no longer strips a rail's own term before counting it: {needle}"
+            );
+        }
+        // Only its OWN term. A scope or a size is somebody else's filter and
+        // switching kind under it really does give the narrowed count.
+        assert!(
+            !PAGE.contains("without(text, [\"under\"]")
+                && !PAGE.contains("without(text, [\"size\"]"),
+            "a rail is stripping a filter that is not its own"
+        );
+        // **Both groups on every call, and this is not decoration.**
+        // `NativeIndex::facets` chooses `AGE_SCAN_CAP` (unbounded) when an age
+        // band is asked for and `FACET_SCAN_CAP` (200_000 rows) when it is not,
+        // so asking the stripped query for `by=kind` alone moves the rail onto
+        // the sampled path. That sample is the first 200,000 rows the walk
+        // reaches, not a proportional one: measured on the empty query, images
+        // came back 210,551 exact against 1,430 sampled, and video 3.1x
+        // overstated. Thirteen plausible wrong numbers is worse than thirteen
+        // honest zeros, which is the whole reason this assertion is here.
+        assert!(
+            PAGE.contains("by: \"kind,age\""),
+            "the sidebar asks for one facet group, which puts the rail on the \
+             capped scan path and makes its numbers a biased sample"
+        );
+        // The meter under the list counts what is in the list, so it reads the
+        // query in force rather than the broader one a rail was counted with.
+        assert!(
+            PAGE.contains("const total = inForce.then((res) => {"),
+            "the total no longer comes from the query actually in force"
         );
     }
 
@@ -1527,8 +1581,11 @@ mod tests {
         let guard = body
             .find("if (text !== q.value) return Promise.resolve();")
             .expect("sidebar has no preflight query guard");
+        // Not the argument by name: the query asked for is no longer always
+        // the one in force — a rail is counted with its own term stripped —
+        // so what matters here is that no call of any shape precedes the guard.
         let call = body
-            .find("SERVICE.sidebar(text, BAR_EDGES)")
+            .find("SERVICE.sidebar(")
             .expect("sidebar service call is absent");
         assert!(
             guard < call,

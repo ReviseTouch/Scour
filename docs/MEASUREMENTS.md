@@ -4718,3 +4718,70 @@ window; an empty speculative forward page keeps the previous page visible.
 ```sh
 cargo test -p scour-gui list_growth_is_demand_driven_and_bounded
 ```
+
+## 2026-08-16 — a filter rail counted through its own filter
+
+Reported as "selecting one filter in the left sidebar zeroes the counts of all
+the others". It did. The service answers a facet with the keys that matched and
+no others, so under a `kind:` term the kind group comes back as a single key:
+
+```sh
+scour facets "" --by kind            # 13 keys: doc 459,677 … video 81
+scour facets "kind:image" --by kind  # one key: image 200,000 (capped)
+```
+
+In the window, on a live index of **2,238,943** entries: selecting `kind:image`
+left **12 of the 13** rows in the rail reading `0`, and clicking the 27-day bar
+left **21 of the 24** bars flat — which erases the control for widening the
+range. Both are true and both are useless: a rail exists to say what switching
+would give, and that question is about the query *without* the term the rail
+itself put there.
+
+**The trap in fixing it.** `NativeIndex::facets` picks its scan cap from the
+questions asked — `AGE_SCAN_CAP` (unbounded) when an age band is wanted,
+`FACET_SCAN_CAP` (200,000 rows) otherwise. So asking the stripped query for
+`by=kind` alone, which is the obvious way to write the second call, moves the
+rail onto the sampled path, and that sample is not proportional. It is the
+first 200,000 rows the walk reaches. On the empty query, exact against sampled:
+
+| kind | exact | sampled | share of true |
+|---|---|---|---|
+| image | 210,551 | 1,430 | 0.007 |
+| build | 304,872 | 50,508 | 0.166 |
+| video | 81 | 22 | 0.272 |
+
+A proportional sample would put every ratio at 0.089. Thirteen plausible wrong
+numbers is worse than thirteen honest zeros, so every facet call keeps
+`by=kind,age`. The extra group is close to free — the walk is the cost and the
+counting is not, which is why `facets` answers several questions from one walk.
+
+**What it costs.** Medians of three, driven in the real window with
+`scripts/scour-app` and `scripts/probe`, counting only the round the query
+change asked for. Latency is the slowest of the parallel calls, which is what a
+person waits for; service time is all of them added up.
+
+| leg | facet calls | latency ms | service ms |
+|---|---|---|---|
+| to a blank box | 1 → 1 | 312 → 226 | 312 → 226 |
+| to `rapor` | 1 → 1 | 30 → 17 | 30 → 17 |
+| click `kind:image` | 1 → 2 | 62 → 247 | 62 → 297 |
+| click the 27-day bar | 1 → 2 | 111 → 556 | 111 → 737 |
+| both together | 1 → 3 | 27 → 182 | 27 → 416 |
+
+**The unfiltered legs are untouched**, and those are the ones every keystroke
+goes through: with no `kind:` or `dm:` term the three questions are about the
+same rows and it is the single call it always was. A second is paid for only by
+somebody who has clicked a filter, a third only by somebody who has clicked
+both. The two unfiltered rows differ by noise, not by work — the same query is
+asked in both.
+
+Idling for 30 s on `rapor kind:image`, which is the narrow filtered query that
+stays under `SIDEBAR_LIVE_UNDER_MS` and therefore keeps refreshing: scourd at
+**4.23% → 4.37%** of a core (medians of three, alternating; **0.40%** with no
+window open at all), facet service time **211 → 214 ms** per 30 s, and facet
+calls **10 → 8**. The call count did not double because the cost is charged for
+the whole set rather than the first answer back, so `atMostEvery` backs the
+refresh off to half as many rounds. Sampling the rail every frame through a
+query change, the window in which the previous query's numbers are still on
+screen was **26.8 → 28.8 ms** — unchanged, and pre-existing: it is the gap
+between the keystroke and the search reply that runs `clearSidebarCounts`.
