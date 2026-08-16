@@ -394,6 +394,31 @@ msgstr "simgeler"
 msgid "turn icons on or off"
 msgstr "simgeleri aç veya kapat"
 
+# The three shapes the list can take. "icons" above is the switch that puts a
+# picture in every row of the table and is a different question from these, so
+# the grid deliberately says "icon grid" rather than borrowing that msgid.
+
+msgid "how the results are shown"
+msgstr "sonuçlar nasıl gösteriliyor"
+
+msgid "detail list"
+msgstr "ayrıntı listesi"
+
+msgid "show the results as a detail list"
+msgstr "sonuçları ayrıntı listesi olarak göster"
+
+msgid "icon grid"
+msgstr "simge ızgarası"
+
+msgid "show the results as an icon grid"
+msgstr "sonuçları simge ızgarası olarak göster"
+
+msgid "large icons"
+msgstr "büyük simgeler"
+
+msgid "show the results as large icons"
+msgstr "sonuçları büyük simgeler olarak göster"
+
 msgid "design notes"
 msgstr "tasarım notları"
 
@@ -837,3 +862,11 @@ msgstr "CSV olarak dışa aktar"
 
 msgid "export the whole result as CSV"
 msgstr "tüm sonucu CSV olarak dışa aktar"
+
+# The maker, at the foot of the help. The link travels inside the msgid so that
+# a language is free to put it where its grammar wants it — Turkish puts the
+# name first and the verb last, which glueing a translated "Made by" onto a
+# fixed anchor could not have done.
+
+msgid "Made by <a href=\"https://revisetouch.com\" target=\"_blank\" rel=\"noreferrer\">revisetouch.com</a>"
+msgstr "<a href=\"https://revisetouch.com\" target=\"_blank\" rel=\"noreferrer\">revisetouch.com</a> tarafından yapıldı"

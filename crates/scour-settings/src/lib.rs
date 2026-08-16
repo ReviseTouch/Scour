@@ -147,6 +147,25 @@ pub struct Settings {
     /// somebody typed `tr-` is worse than a window in the wrong language.
     #[serde(default)]
     pub language: String,
+    /// What shape the result list is drawn in: `detail` a table of rows,
+    /// `icons` a grid of small tiles, `large` a grid of big ones.
+    ///
+    /// **Shared rather than [`Settings::view`], and the boundary is worth
+    /// stating** — whether thumbnails are drawn lives in `view.web` and this
+    /// does not. The difference is who can mean it: whether a *picture* goes
+    /// in a row is something only a window with pictures decides, while "show
+    /// me these as tiles rather than as lines" is an answer any frontend with
+    /// a screen gives, and the Slint window will be asked the same question
+    /// the day it grows a second shape. Two frontends inventing two names for
+    /// that is what the typed fields exist to stop.
+    ///
+    /// Empty means "nobody has chosen", which every frontend reads as its own
+    /// default. Not validated here, for the reason [`Settings::language`] is
+    /// not: an unknown word degrades to that default, and a settings file that
+    /// refuses to load because one frontend wrote a shape another has not
+    /// heard of is a person's preferences gone.
+    #[serde(default)]
+    pub layout: String,
     /// Past queries, most recent first.
     ///
     /// **Only queries somebody meant.** A search box runs a query per
@@ -191,6 +210,8 @@ pub struct Change {
     /// lets the window change the language while a terminal is writing its
     /// sort order, and neither undoes the other.
     pub language: Option<String>,
+    /// `detail`, `icons`, `large` — or `""` to go back to no opinion at all.
+    pub layout: Option<String>,
     /// Replace the list outright. For clearing it, mostly.
     pub history: Option<Vec<String>>,
     /// Put one query at the front instead.
@@ -232,6 +253,9 @@ impl Change {
         }
         if let Some(v) = self.language {
             to.language = v;
+        }
+        if let Some(v) = self.layout {
+            to.layout = v;
         }
         if let Some(v) = self.history {
             to.history = v;
@@ -377,6 +401,42 @@ mod tests {
         assert!(s.history.is_empty());
         assert_eq!(s.descending, None);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **The shape of the list is a shared field, and behaves like one.**
+    ///
+    /// It survives a write from a frontend that has never heard of it, which
+    /// is the whole reason it is a [`Change`] field rather than something a
+    /// window sends as part of a whole object. The empty string is kept as a
+    /// distinct answer — "nobody has chosen" is not "detail", and a frontend
+    /// whose default is something else has to be able to tell the two apart.
+    #[test]
+    fn the_list_shape_outlives_a_frontend_that_does_not_know_it() {
+        let mut s = Settings::default();
+        assert_eq!(s.layout, "", "nobody has chosen, to start with");
+
+        Change {
+            layout: Some("large".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.layout, "large");
+
+        // A terminal saving its sort order says nothing about the shape.
+        Change {
+            sort: Some("size".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.layout, "large");
+
+        // And it can be handed back.
+        Change {
+            layout: Some(String::new()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.layout, "");
     }
 
     #[test]
