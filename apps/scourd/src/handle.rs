@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use scour_engine::Engine;
+use scour_ipc::Emit;
 use scour_proto::{Outcome, Request, Response};
 
 /// What every frontend remembers, and where it is written.
@@ -30,15 +31,44 @@ impl Kept {
     }
 }
 
-pub fn dispatch(engine: &Engine, kept: &Kept, req: Request) -> Outcome {
-    match run(engine, kept, req) {
+pub fn dispatch(engine: &Engine, kept: &Kept, req: Request, emit: &mut dyn Emit) -> Outcome {
+    match run(engine, kept, req, emit) {
         Ok(r) => Outcome::Ok(r),
         Err(e) => Outcome::Error(e),
     }
 }
 
-fn run(engine: &Engine, kept: &Kept, req: Request) -> scour_core::Result<Response> {
+fn run(
+    engine: &Engine,
+    kept: &Kept,
+    req: Request,
+    emit: &mut dyn Emit,
+) -> scour_core::Result<Response> {
     Ok(match req {
+        // **The one request that is not one answer.** Rows are written into
+        // frames as the walk produces them and the frames go out while this is
+        // still running; what is returned here is the last of them.
+        //
+        // The `Err` from a piece is the reader having gone away — an ordinary
+        // cancelled download. It stops the walk, and it is deliberately not
+        // turned into a failure reply: there is nobody left to read one, and
+        // the frame would only fail to write as well.
+        Request::Export { query, columns } => {
+            let mut gone = None;
+            let rows = engine.export(&query, &columns, |csv| {
+                match emit.piece(Response::ExportChunk { csv }) {
+                    Ok(()) => true,
+                    Err(e) => {
+                        gone = Some(e);
+                        false
+                    }
+                }
+            })?;
+            match gone {
+                Some(e) => return Err(e),
+                None => Response::ExportDone { rows },
+            }
+        }
         Request::Search {
             query,
             sort,

@@ -256,6 +256,24 @@ const PREPARE_COST: u32 = 10;
 /// the knee.
 const CANDIDATES: u32 = 200_000;
 
+/// How much CSV goes into one frame of an export.
+///
+/// **A row a frame would make the framing most of the bytes.** A frame is a
+/// line of JSON — `{"id":7,"more":true,"ok":{"result":"export_chunk","csv":…}}`
+/// — so a 60-byte row would pay 60 bytes of envelope, a `serde_json` call and
+/// a socket write for itself. At 2.24 M rows that is 2.24 M of each.
+///
+/// A whole export in one frame is the other end and is what this exists to
+/// avoid: it is the 200-odd MB nobody may hold.
+///
+/// 128 KB is roughly two thousand rows of this index, which is one write and
+/// one JSON escape per two thousand rows, and a transient allocation of about
+/// twice that while the frame is built. It is also comfortably under the
+/// megabyte the server will read back on the request side — not that a reply
+/// is subject to that ceiling, but a frame nobody could have sent in the other
+/// direction is a frame worth being suspicious of.
+const EXPORT_CHUNK: usize = 128 * 1024;
+
 /// The parts of a query the parser could not read as written.
 ///
 /// The service does this rather than the caller, and that is the whole point:
@@ -659,6 +677,83 @@ impl Engine {
             // Stamped by `search` for every path alike.
             misread: Vec::new(),
         })
+    }
+
+    /// The whole matching set, as CSV, in pieces.
+    ///
+    /// **The service makes the file, not the frontend.** It was the browser
+    /// bridge's, in JavaScript's neighbourhood if not in JavaScript, and the
+    /// owner's instruction was exactly this: the Rust service gives the CSV.
+    /// What that buys is one implementation of the quoting instead of one per
+    /// frontend — the terminal had no export at all and now reaches the same
+    /// code — and it is the only arrangement in which the walk and the writing
+    /// happen in the same place, which is what makes a stream possible.
+    ///
+    /// `out` is handed each piece and returns false to stop. Stopping is
+    /// ordinary — a cancelled download — and it propagates all the way into
+    /// the index's walk, which abandons it. Nothing is held: not the rows, not
+    /// the file, not a buffer that grows with the answer.
+    ///
+    /// Returns how many rows were written.
+    pub fn export(
+        &self,
+        query: &str,
+        columns: &[String],
+        mut out: impl FnMut(String) -> bool,
+    ) -> Result<u64> {
+        let sheet = if columns.is_empty() {
+            scour_export::Sheet::new(scour_export::Sheet::default_columns())
+        } else {
+            scour_export::Sheet::new(columns.to_vec())
+        };
+        let mut buf: Vec<u8> = Vec::with_capacity(EXPORT_CHUNK + 4096);
+        sheet.header(&mut buf);
+
+        // Set when `out` refuses, because the walk below can only be stopped
+        // by returning false and the reason has to survive back to here — a
+        // caller that went away is not the same as a query that ran out of
+        // rows, and the count alone cannot tell them apart.
+        let mut stopped = false;
+        let mut flush = |buf: &mut Vec<u8>, stopped: &mut bool| {
+            if buf.is_empty() {
+                return true;
+            }
+            // Rows are built from `String` paths, so this is UTF-8 by
+            // construction; the lossy conversion is a refusal to panic on the
+            // day that stops being true, not an expectation that it will.
+            let text = String::from_utf8_lossy(buf).into_owned();
+            buf.clear();
+            if out(text) {
+                true
+            } else {
+                *stopped = true;
+                false
+            }
+        };
+
+        let mut wrote = 0u64;
+        let scanned = self.shared.index.scan(
+            &scour_core::ScanRequest {
+                query: scour_query::parse(query),
+            },
+            &mut |hit| {
+                sheet.row(hit, &mut buf);
+                wrote += 1;
+                if buf.len() >= EXPORT_CHUNK {
+                    return flush(&mut buf, &mut stopped);
+                }
+                true
+            },
+        )?;
+        debug_assert_eq!(scanned, wrote);
+        if !stopped {
+            // The tail, and the header when the query matched nothing at all.
+            // An empty result still produces a file with its heading row: a
+            // spreadsheet with no rows says "nothing matched", and a zero-byte
+            // download says the export broke.
+            flush(&mut buf, &mut stopped);
+        }
+        Ok(wrote)
     }
 
     /// Every facet question about one query, answered from one walk.

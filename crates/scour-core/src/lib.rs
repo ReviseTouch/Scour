@@ -26,8 +26,8 @@ pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
     EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Group, Hit,
     IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Page, PrefixSet,
-    Result, Role, ScanOptions, ScanReport, SearchRequest, SearchResponse, SortKey, SourceId,
-    SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode, UsageRequest,
+    Result, Role, ScanOptions, ScanReport, ScanRequest, SearchRequest, SearchResponse, SortKey,
+    SourceId, SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode, UsageRequest,
     UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest, runs_when_opened, under,
 };
 

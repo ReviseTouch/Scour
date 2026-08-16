@@ -279,6 +279,14 @@ pub fn human(r: &Response) -> String {
         Response::Maintained(m) => format!("{:?} finished in {} ms.", m.level, m.took_ms),
         Response::Accepted => "Accepted.".into(),
         Response::Text { text } => text.clone(),
+        // The MCP server exposes no export, so these never arrive. It could:
+        // the transport under it streams already, and the tool would be a
+        // `Client::stream` writing where the model said. What stops it is that
+        // a model must not be handed two hundred megabytes through a context
+        // window — so the tool would have to answer with a *filename* rather
+        // than with rows, which makes it the only tool here that writes to
+        // disk. That is the owner's decision to take, not this match arm's.
+        Response::ExportChunk { .. } | Response::ExportDone { .. } => String::new(),
     }
 }
 

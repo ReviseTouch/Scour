@@ -4259,3 +4259,184 @@ fn reported_disk_bytes_follow_publication_erasure_and_rebuild() {
         "a second quiet read must preserve the exact result"
     );
 }
+
+/// The scan reaches every row a search would, across every segment.
+///
+/// **The set, not the order.** `Index::scan` streams and does not sort, so
+/// this compares against the *set* brute force produces — both sides sorted
+/// here, so that two lists of the same paths compare equal whatever order they
+/// arrived in.
+///
+/// What it guards is a class of bug paging never had: a segment walked but not
+/// merged, a hidden removal the walk still emits, a block the zone map skipped
+/// that held a match. Each returns a plausible file that is short of the truth
+/// by a few thousand rows, and nothing but a comparison against every entry
+/// notices.
+#[test]
+fn a_scan_reaches_every_row_a_search_would() {
+    let f = Fixture::new(16_000, 2_000);
+    assert!(
+        f.index.stats().expect("stats").segments >= 8,
+        "the fixture is supposed to be fragmented"
+    );
+    for q in [
+        "",
+        "rapor",
+        "ext:rs",
+        "*.pdf",
+        "size:>1kb",
+        "dm:>2020-01-01",
+    ] {
+        let mut got = Vec::new();
+        let counted = f
+            .index
+            .scan(
+                &scour_core::ScanRequest {
+                    query: parse_at(q, NOW),
+                },
+                &mut |hit| {
+                    got.push(hit.path.clone());
+                    true
+                },
+            )
+            .expect("scan");
+        assert_eq!(counted as usize, got.len(), "{q:?}: the count is the rows");
+
+        let mut want: Vec<String> = brute_force(
+            &f.entries,
+            &parse_at(q, NOW),
+            SortKey::Modified,
+            true,
+            usize::MAX,
+        )
+        .into_iter()
+        .map(|h| h.path)
+        .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "query {q:?} scanned a different set than exists");
+    }
+}
+
+/// A scan and a count answer the same number.
+///
+/// The one thing an export's reader can check without this repository, so it
+/// is the one that must not drift: `scour count` and the row count of `scour
+/// export` are the same walk asked two ways.
+#[test]
+fn a_scan_counts_what_a_search_counts() {
+    let f = Fixture::new(8_000, 1_000);
+    for q in ["", "rapor", "ext:rs", "kind:image", "zzzz-nothing-matches"] {
+        let scanned = f
+            .index
+            .scan(
+                &scour_core::ScanRequest {
+                    query: parse_at(q, NOW),
+                },
+                &mut |_| true,
+            )
+            .expect("scan");
+        let counted = f
+            .index
+            .search(&SearchRequest {
+                query: parse_at(q, NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 0,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search")
+            .total;
+        assert_eq!(scanned, counted, "{q:?}: scan and count disagree");
+    }
+}
+
+/// A reader that stops is obeyed at once, and the count says where.
+///
+/// A cancelled download, seen from the bottom of the stack. What must not
+/// happen is the walk running to the end anyway: on the owner's machine that
+/// is two million rows of front-coded paths rebuilt for somebody who has gone.
+#[test]
+fn a_scan_that_is_stopped_stops() {
+    let f = Fixture::new(8_000, 1_000);
+    let mut seen = 0u64;
+    let counted = f
+        .index
+        .scan(
+            &scour_core::ScanRequest {
+                query: Ast::default(),
+            },
+            &mut |_| {
+                seen += 1;
+                seen < 10
+            },
+        )
+        .expect("scan");
+    assert_eq!(seen, 10);
+    assert_eq!(counted, 10, "the count is what the caller was given");
+
+    // And the index is untouched by having been abandoned: no lock kept, no
+    // state left behind, the next question answered in full. Against
+    // `f.entries` rather than the 8,000 asked for — the generator makes
+    // directories as well as files, and a number typed here would be a fact
+    // about the generator rather than about the scan.
+    assert_eq!(
+        f.index
+            .scan(
+                &scour_core::ScanRequest {
+                    query: Ast::default()
+                },
+                &mut |_| true
+            )
+            .expect("scan again"),
+        f.entries.len() as u64
+    );
+}
+
+/// A removal that has not been written yet must not be exported.
+///
+/// It is hidden from searches the moment it is applied and erased at the next
+/// commit, and between those two moments the row is still in the segment and
+/// still matches. A scan reading the segment directly would export files that
+/// are gone — worse in an export than on a page, because a spreadsheet is
+/// acted on later, when the difference is no longer there to see.
+#[test]
+fn a_scan_does_not_export_what_a_pending_removal_took() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let entries = [
+        entry("/a/keep.txt", NOW, 1),
+        entry("/a/gone.txt", NOW, 2),
+        entry("/a/also-gone.txt", NOW, 3),
+    ];
+    index
+        .apply(&mut entries.iter().cloned().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+
+    // Applied and deliberately not committed.
+    index
+        .apply(
+            &mut ["/a/gone.txt", "/a/also-gone.txt"]
+                .into_iter()
+                .map(|p| Change::RemoveSubtree { path: p.into() }),
+        )
+        .expect("remove");
+
+    let mut got = Vec::new();
+    index
+        .scan(
+            &scour_core::ScanRequest {
+                query: Ast::default(),
+            },
+            &mut |h| {
+                got.push(h.path.clone());
+                true
+            },
+        )
+        .expect("scan");
+    assert_eq!(got, ["/a/keep.txt".to_owned()]);
+}

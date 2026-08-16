@@ -4549,10 +4549,18 @@ dependencies = [
  "parking_lot",
  "scour-core",
  "scour-dupes",
+ "scour-export",
  "scour-index-native",
  "scour-mock",
  "scour-query",
  "tempfile",
+]
+
+[[package]]
+name = "scour-export"
+version = "0.1.0"
+dependencies = [
+ "scour-core",
 ]
 
 [[package]]

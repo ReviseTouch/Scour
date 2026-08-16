@@ -88,6 +88,20 @@ impl Default for SearchRequest {
     }
 }
 
+/// Every row a query matches, asked for once.
+///
+/// **A query and nothing else, and the two missing fields are the point.**
+/// There is no page, because the whole set is what this asks for and bounding
+/// it is what [`SearchRequest`] is for. And there is no sort: see
+/// [`Index::scan`], which explains why an order is a different problem from a
+/// stream and who is expected to solve it.
+///
+/// [`Index::scan`]: crate::Index::scan
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanRequest {
+    pub query: Ast,
+}
+
 /// One result row, complete.
 ///
 /// Nothing is projected away. Materialising a full row from the index's

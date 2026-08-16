@@ -8,7 +8,7 @@ use interprocess::TryClone;
 use interprocess::local_socket::traits::ListenerExt;
 use interprocess::local_socket::{ListenerOptions, Stream};
 use scour_core::{Error, Result};
-use scour_proto::{Call, Outcome, Reply, Request};
+use scour_proto::{Call, Outcome, Reply, Request, Response};
 
 /// Turn an address into whatever the platform's socket layer calls a name.
 pub(crate) fn name(addr: &str) -> Result<interprocess::local_socket::Name<'_>> {
@@ -85,9 +85,13 @@ impl Server {
     /// One thread per connection. A client holds its connection open for a
     /// whole session — the search box sends one request per keystroke — so the
     /// count is the number of open windows, not the number of requests.
+    ///
+    /// The handler is given somewhere to put the pieces of an answer that has
+    /// them. Almost nothing uses it: the reply it returns is the answer, and
+    /// for an export it is the last frame of one.
     pub fn serve<H>(self, handler: H, stop: Arc<AtomicBool>)
     where
-        H: Fn(Request) -> Outcome + Send + Sync + 'static,
+        H: Fn(Request, &mut dyn Emit) -> Outcome + Send + Sync + 'static,
     {
         let handler = Arc::new(handler);
         for conn in self.listener.incoming() {
@@ -107,9 +111,52 @@ impl Server {
     }
 }
 
+/// Somewhere to put a piece of an answer.
+///
+/// A handler that produces an answer in pieces writes them here as it makes
+/// them and returns the last frame as its [`Outcome`]. Nothing is buffered:
+/// the write goes to the socket, so the kernel's buffer is the backpressure
+/// and a client that has gone away shows up as an error on the next piece
+/// rather than as memory the service keeps growing.
+pub trait Emit {
+    /// Send one piece.
+    ///
+    /// `Err` means the reader is gone — an ordinary cancelled download. The
+    /// only correct response is to stop producing, which is why this returns
+    /// a result the caller has to look at rather than swallowing it.
+    fn piece(&mut self, response: Response) -> scour_core::Result<()>;
+}
+
+/// The pieces go straight out of the socket this connection is holding.
+struct ToSocket<'a, W: Write> {
+    out: &'a mut W,
+    id: u64,
+    /// Pieces written, so that a handler which never emitted one can be told
+    /// apart from one that did — the shutdown path and the tests both care.
+    sent: u64,
+}
+
+impl<W: Write> Emit for ToSocket<'_, W> {
+    fn piece(&mut self, response: Response) -> scour_core::Result<()> {
+        let mut text =
+            serde_json::to_string(&Reply::piece(self.id, response)).map_err(|e| Error::Io {
+                detail: e.to_string(),
+            })?;
+        text.push('\n');
+        self.out
+            .write_all(text.as_bytes())
+            .and_then(|()| self.out.flush())
+            .map_err(|e| Error::Unreachable {
+                detail: e.to_string(),
+            })?;
+        self.sent += 1;
+        Ok(())
+    }
+}
+
 fn session<H>(conn: Stream, handler: &H, stop: &AtomicBool)
 where
-    H: Fn(Request) -> Outcome,
+    H: Fn(Request, &mut dyn Emit) -> Outcome,
 {
     let mut out = match conn.try_clone() {
         Ok(c) => c,
@@ -132,12 +179,12 @@ where
             // Over the ceiling: say so and hang up. Continuing would mean
             // resynchronising on a newline that may never arrive.
             Err(TooLong) => {
-                let reply = Reply {
-                    id: 0,
-                    outcome: Outcome::Error(Error::Config {
+                let reply = Reply::whole(
+                    0,
+                    Outcome::Error(Error::Config {
                         detail: format!("a request may not exceed {MAX_LINE} bytes"),
                     }),
-                };
+                );
                 if let Ok(mut text) = serde_json::to_string(&reply) {
                     text.push('\n');
                     let _ = out.write_all(text.as_bytes());
@@ -153,16 +200,27 @@ where
         // nonsense should be told, and a client waiting for a reply that never
         // comes is the worst failure this layer can produce.
         let reply = match serde_json::from_str::<Call>(&line) {
-            Ok(call) => Reply {
-                id: call.id,
-                outcome: handler(call.request),
-            },
-            Err(e) => Reply {
-                id: 0,
-                outcome: Outcome::Error(Error::Config {
+            Ok(call) => {
+                // The pieces of an answer, if it has any, go out here while
+                // the handler is still running. The terminating frame is what
+                // it returns — including when it stopped early because this
+                // socket failed, in which case writing that frame fails too
+                // and the loop below hangs up. Which is right: there is
+                // nobody left to tell.
+                let mut emit = ToSocket {
+                    out: &mut out,
+                    id: call.id,
+                    sent: 0,
+                };
+                let outcome = handler(call.request, &mut emit);
+                Reply::whole(call.id, outcome)
+            }
+            Err(e) => Reply::whole(
+                0,
+                Outcome::Error(Error::Config {
                     detail: e.to_string(),
                 }),
-            },
+            ),
         };
         let Ok(mut text) = serde_json::to_string(&reply) else {
             return;

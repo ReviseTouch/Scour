@@ -666,107 +666,42 @@ fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
     }
 }
 
-/// How many match, exactly, however long that takes.
-///
-/// Separate from the search because the two have different deadlines: the rows
-/// have to be on screen before the next keystroke and this does not.
 /// The whole result set, as a spreadsheet.
 ///
-/// **Not the list, the result set.** The window stops at `REACH` — twenty
-/// thousand rows — because past that a query wants narrowing rather than more
-/// scrolling, and because a person cannot read further anyway. An export is
-/// the other case: it exists precisely to hand the whole answer to something
-/// that is not a person. So this pages through to the end, however far that
-/// is, and the owner asked for exactly that.
+/// **A pipe now, and it used to be the author.** The URL, the headers and the
+/// bytes are unchanged; what left is the loop that made them. This paged the
+/// service — `offset`, `offset + 10_000`, and so on — and a page costs what it
+/// takes to walk to its offset: 2.1 ms at the start of this index, 25.3 at a
+/// hundred thousand, 65.5 at half a million, 117.6 at a million. Linear per
+/// page is quadratic in total, so the whole index wrote 1.4 M lines in ten
+/// minutes without finishing, and the endpoint stopped at half a million and
+/// said so in a trailer. The owner asked for no limit; there is none now,
+/// because the service walks the set once and these bytes are what it produced.
 ///
-/// **Written as it goes.** Two million rows is a couple of hundred megabytes,
-/// and building it before sending it would hold all of that at once for no
-/// reason — see `http::attachment` for why the length is not declared.
+/// Three things went with the loop, and each is worth naming because each was
+/// load-bearing before:
 ///
-/// The columns are the ones the window is showing, in the order it shows them,
-/// which is the least surprising answer: they are what the reader chose. A
-/// column that is not on screen is one keystroke away and then exported.
+/// * **The `CEILING`**, and the `# scour: stopped at N rows` trailer under it.
+///   There is nothing left to stop for, so a file that said it had stopped
+///   would be a lie. A short file now means a failure, and it carries no
+///   trailer either — the connection simply ends, which is what a truncated
+///   download looks like to everything that reads one.
+/// * **The quoting, the byte-order mark and the date format.** They live in
+///   `scour_export`, in the service. Not moved for tidiness: this bridge is
+///   one frontend of four, the terminal writes the same file now with `scour
+///   export`, and two implementations of RFC 4180 quoting is two chances for a
+///   spreadsheet to open and be quietly wrong.
+/// * **`sort` and `desc`.** The service streams in the index's own order and
+///   cannot be asked for another — see `Request::Export`. The parameters are
+///   still accepted and now do nothing, which is said here rather than
+///   pretended about; a spreadsheet sorts itself in one click.
 ///
-/// **The set moves while this runs**, because a watched filesystem does. A
-/// row written into a segment during the export shifts everything after it by
-/// one, so a file can appear twice or not at all. That is inherent to paging a
-/// live index and is not worth a lock held for the length of a download; the
-/// alternative is refusing to export while anything is being written, which on
-/// this machine would be never.
+/// **The set no longer moves while this runs.** Paging a live index meant a
+/// row written during the export shifted everything after it, so a file could
+/// appear twice or not at all — documented here as inherent, and it was
+/// inherent to *paging*. One walk under one read lock is a consistent snapshot.
 fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    let query = req.param("q").unwrap_or_default().to_owned();
-    let sort = sort_of(req.param("sort"));
-    let descending = req.param("desc").unwrap_or("1") != "0";
-
-    /// What a column is called in the file, and how to read it off a hit.
-    /// Keyed by the same ids the page uses for its columns.
-    fn cell(id: &str, h: &scour_core::Hit) -> String {
-        match id {
-            "name" => h.name().to_owned(),
-            "path" => h.parent().to_owned(),
-            "full" => h.path.clone(),
-            "ext" => scour_core::ext_of(h.name()).to_owned(),
-            "size" => h.meta.size.to_string(),
-            "disk" => h.meta.disk.to_string(),
-            "mtime" => stamp(h.meta.mtime),
-            "ctime" => stamp(h.meta.ctime),
-            "atime" => stamp(h.meta.atime),
-            "kind" => h.kind.token().to_owned(),
-            "perm" => scour_core::mode_string(h.meta.mode),
-            "user" => owner_name(Owner::User, h.meta.uid),
-            "group" => owner_name(Owner::Group, h.meta.gid),
-            "items" => h.meta.items.to_string(),
-            _ => String::new(),
-        }
-    }
-
-    /// Seconds since the epoch, written the way a spreadsheet reads a date.
-    ///
-    /// ISO 8601 rather than the window's "5 dk önce": one is for a person
-    /// glancing at a screen and the other is for a column that will be sorted
-    /// and filtered by something else. Zero means the filesystem never said,
-    /// and an empty cell says that better than 1970 does.
-    fn stamp(t: i64) -> String {
-        if t <= 0 {
-            return String::new();
-        }
-        let days = t.div_euclid(86_400);
-        let secs = t.rem_euclid(86_400);
-        let (y, m, d) = civil(days);
-        format!(
-            "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
-            secs / 3600,
-            (secs % 3600) / 60,
-            secs % 60
-        )
-    }
-
-    /// Days since 1970-01-01 to a calendar date. Howard Hinnant's civil_from_days,
-    /// which is exact for every date this index can hold and needs no dependency.
-    fn civil(z: i64) -> (i64, u32, u32) {
-        let z = z + 719_468;
-        let era = z.div_euclid(146_097);
-        let doe = z.rem_euclid(146_097);
-        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-        (if m <= 2 { y + 1 } else { y }, m, d)
-    }
-
-    /// RFC 4180: quote when the value holds a separator, a quote or a line
-    /// break, and double any quote inside. Filenames contain all three.
-    fn escape(v: &str) -> String {
-        if v.contains([',', '"', '\n', '\r']) {
-            format!("\"{}\"", v.replace('"', "\"\""))
-        } else {
-            v.to_owned()
-        }
-    }
-
-    let cols: Vec<String> = req
+    let columns: Vec<String> = req
         .param("cols")
         .map(|c| {
             c.split(',')
@@ -774,106 +709,63 @@ fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_else(|| {
-            ["name", "path", "size", "mtime", "kind"]
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect()
-        });
+        .unwrap_or_default();
+    let request = Request::Export {
+        query: req.param("q").unwrap_or_default().to_owned(),
+        columns,
+    };
 
-    http::attachment(stream, "text/csv; charset=utf-8", "scour.csv");
-    // A byte-order mark, because the spreadsheet most people open this in
-    // guesses the encoding otherwise and guesses wrong on Turkish.
-    let _ = stream.write_all(&[0xEF, 0xBB, 0xBF]);
-    let head: Vec<String> = cols.iter().map(|c| escape(c)).collect();
-    let _ = stream.write_all(format!("{}\r\n", head.join(",")).as_bytes());
-
-    /// How far an export goes before it stops and says so.
-    ///
-    /// **Not the list's `REACH`**, which is twenty thousand because past that a
-    /// person is not reading any more. An export is for a machine and wants
-    /// everything — the owner asked for no limit at all, and this is not that.
-    /// It is here because of a measurement.
-    ///
-    /// The bridge pages through the service, and a page costs what it takes to
-    /// walk to its offset: 2.1 ms at the start, 25.3 at a hundred thousand,
-    /// 65.5 at half a million, 117.6 at a million. Linear per page is quadratic
-    /// in total, so the whole of this index — 2.24 M rows — wrote 1.4 M lines
-    /// in ten minutes and had not finished. Half a million lands in **71
-    /// seconds** — measured, against the fifteen this was first guessed at —
-    /// and covers every export anyone has actually wanted here.
-    ///
-    /// **The honest limit needs the service to stream**, not to be paged: one
-    /// request, rows written as the walk yields them, no offset to re-walk. The
-    /// cursor that would avoid it cannot be written in the query language,
-    /// which takes a date and not a time — `dm:<=2026-03-07` parses and
-    /// `dm:<=1770000000` does not — so a cursor could only step a day at a
-    /// time and would re-read every file stamped that day. Measured, not
-    /// assumed.
-    const CEILING: u32 = 500_000;
-
-    // Whatever the service will serve at once. Asking for more than
-    // `result_limit` is answered with `result_limit`, so this discovers the
-    // page size from the first answer rather than assuming one.
-    let mut offset: u32 = 0;
-    let mut buf = String::with_capacity(64 * 1024);
-    // The stream has begun, so there is nowhere left to put a status code.
-    // Ending the body is all a reader sees, and a short file beats a wrong one.
-    while let Ok(Response::Search(r)) = call(
-        client,
-        Request::Search {
-            query: query.clone(),
-            sort,
-            descending,
-            page: Page {
-                offset,
-                limit: 10_000,
-                // No total is wanted, and counting one is the only work that
-                // is proportional to the size of the set.
-                count_cap: 1,
-            },
-        },
-    ) {
-        if r.hits.is_empty() {
-            break;
-        }
-        let got = r.hits.len() as u32;
-        for h in &r.hits {
-            for (i, id) in cols.iter().enumerate() {
-                if i > 0 {
-                    buf.push(',');
-                }
-                buf.push_str(&escape(&cell(id, h)));
-            }
-            buf.push_str("\r\n");
-        }
-        if stream.write_all(buf.as_bytes()).is_err() {
-            // The reader went away — a cancelled download. Ordinary.
+    // **A connection of its own, not one from the pool.** An export holds its
+    // connection for as long as it takes to walk the index, and a pooled one
+    // would be one the rest of the page cannot use for that whole time — with
+    // `POOL` at eight, a handful of concurrent downloads would starve the
+    // keystrokes. It is not returned afterwards either: a stream the reader
+    // abandons leaves frames in flight, which is the state `Client::stream`
+    // refuses to reuse a connection after.
+    let addr = match client.lock() {
+        Ok(guard) => guard.addr.clone(),
+        Err(_) => {
+            http::fail(
+                stream,
+                "500 Internal Server Error",
+                "the bridge lost its client",
+            );
             return;
         }
-        buf.clear();
-        offset += got;
-        // Short page means the end of the set.
-        if got < 200 {
-            break;
+    };
+    let mut link = match Client::connect(&addr) {
+        Ok(c) => c,
+        Err(e) => {
+            http::fail(stream, "502 Bad Gateway", &e.to_string());
+            return;
         }
-        if offset >= CEILING {
-            // **Said in the file, not only in the code.** A spreadsheet that is
-            // quietly half an answer is worse than one that is openly part of
-            // it — the reader has no other way to find out, and a truncated
-            // export read as complete is a wrong conclusion about a disk.
-            let _ = stream.write_all(
-                format!(
-                    "# scour: stopped at {offset} rows.                      Narrow the query to export the rest.\r\n"
-                )
-                .as_bytes(),
-            );
-            break;
-        }
-    }
+    };
+
+    // The headers go out before the first row, so there is nowhere left to put
+    // a status code if the walk fails after this line. That is the trade the
+    // whole endpoint is built on — see `http::attachment` — and it is why the
+    // two failures above are checked *before* it.
+    http::attachment(stream, "text/csv; charset=utf-8", "scour.csv");
+    let result = link.stream(request, |piece| match piece {
+        Response::ExportChunk { csv } => stream.write_all(csv.as_bytes()).is_ok(),
+        // Not a piece of an export. Ignored rather than taken as the end: a
+        // service newer than this bridge may have something to add, and a
+        // download that keeps its rows is better than one that stops on a
+        // frame it did not recognise.
+        _ => true,
+    });
+    // Nothing to say and nowhere to say it. A reader that went away is the
+    // ordinary case — a cancelled download — and an export that failed leaves
+    // a short file, which is the only signal HTTP has left once a body has
+    // begun.
+    let _ = result;
     let _ = stream.flush();
 }
 
+/// How many match, exactly, however long that takes.
+///
+/// Separate from the search because the two have different deadlines: the rows
+/// have to be on screen before the next keystroke and this does not.
 fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Count {
         query: req.param("q").unwrap_or_default().to_owned(),

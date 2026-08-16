@@ -3,8 +3,9 @@
 use std::fmt::Debug;
 
 use crate::types::{
-    ApplyReport, Change, Error, FacetRequest, FacetResponse, IndexStats, MaintReport, Maintenance,
-    Result, SearchRequest, SearchResponse, SourceId, UsageRequest, UsageResponse,
+    ApplyReport, Change, Error, FacetRequest, FacetResponse, Hit, IndexStats, MaintReport,
+    Maintenance, Result, ScanRequest, SearchRequest, SearchResponse, SourceId, UsageRequest,
+    UsageResponse,
 };
 
 /// An index over entries.
@@ -106,6 +107,39 @@ pub trait Index: Send + Sync + Debug {
     }
 
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse>;
+
+    /// Every matching row, one at a time, for a caller that will not keep them.
+    ///
+    /// **The whole set, and never more than one row of it in hand.** This is
+    /// what [`Index::search`] cannot be asked for: a page is bounded and this
+    /// is not, so the answer cannot be a `Vec` at any size — 2.24 M rows is a
+    /// couple of hundred megabytes of built paths, and the caller is writing
+    /// them to a socket as they arrive.
+    ///
+    /// Nor can it be *assembled* from pages. A page costs what it takes to
+    /// walk to its offset, so paging the whole set is linear per page and
+    /// quadratic in total: measured on this index at 2.1 ms for the first page
+    /// and 117.6 ms at offset one million, which is ten minutes to reach 1.4 M
+    /// rows and still counting. One walk is 2.24 M rows and no offsets.
+    ///
+    /// `f` returns false to stop, and the count returned is what it was given.
+    /// Stopping is ordinary: it is what a cancelled download looks like from
+    /// down here, and an implementation must leave nothing behind when it
+    /// happens.
+    ///
+    /// **The order is the implementation's own** and this says nothing about
+    /// it. There is no `sort` on [`ScanRequest`] because ordering the whole
+    /// set is a different problem from streaming it — one needs a key per
+    /// match held until the last match is seen. A caller that needs an order
+    /// sorts what it receives, which is what the spreadsheets and scripts on
+    /// the other end of this were always going to do anyway.
+    ///
+    /// Defaulted to a refusal rather than to a paged loop: an index that
+    /// cannot walk its matching set once should say so, instead of silently
+    /// costing a caller the quadratic that this exists to remove.
+    fn scan(&self, _req: &ScanRequest, _f: &mut dyn FnMut(&Hit) -> bool) -> Result<u64> {
+        Err(Error::unsupported("streaming the whole matching set"))
+    }
 
     fn facets(&self, req: &FacetRequest) -> Result<FacetResponse>;
 

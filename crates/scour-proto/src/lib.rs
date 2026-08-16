@@ -29,11 +29,54 @@ pub struct Call {
     pub request: Request,
 }
 
+/// One frame of one answer.
+///
+/// Almost every request is answered by exactly one of these. The exception is
+/// [`Request::Export`], which is answered by a run of them — see `more`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub id: u64,
+    /// Another frame with this id follows.
+    ///
+    /// **The whole of the streaming change to the wire.** The framing was
+    /// already one JSON object per line with a request id on it; what it could
+    /// not say was "this is a piece". Without a marker, a client that asked for
+    /// something answered in pieces would read the first piece as the answer
+    /// and leave the rest in its buffer, and the *next* request on that
+    /// connection would be answered by the leftovers — a desynchronised stream
+    /// that reports the wrong file rather than an error.
+    ///
+    /// Defaulted and omitted when false, so a frame written by a service that
+    /// predates this is read unchanged, and a client that predates it ignores
+    /// the field on the frames it will never ask for.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub more: bool,
     #[serde(flatten)]
     pub outcome: Outcome,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl Reply {
+    /// A whole answer, in one frame.
+    pub fn whole(id: u64, outcome: Outcome) -> Reply {
+        Reply {
+            id,
+            more: false,
+            outcome,
+        }
+    }
+
+    /// A piece, with more to come.
+    pub fn piece(id: u64, response: Response) -> Reply {
+        Reply {
+            id,
+            more: true,
+            outcome: Outcome::Ok(response),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +98,50 @@ pub enum Request {
         descending: bool,
         #[serde(default)]
         page: Page,
+    },
+    /// The whole matching set, as a spreadsheet, in pieces.
+    ///
+    /// **The only request answered by more than one frame.** Everything else
+    /// here is a page or a summary and fits in one; this is the whole answer,
+    /// which on this index is 2.24 M rows and a couple of hundred megabytes,
+    /// and there is no size at which holding all of it was ever the plan.
+    ///
+    /// ## Why it is a request rather than something the caller assembles
+    ///
+    /// It was the latter, in the browser bridge, and paging is what made it
+    /// impossible. A page costs what it takes to walk to its offset — 2.1 ms
+    /// at the start of this index, 25.3 at a hundred thousand, 65.5 at half a
+    /// million, 117.6 at a million — so a caller stitching pages together pays
+    /// a cost that is linear per page and therefore quadratic in total. The
+    /// whole of this index wrote 1.4 M lines in ten minutes and had not
+    /// finished. The endpoint stopped at half a million and said so in the
+    /// file, and the owner asked for no limit.
+    ///
+    /// A keyset cursor is the usual escape from an offset and cannot be
+    /// written here: the query language takes a date and not a time.
+    /// `dm:<=2026-03-07` parses; `dm:<=1770000000` and `dm:<2026-03-07T18:25:13`
+    /// do not — checked, not assumed — so a cursor could only step a day, and
+    /// one package install stamps a hundred thousand files in a day.
+    ///
+    /// So the walk happens once, in the service, and the rows leave as they
+    /// are produced.
+    ///
+    /// ## The order, which is the index's and not the caller's
+    ///
+    /// There is no `sort` here, and its absence is the honest version of a
+    /// field that would have to be ignored. Rows arrive in the order the index
+    /// holds them: newest-first within a segment, which is the layout the whole
+    /// search path is built on. See [`Response::ExportDone`] and the note in
+    /// `scour-index-native`'s `scan` for what an ordered export would take and
+    /// why it is not this change.
+    Export {
+        #[serde(default)]
+        query: String,
+        /// Column ids, in the order they are wanted. Empty means the five the
+        /// window shows out of the box. Named by the caller because they are
+        /// what the reader chose — see `scour_export::Sheet`.
+        #[serde(default)]
+        columns: Vec<String>,
     },
     /// How many match, up to the cap.
     Count {
@@ -328,6 +415,30 @@ pub enum Response {
         /// deleted on the strength of a guess.
         unconfirmed: u64,
     },
+    /// A piece of an export: CSV text, whole lines, ready to write.
+    ///
+    /// **Whole lines**, so that a relay never has to buffer a partial one and
+    /// a reader that stops mid-export stops on a row boundary. The first piece
+    /// carries the byte-order mark and the heading row.
+    ///
+    /// Sized by the service — see `EXPORT_CHUNK` in `scour-engine` — rather
+    /// than being one row a frame: a frame is a line of JSON with a `{"id":…}`
+    /// on it, and paying that per row would make the framing most of the
+    /// bytes on the wire.
+    ExportChunk {
+        csv: String,
+    },
+    /// The export finished, and how many rows it wrote.
+    ///
+    /// **A count the caller can check.** An export that stops early because
+    /// the service failed halfway is otherwise indistinguishable from one that
+    /// ran out of rows, and a truncated spreadsheet read as complete is a
+    /// wrong conclusion about a disk. A failure arrives as `Outcome::Error`
+    /// instead of this, so a reader that never sees either knows the answer is
+    /// incomplete.
+    ExportDone {
+        rows: u64,
+    },
     Settings(scour_settings::Settings),
     Facets(FacetResponse),
     Tree {
@@ -388,6 +499,7 @@ impl Request {
             | Request::SetSettings { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
+            | Request::Export { .. }
             | Request::Count { .. }
             | Request::Facets { .. }
             | Request::Tree { .. }
@@ -406,10 +518,48 @@ impl Request {
         }
     }
 
+    /// Is this answered by a run of frames rather than by one?
+    ///
+    /// **A client has to know before it asks.** `Client::call` reads exactly
+    /// one line; asking it for something answered in pieces would leave the
+    /// rest of them in the buffer for the next request to mistake for its own
+    /// answer. So this is checked at the door — see `scour_ipc::Client::call`,
+    /// which refuses rather than desynchronises.
+    ///
+    /// Exhaustive for the same reason [`Request::is_mutating`] is: whoever
+    /// adds the next streaming request has to say so here, because nothing
+    /// compiles until they do.
+    pub fn streams(&self) -> bool {
+        match self {
+            Request::Export { .. } => true,
+            Request::Search { .. }
+            | Request::Count { .. }
+            | Request::Facets { .. }
+            | Request::Tree { .. }
+            | Request::Stat { .. }
+            | Request::Places {}
+            | Request::Preview { .. }
+            | Request::Usage { .. }
+            | Request::Duplicates { .. }
+            | Request::Settings {}
+            | Request::SetSettings { .. }
+            | Request::Explain { .. }
+            | Request::Sources {}
+            | Request::Status {}
+            | Request::Stats {}
+            | Request::Await { .. }
+            | Request::Rescan { .. }
+            | Request::Maintain { .. }
+            | Request::Syntax {}
+            | Request::Shutdown {} => false,
+        }
+    }
+
     /// A short, stable name for logs and metrics.
     pub fn name(&self) -> &'static str {
         match self {
             Request::Search { .. } => "search",
+            Request::Export { .. } => "export",
             Request::Count { .. } => "count",
             Request::Facets { .. } => "facets",
             Request::Tree { .. } => "tree",
@@ -539,6 +689,10 @@ mod tests {
                 since: 9,
                 timeout_ms: 1_000,
             },
+            Request::Export {
+                query: "kind:font".into(),
+                columns: vec!["name".into(), "size".into()],
+            },
             Request::Rescan {
                 path: Some("/a".into()),
             },
@@ -605,6 +759,10 @@ mod tests {
             Response::Stats(IndexStats::default()),
             Response::Maintained(MaintReport::default()),
             Response::Accepted,
+            Response::ExportChunk {
+                csv: "a.txt,12\r\n".into(),
+            },
+            Response::ExportDone { rows: 2 },
             Response::Text {
                 text: "hello".into(),
             },
@@ -621,20 +779,14 @@ mod tests {
 
     #[test]
     fn a_reply_carries_either_an_answer_or_a_typed_failure() {
-        let ok = Reply {
-            id: 7,
-            outcome: Outcome::Ok(Response::Accepted),
-        };
+        let ok = Reply::whole(7, Outcome::Ok(Response::Accepted));
         let json = serde_json::to_string(&ok).expect("serialise");
         assert_eq!(
             serde_json::from_str::<Reply>(&json).expect("deserialise"),
             ok
         );
 
-        let bad = Reply {
-            id: 8,
-            outcome: Outcome::Error(Error::QueryTooShort { need: 3 }),
-        };
+        let bad = Reply::whole(8, Outcome::Error(Error::QueryTooShort { need: 3 }));
         let json = serde_json::to_string(&bad).expect("serialise");
         let back: Reply = serde_json::from_str(&json).expect("deserialise");
         let Outcome::Error(e) = back.outcome else {
@@ -642,6 +794,69 @@ mod tests {
         };
         // The code is what a caller matches on; the English is a fallback.
         assert_eq!(e.code(), "query_too_short");
+    }
+
+    /// A whole answer says nothing about being one, and a piece says it.
+    ///
+    /// The asymmetry is deliberate and is what makes the field free: a service
+    /// written before streaming existed emits exactly the frames this reads as
+    /// whole, and a client written before it reads a whole frame unchanged.
+    /// Only the frames nobody used to ask for carry the extra key.
+    #[test]
+    fn only_a_piece_of_an_answer_says_that_more_follows() {
+        let whole = serde_json::to_string(&Reply::whole(1, Outcome::Ok(Response::Accepted)))
+            .expect("serialise");
+        assert!(
+            !whole.contains("more"),
+            "a whole answer is the frame it always was: {whole}"
+        );
+
+        let piece = Reply::piece(
+            1,
+            Response::ExportChunk {
+                csv: "a.txt\r\n".into(),
+            },
+        );
+        let json = serde_json::to_string(&piece).expect("serialise");
+        assert!(json.contains("\"more\":true"), "{json}");
+        let back: Reply = serde_json::from_str(&json).expect("deserialise");
+        assert!(back.more);
+        assert_eq!(back.id, 1);
+
+        // Read back as false when absent, which is what every existing frame
+        // on the wire looks like.
+        let old: Reply =
+            serde_json::from_str(r#"{"id":4,"ok":{"result":"accepted"}}"#).expect("parse");
+        assert!(!old.more);
+    }
+
+    /// Exactly one request is answered in pieces, and a client checks before
+    /// it asks — see `Request::streams`.
+    #[test]
+    fn only_the_export_answers_in_pieces() {
+        assert!(
+            Request::Export {
+                query: String::new(),
+                columns: Vec::new(),
+            }
+            .streams()
+        );
+        for r in [
+            Request::Search {
+                query: String::new(),
+                sort: SortKey::default(),
+                descending: true,
+                page: Page::default(),
+            },
+            Request::Count {
+                query: String::new(),
+                cap: 1,
+            },
+            Request::Status {},
+            Request::Shutdown {},
+        ] {
+            assert!(!r.streams(), "{} answers in one frame", r.name());
+        }
     }
 
     /// The two fields a live client leaves out most of the time.
