@@ -4,7 +4,11 @@
      doctype is not a formality: without it the browser is in quirks mode,
      where the `height: 100%` chain from `html` down to the results list
      does not connect and the window collapses to the height of its content. -->
-<html lang="tr">
+<!-- `lang` is the source language, and `applyLanguage` rewrites it as soon as
+     the catalogue lands. It matters beyond politeness: the attribute is what a
+     screen reader picks a voice from, and what the browser hyphenates and
+     spell-checks by. -->
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -799,7 +803,7 @@
     overflow-wrap: anywhere; line-height: 1.5;
   }
 
-  /* ---------------- önizleme ----------------
+  /* ---------------- the preview ----------------
 
      A third column, shut by default: most of what this list is used for is
      finding a path and getting out of the way, and a panel that is always
@@ -1039,7 +1043,7 @@
   .about:hover { color: var(--ink); border-color: var(--ink-3); }
   .about[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
 
-  /* ---------------- satır menüsü ---------------- */
+  /* ---------------- the row menu ---------------- */
   tbody tr { cursor: default; }
   /* The rows that are not drawn, standing in for their own height. */
   tbody tr.spacer, tbody tr.ghost { pointer-events: none; }
@@ -1107,6 +1111,13 @@
     display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
   }
   .rowmenu.cols button[disabled] { opacity: .4; cursor: default; }
+  /* The language menu borrows the column picker's tick, because it is the same
+     gesture — a list where one entry is the one in force. Narrower: two
+     language names do not need the width of "Back to the default". */
+  .rowmenu.langs { min-width: 132px; }
+  .rowmenu.langs .tick {
+    display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
+  }
   .rowmenu.cols .reset {
     border-top: 1px solid var(--line); margin-top: 3px; padding-top: 6px;
     color: var(--ink-3);
@@ -1197,48 +1208,43 @@
 
 <div class="wrap">
 
+  <!-- **The words are msgids, and the elements are empty.**
+       `data-t` carries the English source text — which is the catalogue's key,
+       not an invented identifier — and `applyLanguage` writes the translation
+       in. Empty rather than holding the English as well, because two copies of
+       a string in one file is two things to keep in step and the attribute is
+       the one that wins; a heading that reads `data-t="Kind"` is no harder to
+       read than one that says `Kind` twice.
+
+       `-html` where the sentence has markup inside it, `-title`/`-aria`/`-ph`
+       for the three attributes that are read aloud or hovered. Anything a
+       screen reader speaks is a string like any other. -->
   <aside class="side">
     <div class="note">
-      <h1>Scour · arayüz</h1>
-      <p id="blurb">Bu sayfa çalışan servise bağlı: her tuş <code>scourd</code>'a gidiyor,
-        aşağıdaki her satır ve her sayı oradan geliyor. Bu, arayüz
-      için bir hız rakamı değil bir <b>izin</b>: sonuç, sayaç, süzgeç sayıları ve zaman
-      dağılımı her tuşta yeniden hesaplanabilir. Tasarım bunun üstüne kuruldu.</p>
-      <p>Aşağısı canlı — yazın, süzgeçlere ve başlıklara tıklayın.</p>
+      <h1 data-t="Scour · the interface"></h1>
+      <p id="blurb" data-t-html="This page is wired to the running service: every keystroke goes to &lt;code&gt;scourd&lt;/code&gt;, and every row and every number below comes back from it. That is not a speed figure for the interface but a &lt;b&gt;permission&lt;/b&gt;: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."></p>
+      <p data-t="Everything below is live — type, and click the filters and the headings."></p>
     </div>
     <div class="legend">
       <section>
-        <h3>Tazelik cetveli</h3>
-        <p>Her satırın solundaki üç piksel, dosyanın ne zaman değiştiğini renkle söylüyor.
-        Motor satırları zaten tarih sırasında sakladığı için liste boyunca kesintisiz bir
-        tayf çıkıyor: sıcak sarı az önce, soğuk arduvaz yıllar önce. Kolona bakmadan
-        "burası taze bölge" görünüyor.</p>
+        <h3 data-t="The freshness ruler"></h3>
+        <p data-t="The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column."></p>
       </section>
       <section>
-        <h3>Sorgu arayüzün kendisi</h3>
-        <p>Kutucuk yok. Metin yazıldığı gibi duruyor — kopyalanabilir, MCP'ye
-        yapıştırılabilir — ama tanınan terimler renkleniyor: <code>kind:</code>
-        <code>under:</code> <code>dm:</code>. Süzgeçe tıklamak terimi <em>yazıya</em>
-        ekliyor, gizli bir duruma değil.</p>
+        <h3 data-t="The query is the interface"></h3>
+        <p data-t-html="Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: &lt;code&gt;kind:&lt;/code&gt; &lt;code&gt;under:&lt;/code&gt; &lt;code&gt;dm:&lt;/code&gt;. Clicking a filter adds the term to the &lt;em&gt;text&lt;/em&gt;, not to a hidden state."></p>
       </section>
       <section>
-        <h3>Ölçüm gizlenmiyor</h3>
-        <p><code>0,29 ms · 4.864 satır okundu</code> — motorun raporladığı gerçek sayılar.
-        Hızlı olduğunu söylemek yerine ne kadar iş yaptığını gösteriyor; bir gün
-        yavaşlarsa bunu ilk arayüz söyler.</p>
+        <h3 data-t="The measurement is not hidden"></h3>
+        <p data-t-html="&lt;code&gt;0.29 ms · 4,864 rows read&lt;/code&gt; — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so."></p>
       </section>
       <section>
-        <h3>Rapor: yaşa göre dağılım</h3>
-        <p>Her klasörün çubuğu, baytlarının ne kadarının taze ne kadarının bayat
-        olduğunu gösteriyor. Boyut tek başına ne sileceğini söylemiyor;
-        <b>bir yıldır kimsenin dokunmadığı 25 GB</b> söylüyor. TreeSize dâhil
-        hiçbir araçta yok, çünkü hiçbirinde satır başına tarih elde değil.</p>
+        <h3 data-t="The report: bytes by age"></h3>
+        <p data-t-html="Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; &lt;b&gt;25 GB nobody has touched in a year&lt;/b&gt; does. No tool has this, TreeSize included, because none of them has a date per row to hand."></p>
       </section>
       <section>
-        <h3>Zaman şeridi</h3>
-        <p>Sonuç kümesinin tarih dağılımı, her tuşta yeniden çiziliyor. Bir çubuğa
-        tıklamak sorguya <code>dm:</code> terimi ekliyor. Yalnızca süzgeç sayıları
-        mikrosaniye sürdüğü için mümkün.</p>
+        <h3 data-t="The time ribbon"></h3>
+        <p data-t-html="The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a &lt;code&gt;dm:&lt;/code&gt; term to the query. Possible only because filter counts take microseconds."></p>
       </section>
     </div>
   </aside>
@@ -1255,9 +1261,9 @@
                in when the mockup became the product. A fresh browser profile
                therefore opened searching for somebody else's example. -->
           <input id="q" spellcheck="false" autocomplete="off"
-                 aria-label="Sorgu" role="combobox" aria-expanded="false"
+                 data-t-aria="Query" role="combobox" aria-expanded="false"
                  aria-autocomplete="list" aria-controls="hints"
-                 placeholder="dosya adı  ·  ext:pdf  ·  kind:image dm:7d  ·  size:&gt;10mb">
+                 data-t-ph="file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:&gt;10mb">
           <div class="qacts" id="qacts" aria-hidden="true"></div>
           <!-- **A shortcut nobody can see is a feature nobody has.** `Alt+↓`
                is the combo box gesture, and this is what says so — the same
@@ -1265,8 +1271,8 @@
                there is a past to show, because an arrow that opens nothing is
                worse than none. -->
           <button type="button" id="qpast" tabindex="-1" hidden
-                  title="önceki aramalar (Alt+↓)" aria-label="önceki aramalar">▾</button>
-          <div class="hints" id="hints" role="listbox" aria-label="Öneriler" hidden></div>
+                  data-t-title="past searches (Alt+↓)" data-t-aria="past searches">▾</button>
+          <div class="hints" id="hints" role="listbox" data-t-aria="Suggestions" hidden></div>
         </div>
       </div>
       <p class="qread" id="qread"></p>
@@ -1275,29 +1281,40 @@
     <div class="meter">
       <span class="big" id="count">—</span>
       <span class="sep">·</span>
-      <span class="ms" id="ms">0,29 ms</span>
+      <!-- **Empty, not `0,29 ms · 4.864 satır okundu`.** Those were the mockup's
+           own measurements, left in when the mockup became the product — the
+           same leftover as the `rapor` that used to be the query box's value,
+           and wrong in the same way: a fresh window opened claiming to have
+           read four thousand rows it had not read. The first search fills both
+           within a few milliseconds. -->
+      <span class="ms" id="ms">—</span>
       <span class="sep">·</span>
-      <span id="rows">4.864 satır okundu</span>
+      <span id="rows"></span>
       <span class="sep">·</span>
-      <span id="path-note">bağlanıyor…</span>
+      <span id="path-note" data-t="connecting…"></span>
       <button type="button" id="icons" class="about" aria-pressed="true"
-              title="simgeler" aria-label="simgeleri aç veya kapat">◨</button>
+              data-t-title="icons" data-t-aria="turn icons on or off">◨</button>
       <button type="button" id="about" class="about" aria-pressed="false"
-              title="tasarım notları" aria-label="tasarım notlarını göster">?</button>
+              data-t-title="design notes" data-t-aria="show the design notes">?</button>
+      <!-- The language menu. Beside the two other things in this bar that
+           change how the window looks rather than what it is looking at. -->
+      <button type="button" id="lang" class="about" aria-haspopup="menu"
+              aria-expanded="false" data-t-title="language"
+              data-t-aria="choose the language">文</button>
     </div>
 
     <div class="tabs" role="tablist">
-      <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search">Ara</button>
-      <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report">Rapor</button>
+      <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
+      <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
     </div>
 
     <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
-      <nav class="rail" aria-label="Süzgeçler">
-        <h2>Tür</h2>
+      <nav class="rail" data-t-aria="Filters">
+        <h2 data-t="Kind"></h2>
         <div id="kinds"></div>
-        <h2>Kapsam</h2>
+        <h2 data-t="Scope"></h2>
         <div id="scopes"></div>
-        <h2>Boyut</h2>
+        <h2 data-t="Size"></h2>
         <div id="sizes"></div>
       </nav>
 
@@ -1312,37 +1329,35 @@
             </thead>
             <tbody id="rows-body"></tbody>
           </table>
-          <div class="empty" id="empty" hidden>
-            Eşleşme yok. <code>ab</code> gibi iki harf de çalışır — trigram indeksi
-            reddetmez, tarama yapar.
-          </div>
+          <div class="empty" id="empty" hidden
+               data-t-html="No matches. Two letters like &lt;code&gt;ab&lt;/code&gt; work too — the trigram index does not refuse them, it scans."></div>
         </div>
 
-        <!-- Seçim şeridi. Boşken yok; ne seçildiğini ve onunla ne
-             yapılabileceğini söyler. -->
+        <!-- The selection bar. Absent when nothing is selected; it says what is
+             selected and what can be done with it. -->
         <div class="selbar" id="selbar" hidden></div>
 
         <div class="ribbon">
           <div class="ribbon-head">
-            <span style="letter-spacing:.14em;text-transform:uppercase;font-weight:650">Zaman dağılımı</span>
-            <span id="ribbon-note">sonuçların değişme tarihine göre — tıklayın, aralık süzgeci olur</span>
+            <span style="letter-spacing:.14em;text-transform:uppercase;font-weight:650" data-t="Time distribution"></span>
+            <span id="ribbon-note" data-t="by when the results last changed — click to filter to a range"></span>
           </div>
           <div class="bars" id="bars"></div>
           <div class="scale">
-            <span>2 yıl önce</span><span>1 yıl</span><span>6 ay</span>
-            <span>1 ay</span><span>1 hafta</span><span>bugün</span>
+            <span data-t="2 years ago"></span><span data-t="1 year"></span><span data-t="6 months"></span>
+            <span data-t="1 month"></span><span data-t="1 week"></span><span data-t="today"></span>
           </div>
         </div>
       </div>
 
-      <!-- Önizleme. Boşluk tuşuyla açılır, tıpkı Quick Look ve sushi gibi. -->
-      <aside class="peek" id="peek" hidden aria-label="Önizleme">
+      <!-- The preview. Opened with Space, the way Quick Look and sushi are. -->
+      <aside class="peek" id="peek" hidden data-t-aria="Preview">
         <div class="peek-head">
           <span class="nm" id="peek-name"></span>
-          <button type="button" id="peek-native" title="sistem önizleyicisinde aç"
-                  aria-label="sistem önizleyicisinde aç" hidden>⤢</button>
-          <button type="button" id="peek-close" title="kapat (Boşluk)"
-                  aria-label="önizlemeyi kapat">×</button>
+          <button type="button" id="peek-native" data-t-title="open in the system previewer"
+                  data-t-aria="open in the system previewer" hidden>⤢</button>
+          <button type="button" id="peek-close" data-t-title="close (Space)"
+                  data-t-aria="close the preview">×</button>
         </div>
         <div class="peek-body" id="peek-body"></div>
         <div class="peek-cut" id="peek-cut" hidden></div>
@@ -1350,7 +1365,7 @@
       </aside>
     </div>
 
-    <!-- ------------------------------ RAPOR ------------------------------ -->
+    <!-- ------------------------------ REPORT ----------------------------- -->
     <div class="report" id="view-report" role="tabpanel" aria-labelledby="tab-report" hidden>
       <div class="crumb" id="crumb"></div>
 
@@ -1362,11 +1377,11 @@
       <table class="kids">
         <thead>
           <tr>
-            <th>Klasör</th>
-            <th style="width:34%">Yaşa göre dağılım</th>
-            <th class="r">Boyut</th>
-            <th class="r">Pay</th>
-            <th class="r">Dosya</th>
+            <th data-t="Folder"></th>
+            <th style="width:34%" data-t="By age"></th>
+            <th class="r" data-t="Size"></th>
+            <th class="r" data-t="Share"></th>
+            <th class="r" data-t="Files"></th>
           </tr>
         </thead>
         <tbody id="r-kids"></tbody>
@@ -1376,32 +1391,34 @@
 
       <div class="panels">
         <div class="panel">
-          <h4>Türe göre</h4>
+          <h4 data-t="By kind"></h4>
           <div id="p-kind"></div>
         </div>
         <div class="panel">
-          <h4>En büyük dosyalar</h4>
+          <h4 data-t="Largest files"></h4>
           <div id="p-big"></div>
         </div>
         <div class="panel">
-          <h4>Bu klasörde ara</h4>
+          <h4 data-t="Search in this folder"></h4>
           <div id="p-jump"></div>
-          <p class="hint">Rapordan aramaya geçiş: sorguya <code>under:</code> terimi
-          eklenir, arama sekmesi aynı kapsamla açılır.</p>
+          <p class="hint" data-t-html="From the report into the search: an &lt;code&gt;under:&lt;/code&gt; term is added to the query and the search tab opens with the same scope."></p>
         </div>
       </div>
 
-      <!-- Yinelenenler. `docs/REPORTS.md` §B; buraya döneceği yazılmıştı. -->
+      <!-- Duplicates. `docs/REPORTS.md` §B, which said this would come back. -->
       <div class="dupes">
         <div class="dupes-head">
-          <h4>Yinelenen dosyalar</h4>
-          <button type="button" id="d-open" aria-expanded="false">göster</button>
+          <h4 data-t="Duplicate files"></h4>
+          <!-- Filled by `setOpen`, which is also what flips it to "hide" — so
+               it carries no `data-t` of its own; two writers for one word is
+               how one of them ends up stale. -->
+          <button type="button" id="d-open" aria-expanded="false"></button>
           <div class="dupes-sum" id="d-sum" hidden>—</div>
           <div class="floors" id="d-floor" hidden></div>
-          <button type="button" id="d-confirm" hidden>Okuyarak doğrula</button>
+          <button type="button" id="d-confirm" hidden data-t="Confirm by reading"></button>
         </div>
-        <p class="hint" id="d-note" hidden>Aynı boyutta olmak aynı dosya olmak değildir.
-        Aşağısı boyuta göre aday listesidir; <b>doğrulanmadan hiçbir şey silinmemeli</b>.</p>
+        <p class="hint" id="d-note" hidden
+           data-t-html="Being the same size is not being the same file. Below is a list of candidates by size; &lt;b&gt;nothing should be deleted before it is confirmed&lt;/b&gt;."></p>
         <div id="d-list" hidden></div>
       </div>
     </div>
@@ -1411,6 +1428,97 @@
 
 <script>
 (function () {
+  /* ------------------------------------------------------------------ *
+   * The words.
+   *
+   * **The catalogue is the service's, not this file's.** Every string below
+   * is written in English and looked up; the English *is* the key, the way
+   * gettext keys by the source text, so a string nobody has translated
+   * degrades to correct English rather than to `hint.empty.3`. The Turkish
+   * lives in `lang/tr/LC_MESSAGES/scour.po`, is compiled into `scour-i18n`,
+   * and reaches this page through `/api/strings` — the same catalogue the
+   * CLI and the Slint window read, because the alternative is three
+   * frontends translated separately and drifting.
+   *
+   * `{name}` is the only substitution, and there is no plural machinery.
+   * Turkish does not inflect a noun after a numeral — "5 dosya", not
+   * "5 dosyalar" — so the one language shipped beside English needs none, and
+   * the English strings are written to avoid needing it either. The day a
+   * language that does need it arrives, this is where it goes and `po.rs`
+   * says what it would cost.
+   *
+   * **Called `T` and not `t`.** Nineteen local variables in this file are
+   * already called `t` — a token, a term, a timestamp — and a lookup that can
+   * be shadowed by one of them is a lookup that fails somewhere inside a
+   * `catch`. `T(` is also the thing `the_page_says_nothing_the_catalogue_has_
+   * not_heard_of` greps for, and it cannot be confused with `at(` or `format(`.
+   * ------------------------------------------------------------------ */
+  let LANG = "en";
+  let LANGUAGES = [];
+  let STRINGS = {};
+  const T = (msgid, vars) => {
+    let s = Object.hasOwn(STRINGS, msgid) ? STRINGS[msgid] : msgid;
+    if (vars) {
+      for (const k of Object.keys(vars)) s = s.split("{" + k + "}").join(vars[k]);
+    }
+    return s;
+  };
+
+  /* Numbers and dates follow the language too, and they were welded as hard
+     as the words were: `toLocaleString("tr-TR")` printed `4.864` and
+     `Intl.DateTimeFormat("tr-TR")` printed a Turkish month, whatever the rest
+     of the window said. Rebuilt on a switch rather than read per call —
+     `STAMP` is used once per row per paint, and constructing a formatter
+     there was measured as the wrong place for it long before this. */
+  const DATE_PARTS = {
+    day: "numeric", month: "long", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  };
+  /* Two decimals always, so the meter does not change width between `0.3 ms`
+     and `0.29 ms` while somebody types; one for the index's size, which is
+     megabytes and does not need more. */
+  const MS_PARTS = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  const MB_PARTS = { minimumFractionDigits: 1, maximumFractionDigits: 1 };
+  let NUMBERS = new Intl.NumberFormat("en");
+  let MS = new Intl.NumberFormat("en", MS_PARTS);
+  let MB = new Intl.NumberFormat("en", MB_PARTS);
+  let STAMP = new Intl.DateTimeFormat("en", DATE_PARTS);
+  function buildFormatters() {
+    NUMBERS = new Intl.NumberFormat(LANG);
+    MS = new Intl.NumberFormat(LANG, MS_PARTS);
+    MB = new Intl.NumberFormat(LANG, MB_PARTS);
+    STAMP = new Intl.DateTimeFormat(LANG, DATE_PARTS);
+  }
+
+  /* Write the catalogue into the markup.
+   *
+   * `data-t` is a msgid and the element holds nothing else, so this can run
+   * again on a switch and read the same key it read the first time. An
+   * earlier sketch harvested the element's own text as the msgid, which works
+   * exactly once: the second pass looks up the Turkish and finds nothing. */
+  function applyMarkup(root) {
+    for (const el of root.querySelectorAll("[data-t]")) {
+      el.textContent = T(el.dataset.t);
+    }
+    /* `innerHTML` for the handful of sentences with `<code>` or `<b>` inside
+       them. The strings are the catalogue's own — they are not user input and
+       never touch a path or a query — and the alternative is either prose
+       chopped into a span per clause or a design note that cannot say
+       `kind:` in the face it is talking about. */
+    for (const el of root.querySelectorAll("[data-t-html]")) {
+      el.innerHTML = T(el.dataset.tHtml);
+    }
+    for (const el of root.querySelectorAll("[data-t-title]")) {
+      el.title = T(el.dataset.tTitle);
+    }
+    for (const el of root.querySelectorAll("[data-t-aria]")) {
+      el.setAttribute("aria-label", T(el.dataset.tAria));
+    }
+    for (const el of root.querySelectorAll("[data-t-ph]")) {
+      el.placeholder = T(el.dataset.tPh);
+    }
+  }
+
   let TOTAL = 0;   /* from /api/status, once the page is up */
   let TOTAL_KNOWN = false;
   /* The search is deliberately sent before status. Until status lands there
@@ -1432,9 +1540,9 @@
   const DAY = 86400;
   /* The mockup froze the clock so its twenty invented files would always read
      the same. Real rows carry real mtimes, and against a fixed `now` a file
-     modified yesterday came out as "1 dk önce" — the age was negative and the
+     modified yesterday came out as "1 min ago" — the age was negative and the
      ruler clamped it. Recomputed on every draw, because a search box stays
-     open for hours and "5 dk önce" has to stop being true. */
+     open for hours and "5 min ago" has to stop being true. */
   let now = Math.floor(Date.now() / 1000);
   const F = (p, name, size, ago, kind) =>
     ({ path: p, name, size, mtime: now - ago, kind });
@@ -1527,10 +1635,27 @@
      and the histogram — nothing else keeps a copy. */
   let FILES = [];
 
+  /* The label for one row's kind, in three places that all had their own copy.
+   *
+   * **"Klasör" used to be written here**, which made this file the fourth
+   * holder of a word `/api/kinds` already sends: the engine has a `folder`
+   * kind, its msgid is "Folder", and the rail was already showing the
+   * translation of it one column to the left. Three literals, one for each
+   * place a row's kind is filled in, and nothing that would have noticed if
+   * they disagreed with the rail.
+   *
+   * So the folder label is looked up like every other one. `KIND_KEY` is empty
+   * until `/api/kinds` lands, which is a few milliseconds — the same few in
+   * which every other row label is also blank, and the same reload path
+   * repaints them all. */
+  const labelOfToken = (token) => KIND_KEY[token] || T("Other");
+  const kindLabel = (row) => labelOfToken(row.is_dir ? "folder" : row.kind);
+
   /* The service answers in its own vocabulary: a full path, and a kind as the
      token the query language uses. The page wants a folder, a name and the
-     Turkish label. One place converts. */
-  /* Everything the service sent, with the two fields the page names
+     label in the reader's language. One place converts.
+
+     Everything the service sent, with the two fields the page names
      differently laid over it. Listing the fields here instead was how a
      column switched on in the picker rendered blank: the value had arrived
      and this had thrown it away, which is the kind of bug that looks like the
@@ -1541,7 +1666,7 @@
     /* The engine's own word for it, kept beside the translated one: the label
        is for reading and the token is what the icon is asked for by. */
     ktoken: row.is_dir ? "folder" : row.kind,
-    kind: row.is_dir ? "Klasör" : (KIND_KEY[row.kind] || "Diğer"),
+    kind: kindLabel(row),
   });
 
 
@@ -1596,7 +1721,7 @@
     return "--t5";
   };
 
-  const fmt = (n) => n.toLocaleString("tr-TR");
+  const fmt = (n) => NUMBERS.format(n);
   const bytes = (n) => {
     const u = ["B", "KB", "MB", "GB"];
     let i = 0, v = n;
@@ -1605,7 +1730,7 @@
   };
   /* **Seconds, but only for the first minute.**
    *
-   * Under a minute everything said "1 dk önce", which is the one range where
+   * Under a minute everything said "1 min ago", which is the one range where
    * the difference matters: watching whether a file you just saved has reached
    * the index is a question about seconds, and it was the only question this
    * column could not answer.
@@ -1620,34 +1745,58 @@
   const ago = (mtime) => {
     const s = now - mtime;
     /* **One second is the floor, and it is the whole range too.** The first
-       version said "az önce" below one — and there is nothing below one
+       version said "just now" below one — and there is nothing below one
        second to be vaguer about, so a word where the ladder already had a
        number was a word that said less. The clamp still does the work it was
        there for: a timestamp in the future — clock skew, a copy that kept its
-       times — reads as one second rather than as minus four. */
-    if (s < 60) return Math.max(1, s) + " sn önce";
-    if (s < 3600) return Math.max(1, Math.round(s / 60)) + " dk önce";
-    if (s < DAY) return Math.round(s / 3600) + " sa önce";
-    if (s < 30 * DAY) return Math.round(s / DAY) + " gün önce";
-    if (s < 365 * DAY) return Math.round(s / (30 * DAY)) + " ay önce";
-    return Math.round(s / (365 * DAY)) + " yıl önce";
+       times — reads as one second rather than as minus four.
+
+       Six rungs rather than one string with a unit substituted in: a unit is
+       not a word that can be lifted out of one language's sentence and dropped
+       into another's, and this column is narrow enough that the abbreviation is
+       part of the translator's decision.
+
+       **The singular is a second msgid, and it is standing in for plural
+       forms.** `po.rs` carries no `msgid_plural`, deliberately and with a note
+       saying so, because Turkish does not inflect a noun after a numeral: "1
+       gün önce" and "5 gün önce" take the same word. English does, and this
+       column is the one place where getting it wrong is on screen in every
+       list — a machine like this one has years-old files in every folder, so
+       `1 years ago` would be everywhere. The three rungs where the noun is a
+       whole word pick their own string; the abbreviated ones do not need to.
+
+       Nine other `{n} …` strings in this file still read `1 files` in English.
+       That is a gap and not an oversight: closing it properly means plural
+       forms in the catalogue, which is the change `po.rs` invites and which
+       buys Turkish nothing. */
+    if (s < 60) return T("{n} sec ago", { n: Math.max(1, s) });
+    if (s < 3600) return T("{n} min ago", { n: Math.max(1, Math.round(s / 60)) });
+    if (s < DAY) return T("{n} hr ago", { n: Math.round(s / 3600) });
+    if (s < 30 * DAY) {
+      const n = Math.round(s / DAY);
+      return n === 1 ? T("1 day ago") : T("{n} days ago", { n });
+    }
+    if (s < 365 * DAY) {
+      const n = Math.round(s / (30 * DAY));
+      return n === 1 ? T("1 month ago") : T("{n} months ago", { n });
+    }
+    const years = Math.round(s / (365 * DAY));
+    return years === 1 ? T("1 year ago") : T("{n} years ago", { n: years });
   };
 
-  /* The reading behind the reading. "4 gün önce" is what a list wants and
+  /* The reading behind the reading. "4 days ago" is what a list wants and
      never what a person wants at the moment they stop and ask; the exact time
      was in the row all along and had nowhere to be shown. Costs nothing and
-     moves nothing — it is only read when the pointer rests. */
-  /* **The formatter is built once, and that is not a micro-optimisation.**
+     moves nothing — it is only read when the pointer rests.
+
+     **The formatter is built once, and that is not a micro-optimisation.**
      `toLocaleString` with an options object constructs one of these on every
      call. This is called once per row per paint, and on a machine whose index
      moves every few seconds that is fifty-odd constructions every few seconds
      — for a string that cannot change, because it is when the file was
-     written. */
-  const STAMP = new Intl.DateTimeFormat("tr-TR", {
-    day: "numeric", month: "long", year: "numeric",
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  });
-  const exact = (t) => (!t ? "" : STAMP.format(new Date(t * 1000)));
+     written. It lives at the top of the file now, beside the language it is
+     built from; `buildFormatters` is the one place that replaces it. */
+  const exact = (at) => (!at ? "" : STAMP.format(new Date(at * 1000)));
 
   /* Does this file live somewhere that records when it was read?
    *
@@ -1716,36 +1865,29 @@
     return out;
   }
 
+  /* Kind token to label, from `/api/kinds`. Empty until it lands. */
   let KIND_KEY = {};
-  /* Turkish spellings match too: `tür:görsel` and `kind:image` are one thing.
-     In the engine that is `Kind::from_name`'s job. */
-  const KIND_TR = { klasör: "dir", klasor: "dir", kod: "code", görsel: "image",
-                    gorsel: "image", belge: "doc", medya: "media", ses: "media",
-                    video: "media", arşiv: "archive", arsiv: "archive",
-                    dosya: "file", zip: "archive", img: "image", pic: "image" };
 
-  function matches(f, p) {
-    const n = fold(f.name);
-    for (const t of p.text) if (!n.includes(t)) return false;
-    for (const t of p.not) if (n.includes(t)) return false;
-    if (p.kind && KIND_KEY[p.kind] !== f.kind && KIND_TR[p.kind] !== f.kind) return false;
-    if (p.under && !f.path.startsWith(p.under)) return false;
-    if (p.parent && f.path.slice(0, f.path.lastIndexOf("/")) !== p.parent) return false;
-    if (p.path && !fold(f.path).includes(p.path)) return false;
-    if (p.isDir !== null && (f.kind === "dir") !== p.isDir) return false;
-    if (p.ext && !p.ext.split(";").some((e) => n.endsWith("." + e.replace(/^\./, "")))) return false;
-    if (p.size) {
-      const v = p.size.startsWith(">") ? parseFloat(p.size.slice(1)) : parseFloat(p.size.replace("=", ""));
-      const mb = p.size.includes("mb") ? 1048576 : 1;
-      if (p.size.startsWith(">") && !(f.size > v * mb)) return false;
-      if (p.size.startsWith("=") && f.size !== 0) return false;
-    }
-    if (p.band) {
-      const d = parseInt(p.band, 10) || 0;
-      if (now - f.mtime > d * DAY) return false;
-    }
-    return true;
-  }
+  /* **`matches()` and its `KIND_TR` table were here and are gone.**
+   *
+   * The last of the mockup's engine: a row filter that decided in the page
+   * whether a file matched a query, from twenty invented files, before there
+   * was a service to ask. Nothing has called it since the list started coming
+   * from `/api/search` — every predicate in it is now `scour-query`'s.
+   *
+   * It is removed rather than left because of what it was carrying. `KIND_TR`
+   * mapped Turkish spellings to kind tokens and mapped them to the *old*
+   * taxonomy: `ses` and `video` both to `media`, a kind the engine still
+   * parses and stopped producing, and `klasör` to `dir` where the token is
+   * `folder`. A dead table is harmless; a dead table of Turkish words in the
+   * one file being emptied of Turkish words is a trap laid for the next
+   * translator, who would have found it, believed it, and translated the
+   * taxonomy the engine gave up on.
+   *
+   * The live version of what it did is `KIND_ALIASES` below, which is copied
+   * from `Kind::from_name` and is grammar rather than vocabulary — the engine
+   * parses those words, so they are not translated and do not belong to the
+   * catalogue. */
 
   const escape_ = (s) => s.replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -1761,19 +1903,26 @@
      the day the two tables drift, the box says something the engine never
      said. That is why the product takes this over the wire.
   ------------------------------------------------------------------ */
+  /* **`name` and `alias` are grammar; `about` is a sentence.** The first two
+     are what the engine parses — `tür:` finds images whatever language the
+     window is in, because `Kind::from_name` reads it and `Kind::from_name`
+     does not know there is a window. Routing them through the catalogue would
+     mean a query that works in one language and not in another, and a query
+     somebody wrote down would stop working when they switched. Only `about`,
+     which nothing parses and a person reads, is a msgid. */
   const FIELDS = [
-    { name: "ext",     alias: [],                          takes: "ext",   about: "uzantı bu, ya da ; ile ayrılmış bunlardan biri", eg: "ext:pdf" },
-    { name: "path",    alias: [],                          takes: "text",  about: "tam yol bunu içeriyor",                          eg: "path:src/api" },
-    { name: "under",   alias: ["in", "altinda"],           takes: "path",  about: "bu klasörün altında, herhangi bir derinlikte",   eg: "under:/home" },
-    { name: "parent",  alias: ["child", "children"],       takes: "path",  about: "doğrudan bu klasörün içinde, bir seviye",        eg: "parent:/etc" },
-    { name: "file",    alias: ["files"],                   takes: "none",  about: "yalnız dosyalar",                                eg: "" },
-    { name: "folder",  alias: ["folders", "dir"],          takes: "none",  about: "yalnız klasörler",                               eg: "" },
-    { name: "size",    alias: [],                          takes: "size",  about: "boyut, ikili birimlerle, karşılaştırma isteğe bağlı", eg: "size:>1mb" },
-    { name: "kind",    alias: ["type", "tur", "tür"],      takes: "kind",  about: "kaba dosya türü",                                eg: "kind:image" },
-    { name: "dm",      alias: ["modified"],                takes: "time",  about: "en son ne zaman değişti",                        eg: "dm:7d" },
-    { name: "dc",      alias: ["created"],                 takes: "time",  about: "ne zaman oluşturuldu",                           eg: "dc:2026-01-31" },
-    { name: "da",      alias: ["accessed"],                takes: "time",  about: "en son ne zaman okundu",                         eg: "da:>2026-01-01" },
-    { name: "content", alias: ["text", "icerik", "içerik"],takes: "text",  about: "belge içeriği bunu içeriyor (içerik indeksliyse)", eg: "content:invoice" },
+    { name: "ext",     alias: [],                          takes: "ext",   about: "the extension is this, or one of these separated by ;", eg: "ext:pdf" },
+    { name: "path",    alias: [],                          takes: "text",  about: "the whole path contains this",                   eg: "path:src/api" },
+    { name: "under",   alias: ["in", "altinda"],           takes: "path",  about: "under this folder, at any depth",                eg: "under:/home" },
+    { name: "parent",  alias: ["child", "children"],       takes: "path",  about: "directly inside this folder, one level",         eg: "parent:/etc" },
+    { name: "file",    alias: ["files"],                   takes: "none",  about: "files only",                                     eg: "" },
+    { name: "folder",  alias: ["folders", "dir"],          takes: "none",  about: "folders only",                                   eg: "" },
+    { name: "size",    alias: [],                          takes: "size",  about: "size, in binary units, comparison optional",      eg: "size:>1mb" },
+    { name: "kind",    alias: ["type", "tur", "tür"],      takes: "kind",  about: "the rough kind of file",                         eg: "kind:image" },
+    { name: "dm",      alias: ["modified"],                takes: "time",  about: "when it last changed",                           eg: "dm:7d" },
+    { name: "dc",      alias: ["created"],                 takes: "time",  about: "when it was created",                            eg: "dc:2026-01-31" },
+    { name: "da",      alias: ["accessed"],                takes: "time",  about: "when it was last read",                          eg: "da:>2026-01-01" },
+    { name: "content", alias: ["text", "icerik", "içerik"],takes: "text",  about: "the document's contents contain this (if contents are indexed)", eg: "content:invoice" },
   ];
   /* The values `kind:` takes, in the order a list should show them.
    *
@@ -1797,11 +1946,11 @@
    *
    * Measured in the window rather than argued: clicking Veri made ONE facet
    * call, `q=kind:data`, and `KIND_COUNTS` came back `{data: 209320}`;
-   * clicking Görsel made TWO, the second `q=`, and `KIND_COUNTS` came back
-   * with all thirteen keys. The five the owner named — Veri, Yapılandırma,
-   * Ses, Yazı tipi, Derleme çıktısı — are exactly the five that were missing
-   * here. `video` escaped only by accident: the word is spelled the same in
-   * both languages and so was already in the Turkish list below.
+   * clicking Image made TWO, the second `q=`, and `KIND_COUNTS` came back
+   * with all thirteen keys. The five the owner named — data, config, audio,
+   * font and build — are exactly the five that were missing here. `video`
+   * escaped only by accident: the word is spelled the same in both languages
+   * and so was already in the alias list below.
    *
    * The box's colours were never wrong, and that is worth saying because it is
    * why this went unnoticed: they come from `/api/explain` over the wire, so
@@ -1842,7 +1991,17 @@
 
   /* Turkish folding — the same rule as the engine's `DefaultFolder`: dotted
      and dotless i are ONE letter. That is why the table lists `altinda` and
-     not `altında`: folding sends both to the same place. */
+     not `altında`: folding sends both to the same place.
+
+     **The `"tr"` here is not the interface's language and must not follow it.**
+     It is the rule the engine applies to every query in every locale, so that
+     `ISTANBUL`, `İstanbul` and `ıstanbul` find each other whoever is looking.
+     Made to follow the menu, an English window would fold `I` to `i` and `İ`
+     to `i̇`, disagree with the service about what a term matches, and paint as
+     understood a query the service read differently. The catalogue itself
+     folds nothing — `T` is an exact lookup — for the neighbouring reason: a
+     msgid is a key, not text to be compared loosely, and `highlight.rs` has
+     already had a panic out of treating one as the other. */
   const fold = (t) => t.replace(/[İIı]/g, "i").toLocaleLowerCase("tr");
   const field = (name) => {
     const f = fold(name);
@@ -2066,9 +2225,9 @@
       `<div class="band" style="left:${left - 3}px;width:${width + 6}px"></div>` +
       `<div class="pair" style="left:${x}px">` +
       `<button class="neg" ` +
-      `title="${negated ? "Dışlamayı kaldır" : "Bu terimi dışla"}">` +
+      `title="${escape_(negated ? T("Stop excluding this") : T("Exclude this term"))}">` +
       `${negated ? "+" : "!"}</button>` +
-      `<button class="drop" title="Terimi kaldır">✕</button>` +
+      `<button class="drop" title="${escape_(T("Remove this term"))}">✕</button>` +
       `</div>`;
   }
 
@@ -2454,13 +2613,13 @@
       const list = f.takes === "kind" ? KIND_VALUES : f.takes === "time" ? TIME_VALUES : [];
       const pre = fold(sp[1]);
       return list.filter((v) => v.startsWith(pre)).map((v) => ({
-        insert: sp[0] + ":" + v, label: f.name + ":" + v, about: f.about, at: [a, b],
+        insert: sp[0] + ":" + v, label: f.name + ":" + v, about: T(f.about), at: [a, b],
       }));
     }
     const pre = fold(typed);
     return FIELDS
       .filter((f) => f.name.startsWith(pre) || f.alias.some((x) => x.startsWith(pre)))
-      .map((f) => ({ insert: f.name + ":", label: f.eg || f.name + ":", about: f.about, at: [a, b] }));
+      .map((f) => ({ insert: f.name + ":", label: f.eg || f.name + ":", about: T(f.about), at: [a, b] }));
   }
 
   const hintBox = document.getElementById("hints");
@@ -2901,7 +3060,7 @@
    * the matching set on its own leash and moved `LIST.total` without a word
    * about the message — and when it got there first, the branch in
    * `fillWindow` that hides the message was skipped for having nothing left to
-   * change. The screen then said "Eşleşme yok" over a list with a row in it,
+   * change. The screen then said "No matches" over a list with a row in it,
    * and went on saying it until the query changed.
    *
    * So the two are moved together or not at all. `dropBeyond` and `dropShort`
@@ -3083,8 +3242,10 @@
       spTop.firstElementChild.style.height = topCss;
     }
     if (far) {
-      const note =
-        `ilk ${fmt(REACH)} satır · ${fmt(LIST.total)} eşleşmeden. Daha ilerisi için aramayı daraltın.`;
+      const note = T(
+        "the first {reach} rows · of {total} matches. Narrow the search to go further.",
+        { reach: fmt(REACH), total: fmt(LIST.total) },
+      );
       if (farRow.firstElementChild.textContent !== note) {
         farRow.firstElementChild.textContent = note;
       }
@@ -3430,7 +3591,7 @@
           if (!res.capped && (!LIST.exact || LIST.total !== res.total)) {
             setTotal(res.total, true);
           }
-          if (refreshing) now = Math.floor(Date.now() / 1000);  /* "5 dk önce" moves */
+          if (refreshing) now = Math.floor(Date.now() / 1000);  /* "5 min ago" moves */
           repaint(true);
           /* A slot has just come free, and the screen may be somewhere else
              now. Asking again here is what keeps a still list filling in
@@ -3476,7 +3637,7 @@
   let paintQueued = false;
   let dirty = false;          /* the rows changed, though the range did not */
   let painted = "";
-  /* ---------------- the clock behind "12 sn önce" ----------------
+  /* ---------------- the clock behind "12 sec ago" ----------------
    *
    * `now` was refreshed in two places: when a live revision landed and when a
    * search ran. Nothing else moved it. At minute granularity that is invisible
@@ -3779,7 +3940,7 @@
        even where the file is the same — the marked letters moved. */
     for (const tr of pool) tr.__stamp = "";
     repaint(true);
-    /* "Eşleşme yok" is not decided here any more; `setTotal` is the one place
+    /* "No matches" is not decided here any more; `setTotal` is the one place
        that moves the length and the message together. This used to write it
        and got it the wrong way round once — the one case the message exists
        for was the one case it was hidden in — which is a good argument for
@@ -3792,11 +3953,31 @@
        instead of claiming a number the engine did not actually reach. */
     const shown = LIST.exact ? fmt(LIST.total) : fmt(LIST.total) + "+";
     document.getElementById("count").textContent = withIndexTotal(shown);
-    document.getElementById("ms").textContent =
-      (res.took_us / 1000).toFixed(2).replace(".", ",") + " ms";
-    document.getElementById("rows").textContent = fmt(res.rows_visited) + " satır okundu";
+    drawCost(res.took_us, res.rows_visited);
 
     syncFacets(p);
+  }
+
+  /* What the last search cost, kept rather than only printed.
+   *
+   * **Kept because the two halves of it are in a language.** The separator is
+   * — `0,29 ms` in Turkish and `0.29 ms` in English — and "rows read" is a
+   * sentence. Written once and never revisited, a switch left the two figures
+   * beside a count and a status line that had both changed, in the language
+   * before last, until somebody happened to type. Measured in the window:
+   * `10,48 ms · 200 satır okundu` under an English heading row. */
+  let LAST_COST = null;
+  function drawCost(us, rowsVisited) {
+    if (us !== undefined) LAST_COST = { us, rowsVisited };
+    if (!LAST_COST) return;
+    /* **The decimal separator is the language's, not a `replace`.** This read
+       `.toFixed(2).replace(".", ",")` — a comma written in by hand because the
+       window was Turkish — which printed `0,29 ms` under an English interface
+       showing `4,864 rows`, two different meanings for one character in one
+       line. `Intl` knows which is which. */
+    document.getElementById("ms").textContent = MS.format(LAST_COST.us / 1000) + " ms";
+    document.getElementById("rows").textContent =
+      T("{n} rows read", { n: fmt(LAST_COST.rowsVisited) });
   }
 
   /* The rest of the answer: the exact total, the rail and the chart, from
@@ -3853,7 +4034,7 @@
    * switching kind while keeping the scope really does give the scoped count —
    * that rail is already right and was never part of this.
    *
-   * `field()` rather than a prefix match, so the aliases resolve: `tür:görsel`
+   * `field()` rather than a prefix match, so the aliases resolve: `tur:image`
    * and `type:image` are the same term as `kind:image`, and `modified:` is
    * `dm:`. `toggleTerm` compares the same way, as of the commit after this
    * one; this comment used to say it did not, and said so for one commit
@@ -4022,8 +4203,8 @@
     document.getElementById("ms").textContent = "—";
     document.getElementById("rows").textContent =
       String(err.message || err).includes("403")
-        ? "bağlantı reddedildi — bağlantıdaki anahtar bu koşuya ait değil"
-        : "servise ulaşılamıyor — scourd çalışıyor mu?";
+        ? T("connection refused — the key in the link is not this run's")
+        : T("the service cannot be reached — is scourd running?");
   }
 
 
@@ -4061,9 +4242,17 @@
       const c = v === 0 ? "--line" : bandOf(now - days * DAY);
       /* The oldest bar has no upper bound, so clicking it cannot mean
          `dm:730d` — it would select everything. It selects nothing instead. */
+      const span = oldest
+        ? T("older than {days} days", { days })
+        : T("up to {days} days", { days });
+      const title = T("{n} results · {span}", { n: fmt(v), span })
+        + (capped ? T(" (sampled)") : "");
+      const label = oldest
+        ? T("{n} results, older than {days} days", { n: v, days })
+        : T("{n} results, the last {days} days", { n: v, days });
       return `<button type="button" ${oldest ? "" : `data-days="${days}"`}
-                title="${fmt(v)} sonuç · ${oldest ? days + " günden eski" : days + " güne kadar"}${capped ? " (örneklenmiş)" : ""}"
-                aria-label="${v} sonuç, ${oldest ? days + " günden eski" : "son " + days + " gün"}">
+                title="${escape_(title)}"
+                aria-label="${escape_(label)}">
                 <i style="height:${h}px;background:var(${c})"></i></button>`;
     }).join("");
   }
@@ -4171,13 +4360,20 @@
   };
   const cell = (cls, get) => (td, f) => writeText(td, f, cls, get);
 
+  /* **`msgid`, not `label`.** The field held a finished Turkish word and was
+     read in two places — the heading row and the column picker — so a language
+     switch would have had to find both. It holds the catalogue's key now and
+     both readers translate it at draw time, which makes one rule for when a
+     word is resolved instead of two. `id` is what the settings are keyed by
+     and `key` is what the engine sorts by; neither is a word and neither
+     moves. */
   const COLUMNS = [
-    { id: "name",  label: "Ad",       key: "name",  w: 240,
+    { id: "name",  msgid: "Name",      key: "name",  w: 240,
       write: (td, f, p) => {
         if (td.className !== "name") td.className = "name";
         writeName(td, f, p.text);
       } },
-    { id: "path",  label: "Konum",    key: "path",  w: 320,
+    { id: "path",  msgid: "Location",  key: "path",  w: 320,
       write: (td, f) => {
         if (td.className !== "") td.className = "";
         let div = td.firstElementChild;
@@ -4204,29 +4400,30 @@
      * those are without a walk it is not going to do. Over-marking is the
      * direction to be wrong in. What is excluded is in the settings, which is
      * what the title says. */
-    { id: "size",  label: "Boyut",    key: "size",  w: 90,  num: true,
+    { id: "size",  msgid: "Size",      key: "size",  w: 90,  num: true,
       write: (td, f) => {
         cell("n", (x) => (x.is_dir
           ? (x.under ? "~" + bytes(x.under.disk) : "")
           : bytes(x.size)))(td, f);
         const t = f.is_dir && f.under
-          ? `indekslenen boyut · ${fmt(f.under.files)} dosya`
-            + `\ndışlananlar (target, node_modules…) sayılmaz — ayarlarda`
+          ? T("indexed size · {n} files", { n: fmt(f.under.files) })
+            + "\n"
+            + T("what is excluded (target, node_modules…) is not counted — see the settings")
           : "";
         if (td.title !== t) td.title = t;
       } },
-    { id: "mtime", label: "Değişme",  key: "modified", w: 120,
+    { id: "mtime", msgid: "Modified",  key: "modified", w: 120,
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);
         td.style.color = `var(${bandOf(f.mtime)})`;
         const t = exact(f.mtime);
         if (td.title !== t) td.title = t;
       } },
-    { id: "kind",  label: "Tür",      key: "kind",  w: 110,
+    { id: "kind",  msgid: "Kind",      key: "kind",  w: 110,
       write: cell("kind", (f) => f.kind || "") },
-    { id: "ext",   label: "Uzantı",   key: "ext",   w: 80,
+    { id: "ext",   msgid: "Extension", key: "ext",   w: 80,
       write: cell("kind", (f) => f.ext || "") },
-    { id: "ctime", label: "Oluşturma", key: "created", w: 120,
+    { id: "ctime", msgid: "Created",   key: "created", w: 120,
       write: (td, f) => {
         cell("n left", (x) => (x.ctime ? ago(x.ctime) : ""))(td, f);
         const t = exact(f.ctime);
@@ -4239,26 +4436,29 @@
      * its are frozen at creation. The same column, two volumes, two different
      * meanings — so the one that means nothing says nothing, and the title
      * says why rather than leaving somebody to work it out from the numbers. */
-    { id: "atime", label: "Erişim",   key: "accessed", w: 120,
+    { id: "atime", msgid: "Accessed",  key: "accessed", w: 120,
       write: (td, f) => {
         const dead = frozenAtime(f);
         cell("n left", (x) => (dead ? "—" : x.atime ? ago(x.atime) : ""))(td, f);
         // On a volume that records nothing the explanation is worth more than
         // a timestamp; where it records, the timestamp is the whole point.
+        // One literal rather than two joined with `+`: the msgid is what the
+        // catalogue is keyed by and what `the_page_says_nothing_the_catalogue_
+        // has_not_heard_of` reads out of this file, and it cannot see a string
+        // the parser has not folded yet.
         const t = dead
-          ? "bu birimde okuma zamanı kaydedilmiyor (noatime) — gösterilen sayı"
-            + " dosyanın oluşturulduğu andan kalma olurdu"
+          ? T("this volume does not record reads (noatime) — the number shown would be left over from when the file was created")
           : exact(f.atime);
         if (td.title !== t) td.title = t;
         td.style.color = dead ? "var(--ink-3)" : "";
       } },
-    { id: "perm",  label: "İzinler",  key: "mode",  w: 108,
+    { id: "perm",  msgid: "Mode",      key: "mode",  w: 108,
       write: cell("mono", (f) => f.perm || "") },
-    { id: "user",  label: "Sahip",    key: "uid",   w: 100,
+    { id: "user",  msgid: "Owner",     key: "uid",   w: 100,
       write: cell("mono", (f) => f.user || "") },
-    { id: "group", label: "Grup",     key: "gid",   w: 100,
+    { id: "group", msgid: "Group",     key: "gid",   w: 100,
       write: cell("mono", (f) => f.group || "") },
-    { id: "disk",  label: "Diskte",   key: "disk",  w: 90, num: true,
+    { id: "disk",  msgid: "On disk",   key: "disk",  w: 90, num: true,
       write: cell("n", (f) => (f.disk > 0 ? bytes(f.disk) : "")) },
   ];
   const COL_DEFAULT = ["name", "path", "size", "mtime", "kind"];
@@ -4417,13 +4617,14 @@
           (c) =>
             `<th data-col="${c.id}"${c.key ? ` data-sort="${c.key}"` : ""}` +
             `${c.num ? ' class="num"' : ""}` +
-            `${c.key ? "" : ' title="bu kolona göre sıralanamıyor"'}>${c.label}</th>`
+            `${c.key ? "" : ` title="${escape_(T("this column cannot be sorted by"))}"`}>` +
+            `${escape_(T(c.msgid))}</th>`
         )
         .join("") +
       // The picker lives where a column would be, so it is where the eye
       // already is when the question "why is this column here" comes up.
-      `<th class="pick"><button type="button" id="pick" title="kolonlar"
-         aria-label="kolonları seç">⋮</button></th>`;
+      `<th class="pick"><button type="button" id="pick" title="${escape_(T("columns"))}"
+         aria-label="${escape_(T("choose the columns"))}">⋮</button></th>`;
     /* **Numbered downwards, left to right, and that is not decoration.**
      *
      * Each sticky heading is its own stacking context, so a grip's `z-index`
@@ -4462,8 +4663,9 @@
       // not a smaller table, it is a broken one.
       const locked = on && SHOWN.length === 1;
       return `<button type="button" data-col="${c.id}"${locked ? " disabled" : ""}>
-        <span class="tick">${on ? "✓" : ""}</span>${escape_(c.label)}</button>`;
-    }).join("") + `<button type="button" data-col="" class="reset">Varsayılana dön</button>`;
+        <span class="tick">${on ? "✓" : ""}</span>${escape_(T(c.msgid))}</button>`;
+    }).join("")
+      + `<button type="button" data-col="" class="reset">${escape_(T("Back to the default"))}</button>`;
     return menu;
   }
 
@@ -4476,7 +4678,7 @@
       if (has) return;
       const g = document.createElement("span");
       g.className = "grip";
-      g.title = "sürükle · çift tıkla sıfırla";
+      g.title = T("drag · double-click to reset");
       th.appendChild(g);
     });
   }
@@ -4547,7 +4749,7 @@
      * spelling of it.**
      *
      * This compared the literal prefix — `kind:` against the start of each
-     * term — so a box already holding `tür:görsel`, which is the *same field*
+     * term — so a box already holding `tur:image`, which is the *same field*
      * written the way the rail itself offers it, matched nothing. The new term
      * was appended instead of substituted, and a query asking for two kinds at
      * once matches no file at all: every rail read zero and the list emptied.
@@ -4597,7 +4799,7 @@
     render();
   });
 
-  /* ---------------- kolon sırası ----------------
+  /* ---------------- the column order ----------------
    *
    * Take a heading and put it somewhere else. The menu could already say
    * *which* columns are shown and nothing could say **in what order** — the
@@ -4738,7 +4940,7 @@
       const j = await r.json();
       if (j.error) { flash(j.error); return; }
       if (j.instead) flash(j.instead);
-    } catch (e) { flash("açılamadı: " + (e.message || e)); }
+    } catch (e) { flash(T("could not open: {why}", { why: e.message || e })); }
   }
 
   /* One line, under the meter, that says what just happened and then stops.
@@ -4807,7 +5009,7 @@
   const pathOf = (tr) => tr && tr.dataset && tr.dataset.path;
 
   /* ------------------------------------------------------------------ *
-   * Seçim — more than one row at a time.
+   * The selection — more than one row at a time.
    *
    * Everything's staple and the one thing this list could not do: every
    * action was about the row under the pointer, so "copy these eleven paths"
@@ -4891,18 +5093,24 @@
        in the size column — the part of it this index has — and quietly adding
        that into a total beside exact file sizes would make one number out of
        two different kinds of claim. */
-    const parts = [`<span class="n">${fmt(n)}</span> seçili`];
+    /* The count is inside the msgid rather than glued to the front of it: a
+       language does not have to put the number first, and Turkish does not
+       always want the same word order English does. `{n}` carries the markup
+       with it, which is the only reason this one is HTML. */
+    const parts = [T('<span class="n">{n}</span> selected', { n: fmt(n) })];
     if (n - dirs > 0) parts.push(`<span class="sum">${bytes(total)}</span>`);
-    if (dirs) parts.push(`<span class="sum">${fmt(dirs)} klasör</span>`);
+    if (dirs) parts.push(T('<span class="sum">{n} folders</span>', { n: fmt(dirs) }));
     const nFolders = foldersOf().length;
     selbar.innerHTML =
       parts.join(' <span class="sum">·</span> ') +
       `<span class="grow"></span>` +
-      `<button type="button" data-sel="copy">Yolları kopyala</button>` +
+      `<button type="button" data-sel="copy">${escape_(T("Copy the paths"))}</button>` +
       `<button type="button" data-sel="folder"${asking ? ' class="asking"' : ""}>` +
-      (asking ? `${fmt(nFolders)} pencere açılsın mı?` : `Klasörlerini aç (${fmt(nFolders)})`) +
+      escape_(asking
+        ? T("Open {n} windows?", { n: fmt(nFolders) })
+        : T("Open their folders ({n})", { n: fmt(nFolders) })) +
       `</button>` +
-      `<button type="button" data-sel="clear">Bırak</button>`;
+      `<button type="button" data-sel="clear">${escape_(T("Drop it"))}</button>`;
   }
 
   /* The folders a selection sits in, each one once.
@@ -4947,8 +5155,8 @@
   function copySelected() {
     const text = [...SEL.keys()].join("\n");
     navigator.clipboard.writeText(text).then(
-      () => flash(`${fmt(SEL.size)} yol kopyalandı`),
-      () => flash("kopyalanamadı"));
+      () => flash(T("{n} paths copied", { n: fmt(SEL.size) })),
+      () => flash(T("could not copy")));
   }
 
   selbar.addEventListener("click", (e) => {
@@ -5066,19 +5274,20 @@
     const many = SEL.size > 1;
     menu.innerHTML = (many
       ? [
-          [`${fmt(SEL.size)} yolu kopyala`, "copy"],
+          [T("Copy {n} paths", { n: fmt(SEL.size) }), "copy"],
           // Not "open them": opening a selection means as many programs as
           // there are rows, and the bar's button is where that lives, behind
           // a question. What a menu offers should be safe to press.
-          ["Klasörlerini aç", "folders"],
-          ["Seçimi bırak", "clear"],
+          [T("Open their folders"), "folders"],
+          [T("Drop the selection"), "clear"],
         ]
       : [
-          ["Aç", "file"],
-          ["Klasörünü aç", "folder"],
-          ["Yolu kopyala", "copy"],
+          [T("Open"), "file"],
+          [T("Open its folder"), "folder"],
+          [T("Copy the path"), "copy"],
         ]
-    ).map(([label, act]) => `<button type="button" data-act="${act}">${label}</button>`).join("");
+    ).map(([label, act]) =>
+      `<button type="button" data-act="${act}">${escape_(label)}</button>`).join("");
     menu.dataset.path = p;
     menu.hidden = false;
     /* Kept on screen: near the pointer, but never past the edge. */
@@ -5101,9 +5310,11 @@
       // One row or the whole selection, and the same key order the bar copies
       // in — insertion order, which is the order they were picked.
       const text = SEL.size > 1 ? [...SEL.keys()].join("\n") : p;
-      const said = SEL.size > 1 ? `${fmt(SEL.size)} yol kopyalandı` : "yol kopyalandı";
+      const said = SEL.size > 1
+        ? T("{n} paths copied", { n: fmt(SEL.size) })
+        : T("path copied");
       navigator.clipboard.writeText(text).then(() => flash(said),
-                                               () => flash("kopyalanamadı"));
+                                               () => flash(T("could not copy")));
     } else {
       launch(p, act);
     }
@@ -5114,7 +5325,7 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
 
   /* ------------------------------------------------------------------ *
-   * Önizleme — the panel the window draws itself.
+   * The preview — the panel the window draws itself.
    *
    * A search that finds the right *name* and then cannot tell you whether it
    * is the right *file* has stopped one step early. Three `rapor-son.pdf`s in
@@ -5180,16 +5391,19 @@
     const full = f.path + "/" + f.name;
     const shown = HOME && f.path.startsWith(HOME + "/")
       ? "~" + f.path.slice(HOME.length) : f.path;
+    /* The same words the column headings use, and deliberately the same
+       msgids: a panel that called the date "Changed" while the column above it
+       said "Modified" would be two names for one field. */
     const rows = [
-      ["Konum", shown],
-      ["Tür", f.kind || ""],
-      [f.is_dir ? "İçindekiler" : "Boyut",
-       f.is_dir ? (f.items ? fmt(f.items) + " öge" : "") : bytes(f.size)],
-      ["Değişme", f.mtime ? ago(f.mtime) : ""],
-      ["Oluşturma", f.ctime ? ago(f.ctime) : ""],
-      ["Erişim", f.atime ? ago(f.atime) : ""],
-      ["İzinler", f.perm || ""],
-      ["Sahip", [f.user, f.group].filter(Boolean).join(" · ")],
+      [T("Location"), shown],
+      [T("Kind"), f.kind || ""],
+      [f.is_dir ? T("Contents") : T("Size"),
+       f.is_dir ? (f.items ? T("{n} items", { n: fmt(f.items) }) : "") : bytes(f.size)],
+      [T("Modified"), f.mtime ? ago(f.mtime) : ""],
+      [T("Created"), f.ctime ? ago(f.ctime) : ""],
+      [T("Accessed"), f.atime ? ago(f.atime) : ""],
+      [T("Mode"), f.perm || ""],
+      [T("Owner"), [f.user, f.group].filter(Boolean).join(" · ")],
     ].filter(([, v]) => v);
     peekFacts.textContent = "";
     for (const [k, v] of rows) {
@@ -5304,9 +5518,9 @@
       if (type) el.type = type;
       el.addEventListener("loadedmetadata", () => {
         if (PEEK.path !== mine) return;
-        addFact("Süre", clock(el.duration));
+        addFact(T("Length"), clock(el.duration));
         if (tag === "video" && el.videoWidth) {
-          addFact("Boyutlar", `${el.videoWidth} × ${el.videoHeight}`);
+          addFact(T("Dimensions"), `${el.videoWidth} × ${el.videoHeight}`);
         }
       });
     }
@@ -5332,7 +5546,7 @@
        on for the moment between one file and the next. */
     peekNative.hidden = true;
     if (f.is_dir) {
-      showNothing("Klasör — içindekiler listede.");
+      showNothing(T("A folder — what is in it is in the list."));
       return;
     }
     PEEK.timer = setTimeout(() => {
@@ -5373,14 +5587,15 @@
                    inside the file is marked exactly as a hit in the name is. */
                 writePeekText(t, parse(q.value).text);
                 if (r.headers.get("X-Scour-Complete") === "0") {
-                  peekCut.textContent =
-                    `ilk ${bytes(new Blob([t]).size)} — dosya ${bytes(meta.size)}`;
+                  peekCut.textContent = T("the first {shown} — the file is {total}", {
+                    shown: bytes(new Blob([t]).size), total: bytes(meta.size),
+                  });
                   peekCut.hidden = false;
                 }
               })
               .catch(() => {});
           } else {
-            showNothing("Bu dosya türü tarayıcıda gösterilemiyor.",
+            showNothing(T("This kind of file cannot be shown in a browser."),
                         meta.thumb ? full : null);
           }
         })
@@ -5389,8 +5604,8 @@
           /* 403 is the one refusal worth naming, because it is a decision
              somebody made rather than a failure: `--no-preview`. */
           showNothing(String(e).includes("403")
-            ? "Önizleme kapalı (--no-preview)."
-            : "Önizlenemedi.");
+            ? T("Previewing is off (--no-preview).")
+            : T("It could not be previewed."));
         });
     }, 120);
   }
@@ -5428,16 +5643,34 @@
     if (e.key === "Escape" && PEEK.on && !peek.hidden) setPeek(false);
   });
 
-  /* The index's size, for the "x / y" meter. */
+  /* The index's size, for the "x / y" meter.
+   *
+   * **The last one is kept, for the same reason the last search's cost is.**
+   * `applyMarkup` writes `#path-note` back to its msgid — that is what makes
+   * "connecting…" the honest thing to show before the first status — so a
+   * language switch put the window back to "connecting…" over a service it was
+   * plainly connected to, and left it there until the next reply. Which is up
+   * to twenty-five seconds: `/api/wait` answers when the index moves, and on an
+   * idle machine it does not. */
+  let LAST_STATUS = null;
   function applyStatus(s) {
+    LAST_STATUS = s;
     TOTAL = s.entries;
     TOTAL_KNOWN = true;
     let moved = false;
     const note = document.getElementById("path-note");
     if (note) {
-      const mb = (s.index_bytes / 1048576).toFixed(1).replace(".", ",");
-      const text = `indeks ${mb} MB · ${s.sources} kaynak · ${s.watching} izleniyor`
-        + (s.scanning ? " · taranıyor" : "");
+      // `Intl` rather than `.replace(".", ",")`, for the same reason the
+      // millisecond figure changed: the separator belongs to the language.
+      const mb = MB.format(s.index_bytes / 1048576);
+      // Singular picked here for the same reason `ago` does it: almost every
+      // machine has one or two sources, so `1 sources` would be the ordinary
+      // reading of this line rather than an edge case.
+      const text = (s.sources === 1
+        ? T("index {mb} MB · 1 source · {watching} watched", { mb, watching: s.watching })
+        : T("index {mb} MB · {sources} sources · {watching} watched", {
+            mb, sources: s.sources, watching: s.watching,
+          })) + (s.scanning ? T(" · scanning") : "");
       if (text !== note.textContent) { note.textContent = text; moved = true; }
     }
     /* `LIST`, not the search reply. The search answers under a cap so it can
@@ -5816,23 +6049,141 @@
     })
     .catch(() => {});
 
-  SERVICE.get("kinds", {})
-    .then((res) => {
-      KINDS = res.kinds.map((k) => [k.label, k.token]);
-      KIND_KEY = Object.fromEntries(res.kinds.map((k) => [k.token, k.label]));
-      /* Rows may have beaten this local request. Bring their labels and the
-         rail up to date without searching the index again. */
-      for (const f of LIST.rows.values()) {
-        f.kind = f.is_dir ? "Klasör" : (KIND_KEY[f.ktoken] || "Diğer");
-      }
-      for (const f of FILES) {
-        f.kind = f.is_dir ? "Klasör" : (KIND_KEY[f.ktoken] || "Diğer");
-      }
-      syncFacets(parse(q.value));
-      for (const tr of pool) tr.__stamp = "";
-      repaint(true);
-    })
-    .catch(() => {});
+  /* ------------------------------------------------------------------ *
+   * The language, and changing it without restarting anything.
+   *
+   * Two routes, asked together and applied together. `/api/strings` carries
+   * the catalogue and the list of languages that exist; `/api/kinds` carries
+   * the thirteen kind labels, which are the one part of the window whose words
+   * the page does not hold a msgid for — they are the engine's taxonomy and
+   * the bridge translates them, which is what keeps the rail from knowing a
+   * different set of kinds than the engine has.
+   *
+   * **Applied together, not each on arrival.** Separately, a switch redrew the
+   * rail in the new language a frame before the headings changed and a frame
+   * after the sidebar did. One `Promise.all`, one repaint.
+   * ------------------------------------------------------------------ */
+  function applyKinds(res) {
+    KINDS = res.kinds.map((k) => [k.label, k.token]);
+    KIND_KEY = Object.fromEntries(res.kinds.map((k) => [k.token, k.label]));
+    /* Rows may have beaten this request, or be left over from the language
+       before this one. Bring their labels up to date without searching the
+       index again — the rows did not change, only the word for their kind. */
+    for (const f of LIST.rows.values()) f.kind = labelOfToken(f.ktoken);
+    for (const f of FILES) f.kind = labelOfToken(f.ktoken);
+  }
+
+  /* Everything that has a word in it, redrawn.
+   *
+   * The list of what to redraw is the honest cost of not having a framework,
+   * and it is written out rather than hidden behind a full reload because a
+   * reload would lose the query, the scroll position and the selection —
+   * "without restarting anything" has to mean the window keeps its place. */
+  function applyLanguage() {
+    document.documentElement.lang = LANG;
+    buildFormatters();
+    applyMarkup(document);
+    buildLangMenu();
+    buildHeads();               // the headings, and the picker's title
+    syncFacets(parse(q.value)); // the three rails
+    drawSelBar();               // the selection bar, if anything is selected
+    /* The two lines in the meter that nothing else will rewrite until
+       something happens. Both were caught in the window rather than reasoned
+       about: `10,48 ms · 200 satır okundu` sat under English headings, and
+       `#path-note` had been put back to "connecting…" by `applyMarkup` two
+       lines above. See `drawCost` and `applyStatus`. */
+    drawCost();
+    if (LAST_STATUS) applyStatus(LAST_STATUS);
+    /* The preview's fact list, if it is open. `drawPeek` returns early for the
+       row it is already showing — deliberately, so that arrowing back onto a
+       row does not restart a video — so the panel would have kept the previous
+       language's `Tür`/`Boyut`/`Değişme` until the selection moved. Only the
+       labels are rewritten; the bytes on screen have not changed. */
+    if (PEEK.on && !peek.hidden) {
+      const row = focusedRow();
+      if (row && row.__row) peekFactsOf(row.__row);
+    }
+    if (window.SCOUR && window.SCOUR.relabel) window.SCOUR.relabel();
+    /* The rows carry `ago(...)` and a kind label, both of which just changed,
+       and the pool skips a row whose stamp is unchanged. */
+    for (const tr of pool) tr.__stamp = "";
+    painted = "";
+    repaint(true);
+  }
+
+  /* Fetch a language and put it on. `tag` empty means "whatever the service
+     works out" — the setting, then the config file, then `LANG`. */
+  function loadLanguage(tag) {
+    const params = tag ? { lang: tag } : {};
+    return Promise.all([
+      SERVICE.get("strings", params),
+      SERVICE.get("kinds", params),
+    ]).then(([words, kinds]) => {
+      LANG = words.lang || "en";
+      LANGUAGES = words.languages || [];
+      STRINGS = words.strings || {};
+      applyKinds(kinds);
+      applyLanguage();
+    });
+  }
+
+  /* **Saved before it is drawn, and drawn whether or not the save lands.**
+     `keep` is fire-and-forget by design; a window that refused to change
+     language because a settings write was slow would be worse than one that
+     changes and writes a moment later. */
+  function chooseLanguage(tag) {
+    keep({ language: tag });
+    langMenu.hidden = true;
+    langBtn.setAttribute("aria-expanded", "false");
+    loadLanguage(tag).catch((e) => console.error("scour: language:", e));
+  }
+
+  const langBtn = document.getElementById("lang");
+  const langMenu = document.createElement("div");
+  langMenu.className = "rowmenu langs";
+  langMenu.hidden = true;
+  document.body.appendChild(langMenu);
+
+  /* Built from what the service ships, never from a list in here: a menu with
+     its own list would offer a language nobody wrote a catalogue for, and the
+     first thing it did would be to show an untranslated window. */
+  function buildLangMenu() {
+    langMenu.innerHTML = LANGUAGES.map(({ tag, name }) =>
+      `<button type="button" data-lang="${escape_(tag)}">` +
+      `<span class="tick">${tag === LANG ? "✓" : ""}</span>${escape_(name)}</button>`
+    ).join("");
+  }
+
+  langBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = langMenu.hidden;
+    langMenu.hidden = !open;
+    langBtn.setAttribute("aria-expanded", String(open));
+    if (!open) return;
+    const r = langBtn.getBoundingClientRect();
+    const m = langMenu.getBoundingClientRect();
+    langMenu.style.left = Math.min(r.left, innerWidth - m.width - 8) + "px";
+    langMenu.style.top = r.bottom + 4 + "px";
+  });
+  langMenu.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-lang]");
+    if (btn) chooseLanguage(btn.dataset.lang);
+  });
+  document.addEventListener("click", () => {
+    langMenu.hidden = true;
+    langBtn.setAttribute("aria-expanded", "false");
+  });
+
+  /* No `lang` argument on the first load: the service is the one that knows
+     what was chosen last time, and asking it is what makes the choice survive
+     the window being closed. */
+  loadLanguage("").catch(() => {
+    /* An English window is a working window — every msgid in this file is its
+       own English — so a catalogue that cannot be fetched is not a reason to
+       stop. The kind labels are the exception and they come up empty, the same
+       few milliseconds they are empty on every load. */
+    applyLanguage();
+  });
 
   /* What the report is allowed to reach in here.
    *
@@ -5840,7 +6191,7 @@
    * that was not a style choice — it was a bug that hid for as long as the
    * report was live. Wiring the report to the engine put `SERVICE.usage(...)`
    * inside a scope where `SERVICE` does not exist, so the first panel threw
-   * `ReferenceError` into the `catch` that prints "servise ulaşılamıyor", and
+   * `ReferenceError` into the `catch` that says the service cannot be reached,
    * every figure on the tab stayed a dash. It looked exactly like the service
    * being down, which is why nobody suspected the page.
    *
@@ -5853,6 +6204,20 @@
     service: SERVICE,
     escape: escape_,
     home: () => HOME,
+    /* The catalogue, and the number formatters that go with it.
+     *
+     * Handed over rather than fetched again: `/api/strings` is one request and
+     * two closures asking for it would be two, arriving at different moments —
+     * the report would spend a frame in the old language every time somebody
+     * switched. Functions rather than the objects themselves, because the
+     * objects are replaced when the language changes and a captured `NUMBERS`
+     * would keep formatting in the language it was captured in. */
+    t: (msgid, vars) => T(msgid, vars),
+    fmt: (n) => fmt(n),
+    /* The report's own redraw, registered by the report and called from
+       `applyLanguage`. Null until the second closure has run — which is after
+       this one, so this half must never assume it is there. */
+    relabel: null,
     // Both arrive from the service after this runs, so both are getters. The
     // kind panel was empty for the same reason the rest of the tab was blank:
     // it reached for `KINDS` and `BAR_EDGES` across a closure boundary and
@@ -5869,13 +6234,14 @@
   };
 })();
 
-// ---------------------------------------------------------------- RAPOR
+// ---------------------------------------------------------------- REPORT
 //
 // **This was a mockup for a long time, and it showed.** The tree below used to
 // be twenty-four folders written into the page — real numbers once, measured
 // against a home directory in August, and frozen from then on. It sat three
-// inches from a sidebar that says "Aşağısı canlı", which made it the one place
-// in this interface that showed somebody invented figures about their own disk.
+// inches from a sidebar that says "Everything below is live", which made it the
+// one place in this interface showing somebody invented figures about their own
+// disk.
 //
 // The engine had answered this the whole time: `Request::Usage` ships and
 // `scour du` uses it. Only the route was missing. Every number here now comes
@@ -5891,10 +6257,25 @@
   const home = window.SCOUR.home;
   const kinds = window.SCOUR.kinds;
   const barEdges = window.SCOUR.barEdges;
+  /* The catalogue and the number formatter, from the other half. Both are
+     wrappers rather than the values, so a language change is picked up here
+     without this closure being told about it. */
+  const T = window.SCOUR.t;
+  const fmt = window.SCOUR.fmt;
 
+  /* The six age bands. Resolved at draw time rather than here: this runs
+     before the catalogue has arrived, so a finished string built now would be
+     the English of a window that had already gone Turkish.
+
+     Named fields rather than a pair, so that the word is spelled `msgid:` —
+     the same convention `COLUMNS` and `FIELDS` use, and what
+     `the_page_says_nothing_the_catalogue_has_not_heard_of` reads. A msgid that
+     a test cannot find is a msgid that can go missing from the catalogue
+     without anything failing. */
   const AGE = [
-    ["bugün",    "--t0"], ["bu hafta", "--t1"], ["bu ay",   "--t2"],
-    ["6 ay",     "--t3"], ["bu yıl",   "--t4"], ["daha eski","--t5"]
+    { msgid: "today",      c: "--t0" }, { msgid: "this week", c: "--t1" },
+    { msgid: "this month", c: "--t2" }, { msgid: "six months", c: "--t3" },
+    { msgid: "this year",  c: "--t4" }, { msgid: "older",     c: "--t5" },
   ];
 
   const bytes = (n) => {
@@ -5902,7 +6283,30 @@
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i ? v.toFixed(1) : v) + " " + u[i];
   };
-  const fmt = (n) => n.toLocaleString("tr-TR");
+
+  /* **Where the `%` goes is the language's business too.** It was written
+     `%${shown}` — Turkish order, sign first — so an English window read
+     `%38.4`; and the fallback for a folder holding nothing was the literal
+     `"0,0"`, a Turkish decimal comma typed into the page. `Intl` places the
+     sign, picks the separator, and knows about the space Turkish puts between
+     them.
+
+     Built per call rather than kept, which is the wrong instinct everywhere
+     else in this file and is right here: a kept formatter belongs to a
+     language, and this closure is not told when that changes. `stack` makes
+     six per folder over twenty-four folders, plus a share cell each — 168 a
+     redraw. Measured in the window rather than guessed: 168 constructions and
+     formats in a loop, warmed first so that ICU's lazy set-up is not the
+     reading, median of seven rounds, taken twice — **2.0 ms and 2.3 ms** per
+     redraw, against the 96 ms index walk it is drawing, and paid only while
+     the report tab is open. Cheap enough that a cache is not worth the
+     language bug it would bring. */
+  const percent = (v, digits) => {
+    const dp = digits === undefined ? (v < 1 ? 1 : 0) : digits;
+    return new Intl.NumberFormat(document.documentElement.lang, {
+      style: "percent", minimumFractionDigits: dp, maximumFractionDigits: dp,
+    }).format(v / 100);
+  };
   const leafOf = (p) => p.slice(p.lastIndexOf("/") + 1) || p;
   /* `~` for the reader's own home, the same substitution the location column
      makes. Read at call time, not captured: `HOME` arrives from
@@ -5950,15 +6354,16 @@
     return `<div class="stack">` + age.map((v, i) => {
       const pct = (v / total) * 100;
       if (pct < 0.05) return "";
-      const shown = pct < 1 ? pct.toFixed(1) : Math.round(pct);
-      return `<i style="width:${pct}%;background:var(${AGE[i][1]})" title="${AGE[i][0]} · %${shown}"></i>`;
+      return `<i style="width:${pct}%;background:var(${AGE[i].c})"` +
+             ` title="${escape_(T(AGE[i].msgid))} · ${escape_(percent(pct))}"></i>`;
     }).join("") + `</div>`;
   }
 
   function breadcrumb() {
     const parts = scope.split("/").filter(Boolean);
-    const home = `<button data-path="">tümü</button>`;
-    const where = !parts.length ? `<span>tümü</span>` : home + parts.map((seg, i) => {
+    const all = escape_(T("everything"));
+    const home = `<button data-path="">${all}</button>`;
+    const where = !parts.length ? `<span>${all}</span>` : home + parts.map((seg, i) => {
       const path = "/" + parts.slice(0, i + 1).join("/");
       const last = i === parts.length - 1;
       const label = last ? `<span>${seg}</span>` : `<button data-path="${path}">${seg}</button>`;
@@ -5969,8 +6374,9 @@
        is text somebody typed, and `<b>` in it is a `<b>` to a browser. */
     const f = filter();
     return where + (f
-      ? `<span class="filt">süzgeç <b>${escape_(f)}</b>
-           <button id="unfilter" title="süzgeci kaldır" aria-label="süzgeci kaldır">×</button>
+      ? `<span class="filt">${escape_(T("filter"))} <b>${escape_(f)}</b>
+           <button id="unfilter" title="${escape_(T("remove the filter"))}"
+                   aria-label="${escape_(T("remove the filter"))}">×</button>
          </span>`
       : "");
   }
@@ -5986,7 +6392,7 @@
       if (mine !== drawing) return;
       console.error("scour: the report did not load:", e);
       document.getElementById("r-bytes").textContent = "—";
-      document.getElementById("r-meta").textContent = "servise ulaşılamıyor";
+      document.getElementById("r-meta").textContent = T("the service cannot be reached");
       kidsEl.innerHTML = "";
       return;
     }
@@ -6009,10 +6415,12 @@
     const kids = q ? res.children.filter((c) => c.files > 0) : res.children;
     const cut = q
       ? (res.child_count
-          ? ` · ${fmt(res.child_count)} klasörün ${fmt(kids.length)}'inde eşleşme var`
+          ? " · " + T("{shown} of {total} folders have a match",
+                      { shown: fmt(kids.length), total: fmt(res.child_count) })
           : "")
       : res.child_count > kids.length
-        ? ` · ${fmt(res.child_count)} klasörün en ağır ${kids.length}'i`
+        ? " · " + T("the heaviest {shown} of {total} folders",
+                    { shown: kids.length, total: fmt(res.child_count) })
         : "";
     /* **Said in words, not only in a chip.** With a filter on, this figure is
        what the matching files come to — not what the folder holds, and not what
@@ -6020,12 +6428,14 @@
        look identical, so the difference has to be written down where the
        number is. */
     const about = q
-      ? `<br>yalnız <b>eşleşen</b> dosyalar · klasörün tamamı değil`
+      ? "<br>" + T("only the <b>matching</b> files · not the whole folder")
       : "";
     document.getElementById("r-meta").innerHTML =
-      `${fmt(n.files)} dosya · diskte ${bytes(n.disk)}<br>` +
-      `<b>%${stale}</b>'i bir yıldan eski<br>` +
-      `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}${about}`;
+      T("{files} files · {disk} on disk", { files: fmt(n.files), disk: bytes(n.disk) })
+      + "<br>"
+      + T("<b>{percent}%</b> of it older than a year", { percent: stale })
+      + "<br>"
+      + `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}${about}`;
 
     /* Already heaviest-first from the engine, which is what `top` cuts on. */
     kidsEl.innerHTML = kids.map((v) => `
@@ -6033,17 +6443,17 @@
         <td class="nmcell"><button data-path="${v.path}">${leafOf(v.path)} <span style="color:var(--ink-3)">›</span></button></td>
         <td class="stack-wrap">${stack(v.age, v.bytes)}</td>
         <td class="r big">${bytes(v.bytes)}</td>
-        <td class="r">%${n.bytes ? ((v.bytes / n.bytes) * 100).toFixed(1) : "0,0"}</td>
+        <td class="r">${escape_(percent(n.bytes ? (v.bytes / n.bytes) * 100 : 0, 1))}</td>
         <td class="r">${fmt(v.files)}</td>
       </tr>`).join("") ||
       `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">${
-        q
-          ? "Bu kapsamda, alt klasörlerin hiçbirinde eşleşen dosya yok."
-          : "Bu klasörün altında ayrıca gösterilecek klasör yok."
+        escape_(q
+          ? T("In this scope, none of the subfolders has a matching file.")
+          : T("There are no further folders to show under this one."))
       }</td></tr>`;
 
-    document.getElementById("agekey").innerHTML = AGE.map(([lbl, c]) =>
-      `<span><i style="background:var(${c})"></i>${lbl}</span>`).join("");
+    document.getElementById("agekey").innerHTML = AGE.map((band) =>
+      `<span><i style="background:var(${band.c})"></i>${escape_(T(band.msgid))}</span>`).join("");
 
     drawKinds();
     drawBiggest();
@@ -6130,7 +6540,7 @@
     const list = document.getElementById("d-list");
     const sum = document.getElementById("d-sum");
     const btn = document.getElementById("d-confirm");
-    sum.textContent = budgetMb ? "okunuyor…" : "…";
+    sum.textContent = budgetMb ? T("reading…") : "…";
     btn.disabled = true;
     let res;
     try {
@@ -6138,7 +6548,7 @@
     } catch (e) {
       if (mine !== dupeRun) return;
       console.error("scour: the duplicates panel did not load:", e);
-      sum.textContent = "servise ulaşılamıyor";
+      sum.textContent = T("the service cannot be reached");
       list.textContent = "";
       btn.disabled = false;
       return;
@@ -6147,39 +6557,44 @@
     btn.disabled = false;
 
     sum.textContent =
-      `${bytes(res.proven)} doğrulandı · ${bytes(res.waste)} aday · ` +
-      `${fmt(res.candidates)} dosya` + (res.read ? ` · ${bytes(res.read)} okundu` : "") +
+      T("{proven} confirmed · {waste} candidate · {n} files",
+        { proven: bytes(res.proven), waste: bytes(res.waste), n: fmt(res.candidates) }) +
+      (res.read ? " · " + T("{n} read", { n: bytes(res.read) }) : "") +
       /* **This panel does not take the filter, and says so.** A copy of a file
          is a copy whether or not its name matches what was typed above, so
          narrowing here would hide the other half of a pair and call the
          remaining one unique. Sitting silently under a filtered headline it
          would read as filtered, which is the thing to prevent. */
-      (filter() ? " · süzgeçten bağımsız" : "");
+      (filter() ? " · " + T("independent of the filter") : "");
     /* The one sentence that must never be dropped: a partial answer that looks
        complete is what gets files deleted on a guess. */
     document.getElementById("d-note").innerHTML = res.unconfirmed
-      ? `Aynı boyutta olmak aynı dosya olmak değildir. <b>${fmt(res.unconfirmed)} grup
-         okunarak doğrulanmadı</b> — onlar aday, yinelenen değil.`
-      : `Hepsi okunarak karşılaştırıldı.`;
+      ? T("Being the same size is not being the same file. <b>{n} groups were not confirmed by reading</b> — those are candidates, not duplicates.", { n: fmt(res.unconfirmed) })
+      : T("All of them were compared by reading.");
 
-    const word = { content: "birebir aynı", edges: "uçları aynı", size: "yalnız boyut" };
+    /* The engine's three certainties, in the reader's language. The keys are
+       `Certainty`'s own words and are not translated — they are what comes
+       over the wire and what the CSS class is named after. */
+    const word = {
+      content: T("identical"), edges: T("same ends"), size: T("same size only"),
+    };
     list.innerHTML = res.groups.map((g) => `
       <div class="dupe">
         <div class="top">
           <span class="save">${bytes(g.waste)}</span>
           <span class="of">×${g.paths.length} · ${bytes(g.size)}</span>
-          <span class="sure ${g.certainty}">${word[g.certainty] || g.certainty}</span>
+          <span class="sure ${g.certainty}">${escape_(word[g.certainty] || g.certainty)}</span>
         </div>
         <ul>${g.paths.slice(0, 6).map((p) => `<li>${escape_(shorten(p))}</li>`).join("")}${
           /* One group of twenty-eight qdrant pages otherwise swallows the
              panel, and the twenty-second path teaches nobody what the sixth
              did not. The count above still says how many there are. */
           g.paths.length > 6
-            ? `<li style="color:var(--ink-3)">… ${fmt(g.paths.length - 6)} tane daha</li>`
+            ? `<li style="color:var(--ink-3)">… ${escape_(T("{n} more", { n: fmt(g.paths.length - 6) }))}</li>`
             : ""
         }</ul>
       </div>`).join("") ||
-      `<div class="dupe"><div class="top"><span class="of">bu kapsamda yinelenen yok</span></div></div>`;
+      `<div class="dupe"><div class="top"><span class="of">${escape_(T("no duplicates in this scope"))}</span></div></div>`;
   }
 
   /* Open or shut, and remembered. Read from the settings the service holds,
@@ -6189,7 +6604,7 @@
   function showDupes(open, ask) {
     dupesOpen = open;
     const opener = document.getElementById("d-open");
-    opener.textContent = open ? "gizle" : "göster";
+    opener.textContent = open ? T("hide") : T("show");
     opener.setAttribute("aria-expanded", String(open));
     for (const id of dupeParts) {
       const el = document.getElementById(id);
@@ -6207,7 +6622,7 @@
   function drawFloors() {
     floorBox.innerHTML = FLOORS.map(([mb, label]) =>
       `<button type="button" data-mb="${mb}" aria-pressed="${mb === dupeFloor}"
-        title="bu boyuttan küçükleri hiç bakma">${label}+</button>`).join("");
+        title="${escape_(T("do not look at anything smaller than this"))}">${label}+</button>`).join("");
   }
   floorBox.addEventListener("click", (e) => {
     const b = e.target.closest("[data-mb]");
@@ -6280,6 +6695,30 @@
   }
   document.getElementById("tab-search").onclick = () => show("search");
   document.getElementById("tab-report").onclick = () => show("report");
+
+  /* **What this half does when the language changes, which is less than it
+   * looks.**
+   *
+   * `show("report")` redraws this whole tab every time it is opened, and the
+   * language menu is in the meter bar, which `show` hides while this tab is
+   * up — so nothing here can be *looked at* in a language it was not drawn in.
+   * Two things escape that, because they are written once and no later draw
+   * rewrites them: the floor buttons' titles, and the word on the show/hide
+   * button. Both were caught in the window, reading `show` under a Turkish
+   * heading.
+   *
+   * A `drawReport()` beside them would be a branch that cannot run today,
+   * which is the kind of thing this change spent its morning deleting — see
+   * the note where `matches()` used to be.
+   *
+   * Registered rather than reached for, because the two halves are separate
+   * closures on purpose: the last time one reached into the other, the whole
+   * tab came up as dashes inside its own `catch` and it looked exactly like
+   * the service being down. */
+  window.SCOUR.relabel = () => {
+    drawFloors();
+    showDupes(dupesOpen, false);
+  };
 })();
 
 </script>

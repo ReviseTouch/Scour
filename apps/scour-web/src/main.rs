@@ -112,10 +112,13 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let addr = args
-        .socket
-        .clone()
-        .unwrap_or_else(|| scour_config::Config::load_or_default().0.socket());
+    // One read for both, and the language half is why it is no longer thrown
+    // away: `ui.language` is a machine's answer for a person who has not opened
+    // a menu, and reading the file again per request to find it would be a file
+    // read on every `/api/kinds`.
+    let config = scour_config::Config::load_or_default().0;
+    let _ = CONFIGURED_LANGUAGE.set(config.ui.language.clone());
+    let addr = args.socket.clone().unwrap_or_else(|| config.socket());
 
     // Fail here rather than in the browser: a page that loads and then says
     // "no service" is a worse error than a command that does not start.
@@ -276,7 +279,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         ),
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
-        "/api/kinds" => api_kinds(&mut stream),
+        "/api/kinds" => api_kinds(&mut stream, client, &req),
+        "/api/strings" => api_strings(&mut stream, client, &req),
         "/api/places" => api_places(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
@@ -496,9 +500,15 @@ fn api_icon(stream: &mut TcpStream, req: &http::Req) {
 /// were permanently zero.
 ///
 /// `Kind::OFFERED` exists for exactly this and says so in its own doc comment.
-fn api_kinds(stream: &mut TcpStream) {
-    static CAT: std::sync::OnceLock<scour_i18n::Catalogue> = std::sync::OnceLock::new();
-    let cat = CAT.get_or_init(scour_i18n::Catalogue::from_environment);
+///
+/// **`?lang=` rather than one language for the life of the process.** The
+/// catalogue used to be built once from the environment, which was right while
+/// the language could only be changed by restarting. It can be changed from a
+/// menu now, and the labels here are the one part of the rail the page does not
+/// hold a msgid for — so a switch that did not reach this route would leave
+/// thirteen rows in the old language under a window that had changed.
+fn api_kinds(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let cat = catalogue_for(client, req);
     let kinds: Vec<serde_json::Value> = scour_core::Kind::OFFERED
         .iter()
         .map(|k| {
@@ -509,6 +519,75 @@ fn api_kinds(stream: &mut TcpStream) {
         })
         .collect();
     http::json(stream, &serde_json::json!({ "kinds": kinds }));
+}
+
+/// The whole catalogue, for the one frontend that cannot link it.
+///
+/// Every other frontend calls `scour-i18n` directly; a browser cannot, so the
+/// words come over the wire once and the page looks them up with the same rule
+/// [`Catalog::get`] implements — present means translated, absent means the
+/// msgid it already holds is the answer. That is why this hands over a map and
+/// not a list of rendered labels: rendering them here would mean this file
+/// knowing every string the page shows, which is a second copy of the page's
+/// vocabulary and exactly the shape that put thirteen kinds in the engine and
+/// eight in the rail.
+///
+/// The English answer is an empty map, and that is the correct amount rather
+/// than a failure: the msgid *is* the English.
+///
+/// `languages` travels with it so the menu is built from what is shipped. A
+/// page with its own list would offer a language nobody wrote a catalogue for.
+fn api_strings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let cat = catalogue_for(client, req);
+    let strings: serde_json::Map<String, serde_json::Value> = cat
+        .entries()
+        .map(|(k, v)| (k.to_owned(), serde_json::Value::String(v.to_owned())))
+        .collect();
+    let languages: Vec<serde_json::Value> = scour_i18n::LANGUAGES
+        .iter()
+        .map(|(tag, name)| serde_json::json!({ "tag": tag, "name": name }))
+        .collect();
+    http::json(
+        stream,
+        &serde_json::json!({
+            "lang": cat.locale(),
+            "languages": languages,
+            "strings": strings,
+        }),
+    );
+}
+
+/// `ui.language` from the config file, read once.
+///
+/// Once, because the alternative is a file read per request and this is asked
+/// on every `/api/kinds`. The service is the thing that would notice a config
+/// change, and it does not notice this one either — editing `config.toml` has
+/// always meant restarting.
+static CONFIGURED_LANGUAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The catalogue this request should answer in.
+///
+/// `?lang=` when the page names one, because a page that has just been switched
+/// must not have to wait for its own `POST` to land before the next route
+/// agrees with it — the settings write and the re-fetch are two requests, and
+/// between them the service still holds the old answer.
+///
+/// Otherwise the shared order in [`scour_i18n::choose`]: what was chosen, then
+/// the config file, then the environment. Asking the service for the setting
+/// costs one round trip on a socket, which is measured in tens of microseconds
+/// and happens twice on load.
+fn catalogue_for(client: &Mutex<Link>, req: &http::Req) -> scour_i18n::Catalogue {
+    if let Some(tag) = req.param("lang").filter(|t| !t.is_empty()) {
+        return scour_i18n::Catalogue::for_language(tag);
+    }
+    let chosen = match call(client, Request::Settings {}) {
+        Ok(Response::Settings(s)) => s.language,
+        // A service that cannot be asked is not a reason to fall over; the
+        // environment is still a usable answer and the page still draws.
+        _ => String::new(),
+    };
+    let configured = CONFIGURED_LANGUAGE.get().map_or("", String::as_str);
+    scour_i18n::Catalogue::for_language(&scour_i18n::choose(&chosen, configured))
 }
 
 /// Where this person keeps things, so the page does not have to guess.
@@ -1373,6 +1452,14 @@ mod tests {
         }
     }
 
+    /// **Nor on the catalogue**, which is the same property one layer out.
+    ///
+    /// The taxonomy and the words now arrive together — `loadLanguage` asks for
+    /// both, so that a language switch cannot leave the rail's thirteen labels
+    /// a frame behind the headings. That put the kinds request inside a
+    /// function, which is what this test used to look for by name; what it is
+    /// actually about has not moved. The first page of rows must not wait for
+    /// either, and neither may start a second search when it lands.
     #[test]
     fn the_first_search_does_not_wait_for_the_kind_taxonomy() {
         let boot = PAGE
@@ -1382,17 +1469,34 @@ mod tests {
         let search = body
             .find("\n  render();")
             .expect("the boot sequence does not start a search");
-        let kinds = body
-            .find("SERVICE.get(\"kinds\", {})")
-            .expect("the boot sequence does not load kinds");
+        let words = body
+            .find("loadLanguage(\"\")")
+            .expect("the boot sequence does not load the language");
         assert!(
-            search < kinds,
-            "the first search is still gated on the kind taxonomy"
+            search < words,
+            "the first search is still gated on the words and the taxonomy"
         );
+
+        // And what arrives repaints rather than searching again: the rows did
+        // not change, only the word for their kind and the format of a number.
+        let at = PAGE
+            .find("  function applyLanguage() {")
+            .expect("the page has no applyLanguage");
+        let end = PAGE[at..].find("\n  }").map(|e| at + e).expect("no end");
+        let apply = &PAGE[at..end];
         assert!(
-            !body[kinds..].contains(".finally(render)"),
-            "loading kinds starts another search instead of repainting locally"
+            !apply.contains("render()"),
+            "changing language starts another index search instead of repainting"
         );
+        for needle in [
+            "for (const tr of pool) tr.__stamp = \"\";",
+            "repaint(true);",
+        ] {
+            assert!(
+                apply.contains(needle),
+                "applyLanguage does not redraw the rows: missing {needle}"
+            );
+        }
     }
 
     #[test]
@@ -1540,6 +1644,234 @@ mod tests {
         );
     }
 
+    /// Every msgid in the page, exactly as the page writes it.
+    ///
+    /// Four spellings, because a msgid reaches the catalogue four ways and all
+    /// four are literals on purpose:
+    ///
+    /// * `T("…")` — a lookup in the script.
+    /// * `data-t`, `data-t-html`, `data-t-title`, `data-t-aria`, `data-t-ph`
+    ///   — a lookup written into the markup, so the element can be empty and
+    ///   the key is not duplicated as its own content.
+    /// * `msgid: "…"` — a column heading or an age band, resolved by two
+    ///   readers each.
+    /// * `about: "…"` — a query field's one-line description.
+    ///
+    /// **Literal-only, and that is the design rather than a limitation of this
+    /// function.** `T` is never handed an expression and a msgid is never
+    /// built by concatenation, because a msgid a test cannot see is a msgid
+    /// that can fall out of the catalogue with nothing failing — which is what
+    /// happened to the kind taxonomy twice in one week, in the other
+    /// direction.
+    fn page_msgids() -> Vec<String> {
+        /// The escapes a msgid can carry, and no more. A `\u{...}` in one
+        /// would be a msgid nobody could read in the `.po` either.
+        fn unescape(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            let mut chars = s.chars();
+            while let Some(c) = chars.next() {
+                if c != '\\' {
+                    out.push(c);
+                    continue;
+                }
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('r') => out.push('\r'),
+                    Some(other) => out.push(other),
+                    None => out.push('\\'),
+                }
+            }
+            out
+        }
+
+        /// The string literal starting at `from`, up to the first unescaped
+        /// closing quote.
+        fn literal(rest: &str, quote: char) -> Option<String> {
+            let mut out = String::new();
+            let mut escaped = false;
+            for c in rest.chars() {
+                if escaped {
+                    out.push(c);
+                    escaped = false;
+                } else if c == '\\' {
+                    out.push(c);
+                    escaped = true;
+                } else if c == quote {
+                    return Some(unescape(&out));
+                } else if c == '\n' {
+                    return None; // not a literal; a line ended inside it
+                } else {
+                    out.push(c);
+                }
+            }
+            None
+        }
+
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut push = |s: String| {
+            if !s.is_empty() && seen.insert(s.clone()) {
+                out.push(s);
+            }
+        };
+
+        for (open, quote, entity) in [
+            ("T(\"", '"', false),
+            ("T('", '\'', false),
+            ("msgid: \"", '"', false),
+            ("about: \"", '"', false),
+            ("data-t=\"", '"', true),
+            ("data-t-html=\"", '"', true),
+            ("data-t-title=\"", '"', true),
+            ("data-t-aria=\"", '"', true),
+            ("data-t-ph=\"", '"', true),
+        ] {
+            let mut at = 0;
+            while let Some(found) = PAGE[at..].find(open) {
+                let start = at + found + open.len();
+                if let Some(text) = literal(&PAGE[start..], quote) {
+                    // Attribute values are HTML: the markup a sentence carries
+                    // is written `&lt;code&gt;` there and `<code>` in the `.po`.
+                    push(if entity {
+                        text.replace("&lt;", "<")
+                            .replace("&gt;", ">")
+                            .replace("&quot;", "\"")
+                            .replace("&#39;", "'")
+                            .replace("&amp;", "&")
+                    } else {
+                        text
+                    });
+                }
+                at = start;
+            }
+        }
+        out
+    }
+
+    /// **The page says nothing the catalogue has not heard of.**
+    ///
+    /// The binding this whole change turns on. The words moved out of the page
+    /// and into `lang/tr/LC_MESSAGES/scour.po`, and the mechanism that makes
+    /// that safe — a missing entry degrades to correct English rather than to
+    /// a bare key — is also the mechanism that would let the whole window drift
+    /// back into English one string at a time with nothing complaining.
+    ///
+    /// So the two are pinned together the way
+    /// `the_page_takes_the_engines_kind_vocabulary` pins the rail to
+    /// `Kind::OFFERED`, and for the same reason: the last two defects in this
+    /// file were both a list here disagreeing with a list somewhere else, and
+    /// neither was visible from either end.
+    #[test]
+    fn the_page_says_nothing_the_catalogue_has_not_heard_of() {
+        let ids = page_msgids();
+        // A floor rather than an exact count, so that adding a string is not a
+        // test change — but not zero either, because a regex that silently
+        // stopped matching would otherwise pass loudly.
+        assert!(
+            ids.len() > 140,
+            "only {} msgids found; the extraction is broken, not the page",
+            ids.len()
+        );
+
+        for (tag, _) in scour_i18n::LANGUAGES {
+            let cat = scour_i18n::Catalogue::for_language(tag);
+            if !cat.is_translated() {
+                continue; // English: the msgid is the string.
+            }
+            let missing: Vec<&String> = ids.iter().filter(|id| !cat.has(id)).collect();
+            assert!(
+                missing.is_empty(),
+                "{tag} has no entry for {} of the window's strings, starting with {:?}",
+                missing.len(),
+                &missing[..missing.len().min(5)]
+            );
+        }
+    }
+
+    /// **No Turkish left in the page outside the query grammar.**
+    ///
+    /// The point of the exercise, asserted rather than eyeballed. What may
+    /// still carry a Turkish letter, and why:
+    ///
+    /// * `KIND_ALIASES`, `FIELDS[].alias`, `TIME_RE` and `MISTAKEN` — spellings
+    ///   the *engine* parses. `tür:görsel` has to keep finding images in an
+    ///   English window, so these are grammar and not vocabulary. They are
+    ///   copied from `Kind::from_name` and `fields.rs`, and the test above
+    ///   already checks the engine agrees with them.
+    /// * `fold`, which collapses the Turkish dotted and dotless i for every
+    ///   query in every locale — `DefaultFolder`'s rule, not the window's.
+    /// * Comments: characters used as examples of what a byte offset does to
+    ///   `İ`, and verbatim quotes of what was reported. A translated quote is
+    ///   not a quote.
+    ///
+    /// Everything else is a string somebody reads, and there are none left.
+    #[test]
+    fn no_turkish_is_left_where_a_reader_would_see_it() {
+        const TURKISH: [char; 12] = ['ç', 'ğ', 'ı', 'ö', 'ş', 'ü', 'Ç', 'Ğ', 'İ', 'Ö', 'Ş', 'Ü'];
+
+        // Comments first: `/* … */`, `// …` and `<!-- … -->` are for whoever
+        // maintains this, not for whoever uses it.
+        let mut code = String::with_capacity(PAGE.len());
+        let mut rest = PAGE;
+        loop {
+            let next = ["/*", "//", "<!--"]
+                .iter()
+                .filter_map(|open| rest.find(open).map(|at| (at, *open)))
+                .min();
+            let Some((at, open)) = next else {
+                code.push_str(rest);
+                break;
+            };
+            code.push_str(&rest[..at]);
+            let close = match open {
+                "/*" => "*/",
+                "//" => "\n",
+                _ => "-->",
+            };
+            rest = match rest[at + open.len()..].find(close) {
+                Some(end) => &rest[at + open.len() + end + close.len()..],
+                None => break,
+            };
+        }
+
+        // Then the grammar, which is four named places and not a category.
+        for (open, close) in [
+            ("const KIND_ALIASES = [", "];"),
+            ("const TIME_RE =", "\n"),
+            ("const MISTAKEN =", "\n"),
+            ("const fold =", "\n"),
+        ] {
+            let at = code
+                .find(open)
+                .unwrap_or_else(|| panic!("the page no longer has `{open}`"));
+            let end = code[at..]
+                .find(close)
+                .map(|e| at + e + close.len())
+                .unwrap_or(code.len());
+            code.replace_range(at..end, "");
+        }
+        // `alias:` lists inside the field table, one line each.
+        while let Some(at) = code.find("alias: [") {
+            let end = code[at..]
+                .find(']')
+                .map(|e| at + e + 1)
+                .expect("alias list");
+            code.replace_range(at..end, "");
+        }
+
+        let left: Vec<&str> = code
+            .lines()
+            .filter(|l| l.contains(TURKISH))
+            .map(str::trim)
+            .collect();
+        assert!(
+            left.is_empty(),
+            "{} lines of Turkish are still in the page: {left:#?}",
+            left.len()
+        );
+    }
+
     #[test]
     fn sorting_keeps_the_exact_total_of_the_same_query() {
         let start = PAGE
@@ -1676,7 +2008,7 @@ mod tests {
             .find("SERVICE.get(\"places\", {})")
             .expect("places request is absent");
         let end = PAGE[start..]
-            .find("SERVICE.get(\"kinds\", {})")
+            .find("* The language, and changing it")
             .map(|at| start + at)
             .expect("places request has no end marker");
         let places = &PAGE[start..end];

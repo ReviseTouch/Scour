@@ -1050,15 +1050,24 @@ fn open(path: &str) {
 }
 
 /// The language the catalogue should speak.
+///
+/// **The rule is `scour_i18n::choose`'s, not this file's.** The copy that used
+/// to be here read `LC_ALL`/`LC_MESSAGES`/`LANG` itself and disagreed with the
+/// catalogue crate twice: it never looked at `SCOUR_LANG`, so the variable that
+/// exists to switch one program left the window alone, and it did not skip
+/// `C`/`POSIX`, so a session started with `LANG=C` asked for a language called
+/// "C". Two frontends, two answers to one question.
+///
+/// **The first argument is empty, and that is the honest gap.** The window
+/// cannot see `scour_settings::Settings::language` — the setting the browser
+/// window's menu writes — because it has no lane to ask for it: `link.rs`
+/// carries `Search`, `Facets` and `Count` and nothing else, and adding a
+/// settings round trip is not the change this comment belongs to. So a language
+/// chosen in the browser window is *stored* where this can reach it and is not
+/// yet read here. Passing it through `choose` rather than around it is what
+/// makes that one line's work when the lane exists.
 fn language(cfg: &scour_config::Config) -> String {
-    if !cfg.ui.language.is_empty() {
-        return cfg.ui.language.clone();
-    }
-    std::env::var("LC_ALL")
-        .or_else(|_| std::env::var("LC_MESSAGES"))
-        .or_else(|_| std::env::var("LANG"))
-        .map(|v| v.split(['_', '.']).next().unwrap_or("en").to_owned())
-        .unwrap_or_else(|_| "en".into())
+    scour_i18n::choose("", &cfg.ui.language)
 }
 
 #[cfg(test)]
