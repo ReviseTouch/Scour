@@ -84,6 +84,43 @@ const WINDOW: Duration = Duration::from_millis(200);
 /// rather than for throughput. At 71 bytes an event it holds about 3,600.
 const BUF: usize = 256 * 1024;
 
+/// The most events one window will collect before it stops reading and says it
+/// lost track.
+///
+/// **The kernel queue is deliberately unlimited and this vector was not.**
+/// `scour-watch` opens the group with `FAN_UNLIMITED_QUEUE` — its own comment
+/// costs that at "about 95 bytes an event, so a million unread events is 90 MB
+/// of kernel memory", and calls the 4.6-million-a-second drain rate "what makes
+/// that a bound rather than a risk". That reasoning covers the kernel's side of
+/// the queue and stops there: draining it is what moves those events *into this
+/// process*, and the read loop below kept going until the queue was empty or
+/// two seconds had passed. Two seconds at the measured drain rate is about nine
+/// million [`Seen`] values, each with an owned name — several hundred megabytes
+/// of anonymous memory, reached by nothing more unusual than deleting a large
+/// tree.
+///
+/// So the deadline is a *time* bound and this is the *memory* one. Past it the
+/// window is abandoned exactly as a kernel overflow is: `lost` is set, and the
+/// subtree is walked again. That is the module's existing contract — an event
+/// is a hint to look again, never a description of what happened — so nothing
+/// downstream needs to learn a new case.
+///
+/// A quarter of a million is far above any ordinary burst (a kernel build, a
+/// `git clone`, an unpacked archive) and is about 20 MB of `Seen` while it is
+/// held. The ceiling is approached rather than hit exactly: [`parse`] empties a
+/// whole buffer before the check, so a window may end up to one buffer — about
+/// 3,600 events — past it.
+const MAX_SEEN: usize = 262_144;
+
+/// The capacity one window may leave behind for the next.
+///
+/// `clear` keeps capacity, so without this a single burst sets the reader's
+/// allocation for the life of the process: the peak becomes the floor, and the
+/// service ends an afternoon holding memory that one `rm -rf` asked for. Ten
+/// thousand events is about 800 KB and covers an ordinary window without
+/// reallocating; anything past it is given back when the window ends.
+const KEEP_SEEN: usize = 10_000;
+
 // Not in `libc` at the time of writing, and their numeric values are kernel
 // ABI, so they are written out rather than derived.
 const FAN_REPORT_DIR_FID: u32 = 0x0000_0400;
@@ -527,6 +564,56 @@ struct Seen {
     settled: bool,
 }
 
+/// Collect one window's events, and say whether anything was lost.
+///
+/// Split out of [`drain`] so the ceiling has something to be tested against:
+/// the loop it came from could only be reached with a real fanotify group and a
+/// real burst, which is why nothing had ever checked what it costs. `read` is
+/// the one syscall it needs, and a test supplies its own.
+///
+/// Three things end a window, and only one of them is "the kernel had no more
+/// to give": the other two are [`MAX_SEEN`] and the two-second deadline, and
+/// both report themselves as lost rather than as a complete window. Reporting a
+/// truncated window as complete is the one outcome that would be wrong — the
+/// events that were not read still happened, and a sweep on that evidence
+/// deletes rows that exist.
+fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) -> isize) -> bool {
+    seen.clear();
+    // Before the window rather than after it: whatever the last burst asked for
+    // is given back here, so the peak does not become the floor. See
+    // [`KEEP_SEEN`].
+    if seen.capacity() > KEEP_SEEN {
+        seen.shrink_to(KEEP_SEEN);
+    }
+    let mut lost = false;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let n = read(buf);
+        if n <= 0 {
+            break;
+        }
+        if !parse(&buf[..n as usize], seen) {
+            lost = true;
+        }
+        // **The memory bound**, checked before the time one because it is the
+        // one a busy filesystem reaches first. See [`MAX_SEEN`].
+        if seen.len() >= MAX_SEEN {
+            lost = true;
+            break;
+        }
+        // A burst larger than the buffer is read out in this loop rather
+        // than left for the next window, but not forever: the drain rate
+        // is 4.6 million events a second, so two seconds is far past any
+        // real batch and exists only so a pathological producer cannot
+        // hold the thread.
+        if Instant::now() > deadline {
+            lost = true;
+            break;
+        }
+    }
+    lost
+}
+
 /// Pull every event out of one buffer.
 ///
 /// Returns `None` for the whole batch if the kernel reported that it dropped
@@ -830,27 +917,9 @@ fn drain(fd: OwnedFd) {
         }
         std::thread::sleep(WINDOW);
 
-        seen.clear();
-        let mut lost = false;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let n = unsafe { libc::read(raw, buf.as_mut_ptr().cast(), buf.len()) };
-            if n <= 0 {
-                break;
-            }
-            if !parse(&buf[..n as usize], &mut seen) {
-                lost = true;
-            }
-            // A burst larger than the buffer is read out in this loop rather
-            // than left for the next window, but not forever: the drain rate
-            // is 4.6 million events a second, so two seconds is far past any
-            // real batch and exists only so a pathological producer cannot
-            // hold the thread.
-            if Instant::now() > deadline {
-                lost = true;
-                break;
-            }
-        }
+        let lost = fill(&mut buf, &mut seen, |b| unsafe {
+            libc::read(raw, b.as_mut_ptr().cast(), b.len())
+        });
 
         let Ok(mut subs) = SUBS.lock() else { return };
 
@@ -945,6 +1014,278 @@ fn note_new_mounts(fresh: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One `FAN_CREATE` event for `name` in the directory with inode `ino`,
+    /// laid out the way [`parse`] reads it.
+    ///
+    /// Built by hand rather than captured, because what these tests need is a
+    /// stream that never ends — which is exactly the shape no recorded capture
+    /// has.
+    fn event(ino: u32, name: &str) -> Vec<u8> {
+        let info_len = 29 + name.len();
+        let event_len = 24 + info_len;
+        let mut e = vec![0u8; event_len];
+        e[0..4].copy_from_slice(&(event_len as u32).to_le_bytes());
+        e[6..8].copy_from_slice(&24u16.to_le_bytes());
+        e[8..16].copy_from_slice(&FAN_CREATE.to_le_bytes());
+        let p = 24;
+        e[p] = FAN_EVENT_INFO_TYPE_DFID_NAME;
+        e[p + 2..p + 4].copy_from_slice(&(info_len as u16).to_le_bytes());
+        // `struct file_handle`: eight bytes of handle, type 1 — the
+        // `FILEID_INO32_GEN` shape `handle_ino` reads as a u32 inode.
+        e[p + 12..p + 16].copy_from_slice(&8u32.to_le_bytes());
+        e[p + 16..p + 20].copy_from_slice(&1i32.to_le_bytes());
+        e[p + 20..p + 24].copy_from_slice(&ino.to_le_bytes());
+        e[p + 28..p + 28 + name.len()].copy_from_slice(name.as_bytes());
+        e
+    }
+
+    /// Fill a read buffer with as many events as it holds.
+    fn buffer_of(events: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for i in 0..events {
+            out.extend_from_slice(&event(1000 + i as u32, "dosya.txt"));
+        }
+        out
+    }
+
+    #[test]
+    fn the_hand_built_event_is_the_one_parse_reads() {
+        // Every ceiling below is measured in events, so a builder that produced
+        // nothing at all would make all of them pass while testing nothing.
+        let mut seen = Vec::new();
+        assert!(parse(&event(4242, "rapor.pdf"), &mut seen));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].parent_ino, 4242);
+        assert_eq!(seen[0].name, "rapor.pdf");
+        assert!(seen[0].fresh, "FAN_CREATE means the entry may be new");
+    }
+
+    #[test]
+    fn a_window_stops_collecting_before_it_can_eat_the_heap() {
+        // **The kernel queue is unlimited on purpose.** `scour-watch` opens the
+        // group with `FAN_UNLIMITED_QUEUE` and reasons about what that costs in
+        // *kernel* memory; nothing had ever reasoned about the userspace vector
+        // that drains it. A producer that never stops — an `rm -rf` of a large
+        // tree, an unpacked archive — used to be read into this vector until
+        // the two-second deadline, which at the module's own measured drain
+        // rate of 4.6 million events a second is about nine million owned
+        // names.
+        //
+        // A reader that never runs out of events is the whole test.
+        let mut buf = vec![0u8; BUF];
+        let mut seen: Vec<Seen> = Vec::new();
+        let stream = buffer_of(1_000);
+        let mut calls = 0usize;
+        let lost = fill(&mut buf, &mut seen, |b| {
+            calls += 1;
+            b[..stream.len()].copy_from_slice(&stream);
+            stream.len() as isize
+        });
+
+        assert!(
+            lost,
+            "a window that stopped early must say so, or the events it never \
+             read are treated as events that never happened"
+        );
+        // `parse` empties a whole buffer before the length is looked at, so the
+        // ceiling is reached from below by at most one buffer.
+        assert!(
+            seen.len() < MAX_SEEN + 1_000,
+            "the window collected {} events against a ceiling of {MAX_SEEN}",
+            seen.len()
+        );
+        assert!(
+            seen.len() >= MAX_SEEN,
+            "it stopped early for some other reason than the ceiling"
+        );
+        // And it stopped because of the count, not because two seconds passed:
+        // this stream is served from memory and could not have taken that long.
+        assert!(
+            calls < MAX_SEEN,
+            "the deadline ended the window, not the cap"
+        );
+    }
+
+    #[test]
+    fn a_burst_does_not_become_the_reader_s_floor() {
+        // `clear` keeps capacity. Without the shrink in `fill`, one burst set
+        // the reader's allocation for the rest of the process's life: the peak
+        // became the floor, and a service that had been busy once held the
+        // memory for it while idle.
+        let mut buf = vec![0u8; BUF];
+        let mut seen: Vec<Seen> = Vec::new();
+        let stream = buffer_of(1_000);
+        let mut left = 400usize;
+        fill(&mut buf, &mut seen, |b| {
+            if left == 0 {
+                return 0;
+            }
+            left -= 1;
+            b[..stream.len()].copy_from_slice(&stream);
+            stream.len() as isize
+        });
+        let after_burst = seen.capacity();
+        assert!(
+            after_burst > KEEP_SEEN,
+            "the burst was too small to be worth testing"
+        );
+
+        // The next window is an ordinary quiet one.
+        let quiet = fill(&mut buf, &mut seen, |_| 0);
+        assert!(!quiet, "an empty window has lost nothing");
+        assert!(
+            seen.capacity() <= KEEP_SEEN,
+            "the reader kept {} slots after the burst, against {KEEP_SEEN}",
+            seen.capacity()
+        );
+    }
+
+    #[test]
+    fn an_ordinary_window_is_read_to_the_end_and_reported_complete() {
+        // The negative control the ceiling needs: a window that fits must not
+        // be reported as lost, or every ordinary burst becomes a full walk of
+        // every root and the bound costs more than it saves.
+        let mut buf = vec![0u8; BUF];
+        let mut seen: Vec<Seen> = Vec::new();
+        let stream = buffer_of(1_000);
+        let mut left = 3usize;
+        let lost = fill(&mut buf, &mut seen, |b| {
+            if left == 0 {
+                return 0;
+            }
+            left -= 1;
+            b[..stream.len()].copy_from_slice(&stream);
+            stream.len() as isize
+        });
+        assert!(!lost, "3,000 events is an ordinary window, not an overflow");
+        assert_eq!(seen.len(), 3_000);
+    }
+
+    #[test]
+    fn the_kernel_saying_it_dropped_events_is_still_reported() {
+        // The overflow record was the only way `lost` could be set before, and
+        // the new ceiling must not have displaced it.
+        let mut over = event(1, "x");
+        let mask = FAN_CREATE | FAN_Q_OVERFLOW;
+        over[8..16].copy_from_slice(&mask.to_le_bytes());
+        let mut buf = vec![0u8; BUF];
+        let mut seen: Vec<Seen> = Vec::new();
+        let mut left = 1usize;
+        let lost = fill(&mut buf, &mut seen, |b| {
+            if left == 0 {
+                return 0;
+            }
+            left -= 1;
+            b[..over.len()].copy_from_slice(&over);
+            over.len() as isize
+        });
+        assert!(
+            lost,
+            "a kernel overflow record still means the subtree is lost"
+        );
+    }
+
+    /// What the directory map costs in **process anonymous memory**, which is a
+    /// different question from what it costs in allocations.
+    ///
+    /// [`directory_map_memory_probe`] answers the second one: it reads
+    /// `mallinfo2`, and reported the packing as 46.05 MB → 33.03 MB with
+    /// retained allocations falling 255,769 → 19. Its author was explicit that
+    /// this is a claim about the allocator and not about RSS, and a later
+    /// summary repeated the number without that caveat. This test exists so the
+    /// RSS half is not a matter of opinion: an allocation that is freed into a
+    /// glibc arena and never returned to the kernel is a saving `mallinfo2`
+    /// sees and `RssAnon` does not.
+    ///
+    /// One shape per process, chosen by `SCOUR_DIRMAP_SHAPE`, because the two
+    /// shapes in one process share an allocator whose arenas the first one
+    /// already grew — which is exactly the confusion being resolved. Scale is
+    /// `SCOUR_DIRMAP_DIRS`; the default is one source's worth, and the two live
+    /// sources on this machine are 511,116 directories between them.
+    ///
+    /// ```text
+    /// SCOUR_DIRMAP_SHAPE=old    cargo test -p scour-source-fs --release directory_map_rss_probe -- --ignored --nocapture --test-threads=1
+    /// SCOUR_DIRMAP_SHAPE=packed cargo test -p scour-source-fs --release directory_map_rss_probe -- --ignored --nocapture --test-threads=1
+    /// ```
+    #[test]
+    #[ignore = "diagnostic RSS probe"]
+    fn directory_map_rss_probe() {
+        fn rss_anon_kb() -> u64 {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            let field = |key: &str| -> u64 {
+                status
+                    .lines()
+                    .find(|l| l.starts_with(key))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0)
+            };
+            field("RssAnon:")
+        }
+        fn hwm_kb() -> u64 {
+            let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+            status
+                .lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0)
+        }
+
+        let dirs: usize = std::env::var("SCOUR_DIRMAP_DIRS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(255_769);
+        let shape = std::env::var("SCOUR_DIRMAP_SHAPE").unwrap_or_else(|_| "packed".into());
+
+        fn path(n: usize) -> String {
+            let branch = n % 41;
+            let project = (n / 41) % 997;
+            let depth = (n / (41 * 997)) % 7;
+            format!(
+                "/home/hasan/Projeler/project-{project:03}/src/component-{branch:02}/depth-{depth}/directory-{n:06}"
+            )
+        }
+        fn key(n: usize) -> DirKey {
+            DirKey {
+                dev: if n & 1 == 0 { 42 } else { 84 },
+                ino: n as u64 + 10,
+            }
+        }
+
+        let before = rss_anon_kb();
+        let started = Instant::now();
+        // Held past the reading, or the drop is what is being measured.
+        let held: Box<dyn std::fmt::Debug> = match shape.as_str() {
+            "old" => {
+                let mut old: HashMap<DirKey, String> = HashMap::new();
+                for n in 0..dirs {
+                    old.insert(key(n), path(n));
+                }
+                Box::new(old.len())
+            }
+            _ => {
+                let mut packed = DirMap::default();
+                for n in 0..dirs {
+                    packed.insert_key(key(n), &path(n));
+                }
+                Box::new(packed.by_key.len())
+            }
+        };
+        let built = started.elapsed();
+        let after = rss_anon_kb();
+        std::hint::black_box(&held);
+
+        println!(
+            "shape={shape} dirs={dirs} RssAnon {before} kB -> {after} kB \
+             (delta {} kB = {:.2} MB) VmHWM {} kB build {:.2} s",
+            after - before,
+            (after - before) as f64 / 1024.0,
+            hwm_kb(),
+            built.as_secs_f64(),
+        );
+    }
 
     /// Reproduce the userspace cost of the directory map at the scale of the
     /// two live sources on the development machine.
