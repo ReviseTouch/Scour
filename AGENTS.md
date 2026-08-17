@@ -95,6 +95,7 @@ carries the `id` of the call it answers. Requests:
 | `duplicates` | | `under`, `min_size`, `read_budget`, `top` → files that share a size, and how many of those were **read** and proved identical. The two numbers always travel together: sharing a size is not being the same file, and a panel showing only the first would be telling somebody to delete database pages that happen to be the same length |
 | `settings` | | what a person has chosen — columns and their order, widths, sort, the queries they meant, and `layout`: the shape the result list is drawn in, one of `detail` (a table of rows), `icons` (a grid of tiles) or `large` (a grid of big ones). Held here because the service is the only thing every frontend talks to, and because a browser loses `localStorage` when it is killed. `layout` is empty until somebody chooses, which is not the same as `detail`, and a word a frontend does not know degrades to its own default rather than refusing the file — the rule `language` already followed |
 | `set-settings` | ✓ | a **change**, not the whole object: what it does not name, it does not touch. That is what lets a window and a terminal be open at once without each erasing the fields the other understands, and what lets a field be added without every frontend learning about it first |
+| `thumbnails` | ✓ | `files` → which of them have a picture now, and `ran`: how many thumbnailer processes this started. The desktop's own `*.thumbnailer` commands do the work and the result goes in the freedesktop cache, so Files and Loupe find what Scour asked for and the reverse. **Here because the bound is about the machine**: at most four decoders at once, one number for the whole desktop, which three frontends each bounding themselves could not be. Fenced like `stat` — every path is `stat`ed first, and the modification time that comes back is what the standard requires be written into the picture. Mutating not because the index changes but because it starts programs, which is what keeps it out of the MCP server. Allowed to take its time, like `await` |
 | `syntax` | | the query language reference, as text |
 | `shutdown` | ✓ | |
 
@@ -161,29 +162,45 @@ does, and the descriptions exist to make it easy.
 
 ### Browser — `scour-web`
 
-A bridge and only a bridge: one page and fourteen JSON routes, holding no index
-and linking no engine. Every route but three reaches the service; `/api/kinds`,
-`/api/places` and `/api/icon` answer from this machine, because the kinds a rail
-should offer come from `Kind::OFFERED`, the folders somebody keeps things in are
-the desktop's own, and a thumbnail is a file the desktop already made. **No HTTP
-framework and no async runtime** — axum would bring tokio, hyper and about a
-hundred crates to do what two hundred lines of `std::net` do, and `scour-mcp` is
-a separate binary precisely so the rest of the workspace stays free of one.
+A bridge and only a bridge: one page and seventeen JSON routes, holding no index
+and linking no engine. One of them answers without the service — `/api/icon`,
+because a thumbnail somebody already made is a file, and reading it is a `stat`
+and a `read` rather than a question about an index. **No HTTP framework and no
+async runtime** — axum would bring tokio, hyper and about a hundred crates to do
+what two hundred lines of `std::net` do, and `scour-mcp` is a separate binary
+precisely so the rest of the workspace stays free of one.
+
+`/api/thumb` is the other half of that pair and deliberately not in the same
+place: it asks the service to *make* the pictures nothing has made yet, because
+how many image decoders may run at once is a fact about the machine rather than
+about a browser. It carries no bytes — it answers with which paths have a
+picture now, and the page fetches those from `/api/icon` as before. It is
+`POST`, it is refused by `--no-thumbnails`, and it opens its own connection to
+the service like `/api/wait`, because it is allowed to take seconds and nothing
+that takes seconds may sit in the shared pool in front of a keystroke.
 
 What is behind the port is an index of every file the user owns, so four things
 hold and none is a preference: **127.0.0.1 only**, with no flag to change it; a
 **token** generated per run and printed with the URL, without which every route
 answers 403; **`Origin` checked** on every request, because a page on the
 internet can make a browser send one here; and `GET` for reading against `POST`
-for the one route that does something, so a link, an image or a prefetch cannot
-reach it. `rescan` and `maintain` are not routed at all — a page in a browser
-does not get to make the service work.
+for the routes that do something, so a link, an image or a prefetch cannot reach
+them. `rescan` and `maintain` are not routed at all — a page in a browser does
+not get to make the service work.
 
-`/api/open` is that one route, and **it runs executables**. That was a refusal
-once, and is not any more, because a search box that finds a program and sends
-you elsewhere to start it has not finished the job. The fence is the index: the
-path is `stat`ed through the service first, so a path no source owns cannot be
-opened. `--no-run` reveals the folder instead; `--no-launch` removes the route.
+`/api/open` is the first of those, and **it runs executables**. That was a
+refusal once, and is not any more, because a search box that finds a program and
+sends you elsewhere to start it has not finished the job. The fence is the
+index: the path is `stat`ed through the service first, so a path no source owns
+cannot be opened. `--no-run` reveals the folder instead; `--no-launch` removes
+the route.
+
+`/api/thumb` is the second, and it runs programs too — the ones
+`/usr/share/thumbnailers` declares. Same fence and for a better reason: every
+path is `stat`ed through the service before a thumbnailer sees it. Its `GET`
+form would have looked completely harmless, which is exactly why it is a `POST`.
+`--no-thumbnails` removes it; reading pictures that already exist is not behind
+that flag, because reading them starts nothing.
 
 ### Window — `scour-gui`
 

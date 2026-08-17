@@ -287,6 +287,12 @@ pub fn human(r: &Response) -> String {
         // than with rows, which makes it the only tool here that writes to
         // disk. That is the owner's decision to take, not this match arm's.
         Response::ExportChunk { .. } | Response::ExportDone { .. } => String::new(),
+        // And this one cannot arrive at all rather than merely not being
+        // exposed: `Request::Thumbnails` is mutating, and `call` refuses
+        // everything `is_mutating` answers true for before it reaches the
+        // socket. It is mutating precisely so that a model cannot make this
+        // machine start a handful of image decoders on files it chose.
+        Response::Thumbnails(_) => String::new(),
     }
 }
 

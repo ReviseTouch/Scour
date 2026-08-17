@@ -4982,3 +4982,122 @@ whole-index download: the service spent 40 ticks during it and **zero** in the
 two seconds after, against the ~350 a full export costs. The refusal travels
 from the failed socket write through `Client::stream` and `Engine::export` into
 `Index::scan`, which abandons the walk.
+
+## 2026-08-17 — a grid of files nothing had ever previewed
+
+The new grid modes drew a blank tile for every file with no cached thumbnail,
+which is every file in a folder nobody has opened in a file manager. Scour now
+asks the desktop's own thumbnailer for the ones it can see. The question is what
+that costs when a screenful of unseen files arrives, and the answer has to be
+measured because "only what is on screen, and only once scrolling stops" is
+otherwise unfalsifiable — so `Request::Thumbnails` carries `ran`, the number of
+processes the service actually started, all the way back to the page.
+
+### The instrument
+
+Nothing here touched the owner's service, index, thumbnail cache or bridge port.
+Its own everything, under `/var/tmp/scour-thumbs-probe`: `XDG_DATA_HOME`,
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, a socket of its own, port 7639, and a
+source holding only generated images.
+
+**Headless Chromium, and that is not a shortcut.** An on-screen window on this
+desktop is occluded by everything else running, and a compositor stops producing
+frames for a surface nobody can see. Measured on the on-screen one:
+
+```
+{"visibility":"visible","hidden":false,"focus":true,"framesInOneSecond":0}
+```
+
+`document.hidden` is false, `visibilityState` is `visible`, the window has
+focus — and `requestAnimationFrame` never fires. The list paints inside one, so
+the page sat holding a perfectly good answer it had not drawn, and
+`Input.synthesizeScrollGesture` hung forever waiting for a frame that was not
+coming. `Page.bringToFront` did not fix it. This is the trap already written
+down here in a longer form: a window can be visible and get no frames, and
+anything read out of a frame that never arrived is a lie.
+
+### Nothing while it moves, and then only the screen
+
+3,000 images, grid of small tiles, cold cache. Twelve flicks
+(`Input.synthesizeScrollGesture`, 6,000 px at 20,000 px/s) back to back, with
+the counters sampled every 25 ms from inside the page — polling from outside
+leaves a round trip between samples, and a gap longer than the page's 250 ms
+quiet time would mean the "still scrolling" state was never tested.
+
+| t (ms) | requests | paths asked | processes | scrollTop |
+|---|---|---|---|---|
+| 25 | 0 | 0 | 0 | 0 |
+| 1,002 | 0 | 0 | 0 | 16,475 |
+| 1,975 | 0 | 0 | 0 | 31,890 |
+| 2,300 | 0 | 0 | 0 | 34,133 ← stops |
+| 2,625 | 1 | 24 | 0 | 34,133 |
+| 3,276 | 2 | 48 | 48 | 34,133 |
+| 4,250 | 4 | 84 | 72 | 34,133 |
+| 4,575 | 4 | 84 | 84 | 34,133 |
+| 8,300 | 4 | 84 | 84 | 34,133 |
+
+**34,133 px of a 3,000-tile grid, and not one request.** The first ask lands
+325 ms after the scrolling stops — the 250 ms quiet plus a frame. Then four
+requests for the 84 loaded tiles on screen, 84 processes, and flat for the next
+four seconds. Nothing accumulates, because the batch is rebuilt from what is
+visible each time rather than drained from a queue built while it moved.
+
+```bash
+python3 /var/tmp/scour-thumbs-probe/scroll.py "under:.../pics/big"
+```
+
+### The switch is a real off
+
+Same rig, 60 never-previewed images, the window's picture switch off, six
+seconds:
+
+| | requests | paths | processes |
+|---|---|---|---|
+| pictures off | **0** | 0 | 0 |
+| pictures on | 3 | 60 | 60 |
+
+Not "requests that draw nothing" — none at all. `--no-thumbnails` on the bridge
+is the operator's equivalent and answers 403; reading pictures that already
+exist is not behind it, and still answers 200.
+
+### Attempted once
+
+Eleven files nothing can draw, asked for three times through `/api/thumb`:
+
+| ask | processes |
+|---|---|
+| first | 5 |
+| second | 0 |
+| third | 0 |
+
+Five, not eleven: three `.rs` and three `.log` never reached a process at all,
+because `make` is answered from the machine's own MIME and thumbnailer tables
+with no I/O and no spawn. The five corrupt PNGs *do* have a declared
+thumbnailer, so each was tried once and each left a note in
+`thumbnails/fail/scour/`. Editing one of them:
+
+| | processes |
+|---|---|
+| after the file changed | 1 |
+| again | 0 |
+
+The note records `Thumb::MTime`, so a file that has been edited since it failed
+is worth exactly one more try.
+
+### The cache is the shared one
+
+`GnomeDesktop.DesktopThumbnailFactory.lookup(uri, mtime)` — the call GNOME
+Files makes — accepted every thumbnail the window produced, 6 of 6 sampled,
+with `Thumb::URI` and `Thumb::MTime` matching the original and `Software:
+Scour`. Files are `0600` and directories `0700`, as the standard asks.
+
+**The negative control matters more than the positive one.** The identical
+picture with its text chunks stripped out, same bytes otherwise:
+
+```
+same picture, metadata removed -> lookup: None
+```
+
+So the acceptance above is the metadata being checked, not the file merely
+being present. `glycin-thumbnailer` writes none of it — measured, both fields
+`None` — which is why the two chunks are written here rather than assumed.

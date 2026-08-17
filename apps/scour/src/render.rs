@@ -234,6 +234,17 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             }
         }
+        // **No CLI command asks for this**, and none is being added: making
+        // thumbnails is what a window that draws them wants, and a terminal
+        // that drew one would have nowhere to put it. The arm exists because
+        // the match is exhaustive, and it prints the one thing a terminal
+        // could do with the answer — the paths that have a picture now, plain,
+        // so nothing here needs a word from the catalogue.
+        Response::Thumbnails(made) => {
+            for path in &made.ready {
+                println!("{path}");
+            }
+        }
         Response::Places(p) => {
             println!("{}{}", label("home"), p.home);
             for place in &p.places {

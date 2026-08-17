@@ -27,7 +27,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 PORTABLE=(
     -p scour-core -p scour-query -p scour-config -p scour-index-native
     -p scour-source-fs -p scour-engine -p scour-ipc -p scour-proto
-    -p scour-i18n -p scourd -p scour -p scour-mcp -p scour-web
+    -p scour-i18n -p scour-thumbs -p scourd -p scour -p scour-mcp -p scour-web
 )
 
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }

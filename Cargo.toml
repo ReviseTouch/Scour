@@ -15,6 +15,7 @@ members = [
     "crates/scour-export",
     "crates/scour-settings",
     "crates/scour-places",
+    "crates/scour-thumbs",
     "crates/scour-index-native",
     "apps/scourd",
     "apps/scour",
@@ -53,6 +54,7 @@ scour-dupes         = { path = "crates/scour-dupes" }
 scour-export        = { path = "crates/scour-export" }
 scour-settings      = { path = "crates/scour-settings" }
 scour-places        = { path = "crates/scour-places" }
+scour-thumbs        = { path = "crates/scour-thumbs" }
 scour-engine        = { path = "crates/scour-engine" }
 scour-mock          = { path = "crates/scour-mock" }
 

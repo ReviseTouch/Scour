@@ -4664,6 +4664,7 @@ dependencies = [
  "scour-places",
  "scour-preview",
  "scour-settings",
+ "scour-thumbs",
  "serde",
  "serde_json",
 ]
@@ -4698,6 +4699,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-thumbs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "scour-watch"
 version = "0.1.0"
 dependencies = [
@@ -4716,6 +4725,7 @@ dependencies = [
  "scour-ipc",
  "scour-preview",
  "scour-proto",
+ "scour-thumbs",
  "serde_json",
 ]
 
@@ -4739,6 +4749,7 @@ dependencies = [
  "scour-query",
  "scour-settings",
  "scour-source-fs",
+ "scour-thumbs",
  "serde",
  "serde_json",
  "tempfile",

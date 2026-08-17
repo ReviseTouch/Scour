@@ -17,6 +17,15 @@ pub struct Req {
     pub path: String,
     pub query: HashMap<String, String>,
     pub headers: HashMap<String, String>,
+    /// What a `POST` carried, when it carried anything.
+    ///
+    /// **One route needs this and the rest never will.** Everything else here
+    /// says what it wants in the query string, and that was enough until a
+    /// request had to name a screenful of files at once: thirty-two paths
+    /// percent-encoded is several kilobytes, [`MAX_HEAD`] is sixteen, and a
+    /// request line that runs past it is *silently cut* — the truncation
+    /// arrives as a 404 for a path nobody asked for, which is a bad hour.
+    pub body: String,
 }
 
 impl Req {
@@ -36,6 +45,14 @@ impl Req {
 /// A bound rather than trust: this listens on a port, and a peer that never
 /// sends a newline must not be able to grow a buffer until the process dies.
 const MAX_HEAD: usize = 16 * 1024;
+
+/// And how much of a body. The same bound and the same reason.
+///
+/// Big enough for [`scour_thumbs::Maker::BATCH`] paths at any length a
+/// filesystem allows — thirty-two times four kilobytes is a hundred and
+/// twenty-eight — and small enough that a peer cannot make this process hold a
+/// megabyte per connection.
+const MAX_BODY: usize = 192 * 1024;
 
 pub fn read_request(stream: &TcpStream) -> Option<Req> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
@@ -68,6 +85,21 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
         }
     }
 
+    // Exactly what was announced and not a byte more: reading to end of stream
+    // would hang on a browser that keeps its socket open, and reading past the
+    // length would eat the next request on a connection this happens not to
+    // reuse today.
+    let length = headers
+        .get("content-length")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(MAX_BODY);
+    let mut body = vec![0u8; length];
+    if length > 0 && reader.read_exact(&mut body).is_err() {
+        return None;
+    }
+    let body = String::from_utf8_lossy(&body).into_owned();
+
     let (path, raw) = target.split_once('?').unwrap_or((target.as_str(), ""));
     let mut query = HashMap::new();
     for pair in raw.split('&').filter(|s| !s.is_empty()) {
@@ -79,6 +111,7 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
         path: path.to_owned(),
         query,
         headers,
+        body,
     })
 }
 
