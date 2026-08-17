@@ -513,6 +513,28 @@ impl Engine {
     /// the one at row zero. Otherwise the index answers it, and the ordering is
     /// asked for in the background so that the next window does not have to
     /// wait for the same walk twice.
+    /// The exclusion rules in force — the configured ones and the built-in
+    /// ones together, because that is the shape they reach the engine in.
+    ///
+    /// A caller that wants to show them *apart* — and a window that offers a
+    /// remove button has to — subtracts
+    /// [`scour_source_fs::platform_defaults`] itself. Splitting them here
+    /// would mean carrying a second copy of both lists for reporting alone.
+    ///
+    /// Subtracting is exact rather than approximate, which is not obvious:
+    /// a person who writes `target` into their own configuration sees it
+    /// listed as built-in, and that is the true answer — removing their line
+    /// would change nothing, because the built-in rule excludes it anyway.
+    pub fn exclusions(&self) -> (&[String], &[String], &[String], &[String]) {
+        let s = &self.shared.opts.scan;
+        (
+            &s.exclude_paths,
+            &s.exclude_dirs,
+            &s.exclude_files,
+            &s.allow,
+        )
+    }
+
     pub fn search(
         &self,
         query: &str,

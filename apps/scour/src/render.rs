@@ -245,6 +245,32 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{path}");
             }
         }
+        // Built in first and marked, because the difference is the whole
+        // point: one list can be edited and the other cannot, and it is the
+        // uneditable one that does nearly all of the excluding.
+        Response::Rules {
+            builtin_paths,
+            builtin_dirs,
+            builtin_files,
+            paths,
+            dirs,
+            files,
+            allow,
+        } => {
+            for (what, list) in [
+                ("builtin path", builtin_paths),
+                ("builtin dir", builtin_dirs),
+                ("builtin file", builtin_files),
+                ("path", paths),
+                ("dir", dirs),
+                ("file", files),
+                ("allow", allow),
+            ] {
+                for v in list {
+                    println!("{}{}", label(what), v);
+                }
+            }
+        }
         Response::Places(p) => {
             println!("{}{}", label("home"), p.home);
             for place in &p.places {

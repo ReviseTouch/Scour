@@ -276,6 +276,21 @@ pub enum Request {
     /// a rule that four are meant to share. The same guess had already been
     /// wrong a layer higher: the page shipped with `/home/hasan` written into
     /// it. A frontend draws what it is told now.
+    /// What the walk is told to skip, and what a person may change about it.
+    ///
+    /// **Two lists, kept apart on purpose.** The exclusions that do the work
+    /// are a built-in set — `target`, `node_modules`, `.cargo/registry` and the
+    /// rest — plus whatever the configuration adds. Only the second can be
+    /// edited, so handing back one merged list would offer a window entries it
+    /// cannot remove. A rail that lies about what a button does is worse than
+    /// no button.
+    ///
+    /// The counts are not here and cannot be: what a rule excludes is *not in
+    /// the index*, so the only way to know how many files it holds is to walk
+    /// the disk. That is a separate, deliberate act — measured at nine minutes
+    /// for `target` on this machine — and it is not something an answer to
+    /// "what are the rules" should quietly do.
+    Rules {},
     Places {},
     /// Make the pictures this desktop has not made yet.
     ///
@@ -476,6 +491,18 @@ pub enum Response {
     },
     Stat(Entry),
     Usage(UsageResponse),
+    /// See [`Request::Rules`]. `builtin` cannot be edited; `paths`, `dirs`,
+    /// `files` and `allow` are the configuration's own, and are what a write
+    /// replaces.
+    Rules {
+        builtin_paths: Vec<String>,
+        builtin_dirs: Vec<String>,
+        builtin_files: Vec<String>,
+        paths: Vec<String>,
+        dirs: Vec<String>,
+        files: Vec<String>,
+        allow: Vec<String>,
+    },
     Places(scour_places::Places),
     Preview(scour_preview::Look),
     Thumbnails(scour_thumbs::Made),
@@ -542,6 +569,7 @@ impl Request {
             | Request::Facets { .. }
             | Request::Tree { .. }
             | Request::Stat { .. }
+            | Request::Rules {}
             | Request::Places {}
             | Request::Preview { .. }
             | Request::Usage { .. }
@@ -570,7 +598,8 @@ impl Request {
     pub fn streams(&self) -> bool {
         match self {
             Request::Export { .. } => true,
-            Request::Search { .. }
+            Request::Rules {}
+            | Request::Search { .. }
             | Request::Count { .. }
             | Request::Facets { .. }
             | Request::Tree { .. }
@@ -598,6 +627,7 @@ impl Request {
     pub fn name(&self) -> &'static str {
         match self {
             Request::Search { .. } => "search",
+            Request::Rules {} => "rules",
             Request::Export { .. } => "export",
             Request::Count { .. } => "count",
             Request::Facets { .. } => "facets",

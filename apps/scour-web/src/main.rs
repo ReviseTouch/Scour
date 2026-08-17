@@ -303,6 +303,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/kinds" => api_kinds(&mut stream, client, &req),
         "/api/strings" => api_strings(&mut stream, client, &req),
         "/api/places" => api_places(&mut stream, client),
+        "/api/rules" => api_rules(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
         "/api/usage" => api_usage(&mut stream, client, &req),
@@ -743,6 +744,33 @@ fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// `/home/hasan` written into it, and the fix then moved the guess from
 /// JavaScript into this bridge rather than into the service. It is in the
 /// service now, in `scour-places`, where every frontend can reach it.
+/// What the walk skips, in two lists.
+///
+/// The built-in set and the configured one are kept apart all the way to the
+/// browser, because only the second can be edited and a panel that offers a
+/// remove button for the first would be lying. See `Request::Rules`.
+fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
+    match call(client, Request::Rules {}) {
+        Ok(Response::Rules {
+            builtin_paths,
+            builtin_dirs,
+            builtin_files,
+            paths,
+            dirs,
+            files,
+            allow,
+        }) => http::json(
+            stream,
+            &serde_json::json!({
+                "builtin": { "paths": builtin_paths, "dirs": builtin_dirs, "files": builtin_files },
+                "mine": { "paths": paths, "dirs": dirs, "files": files, "allow": allow },
+            }),
+        ),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Places {}) {
         Ok(Response::Places(p)) => match serde_json::to_value(&p) {

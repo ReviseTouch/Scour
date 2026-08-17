@@ -111,6 +111,8 @@ enum Command {
     },
     /// Everything known about one path.
     Stat { path: String },
+    /// What the walk skips, built in and configured.
+    Rules,
     /// This desktop's own folders, and which volumes record read times.
     Places,
     /// What can be shown of a file, and the head of it when that is text.
@@ -450,6 +452,7 @@ fn build(args: &Args) -> Result<Request> {
             // A command line has no caret, so there is nothing to complete.
             cursor: None,
         },
+        Some(Command::Rules) => Request::Rules {},
         Some(Command::Places) => Request::Places {},
         Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
         Some(Command::Syntax) => Request::Syntax {},

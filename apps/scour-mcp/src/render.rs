@@ -147,6 +147,33 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        // Marked, because a model asked to change the rules has to know which
+        // half it can change. The built-in set is not editable from anywhere.
+        Response::Rules {
+            builtin_paths,
+            builtin_dirs,
+            builtin_files,
+            paths,
+            dirs,
+            files,
+            allow,
+        } => {
+            let mut out = String::new();
+            for (what, list) in [
+                ("builtin path", builtin_paths),
+                ("builtin dir", builtin_dirs),
+                ("builtin file", builtin_files),
+                ("path", paths),
+                ("dir", dirs),
+                ("file", files),
+                ("allow", allow),
+            ] {
+                for v in list {
+                    out.push_str(&format!("{what}\t{v}\n"));
+                }
+            }
+            out
+        }
         Response::Places(p) => {
             let mut out = format!("home: {}\n", p.home);
             for place in &p.places {

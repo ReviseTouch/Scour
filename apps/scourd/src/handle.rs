@@ -160,6 +160,34 @@ fn run(
         // Answered without the engine, like `Syntax`: it is a fact about the
         // machine rather than about the index, and the service is asked
         // because it is the one thing every frontend already talks to.
+        // **Two lists, not one.** The built-in set is where nearly all of the
+        // exclusion happens — `target` alone is 2,087,642 files on the
+        // machine this was written for — and none of it is editable. Merging
+        // it with the configuration's own would hand a window entries whose
+        // remove button does nothing.
+        Request::Rules {} => {
+            let (bp, bd, bf) = scour_source_fs::platform_defaults();
+            let (paths, dirs, files, allow) = engine.exclusions();
+            // What is left after the built-in half is taken out. A rule
+            // somebody wrote that the built-in set already covers shows up as
+            // built-in, which is the honest answer: deleting their line would
+            // not change what is excluded.
+            let mine = |all: &[String], builtin: &[String]| -> Vec<String> {
+                all.iter()
+                    .filter(|v| !builtin.contains(v))
+                    .cloned()
+                    .collect()
+            };
+            Response::Rules {
+                paths: mine(paths, &bp),
+                dirs: mine(dirs, &bd),
+                files: mine(files, &bf),
+                allow: allow.to_vec(),
+                builtin_paths: bp,
+                builtin_dirs: bd,
+                builtin_files: bf,
+            }
+        }
         Request::Places {} => Response::Places(scour_places::look()),
         // **`stat` first, and that is the fence.** Only a path the index holds
         // may be looked at — the same rule `/api/open` follows, kept here so
