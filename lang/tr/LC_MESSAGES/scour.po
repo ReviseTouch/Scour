@@ -870,3 +870,48 @@ msgstr "tüm sonucu CSV olarak dışa aktar"
 
 msgid "Made by <a href=\"https://revisetouch.com\" target=\"_blank\" rel=\"noreferrer\">revisetouch.com</a>"
 msgstr "<a href=\"https://revisetouch.com\" target=\"_blank\" rel=\"noreferrer\">revisetouch.com</a> tarafından yapıldı"
+
+msgid "what is skipped"
+msgstr "neler atlanıyor"
+
+msgid "the rules that keep files out of the index"
+msgstr "dosyaları indeksin dışında tutan kurallar"
+
+msgid "What is skipped"
+msgstr "Neler atlanıyor"
+
+msgid "These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."
+msgstr "Bunlar indekse hiç ulaşmayanı belirler. Bu makinedeki iki kökte 4.786.967 dosya var, indekste 2.240.000; farkın neredeyse tamamı burada."
+
+msgid "A change takes effect on the next scan — the index does not rearrange itself."
+msgstr "Değişiklik sonraki taramada geçerli olur — indeks kendini yeniden düzenlemez."
+
+msgid "Run `scour rescan` in a terminal to apply it now."
+msgstr "Hemen uygulamak için bir terminalde `scour rescan` çalıştırın."
+
+msgid "Added here"
+msgstr "Buradan eklenenler"
+
+msgid "The only ones this window may change."
+msgstr "Bu pencerenin değiştirebileceği tek grup."
+
+msgid "From config.toml"
+msgstr "config.toml'dan"
+
+msgid "Written by hand, and left alone — changing it here would rewrite the file."
+msgstr "Elle yazılmış, dokunulmuyor — buradan değiştirmek o dosyayı yeniden yazmak olurdu."
+
+msgid "Built in"
+msgstr "Gömülü"
+
+msgid "Part of the program. Mostly build output and package caches, which churn constantly and bury real results."
+msgstr "Programın parçası. Çoğu derleme çıktısı ve paket önbelleği — sürekli değişir ve gerçek sonuçları gömerler."
+
+msgid "a directory name, or a path"
+msgstr "bir dizin adı ya da bir yol"
+
+msgid "add"
+msgstr "ekle"
+
+msgid "remove"
+msgstr "kaldır"

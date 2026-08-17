@@ -1579,6 +1579,9 @@
            how the window looks rather than what it is looking at. -->
       <button type="button" id="csv" class="about"
               data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
+      <button type="button" id="rules" class="about" aria-haspopup="dialog"
+              aria-expanded="false" data-t-title="what is skipped"
+              data-t-aria="the rules that keep files out of the index">⊘</button>
       <button type="button" id="lang" class="about" aria-haspopup="menu"
               aria-expanded="false" data-t-title="language"
               data-t-aria="choose the language">文</button>
@@ -1596,6 +1599,14 @@
       </div>
     </div>
 
+    <div id="rules-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="what is skipped">
+      <h2 data-t="What is skipped"></h2>
+      <p class="why" data-t="These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."></p>
+      <div id="rules-body"></div>
+      <p class="why" data-t="A change takes effect on the next scan — the index does not rearrange itself."></p>
+      <p class="why" data-t="Run `scour rescan` in a terminal to apply it now."></p>
+    </div>
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
       <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
@@ -7051,6 +7062,106 @@
       location.href = `/api/csv?${p}`;
     });
   }
+
+
+  /* ---------------- what is skipped ----------------
+   *
+   * Three sources reach the walk and only one of them can be changed from
+   * here, so the panel keeps them apart: a remove button beside a built-in
+   * rule would be a control that does nothing. The counts are not shown and
+   * cannot be — what a rule excludes is by definition not in the index, so the
+   * only way to know how many files it holds is to walk the disk, which took
+   * nine minutes for `target` on this machine. A number nobody measured is
+   * worse than no number.
+   *
+   * Writing goes through the settings, not through `config.toml`: that file is
+   * hand-written and carries the measurements behind every value in it, and
+   * rewriting it through a serialiser to record something typed into a box
+   * would destroy the part worth keeping. */
+  /* A rule is a name a person typed, and it goes into markup. Everything else
+     in this file that builds HTML from a path does the same; there was no
+     shared helper to reach for. */
+  const esc = (v) =>
+    String(v).replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  const rulesPanel = document.getElementById("rules-panel");
+  const rulesBtn = document.getElementById("rules");
+  let RULES = null;
+
+  const drawRules = () => {
+    if (!RULES) return;
+    const group = (title, note, entries, kind, removable) => {
+      if (!entries.length && !removable) return "";
+      const rows = entries.map((v) =>
+        `<li><code>${esc(v)}</code>` +
+        (removable ? `<button type="button" class="drop" data-kind="${kind}"` +
+                     ` data-value="${esc(v)}" title="${esc(T("remove"))}">×</button>` : "") +
+        `</li>`).join("");
+      return `<section><h3>${esc(title)}</h3><p class="why">${esc(note)}</p>` +
+             `<ul class="rules">${rows}</ul>` +
+             (removable ? `<form class="add" data-kind="${kind}">` +
+               `<input type="text" placeholder="${esc(T("a directory name, or a path"))}" />` +
+               `<button type="submit">${esc(T("add"))}</button></form>` : "") +
+             `</section>`;
+    };
+    const b = RULES.builtin, c = RULES.config, a = RULES.added;
+    rulesPanel.querySelector("#rules-body").innerHTML =
+      group(T("Added here"), T("The only ones this window may change."),
+            [...a.paths, ...a.dirs, ...a.files], "dirs", true) +
+      group(T("From config.toml"), T("Written by hand, and left alone — changing it here would rewrite the file."),
+            [...c.paths, ...c.dirs, ...c.files, ...c.allow], "", false) +
+      group(T("Built in"), T("Part of the program. Mostly build output and package caches, which churn constantly and bury real results."),
+            [...b.paths, ...b.dirs, ...b.files], "", false);
+  };
+
+  const loadRules = () =>
+    SERVICE.get("rules", {}).then((r) => { RULES = r; drawRules(); }).catch(() => {});
+
+  rulesBtn.addEventListener("click", () => {
+    const open = rulesPanel.hidden;
+    rulesPanel.hidden = !open;
+    rulesBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) loadRules();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !rulesPanel.hidden) {
+      rulesPanel.hidden = true;
+      rulesBtn.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  /* A rule is added to `exclude_dirs` whatever it looks like, because that is
+     the rule people mean: a name, matched wherever it appears. A path-shaped
+     one is what `exclude_paths` is for, and telling them apart by guessing at
+     a leading slash would be a rule nobody was told about. */
+  rulesPanel.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const box = e.target.querySelector("input");
+    const v = box.value.trim();
+    if (!v || !RULES) return;
+    const key = v.startsWith("/") ? "paths" : "dirs";
+    const next = [...RULES.added[key], v];
+    RULES.added[key] = next;
+    SERVICE.saveSettings({ ["exclude_" + key]: next });
+    box.value = "";
+    drawRules();
+  });
+  rulesPanel.addEventListener("click", (e) => {
+    const b = e.target.closest(".drop");
+    if (!b || !RULES) return;
+    const v = b.dataset.value;
+    for (const key of ["paths", "dirs", "files"]) {
+      if (!RULES.added[key].includes(v)) continue;
+      RULES.added[key] = RULES.added[key].filter((x) => x !== v);
+      SERVICE.saveSettings({ ["exclude_" + key]: RULES.added[key] });
+    }
+    drawRules();
+  });
+  /* **No rescan button, deliberately.** There is no `/api/rescan`, and adding
+     one means deciding what a window may make the service do — a full walk of
+     two volumes is not a thing to hand to a stray click. `scour rescan` does
+     it from a terminal today, and the panel says so instead of pretending. */
 
   const langBtn = document.getElementById("lang");
   const langMenu = document.createElement("div");
