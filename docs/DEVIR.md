@@ -6,7 +6,7 @@ Bir oturumun sonu. Buradan devam edecek olan için, eksiksiz.
 
 ## 0. Hemen bilmen gerekenler
 
-**Depo:** `/home/hasan/Projeler/Scour` · dal `main` · HEAD **`4948a9c`**
+**Depo:** `/home/hasan/Projeler/Scour` · dal `main` · HEAD **`995bade`**
 · GitHub'da (`hasantr/Scour`, private) · çalışma ağacı temiz.
 
 **Bekleyen tek eylem, ve Hasan'a ait:**
@@ -17,9 +17,9 @@ sudo /home/hasan/.local/bin/scour-yeniden
 
 Çalışan `scourd` sabah 11:42'de yeniden başlatıldı; kurulu ikililer 10:52'den.
 Yani panel, fanotify kuyruk tavanları, paralel yürüyüş ve küçük resimler
-**devrede**. Devrede olmayan: bugün öğleden sonra eklenen kural anahtarları ve
-kuralın kaydedilir kaydedilmez geçerli olması (`4948a9c`). Onlar için yeniden
-kurulum gerekiyor.
+**devrede**. Devrede olmayan: bugün öğleden sonra eklenen kural anahtarları,
+kuralın kaydedilir kaydedilmez geçerli olması, ve kural eklemenin artık tarama
+yapmaması (`4948a9c`, `995bade`). Onlar için yeniden kurulum gerekiyor.
 
 Sudo yalnız `/mnt/depo`'ya fanotify işareti koymak için gerekiyor.
 `scour-watch` işareti koyup yetkiyi bırakıyor; servis Hasan'ın kullanıcısıyla
@@ -210,6 +210,29 @@ adsız gelip düşerdi.
 Kaydetmek taramayı da başlatıyor (Hasan'ın kararı). Karşılaştırarak: bu istek
 sütun genişliği kaydedilirken de geliyor.
 
+**Ama artık her değişiklik tarama demek değil** (`995bade`). Hasan itiraz etti,
+haklıydı: üç ayrı durum tek fiyat ödüyordu.
+
+| değişiklik | ne oluyor | ölçüm |
+|---|---|---|
+| kural eklendi / açıldı | indeks yürünür, uyanlar silinir — **diske hiç gidilmez** | 2,1 sn (2,25 M satır) |
+| `path:` kuralı kapatıldı | yalnız o altağaç taranır | ağaca göre |
+| `dir:`/`file:` kapatıldı | tam tarama — ad her yerde olabilir | kaçınılmaz |
+
+`dir:.cache` eklemek: 5 alt ağaç, **78.995 satır**, 2,4 sn, disk yok. Referans:
+tek kaynakta 1,2 M girdilik ilk tarama 6,7 sn. İkinci kez aynı kural 0 buluyor —
+idempotenslik `smoke.rs`'te 120 alt ağaçla bağlı. Kuyrukta bekleyen tam tarama
+ikinci kez kuyruğa girmiyor (panelde beş tıklama beş yürüyüş demekti).
+
+**Ölçümün bulduğu hata, ve dersi:** ilk sürüm `Rules::excludes_path` soruyordu —
+o *izleyicinin* süzgeci: `is_dir` yok ve bilerek cömert. İndekste ne olmalı
+sorusunun cevabı değil, ve fark gerçek bir yerde: bu makinede container
+deposunda **36 tane `node_modules` symlink'i** var. `dir:` kuralı onlar hakkında
+değil, tarama onları indeksliyor, `excludes_path` "silinmeli" diyordu — her kural
+değişiminde 36 satır siliniyor, sonraki tarama geri koyuyordu. Dizi hiç
+durulmuyordu: 73, sonra 36, sonra 36. `Rules::excludes(path, name, is_dir)` —
+taramanın kendi çağrısı — 0'a indiriyor ve geçişi 5,5 sn'den 2,1 sn'ye çekiyor.
+
 **Her kural kapatılabilir** — gömülü ve `config.toml` dahil. Kapatma bir not
 (`kind:value`, tek yazımı `scour_settings::rule_id`), üç kaynak birleştikten
 *sonra* çıkarılıyor, yani iki yerde yazılı bir kural yarım değil tamamen
@@ -265,11 +288,12 @@ bütün Rust testleri geçiyor). Artık `the_page_script_parses` node'a soruyor.
    kararı**, çünkü kaydettiği dosyanın görünme süresi.
 8. **Ad sıralaması 3 ms ama gerileme riski**: `.norder` yalnız sıkışma/yeniden
    inşa ile yazılıyor. Yeni parçalarda yok, ta ki sıkışana kadar.
-9. **Kural değişince tam tarama yapılıyor, altağaç değil.** Doğru sonucu
-   veriyor — tarama hem ekler hem süpürür — ama bir `dir:` kuralı her yerde
-   olabildiği için ucuz yol yok. Ölçülmedi: Hasan'ın iki kaynağında tam
-   taramanın ne kadar sürdüğü bilinmiyor (referans: 1,2 M girdilik ilk tarama
-   6,7 sn). Bir kural yalnız `path:` ise `rescan(Some(yol))` yetecektir.
+9. **`RemoveSubtree` bir symlink satırını silmiyor.** Ölçüm sırasında çıktı ve
+   *ayrı bir konu*: `apply_rules` artık onları silmeye çalışmıyor (kural
+   dizinler hakkında), ama izleyici bir symlink silindiğini bildirdiğinde aynı
+   yol kullanılıyor. Kanıt: `.../diff/usr/share/node_modules -> nodejs` satırı,
+   `RemoveSubtree` uygulandıktan ve commit edildikten sonra indekste kalıyordu.
+   Kendi turunu ister; başlangıç noktası `NativeIndex::kill_leaves`.
 
 ### Uzun
 
