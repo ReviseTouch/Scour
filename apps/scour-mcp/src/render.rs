@@ -153,20 +153,28 @@ pub fn human(r: &Response) -> String {
             builtin_paths,
             builtin_dirs,
             builtin_files,
-            paths,
-            dirs,
-            files,
-            allow,
+            config_paths,
+            config_dirs,
+            config_files,
+            config_allow,
+            added_paths,
+            added_dirs,
+            added_files,
+            added_allow,
         } => {
             let mut out = String::new();
             for (what, list) in [
                 ("builtin path", builtin_paths),
                 ("builtin dir", builtin_dirs),
                 ("builtin file", builtin_files),
-                ("path", paths),
-                ("dir", dirs),
-                ("file", files),
-                ("allow", allow),
+                ("config path", config_paths),
+                ("config dir", config_dirs),
+                ("config file", config_files),
+                ("config allow", config_allow),
+                ("added path", added_paths),
+                ("added dir", added_dirs),
+                ("added file", added_files),
+                ("added allow", added_allow),
             ] {
                 for v in list {
                     out.push_str(&format!("{what}\t{v}\n"));

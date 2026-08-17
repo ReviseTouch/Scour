@@ -78,6 +78,28 @@ pub const HISTORY: usize = 100;
 /// Everything a frontend remembers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Settings {
+    /// Directory names, file names and path prefixes a person added from a
+    /// window, and the prefixes that take precedence over them.
+    ///
+    /// **Here rather than in `config.toml`, for the reason the column widths
+    /// are.** That file is hand-written and carries measurements and the
+    /// reasoning behind every value in it; rewriting it through a serialiser
+    /// to record a rule somebody typed into a panel would destroy all of that.
+    /// So a rule added from an interface lives beside the index, exactly as a
+    /// column width does, and `config.toml` stays a file a person owns.
+    ///
+    /// The consequence is worth stating: a rule can now be in either place,
+    /// and a panel showing them has to say which. Three sources reach the
+    /// walk — the built-in set, this file, and `config.toml` — and only this
+    /// one can be edited from a window.
+    #[serde(default)]
+    pub exclude_paths: Vec<String>,
+    #[serde(default)]
+    pub exclude_dirs: Vec<String>,
+    #[serde(default)]
+    pub exclude_files: Vec<String>,
+    #[serde(default)]
+    pub exclude_allow: Vec<String>,
     /// Columns to show, in the order they are shown, by id.
     ///
     /// Empty means "whatever this frontend calls its default" — not "no
@@ -198,6 +220,10 @@ pub struct Settings {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Change {
+    pub exclude_paths: Option<Vec<String>>,
+    pub exclude_dirs: Option<Vec<String>>,
+    pub exclude_files: Option<Vec<String>>,
+    pub exclude_allow: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub widths: Option<BTreeMap<String, u32>>,
     pub sort: Option<String>,
@@ -236,6 +262,18 @@ pub struct Change {
 impl Change {
     /// Fold this into the settings.
     pub fn apply(self, to: &mut Settings) {
+        if let Some(v) = self.exclude_paths {
+            to.exclude_paths = v;
+        }
+        if let Some(v) = self.exclude_dirs {
+            to.exclude_dirs = v;
+        }
+        if let Some(v) = self.exclude_files {
+            to.exclude_files = v;
+        }
+        if let Some(v) = self.exclude_allow {
+            to.exclude_allow = v;
+        }
         if let Some(v) = self.columns {
             to.columns = v;
         }

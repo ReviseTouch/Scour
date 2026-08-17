@@ -491,17 +491,28 @@ pub enum Response {
     },
     Stat(Entry),
     Usage(UsageResponse),
-    /// See [`Request::Rules`]. `builtin` cannot be edited; `paths`, `dirs`,
-    /// `files` and `allow` are the configuration's own, and are what a write
-    /// replaces.
+    /// See [`Request::Rules`]. Three groups, because they are three different
+    /// kinds of thing and only one of them a window may change:
+    ///
+    /// * `builtin_*` — code. Not editable anywhere.
+    /// * `config_*` — `config.toml`, written by hand and left alone. Shown so
+    ///   a person can see why something is missing, not offered for deletion:
+    ///   rewriting that file through a serialiser would destroy the comments
+    ///   and measurements that are most of its value.
+    /// * `added_*` — what a window wrote, kept beside the index like the
+    ///   column widths. This is the group a write replaces.
     Rules {
         builtin_paths: Vec<String>,
         builtin_dirs: Vec<String>,
         builtin_files: Vec<String>,
-        paths: Vec<String>,
-        dirs: Vec<String>,
-        files: Vec<String>,
-        allow: Vec<String>,
+        config_paths: Vec<String>,
+        config_dirs: Vec<String>,
+        config_files: Vec<String>,
+        config_allow: Vec<String>,
+        added_paths: Vec<String>,
+        added_dirs: Vec<String>,
+        added_files: Vec<String>,
+        added_allow: Vec<String>,
     },
     Places(scour_places::Places),
     Preview(scour_preview::Look),

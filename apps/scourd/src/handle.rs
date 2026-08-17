@@ -168,21 +168,27 @@ fn run(
         Request::Rules {} => {
             let (bp, bd, bf) = scour_source_fs::platform_defaults();
             let (paths, dirs, files, allow) = engine.exclusions();
-            // What is left after the built-in half is taken out. A rule
-            // somebody wrote that the built-in set already covers shows up as
-            // built-in, which is the honest answer: deleting their line would
-            // not change what is excluded.
-            let mine = |all: &[String], builtin: &[String]| -> Vec<String> {
+            let held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
+            // What is in force, minus the built-in half, minus what a window
+            // added, is what the configuration file itself says. Subtracting
+            // is exact rather than approximate: an entry somebody wrote in two
+            // places is attributed to the one that cannot be deleted, and that
+            // is the true answer — deleting the other would change nothing.
+            let rest = |all: &[String], a: &[String], b: &[String]| -> Vec<String> {
                 all.iter()
-                    .filter(|v| !builtin.contains(v))
+                    .filter(|v| !a.contains(v) && !b.contains(v))
                     .cloned()
                     .collect()
             };
             Response::Rules {
-                paths: mine(paths, &bp),
-                dirs: mine(dirs, &bd),
-                files: mine(files, &bf),
-                allow: allow.to_vec(),
+                config_paths: rest(paths, &bp, &held.exclude_paths),
+                config_dirs: rest(dirs, &bd, &held.exclude_dirs),
+                config_files: rest(files, &bf, &held.exclude_files),
+                config_allow: rest(allow, &[], &held.exclude_allow),
+                added_paths: held.exclude_paths.clone(),
+                added_dirs: held.exclude_dirs.clone(),
+                added_files: held.exclude_files.clone(),
+                added_allow: held.exclude_allow.clone(),
                 builtin_paths: bp,
                 builtin_dirs: bd,
                 builtin_files: bf,

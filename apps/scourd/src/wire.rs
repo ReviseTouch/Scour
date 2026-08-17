@@ -144,6 +144,26 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
     let (paths, dirs, files) = platform_defaults();
     let mut o = config.scan_options();
     o.skip_metadata = false;
+
+    // **Rules a person added from a window.**
+    //
+    // Three sources reach the walk, and they are different kinds of thing.
+    // The built-in set is code. `config.toml` is a file somebody wrote by
+    // hand, with comments and measurements in it. And this is what a panel
+    // wrote, which is why it lives beside the index rather than in that
+    // file — the same decision, and the same reasoning, as the column widths:
+    // rewriting a hand-edited config to record something typed into a
+    // checkbox would destroy the part of it that is worth keeping.
+    //
+    // Read here rather than passed in, because the walk is configured before
+    // `main.rs` opens the settings, and the two must not disagree about which
+    // directory they are reading from — `data_dir` is what makes `--config`
+    // real isolation.
+    let added = scour_settings::Settings::load(&data_dir(config).join("state"));
+    o.exclude_paths.extend(added.exclude_paths);
+    o.exclude_dirs.extend(added.exclude_dirs);
+    o.exclude_files.extend(added.exclude_files);
+    o.allow.extend(added.exclude_allow);
     // **The index does not index itself**, and the reason is not tidiness.
     //
     // A commit writes segment files; the watcher sees them; the engine turns
