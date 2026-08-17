@@ -167,23 +167,74 @@ fn run(
             }
             // **A rule is the one setting that changes what the index holds**,
             // so it is the one that does more than get written down: the engine
-            // takes the new set, every watcher re-tunes to it, and the walk that
-            // brings the index in line starts on its own.
+            // takes the new set, every watcher re-tunes to it, and the index is
+            // brought in line without being asked twice.
             //
             // Compared rather than assumed, because this is also the request a
-            // window sends when somebody drags a column edge — and a rescan of
-            // two volumes for a column width would be an unusable window.
+            // window sends when somebody drags a column edge — and a walk of two
+            // volumes for a column width would be an unusable window.
             let after = rules_of(&held);
             if before != after {
-                let opts = crate::wire::scan_options_with(&kept.config, &held);
+                let was = engine.scan_options();
+                let now = crate::wire::scan_options_with(&kept.config, &held);
+                let opened = opened_up(&was, &now);
                 drop(held);
-                engine.set_scan_options(opts);
-                // The panel says a change takes effect on the next scan; this
-                // is that scan. Queued and returned from immediately — the walk
-                // runs on the worker, and a save that blocked for the length of
-                // it would look like a frozen window.
-                if let Err(e) = engine.rescan(None) {
-                    scour_core::note!("scourd: the rules changed but a scan could not start: {e}");
+                engine.set_scan_options(now);
+
+                // **Tightening first, and without a walk.** Every rule change
+                // can remove entries and only some can add them, so this half
+                // always runs and never goes to the disk: the index already
+                // holds every path the answer is about.
+                // Timed, and reported even when nothing went: this pass reads
+                // every row in the index, so its cost is the price of the whole
+                // no-walk shortcut and the number belongs where somebody will
+                // see it rather than in a benchmark nobody runs.
+                let began = std::time::Instant::now();
+                match engine.apply_rules() {
+                    Ok(n) => scour_core::note!(
+                        "scourd: {n} subtree(s) left the index · {} ms",
+                        began.elapsed().as_millis()
+                    ),
+                    Err(e) => scour_core::note!("scourd: the new rules could not be applied: {e}"),
+                }
+
+                // And a walk only for what was *opened*, over as little as the
+                // change allows. A path rule that went away names its own
+                // subtree; a directory or file name can be anywhere, so that
+                // one costs everything.
+                // Said out loud, because the difference between these three is
+                // the difference between no disk at all and a walk of every
+                // root — and from the outside all three look like "the index
+                // changed a moment later".
+                let walk: Vec<Option<String>> = match opened {
+                    Opened::Nothing => {
+                        scour_core::note!("scourd: rules tightened; no walk needed");
+                        Vec::new()
+                    }
+                    Opened::Subtrees(paths) => {
+                        scour_core::note!(
+                            "scourd: rules opened {}; walking those",
+                            paths.join(", ")
+                        );
+                        paths.into_iter().map(Some).collect()
+                    }
+                    Opened::Everything => {
+                        scour_core::note!(
+                            "scourd: a directory or file name was re-admitted; walking everything"
+                        );
+                        vec![None]
+                    }
+                };
+                for subtree in walk {
+                    // Queued and returned from immediately — the walk runs on
+                    // the worker, and a save that blocked for the length of one
+                    // would look like a frozen window.
+                    if let Err(e) = engine.rescan(subtree.clone()) {
+                        scour_core::note!(
+                            "scourd: the rules opened {} but it could not be walked: {e}",
+                            subtree.as_deref().unwrap_or("everything")
+                        );
+                    }
                 }
             }
             Response::Accepted
@@ -317,6 +368,51 @@ fn run(
     })
 }
 
+/// What a rule change re-admits, and therefore what has to be walked.
+///
+/// **The asymmetry is the whole reason this exists.** Excluding something takes
+/// entries out of an index that already holds them — no walk. Un-excluding
+/// something asks for entries that were never indexed, and only the filesystem
+/// has them.
+#[derive(Debug, PartialEq, Eq)]
+enum Opened {
+    /// Nothing was re-admitted; the change only ever removes.
+    Nothing,
+    /// These subtrees were, and nothing else: a path prefix names where it is.
+    Subtrees(Vec<String>),
+    /// A directory or file *name* was re-admitted, and a name can be anywhere.
+    Everything,
+}
+
+/// Compare two rule sets and say what the second lets back in.
+///
+/// Two ways a rule set widens: an exclusion goes away, or an `allow` — which
+/// overrides every exclusion under a prefix — appears. The first is read from
+/// what `before` had and `after` does not; the second the other way round.
+fn opened_up(before: &scour_core::ScanOptions, after: &scour_core::ScanOptions) -> Opened {
+    let gone = |was: &[String], now: &[String]| -> Vec<String> {
+        was.iter()
+            .filter(|v| !now.iter().any(|x| x.eq_ignore_ascii_case(v)))
+            .cloned()
+            .collect()
+    };
+    // A name that stopped being excluded can match at any depth under any root,
+    // and nothing here knows where. This is the expensive case and it is
+    // supposed to be: it is the honest answer.
+    if !gone(&before.exclude_dirs, &after.exclude_dirs).is_empty()
+        || !gone(&before.exclude_files, &after.exclude_files).is_empty()
+    {
+        return Opened::Everything;
+    }
+    let mut subtrees = gone(&before.exclude_paths, &after.exclude_paths);
+    subtrees.extend(gone(&after.allow, &before.allow));
+    if subtrees.is_empty() {
+        Opened::Nothing
+    } else {
+        Opened::Subtrees(subtrees)
+    }
+}
+
 /// The five lists that decide what the index holds.
 ///
 /// Pulled out so that saving a setting can ask *did the rules change* and get
@@ -332,4 +428,73 @@ fn rules_of(s: &scour_settings::Settings) -> [Vec<String>; 5] {
         s.exclude_allow.clone(),
         s.exclude_off.clone(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scour_core::ScanOptions;
+
+    fn opts(paths: &[&str], dirs: &[&str], allow: &[&str]) -> ScanOptions {
+        ScanOptions {
+            exclude_paths: paths.iter().map(|s| s.to_string()).collect(),
+            exclude_dirs: dirs.iter().map(|s| s.to_string()).collect(),
+            allow: allow.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Tightening asks for no walk at all.
+    ///
+    /// This is the common case by a wide margin — every rule somebody adds,
+    /// and every switch they turn on — and it is the one that used to cost a
+    /// walk of every source.
+    #[test]
+    fn adding_a_rule_opens_nothing() {
+        assert_eq!(
+            opened_up(&opts(&[], &[], &[]), &opts(&["/a"], &["target"], &[])),
+            Opened::Nothing
+        );
+    }
+
+    /// A path rule that goes away names exactly what it re-admits.
+    #[test]
+    fn a_path_rule_that_goes_away_opens_its_own_subtree() {
+        assert_eq!(
+            opened_up(&opts(&["/a", "/b"], &[], &[]), &opts(&["/a"], &[], &[])),
+            Opened::Subtrees(vec!["/b".into()])
+        );
+        // An `allow` is the same thing said the other way round: it overrides
+        // every exclusion under a prefix, so appearing is what opens a tree.
+        assert_eq!(
+            opened_up(&opts(&[], &[], &[]), &opts(&[], &[], &["/c"])),
+            Opened::Subtrees(vec!["/c".into()])
+        );
+    }
+
+    /// A directory *name* can be anywhere, so nothing narrower than everything
+    /// is honest.
+    ///
+    /// `node_modules` re-admitted means every `node_modules` under every root,
+    /// and the index cannot say where they are — it does not hold them; that is
+    /// the point.
+    #[test]
+    fn a_name_rule_that_goes_away_opens_everything() {
+        assert_eq!(
+            opened_up(&opts(&[], &["node_modules"], &[]), &opts(&[], &[], &[])),
+            Opened::Everything
+        );
+    }
+
+    /// Case is not a difference, here or in the merge that builds these lists.
+    #[test]
+    fn a_rule_respelled_is_not_a_rule_removed() {
+        assert_eq!(
+            opened_up(
+                &opts(&[], &["NODE_MODULES"], &[]),
+                &opts(&[], &["node_modules"], &[])
+            ),
+            Opened::Nothing
+        );
+    }
 }

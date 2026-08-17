@@ -144,6 +144,12 @@ struct Shared {
     status: RwLock<Status>,
     pending: AtomicU64,
     scanning: AtomicBool,
+    /// Per source: a whole-source walk is already waiting to run.
+    ///
+    /// Cleared as the walk begins rather than when it ends, so a rule saved
+    /// while one is running still queues one behind it — that walk has
+    /// something the running one does not.
+    queued: Vec<AtomicBool>,
     stop: AtomicBool,
     /// The live watches, each beside the source it belongs to.
     ///
@@ -363,6 +369,7 @@ impl Engine {
         // Moved out of `opts` rather than copied from it, so there is one
         // answer to "what does the walk skip" and not two that can drift.
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
+        let source_count = sources.len();
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -374,6 +381,7 @@ impl Engine {
             scan,
             pending: AtomicU64::new(0),
             scanning: AtomicBool::new(false),
+            queued: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
             stop: AtomicBool::new(false),
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(0),
@@ -491,6 +499,17 @@ impl Engine {
     }
 
     /// Queue a full walk of every source, or of one subtree.
+    ///
+    /// **A whole-source walk that is already queued is not queued again.** The
+    /// job channel is unbounded and nothing downstream collapses these, so
+    /// before this the panel's switches were a way to stack walks of two
+    /// volumes one per click — five taps, five walks, each of them by then
+    /// answering a question the one before it had already answered. The flag
+    /// clears when the walk starts, so a change made *during* a walk still gets
+    /// its own: that one has something new to find.
+    ///
+    /// Subtree walks are left alone. They are cheap, they are usually about
+    /// different subtrees, and the worker already folds overlapping ones.
     pub fn rescan(&self, subtree: Option<String>) -> Result<()> {
         match &subtree {
             Some(path) => {
@@ -504,10 +523,17 @@ impl Engine {
             }
             None => {
                 for i in 0..self.shared.sources.len() {
-                    self.send(Job::Scan {
+                    if self.shared.queued[i].swap(true, Ordering::AcqRel) {
+                        continue;
+                    }
+                    if let Err(e) = self.send(Job::Scan {
                         source: i,
                         subtree: None,
-                    })?;
+                    }) {
+                        // Nothing will clear it, because nothing will run it.
+                        self.shared.queued[i].store(false, Ordering::Release);
+                        return Err(e);
+                    }
                 }
                 Ok(())
             }
@@ -573,6 +599,89 @@ impl Engine {
         for (_, handle) in self.shared.watches.lock().iter() {
             handle.retune(&fresh);
         }
+    }
+
+    /// Throw out everything the rules in force would now skip. Returns how many
+    /// subtrees were dropped.
+    ///
+    /// **A new rule does not need a walk, and paying for one is the whole point
+    /// of this.** Excluding something can only ever *remove* entries, and every
+    /// path the answer is about is already in the index — so this is a pass
+    /// over rows that are in memory, asking each source's own test, against a
+    /// walk of two volumes that would go to the disk to learn nothing new. Only
+    /// the opposite change — a rule taken away — needs a walk, because the
+    /// entries it re-admits were never indexed and cannot be recovered from
+    /// something that does not hold them.
+    ///
+    /// **Subtrees, not rows.** [`Change::RemoveSubtree`] takes a directory and
+    /// everything beneath it in one step — measured at 1.3 µs for 378,100
+    /// documents — so a directory that is now skipped costs one change rather
+    /// than one per file inside it. Whatever is below it is still walked here
+    /// and still tested, which is cheap and keeps this honest for the case the
+    /// shortcut does not cover: a `file:` rule matching something inside a
+    /// directory that stays.
+    pub fn apply_rules(&self) -> Result<u64> {
+        let opts = self.shared.scan();
+        // One test per source, built once. A source that does not do exclusions
+        // says so by returning `None`, and its rows are left alone rather than
+        // being deleted on the strength of a test that answers `false` to
+        // everything.
+        let tests: Vec<Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>>> = self
+            .shared
+            .sources
+            .iter()
+            .map(|s| s.excluder(&opts))
+            .collect();
+        if tests.iter().all(Option::is_none) {
+            return Ok(0);
+        }
+
+        let mut doomed: Vec<String> = Vec::new();
+        self.shared.index.scan(
+            &scour_core::ScanRequest {
+                query: scour_query::parse(""),
+                ..Default::default()
+            },
+            &mut |hit: &Hit| {
+                // The index does not carry which source a row came from in a
+                // `Hit`, and asking every test is both correct and cheap: a
+                // path outside a source's roots is refused by that source's
+                // rules on the root check, before any rule is looked at.
+                // `is_dir` from the row, because a `dir:` rule is about
+                // directories and a file that shares the name is not one.
+                if tests
+                    .iter()
+                    .flatten()
+                    .any(|excluded| excluded(hit.path.as_str(), hit.is_dir))
+                {
+                    doomed.push(hit.path.clone());
+                }
+                true
+            },
+        )?;
+
+        // **Folded to the topmost path of each excluded tree.** Every row under
+        // an excluded directory matches the rule too, so without this a
+        // directory of ten thousand files is ten thousand changes that each
+        // remove a subtree of something already removed. `coalesce` is the same
+        // one the watcher's rescans go through, and its tests are the reason it
+        // is not written twice.
+        let doomed = coalesce(doomed);
+        if std::env::var_os("SCOUR_TRACE_RULES").is_some() {
+            for p in doomed.iter().take(8) {
+                scour_core::note!("scourd: rule drops {p}");
+            }
+        }
+        let n = doomed.len() as u64;
+        if n > 0 {
+            let mut changes = doomed
+                .into_iter()
+                .map(|path| Change::RemoveSubtree { path });
+            self.shared.index.apply(&mut changes)?;
+            self.shared.index.commit()?;
+            self.shared.touched();
+        }
+        Ok(n)
     }
 
     /// One page of one query.
@@ -1463,6 +1572,12 @@ fn run(
                 Ok(Job::Stop) | Err(_) => break,
                 Ok(Job::Scan { source, subtree }) => {
                     let whole = subtree.is_none();
+                    if whole && let Some(flag) = shared.queued.get(source) {
+                        // Cleared here rather than after the walk: from this
+                        // moment a request to walk again is about something
+                        // this walk may already have passed.
+                        flag.store(false, Ordering::Release);
+                    }
                     if !scan(&shared, &changes_tx, source, subtree) && whole {
                         schedule_retry(&mut retries, source);
                     }

@@ -124,6 +124,39 @@ pub trait Source: Send + Sync + Debug {
     /// says which.
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport>;
 
+    /// A test for "would a walk under these options have skipped this path".
+    ///
+    /// **So that a new rule can be applied without walking the disk.** Adding
+    /// an exclusion only ever *removes* entries, and the index already holds
+    /// every path the answer is about — so the whole job is a pass over rows
+    /// that are already in memory, against a test only the source can perform.
+    /// A walk of two volumes to delete rows nobody had to go and look at is
+    /// the wrong price by an order of magnitude.
+    ///
+    /// Returned as a closure because building the test is the expensive part —
+    /// a rule set is compiled once and then asked millions of times — and
+    /// because it keeps whatever a source uses to answer inside that source.
+    /// The engine calls this and nothing else; it has never named a rule type
+    /// and does not start here.
+    ///
+    /// **`is_dir` is not optional information, it is the answer.** A rule that
+    /// names a directory does not name a file that happens to share the name,
+    /// and the difference is not hypothetical: `node_modules` is a *symlink*
+    /// to `nodejs` in 36 places under this machine's container storage. The
+    /// walk indexes those — a `dir:` rule is not about them — and a test that
+    /// left `is_dir` out called every one of them excluded, so every rule
+    /// change tried to delete rows the next walk would put straight back.
+    ///
+    /// The default says "nothing is skipped", which is the honest answer for a
+    /// source with no notion of exclusions: it means the caller walks instead,
+    /// rather than quietly deleting nothing and calling the index reconciled.
+    fn excluder(
+        &self,
+        _opts: &ScanOptions,
+    ) -> Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>> {
+        None
+    }
+
     /// Start reporting changes.
     ///
     /// Takes the **same options as [`Source::scan`]**, and that is the point

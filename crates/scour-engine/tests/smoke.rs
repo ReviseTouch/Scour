@@ -42,6 +42,8 @@ struct MemSource {
     order: Arc<RwLock<Vec<&'static str>>>,
     /// What every `retune` this source's watch was given said to skip.
     retuned: Arc<RwLock<Vec<Vec<String>>>>,
+    /// Whether this source answers `excluder` at all.
+    has_rules: bool,
 }
 
 impl MemSource {
@@ -56,7 +58,15 @@ impl MemSource {
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
+            has_rules: false,
         })
+    }
+
+    /// Like [`MemSource::new`], but it knows what exclusion means.
+    fn with_rules(entries: Vec<Entry>) -> Arc<MemSource> {
+        let mut s = MemSource::new(entries);
+        Arc::get_mut(&mut s).expect("sole owner").has_rules = true;
+        s
     }
 
     fn unwatchable(entries: Vec<Entry>) -> Arc<MemSource> {
@@ -70,6 +80,7 @@ impl MemSource {
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
+            has_rules: false,
         })
     }
 
@@ -102,6 +113,40 @@ impl Source for MemSource {
             c |= Caps::WATCH;
         }
         c
+    }
+
+    /// A deliberately simple stand-in for a real rule set: a path is skipped
+    /// when one of its components is an excluded name, or it sits under an
+    /// excluded prefix. Enough to test what the *engine* does with the answer,
+    /// which is all this file is about — what a rule means is
+    /// `scour-source-fs`'s own tests.
+    ///
+    /// `None` unless asked for, so that "a source with no notion of
+    /// exclusions" stays a case this file can reach.
+    fn excluder(
+        &self,
+        opts: &ScanOptions,
+    ) -> Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>> {
+        if !self.has_rules {
+            return None;
+        }
+        let dirs = opts.exclude_dirs.clone();
+        let paths = opts.exclude_paths.clone();
+        Some(Box::new(move |path: &str, is_dir: bool| {
+            if paths
+                .iter()
+                .any(|p| path == p || path.starts_with(&format!("{p}/")))
+            {
+                return true;
+            }
+            // A directory name matches a directory. The real rules make the
+            // same distinction, and a symlink sharing the name is why.
+            let mut parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+            if !is_dir {
+                parts.pop();
+            }
+            parts.iter().any(|part| dirs.iter().any(|d| d == part))
+        }))
     }
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
@@ -310,6 +355,16 @@ fn fixture(files: usize) -> Fixture {
         engine,
         source,
         _dir: dir,
+    }
+}
+
+/// One entry, named. For the tests where the *paths* are the fixture.
+fn row(path: &str) -> Entry {
+    Entry {
+        id: EntryId::path_hash(SourceId(0), path),
+        path: path.to_owned(),
+        is_dir: !path.contains('.'),
+        meta: scour_core::Meta::UNKNOWN,
     }
 }
 
@@ -948,6 +1003,157 @@ fn new_rules_reach_the_walk_and_every_watcher() {
         retuned,
         vec![vec!["target".to_owned()]],
         "the watcher was not told, or was told the old rules: {retuned:?}"
+    );
+}
+
+/// A tightened rule empties the index of what it now skips — without a walk.
+///
+/// **The measurement this is about:** excluding something can only ever remove
+/// entries, and the index already holds every path the answer concerns. A walk
+/// of two volumes to delete rows nobody had to go and look at is the wrong
+/// price, and it is what a rule change used to cost every time.
+#[test]
+fn a_tightened_rule_clears_the_index_without_walking() {
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let source = MemSource::with_rules(vec![
+        row("/home/u/keep/a.txt"),
+        row("/home/u/skipme"),
+        row("/home/u/skipme/b.txt"),
+        row("/home/u/skipme/deep/c.txt"),
+    ]);
+    let engine = Engine::new(
+        vec![source.clone()],
+        index,
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries == 4);
+    let walks = f.source.scans.load(Ordering::Relaxed);
+
+    let mut fresh = (*f.engine.scan_options()).clone();
+    fresh.exclude_dirs = vec!["skipme".into()];
+    f.engine.set_scan_options(fresh);
+    let dropped = f.engine.apply_rules().expect("apply");
+
+    assert_eq!(dropped, 1, "one subtree, not one change per file inside it");
+    settle(&f, |f| f.engine.status().entries == 1);
+    assert_eq!(
+        f.source.scans.load(Ordering::Relaxed),
+        walks,
+        "the index was brought in line by walking the disk"
+    );
+    let hits = f
+        .engine
+        .search("", SortKey::Path, false, Page::new(0, 50))
+        .expect("search");
+    let paths: Vec<&str> = hits.hits.iter().map(|h| h.path.as_str()).collect();
+    assert_eq!(paths, vec!["/home/u/keep/a.txt"]);
+}
+
+/// Applying the same rules twice finds nothing the second time.
+///
+/// **The property that says the removal actually happened.** A pass that
+/// reports what it dropped and leaves it in the index is indistinguishable
+/// from a working one at a glance — and it costs the full walk of the index
+/// again on the next rule change, for ever. Many subtrees rather than one,
+/// because a single tree is exactly the case that works when a batch bound is
+/// wrong.
+#[test]
+fn applying_the_rules_twice_drops_nothing_the_second_time() {
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let mut rows = Vec::new();
+    for i in 0..120 {
+        rows.push(row(&format!("/home/u/p{i}")));
+        rows.push(row(&format!("/home/u/p{i}/node_modules")));
+        rows.push(row(&format!("/home/u/p{i}/node_modules/x.js")));
+        rows.push(row(&format!("/home/u/p{i}/keep.txt")));
+    }
+    let source = MemSource::with_rules(rows);
+    let engine = Engine::new(
+        vec![source.clone()],
+        index,
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries == 480);
+
+    let mut fresh = (*f.engine.scan_options()).clone();
+    fresh.exclude_dirs = vec!["node_modules".into()];
+    f.engine.set_scan_options(fresh);
+
+    let first = f.engine.apply_rules().expect("first");
+    assert_eq!(first, 120, "one subtree per project");
+    let second = f.engine.apply_rules().expect("second");
+    assert_eq!(
+        second, 0,
+        "the first pass reported {first} removals it did not make"
+    );
+    settle(&f, |f| f.engine.status().entries == 240);
+}
+
+/// A source that does not do exclusions keeps its rows.
+///
+/// The test is `Option`, not a `bool` that defaults to false, precisely so this
+/// case is distinguishable: "I have no rules" must not be read as "none of my
+/// rows are excluded, delete accordingly". The caller walks instead.
+#[test]
+fn rows_from_a_source_with_no_rules_are_left_alone() {
+    let f = fixture(20);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| f.engine.status().entries > 0);
+    let before = f.engine.status().entries;
+    assert!(before > 0);
+
+    let mut fresh = (*f.engine.scan_options()).clone();
+    // A rule that would match everything, if this source had rules at all.
+    fresh.exclude_paths = vec!["/home".into()];
+    f.engine.set_scan_options(fresh);
+
+    assert_eq!(f.engine.apply_rules().expect("apply"), 0);
+    assert_eq!(
+        f.engine.status().entries,
+        before,
+        "rows were deleted on the strength of a test the source never answered"
+    );
+}
+
+/// Asking for the same full walk twice while it waits is one walk.
+///
+/// The panel's switches are one save per click, and before this each one queued
+/// a walk of every source: five taps, five walks, each answering a question the
+/// one before it had already answered.
+#[test]
+fn a_full_walk_already_waiting_is_not_queued_again() {
+    let f = fixture(200);
+    // Slow enough that the queue is still being filled while the first runs.
+    f.source.slow_ms.store(300, Ordering::Relaxed);
+    let before = f.source.scans.load(Ordering::Relaxed);
+    for _ in 0..5 {
+        f.engine.rescan(None).expect("rescan");
+    }
+    std::thread::sleep(Duration::from_millis(1200));
+    let walks = f.source.scans.load(Ordering::Relaxed) - before;
+    assert!(
+        walks <= 2,
+        "five clicks queued {walks} walks; at most the running one and its successor"
     );
 }
 

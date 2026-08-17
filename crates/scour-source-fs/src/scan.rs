@@ -382,6 +382,28 @@ impl Source for FsSource {
         c
     }
 
+    /// The walk's own rules, compiled once and handed back as a test.
+    ///
+    /// **`Rules::excludes`, the same call the walk makes, and not
+    /// `excludes_path`.** The two are different questions and the difference
+    /// bites here: `excludes_path` has no `is_dir` and reads generously on
+    /// purpose — it is the watcher's filter, where letting an event through
+    /// costs a check and refusing one costs a row that never updates again. As
+    /// a test for what the index should hold it is simply wrong: it calls a
+    /// symlink named `node_modules` excluded, the walk does not, and the pass
+    /// that used it deleted 36 rows every time a rule changed and got them all
+    /// back on the next walk.
+    fn excluder(
+        &self,
+        opts: &ScanOptions,
+    ) -> Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>> {
+        let rules = Rules::from_options(opts);
+        Some(Box::new(move |path: &str, is_dir: bool| {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            rules.excludes(path, name, is_dir)
+        }))
+    }
+
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport> {
         let started = Instant::now();
         let rules = Rules::from_options(opts);

@@ -5101,3 +5101,50 @@ same picture, metadata removed -> lookup: None
 So the acceptance above is the metadata being checked, not the file merely
 being present. `glycin-thumbnailer` writes none of it — measured, both fields
 `None` — which is why the two chunks are written here rather than assumed.
+
+## Applying a rule without walking — 2026-08-17
+
+A rule that is *added* can only take entries out, and the index already holds
+every path the answer is about. So `Engine::apply_rules` reads the index and
+deletes what the rules now skip, and goes nowhere near a disk. What that is
+worth, on a **copy** of the live index (`cp -a --reflink=auto`, 2,249,785
+entries, 215 MiB, 8 segments), against a service configured to walk nothing —
+`scan.on_start = false`, `watch = false` — so the number is the pass and
+nothing else:
+
+| pass | dropped | time |
+|---|---|---|
+| a rule matching nothing | 0 subtrees | **2,115 / 2,082 / 2,070 ms** |
+| `dir:.cache` | 5 subtrees, **78,995 rows** | **2,379 ms** |
+| `dir:.cache` again | 0 subtrees | 2,003 ms |
+
+The comparison is not a walk of the same index, which was deliberately not run
+on the owner's machine; the reference is the 2026-08-03 first scan above —
+1,197,514 entries on `/home/hasan` at **6.7 s** — and this index is 2.24 M
+across two volumes, the second of them ntfs3.
+
+Idempotent, and the third row is the point: a pass that reports removals it did
+not make would report them again for ever. `tests/smoke.rs` holds that property
+over 120 subtrees.
+
+### It was 5.5 s and wrong, and the difference was `is_dir`
+
+The first version asked `Rules::excludes_path`, which is the *watcher's*
+filter: no `is_dir`, and generous by design, because there a wrong `false`
+costs one check and a wrong `true` costs a row that never updates again. As a
+test for what the index should contain it is a different question, and the
+answer differs in a real place:
+
+```
+/home/hasan/.local/share/containers/storage/overlay/<hash>/diff/usr/share/node_modules
+  -> nodejs        (a symlink, 6 B, indexed as a file)
+```
+
+There are **36 of these**. A `dir:` rule is not about them, so the walk indexes
+them and `excludes_path` says it should not — so every rule change deleted 36
+rows, and the next walk put them back. Visible as a sequence that never
+settles: 73 subtrees dropped, then 36, then 36, then 36.
+
+Asking `Rules::excludes(path, name, is_dir)` — the same call the walk itself
+makes — takes it to 0, and takes the pass from **5.5 s to 2.1 s**, because most
+of that time was removal work that should never have happened.
