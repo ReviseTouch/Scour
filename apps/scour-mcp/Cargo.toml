@@ -23,6 +23,8 @@ scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
+# For `rule_id`: one spelling of a switched-off rule's name, everywhere.
+scour-settings = { workspace = true }
 anyhow       = { workspace = true }
 rmcp         = { workspace = true }
 tokio        = { workspace = true }

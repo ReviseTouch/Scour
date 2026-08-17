@@ -881,6 +881,10 @@ struct Sub {
     sink: Arc<dyn ChangeSink>,
     roots: Vec<std::path::PathBuf>,
     map: DirMap,
+    /// What [`walk_threads`] answered when the map was first built, kept so
+    /// that rebuilding it in [`WatchHandle::retune`] does not have to ask a
+    /// `FsSource` that is no longer in reach.
+    threads: usize,
     /// Cleared when the handle is dropped. The entry stays in the list — an
     /// index has to keep meaning what it meant — and is simply skipped.
     live: Arc<AtomicBool>,
@@ -903,6 +907,12 @@ impl std::fmt::Debug for Sub {
 
 #[derive(Debug)]
 struct FanWatch {
+    /// Which subscription in [`SUBS`] is this one's, for [`WatchHandle::retune`].
+    ///
+    /// The list is shared by every source and the reader walks all of it, so a
+    /// handle that wants to change its own rules has to be able to say which
+    /// entry it is. Nothing else here needed to know.
+    id: SourceId,
     live: Arc<AtomicBool>,
     /// Filesystems that appeared after the marks were set.
     ///
@@ -926,6 +936,37 @@ impl WatchHandle for FanWatch {
     /// moment ago is already watched — measured: a file written inside a
     /// subvolume created after the mark produced its event like any other.
     fn cover(&self, _path: &str) {}
+
+    /// Take the new rules, and rebuild the directory map behind them.
+    ///
+    /// **The map is not an optimisation here, it is how an event gets a name.**
+    /// A fanotify event names its parent by file handle, and this backend
+    /// answers that from a map it built by walking the roots *under the rules
+    /// in force at the time*. So a rule that is switched off re-opens a subtree
+    /// the map has never heard of, and every event in it would arrive
+    /// unnameable and be dropped — live updates silently off for exactly the
+    /// tree somebody just asked to see.
+    ///
+    /// Built before the lock is taken, because building it walks the disk —
+    /// 0.38 s cold on the NTFS volume here, 0.7 s for both roots warm — and the
+    /// reader takes that same lock for every event it delivers.
+    fn retune(&self, opts: &ScanOptions) {
+        let rules = Arc::new(Rules::from_options(opts));
+        let Some((roots, threads)) = SUBS.lock().ok().and_then(|subs| {
+            subs.iter()
+                .find(|s| s.id == self.id)
+                .map(|s| (s.roots.clone(), s.threads))
+        }) else {
+            return;
+        };
+        let map = DirMap::build(&roots, &rules, threads);
+        if let Ok(mut subs) = SUBS.lock()
+            && let Some(s) = subs.iter_mut().find(|s| s.id == self.id)
+        {
+            s.rules = rules;
+            s.map = map;
+        }
+    }
 
     /// Leave the reader running.
     ///
@@ -981,7 +1022,8 @@ pub fn try_start(
 
     let roots: Vec<std::path::PathBuf> = source.roots().to_vec();
     let rules = Arc::new(Rules::from_options(opts));
-    let map = DirMap::build(&roots, &rules, walk_threads(source, opts));
+    let threads = walk_threads(source, opts);
+    let map = DirMap::build(&roots, &rules, threads);
     let live = Arc::new(AtomicBool::new(true));
     let uncovered: Arc<Mutex<Vec<String>>> = Arc::default();
 
@@ -1002,6 +1044,7 @@ pub fn try_start(
         sink,
         roots,
         map,
+        threads,
         live: Arc::clone(&live),
         uncovered: Arc::clone(&uncovered),
     });
@@ -1014,7 +1057,11 @@ pub fn try_start(
         });
     }
 
-    Some(Ok(Box::new(FanWatch { live, uncovered })))
+    Some(Ok(Box::new(FanWatch {
+        id: source.source_id(),
+        live,
+        uncovered,
+    })))
 }
 
 /// The reader. One thread, however many sources.

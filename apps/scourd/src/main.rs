@@ -226,14 +226,7 @@ fn main() -> Result<()> {
     // test wrote over the settings of the one somebody actually uses — and it
     // did, within an hour of being written. Anything the config points at has
     // to move together, or `--config` is not the isolation it claims to be.
-    let kept = handle::Kept::open(
-        config
-            .index
-            .dir
-            .parent()
-            .unwrap_or(&config.index.dir)
-            .join("state"),
-    );
+    let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();

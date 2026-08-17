@@ -763,6 +763,7 @@ fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
             added_dirs,
             added_files,
             added_allow,
+            off,
         }) => http::json(
             stream,
             &serde_json::json!({
@@ -771,6 +772,10 @@ fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
                             "files": config_files, "allow": config_allow },
                 "added": { "paths": added_paths, "dirs": added_dirs,
                            "files": added_files, "allow": added_allow },
+                // Ids, flat, across all three groups — the page marks a row
+                // rather than moving it, because a rule that is off is still
+                // where somebody wrote it.
+                "off": off,
             }),
         ),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
@@ -1670,6 +1675,51 @@ mod tests {
         ] {
             assert!(body.contains(needle), "`setTotal` does not have {needle}");
         }
+    }
+
+    /// The page's script parses.
+    ///
+    /// **A whole-page failure wearing the clothes of a typo.** The page is a
+    /// single `<script>`, so one `SyntaxError` anywhere in it means *none* of
+    /// it runs: no translation, no search, no rail — a window that looks like a
+    /// broken service. It has now happened twice, and the second time was a
+    /// rules panel declaring `KINDS`, a name the kind rail already had. Every
+    /// one of the 43 translated strings came back empty and every Rust test in
+    /// this file still passed, because none of them ask whether the script is a
+    /// program.
+    ///
+    /// **Asked of a JavaScript engine, because nothing less actually answers
+    /// it.** The first version of this test looked for two-space indentation
+    /// and called that the top level; it reported six redeclarations that are
+    /// nested blocks, in a page that runs. A test that cries wolf about a file
+    /// that works is worse than no test — it gets muted.
+    ///
+    /// Skipped where there is no `node`, and it says so rather than passing
+    /// quietly: a check that is silently not running is the other way this
+    /// class of bug gets through.
+    #[test]
+    fn the_page_script_parses() {
+        let script = PAGE
+            .split_once("<script")
+            .and_then(|(_, rest)| rest.split_once('>'))
+            .and_then(|(_, body)| body.split_once("</script>"))
+            .map(|(body, _)| body)
+            .expect("page.html has no script");
+        let path = std::env::temp_dir().join("scour-page-check.js");
+        std::fs::write(&path, script).expect("writing the script out");
+        match std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .output()
+        {
+            Ok(out) => assert!(
+                out.status.success(),
+                "page.html's script does not parse, so none of it would run:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ),
+            Err(e) => eprintln!("the_page_script_parses: skipped, no node here ({e})"),
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     /// **Nor on the catalogue**, which is the same property one layer out.

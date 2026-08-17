@@ -883,23 +883,29 @@ msgstr "Neler atlanıyor"
 msgid "These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."
 msgstr "Bunlar indekse hiç ulaşmayanı belirler. Bu makinedeki iki kökte 4.786.967 dosya var, indekste 2.240.000; farkın neredeyse tamamı burada."
 
-msgid "A change takes effect on the next scan — the index does not rearrange itself."
-msgstr "Değişiklik sonraki taramada geçerli olur — indeks kendini yeniden düzenlemez."
+msgid "Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."
+msgstr "Bir değişikliği kaydetmek taramayı başlatır; indeks kendiliğinden yetişir. Tarama sürerken arama çalışmayı sürdürür."
 
-msgid "Run `scour rescan` in a terminal to apply it now."
-msgstr "Hemen uygulamak için bir terminalde `scour rescan` çalıştırın."
+msgid "Switching a rule off does not delete it — that is how the two groups nobody can edit are still yours to turn off."
+msgstr "Bir kuralı kapatmak onu silmez — düzenlenemeyen iki grubu yine de kapatabilmenizin yolu budur."
 
 msgid "Added here"
 msgstr "Buradan eklenenler"
 
-msgid "The only ones this window may change."
-msgstr "Bu pencerenin değiştirebileceği tek grup."
+msgid "The only ones this window may delete. Any rule can be switched off."
+msgstr "Bu pencerenin silebileceği tek grup. Her kural kapatılabilir."
 
 msgid "From config.toml"
 msgstr "config.toml'dan"
 
-msgid "Written by hand, and left alone — changing it here would rewrite the file."
-msgstr "Elle yazılmış, dokunulmuyor — buradan değiştirmek o dosyayı yeniden yazmak olurdu."
+msgid "Written by hand, and left alone — deleting it here would rewrite the file. Switch it off instead."
+msgstr "Elle yazılmış, dokunulmuyor — buradan silmek o dosyayı yeniden yazmak olurdu. Onun yerine kapatın."
+
+msgid "skip this"
+msgstr "bunu atla"
+
+msgid "off"
+msgstr "kapalı"
 
 msgid "Built in"
 msgstr "Gömülü"

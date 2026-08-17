@@ -70,6 +70,21 @@ pub trait WatchHandle: Send + Debug {
     /// already knows the path is real and worth the syscalls.
     fn cover(&self, _path: &str) {}
 
+    /// The rules changed; watch by these from now on.
+    ///
+    /// **A watcher filters, and until this existed it filtered by whatever it
+    /// was told at start-up.** That was invisible while the rules could only
+    /// be edited in a file the service reads once. Now a window can add one,
+    /// and a watcher still holding the old set is the exact failure the rule
+    /// was added to prevent: somebody excludes `target`, the index is swept
+    /// clean of it, the next build writes two million files, and the watcher
+    /// puts every one of them back.
+    ///
+    /// A default that does nothing, because a mechanism that does no filtering
+    /// of its own has nothing to re-tune. Whatever a backend rebuilds here has
+    /// to be safe to rebuild while events are arriving.
+    fn retune(&self, _opts: &ScanOptions) {}
+
     /// Stop watching. Dropping does the same; this exists so a caller can wait
     /// for the watcher's threads to finish.
     fn stop(self: Box<Self>);

@@ -141,29 +141,61 @@ fn data_dir(config: &Config) -> &std::path::Path {
 /// still wants `/proc` skipped, and discovering otherwise means discovering it
 /// the hard way.
 fn scan_options(config: &Config) -> scour_core::ScanOptions {
-    let (paths, dirs, files) = platform_defaults();
-    let mut o = config.scan_options();
-    o.skip_metadata = false;
-
-    // **Rules a person added from a window.**
-    //
-    // Three sources reach the walk, and they are different kinds of thing.
-    // The built-in set is code. `config.toml` is a file somebody wrote by
-    // hand, with comments and measurements in it. And this is what a panel
-    // wrote, which is why it lives beside the index rather than in that
-    // file — the same decision, and the same reasoning, as the column widths:
-    // rewriting a hand-edited config to record something typed into a
-    // checkbox would destroy the part of it that is worth keeping.
-    //
     // Read here rather than passed in, because the walk is configured before
     // `main.rs` opens the settings, and the two must not disagree about which
     // directory they are reading from — `data_dir` is what makes `--config`
     // real isolation.
-    let added = scour_settings::Settings::load(&data_dir(config).join("state"));
-    o.exclude_paths.extend(added.exclude_paths);
-    o.exclude_dirs.extend(added.exclude_dirs);
-    o.exclude_files.extend(added.exclude_files);
-    o.allow.extend(added.exclude_allow);
+    let added = scour_settings::Settings::load(&state_dir(config));
+    scan_options_with(config, &added)
+}
+
+/// Where a window's own settings live, beside this index.
+pub fn state_dir(config: &Config) -> std::path::PathBuf {
+    data_dir(config).join("state")
+}
+
+/// What `config.toml` itself asks to skip — no built-ins, nothing a window
+/// added.
+///
+/// Reported rather than used: a panel shows these as their own group, because
+/// they can be switched off but not deleted. Removing one means rewriting a
+/// hand-edited file, and that file is where the reasoning behind every value in
+/// it is written down.
+pub fn config_rules(config: &Config) -> (Vec<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let c = &config.exclude;
+    (
+        c.paths.clone(),
+        c.dirs.clone(),
+        c.files.clone(),
+        c.allow.clone(),
+    )
+}
+
+/// The rules in force, given what a window has written.
+///
+/// **Three sources reach the walk, and they are different kinds of thing.** The
+/// built-in set is code. `config.toml` is a file somebody wrote by hand, with
+/// comments and measurements in it. And the third is what a panel wrote, which
+/// lives beside the index rather than in that file — the same decision, and the
+/// same reasoning, as the column widths: rewriting a hand-edited config to
+/// record something typed into a checkbox would destroy the part of it that is
+/// worth keeping.
+///
+/// They are merged and then the switched-off ones are taken back out, in that
+/// order, because a rule can be written in two places and switching it off has
+/// to mean off — not "off in one of the two lists it is in".
+pub fn scan_options_with(
+    config: &Config,
+    added: &scour_settings::Settings,
+) -> scour_core::ScanOptions {
+    let (paths, dirs, files) = platform_defaults();
+    let mut o = config.scan_options();
+    o.skip_metadata = false;
+
+    o.exclude_paths.extend(added.exclude_paths.iter().cloned());
+    o.exclude_dirs.extend(added.exclude_dirs.iter().cloned());
+    o.exclude_files.extend(added.exclude_files.iter().cloned());
+    o.allow.extend(added.exclude_allow.iter().cloned());
     // **The index does not index itself**, and the reason is not tidiness.
     //
     // A commit writes segment files; the watcher sees them; the engine turns
@@ -204,6 +236,21 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
     merge(&mut o.exclude_paths, paths);
     merge(&mut o.exclude_dirs, dirs);
     merge(&mut o.exclude_files, files);
+
+    // **Switched off, last, after everything is in.**
+    //
+    // A rule can be written in two of the three places — somebody's
+    // `config.toml` says `target` and so does the built-in set — and switching
+    // it off has to mean off rather than "off in one of the lists it is in".
+    // Taking them out at the end is what makes that true whatever the overlap.
+    //
+    // `deny` is deliberately not offered: it holds the service's own index and
+    // data directory, which is not an exclusion a person chose but the feedback
+    // loop that cost two cores when an `allow` rule reopened it once already.
+    switch_off(&mut o.exclude_paths, "path", added);
+    switch_off(&mut o.exclude_dirs, "dir", added);
+    switch_off(&mut o.exclude_files, "file", added);
+    switch_off(&mut o.allow, "allow", added);
     o
 }
 
@@ -213,6 +260,10 @@ fn merge(into: &mut Vec<String>, extra: Vec<String>) {
             into.push(e);
         }
     }
+}
+
+fn switch_off(list: &mut Vec<String>, kind: &str, added: &scour_settings::Settings) {
+    list.retain(|v| !added.rule_off(kind, v));
 }
 
 #[cfg(test)]
@@ -231,6 +282,92 @@ mod tests {
         assert!(
             o.exclude_dirs.iter().any(|d| d == "node_modules"),
             "the platform's does too"
+        );
+    }
+
+    /// Whatever list a rule is in, switching it off takes it out of force.
+    ///
+    /// The three groups are three different kinds of thing — code, a
+    /// hand-written file, and what a window wrote — and only the last can be
+    /// deleted. The switch is what makes the other two something a person can
+    /// still say no to, so it has to reach all three.
+    #[test]
+    fn a_rule_switched_off_is_not_in_force_whichever_list_it_is_in() {
+        let mut c = Config::default();
+        c.exclude.dirs = vec!["from-the-file".into()];
+        let added = scour_settings::Settings {
+            exclude_dirs: vec!["from-a-window".into()],
+            exclude_off: vec![
+                "dir:node_modules".into(), // built in
+                "dir:from-the-file".into(),
+                "dir:from-a-window".into(),
+            ],
+            ..Default::default()
+        };
+        let o = scan_options_with(&c, &added);
+        for gone in ["node_modules", "from-the-file", "from-a-window"] {
+            assert!(
+                !o.exclude_dirs.iter().any(|d| d == gone),
+                "{gone} is switched off and still being skipped: {:?}",
+                o.exclude_dirs
+            );
+        }
+        // And the ones nobody touched are untouched.
+        assert!(o.exclude_dirs.iter().any(|d| d == "__pycache__"));
+    }
+
+    /// A rule written in two places is off when it is switched off — not
+    /// half-off.
+    ///
+    /// Subtracting at the end rather than per source is what makes this true:
+    /// `target` is in the built-in set *and* in this configuration, and taking
+    /// it out of one list would leave the other still excluding it. The switch
+    /// would then do nothing, visibly, for the one rule people most want to
+    /// turn off.
+    #[test]
+    fn switching_off_a_rule_written_twice_switches_off_both_copies() {
+        let mut c = Config::default();
+        c.exclude.dirs = vec!["target".into()];
+        let added = scour_settings::Settings {
+            exclude_off: vec!["dir:target".into()],
+            ..Default::default()
+        };
+        let o = scan_options_with(&c, &added);
+        assert!(
+            !o.exclude_dirs
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case("target")),
+            "one copy of the rule survived the switch: {:?}",
+            o.exclude_dirs
+        );
+    }
+
+    /// What the service writes about itself cannot be switched back on.
+    ///
+    /// `deny` is not an exclusion somebody chose; it is the feedback loop that
+    /// cost two cores — a commit writes segments, the watcher sees them, the
+    /// engine indexes them, and indexing them writes segments. An `allow` rule
+    /// reopened it once already, which is why it is a separate list, and the
+    /// switches must not be a second way in.
+    #[test]
+    fn the_switches_cannot_reopen_the_index_to_itself() {
+        let c = Config::default();
+        let dir = index_dir(&c).to_string_lossy().into_owned();
+        let added = scour_settings::Settings {
+            // Every spelling of it somebody might reach for.
+            exclude_off: vec![
+                format!("path:{dir}"),
+                format!("dir:{dir}"),
+                format!("deny:{dir}"),
+            ],
+            ..Default::default()
+        };
+        let o = scan_options_with(&c, &added);
+        let rules = scour_source_fs::Rules::from_options(&o);
+        assert!(
+            rules.excludes_path(&format!("{dir}/seg-00000001.cols")),
+            "a switch reopened the index to itself: {:?}",
+            o.deny
         );
     }
 

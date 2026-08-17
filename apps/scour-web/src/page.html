@@ -1058,6 +1058,79 @@
     line-height: 1.55;
   }
   .help[hidden] { display: none; }
+
+  /* ---------------- what is skipped ----------------
+     The panel shipped with no styling at all: it opened, it was legible, and
+     it sat in the page's flow pushing the table down. It carries switches now
+     — a control somebody aims at rather than reads — so it is an overlay like
+     the help, positioned the same way and off the same tokens. */
+  .sheet {
+    position: fixed;
+    top: 64px; right: 20px;
+    z-index: 60;
+    width: min(400px, calc(100vw - 40px));
+    max-height: min(620px, calc(100vh - 120px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,.75);
+    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 5);
+    color: var(--ink-2);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .sheet[hidden] { display: none; }
+  .sheet h2 {
+    font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+    font-weight: 650; color: var(--ink); margin: 0 0 calc(var(--u) * 3);
+  }
+  .sheet h3 {
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    font-weight: 650; color: var(--ink-3);
+    margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
+    padding-top: calc(var(--u) * 3);
+    border-top: 1px solid var(--line);
+  }
+  .sheet .why { margin: 0 0 calc(var(--u) * 2); font-size: 12px; color: var(--ink-3); }
+  ul.rules { list-style: none; margin: 0; padding: 0; }
+  ul.rules li {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: 2px 0;
+  }
+  /* The label is the hit target, not the box: these are short strings and a
+     13-pixel checkbox beside them is a hard thing to aim at. */
+  ul.rules label {
+    flex: 1; display: flex; align-items: center; gap: calc(var(--u) * 2);
+    cursor: pointer; min-width: 0;
+  }
+  ul.rules code {
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  /* Switched off has to look switched off from across the room — the checkbox
+     alone reads as decoration in a list of forty. */
+  ul.rules li.off code { color: var(--ink-3); text-decoration: line-through; }
+  ul.rules .drop {
+    background: none; border: 0; padding: 0 calc(var(--u));
+    color: var(--ink-3); font-size: 15px; line-height: 1; cursor: pointer;
+  }
+  ul.rules .drop:hover { color: var(--q-bad, var(--ink)); }
+  form.add { display: flex; gap: calc(var(--u) * 2); margin-top: calc(var(--u) * 3); }
+  form.add input {
+    flex: 1; min-width: 0;
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 6px; font: inherit; font-size: 12px;
+  }
+  form.add button {
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  form.add button:hover { border-color: var(--ink-3); }
+
   .help-head { display: flex; align-items: baseline; gap: calc(var(--u) * 3); }
   .help h1 {
     flex: 1;
@@ -1604,8 +1677,8 @@
       <h2 data-t="What is skipped"></h2>
       <p class="why" data-t="These decide what never reaches the index. Two roots on this machine hold 4,786,967 files and the index holds 2,240,000; nearly all of the difference is here."></p>
       <div id="rules-body"></div>
-      <p class="why" data-t="A change takes effect on the next scan — the index does not rearrange itself."></p>
-      <p class="why" data-t="Run `scour rescan` in a terminal to apply it now."></p>
+      <p class="why" data-t="Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."></p>
+      <p class="why" data-t="Switching a rule off does not delete it — that is how the two groups nobody can edit are still yours to turn off."></p>
     </div>
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
@@ -7089,30 +7162,58 @@
   const rulesBtn = document.getElementById("rules");
   let RULES = null;
 
+  /* **A rule carries the list it came from, and it has to.** `target` as a
+     directory name and `/home/x/target` as a path prefix are two different
+     rules, and the switch is keyed by `kind:value` — flattening the four lists
+     into one, as this did while every row was only ever shown, would leave two
+     rules sharing one switch. */
+  /* `RULE_KINDS` rather than `KINDS`, which this page already has for the file
+     kinds in the rail — one script, one scope, and a redeclaration takes the
+     whole of it down from that line on. It did: every one of the 43 translated
+     strings came back empty. */
+  const RULE_KINDS = [["path", "paths"], ["dir", "dirs"], ["file", "files"], ["allow", "allow"]];
+  const rulesOf = (g) =>
+    RULE_KINDS.flatMap(([kind, key]) => (g[key] || []).map((value) => ({ kind, value })));
+  const ruleId = (kind, value) => kind + ":" + value;
+  /* Case-insensitively, like the merge in the service that builds these lists:
+     `NODE_MODULES` and `node_modules` are one rule everywhere else, and a
+     switch that disagreed would look broken. */
+  const isOff = (id) =>
+    (RULES.off || []).some((o) => o.toLowerCase() === id.toLowerCase());
+
   const drawRules = () => {
     if (!RULES) return;
-    const group = (title, note, entries, kind, removable) => {
+    const group = (title, note, entries, removable) => {
       if (!entries.length && !removable) return "";
-      const rows = entries.map((v) =>
-        `<li><code>${esc(v)}</code>` +
-        (removable ? `<button type="button" class="drop" data-kind="${kind}"` +
-                     ` data-value="${esc(v)}" title="${esc(T("remove"))}">×</button>` : "") +
-        `</li>`).join("");
+      const rows = entries.map(({ kind, value }) => {
+        const id = ruleId(kind, value);
+        const off = isOff(id);
+        /* The checkbox is the label, so the whole row is the target — these are
+           short strings and a bare 13-pixel box beside them is a hard thing to
+           hit. `aria-label` because a checkbox whose label is a rule needs to
+           say what checking it means. */
+        return `<li class="${off ? "off" : ""}">` +
+          `<label><input type="checkbox" class="onoff" data-id="${esc(id)}"` +
+          ` ${off ? "" : "checked"} aria-label="${esc(T("skip this"))}" />` +
+          `<code>${esc(value)}</code></label>` +
+          (removable ? `<button type="button" class="drop" data-kind="${kind}"` +
+                       ` data-value="${esc(value)}" title="${esc(T("remove"))}">×</button>` : "") +
+          `</li>`;
+      }).join("");
       return `<section><h3>${esc(title)}</h3><p class="why">${esc(note)}</p>` +
              `<ul class="rules">${rows}</ul>` +
-             (removable ? `<form class="add" data-kind="${kind}">` +
+             (removable ? `<form class="add">` +
                `<input type="text" placeholder="${esc(T("a directory name, or a path"))}" />` +
                `<button type="submit">${esc(T("add"))}</button></form>` : "") +
              `</section>`;
     };
-    const b = RULES.builtin, c = RULES.config, a = RULES.added;
     rulesPanel.querySelector("#rules-body").innerHTML =
-      group(T("Added here"), T("The only ones this window may change."),
-            [...a.paths, ...a.dirs, ...a.files], "dirs", true) +
-      group(T("From config.toml"), T("Written by hand, and left alone — changing it here would rewrite the file."),
-            [...c.paths, ...c.dirs, ...c.files, ...c.allow], "", false) +
+      group(T("Added here"), T("The only ones this window may delete. Any rule can be switched off."),
+            rulesOf(RULES.added), true) +
+      group(T("From config.toml"), T("Written by hand, and left alone — deleting it here would rewrite the file. Switch it off instead."),
+            rulesOf(RULES.config), false) +
       group(T("Built in"), T("Part of the program. Mostly build output and package caches, which churn constantly and bury real results."),
-            [...b.paths, ...b.dirs, ...b.files], "", false);
+            rulesOf(RULES.builtin), false);
   };
 
   const loadRules = () =>
@@ -7158,10 +7259,26 @@
     }
     drawRules();
   });
-  /* **No rescan button, deliberately.** There is no `/api/rescan`, and adding
-     one means deciding what a window may make the service do — a full walk of
-     two volumes is not a thing to hand to a stray click. `scour rescan` does
-     it from a terminal today, and the panel says so instead of pretending. */
+  /* **Off is a note, not a deletion**, and that is what makes the two groups
+     this window cannot edit — the program's own set, and a hand-written
+     `config.toml` — something a person can still turn off. The note is kept
+     beside the index with the column widths; neither the file nor the binary
+     is touched, and switching the rule back on is deleting the note. */
+  rulesPanel.addEventListener("change", (e) => {
+    const box = e.target.closest(".onoff");
+    if (!box || !RULES) return;
+    const id = box.dataset.id;
+    const rest = (RULES.off || []).filter((o) => o.toLowerCase() !== id.toLowerCase());
+    RULES.off = box.checked ? rest : [...rest, id];
+    SERVICE.saveSettings({ exclude_off: RULES.off });
+    drawRules();
+  });
+  /* **No rescan button, and now nothing to put one there for.** Saving a rule
+     is what asks for the walk — the service takes the new set, re-tunes the
+     watchers to it, and scans — so a button would be a second way to ask for
+     something that already happened. What was rejected is unchanged: a full
+     walk of two volumes is not a thing to hand to a stray click, and this way
+     the only thing that starts one is a deliberate change to what is indexed. */
 
   const langBtn = document.getElementById("lang");
   const langMenu = document.createElement("div");

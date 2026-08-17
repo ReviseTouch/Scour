@@ -161,23 +161,33 @@ pub fn human(r: &Response) -> String {
             added_dirs,
             added_files,
             added_allow,
+            off,
         } => {
             let mut out = String::new();
-            for (what, list) in [
-                ("builtin path", builtin_paths),
-                ("builtin dir", builtin_dirs),
-                ("builtin file", builtin_files),
-                ("config path", config_paths),
-                ("config dir", config_dirs),
-                ("config file", config_files),
-                ("config allow", config_allow),
-                ("added path", added_paths),
-                ("added dir", added_dirs),
-                ("added file", added_files),
-                ("added allow", added_allow),
+            for (what, kind, list) in [
+                ("builtin path", "path", builtin_paths),
+                ("builtin dir", "dir", builtin_dirs),
+                ("builtin file", "file", builtin_files),
+                ("config path", "path", config_paths),
+                ("config dir", "dir", config_dirs),
+                ("config file", "file", config_files),
+                ("config allow", "allow", config_allow),
+                ("added path", "path", added_paths),
+                ("added dir", "dir", added_dirs),
+                ("added file", "file", added_files),
+                ("added allow", "allow", added_allow),
             ] {
                 for v in list {
-                    out.push_str(&format!("{what}\t{v}\n"));
+                    // A third column only where there is something to say: a
+                    // rule that is listed but switched off reads as in force
+                    // otherwise, which is the one misreading that matters here.
+                    let id = scour_settings::rule_id(kind, v);
+                    let state = if off.iter().any(|o| o.eq_ignore_ascii_case(&id)) {
+                        "\toff"
+                    } else {
+                        ""
+                    };
+                    out.push_str(&format!("{what}\t{v}{state}\n"));
                 }
             }
             out

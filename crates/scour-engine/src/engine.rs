@@ -25,6 +25,14 @@ pub struct Explained {
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
+    /// What the walk and the watchers skip, to begin with.
+    ///
+    /// **Taken by [`Engine::new`] and not read from here again.** These are the
+    /// only options a person edits while the service runs — a rule typed into a
+    /// window has to mean something before the next restart — so the engine
+    /// keeps them behind a lock and [`Engine::set_scan_options`] replaces them.
+    /// Left in this struct it would be a second copy that stopped being true
+    /// the first time somebody saved a rule.
     pub scan: ScanOptions,
     /// How long changes accumulate before a commit.
     pub commit_interval: Duration,
@@ -119,6 +127,20 @@ struct Shared {
     sources: Vec<Arc<dyn Source>>,
     index: Arc<dyn Index>,
     opts: EngineOptions,
+    /// What the walk and the watchers skip.
+    ///
+    /// **Apart from the rest of [`EngineOptions`], and behind a lock, because
+    /// this is the one part of them a person edits while the service runs.**
+    /// It used to be read once at start-up with everything else, which was
+    /// true for as long as the only way to write a rule was a file the service
+    /// reads on start. A window can write one now, and a rule that needs a
+    /// restart to mean anything is a control that lies: the panel says the
+    /// change takes effect on the next scan, and it has to.
+    ///
+    /// An `Arc` inside the lock so a scan can take its own copy and let go —
+    /// a walk holds these for as long as it runs, and a rule saved during one
+    /// must not block on it.
+    scan: RwLock<Arc<ScanOptions>>,
     status: RwLock<Status>,
     pending: AtomicU64,
     scanning: AtomicBool,
@@ -293,6 +315,14 @@ fn misread(query: &str) -> Vec<scour_core::Span> {
 }
 
 impl Shared {
+    /// What the walk skips, right now.
+    ///
+    /// A pointer copy taken under the read lock, so a caller that walks for a
+    /// minute is not holding anything a saved rule has to wait behind.
+    fn scan(&self) -> Arc<ScanOptions> {
+        Arc::clone(&self.scan.read())
+    }
+
     /// A search run again could now answer differently.
     ///
     /// Bumped under the waiters' lock, so a client that has read the revision
@@ -326,10 +356,13 @@ impl Engine {
     pub fn new(
         sources: Vec<Arc<dyn Source>>,
         index: Arc<dyn Index>,
-        opts: EngineOptions,
+        mut opts: EngineOptions,
     ) -> Engine {
         // One slot: a request that has been overtaken is work nobody wants.
         let (prepare_tx, prepare_rx) = crossbeam_channel::bounded::<Prepare>(1);
+        // Moved out of `opts` rather than copied from it, so there is one
+        // answer to "what does the walk skip" and not two that can drift.
+        let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -338,6 +371,7 @@ impl Engine {
             sources,
             index,
             opts,
+            scan,
             pending: AtomicU64::new(0),
             scanning: AtomicBool::new(false),
             stop: AtomicBool::new(false),
@@ -391,15 +425,13 @@ impl Engine {
     /// nothing here has to know what it is talking to.
     pub fn start_watching(&self) -> Result<u32> {
         let mut started = 0;
+        let scan = self.shared.scan();
         let mut handles = self.shared.watches.lock();
         for (i, src) in self.shared.sources.iter().enumerate() {
             if !src.caps().contains(scour_core::Caps::WATCH) {
                 continue;
             }
-            match src.watch(
-                &self.shared.opts.scan,
-                Box::new(Forward(self.changes.clone())),
-            ) {
+            match src.watch(&scan, Box::new(Forward(self.changes.clone()))) {
                 Ok(h) => {
                     handles.push((i, h));
                     started += 1;
@@ -506,6 +538,43 @@ impl Engine {
         })
     }
 
+    /// What the walk and the watchers are skipping, right now.
+    ///
+    /// The rules in force, merged: the built-in set, the configuration's own,
+    /// and whatever a window has added, all in the one shape the engine works
+    /// in. A caller that has to show them *apart* — a panel with a switch
+    /// beside each one does — knows where each group came from and does not
+    /// ask here; this is for anyone who wants the single true answer to "what
+    /// is being skipped".
+    ///
+    /// A snapshot, not a view: [`Engine::set_scan_options`] can replace them
+    /// between one call and the next.
+    pub fn scan_options(&self) -> Arc<ScanOptions> {
+        self.shared.scan()
+    }
+
+    /// Skip by these from now on, and tell the watchers.
+    ///
+    /// **The rules are the one part of the engine's configuration a person
+    /// edits while it runs**, and everything downstream of that has to be told
+    /// rather than restarted: a walk started after this uses the new set, and
+    /// every live watcher re-tunes to it. Without the second half a rule would
+    /// sweep a tree clean and the watcher would put it straight back, which is
+    /// the failure the rule was added to prevent.
+    ///
+    /// It does not scan. Deciding *when* the index should be brought in line
+    /// with a new rule is the caller's, because only the caller knows whether
+    /// a person just asked for this or a file changed on disk.
+    pub fn set_scan_options(&self, opts: ScanOptions) {
+        let fresh = Arc::new(opts);
+        *self.shared.scan.write() = Arc::clone(&fresh);
+        // Under the same lock the worker takes to cover a subtree, so a retune
+        // and a cover cannot be inside one handle at once.
+        for (_, handle) in self.shared.watches.lock().iter() {
+            handle.retune(&fresh);
+        }
+    }
+
     /// One page of one query.
     ///
     /// Served from [`Prepared`] when the same query's order is already known,
@@ -513,28 +582,6 @@ impl Engine {
     /// the one at row zero. Otherwise the index answers it, and the ordering is
     /// asked for in the background so that the next window does not have to
     /// wait for the same walk twice.
-    /// The exclusion rules in force — the configured ones and the built-in
-    /// ones together, because that is the shape they reach the engine in.
-    ///
-    /// A caller that wants to show them *apart* — and a window that offers a
-    /// remove button has to — subtracts
-    /// [`scour_source_fs::platform_defaults`] itself. Splitting them here
-    /// would mean carrying a second copy of both lists for reporting alone.
-    ///
-    /// Subtracting is exact rather than approximate, which is not obvious:
-    /// a person who writes `target` into their own configuration sees it
-    /// listed as built-in, and that is the true answer — removing their line
-    /// would change nothing, because the built-in rule excludes it anyway.
-    pub fn exclusions(&self) -> (&[String], &[String], &[String], &[String]) {
-        let s = &self.shared.opts.scan;
-        (
-            &s.exclude_paths,
-            &s.exclude_dirs,
-            &s.exclude_files,
-            &s.allow,
-        )
-    }
-
     pub fn search(
         &self,
         query: &str,
@@ -1879,9 +1926,12 @@ fn scan(
         stop: Arc::clone(shared),
         failed: false,
     };
+    // Read once, here, rather than per directory: a walk has to skip by one
+    // set of rules from beginning to end. A rule saved halfway through takes
+    // effect on the scan that follows — which is the scan the save asks for.
     let opts = ScanOptions {
         subtree: subtree.clone(),
-        ..shared.opts.scan.clone()
+        ..(*shared.scan()).clone()
     };
     let report = src.scan(&opts, &mut sink);
     sink.flush();

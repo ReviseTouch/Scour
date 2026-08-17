@@ -23,6 +23,9 @@ scour-proto  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
+# For `rule_id` alone. A switched-off rule is named the same way wherever the
+# name is built; two spellings of one id is a switch that silently misses.
+scour-settings = { workspace = true }
 anyhow       = { workspace = true }
 clap         = { workspace = true }
 serde_json   = { workspace = true }

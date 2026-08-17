@@ -501,6 +501,16 @@ pub enum Response {
     ///   and measurements that are most of its value.
     /// * `added_*` — what a window wrote, kept beside the index like the
     ///   column widths. This is the group a write replaces.
+    ///
+    /// And `off`, which cuts across all three: the ids of rules that are listed
+    /// but not applied. **A switched-off rule is still reported in its own
+    /// group**, because that is where it lives and switching it back on has to
+    /// be possible — a panel built from what the engine is enforcing would
+    /// watch the rule disappear rather than see it switch. This is what makes
+    /// the two groups nobody can delete — code, and a hand-written file —
+    /// something a person can nonetheless turn off. See
+    /// [`scour_settings::rule_id`] for how an id is spelled; a frontend builds
+    /// the same string to compare.
     Rules {
         builtin_paths: Vec<String>,
         builtin_dirs: Vec<String>,
@@ -513,6 +523,7 @@ pub enum Response {
         added_dirs: Vec<String>,
         added_files: Vec<String>,
         added_allow: Vec<String>,
+        off: Vec<String>,
     },
     Places(scour_places::Places),
     Preview(scour_preview::Look),

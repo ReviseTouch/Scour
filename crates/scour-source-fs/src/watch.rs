@@ -14,8 +14,8 @@
 //! engine walks the subtree again. That single variant is what lets the layer
 //! above stay free of platform knowledge.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use scour_core::{Change, ChangeSink, Error, Result, ScanOptions, WatchHandle};
@@ -23,6 +23,14 @@ use scour_core::{Change, ChangeSink, Error, Result, ScanOptions, WatchHandle};
 use crate::path;
 use crate::rules::Rules;
 use crate::scan::FsSource;
+
+/// The rule set the watcher filters by, swappable while it runs.
+///
+/// Two layers, and both are load-bearing: the outer lock is what lets
+/// [`WatchHandle::retune`] replace the set, and the inner `Arc` is what lets an
+/// event take a copy and let go of the lock immediately rather than filtering
+/// with it held.
+type SharedRules = Arc<RwLock<Arc<Rules>>>;
 
 pub fn start(
     source: FsSource,
@@ -51,13 +59,28 @@ pub fn start(
     // for files the walk skips, and every one is an entry that exists until
     // something else removes it — a `cargo test` under a watched but unscanned
     // build directory took a query here from 8 ms to 13 seconds.
-    let rules = Arc::new(Rules::from_options(opts));
+    //
+    // **Behind a lock, because the rules can change while this is running.**
+    // They used to be settable in a file read once at start-up; a window can
+    // add one now, and a watcher still filtering by the old set would put back
+    // everything a new rule had just swept out. See [`WatchHandle::retune`].
+    let rules: SharedRules = Arc::new(RwLock::new(Arc::new(Rules::from_options(opts))));
 
     let handler = {
         let sink = Arc::clone(&sink);
         let rules = Arc::clone(&rules);
         move |res: notify::Result<Event>| match res {
-            Ok(event) => translate(id, real_modes, &rules, &event, &sink),
+            Ok(event) => {
+                // Cloned out of the lock rather than held across the
+                // translation: the read is a pointer copy, and holding it
+                // would put every event in line behind a `retune` that is
+                // rebuilding the set.
+                let held = match rules.read() {
+                    Ok(r) => Arc::clone(&r),
+                    Err(p) => Arc::clone(&p.into_inner()),
+                };
+                translate(id, real_modes, &held, &event, &sink)
+            }
             Err(e) => {
                 // The interesting failures are the ones that mean "I stopped
                 // seeing things": inotify running out of watches, a Windows
@@ -125,6 +148,7 @@ pub fn start(
         stopped: AtomicBool::new(false),
         skipped: std::sync::Mutex::new(skipped),
         follow_symlinks: opts.follow_symlinks,
+        rules,
     }))
 }
 
@@ -457,6 +481,11 @@ struct FsWatch {
     /// "nothing below here will be seen again" was thrown away.
     skipped: std::sync::Mutex<Vec<String>>,
     follow_symlinks: bool,
+    /// Shared with the event handler, so [`WatchHandle::retune`] can replace
+    /// what it filters by without taking the watch down and putting it back —
+    /// which on this backend means re-installing one inotify watch per
+    /// directory, 296,711 of them for a home directory here.
+    rules: SharedRules,
 }
 
 impl std::fmt::Debug for FsWatch {
@@ -509,6 +538,21 @@ impl WatchHandle for FsWatch {
             // nothing here collapses them and the list only ever grew. See
             // [`MAX_SKIPPED`].
             held.truncate(MAX_SKIPPED);
+        }
+    }
+
+    /// Filter by the new rules from the next event on.
+    ///
+    /// The cover is deliberately left alone. A watch that is now inside an
+    /// excluded directory costs one inotify entry and reports events this
+    /// throws away; taking it out would mean walking the whole cover, and
+    /// putting it back when the rule goes would mean installing 296,711
+    /// watches again. The filter is where the rule has to be right, and it is.
+    fn retune(&self, opts: &ScanOptions) {
+        let fresh = Arc::new(Rules::from_options(opts));
+        match self.rules.write() {
+            Ok(mut held) => *held = fresh,
+            Err(poisoned) => *poisoned.into_inner() = fresh,
         }
     }
 

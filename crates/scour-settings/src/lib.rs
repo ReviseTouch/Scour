@@ -68,6 +68,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// How a rule is named in [`Settings::exclude_off`]: `dir:target`, `path:/proc`.
+///
+/// One function so that the service, a terminal and a window cannot each
+/// invent a slightly different spelling of the same id — a switch written by
+/// one and read by another has to match exactly, and this is the whole of the
+/// format.
+pub fn rule_id(kind: &str, value: &str) -> String {
+    format!("{kind}:{value}")
+}
+
 /// How many past queries are kept.
 ///
 /// Enough that yesterday's search is still there, short enough that the list
@@ -100,6 +110,31 @@ pub struct Settings {
     pub exclude_files: Vec<String>,
     #[serde(default)]
     pub exclude_allow: Vec<String>,
+    /// Rules switched off, by id — `dir:target`, `path:/proc`, `file:.DS_Store`,
+    /// `allow:/x`.
+    ///
+    /// **Off rather than deleted, and that is what makes the other two groups
+    /// reachable at all.** A built-in rule is code and a `config.toml` rule is
+    /// somebody's hand-written file; neither can be removed from a window, so
+    /// until this existed a panel could only show them and shrug. Switching one
+    /// off is a note kept beside the index saying *not this one* — it changes
+    /// nothing in the file or the binary, and switching it back on is deleting
+    /// the note.
+    ///
+    /// It applies to added rules too, so that trying a rule and putting it back
+    /// does not mean retyping it.
+    ///
+    /// **Ids, not values, because the same word means different things in
+    /// different lists.** `target` as a directory name and `/home/x/target` as
+    /// a path prefix are two rules, and a list of bare strings could not say
+    /// which one somebody switched off.
+    ///
+    /// What this cannot switch off is [`scour_core::ScanOptions::deny`] — the
+    /// service's own index and data directory. That is not an exclusion a
+    /// person chose, it is the loop that costs two cores if it is ever taken
+    /// back, and it is kept in a separate list for exactly this reason.
+    #[serde(default)]
+    pub exclude_off: Vec<String>,
     /// Columns to show, in the order they are shown, by id.
     ///
     /// Empty means "whatever this frontend calls its default" — not "no
@@ -224,6 +259,8 @@ pub struct Change {
     pub exclude_dirs: Option<Vec<String>>,
     pub exclude_files: Option<Vec<String>>,
     pub exclude_allow: Option<Vec<String>>,
+    /// See [`Settings::exclude_off`]. Rule ids, replaced outright.
+    pub exclude_off: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub widths: Option<BTreeMap<String, u32>>,
     pub sort: Option<String>,
@@ -273,6 +310,9 @@ impl Change {
         }
         if let Some(v) = self.exclude_allow {
             to.exclude_allow = v;
+        }
+        if let Some(v) = self.exclude_off {
+            to.exclude_off = v;
         }
         if let Some(v) = self.columns {
             to.columns = v;
@@ -350,6 +390,21 @@ impl Settings {
         self.history.retain(|q| q != query);
         self.history.insert(0, query.to_owned());
         self.history.truncate(HISTORY);
+    }
+
+    /// Has this rule been switched off?
+    ///
+    /// `kind` is one of `path`, `dir`, `file`, `allow` — the four lists a rule
+    /// can be in — and `value` is the rule itself. Together they make the id
+    /// kept in [`Settings::exclude_off`], and one is written the same way
+    /// wherever it is made: `kind`, a colon, the value.
+    ///
+    /// Compared without case, like the merge that builds the rule lists in the
+    /// first place. `NODE_MODULES` and `node_modules` are one rule everywhere
+    /// else, and a switch that disagreed would be a switch that looks broken.
+    pub fn rule_off(&self, kind: &str, value: &str) -> bool {
+        let id = rule_id(kind, value);
+        self.exclude_off.iter().any(|o| o.eq_ignore_ascii_case(&id))
     }
 
     /// Where the file lives, given the directory the caller keeps state in.

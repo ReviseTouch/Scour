@@ -40,6 +40,8 @@ struct MemSource {
     /// happens between them is covered by whichever came second — and by
     /// neither if the walk did.
     order: Arc<RwLock<Vec<&'static str>>>,
+    /// What every `retune` this source's watch was given said to skip.
+    retuned: Arc<RwLock<Vec<Vec<String>>>>,
 }
 
 impl MemSource {
@@ -53,6 +55,7 @@ impl MemSource {
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
+            retuned: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -66,6 +69,7 @@ impl MemSource {
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
+            retuned: Arc::new(RwLock::new(Vec::new())),
         })
     }
 
@@ -184,6 +188,7 @@ impl Source for MemSource {
         *self.sink.write() = Some(s);
         Ok(Box::new(NoopWatch {
             order: Arc::clone(&self.order),
+            retuned: Arc::clone(&self.retuned),
         }))
     }
 
@@ -915,14 +920,79 @@ fn a_subtree_is_watched_before_it_is_walked() {
     );
 }
 
+/// New rules reach the walk *and* the watchers.
+///
+/// **Both halves, and the second is the one that was missing.** The rules used
+/// to be read once at start-up, which was true for as long as the only way to
+/// write one was a file. A window can write one now, and a rule that only the
+/// walk hears about is worse than no rule at all: the scan sweeps `target`
+/// clean, the next build writes two million files, and the watcher — still
+/// filtering by what it was handed at start-up — puts every one of them back.
+/// That is the exact failure the rule exists to prevent.
+#[test]
+fn new_rules_reach_the_walk_and_every_watcher() {
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+
+    let mut fresh = (*f.engine.scan_options()).clone();
+    fresh.exclude_dirs = vec!["target".into()];
+    f.engine.set_scan_options(fresh);
+
+    assert_eq!(
+        f.engine.scan_options().exclude_dirs,
+        vec!["target".to_owned()],
+        "the walk is still being configured by the old rules"
+    );
+    let retuned = f.source.retuned.read().clone();
+    assert_eq!(
+        retuned,
+        vec![vec!["target".to_owned()]],
+        "the watcher was not told, or was told the old rules: {retuned:?}"
+    );
+}
+
+/// Setting the rules does not scan, and that is deliberate.
+///
+/// Whether the index should be brought in line is the caller's to decide —
+/// `scourd` scans because a person just asked for this, and a walk that
+/// happened as a side effect of a setter would be one nothing could opt out of.
+#[test]
+fn setting_the_rules_is_not_itself_a_scan() {
+    let f = fixture(200);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    let before = f.source.scans.load(Ordering::Relaxed);
+
+    let mut fresh = (*f.engine.scan_options()).clone();
+    fresh.exclude_dirs = vec!["target".into()];
+    f.engine.set_scan_options(fresh);
+    std::thread::sleep(Duration::from_millis(200));
+
+    assert_eq!(
+        f.source.scans.load(Ordering::Relaxed),
+        before,
+        "changing the rules walked the disk on its own"
+    );
+}
+
 #[derive(Debug)]
 struct NoopWatch {
     order: Arc<RwLock<Vec<&'static str>>>,
+    /// What each [`WatchHandle::retune`] was told to skip.
+    ///
+    /// Kept rather than counted, because "it was told something" is not the
+    /// property that matters: a watcher told to re-tune with the *old* rules
+    /// re-tunes to nothing, and would pass a test that only counted the calls.
+    retuned: Arc<RwLock<Vec<Vec<String>>>>,
 }
 
 impl WatchHandle for NoopWatch {
     fn cover(&self, _path: &str) {
         self.order.write().push("cover");
+    }
+
+    fn retune(&self, opts: &ScanOptions) {
+        self.order.write().push("retune");
+        self.retuned.write().push(opts.exclude_dirs.clone());
     }
 
     fn stop(self: Box<Self>) {}

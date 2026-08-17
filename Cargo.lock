@@ -4514,6 +4514,7 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-proto",
+ "scour-settings",
  "serde_json",
 ]
 
@@ -4628,6 +4629,7 @@ dependencies = [
  "scour-core",
  "scour-ipc",
  "scour-proto",
+ "scour-settings",
  "serde",
  "serde_json",
  "tokio",
