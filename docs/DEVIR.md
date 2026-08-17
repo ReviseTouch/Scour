@@ -6,7 +6,7 @@ Bir oturumun sonu. Buradan devam edecek olan için, eksiksiz.
 
 ## 0. Hemen bilmen gerekenler
 
-**Depo:** `/home/hasan/Projeler/Scour` · dal `main` · HEAD **`ab62d7f`**
+**Depo:** `/home/hasan/Projeler/Scour` · dal `main` · HEAD **`4948a9c`**
 · GitHub'da (`hasantr/Scour`, private) · çalışma ağacı temiz.
 
 **Bekleyen tek eylem, ve Hasan'a ait:**
@@ -15,11 +15,11 @@ Bir oturumun sonu. Buradan devam edecek olan için, eksiksiz.
 sudo /home/hasan/.local/bin/scour-yeniden
 ```
 
-Çalışan `scourd` **16 Ağustos'tan**. Kurulu ikililer bugünden. Yani şu an
-devrede olmayanlar: fanotify kuyruk tavanları, paralel dizin yürüyüşü, küçük
-resim üretimi, ve atlama kuralları paneli. Panel açılıyor ama boş görünüyor —
-servis `Request::Rules`'u tanımıyor, köprü 502 dönüyor, panel uydurmuyor. **Bu
-bir arıza değil.**
+Çalışan `scourd` sabah 11:42'de yeniden başlatıldı; kurulu ikililer 10:52'den.
+Yani panel, fanotify kuyruk tavanları, paralel yürüyüş ve küçük resimler
+**devrede**. Devrede olmayan: bugün öğleden sonra eklenen kural anahtarları ve
+kuralın kaydedilir kaydedilmez geçerli olması (`4948a9c`). Onlar için yeniden
+kurulum gerekiyor.
 
 Sudo yalnız `/mnt/depo`'ya fanotify işareti koymak için gerekiyor.
 `scour-watch` işareti koyup yetkiyi bırakıyor; servis Hasan'ın kullanıcısıyla
@@ -103,7 +103,14 @@ söz zincirinden senkron yazılanlar (ray sayıları, sayaç, basılı durum) g�
 **Rust testleri sayfanın çalıştığını söylemiyor.** `a7789d8`'de var olmayan bir
 düğmeye dinleyici ekledim; sayfa tek betik olduğu için o satırdan aşağısı hiç
 çalışmadı — 32 çevrili metnin 31'i boş kaldı, rapor sekmesi tire doldu. Bütün
-Rust testleri geçiyordu. **Aç ve bak.**
+Rust testleri geçiyordu. **Aç ve bak.** İkinci kez oldu: panel betiği `KINDS`'ı
+yeniden bildirdi, 43 metnin 43'ü boş kaldı, bütün Rust testleri yine geçiyordu.
+Artık `the_page_script_parses` node'a soruyor — ama testin kendisi de bir ders:
+ilk sürümü girintiden tahmin ediyordu ve **çalışan** sayfada altı yanlış alarm
+verdi. Çalışan bir dosyaya kurt diyen test susturulur.
+
+**Sayfaya yeni bir üst düzey isim eklerken önce ara.** Tek `<script>`, tek
+kapsam; `grep -c "\bAD\b" page.html` bir saniye sürüyor.
 
 **Listenin sıralamasını kontrol et.** Canlı yenilemeyi `konum` sıralı bir
 listede sınayıp "bozuk" sonucuna vardım. Bozuk değildi.
@@ -181,14 +188,47 @@ dosya tanıtıcısıyla adlandırıyor); birleştirme üç gerekçeyle reddedild
   (`/usr/share/thumbnailers/*.thumbnailer`), standart önbelleğe `Thumb::URI` ve
   `Thumb::MTime` ile. GNOME'un kendi `lookup()`'ı 90/90 kabul etti.
 - **`revisetouch.com`** yardım panelinin altında.
-- **Atlama kuralları paneli** — üç grup, tek düzenlenebilir.
+- **Atlama kuralları paneli** — üç grup, her kural anahtarlı (`4948a9c`).
+
+### Atlama kuralları — bitti (öğleden sonra, `4948a9c`)
+
+Sabahki panelin iki eksiği vardı ve ilki **yalan söyleyen bir denetimdi**:
+sayfa "sonraki taramada geçerli" diyordu, oysa `scan_options` yalnız açılışta
+okunuyordu. Kendi servisimde ölçüldü: protokolden kural yazıldı, `rules` doğru
+raporladı, `rescan` çalıştı, sayım **14'te kaldı**; ancak yeniden başlatınca 8
+oldu.
+
+Artık kurallar motorun çalışırken değiştirilebilen tek yapılandırması.
+`Engine::set_scan_options` kilit arkasında değiştirir **ve her canlı izleyiciyi
+yeniden ayarlar** — atlanan bir ağacı süpürüp izleyiciyi eski kuralla bırakmak,
+kuralın konma sebebinin ta kendisiydi. `WatchHandle::retune`: inotify yalnız
+süzgecini değiştirir (kapsamı sökmek 296.711 izlemeyi yeniden kurmak demek),
+fanotify dizin haritasını da yeniden kurar — olayın **adı** o haritadan geliyor,
+kapatılan kural haritanın hiç bilmediği bir ağacı açar ve oradaki her olay
+adsız gelip düşerdi.
+
+Kaydetmek taramayı da başlatıyor (Hasan'ın kararı). Karşılaştırarak: bu istek
+sütun genişliği kaydedilirken de geliyor.
+
+**Her kural kapatılabilir** — gömülü ve `config.toml` dahil. Kapatma bir not
+(`kind:value`, tek yazımı `scour_settings::rule_id`), üç kaynak birleştikten
+*sonra* çıkarılıyor, yani iki yerde yazılı bir kural yarım değil tamamen
+kapanıyor. `deny` bilerek verilmiyor: servisin kendi indeks dizini seçilmiş bir
+atlama değil, iki çekirdeğe mal olan geri besleme döngüsü.
+
+Gerçek pencerede uçtan uca doğrulandı: anahtara tıklandı, `node_modules` geri
+yürürlüğe girdi, `m1.js` saniyeler içinde indeksten düştü — hiçbir şey yeniden
+başlatılmadan.
 
 ### Düzeltilen arızalar
 
 Tarih sıralamasının yarışı · kenar çubuğunun filtre seçince sıfırlanması (iki
 turda: takma ad eşleştirmesi, sonra sayfanın sekiz türlük eski sözlüğü) · boş
 sonuçta canlı yenilemenin 12,6 saniye geride kalması · `empty.hidden`'ın dört
-yazarı · sayfayı üçte birinde durduran eksik düğme (**benim hatam**).
+yazarı · sayfayı üçte birinde durduran eksik düğme (**benim hatam**) · panel
+betiğinin `KINDS`'ı yeniden bildirip **bütün sayfayı** düşürmesi (yine benim
+hatam, ve aynı sınıf: tek `<script>`, tek `SyntaxError`, 43 metnin 43'ü boş,
+bütün Rust testleri geçiyor). Artık `the_page_script_parses` node'a soruyor.
 
 ---
 
@@ -197,53 +237,50 @@ yazarı · sayfayı üçte birinde durduran eksik düğme (**benim hatam**).
 ### Hemen
 
 1. **Servisi yeniden başlat** (Hasan). Yukarıda.
-2. **Ayar kuralının taramayı gerçekten etkilediği kanıtlanmadı.**
-   `wire.rs::scan_options` üç satırla ayarları `ScanOptions`'a katıyor,
-   derleniyor, doğru okunuyor — ama test servisim hiç indekslemedi ve sebebini
-   bulamadım. `/tmp` gömülü atlama listesinde (iki denemem oraya gitti);
-   üçüncüsü `/var/tmp`'de yine sıfır verdi. **Devam eden önce o taramayı
-   çalıştırsın.**
 
 ### Kısa
 
-3. **Diskte ~4 GB ajan artığı** — `/var/tmp/scour-*-wt`, `/var/tmp/scour-*-idx`,
+2. **Diskte ~4 GB ajan artığı** — `/var/tmp/scour-*-wt`, `/var/tmp/scour-*-idx`,
    `~/.local/share/scour/index-bench-tail-20260815`. `scour-btrfs-wt` ve
    `scour-fanotify-wt` **Hasan'ın**, dokunma. Yedeğe de dokunma.
-4. **Taşınabilirlik** — `scour-places`'in `/proc/self/mounts` okuması `cfg`siz
+3. **Taşınabilirlik** — `scour-places`'in `/proc/self/mounts` okuması `cfg`siz
    (macOS'ta boş döner, çökmez ama birim bilgisi olmaz), ve `scan.rs`'in
    `SYS_ioprio_set` çağrısı `cfg`siz (macOS'ta **derlenmez**). Hasan: *"şimdilik
    geniş alalım, kapı açık olsun."*
-5. **Izgarada `↑`/`↓`** satırda yana yürüyor, sütunda aşağı değil.
+4. **Izgarada `↑`/`↓`** satırda yana yürüyor, sütunda aşağı değil.
 
 ### Orta
 
-6. **CSV'de sıralama yok** — akış indeksin kendi sırasında. Sebebi eşitlik
+5. **CSV'de sıralama yok** — akış indeksin kendi sırasında. Sebebi eşitlik
    grupları: `modified` artan, satır listesinin tersi değil; tersi ama eşit
    tarihli her öbek kendi içinde ters. Kendi turunu ister. Hesap
    `NativeIndex::scan`'de.
-7. **Kenar çubuğunun 210 ms'lik ikinci sorusu** önbelleğe alınmadı, ve gerekçesi
+6. **Kenar çubuğunun 210 ms'lik ikinci sorusu** önbelleğe alınmadı, ve gerekçesi
    ölçülü: `sidebarCost` duvar saati tutuyor, canlı yenileme 40 ms'den pahalı
    olanı reddediyor — önbellek isabeti onu eşiğin altına düşürüp o eşiğin
    engellediği onda bir çekirdeği geri açardı. Doğru çözüm maliyeti duvar
    saatinden ayrı fiyatlandırmak.
-8. **Commit sıklığı** (`commit_watched`, kodda sabit 1 sn) — açık pencere
+7. **Commit sıklığı** (`commit_watched`, kodda sabit 1 sn) — açık pencere
    dakikada 12 parça ürettiriyor, diske yazma 12,6 → 50,8 MB/dk. **Hasan'ın
    kararı**, çünkü kaydettiği dosyanın görünme süresi.
-9. **Ad sıralaması 3 ms ama gerileme riski**: `.norder` yalnız sıkışma/yeniden
+8. **Ad sıralaması 3 ms ama gerileme riski**: `.norder` yalnız sıkışma/yeniden
    inşa ile yazılıyor. Yeni parçalarda yok, ta ki sıkışana kadar.
-10. **B kademesi kural yönetimi** — kural değişince motorun ilgili ağacı kendi
-    kendine tarayıp süpürmesi. Şu an "sonraki taramada geçerli" deniyor.
+9. **Kural değişince tam tarama yapılıyor, altağaç değil.** Doğru sonucu
+   veriyor — tarama hem ekler hem süpürür — ama bir `dir:` kuralı her yerde
+   olabildiği için ucuz yol yok. Ölçülmedi: Hasan'ın iki kaynağında tam
+   taramanın ne kadar sürdüğü bilinmiyor (referans: 1,2 M girdilik ilk tarama
+   6,7 sn). Bir kural yalnız `path:` ise `rescan(Some(yol))` yetecektir.
 
 ### Uzun
 
-11. **TUI** — hiç yok. Hasan'ın aylardır süren asıl isteği.
-12. **Slint'i tamamlamak** — 20–120 satır getiriyor, devam sayfalaması yok, üç
+10. **TUI** — hiç yok. Hasan'ın aylardır süren asıl isteği.
+11. **Slint'i tamamlamak** — 20–120 satır getiriyor, devam sayfalaması yok, üç
     sıralama başlığı. Ana ürün bu olmalı; Chromium penceresi maket.
-13. **Sürükle-bırak (dışarı)** — `dragstart` kodda sıfır kez geçiyor.
-14. **Kayıtlı aramalar** · **yeniden adlandır/sil/taşı** (Hasan'ın kararı).
-15. **fsearch/plocate karşılaştırma tablosu** — HN'e gitmeden önce şart. İlk
+12. **Sürükle-bırak (dışarı)** — `dragstart` kodda sıfır kez geçiyor.
+13. **Kayıtlı aramalar** · **yeniden adlandır/sil/taşı** (Hasan'ın kararı).
+14. **fsearch/plocate karşılaştırma tablosu** — HN'e gitmeden önce şart. İlk
     soru "plocate'e göre nasıl" olacak ve bugün cevabı yok.
-16. **inotify tarafı** hâlâ dizin başına yol tutuyor (~230 MB). Hasan fanotify
+15. **inotify tarafı** hâlâ dizin başına yol tutuyor (~230 MB). Hasan fanotify
     kullandığı için etkilenmiyor ama taşınabilir yol o.
 
 ---
