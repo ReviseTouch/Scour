@@ -1,0 +1,25 @@
+[package]
+name        = "scour-thumbs"
+description = "The desktop's thumbnail cache: what is in it, who fills it, and how to ask."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **`serde` and nothing else, not even `scour-core`.** Nothing here knows what
+# an index is, what a `Kind` is, or that Scour exists: it answers "does this
+# machine have a picture of this file, and if not can it make one", which is a
+# question about a desktop. That is what makes it usable from the bridge, the
+# service, or a window written later — the same shape `scour-places` and
+# `scour-preview` have. `serde` is here only because the answer crosses the
+# wire.
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

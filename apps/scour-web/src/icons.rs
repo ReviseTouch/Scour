@@ -2,7 +2,12 @@
 //!
 //! **The thumbnail, and nothing else.** The file manager writes one into
 //! `~/.cache/thumbnails` under the MD5 of the file's URI, and every desktop
-//! program reads them from there. Nothing is generated here — this only looks.
+//! program reads them from there. Nothing is generated here — this only looks,
+//! and asks the service when there is nothing to look at. Where a picture
+//! lives and what its name means is `scour-thumbs`, so that the code reading
+//! this cache and the code writing it are the same lines: a reader and a
+//! writer that disagree by one escaped byte never meet, and the symptom is a
+//! cache filling up while every tile stays blank.
 //!
 //! ## What used to be here
 //!
@@ -24,7 +29,7 @@
 //! origin check exist to prevent; the only paths that leave this module are
 //! ones it built itself, from a hash.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// What a browser is handed, and what it may keep.
 pub struct Picture {
@@ -34,44 +39,50 @@ pub struct Picture {
 
 /// The thumbnail somebody has already made for this file.
 pub fn thumbnail(path: &str) -> Option<Picture> {
-    read(&thumbnail_path(path)?)
+    read(&scour_thumbs::cache::existing(path)?)
 }
 
 /// Is there one, without reading it?
 ///
 /// Asked once per row of a page, so that the page requests only the pictures
 /// that exist rather than two hundred that mostly do not.
+pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
+    if never(kind) {
+        return false;
+    }
+    scour_thumbs::cache::existing(path).is_some()
+}
+
+/// Nothing has made one — but could something be asked to?
 ///
-/// **`kind` is asked first because the answer is four `stat` calls.** A
+/// **Zero I/O**, which is what makes it safe to ask once per row of every
+/// answer: it is an extension looked up in the machine's MIME table and a MIME
+/// type looked up in the machine's thumbnailer table, both read once at start.
+/// Cheaper than [`has_thumbnail`], which is four `stat` calls when it says no,
+/// and so it is asked first — a row that nothing can draw never touches the
+/// disk at all.
+///
+/// It says nothing about whether the attempt would *succeed*. That costs a
+/// process, and the answer to it is the failure directory the service keeps.
+pub fn may_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
+    if never(kind) {
+        return false;
+    }
+    scour_thumbs::can_make(path)
+}
+
+/// The kinds no thumbnailer will ever be asked about.
+///
+/// **`kind` is asked first because the alternative is four `stat` calls.** A
 /// thumbnail is looked for in four size directories and a row that has none —
 /// which is nearly every row — pays for all four. On a machine where half the
 /// files are source and build output, most of those questions have a known
 /// answer: nothing thumbnails a `.rs` file, a directory or an ELF binary. The
 /// unknown kind is still asked, because a picture with an unhelpful name is
 /// exactly the case where the desktop knows better than the extension does.
-pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
+fn never(kind: scour_core::Kind) -> bool {
     use scour_core::Kind::*;
-    if matches!(kind, Dir | Code | Build | Exec | Archive) {
-        return false;
-    }
-    thumbnail_path(path).is_some()
-}
-
-fn thumbnail_path(path: &str) -> Option<PathBuf> {
-    if path.is_empty() {
-        return None;
-    }
-    let name = format!("{}.png", md5_hex(file_uri(path).as_bytes()));
-    let base = cache_dir().join("thumbnails");
-    // Biggest first: this is drawn at 18 pixels and every one of them is
-    // downscaled, so the sharper source wins and none of them is large.
-    for size in ["x-large", "large", "normal", "xx-large"] {
-        let p = base.join(size).join(&name);
-        if p.is_file() {
-            return Some(p);
-        }
-    }
-    None
+    matches!(kind, Dir | Code | Build | Exec | Archive)
 }
 
 fn read(p: &Path) -> Option<Picture> {
@@ -93,134 +104,28 @@ fn read(p: &Path) -> Option<Picture> {
     })
 }
 
-/// Where thumbnails live.
-///
-/// Read from the environment once. It was read per row, which is two
-/// environment lookups and two `PathBuf`s to learn something that cannot
-/// change while the process runs.
-fn cache_dir() -> &'static Path {
-    static DIR: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cache"))
-    });
-    &DIR
-}
-
-/// `file://` and the path, escaped the way GLib escapes it.
-///
-/// Verified against this machine's real thumbnail cache rather than read off a
-/// specification: 37 of the files under the picture directories hash to names
-/// that are in it.
-fn file_uri(path: &str) -> String {
-    const SAFE: &[u8] = b"/-_.~!$&'()*+,;=:@";
-    let mut out = String::from("file://");
-    for &b in path.as_bytes() {
-        if b.is_ascii_alphanumeric() || SAFE.contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
-/// MD5, because the thumbnail specification names files with it.
-///
-/// Written out rather than depended on: it is four dependencies away in the
-/// registry and this is the only place in the program that needs one, in the
-/// one role where nobody claims it is a security property — it is a file name
-/// somebody else chose.
-fn md5_hex(input: &[u8]) -> String {
-    const S: [u32; 64] = [
-        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
-        9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
-        15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-    ];
-    /// The round constants, worked out once for the life of the process.
-    ///
-    /// They were built here, which meant sixty-four `sin()` and an allocation
-    /// **per call** — and this is called once per row of every answer. A page
-    /// of two hundred rows spent 12,800 `sin()` deciding two hundred booleans.
-    static K: std::sync::LazyLock<[u32; 64]> = std::sync::LazyLock::new(|| {
-        std::array::from_fn(|i| ((i as f64 + 1.0).sin().abs() * 4_294_967_296.0) as u32)
-    });
-    let k = &*K;
-
-    let mut msg = input.to_vec();
-    let bits = (input.len() as u64).wrapping_mul(8);
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
-    }
-    msg.extend_from_slice(&bits.to_le_bytes());
-
-    let (mut a0, mut b0, mut c0, mut d0) = (
-        0x6745_2301u32,
-        0xefcd_ab89u32,
-        0x98ba_dcfeu32,
-        0x1032_5476u32,
-    );
-    for chunk in msg.chunks(64) {
-        let m: Vec<u32> = chunk
-            .chunks(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-            .collect();
-        let (mut a, mut b, mut c, mut d) = (a0, b0, c0, d0);
-        for i in 0..64 {
-            let (f, g) = match i / 16 {
-                0 => ((b & c) | (!b & d), i),
-                1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
-                2 => (b ^ c ^ d, (3 * i + 5) % 16),
-                _ => (c ^ (b | !d), (7 * i) % 16),
-            };
-            let f = f.wrapping_add(a).wrapping_add(k[i]).wrapping_add(m[g]);
-            a = d;
-            d = c;
-            c = b;
-            b = b.wrapping_add(f.rotate_left(S[i]));
-        }
-        a0 = a0.wrapping_add(a);
-        b0 = b0.wrapping_add(b);
-        c0 = c0.wrapping_add(c);
-        d0 = d0.wrapping_add(d);
-    }
-    [a0, b0, c0, d0]
-        .iter()
-        .flat_map(|w| w.to_le_bytes())
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The gate is the cost, so the gate is what to test.
+    ///
+    /// Both questions are asked once per row of every answer, and on this
+    /// machine half the rows of a broad query are source and build output.
+    /// Whether either of them can ever say yes depends on what is installed;
+    /// that these five kinds are answered without asking anything does not,
+    /// and it is the property the row build is written against.
     #[test]
-    fn md5_is_md5() {
-        // The published vectors. If this drifts, every thumbnail lookup misses
-        // and the list quietly loses its pictures.
-        assert_eq!(md5_hex(b""), "d41d8cd98f00b204e9800998ecf8427e");
-        assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
-        assert_eq!(
-            md5_hex(b"The quick brown fox jumps over the lazy dog"),
-            "9e107d9d372bb6826bd81d3542a419d6"
-        );
-    }
-
-    #[test]
-    fn a_uri_escapes_what_glib_escapes() {
-        assert_eq!(file_uri("/home/u/a b.png"), "file:///home/u/a%20b.png");
-        // Turkish names are the ordinary case here, and every byte of them is
-        // escaped — the hash is over bytes, not characters.
-        assert_eq!(
-            file_uri("/home/u/Çalışma.png"),
-            "file:///home/u/%C3%87al%C4%B1%C5%9Fma.png"
-        );
-        assert_eq!(file_uri("/a/b~c!d"), "file:///a/b~c!d");
+    fn five_kinds_are_answered_without_looking_at_anything() {
+        use scour_core::Kind::*;
+        for kind in [Dir, Code, Build, Exec, Archive] {
+            assert!(!has_thumbnail("/a/holiday.png", kind), "{kind:?}");
+            assert!(!may_thumbnail("/a/holiday.png", kind), "{kind:?}");
+        }
+        // And a name no MIME database on any machine gives a type to. This is
+        // the answer for the ordinary row: nothing declared, nothing asked.
+        assert!(!may_thumbnail("/a/notes.not-a-real-extension", Image));
+        assert!(!may_thumbnail("", File));
     }
 
     /// Every kind the engine can name has a drawing in the page.

@@ -1913,6 +1913,26 @@
       `/api/settings?${new URLSearchParams({ set: JSON.stringify(s), t: TOKEN })}`,
       { method: "POST" },
     ).catch(() => {}),
+    /* Ask the desktop to make the pictures it has not made yet, and say which
+       ones exist afterwards. No bytes come back through here: the page then
+       fetches them from `/api/icon`, exactly as it fetches the ones that were
+       already there.
+
+       `POST`, because it starts programs — a `GET` form of this would be an
+       `<img src>` that quietly makes a machine decode a video, which is the
+       shape the method split exists to stop. The paths go in the body rather
+       than the query because a screenful of them is several kilobytes and a
+       request line is bounded at sixteen; over that it is cut rather than
+       refused. */
+    thumbs: async (paths) => {
+      const r = await fetch(`/api/thumb?${new URLSearchParams({ t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+        body: paths.join("\n"),
+      });
+      if (!r.ok) throw new Error(`thumb: ${r.status}`);
+      return r.json();
+    },
     status: () => SERVICE.get("status", {}),
     /* The one request that is meant to take a long time: it does not answer
        until the index would answer differently. See the live section at the
@@ -4361,6 +4381,12 @@
       painted = now;
       dirty = false;
       fillWindow();
+      /* **After the draw, and on a timer of its own.** Making a thumbnail is
+         a separate process doing image decoding; nothing about it may be in
+         front of a paint, a scroll or a keystroke. `picturesSoon` restarts its
+         wait on every repaint, so a scroll that is still moving never gets as
+         far as asking — see the picture section further down. */
+      picturesSoon();
     });
   }
   const onScroll = () => repaint(false);
@@ -6542,6 +6568,113 @@
     applyIcons();
   });
   iconBtn.setAttribute("aria-pressed", String(ICONS));
+
+  /* ---------------- pictures nothing has made yet ----------------
+   *
+   * A folder somebody has never opened in a file manager has no thumbnails,
+   * because nothing has ever previewed the files in it — so the grid came up
+   * as a page of empty boxes. The fix is not to draw anything: it is to ask
+   * the desktop's own thumbnailer, which is what the standard is for, so that
+   * the picture Scour asked for is one Files and Loupe find already made.
+   *
+   * **All of that happens in the service.** How many decoders may run at once
+   * is a fact about the machine and there is one of it; see `Request::Thumbnails`.
+   * What is decided here is only *which* files, and the answer is: the ones on
+   * the screen, once the screen has stopped moving.
+   *
+   * Four bounds, and each of them is something this project has paid for:
+   *
+   * - **`PICTURE_QUIET`** — nothing is asked while anything is moving. Flicking
+   *   through twenty thousand tiles must cost nothing; `afterQuiet` restarts
+   *   its timer on every repaint, so a scroll that never settles never asks.
+   * - **`PICTURE_BATCH`** — less than a screenful on purpose. When the answer
+   *   lands this asks again, so a still screen fills in a few rounds and a
+   *   screen that has moved on never pays for the tiles it left behind.
+   * - **One request at a time.** No queue, so nothing can grow with how fast
+   *   somebody scrolls. The batch is rebuilt from what is visible *now* each
+   *   time rather than drained from a list built when it was visible.
+   * - **`PICTURE_MEMORY`** — the record of what has been asked for is capped
+   *   and drops its oldest, because a set keyed by path over a session of
+   *   scrolling is a set the size of the disk. It is only an optimisation
+   *   anyway: the service keeps the real record, on disk, in the standard's
+   *   failure directory, so a path that falls out of here costs one `stat`
+   *   rather than one process.
+   *
+   * And it is all behind `ICONS`. Pictures off means not one request. */
+  const PICTURE_QUIET = 250;
+  const PICTURE_BATCH = 24;
+  const PICTURE_MEMORY = 4096;
+  /* The bridge can be started with `--no-thumbnails`, and then this route is
+     403 rather than absent. Asked once and remembered: a window that keeps
+     asking a door that is shut is the same defect as no bound at all. */
+  let picturesRefused = false;
+  let askingPictures = false;
+  const askedForPictures = new Set();
+
+  /* Oldest out first. A `Set` iterates in insertion order, so the first key is
+     the least recently asked for. */
+  function rememberAsking(path) {
+    if (askedForPictures.size >= PICTURE_MEMORY) {
+      askedForPictures.delete(askedForPictures.values().next().value);
+    }
+    askedForPictures.add(path);
+  }
+
+  function askForPictures() {
+    if (!ICONS || picturesRefused || askingPictures || LIST.query === null) return;
+    const [from, to] = visibleRange();
+    const paths = [];
+    for (let i = from; i < to && paths.length < PICTURE_BATCH; i++) {
+      const f = LIST.rows.get(i);
+      /* `make` is the bridge saying the machine declares a thumbnailer for
+         this type. It costs it two hash lookups per row and no syscall, which
+         is why the page never has to guess from an extension. */
+      if (!f || !f.make || f.thumb) continue;
+      const p = fullPath(f);
+      if (askedForPictures.has(p)) continue;
+      rememberAsking(p);
+      paths.push(p);
+    }
+    if (!paths.length) return;
+    askingPictures = true;
+    /* Returned so `afterQuiet` can charge itself for what this cost — a batch
+       of videos is seconds, and the next quiet period should be longer than
+       the one that led to it. */
+    return SERVICE.thumbs(paths)
+      .then((res) => {
+        askingPictures = false;
+        if (!res || !res.ready || !res.ready.length) return;
+        const made = new Set(res.ready);
+        /* Over the visible range rather than over `LIST.rows`, which reaches
+           twenty thousand entries once the reading-ahead has run. The rows
+           this batch was about may have been refetched in the meantime, in
+           which case they already carry `thumb` from the bridge and this
+           finds nothing to do. */
+        const [nowFrom, nowTo] = visibleRange();
+        let any = false;
+        for (let i = nowFrom; i < nowTo; i++) {
+          const f = LIST.rows.get(i);
+          if (f && !f.thumb && made.has(fullPath(f))) { f.thumb = true; any = true; }
+        }
+        if (any) repaint(true);
+        /* The rest of the screen. A batch is deliberately less than a
+           screenful, and this is what finishes it — through the same quiet
+           timer, so a scroll that starts in the meantime still wins. */
+        picturesSoon();
+      })
+      .catch((e) => {
+        askingPictures = false;
+        if (e && /\b403\b/.test(String(e.message))) {
+          picturesRefused = true;
+          return;
+        }
+        /* Not silent, and not retried either: the paths are already in
+           `askedForPictures`, so a bridge that is down costs one failed
+           request per screenful rather than one per frame. */
+        console.error("scour: pictures could not be asked for:", e);
+      });
+  }
+  const picturesSoon = afterQuiet(askForPictures, PICTURE_QUIET);
 
   /* ---------------- changing the shape ----------------
    *

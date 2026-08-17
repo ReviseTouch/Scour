@@ -108,6 +108,17 @@ struct Args {
     /// so. With this the panel shows what the index knows and nothing else.
     #[arg(long)]
     no_preview: bool,
+    /// Never ask the desktop to make a thumbnail it has not made yet.
+    ///
+    /// Pictures already in the cache are still shown — reading them is a
+    /// `stat` and this is about the making, which is separate processes doing
+    /// image and video decoding on files the page happened to scroll past.
+    /// The same reasoning as `--no-preview`: a door widened rather than
+    /// opened, and somebody who would rather it stayed shut should be able to
+    /// say so. The person using the window has their own switch for it; this
+    /// is the one that means the route is not there at all.
+    #[arg(long)]
+    no_thumbnails: bool,
 }
 
 fn main() -> Result<()> {
@@ -167,6 +178,7 @@ fn main() -> Result<()> {
             launch: !args.no_launch,
             run: !args.no_run,
             preview: !args.no_preview,
+            pictures: !args.no_thumbnails,
         };
         // A thread a connection, and the connection closes after one exchange.
         // A browser opens a handful; there is nothing here to pool.
@@ -216,6 +228,9 @@ struct Doing {
     run: bool,
     /// `/api/preview` at all — hand the *contents* of a file to the page.
     preview: bool,
+    /// `/api/thumb` at all — ask the desktop to *make* pictures it has not
+    /// made. Reading the ones that exist is not behind this.
+    pictures: bool,
 }
 
 /// The desktop's quick-look command, resolved once at start.
@@ -245,8 +260,13 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     }
     // Reading is `GET`, doing is `POST`, and the split is not decoration: it
     // is what keeps a link, a prefetch or a history entry from opening a file.
-    let acting =
-        req.path == "/api/open" || (req.path == "/api/settings" && req.param("set").is_some());
+    // `/api/thumb` is on the doing side because it starts programs. It is also
+    // the one route here whose GET form would look completely harmless — an
+    // `<img src>` that quietly makes a machine decode a video — which is
+    // exactly the shape this split exists to stop.
+    let acting = req.path == "/api/open"
+        || req.path == "/api/thumb"
+        || (req.path == "/api/settings" && req.param("set").is_some());
     if req.method != if acting { "POST" } else { "GET" } {
         http::fail(
             &mut stream,
@@ -289,6 +309,12 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/dupes" => api_dupes(&mut stream, client, &req),
         "/api/status" => api_status(&mut stream, client),
         "/api/icon" => api_icon(&mut stream, &req),
+        "/api/thumb" if doing.pictures => api_thumb(&mut stream, addr, &req),
+        "/api/thumb" => http::fail(
+            &mut stream,
+            "403 Forbidden",
+            "making thumbnails is off (--no-thumbnails)",
+        ),
         "/api/wait" => api_wait(&mut stream, addr, &req),
         "/api/explain" => api_explain(&mut stream, client, &req),
         "/api/preview" if doing.preview => api_preview(&mut stream, client, &req),
@@ -447,6 +473,13 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         // the page asks for the ones that do rather than for
                         // two hundred that mostly do not.
                         "thumb": icons::has_thumbnail(&h.path, h.kind),
+                        // And whether one *could* be made — the third state a
+                        // blank tile was missing. Nothing has ever previewed
+                        // this file, but the machine declares a thumbnailer
+                        // for its type, so it is worth asking for once it
+                        // stops moving. Free: two hash lookups and no syscall,
+                        // and it answers no for almost every row.
+                        "make": icons::may_thumbnail(&h.path, h.kind),
                     })
                 })
                 .collect();
@@ -487,6 +520,61 @@ fn api_icon(stream: &mut TcpStream, req: &http::Req) {
     match picture {
         Some(p) => http::cached(stream, p.kind, &p.bytes),
         None => http::fail(stream, "404 Not Found", "no thumbnail"),
+    }
+}
+
+/// Ask the desktop for the pictures it has not made yet.
+///
+/// **This route carries no bytes.** It says which paths have a picture now,
+/// and the page then fetches them from `/api/icon` exactly as it fetches the
+/// ones that were already there. That is deliberate: the reading half was made
+/// cheap and cacheable and there was no reason to grow a second way to do it.
+///
+/// **Its own connection to the service, like `/api/wait`.** The shared pool is
+/// eight and a batch of thumbnails is seconds of somebody else's video
+/// decoding; a search that queued behind one would be the exact failure this
+/// whole design is arranged around — nothing on the path a keystroke takes.
+/// Opening a socket costs microseconds next to what is about to happen on the
+/// other end of it.
+///
+/// The service is where the bound and the fence are. Nothing here decides how
+/// many may run, or whether a path may be touched.
+fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
+    // **In the body, not the query.** A screenful of paths percent-encoded is
+    // several kilobytes and the request line is bounded at sixteen; over that
+    // it is cut rather than refused, which surfaces as a 404 for a path
+    // nobody asked for. Newline-separated because `\n` is the one byte a
+    // filename on any of these platforms cannot hold, and because a body needs
+    // no escaping to survive the trip.
+    let files: Vec<String> = req
+        .body
+        .split('\n')
+        .map(str::trim_end)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if files.is_empty() {
+        http::json(stream, &serde_json::json!({ "ready": [], "ran": 0 }));
+        return;
+    }
+    let mut client = match Client::connect(addr) {
+        Ok(c) => c,
+        Err(e) => {
+            http::fail(stream, "502 Bad Gateway", &e.to_string());
+            return;
+        }
+    };
+    match client.call(Request::Thumbnails { files }) {
+        Ok(Response::Thumbnails(made)) => http::json(
+            stream,
+            // `ran` is the number the design has to be judged on — how many
+            // processes a screenful of unseen files actually starts. Sent to
+            // the page so that the claim can be read out of a running window
+            // rather than argued about.
+            &serde_json::json!({ "ready": made.ready, "ran": made.ran }),
+        ),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e.to_string()),
     }
 }
 

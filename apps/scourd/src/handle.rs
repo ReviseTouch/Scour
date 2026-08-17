@@ -20,6 +20,15 @@ use scour_proto::{Outcome, Request, Response};
 pub struct Kept {
     pub dir: PathBuf,
     pub settings: Mutex<scour_settings::Settings>,
+    /// The one thing on this machine allowed to start thumbnailers.
+    ///
+    /// **Singular, and that is the whole argument for it being here.** How
+    /// many image decoders may run at once is a fact about the machine, not
+    /// about a browser; three frontends each holding a sensible bound of their
+    /// own is a machine with no bound at all. It sits beside `settings` for
+    /// the same reason `settings` is here: it is not about the index, and the
+    /// service is the one process every frontend already talks to.
+    pub maker: scour_thumbs::Maker,
 }
 
 impl Kept {
@@ -27,6 +36,7 @@ impl Kept {
         Kept {
             settings: Mutex::new(scour_settings::Settings::load(&dir)),
             dir,
+            maker: scour_thumbs::Maker::default(),
         }
     }
 }
@@ -160,6 +170,29 @@ fn run(
                 std::path::Path::new(&entry.path),
                 entry.is_dir,
             ))
+        }
+        // **The same fence as `preview`, and it matters more here**: this runs
+        // a program on the file. Every path is `stat`ed through the engine
+        // first, so a path no source owns never reaches a thumbnailer — and
+        // the `stat` is not wasted, because the modification time it returns
+        // is what the standard requires be written into the picture.
+        //
+        // A path the index does not hold is dropped rather than refused. A
+        // batch is a screenful of tiles and one file deleted since the page
+        // drew it is ordinary; failing all thirty-two over it would mean a
+        // grid that stops filling whenever anything moves.
+        Request::Thumbnails { files } => {
+            let wanted: Vec<scour_thumbs::Wanted> = files
+                .iter()
+                .take(scour_thumbs::Maker::BATCH)
+                .filter_map(|path| engine.stat(path).ok())
+                .filter(|entry| !entry.is_dir)
+                .map(|entry| scour_thumbs::Wanted {
+                    path: entry.path.clone(),
+                    mtime: entry.meta.mtime,
+                })
+                .collect();
+            Response::Thumbnails(kept.maker.make(&wanted))
         }
         Request::Explain { query, cursor } => {
             let e = engine.explain(&query, cursor);

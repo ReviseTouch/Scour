@@ -277,6 +277,36 @@ pub enum Request {
     /// wrong a layer higher: the page shipped with `/home/hasan` written into
     /// it. A frontend draws what it is told now.
     Places {},
+    /// Make the pictures this desktop has not made yet.
+    ///
+    /// **Asked of the service because the bound is about the machine.** A
+    /// thumbnail is produced by a separate process doing image or video
+    /// decoding, and how many of those may run at once is one number for the
+    /// whole desktop. A bridge that bounded itself to four, a window that
+    /// bounded itself to four and a terminal that bounded itself to four would
+    /// each be reasonable and the machine would be running twelve. There is one
+    /// [`scour_thumbs::Maker`], in `scourd`, for the same reason there is one
+    /// index.
+    ///
+    /// It follows the split `Preview` already made: the *decision and the
+    /// work* cross the wire, the *bytes* do not. What comes back is which
+    /// paths have a picture now — the caller then reads it out of the shared
+    /// cache the way it already read the ones that were already there.
+    ///
+    /// **This one is allowed to take its time**, like `await` and unlike
+    /// everything else: it is seconds of somebody else's decoding. A caller
+    /// that cannot afford to wait must not put it where waiting matters —
+    /// `scour-web` gives it a connection of its own so a search never queues
+    /// behind one.
+    ///
+    /// Fenced like `stat` and for a much better reason than `preview`: this
+    /// **runs a program on the file**. Only a path the index holds.
+    Thumbnails {
+        /// At most [`scour_thumbs::Maker::BATCH`]; the rest are ignored. A
+        /// frontend is not a fence, so the cap is applied here as well as
+        /// there.
+        files: Vec<String>,
+    },
     /// The configured sources and what each can do.
     Sources {},
     Status {},
@@ -448,6 +478,7 @@ pub enum Response {
     Usage(UsageResponse),
     Places(scour_places::Places),
     Preview(scour_preview::Look),
+    Thumbnails(scour_thumbs::Made),
     Explain {
         /// The query as it was understood.
         description: String,
@@ -497,6 +528,13 @@ impl Request {
             Request::Rescan { .. }
             | Request::Maintain { .. }
             | Request::SetSettings { .. }
+            // **It starts programs and writes files.** Nothing about the index
+            // changes, so this is the looser reading of "mutating" — but this
+            // predicate is the MCP server's security boundary rather than a
+            // classification, and "a model may cause this machine to run a
+            // handful of image decoders on files it chose" is not something to
+            // arrive at by leaving a variant on the quiet side of a match.
+            | Request::Thumbnails { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
             | Request::Export { .. }
@@ -548,6 +586,7 @@ impl Request {
             | Request::Status {}
             | Request::Stats {}
             | Request::Await { .. }
+            | Request::Thumbnails { .. }
             | Request::Rescan { .. }
             | Request::Maintain { .. }
             | Request::Syntax {}
@@ -566,6 +605,7 @@ impl Request {
             Request::Stat { .. } => "stat",
             Request::Places {} => "places",
             Request::Preview { .. } => "preview",
+            Request::Thumbnails { .. } => "thumbnails",
             Request::Usage { .. } => "usage",
             Request::Duplicates { .. } => "duplicates",
             Request::Settings {} => "settings",
@@ -588,7 +628,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_three_requests_change_anything() {
+    fn what_changes_something_is_named_one_by_one() {
         // The MCP server refuses everything this calls mutating, so the list
         // is a security boundary rather than a classification. Named one by
         // one: `is_mutating` is exhaustive, so a new variant cannot be
@@ -600,6 +640,9 @@ mod tests {
                 level: Maintenance::Compact,
             },
             Request::Shutdown {},
+            // Not a write to the index — a write to the desktop's thumbnail
+            // cache, and a handful of processes started to fill it.
+            Request::Thumbnails { files: Vec::new() },
         ];
         for r in &mutating {
             assert!(r.is_mutating(), "{} has to be refused", r.name());
@@ -701,6 +744,9 @@ mod tests {
             },
             Request::Syntax {},
             Request::Shutdown {},
+            Request::Thumbnails {
+                files: vec!["/a/b.png".into()],
+            },
         ];
         let mut names = Vec::new();
         for r in all {
@@ -766,6 +812,10 @@ mod tests {
             Response::Text {
                 text: "hello".into(),
             },
+            Response::Thumbnails(scour_thumbs::Made {
+                ready: vec!["/a/b.png".into()],
+                ran: 1,
+            }),
         ];
         for r in all {
             let json = serde_json::to_string(&r)
