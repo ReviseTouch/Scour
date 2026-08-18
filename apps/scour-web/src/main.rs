@@ -60,6 +60,38 @@ use scour_proto::{Request, Response};
 /// and there is nothing here a user would want to edit separately.
 const PAGE: &str = include_str!("page.html");
 
+/// The page with its palette written in.
+///
+/// **The colours are not in `page.html` any more.** They were, and so were the
+/// same colours in `theme.slint`, and keeping the two the same was somebody
+/// remembering to — which had already failed once: the light scheme's focus
+/// ring said `#4a9eff` here and `#2f6ba3` there, and nothing could tell.
+/// [`scour_ui`] holds them now and both windows are written from it.
+///
+/// Built once. The page is served on every window open and this is a few
+/// hundred bytes of formatting that would otherwise be redone each time.
+fn page() -> &'static str {
+    static PAGE_WITH_THEME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PAGE_WITH_THEME.get_or_init(|| {
+        let dark = scour_ui::css_vars(&scour_ui::DARK);
+        let light = scour_ui::css_vars(&scour_ui::LIGHT);
+        let metrics = scour_ui::css_metrics();
+        // Four blocks, and each is load-bearing. The bare `:root` is what a
+        // browser with no opinion gets. The media query is the system
+        // preference. The two `[data-theme]` rules are the language menu's
+        // override and have to win over the media query, which is why they
+        // come last and repeat what the blocks above them already said.
+        let theme = format!(
+            ":root {{\n{dark}{metrics}  }}\n\n               @media (prefers-color-scheme: light) {{\n    :root {{\n{light}    }}\n  }}\n               :root[data-theme=\"light\"] {{\n{light}  }}\n               :root[data-theme=\"dark\"] {{\n{dark}  }}\n"
+        );
+        PAGE.replacen(
+            "/* @THEME@ — see `scour-ui`; the bridge writes this block when it serves\n     the page, so that the window and this page cannot drift apart. */",
+            &theme,
+            1,
+        )
+    })
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "scour-web", about = "Scour in a browser", version)]
 struct Args {
@@ -295,7 +327,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
             &mut stream,
             "200 OK",
             "text/html; charset=utf-8",
-            PAGE.as_bytes(),
+            page().as_bytes(),
         ),
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/csv" => api_csv(&mut stream, client, &req),
@@ -1720,6 +1752,69 @@ mod tests {
             Err(e) => eprintln!("the_page_script_parses: skipped, no node here ({e})"),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The page's palette is written from `scour-ui`, not from the page.
+    ///
+    /// **This is the guard on a class of bug that had already happened.** The
+    /// colours were declared twice — here and in `theme.slint` — and staying
+    /// equal was somebody remembering to. The light scheme's focus ring had
+    /// drifted apart, `#4a9eff` on this side and `#2f6ba3` on the other, and
+    /// nothing anywhere could tell.
+    ///
+    /// Two things are checked, and the second is the one that matters: that
+    /// the marker was actually replaced (a served page carrying `@THEME@`
+    /// would have no colours at all), and that a variable the page *uses* is
+    /// present with the value the shared crate holds. Delete the injection and
+    /// this fails; change a colour in one place only and it cannot happen,
+    /// because there is only one place.
+    #[test]
+    fn the_page_takes_its_palette_from_the_shared_crate() {
+        let served = super::page();
+        assert!(
+            !served.contains("@THEME@"),
+            "the marker survived: the page is served with no palette"
+        );
+        for (name, colour) in [
+            ("--ground", scour_ui::DARK.ground),
+            ("--q-key", scour_ui::DARK.q_key),
+            ("--mark", scour_ui::DARK.mark),
+            ("--focus", scour_ui::DARK.focus),
+        ] {
+            let want = format!("{name}: {};", colour.css());
+            assert!(
+                served.contains(&want),
+                "the served page does not carry `{want}`"
+            );
+        }
+        // **And the served route actually calls it.** The first version of
+        // this test checked `page()` and passed happily with the route still
+        // handing out the raw `PAGE` — a page with a `@THEME@` comment where
+        // its colours should be. Verified by breaking it: the assertion above
+        // did not move. Reading this file back is blunt, and it is the only
+        // thing here that fails when the wiring is undone rather than when the
+        // formatting is.
+        //
+        // **Spelled in two pieces**, because the first attempt at this looked
+        // for the whole call and found it — in its own source, three lines up.
+        // A test that reads the file it is written in matches itself.
+        let me = include_str!("main.rs");
+        let call = concat!("page()", ".as_bytes()");
+        assert!(
+            me.contains(call),
+            "the `/` route no longer serves `page()`, so the palette is not injected"
+        );
+
+        // And the light scheme reaches the two blocks that override the media
+        // query — the language menu writes `data-theme`, and a block missing
+        // there is a switch that half works.
+        let light = scour_ui::LIGHT.panel.css();
+        assert_eq!(
+            served.matches(&format!("--panel: {light};")).count(),
+            2,
+            "the light panel colour should appear in both the media query and \
+             the `[data-theme=\"light\"]` block"
+        );
     }
 
     /// **Nor on the catalogue**, which is the same property one layer out.

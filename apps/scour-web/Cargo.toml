@@ -31,6 +31,8 @@ scour-proto  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
+# The palette, shared with the Slint window so the two cannot drift.
+scour-ui     = { workspace = true }
 # The one thing here that is not about search. It has no dependency of its own
 # — not even `scour-core` — because "what can be shown of this file" is a
 # question about a file and a decoder, not about an index.

@@ -4575,6 +4575,7 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-proto",
+ "scour-ui",
  "slint",
  "slint-build",
 ]
@@ -4709,6 +4710,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-ui"
+version = "0.1.0"
+
+[[package]]
 name = "scour-watch"
 version = "0.1.0"
 dependencies = [
@@ -4728,6 +4733,7 @@ dependencies = [
  "scour-preview",
  "scour-proto",
  "scour-thumbs",
+ "scour-ui",
  "serde_json",
 ]
 

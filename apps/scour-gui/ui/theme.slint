@@ -1,66 +1,116 @@
-// The palette, in one place.
+// The palette, in one place — and that place is `crates/scour-ui`.
 //
-// Taken from the design mockup rather than invented here, and the two halves
-// are not the same colours lightened: a dark interface reads by luminance and
-// a light one by hue, so each was chosen against its own ground.
+// **The colours are not written here any more.** They were, and the same
+// colours were written in `page.html`, and the two staying equal was somebody
+// remembering to. That had already failed: the light scheme's focus ring said
+// `#2f6ba3` here and `#4a9eff` there, and nothing anywhere could tell.
 //
-// Slint already receives the platform colour scheme from its window backend.
-// Binding to that avoids a synchronous `gsettings` process at start and keeps
-// an open window in step when the desktop changes.
+// `main.rs` fills the two schemes at start-up from `scour_ui::DARK` and
+// `scour_ui::LIGHT`. This file keeps what is genuinely Slint's: which scheme
+// applies, and the names the rest of the window uses.
+//
+// Slint receives the platform colour scheme from its window backend. Binding
+// to that avoids a synchronous `gsettings` process at start and keeps an open
+// window in step when the desktop changes — which is also why the *choice*
+// stays here rather than being made in Rust and pushed in.
 
 import { Palette } from "std-widgets.slint";
 
+// One scheme's worth of colour. Mirrors `scour_ui::Palette`; the generated
+// Rust struct is what `main.rs` builds.
+export struct Scheme {
+    ground: brush,
+    panel: brush,
+    panel-2: brush,
+    line: brush,
+    line-soft: brush,
+    ink: brush,
+    ink-2: brush,
+    ink-3: brush,
+    mark: brush,
+    mark-ink: brush,
+    pick: brush,
+    focus: brush,
+    hover: brush,
+    t0: brush,
+    t1: brush,
+    t2: brush,
+    t3: brush,
+    t4: brush,
+    t5: brush,
+    q-key: brush,
+    q-val: brush,
+    q-glob: brush,
+    q-not: brush,
+    q-bad: brush,
+}
+
 export global Theme {
     in property <bool> dark: Palette.color-scheme != ColorScheme.light;
+    in property <Scheme> dark-scheme;
+    in property <Scheme> light-scheme;
+
+    // The one place the choice is made. Everything below reads through it, so
+    // a window already open re-colours itself when the desktop switches.
+    out property <Scheme> c: dark ? dark-scheme : light-scheme;
 
     // --- surfaces ---------------------------------------------------------
-    out property <brush> ground: dark ? #0d1117 : #f7f5f0;
-    out property <brush> panel: dark ? #131920 : #fffefb;
-    out property <brush> panel-2: dark ? #171e26 : #f1efe9;
-    out property <brush> line: dark ? #212a35 : #ddd8cd;
-    out property <brush> line-soft: dark ? #1a222c : #e8e4db;
+    out property <brush> ground: c.ground;
+    out property <brush> panel: c.panel;
+    out property <brush> panel-2: c.panel-2;
+    out property <brush> line: c.line;
+    out property <brush> line-soft: c.line-soft;
 
     // --- text -------------------------------------------------------------
-    out property <brush> ink: dark ? #e7eaee : #1c1e21;
-    out property <brush> ink-2: dark ? #9aa5b1 : #5c636c;
-    out property <brush> ink-3: dark ? #63707e : #8a9198;
+    out property <brush> ink: c.ink;
+    out property <brush> ink-2: c.ink-2;
+    out property <brush> ink-3: c.ink-3;
 
     // --- accents ----------------------------------------------------------
-    out property <brush> mark: dark ? #ffd24a : #ffdf6b;
-    out property <brush> mark-ink: dark ? #1a1200 : #2a1f00;
-    out property <brush> focus: dark ? #4a9eff : #2f6ba3;
-    out property <brush> selection: dark ? #1d2b3d : #dce8f5;
-    out property <brush> hover: dark ? #171f29 : #efece4;
+    out property <brush> mark: c.mark;
+    out property <brush> mark-ink: c.mark-ink;
+    out property <brush> focus: c.focus;
+    out property <brush> hover: c.hover;
+    // What a selected row is tinted with. **`pick`, and translucent**, which is
+    // the browser's answer: a row can be selected *and* hold a match at once,
+    // and an opaque fill would bury the match wash under it.
+    out property <brush> selection: c.pick;
 
     // --- age, oldest last -------------------------------------------------
     //
     // Six steps rather than a gradient, because the question they answer is
     // ordinal: is this from today, this week, or before I started.
-    out property <brush> t0: dark ? #ffb020 : #d98600;
-    out property <brush> t1: dark ? #ff7a45 : #d4532a;
-    out property <brush> t2: dark ? #c2688f : #a8447a;
-    out property <brush> t3: dark ? #7a6fc4 : #5f52ad;
-    out property <brush> t4: dark ? #4a7fb5 : #2f6ba3;
-    out property <brush> t5: dark ? #3b4a58 : #97a1ac;
+    out property <brush> t0: c.t0;
+    out property <brush> t1: c.t1;
+    out property <brush> t2: c.t2;
+    out property <brush> t3: c.t3;
+    out property <brush> t4: c.t4;
+    out property <brush> t5: c.t5;
 
     // --- the query line ---------------------------------------------------
     //
     // Five roles and no more. Two of them say *this is not what you think it
     // is*, which is the only reason the colouring earns its place.
-    out property <brush> q-key: dark ? #7fa9e0 : #2f6ba3; // field, comparison
-    out property <brush> q-val: dark ? #6fc2a0 : #1a7a58; // value, quoted text
-    out property <brush> q-glob: dark ? #b48ce0 : #6b3fa0; // wildcard
-    out property <brush> q-not: dark ? #e8825a : #b8531f; // exclusion
-    out property <brush> q-bad: dark ? #ff5f56 : #c0392b; // read as plain text
+    out property <brush> q-key: c.q-key;
+    out property <brush> q-val: c.q-val;
+    out property <brush> q-glob: c.q-glob;
+    out property <brush> q-not: c.q-not;
+    out property <brush> q-bad: c.q-bad;
 
     // --- metrics ----------------------------------------------------------
-    out property <length> unit: 4px;
-    out property <length> row-height: 30px;
-    out property <length> radius: 6px;
+    //
+    // Filled from `scour_ui::METRICS` for the same reason the colours are: the
+    // row pitch is what both virtual lists are built on, and two windows
+    // disagreeing about it is two windows scrolling differently.
+    in property <length> unit: 4px;
+    in property <length> row-height: 30px;
+    in property <length> radius: 6px;
 }
 
 export global Fonts {
-    out property <string> mono: "monospace";
-    out property <length> size: 13px;
+    in property <string> mono: "monospace";
+    in property <length> size: 13px;
+    // Not shared: a second text size is this window's own typography, and the
+    // page has several rather than one.
     out property <length> small: 11px;
 }

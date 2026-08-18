@@ -1,0 +1,17 @@
+[package]
+name        = "scour-ui"
+description = "What every Scour window agrees on: the palette, the metrics."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **No dependencies, and that is the point.** This is data. A window reads it
+# and turns it into whatever its own toolkit wants — CSS custom properties,
+# Slint globals, terminal escape codes. Nothing here knows any of them.
+[dependencies]

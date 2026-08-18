@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Facet, MainWindow, Row, Theme};
+pub use ui::{Facet, Fonts, MainWindow, Row, Scheme, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -284,6 +284,7 @@ fn main() -> Result<()> {
     let config = scour_config::Config::load_or_default().0;
     let cat = Rc::new(Catalogue::for_language(&language(&config)));
     let window = MainWindow::new().context("the window could not be created")?;
+    dress(&window);
     trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
@@ -1066,6 +1067,68 @@ fn open(path: &str) {
 /// chosen in the browser window is *stored* where this can reach it and is not
 /// yet read here. Passing it through `choose` rather than around it is what
 /// makes that one line's work when the lane exists.
+/// Hand the window its palette.
+///
+/// **The colours come from `scour-ui`, which the browser page is also written
+/// from.** Before this they were written twice — once in `theme.slint`, once
+/// in `page.html` — and staying equal was somebody remembering to. It had
+/// already failed: the light scheme's focus ring was `#2f6ba3` here and
+/// `#4a9eff` there.
+///
+/// Both schemes are pushed, not one: which of them applies is Slint's to
+/// decide, because it is the only side that hears the desktop change its mind
+/// while the window is open.
+fn dress(window: &MainWindow) {
+    let theme = window.global::<Theme>();
+    theme.set_dark_scheme(scheme(&scour_ui::DARK));
+    theme.set_light_scheme(scheme(&scour_ui::LIGHT));
+    theme.set_unit(scour_ui::METRICS.unit);
+    theme.set_row_height(scour_ui::METRICS.row);
+    theme.set_radius(scour_ui::METRICS.radius);
+
+    let fonts = window.global::<Fonts>();
+    fonts.set_size(scour_ui::METRICS.size);
+    // The page names a stack and lets the browser pick; a native window asks
+    // the platform for one family. Taking the first name would ask for
+    // `ui-monospace`, which no font server knows — so the generic is what both
+    // ends up resolving to anyway, said plainly.
+    fonts.set_mono("monospace".into());
+}
+
+/// One `scour-ui` palette, in the shape the window's generated struct wants.
+fn scheme(p: &scour_ui::Palette) -> Scheme {
+    let c = |x: &scour_ui::Rgba| {
+        let (a, r, g, b) = x.argb();
+        slint::Brush::SolidColor(slint::Color::from_argb_u8(a, r, g, b))
+    };
+    Scheme {
+        ground: c(&p.ground),
+        panel: c(&p.panel),
+        panel_2: c(&p.panel_2),
+        line: c(&p.line),
+        line_soft: c(&p.line_soft),
+        ink: c(&p.ink),
+        ink_2: c(&p.ink_2),
+        ink_3: c(&p.ink_3),
+        mark: c(&p.mark),
+        mark_ink: c(&p.mark_ink),
+        pick: c(&p.pick),
+        focus: c(&p.focus),
+        hover: c(&p.hover),
+        t0: c(&p.t[0]),
+        t1: c(&p.t[1]),
+        t2: c(&p.t[2]),
+        t3: c(&p.t[3]),
+        t4: c(&p.t[4]),
+        t5: c(&p.t[5]),
+        q_key: c(&p.q_key),
+        q_val: c(&p.q_val),
+        q_glob: c(&p.q_glob),
+        q_not: c(&p.q_not),
+        q_bad: c(&p.q_bad),
+    }
+}
+
 fn language(cfg: &scour_config::Config) -> String {
     scour_i18n::choose("", &cfg.ui.language)
 }
@@ -1073,6 +1136,35 @@ fn language(cfg: &scour_config::Config) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window's palette is the one the browser page is written from.
+    ///
+    /// **The guard on a drift that had already happened.** These colours were
+    /// written here *and* in `page.html`, and keeping them equal was somebody
+    /// remembering to — which failed quietly: the light scheme's focus ring
+    /// was `#2f6ba3` in this file and `#4a9eff` in that one, and no test
+    /// anywhere could tell.
+    ///
+    /// What this checks is the conversion, which is where a mistake would
+    /// otherwise be invisible: Slint takes alpha first and the browser takes
+    /// it last, so a channel swapped here would be right for `#ffffff` and
+    /// wrong for everything else.
+    #[test]
+    fn the_window_wears_the_shared_palette() {
+        let dark = scheme(&scour_ui::DARK);
+        let want = |c: &scour_ui::Rgba| {
+            let (a, r, g, b) = c.argb();
+            slint::Brush::SolidColor(slint::Color::from_argb_u8(a, r, g, b))
+        };
+        assert_eq!(dark.ground, want(&scour_ui::DARK.ground));
+        assert_eq!(dark.q_key, want(&scour_ui::DARK.q_key));
+        // The translucent one, which is the case a channel swap survives.
+        assert_eq!(dark.pick, want(&scour_ui::DARK.pick));
+        assert_eq!(dark.mark, want(&scour_ui::DARK.mark));
+
+        let light = scheme(&scour_ui::LIGHT);
+        assert_ne!(light.ground, dark.ground, "both schemes came out the same");
+    }
 
     #[test]
     fn only_plain_words_are_highlighted() {
