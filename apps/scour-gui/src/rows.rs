@@ -6,6 +6,8 @@
 //! would be a second implementation of something that
 //! already exists in `scour-core`, and the two would drift.
 
+use std::cell::{Cell, RefCell};
+
 use humansize::{BINARY, format_size};
 use scour_core::{Hit, Kind, text::Folder};
 
@@ -221,36 +223,67 @@ mod tests {
 /// **Why this shape.** A `VecModel` holds every row the view can show, so a
 /// window over five million results has to be a sliding window — and then the
 /// scrollbar measures the window, scrolling past its edge shows blank, and
-/// every fetch has to move the viewport back to where the eye was. All three
-/// were fixed separately today and all three came back.
+/// every fetch has to move the viewport back to where the eye was.
 ///
 /// `Model` inverts it: `row_count` is the real total, so the view sizes itself
 /// and its scrollbar correctly and asks for exactly the rows it is about to
-/// draw. `row_data` answers from the loaded window, and when it is asked for a
-/// row outside that window it says so — [`Rows::wanted`] is how the window
-/// learns which page to fetch next. A row that has not arrived is drawn empty
-/// for one frame rather than left as a hole.
+/// draw. `row_data` answers from the loaded window, and a row that has not
+/// arrived is drawn empty for one frame rather than left as a hole.
 ///
 /// Taken from `Hukuk-Dosyalar`'s `RowsModel`, which does the same thing over a
 /// store that is already in memory.
+///
+/// ## What the notifications have to be
+///
+/// This model is refreshed while somebody is looking at it — every time the
+/// index moves, and every time a page arrives — and **how** it says so decides
+/// whether the list stays still. [`slint::ModelNotify::reset`] means *the
+/// whole thing changed*: the view throws its elements away, rebuilds them, and
+/// re-clamps a viewport it has just re-measured. Doing that on every reply is
+/// what made scrolling jump, flash, and land back at the top.
+///
+/// So a reset happens for one reason only — the list got longer or shorter, so
+/// the view really does have to re-measure. A page landing in a list of
+/// unchanged length is [`slint::ModelNotify::row_changed`] over the rows that
+/// actually differ, which leaves the viewport, the scrollbar and every element
+/// outside those rows exactly where they were.
 pub struct Rows {
-    loaded: std::cell::RefCell<Vec<Row>>,
+    loaded: RefCell<Vec<Row>>,
     /// Where `loaded` begins in the whole result.
-    offset: std::cell::Cell<usize>,
+    offset: Cell<usize>,
     /// How long the result is, which is what the view is sized from.
-    total: std::cell::Cell<usize>,
+    total: Cell<usize>,
+    /// The page a fetch is out for.
+    ///
+    /// Without it, every frame drawn between asking and answering reports the
+    /// same miss again, and each one moves the window somewhere slightly
+    /// different — a list that fetches forever and never settles.
+    asked: Cell<Option<(usize, usize)>>,
     /// A row the view asked for and this could not answer.
-    want: std::cell::Cell<Option<usize>>,
+    want: Cell<Option<usize>>,
+    /// The most rows a page has ever actually held.
+    ///
+    /// What the service gives, which is not always what was asked for: it has
+    /// a page ceiling of its own. See [`Rows::served`].
+    served: Cell<usize>,
+    /// How many times the view has been told to re-measure.
+    ///
+    /// Kept because it is the number the scrolling bug was made of: it should
+    /// move when the result's length changes and at no other time.
+    resets: Cell<u64>,
     notify: slint::ModelNotify,
 }
 
 impl Default for Rows {
     fn default() -> Self {
         Rows {
-            loaded: std::cell::RefCell::new(Vec::new()),
-            offset: std::cell::Cell::new(0),
-            total: std::cell::Cell::new(0),
-            want: std::cell::Cell::new(None),
+            loaded: RefCell::new(Vec::new()),
+            offset: Cell::new(0),
+            total: Cell::new(0),
+            asked: Cell::new(None),
+            want: Cell::new(None),
+            served: Cell::new(0),
+            resets: Cell::new(0),
             notify: slint::ModelNotify::default(),
         }
     }
@@ -260,11 +293,104 @@ impl Rows {
     /// Hand over a page: the rows, where they start, and how long the whole
     /// result is.
     pub fn put(&self, rows: Vec<Row>, offset: usize, total: usize) {
+        let before = (self.offset.get(), self.loaded.borrow().len());
+        let grew = total != self.total.get();
+        self.served.set(self.served.get().max(rows.len()));
         *self.loaded.borrow_mut() = rows;
         self.offset.set(offset);
         self.total.set(total);
+        self.asked.set(None);
         self.want.set(None);
-        self.notify.reset();
+        if grew {
+            self.reset();
+            return;
+        }
+        let after = (offset, self.loaded.borrow().len());
+        for row in touched(before, after, total) {
+            self.notify.row_changed(row);
+        }
+    }
+
+    /// The length changed and nothing else did.
+    ///
+    /// The interactive search counts only to its cap, so the first answer to
+    /// `a` says a thousand and the exact count arrives a moment later. Without
+    /// this the list stays a thousand rows tall over an index of millions —
+    /// and then jumps the first time a page happens to be fetched.
+    pub fn set_total(&self, total: usize) {
+        // Never shorter than what is already loaded: a list that says it holds
+        // fewer rows than it is holding cannot draw the ones it has.
+        let total = total.max(self.offset.get() + self.loaded.borrow().len());
+        if total == self.total.get() {
+            return;
+        }
+        self.total.set(total);
+        self.reset();
+    }
+
+    /// Take the arrival flags off the rows that are loaded.
+    ///
+    /// **Only the ones that are loaded**, which is the whole point. This used
+    /// to walk `0..row_count()` — the whole result — asking the model for
+    /// every row: seconds of frozen window on a large index, and every one of
+    /// those millions of misses looked to the model like the view asking for a
+    /// row it could not see, which sent the list somewhere else entirely.
+    pub fn clear_fresh(&self) {
+        let offset = self.offset.get();
+        let mut cleared = Vec::new();
+        {
+            let mut loaded = self.loaded.borrow_mut();
+            for (i, row) in loaded.iter_mut().enumerate() {
+                if row.fresh {
+                    row.fresh = false;
+                    cleared.push(offset + i);
+                }
+            }
+        }
+        for row in cleared {
+            self.notify.row_changed(row);
+        }
+    }
+
+    /// Note that a page has been asked for, so the same miss is not asked for
+    /// again on every frame until it lands.
+    pub fn asking(&self, offset: usize, limit: usize) {
+        self.asked.set(Some((offset, limit)));
+        self.want.set(None);
+    }
+
+    /// Forget that a page was asked for, because its answer is not coming.
+    ///
+    /// A refused query and a service that went away both leave a request
+    /// unanswered, and without this the window would sit behind a page that
+    /// will never land and never ask for another.
+    pub fn forget_asking(&self) {
+        self.asked.set(None);
+    }
+
+    /// Where the page that is current *or on its way* begins.
+    ///
+    /// The two differ for as long as a fetch is in flight, and the live
+    /// refresh has to ask about the second one: re-fetching the page that is
+    /// on screen while a scroll is being answered put the answer to the scroll
+    /// on screen and then replaced it with where the list used to be.
+    pub fn page_now(&self) -> usize {
+        match self.asked.get() {
+            Some((offset, _)) => offset,
+            None => self.offset.get(),
+        }
+    }
+
+    /// Whether `count` rows from `first` still have to be fetched: not loaded,
+    /// and not already on their way.
+    pub fn needs(&self, first: usize, count: usize) -> bool {
+        if self.covers(first, count) {
+            return false;
+        }
+        match self.asked.get() {
+            Some((offset, limit)) => first < offset || first + count > offset + limit,
+            None => true,
+        }
     }
 
     /// The row the view asked for and did not get, if any. Taken, not read:
@@ -273,13 +399,70 @@ impl Rows {
         self.want.take()
     }
 
-    pub fn offset(&self) -> usize {
-        self.offset.get()
+    /// Whether `count` rows from `first` can all be drawn from what is loaded.
+    ///
+    /// What the window polls, rather than waiting to be told. A miss reported
+    /// by `row_data` only arrives if the view draws the missing row, and after
+    /// a page lands somewhere the eye is not, it never does — which is a list
+    /// that loads its first page and then stops.
+    pub fn covers(&self, first: usize, count: usize) -> bool {
+        let total = self.total.get();
+        if total == 0 {
+            return true;
+        }
+        let first = first.min(total - 1);
+        let last = first.saturating_add(count).min(total);
+        let offset = self.offset.get();
+        let len = self.loaded.borrow().len();
+        first >= offset && last <= offset + len
     }
 
     pub fn loaded_len(&self) -> usize {
         self.loaded.borrow().len()
     }
+
+    /// How many rows a page actually holds.
+    ///
+    /// **Observed, not assumed.** The service has a page ceiling of its own,
+    /// and if it is lower than what this asks for, a page pinned to the end of
+    /// the result stops short of it — so the last rows of a long list are
+    /// asked for, drawn blank, and asked for again for as long as anybody
+    /// looks at them. This is the evidence for how big a page really is.
+    pub fn served(&self) -> usize {
+        self.served.get().max(1)
+    }
+
+    pub fn total(&self) -> usize {
+        self.total.get()
+    }
+
+    /// How many times the view has been told to re-measure. See [`Rows`].
+    #[cfg(test)]
+    pub fn resets(&self) -> u64 {
+        self.resets.get()
+    }
+
+    fn reset(&self) {
+        self.resets.set(self.resets.get() + 1);
+        self.notify.reset();
+    }
+}
+
+/// The rows two windows disagree about: everything either of them held.
+///
+/// A page arriving in place changes the rows it lands on and the rows it
+/// leaves behind, and nothing else in a result of millions.
+fn touched(
+    before: (usize, usize),
+    after: (usize, usize),
+    total: usize,
+) -> impl Iterator<Item = usize> {
+    let ends = |(offset, len): (usize, usize)| (offset, offset + len);
+    let (a0, a1) = ends(before);
+    let (b0, b1) = ends(after);
+    let from = a0.min(b0);
+    let to = a1.max(b1).min(total);
+    from..to.max(from)
 }
 
 impl slint::Model for Rows {
@@ -298,6 +481,12 @@ impl slint::Model for Rows {
         // Outside the loaded window. Remember the first such row — the view
         // asks for a run of them and they all want the same page — and give
         // back a blank so the list keeps its shape while it arrives.
+        if let Some((offset, limit)) = self.asked.get()
+            && row >= offset
+            && row < offset + limit
+        {
+            return Some(Row::default());
+        }
         if self.want.get().is_none() {
             self.want.set(Some(row));
         }
@@ -306,5 +495,124 @@ impl slint::Model for Rows {
 
     fn model_tracker(&self) -> &dyn slint::ModelTracker {
         &self.notify
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    use slint::Model;
+
+    fn page(n: usize) -> Vec<Row> {
+        (0..n).map(|_| Row::default()).collect()
+    }
+
+    #[test]
+    fn the_list_is_as_long_as_the_result_not_as_the_page() {
+        let rows = Rows::default();
+        rows.put(page(256), 0, 2_500_000);
+        assert_eq!(rows.row_count(), 2_500_000);
+        assert_eq!(rows.loaded_len(), 256);
+    }
+
+    #[test]
+    fn a_page_landing_in_place_does_not_make_the_view_re_measure() {
+        // The live refresh: the same query, the same length, new rows. A reset
+        // here is a rebuilt list and a re-clamped viewport, which is what the
+        // scrolling jump was.
+        let rows = Rows::default();
+        rows.put(page(256), 0, 10_000);
+        let after_first = rows.resets();
+        rows.put(page(256), 0, 10_000);
+        rows.put(page(256), 128, 10_000);
+        assert_eq!(
+            rows.resets(),
+            after_first,
+            "no reset while the length holds"
+        );
+
+        // And when the length really does change, the view has to be told.
+        rows.put(page(256), 128, 20_000);
+        assert_eq!(rows.resets(), after_first + 1);
+    }
+
+    #[test]
+    fn the_exact_count_lengthens_the_list_it_does_not_reload_it() {
+        // The search counts to its cap; the exact total follows a moment
+        // later. Until this existed the list stayed as long as the cap.
+        let rows = Rows::default();
+        rows.put(page(256), 0, 1_000);
+        rows.set_total(2_481_902);
+        assert_eq!(rows.row_count(), 2_481_902);
+        assert_eq!(rows.loaded_len(), 256, "the page it was showing is intact");
+        rows.set_total(2_481_902);
+        assert_eq!(rows.resets(), 2, "and saying it twice costs nothing");
+    }
+
+    #[test]
+    fn a_row_outside_the_window_is_asked_for_once() {
+        let rows = Rows::default();
+        rows.put(page(256), 0, 10_000);
+        assert!(rows.row_data(300).is_some(), "drawn blank, not left a hole");
+        rows.row_data(301);
+        assert_eq!(rows.wanted(), Some(300), "the first miss, not the last");
+        assert_eq!(rows.wanted(), None, "taken, so one fetch per miss");
+    }
+
+    #[test]
+    fn a_page_already_on_its_way_is_not_asked_for_again() {
+        let rows = Rows::default();
+        rows.put(page(256), 0, 10_000);
+        rows.asking(256, 256);
+        rows.row_data(300);
+        assert_eq!(rows.wanted(), None, "the answer to this is already coming");
+        assert!(!rows.needs(300, 30), "and the window does not ask twice");
+        // Somewhere else entirely, though, is a different question.
+        rows.row_data(9_000);
+        assert_eq!(rows.wanted(), Some(9_000));
+        assert!(rows.needs(9_000, 30));
+        assert_eq!(rows.page_now(), 256, "the refresh follows the fetch");
+        // A refusal or a service that went away leaves the page unanswered,
+        // and the window has to be able to ask again.
+        rows.forget_asking();
+        assert!(rows.needs(300, 30));
+    }
+
+    #[test]
+    fn a_page_is_as_big_as_the_service_makes_it() {
+        let rows = Rows::default();
+        // The first page is only what fits on screen; the ones after it are
+        // full. What a page holds is the biggest of them, not the latest.
+        rows.put(page(24), 0, 10_000);
+        assert_eq!(rows.served(), 24);
+        rows.put(page(200), 0, 10_000);
+        rows.put(page(13), 9_987, 10_000);
+        assert_eq!(rows.served(), 200, "the short tail is not a smaller page");
+    }
+
+    #[test]
+    fn what_is_loaded_is_what_can_be_drawn() {
+        let rows = Rows::default();
+        rows.put(page(256), 128, 10_000);
+        assert!(rows.covers(128, 30));
+        assert!(rows.covers(354, 30));
+        assert!(!rows.covers(127, 30), "one row above the window");
+        assert!(!rows.covers(355, 30), "runs off the end of it");
+        // The end of the result is covered by whatever is left of it.
+        rows.put(page(40), 9_960, 10_000);
+        assert!(rows.covers(9_990, 30));
+    }
+
+    #[test]
+    fn the_arrival_flags_come_off_what_is_loaded_and_nothing_else() {
+        let rows = Rows::default();
+        let mut marked = page(4);
+        marked[1].fresh = true;
+        rows.put(marked, 1_000, 2_000_000);
+        let before = rows.resets();
+        rows.clear_fresh();
+        assert!(!rows.row_data(1_001).unwrap().fresh);
+        assert_eq!(rows.resets(), before, "clearing a flag is not a re-measure");
+        assert_eq!(rows.wanted(), None, "and it asks for nothing");
     }
 }

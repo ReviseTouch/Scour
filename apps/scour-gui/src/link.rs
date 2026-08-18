@@ -100,6 +100,14 @@ pub enum Ask {
 pub enum Got {
     Search {
         generation: u64,
+        /// Where the page this answers begins.
+        ///
+        /// **Carried, not remembered.** A page fetch does not advance the
+        /// generation, so two searches for the same query at different offsets
+        /// are both current; a window that read "which offset did I last ask
+        /// for" off its own state put the first answer at the second answer's
+        /// place, and drew rows a hundred lines from where they belong.
+        offset: u32,
         reply: Box<Response>,
     },
     Facets {
@@ -429,6 +437,12 @@ fn spawn_lane(
                 ),
                 Ask::Stop => break,
             };
+            // The page this request asked for, read back off the request
+            // itself so the answer can say where it goes. See `Got::Search`.
+            let offset = match &request {
+                Request::Search { page, .. } => page.offset,
+                _ => 0,
+            };
             match c.call(request) {
                 Ok(reply) => {
                     let reply = Box::new(reply);
@@ -443,6 +457,7 @@ fn spawn_lane(
                         },
                         Lane::Search => Got::Search {
                             generation: revision,
+                            offset,
                             reply,
                         },
                         Lane::Places => Got::Places(reply),

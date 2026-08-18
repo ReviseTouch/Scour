@@ -67,14 +67,14 @@ pub fn build(config: &Config) -> Result<Engine> {
                     .max(config.service.commit_interval_ms),
             ),
             rebuild_threshold: config.index.rebuild_threshold,
-            // Raised to the browser window's fetch run and no further. That
-            // page asks for fixed runs of 200 rows and records the whole run as
-            // loaded, so a ceiling under it leaves rows that never arrive.
-            // Above it the number in the file is the owner's and is taken as
-            // written — this was `.max(1_000)`, which silently ignored every
-            // value below a thousand including `UiCfg`'s own default of 200, so
-            // the setting could not be believed at all.
-            result_limit: config.ui.result_limit.max(200),
+            // Raised to a window's fetch run and no further. Both windows ask
+            // for fixed runs of [`scour_core::PAGE_ROWS`] and record the whole
+            // run as loaded, so a ceiling under it leaves rows that never
+            // arrive. Above it the number in the file is the owner's and is
+            // taken as written — this was `.max(1_000)`, which silently
+            // ignored every value below a thousand including `UiCfg`'s own
+            // default, so the setting could not be believed at all.
+            result_limit: config.ui.result_limit.max(scour_core::PAGE_ROWS),
             ..EngineOptions::default()
         },
     ))

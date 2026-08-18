@@ -494,7 +494,59 @@ export component MainWindow inherits Window {
     /// strings allocated here, so asking for two hundred to draw twenty was
     /// paying nine tenths of that for nothing.
     out property <int> visible-rows: max(20, Math.floor(list.height / Theme.row-height) + 12);
-    in-out property <length> scroll-y <=> list.viewport-y;
+    // --- the scrollbar ----------------------------------------------------
+    //
+    // **Drawn by this window, in a lane of its own.** The style's own bar is a
+    // two-pixel hairline drawn *over* the list, and both halves of that were
+    // wrong here: it is invisible against a dark panel, and it sits on the
+    // size column — whose digits are the ones that must not be covered. A
+    // gutter cannot fix the second half, because a column somebody has dragged
+    // wider makes the rows wider than the list and the overlay lands on them
+    // wherever the gutter is.
+    //
+    // So the list gives up 14px and the bar gets them. The arithmetic is the
+    // flickable's own: how far there is to scroll, how much of it is on
+    // screen, and where in it the viewport currently sits.
+    property <length> sb-inset: 4px;
+    property <length> sb-span: max(0px, list.viewport-height - list.visible-height);
+    property <length> sb-track: list.visible-height - 2 * root.sb-inset;
+    /// Never shorter than this, however long the result is. Two and a half
+    /// million rows would otherwise put a thumb on screen too small to hit.
+    property <length> sb-thumb: root.sb-span <= 0px ? 0px
+        : max(36px, root.sb-track * list.visible-height / list.viewport-height);
+    property <length> sb-travel: max(0px, root.sb-track - root.sb-thumb);
+    property <length> sb-y: root.sb-inset + (root.sb-span <= 0px ? 0px
+        : root.sb-travel * min(1.0, max(0.0, (0px - list.viewport-y) / root.sb-span)));
+
+    /// Put the thumb's top at `y` and take the list with it.
+    function scroll-thumb-to(y: length) {
+        if (root.sb-travel <= 0px) {
+            return;
+        }
+        list.viewport-y = 0px - root.sb-span
+            * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel));
+    }
+
+    /// Put the list back to the top, or a measured distance down it.
+    ///
+    /// **A function rather than a property aliased to `viewport-y`.** The
+    /// scroll position is the `ListView`'s to keep — it corrects it as it
+    /// measures rows, clamps it at both ends, and hands it to the scrollbar.
+    /// Two-way binding it out to the window put a second owner on it; setting
+    /// it is a thing the window does twice, and only ever on purpose.
+    public function scroll-to(down: length) {
+        list.viewport-y = 0px - down;
+    }
+    /// The first row of the result the list is showing.
+    ///
+    /// **What the window polls.** The model can say "I was asked for a row I
+    /// do not hold", but only if the view draws that row — and once a page has
+    /// landed somewhere the eye is not, it never does, which is a list that
+    /// loads its first page and then stops. This is the position itself, read
+    /// off the viewport, so the fetch decision never depends on a miss being
+    /// reported.
+    out property <int> first-row:
+        max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
     // The query as Rust folded it back — set only when Rust changes the text
     // itself (a facet click), never on every keystroke, or the caret jumps.
     in-out property <string> query;
@@ -524,23 +576,12 @@ export component MainWindow inherits Window {
     callback rule-toggled(string);
     callback bar-clicked(int);
     callback column-dragged(string, length);
-    // direction: -1 for the preceding window, +1 for the following one.
-    // first-visible anchors the same global row after the bounded model slides.
-    callback need-page(int, int);
-
-    changed visible-rows => {
-        if (root.rows.length > 0 && root.visible-rows > root.rows.length) {
-            root.need-page(1, max(0,
-                Math.floor((0px - list.viewport-y) / Theme.row-height)));
-        }
-    }
+    // **No page callbacks.** The list is a model whose length is the whole
+    // result, so there is no window for the view to slide and no anchor for it
+    // to keep: it scrolls, and the window fetches what scrolled into sight.
 
     public function focus-query() {
         input.focus();
-    }
-
-    public function anchor-row(row: int) {
-        list.viewport-y = 0px - max(row, 0) * Theme.row-height;
     }
 
     forward-focus: input;
@@ -690,20 +731,12 @@ export component MainWindow inherits Window {
                                 list.viewport-y = list.visible-height
                                     - (root.selected + 1) * Theme.row-height;
                             }
-                            if (root.rows.length > 0 && root.selected >= root.rows.length - 4) {
-                                root.need-page(1, max(0,
-                                    Math.floor((0px - list.viewport-y) / Theme.row-height)));
-                            }
                             return accept;
                         }
                         if (e.text == Key.UpArrow) {
                             root.selected = max(root.selected - 1, 0);
                             if (root.selected * Theme.row-height + list.viewport-y < 0px) {
                                 list.viewport-y = 0px - root.selected * Theme.row-height;
-                            }
-                            if (root.selected <= 3) {
-                                root.need-page(-1, max(0,
-                                    Math.floor((0px - list.viewport-y) / Theme.row-height)));
                             }
                             return accept;
                         }
@@ -1013,6 +1046,8 @@ export component MainWindow inherits Window {
                 }
 
                 list := ListView {
+                    // The window draws its own, in the lane below. See `sb-`.
+                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
                     // **Over the model, not over a count.** A `for` on an
                     // integer builds every element at once, which took the
@@ -1183,12 +1218,21 @@ export component MainWindow inherits Window {
                             // drawn in the query's key colour, which is what
                             // the page does: the one distinction worth a
                             // colour in a list of names is "this one opens".
+                            // **The icon's 15px and its gap come out of this
+                            // column, not out of the row.** They were an extra
+                            // child beside the five the headings describe, so
+                            // every row was 23px wider than the header above
+                            // it: the list scrolled sideways under a bar
+                            // nobody asked for, and each heading sat 23px to
+                            // the left of the column it names. The page puts
+                            // the icon inside the name cell for the same
+                            // reason.
                             Marked {
                                 pre: here.pre;
                                 hit: here.hit;
                                 post: here.post;
                                 colour: here.is-dir ? Theme.q-key : Theme.ink;
-                                width: root.cw-name;
+                                width: max(0px, root.cw-name - 15px - 8px);
                             }
 
                             Text {
@@ -1236,6 +1280,66 @@ export component MainWindow inherits Window {
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
                             }
+                        }
+                    }
+                }
+            }
+
+            // --------------------------------------------------------------
+            // The scrollbar's lane. Beside the list, never over it — see the
+            // `sb-` properties for why, and for the arithmetic.
+            // --------------------------------------------------------------
+            VerticalLayout {
+                width: 14px;
+
+                // Level with the column headings, and carrying their rule
+                // across so the line under them does not stop short.
+                Rectangle {
+                    height: 31px;
+                    background: Theme.panel;
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+                }
+
+                Rectangle {
+                    background: Theme.panel;
+
+                    thumb := Rectangle {
+                        x: 4px;
+                        width: 6px;
+                        y: root.sb-y;
+                        height: root.sb-thumb;
+                        border-radius: 3px;
+                        // Quiet until it is wanted, like the page's own.
+                        background: grab.pressed ? Theme.ink-2
+                            : grab.has-hover ? Theme.ink-3 : Theme.line;
+                        visible: root.sb-span > 0px;
+                        animate background { duration: 120ms; }
+                    }
+
+                    grab := TouchArea {
+                        // Where the thumb was when this press began.
+                        property <length> from;
+
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) {
+                                // A press on the track takes the thumb to the
+                                // pointer; a press on the thumb picks it up
+                                // where it is. Either way the drag continues
+                                // from there.
+                                if (self.mouse-y < thumb.y
+                                    || self.mouse-y > thumb.y + thumb.height) {
+                                    root.scroll-thumb-to(self.mouse-y - thumb.height / 2);
+                                }
+                                self.from = thumb.y;
+                            }
+                        }
+
+                        moved => {
+                            root.scroll-thumb-to(self.from + self.mouse-y - self.pressed-y);
                         }
                     }
                 }

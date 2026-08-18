@@ -25,10 +25,11 @@ pub use traits::{ChangeSink, ContentSink, EntrySink, Extractor, Flow, Index, Sou
 pub use types::{
     AGE_BANDS, ApplyReport, Ast, Caps, Change, Cmp, Completion, CompletionKind, DirUsage, Entry,
     EntryId, Error, Facet, FacetBy, FacetGroup, FacetRequest, FacetResponse, Group, Hit,
-    IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, Page, PrefixSet,
-    Result, Role, ScanOptions, ScanReport, ScanRequest, SearchRequest, SearchResponse, SortKey,
-    SourceId, SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode, UsageRequest,
-    UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest, runs_when_opened, under,
+    IndexStats, Key, Kind, MaintReport, Maintenance, Match, Meta, NumField, PAGE_ROWS, Page,
+    PrefixSet, Result, Role, ScanOptions, ScanReport, ScanRequest, SearchRequest, SearchResponse,
+    SortKey, SourceId, SourceInfo, SourceKind, Span, Status, Subtree, TimeField, TreeNode,
+    UsageRequest, UsageResponse, ext_of, ext_str, kind_of, mode_string, path_digest,
+    runs_when_opened, under,
 };
 
 /// Say something, and carry on if nobody is listening.

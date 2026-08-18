@@ -49,11 +49,25 @@ pub struct Page {
     pub count_cap: u32,
 }
 
+/// Rows in a page, and the smallest page a service may serve.
+///
+/// Two facts in one number, and they have to be one number. It is what a
+/// caller gets by default, and it is the floor `scourd` puts under a
+/// configured `result_limit` — so a client that asks for exactly this many is
+/// answered in full, whatever the configuration says.
+///
+/// A window that pages through a long result depends on that. It fetches a
+/// page around wherever the eye is, and if the service quietly served fewer
+/// rows than were asked for, the last page could never reach the end of the
+/// list: the rows down there would be asked for, drawn blank, asked for again,
+/// for as long as somebody looked at them.
+pub const PAGE_ROWS: u32 = 200;
+
 impl Default for Page {
     fn default() -> Self {
         Self {
             offset: 0,
-            limit: 200,
+            limit: PAGE_ROWS,
             count_cap: 10_000,
         }
     }
