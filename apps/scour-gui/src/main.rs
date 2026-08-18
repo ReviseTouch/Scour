@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Facet, Fonts, MainWindow, Row, Scheme, Theme};
+pub use ui::{Bar, Facet, Fonts, MainWindow, Row, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -631,6 +631,27 @@ fn main() -> Result<()> {
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
     FIRST.with(|f| f.set(Some(launched)));
+    // Type a query before the window opens, for the same reason `SCOUR_GUI_SNAP`
+    // exists: a picture of an empty box says nothing about how a query looks.
+    if let Ok(q) = std::env::var("SCOUR_GUI_QUERY") {
+        // Set, then tell the window once. Calling `query-changed` *and*
+        // letting the two-way binding fire it produced "rapor", "erapor",
+        // "emrapor" — the callback writing back into the property it was
+        // called from.
+        window.set_query(q.as_str().into());
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(80),
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_query_changed(w.get_query());
+                }
+            },
+        );
+    }
+
     // Photograph the window and leave, when asked. See [`snapshot`].
     if let Ok(path) = std::env::var("SCOUR_GUI_SNAP") {
         let weak = window.as_weak();
@@ -682,6 +703,13 @@ fn send_search(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: 
             s.descending,
         )
     };
+    // Beside the search, on the same lane and with the same coalescing: the
+    // colours belong to the query that is on screen, and the newest is the
+    // only one anybody will see.
+    link.send(Ask::Explain {
+        query_revision,
+        query: query.clone(),
+    });
     link.send(Ask::Search {
         generation,
         query_revision,
@@ -1009,6 +1037,44 @@ fn apply(
         // labels are the desktop's own words — `user-dirs.dirs` is written in
         // the language the desktop was set up in — so nothing here translates
         // them and nothing here guesses at `~/Documents`.
+        // The query, read back and cut into runs. Painted under the box.
+        //
+        // **The roles are the engine's**, mapped to five colours and nothing
+        // else. Two of them say *this is not what you think it is* — a field
+        // the parser did not recognise, a value it could not use — and those
+        // are the only reason the colouring earns its place: without them a
+        // mistyped `sizE:>1mb` is searched for as text and answers `0 of 0`,
+        // which is what a correct query matching nothing also answers.
+        Got::Explain {
+            query_revision,
+            reply,
+        } => {
+            if query_revision != state.borrow().query_revision {
+                return;
+            }
+            let Response::Explain { spans, .. } = *reply else {
+                return;
+            };
+            let query = full_query(&state.borrow());
+            let runs: Vec<Span> = spans
+                .iter()
+                .map(|sp| Span {
+                    text: query
+                        .get(sp.start as usize..(sp.start + sp.len) as usize)
+                        .unwrap_or_default()
+                        .into(),
+                    role: match sp.role {
+                        scour_core::Role::Field => 1,
+                        scour_core::Role::Value => 2,
+                        scour_core::Role::Glob => 3,
+                        scour_core::Role::Not => 4,
+                        scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
+                        _ => 0,
+                    },
+                })
+                .collect();
+            w.set_spans(ModelRc::new(VecModel::from(runs)));
+        }
         Got::Places(reply) => {
             let Response::Places(p) = *reply else {
                 trace(&format!("places: unexpected reply {reply:?}"));

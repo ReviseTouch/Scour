@@ -55,6 +55,18 @@ export struct Bar {
     about: string,
 }
 
+// One coloured run of the query, as the engine cut it.
+//
+// **The engine cuts it, not this window.** A frontend that tokenised the query
+// itself would be a second parser, and the day the two disagreed the box would
+// be confidently colouring a lie. `Request::Explain` returns the runs; all
+// that is left here is a role and a colour.
+export struct Span {
+    text: string,
+    // 0 plain · 1 field · 2 value · 3 wildcard · 4 exclusion · 5 read as text
+    role: int,
+}
+
 export struct Facet {
     // How tall this row's bar is, 0..1 of the largest count in its section.
     // Computed in Rust: a max over a model is a loop per row per frame.
@@ -274,6 +286,7 @@ export component MainWindow inherits Window {
 
     // --- what Rust sets ---------------------------------------------------
     in property <[Row]> rows;
+    in property <[Span]> spans;
     in property <[Facet]> facets;
     in property <[Facet]> scopes;
     in property <[Facet]> sizes;
@@ -455,6 +468,31 @@ export component MainWindow inherits Window {
                 Rectangle {
                     horizontal-stretch: 1;
 
+                    // **The colours are a layer under a transparent box.**
+                    // Slint has no range colouring for editable text — the
+                    // upstream issue puts it out of scope — and this is the
+                    // browser page's own answer to the same limit: draw the
+                    // query again, in colour, exactly under the real one, and
+                    // let the caret and the selection show through. Both are
+                    // the same monospace at the same size, so the two line up
+                    // character for character.
+                    HorizontalLayout {
+                        alignment: start;
+                        for sp[i] in root.spans: Text {
+                            text: sp.text;
+                            font-family: Fonts.mono;
+                            font-size: 20px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                            color: sp.role == 1 ? Theme.q-key
+                                 : sp.role == 2 ? Theme.q-val
+                                 : sp.role == 3 ? Theme.q-glob
+                                 : sp.role == 4 ? Theme.q-not
+                                 : sp.role == 5 ? Theme.q-bad
+                                 : Theme.ink;
+                        }
+                    }
+
                     if root.query == "": Text {
                         x: 0;
                         width: parent.width;
@@ -469,7 +507,10 @@ export component MainWindow inherits Window {
 
                 input := TextInput {
                     text <=> root.query;
-                    color: Theme.ink;
+                    // Invisible ink: what the reader sees is the coloured layer
+                    // underneath. The caret is drawn by the input itself and is
+                    // not affected, which is the whole reason this works.
+                    color: transparent;
                     font-size: 20px;
                     font-weight: 600;
                     font-family: Fonts.mono;

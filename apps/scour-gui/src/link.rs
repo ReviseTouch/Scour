@@ -49,6 +49,15 @@ pub enum Ask {
         query: String,
     },
     /// How many match, exactly, once the typing has stopped.
+    /// Read the query back: the runs, and what each one is.
+    ///
+    /// Sent beside every search, because the colouring has to keep up with the
+    /// typing. It goes on the fast lane *and* is allowed to coalesce — the
+    /// newest query is the only one whose colours anybody will see.
+    Explain {
+        query_revision: u64,
+        query: String,
+    },
     /// This desktop's own folders, asked once at start-up.
     ///
     /// **Of the service, not of `scour-places` directly**, even though the
@@ -79,6 +88,10 @@ pub enum Got {
         reply: Box<Response>,
     },
     Places(Box<Response>),
+    Explain {
+        query_revision: u64,
+        reply: Box<Response>,
+    },
     /// The service answered, and the answer was no.
     ///
     /// Distinct from [`Got::Down`] because the two want opposite handling: a
@@ -141,7 +154,9 @@ impl Freshness {
     fn accepts(&self, ask: &Ask) -> bool {
         match ask {
             Ask::Search { generation, .. } => *generation == self.search.load(Ordering::Acquire),
-            Ask::Facets { query_revision, .. } | Ask::Count { query_revision, .. } => {
+            Ask::Facets { query_revision, .. }
+            | Ask::Count { query_revision, .. }
+            | Ask::Explain { query_revision, .. } => {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
             // Asked once and never superseded: there is no newer answer to
@@ -180,7 +195,13 @@ impl Link {
             // for anything asked once: `Places` went in and the search that
             // followed it a microsecond later swallowed it, every time, with
             // no error anywhere.
-            Ask::Facets { .. } | Ask::Count { .. } | Ask::Places => &self.slow,
+            // `Explain` joins them for the same reason `Places` did: the fast
+            // lane keeps only the newest queued request, and a search sent a
+            // microsecond later takes the colouring with it. Every one of
+            // these is cheap enough that the slow lane is not slow for them.
+            Ask::Facets { .. } | Ask::Count { .. } | Ask::Places | Ask::Explain { .. } => {
+                &self.slow
+            }
             _ => &self.fast,
         };
         // A closed channel means the lane died, and the window finds out from
@@ -204,6 +225,8 @@ enum Lane {
     Count,
     /// This desktop's folders, asked once and never superseded.
     Places,
+    /// The query read back, for the colouring.
+    Explain,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -313,6 +336,17 @@ fn spawn_lane(
                     },
                     Lane::Facets,
                 ),
+                Ask::Explain {
+                    query_revision,
+                    query,
+                } => (
+                    query_revision,
+                    Request::Explain {
+                        query,
+                        cursor: None,
+                    },
+                    Lane::Explain,
+                ),
                 Ask::Places => (0, Request::Places {}, Lane::Places),
                 Ask::Count {
                     query_revision,
@@ -344,6 +378,10 @@ fn spawn_lane(
                             reply,
                         },
                         Lane::Places => Got::Places(reply),
+                        Lane::Explain => Got::Explain {
+                            query_revision: revision,
+                            reply,
+                        },
                     });
                 }
                 Err(e) => {
@@ -363,7 +401,7 @@ fn spawn_lane(
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
-                            Lane::Places => ReplyRevision::Query(revision),
+                            Lane::Places | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {
                             revision,
