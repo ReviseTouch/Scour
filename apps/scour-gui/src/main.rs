@@ -772,6 +772,12 @@ fn main() -> Result<()> {
     // exists: a picture of an empty box says nothing about how a query looks.
     // Open a panel before the window does, for the same reason the query flag
     // exists: a picture of a closed panel says nothing about the panel.
+    // Force a scheme, for looking at the other one on a desktop that has
+    // made its choice.
+    if let Ok(scheme) = std::env::var("SCOUR_GUI_SCHEME") {
+        window.global::<Theme>().set_dark(scheme != "light");
+    }
+
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
         window.set_view_mode(mode.as_str().into());
     }

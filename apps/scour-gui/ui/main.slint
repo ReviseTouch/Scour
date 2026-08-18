@@ -128,13 +128,22 @@ component FacetRow inherits Rectangle {
     callback clicked();
 
     height: 24px;
+    // The pressed row is tinted *and* keeps its ink, because in the light
+    // scheme a translucent blue over cream is close enough to the hover that
+    // the two were telling the reader nothing apart.
     background: root.on ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
 
+    // Inset two pixels top and bottom and squared off at the left, exactly as
+    // the page draws it — and at full strength, not at half. Half an opacity
+    // over `line` is invisible in both schemes, which is a bar that is drawn,
+    // measured, and telling nobody anything.
     if root.share > 0: Rectangle {
         x: 0;
+        y: 2px;
+        height: parent.height - 4px;
         width: parent.width * root.share;
         background: Theme.line;
-        opacity: 0.55;
+        border-radius: 2px;
     }
 
     touch := TouchArea {
