@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Facet, Fonts, Kid, MainWindow, Row, Scheme, Span, Theme};
+pub use ui::{Bar, Dupe, Facet, Fonts, Kid, MainWindow, Row, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -250,7 +250,35 @@ impl State {
     }
 }
 
-/// The six age bands, in the order the colours run.
+/// How many of a group's paths are listed before the rest are counted.
+const SHOWN_PATHS: usize = 6;
+
+/// The size floors the duplicate hunt offers, and their words.
+///
+/// A unique size eliminates only 6.2% of files, so a floor is what makes the
+/// question answerable: candidates over a megabyte are eighteen thousand of
+/// them holding 141.8 GB — see `docs/REPORTS.md`.
+const FLOORS: [(u64, &str); 4] = [
+    (1 << 20, "1 MB+"),
+    (10 << 20, "10 MB+"),
+    (100 << 20, "100 MB+"),
+    (1 << 30, "1 GB+"),
+];
+
+/// Ask for the duplicates under the report's scope, at the chosen floor.
+///
+/// By size alone: reading is what turns a candidate into a duplicate and it
+/// reads whole files off a disk, so it is a second press rather than something
+/// that happens because somebody opened a panel.
+fn hunt(w: &MainWindow, link: &Rc<Link>, state: &Rc<RefCell<State>>) {
+    link.send(Ask::Dupes {
+        under: state.borrow().scope.clone(),
+        min_size: FLOORS[w.get_dupe_floor().clamp(0, 3) as usize].0,
+        read_budget: 0,
+    });
+}
+
+/// The six age bands, in the order the colours run./// The six age bands, in the order the colours run.
 const BANDS: [&str; 6] = [
     "today",
     "this week",
@@ -955,8 +983,112 @@ fn main() -> Result<()> {
             w.set_age_words(ModelRc::new(VecModel::from(
                 BANDS.iter().map(|b| t(&cat, b)).collect::<Vec<_>>(),
             )));
+            w.set_head_kinds(t(&cat, "By kind"));
+            w.set_head_biggest(t(&cat, "Largest files"));
+            w.set_head_jump(t(&cat, "Search in this folder"));
+            w.set_head_dupes(t(&cat, "Duplicate files"));
+            w.set_report_under(if path.is_empty() {
+                t(&cat, "everything")
+            } else {
+                path.clone()
+            });
+            w.set_jump_label(t(&cat, "Search in this scope"));
+            w.set_jump_note(t(
+                &cat,
+                "From the report into the search: an under: term is added to the query and the search tab opens with the same scope.",
+            ));
+            w.set_dupes_show(t(&cat, "show"));
+            w.set_dupes_hide(t(&cat, "hide"));
+            w.set_dupes_confirm(t(&cat, "Confirm by reading"));
+            w.set_dupe_floors(ModelRc::new(VecModel::from(
+                FLOORS
+                    .iter()
+                    .map(|(_, label)| slint::SharedString::from(*label))
+                    .collect::<Vec<_>>(),
+            )));
             link.send(Ask::Usage {
                 path: path.to_string(),
+            });
+            link.send(Ask::Kinds {
+                path: path.to_string(),
+            });
+            link.send(Ask::Biggest {
+                path: path.to_string(),
+            });
+            if w.get_dupes_open() {
+                hunt(&w, &link, &state);
+            }
+        });
+    }
+
+    // From the report into the search: the scope becomes an `under:` term and
+    // the search tab opens with it. One query rather than a second kind of
+    // scope the search would have to know about.
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let model = Rc::clone(&rows);
+        let weak = window.as_weak();
+        window.on_report_search(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let scope = state.borrow().scope.clone();
+            let query = if scope.is_empty() {
+                String::new()
+            } else {
+                format!("under:\"{scope}\"")
+            };
+            {
+                let mut s = state.borrow_mut();
+                s.query = query.clone();
+                s.facet = None;
+                s.advance_query();
+            }
+            w.set_query(query.as_str().into());
+            w.set_active_facet(slint::SharedString::new());
+            w.set_tab("search".into());
+            dispatch(&state, &link, &model, w.get_visible_rows().max(0) as u32);
+        });
+    }
+
+    // The duplicate hunt: not run unasked, and remembered once it is.
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_dupes_toggled(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let open = !w.get_dupes_open();
+            w.set_dupes_open(open);
+            if open {
+                hunt(&w, &link, &state);
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_dupes_floored(move |at| {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_dupe_floor(at);
+            if w.get_dupes_open() {
+                hunt(&w, &link, &state);
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_dupes_read(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // **Reading is the only thing that turns a candidate into a
+            // duplicate**, and it is asked for rather than assumed: it reads
+            // whole files off a disk.
+            link.send(Ask::Dupes {
+                under: state.borrow().scope.clone(),
+                min_size: FLOORS[w.get_dupe_floor().clamp(0, 3) as usize].0,
+                read_budget: 8 << 30,
             });
         });
     }
@@ -1285,6 +1417,9 @@ fn main() -> Result<()> {
     // flag exists: a picture of the search tab says nothing about the other one.
     if std::env::var("SCOUR_GUI_TAB").as_deref() == Ok("report") {
         window.set_tab("report".into());
+        // With the duplicate hunt open, when asked: it is the one part of the
+        // report that is not run unless somebody presses for it.
+        window.set_dupes_open(std::env::var_os("SCOUR_GUI_DUPES").is_some());
         window.invoke_report_open(slint::SharedString::new());
     }
 
@@ -1939,6 +2074,133 @@ fn apply(
                 return;
             }
             show_usage(w, cat, &path, &u);
+        }
+        // What kinds the weight under a folder is in — the same walk the
+        // search rail uses, scoped to the report's folder instead of to a
+        // query. Drawn as a share so that a bar answers before a number does.
+        Got::Kinds { path, reply } => {
+            let Response::Facets(f) = *reply else { return };
+            if path != state.borrow().scope {
+                return;
+            }
+            let kinds = f
+                .groups
+                .iter()
+                .find(|g| matches!(g.by, scour_core::FacetBy::Kind));
+            let Some(group) = kinds else { return };
+            let most = group
+                .facets
+                .iter()
+                .map(|k| k.count)
+                .max()
+                .unwrap_or(1)
+                .max(1);
+            // The kind's word comes from the engine's own msgid, the same way
+            // the rail's does — a window that spelled these itself would be a
+            // second vocabulary.
+            let mut rows: Vec<Facet> = Vec::new();
+            for kind in rows::offered_kinds() {
+                let token = kind.token();
+                let Some(hit) = group.facets.iter().find(|x| x.key == token) else {
+                    continue;
+                };
+                rows.push(Facet {
+                    label: t(cat, kind.msgid()),
+                    token: token.into(),
+                    count: grouped(hit.count).into(),
+                    share: hit.count as f32 / most as f32,
+                });
+            }
+            w.set_report_kinds(ModelRc::new(VecModel::from(rows)));
+        }
+        // The heaviest files under it. A page of eight, ordered by size, with
+        // no count asked for: nothing here reads a total and counting is the
+        // one piece of work proportional to how many match.
+        Got::Biggest { path, reply } => {
+            let Response::Search(r) = *reply else { return };
+            if path != state.borrow().scope {
+                return;
+            }
+            let rows: Vec<Facet> = r
+                .hits
+                .iter()
+                .map(|h| Facet {
+                    label: h.name().into(),
+                    token: h.path.as_str().into(),
+                    count: compact_bytes(h.meta.size.max(0) as u64).into(),
+                    share: 0.0,
+                })
+                .collect();
+            w.set_report_big(ModelRc::new(VecModel::from(rows)));
+        }
+        // The same file, several times over. **Being the same size is not
+        // being the same file**, and the word for a group says which of the
+        // two it is — `content` means read end to end and compared, and
+        // nothing else licenses the word "duplicate".
+        Got::Dupes(reply) => {
+            let Response::Duplicates {
+                groups,
+                candidates,
+                waste,
+                proven,
+                unconfirmed,
+                ..
+            } = *reply
+            else {
+                return;
+            };
+            w.set_dupes_sum(
+                t(cat, "{proven} confirmed · {waste} candidate · {n} files")
+                    .replace("{proven}", &compact_bytes(proven))
+                    .replace("{waste}", &compact_bytes(waste))
+                    .replace("{n}", &grouped(candidates))
+                    .into(),
+            );
+            w.set_dupes_note(
+                if unconfirmed == 0 {
+                    t(cat, "All of them were compared by reading.").to_string()
+                } else {
+                    t(
+                        cat,
+                        "Being the same size is not being the same file. {n} groups were not confirmed by reading — those are candidates, not duplicates.",
+                    )
+                    .replace("{n}", &grouped(unconfirmed))
+                }
+                .into(),
+            );
+            let list: Vec<Dupe> = groups
+                .iter()
+                .map(|g| Dupe {
+                    size: compact_bytes(g.size).into(),
+                    times: format!("×{}  ·  {}", g.paths.len(), compact_bytes(g.waste)).into(),
+                    certainty: t(
+                        cat,
+                        match g.certainty.as_str() {
+                            "content" => "identical",
+                            "edges" => "same ends",
+                            _ => "same size only",
+                        },
+                    ),
+                    proven: g.certainty == "content",
+                    // Six of them and a count, as the page has it: a group of
+                    // twenty-eight copies is a fact about the group, not
+                    // twenty-eight lines somebody has to scroll past to reach
+                    // the next one.
+                    paths: {
+                        let mut lines: Vec<String> =
+                            g.paths.iter().take(SHOWN_PATHS).cloned().collect();
+                        if g.paths.len() > SHOWN_PATHS {
+                            lines.push(format!(
+                                "… {}",
+                                t(cat, "{n} more")
+                                    .replace("{n}", &grouped((g.paths.len() - SHOWN_PATHS) as u64))
+                            ));
+                        }
+                        lines.join("\n").into()
+                    },
+                })
+                .collect();
+            w.set_dupes(ModelRc::new(VecModel::from(list)));
         }
         Got::Rules(reply) => {
             let Response::Rules {

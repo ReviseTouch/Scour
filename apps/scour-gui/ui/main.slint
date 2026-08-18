@@ -90,6 +90,20 @@ export struct Kid {
     a5: float,
 }
 
+// One group of files that might be the same file.
+//
+// `certainty` is the engine's own word for how far the checking got, and
+// `proven` is whether that word is `content` — read end to end and compared.
+// The two are separate because only the second licenses the word "duplicate":
+// being the same size is not being the same file.
+export struct Dupe {
+    size: string,
+    times: string,
+    certainty: string,
+    proven: bool,
+    paths: string,
+}
+
 // One coloured run of the query, as the engine cut it.
 //
 // **The engine cuts it, not this window.** A frontend that tokenised the query
@@ -621,6 +635,7 @@ export component MainWindow inherits Window {
     public function scroll-to(down: length) {
         list.viewport-y = 0px - down;
         tiles.viewport-y = 0px - down;
+        paper.viewport-y = 0px - down;
     }
     /// The first row of the result the list is showing.
     ///
@@ -682,6 +697,29 @@ export component MainWindow inherits Window {
     property <length> age-bar: 260px;
     /// The six band words, in the order the colours run.
     in property <[string]> age-words;
+    in property <string> head-kinds;
+    in property <string> head-biggest;
+    in property <string> head-jump;
+    in property <string> head-dupes;
+    in property <[Facet]> report-kinds;
+    in property <[Facet]> report-big;
+    in property <string> report-under;
+    in property <string> jump-label;
+    in property <string> jump-note;
+    callback report-search();
+    // The same file, several times over.
+    in property <bool> dupes-open;
+    in property <string> dupes-show;
+    in property <string> dupes-hide;
+    in property <string> dupes-sum;
+    in property <string> dupes-note;
+    in property <string> dupes-confirm;
+    in property <[string]> dupe-floors;
+    in property <int> dupe-floor;
+    in property <[Dupe]> dupes;
+    callback dupes-toggled();
+    callback dupes-floored(int);
+    callback dupes-read();
     in property <string> head-folder;
     in property <string> head-age;
     in property <string> head-share;
@@ -1114,13 +1152,31 @@ export component MainWindow inherits Window {
         // the two lists are: an id inside an `if` is out of scope, and the
         // window has to be able to reach both.
         // ------------------------------------------------------------------
-        VerticalLayout {
+        // **One scrolling document**, the way the page's report is: the
+        // panels and the duplicate list are below the fold on any window
+        // shorter than a desk, and a report you cannot reach the bottom of is
+        // a report with the answer cut off.
+        paper := ScrollView {
             visible: root.tab == "report";
             max-height: root.tab == "report" ? 100000px : 0px;
             min-height: 0px;
+            // **Said, not inferred.** A `ScrollView` does not learn how tall
+            // its content is from a layout inside it: without this the
+            // viewport is the view, there is no overflow, and the panels below
+            // the fold are unreachable rather than merely off screen.
+            viewport-height: sheet.preferred-height;
+
+            sheet := VerticalLayout {
+            // **Its natural height, not the view's.** A layout inside a
+            // `ScrollView` stretches to fill it like any other child, so the
+            // report was being squeezed into one screen — the panels cut off
+            // at the bottom and nothing to scroll to, because there was no
+            // overflow to scroll.
+            height: self.preferred-height;
             padding-left: 20px;
             padding-right: 20px;
             padding-top: 14px;
+            padding-bottom: 14px;
             spacing: 10px;
 
             // The scope, one segment a button: any ancestor is one press away.
@@ -1255,8 +1311,12 @@ export component MainWindow inherits Window {
                 }
             }
 
-            kidlist := ListView {
-                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+            // At most two dozen of them — `top` in the request says so — so
+            // this is a plain repeater and the report scrolls as one document,
+            // the way the page's does. A `ListView` here would be a second
+            // scrolling thing inside the first.
+            VerticalLayout {
+                spacing: 0px;
 
                 for kid[i] in root.kids: Rectangle {
                     height: 30px;
@@ -1400,6 +1460,297 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                     }
                 }
+            }
+
+            // Three panels, the page's own: what kinds the weight is in, the
+            // heaviest files under here, and the way from this folder into a
+            // search scoped to it.
+            HorizontalLayout {
+                spacing: 12px;
+
+                Rectangle {
+                    background: Theme.panel-2;
+                    border-width: 1px;
+                    border-color: Theme.line-soft;
+                    border-radius: 3px;
+                    // Even thirds, and none of them narrower than the page's
+                    // own floor: a panel that gives way to its neighbour ends
+                    // up eliding the words it exists to show.
+                    horizontal-stretch: 1;
+                    min-width: 215px;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+
+                        Text {
+                            text: root.head-kinds;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            font-weight: 650;
+                            letter-spacing: 1.2px;
+                        }
+
+                        for kind[i] in root.report-kinds: Rectangle {
+                            height: 19px;
+
+                            // The bar behind the words, as the page has it: a
+                            // share is read from a length before it is read
+                            // from a number.
+                            Rectangle {
+                                x: 0;
+                                width: parent.width * kind.share;
+                                height: parent.height;
+                                background: Theme.line-soft;
+                                border-radius: 2px;
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+
+                                Text {
+                                    text: kind.label;
+                                    color: Theme.ink-2;
+                                    font-size: 11.5px;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: kind.count;
+                                    color: Theme.ink-3;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                    width: 72px;
+                                }
+                            }
+                        }
+                        Rectangle { }
+                    }
+                }
+
+                Rectangle {
+                    background: Theme.panel-2;
+                    border-width: 1px;
+                    border-color: Theme.line-soft;
+                    border-radius: 3px;
+                    // Even thirds, and none of them narrower than the page's
+                    // own floor: a panel that gives way to its neighbour ends
+                    // up eliding the words it exists to show.
+                    horizontal-stretch: 1;
+                    min-width: 215px;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+
+                        Text {
+                            text: root.head-biggest;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            font-weight: 650;
+                            letter-spacing: 1.2px;
+                        }
+
+                        for big[i] in root.report-big: HorizontalLayout {
+                            height: 19px;
+                            spacing: 8px;
+
+                            Text {
+                                text: big.label;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: big.count;
+                                color: Theme.ink;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                font-weight: 650;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                width: 76px;
+                            }
+                        }
+                        Rectangle { }
+                    }
+                }
+
+                Rectangle {
+                    background: Theme.panel-2;
+                    border-width: 1px;
+                    border-color: Theme.line-soft;
+                    border-radius: 3px;
+                    // Even thirds, and none of them narrower than the page's
+                    // own floor: a panel that gives way to its neighbour ends
+                    // up eliding the words it exists to show.
+                    horizontal-stretch: 1;
+                    min-width: 215px;
+
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+
+                        Text {
+                            text: root.head-jump;
+                            color: Theme.ink-3;
+                            font-size: 10.5px;
+                            font-weight: 650;
+                            letter-spacing: 1.2px;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 8px;
+                            Text {
+                                text: "under:";
+                                color: Theme.q-key;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.report-under;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                overflow: elide;
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+                            Push {
+                                label: root.jump-label;
+                                clicked => {
+                                    root.report-search();
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: root.jump-note;
+                            color: Theme.ink-3;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        Rectangle { }
+                    }
+                }
+            }
+
+            // The same file, several times over. Not run unasked: it is a walk
+            // of every candidate, and looking at what a folder weighs should
+            // not start one.
+            HorizontalLayout {
+                spacing: 10px;
+                height: 30px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.head-dupes;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.dupes-open ? root.dupes-hide : root.dupes-show;
+                        clicked => {
+                            root.dupes-toggled();
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.dupes-sum;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { }
+
+                for floor[i] in root.dupe-floors: VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: floor;
+                        asking: i == root.dupe-floor;
+                        clicked => {
+                            root.dupes-floored(i);
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.dupes-confirm;
+                        clicked => {
+                            root.dupes-read();
+                        }
+                    }
+                }
+            }
+
+            if root.dupes-open: Text {
+                text: root.dupes-note;
+                color: Theme.ink-3;
+                font-size: 11.5px;
+                wrap: word-wrap;
+            }
+
+            if root.dupes-open: VerticalLayout {
+                spacing: 10px;
+
+                for group[i] in root.dupes: VerticalLayout {
+                    spacing: 2px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: group.size;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            font-weight: 650;
+                        }
+                        Text {
+                            text: group.times;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                        }
+                        Rectangle { }
+                        Text {
+                            text: group.certainty;
+                            color: group.proven ? Theme.t1 : Theme.q-bad;
+                            font-family: Fonts.mono;
+                            font-size: 11px;
+                        }
+                    }
+                    Text {
+                        text: group.paths;
+                        color: Theme.ink-3;
+                        font-family: Fonts.mono;
+                        font-size: 11px;
+                        wrap: no-wrap;
+                        overflow: elide;
+                    }
+                }
+            }
             }
         }
 

@@ -718,6 +718,14 @@ msgstr "Türe göre"
 msgid "Largest files"
 msgstr "En büyük dosyalar"
 
+# The button in that panel, and the sentence under it without the markup the
+# page hangs on `<code>`.
+msgid "Search in this scope"
+msgstr "Bu kapsamda ara"
+
+msgid "From the report into the search: an under: term is added to the query and the search tab opens with the same scope."
+msgstr "Rapordan aramaya geçiş: sorguya under: terimi eklenir, arama sekmesi aynı kapsamla açılır."
+
 msgid "Search in this folder"
 msgstr "Bu klasörde ara"
 

@@ -65,6 +65,20 @@ pub enum Ask {
     Usage {
         path: String,
     },
+    /// What kinds the weight under a folder is in.
+    Kinds {
+        path: String,
+    },
+    /// The heaviest files under a folder.
+    Biggest {
+        path: String,
+    },
+    /// The same file, several times over, under a folder.
+    Dupes {
+        under: String,
+        min_size: u64,
+        read_budget: u64,
+    },
     /// What the walk skips, in three groups.
     Rules,
     /// Wait until the index is no longer at `since`, then say so.
@@ -135,6 +149,15 @@ pub enum Got {
         path: String,
         reply: Box<Response>,
     },
+    Kinds {
+        path: String,
+        reply: Box<Response>,
+    },
+    Biggest {
+        path: String,
+        reply: Box<Response>,
+    },
+    Dupes(Box<Response>),
     Rules(Box<Response>),
     Status(Box<Response>),
     Awake(Box<Response>),
@@ -221,7 +244,10 @@ impl Freshness {
             | Ask::Status
             | Ask::Await { .. }
             | Ask::Remember { .. }
-            | Ask::Usage { .. } => true,
+            | Ask::Usage { .. }
+            | Ask::Kinds { .. }
+            | Ask::Biggest { .. }
+            | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
     }
@@ -276,6 +302,9 @@ impl Link {
             | Ask::Status
             | Ask::Remember { .. }
             | Ask::Usage { .. }
+            | Ask::Kinds { .. }
+            | Ask::Biggest { .. }
+            | Ask::Dupes { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -305,6 +334,12 @@ enum Lane {
     Explain,
     /// What a folder weighs.
     Usage,
+    /// What kinds are under it.
+    Kinds,
+    /// The heaviest files under it.
+    Biggest,
+    /// The same file, several times over.
+    Dupes,
     /// The exclusion rules.
     Rules,
     /// What the service is holding.
@@ -365,6 +400,13 @@ fn spawn_lane(
                 continue;
             }
             let Some(c) = client.as_mut() else { continue };
+            // Which folder a report answer is about, taken before the match
+            // consumes the request: a slow answer for a folder nobody is
+            // looking at any more is dropped rather than drawn.
+            let weighed = match &ask {
+                Ask::Usage { path } | Ask::Kinds { path } | Ask::Biggest { path } => path.clone(),
+                _ => String::new(),
+            };
             let (revision, request, facets) = match ask {
                 Ask::Search {
                     generation,
@@ -445,6 +487,68 @@ fn spawn_lane(
                     },
                     Lane::Usage,
                 ),
+                Ask::Kinds { ref path } => (
+                    0,
+                    Request::Facets {
+                        query: under(path),
+                        // **The age is asked for and thrown away**, and that
+                        // is not waste: a kind count on its own is capped at
+                        // two hundred thousand rows, and because rows are
+                        // stored newest-first a cap is not a sample — it is
+                        // the recent end of the index. The report would have
+                        // said a quarter of a million files where the rail
+                        // beside it says two and a half million. Asking for a
+                        // distribution too lifts the cap, and both are columns
+                        // read in the same walk.
+                        by: vec![
+                            scour_core::FacetBy::Kind,
+                            scour_core::FacetBy::Age {
+                                edges: scour_ui::bar_edges(),
+                            },
+                        ],
+                    },
+                    Lane::Kinds,
+                ),
+                Ask::Biggest { ref path } => (
+                    0,
+                    Request::Search {
+                        // **`file:` and not `!is:dir`.** Sorted by size a
+                        // folder is ordered by what is *under* it, so a list
+                        // of the largest without this is a list of the
+                        // heaviest folders showing their own size — every row
+                        // reading 0,0 MB beside a name that holds a hundred
+                        // gigabytes.
+                        query: match under(path).as_str() {
+                            "" => "file:".to_owned(),
+                            scope => format!("{scope} file:"),
+                        },
+                        sort: scour_core::SortKey::Size,
+                        descending: true,
+                        page: scour_core::Page {
+                            offset: 0,
+                            limit: 8,
+                            // Nothing here reads the total, and counting is
+                            // the one piece of work proportional to how many
+                            // match.
+                            count_cap: 1,
+                        },
+                    },
+                    Lane::Biggest,
+                ),
+                Ask::Dupes {
+                    ref under,
+                    min_size,
+                    read_budget,
+                } => (
+                    0,
+                    Request::Duplicates {
+                        under: under.clone(),
+                        min_size,
+                        read_budget,
+                        top: 40,
+                    },
+                    Lane::Dupes,
+                ),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Await { since } => (
@@ -477,10 +581,7 @@ fn spawn_lane(
             // Which folder a usage answer is about, read back off the
             // request so a slow one for a folder nobody is looking at any
             // more can be dropped rather than drawn.
-            let weighed = match &request {
-                Request::Usage { path, .. } => path.clone(),
-                _ => String::new(),
-            };
+
             let (offset, limit) = match &request {
                 Request::Search { page, .. } => (page.offset, page.limit),
                 _ => (0, 0),
@@ -508,6 +609,15 @@ fn spawn_lane(
                             path: weighed.clone(),
                             reply,
                         },
+                        Lane::Kinds => Got::Kinds {
+                            path: weighed.clone(),
+                            reply,
+                        },
+                        Lane::Biggest => Got::Biggest {
+                            path: weighed.clone(),
+                            reply,
+                        },
+                        Lane::Dupes => Got::Dupes(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Status => Got::Status(reply),
                         Lane::Await => Got::Awake(reply),
@@ -539,6 +649,9 @@ fn spawn_lane(
                             | Lane::Status
                             | Lane::Await
                             | Lane::Usage
+                            | Lane::Kinds
+                            | Lane::Biggest
+                            | Lane::Dupes
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {
@@ -566,6 +679,19 @@ fn newest_queued(mut ask: Ask, rx: &Receiver<Ask>) -> Ask {
         }
     }
     ask
+}
+
+/// A folder as a query term, and nothing at all for the whole index.
+///
+/// Quoted, because a path can hold a space and an unquoted term would end at
+/// it — leaving a scope that is a prefix of what was asked for, which reads as
+/// a correct answer to a different question.
+fn under(path: &str) -> String {
+    if path.is_empty() {
+        String::new()
+    } else {
+        format!("under:\"{path}\"")
+    }
 }
 
 fn sort_of(name: &str) -> scour_core::SortKey {
