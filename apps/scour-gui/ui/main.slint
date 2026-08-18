@@ -1098,18 +1098,27 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
-                        Tool { glyph: "≣"; on: root.view-mode == "detail";
-                               clicked => { root.view-clicked("detail"); } }
-                        // **Drawn, not wired.** The tile views were built and
-                        // taken back out: they need the list to be laid out in
-                        // lines rather than rows, and doing that by looping
-                        // over a count instead of the model cost the list its
-                        // virtualisation — two hundred rows became two hundred
-                        // live elements and scrolling stopped fetching. A
-                        // button that quietly breaks the list is worse than one
-                        // that does nothing, and this says which it is.
-                        Tool { glyph: "▦"; }
-                        Tool { glyph: "▣"; }
+                        Tool {
+                            glyph: "≣";
+                            on: root.view-mode == "detail";
+                            clicked => {
+                                root.view-clicked("detail");
+                            }
+                        }
+                        Tool {
+                            glyph: "▦";
+                            on: root.view-mode == "icons";
+                            clicked => {
+                                root.view-clicked("icons");
+                            }
+                        }
+                        Tool {
+                            glyph: "▣";
+                            on: root.view-mode == "large";
+                            clicked => {
+                                root.view-clicked("large");
+                            }
+                        }
                     }
                 }
             }
