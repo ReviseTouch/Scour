@@ -5279,15 +5279,25 @@ against:
 
 | offset | walked to | rows visited | reached | rows visited |
 |---|---:|---:|---:|---:|
-| 0 | 1.41 ms | 1,607 | — | — |
-| 1,000 | 1.45 ms | 4,752 | — | — |
-| 10,000 | 3.59 ms | 28,509 | **1.20 ms** | 216 |
-| 100,000 | 19.60 ms | 206,659 | **1.38 ms** | 357 |
-| 500,000 | 60.17 ms | 609,683 | **0.76 ms** | 364 |
-| 1,000,000 | 101.38 ms | 1,112,149 | **0.73 ms** | 230 |
-| 2,000,000 | 196.71 ms | 2,118,280 | **0.97 ms** | 4,977 |
-| 2,400,000 | 214.20 ms | 2,518,539 | **1.04 ms** | 203 |
-| 2,600,000 | 236.69 ms | 2,648,535 | **0.57 ms** | 200 |
+| 1,999 | 1.60 ms | 8,422 | — | — |
+| 2,000 | 1.99 ms | 8,424 | **0.59 ms** | 652 |
+| 7,777 | 4.53 ms | 22,544 | **0.53 ms** | 200 |
+| 10,000 | 4.87 ms | 28,509 | **0.55 ms** | 216 |
+| 100,000 | 22.57 ms | 206,659 | **0.73 ms** | 357 |
+| 123,456 | 22.12 ms | 230,997 | **2.51 ms** | 3,066 |
+| 500,000 | 56.40 ms | 609,683 | **0.52 ms** | 364 |
+| 1,000,000 | 97.00 ms | 1,112,149 | **0.48 ms** | 230 |
+| 1,500,001 | 153.03 ms | 1,616,234 | **0.59 ms** | 200 |
+| 2,000,000 | 192.62 ms | 2,118,280 | **0.70 ms** | 4,977 |
+| 2,345,678 | 245.10 ms | 2,463,962 | **0.73 ms** | 201 |
+| 2,600,000 | 254.25 ms | 2,648,535 | **0.51 ms** | 200 |
+
+Below `REACH_FROM` — 1,999 above — the two are the same walk, which is what
+the row counts say.
+
+**And the pages are the same pages.** Each run prints a digest of the paths it
+returned, and all eighteen offsets agree between the two columns. A page one
+row out is invisible in a timing table and obvious in this one.
 
 ```bash
 cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
@@ -5296,10 +5306,11 @@ cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx/na
 SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx/native
 ```
 
-**Depth stops costing anything.** The last row of two and a half million is a
-millisecond away, against a quarter of a second — and the rows visited say why:
-two hundred, which is the page. The 4,977 at two million is a group of files
-sharing one second, stepped through because there is no rank inside a tie.
+**Depth stops costing anything.** The last row of two and a half million is
+half a millisecond away, against a quarter of a second — and the rows visited
+say why: two hundred, which is the page. The 4,977 at two million and the
+3,066 at 123,456 are groups of files sharing one second, stepped through
+because there is no rank inside a tie.
 
 Below `REACH_FROM` the walk keeps every page it already answered in single-digit
 milliseconds, which is also every keystroke.
