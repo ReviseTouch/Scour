@@ -255,7 +255,10 @@ impl State {
 /// in the size column — the part of it this index has — and adding that into a
 /// total beside exact file sizes would make one number out of two different
 /// kinds of claim.
-fn picked_line(cat: &Catalogue, picks: &std::collections::BTreeMap<usize, rows::Pick>) -> String {
+fn picked_line(
+    cat: &Catalogue,
+    picks: &std::collections::BTreeMap<usize, rows::Pick>,
+) -> (String, String, String) {
     let dirs = picks.values().filter(|p| p.is_dir).count();
     let files = picks.len() - dirs;
     let bytes: u64 = picks
@@ -263,14 +266,26 @@ fn picked_line(cat: &Catalogue, picks: &std::collections::BTreeMap<usize, rows::
         .filter(|p| !p.is_dir)
         .map(|p| p.bytes.max(0) as u64)
         .sum();
-    let mut parts = vec![t(cat, "{n} selected").replace("{n}", &grouped(picks.len() as u64))];
+    let mut after = Vec::new();
     if files > 0 {
-        parts.push(compact_bytes(bytes));
+        after.push(compact_bytes(bytes));
     }
     if dirs > 0 {
-        parts.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
+        after.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
     }
-    parts.join("  ·  ")
+    // Split where the number goes rather than glued to the front of the
+    // sentence: a language does not have to put it first, and this one does
+    // not always want the word order English does.
+    let sentence = t(cat, "{n} selected");
+    let (pre, post) = sentence
+        .split_once("{n}")
+        .unwrap_or(("", sentence.as_str()));
+    let mut post = post.to_string();
+    for part in after {
+        post.push_str("  ·  ");
+        post.push_str(&part);
+    }
+    (pre.to_string(), grouped(picks.len() as u64), post)
 }
 
 /// The folders a selection sits in, each one once.
@@ -294,7 +309,10 @@ fn show_picks(
     asking: bool,
 ) {
     w.set_picked(picks.len() as i32);
-    w.set_picked_line(picked_line(cat, picks).into());
+    let (pre, n, post) = picked_line(cat, picks);
+    w.set_picked_pre(pre.into());
+    w.set_picked_n(n.into());
+    w.set_picked_post(post.into());
     w.set_pick_copy(t(cat, "Copy the paths"));
     w.set_pick_drop(t(cat, "Drop it"));
     w.set_pick_asking(asking);

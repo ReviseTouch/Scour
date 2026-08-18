@@ -650,7 +650,13 @@ export component MainWindow inherits Window {
     // sentence is written in Rust because it is three counts and a size in a
     // language's own word order, and this window does not spell any of those.
     in property <int> picked;
-    in property <string> picked-line;
+    // The sentence in three pieces, because the count is drawn brighter than
+    // the words around it and Slint has no rich text. The pieces come from
+    // the catalogue's own `{n} selected`, split where the number goes — so a
+    // language that puts the number last still gets it in the right place.
+    in property <string> picked-pre;
+    in property <string> picked-n;
+    in property <string> picked-post;
     in property <string> pick-copy;
     in property <string> pick-folders;
     in property <string> pick-drop;
@@ -1574,19 +1580,38 @@ export component MainWindow inherits Window {
                 background: Theme.line;
             }
 
+            // **What is selected on the left, what can be done with it on the
+            // right.** Not packed together at one end: the count is read and
+            // the buttons are aimed at, and a reader's eye should not have to
+            // travel past three buttons to find out how many.
             HorizontalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
                 spacing: 8px;
-                alignment: start;
 
                 VerticalLayout {
                     alignment: center;
-                    Text {
-                        text: root.picked-line;
-                        color: Theme.ink-2;
-                        font-size: Fonts.small;
-                        vertical-alignment: center;
+                    HorizontalLayout {
+                        spacing: 0px;
+                        Text {
+                            text: root.picked-pre;
+                            color: Theme.ink-3;
+                            font-size: Fonts.small;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.picked-n;
+                            color: Theme.ink;
+                            font-size: Fonts.small;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.picked-post;
+                            color: Theme.ink-3;
+                            font-size: Fonts.small;
+                            vertical-alignment: center;
+                        }
                     }
                 }
 
