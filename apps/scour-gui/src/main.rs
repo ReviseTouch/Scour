@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Facet, Fonts, MainWindow, Row, Scheme, Theme};
+pub use ui::{Bar, Facet, Fonts, MainWindow, Row, Scheme, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -329,6 +329,13 @@ fn main() -> Result<()> {
     // The rail's first section is the kinds, and the page calls it `Kind`.
     // `Everything` was this window's own word for the same thing.
     window.set_scope_label(t(&cat, "Kind"));
+    window.set_ribbon_label(t(&cat, "Time distribution"));
+    window.set_ribbon_hint(t(&cat, "results by date changed"));
+    window.set_axis_oldest(t(&cat, "2 years ago"));
+    window.set_axis_year(t(&cat, "1 year"));
+    window.set_axis_month(t(&cat, "1 month"));
+    window.set_axis_week(t(&cat, "1 week"));
+    window.set_axis_today(t(&cat, "today"));
 
     let addr = config.socket();
 
@@ -985,10 +992,28 @@ fn apply(
             let Response::Facets(f) = *reply else { return };
             // Ordered by the taxonomy rather than by count, so the rail does
             // not reshuffle under the pointer between two keystrokes.
+            // **Two questions, one walk.** The reply carries a group per
+            // question asked; `facets` is the first group flattened, kept for
+            // callers that ask one thing. Reading the groups by their `by` is
+            // what lets the ribbon and the rail come out of the same request
+            // without either guessing which half is theirs.
+            let kinds: &[scour_core::Facet] = f
+                .groups
+                .iter()
+                .find(|g| matches!(g.by, scour_core::FacetBy::Kind))
+                .map(|g| g.facets.as_slice())
+                .unwrap_or(&f.facets);
+            let ages: &[scour_core::Facet] = f
+                .groups
+                .iter()
+                .find(|g| matches!(g.by, scour_core::FacetBy::Age { .. }))
+                .map(|g| g.facets.as_slice())
+                .unwrap_or(&[]);
+
             let mut fresh: Vec<Facet> = Vec::new();
             for k in rows::offered_kinds() {
                 let token = k.token();
-                let Some(hit) = f.facets.iter().find(|x| x.key == token) else {
+                let Some(hit) = kinds.iter().find(|x| x.key == token) else {
                     continue;
                 };
                 fresh.push(Facet {
@@ -998,6 +1023,31 @@ fn apply(
                 });
             }
             facets.set_vec(fresh);
+
+            // The ribbon. Keys are the edges as text, newest first, and
+            // `older` is everything past the last one — the service's own
+            // wording, so nothing here has to know how the bands were made.
+            let edges = scour_ui::bar_edges();
+            let mut peak = 1i32;
+            let bars: Vec<Bar> = edges
+                .iter()
+                .map(|days| {
+                    let key = days.to_string();
+                    let count = ages
+                        .iter()
+                        .find(|x| x.key == key)
+                        .map(|x| x.count)
+                        .unwrap_or(0) as i32;
+                    peak = peak.max(count);
+                    Bar {
+                        count,
+                        band: scour_ui::band_of(*days as f64) as i32,
+                        about: String::new().into(),
+                    }
+                })
+                .collect();
+            w.set_bar_peak(peak);
+            w.set_bars(ModelRc::new(VecModel::from(bars)));
             let count_query = {
                 let mut s = state.borrow_mut();
                 if f.capped {

@@ -40,6 +40,16 @@ export struct Row {
 }
 
 // One facet of the rail: a kind, its count, and the token that filters by it.
+// One bar of the time ribbon: how many files fall in it, and which of the six
+// age bands it belongs to — the same band the rows' dates are painted with, so
+// a bar and the rows it stands for are the same colour.
+export struct Bar {
+    count: int,
+    band: int,
+    // What the bar covers, already worded: "up to 38 days", "older than 730".
+    about: string,
+}
+
 export struct Facet {
     label: string,
     token: string,
@@ -176,6 +186,17 @@ export component MainWindow inherits Window {
     // --- what Rust sets ---------------------------------------------------
     in property <[Row]> rows;
     in property <[Facet]> facets;
+    in property <[Bar]> bars;
+    // The tallest bar, so every other one is drawn as a share of it. Computed
+    // in Rust: a max over a Slint model is a loop per bar per frame.
+    in property <int> bar-peak: 1;
+    in property <string> ribbon-label;
+    in property <string> ribbon-hint;
+    in property <string> axis-oldest;
+    in property <string> axis-year;
+    in property <string> axis-month;
+    in property <string> axis-week;
+    in property <string> axis-today;
     in property <string> meter;
     in property <string> hint;
     in property <bool> busy;
@@ -712,6 +733,130 @@ export component MainWindow inherits Window {
                 }
             }
         }
+
+        // ------------------------------------------------------------------
+        // The time ribbon. 107px, off the page.
+        //
+        // Twenty-four bars on a logarithmic scale, so the last day, the last
+        // week and the last year all have room on one screen — a linear one
+        // spends twenty-three of them on "older than a month", which is the
+        // part nobody is looking for. The edges come from `scour-ui`, which is
+        // also where the page gets them.
+        // ------------------------------------------------------------------
+        Rectangle {
+            height: 107px;
+            background: Theme.panel-2;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            VerticalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-top: 10px;
+                padding-bottom: 12px;
+                spacing: 0px;
+
+                HorizontalLayout {
+                    Text {
+                        text: root.ribbon-label;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        font-weight: 650;
+                        letter-spacing: 1.8px;
+                        vertical-alignment: center;
+                        height: 15px;
+                    }
+                    Rectangle { }
+                    Text {
+                        text: root.ribbon-hint;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { height: 4px; }
+
+                // **The bars take what is left, the axis keeps its line.**
+                // Fixed at 42px they filled the ribbon and pushed the axis out
+                // of it — drawn, laid out, and clipped by the height above.
+                HorizontalLayout {
+                    spacing: 3px;
+                    alignment: stretch;
+
+                    for b[i] in root.bars: Rectangle {
+                        horizontal-stretch: 1;
+                        // Bottom-aligned: the bars grow up from a shared floor,
+                        // which is what makes twenty-four of them readable as
+                        // one shape rather than twenty-four rectangles.
+                        VerticalLayout {
+                            alignment: end;
+                            Rectangle {
+                                // A fixed ceiling, not a share of the parent:
+                                // asking the row how tall it is while the row
+                                // is sized by its tallest bar is a loop Slint
+                                // rejects at build time. 36px is what leaves
+                                // the axis its line inside the page's 107.
+                                height: b.count == 0 ? 2px
+                                    : max(4px, 36px * b.count / max(1, root.bar-peak));
+                                background: b.count == 0 ? Theme.line
+                                    : b.band == 0 ? Theme.t0 : b.band == 1 ? Theme.t1
+                                    : b.band == 2 ? Theme.t2 : b.band == 3 ? Theme.t3
+                                    : b.band == 4 ? Theme.t4 : Theme.t5;
+                            }
+                        }
+                    }
+                }
+
+                // The axis. Five marks rather than twenty-four: the scale is
+                // logarithmic and labelling every bar would be a wall of
+                // numbers, where the question is only ever "how far back am I
+                // looking".
+                HorizontalLayout {
+                    padding-top: 3px;
+
+                    Text {
+                        text: root.axis-oldest;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        horizontal-alignment: left;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.axis-year;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.axis-month;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.axis-week;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.axis-today;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        horizontal-alignment: right;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+
 
     }
     }

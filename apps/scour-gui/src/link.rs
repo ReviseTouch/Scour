@@ -277,9 +277,19 @@ fn spawn_lane(
                     query,
                 } => (
                     query_revision,
+                    // **Both in one request.** The rail's kinds and the
+                    // ribbon's ages are the same walk over the same matching
+                    // set; asking twice would pay for it twice, and the two
+                    // answers could then disagree about a query that changed
+                    // between them.
                     Request::Facets {
                         query,
-                        by: vec![scour_core::FacetBy::Kind],
+                        by: vec![
+                            scour_core::FacetBy::Kind,
+                            scour_core::FacetBy::Age {
+                                edges: scour_ui::bar_edges(),
+                            },
+                        ],
                     },
                     Lane::Facets,
                 ),

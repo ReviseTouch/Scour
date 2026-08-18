@@ -927,3 +927,6 @@ msgstr "pencere denetimleri"
 
 msgid "rows read"
 msgstr "satır okundu"
+
+msgid "results by date changed"
+msgstr "sonuçların değişme tarihine göre"

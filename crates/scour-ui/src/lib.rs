@@ -505,3 +505,78 @@ mod column_tests {
         }
     }
 }
+
+/// How many bars the time ribbon has.
+pub const BAR_COUNT: usize = 24;
+
+/// How far back the ribbon reaches, in days.
+pub const BAR_SPAN_DAYS: f64 = 730.0;
+
+/// The upper edge of each bar, in days, newest first.
+///
+/// **Logarithmic, so that the last day, the last week and the last year all
+/// have room on one screen.** A linear scale spends twenty-three of its
+/// twenty-four bars on "older than a month", which is the part nobody is
+/// looking for.
+///
+/// These are what the service is asked for — `FacetBy::Age { edges }` — so the
+/// two windows asking for different edges would be two windows drawing
+/// different histograms of the same index.
+pub fn bar_edges() -> Vec<u32> {
+    let mut v: Vec<u32> = (0..BAR_COUNT)
+        .map(|i| {
+            let t = 1.0 - (i as f64) / (BAR_COUNT as f64);
+            (((10f64.powf(t) - 1.0) / 9.0) * BAR_SPAN_DAYS)
+                .round()
+                .max(1.0) as u32
+        })
+        .collect();
+    v.reverse();
+    v
+}
+
+/// Which of the six time bands an age in days falls in, oldest last.
+///
+/// The same six the rows use for the date's colour, so a bar and the rows it
+/// stands for are the same colour.
+pub fn band_of(days: f64) -> usize {
+    match days {
+        d if d < 1.0 => 0,
+        d if d < 7.0 => 1,
+        d if d < 30.0 => 2,
+        d if d < 365.0 => 3,
+        d if d < 730.0 => 4,
+        _ => 5,
+    }
+}
+
+#[cfg(test)]
+mod ribbon_tests {
+    use super::*;
+
+    /// The edges are what the browser page has always computed.
+    ///
+    /// Written out rather than recomputed, because the point is that this
+    /// function replaced a line of JavaScript and has to produce the same
+    /// twenty-four numbers — a ribbon whose bars mean something slightly
+    /// different in each window is worse than two ribbons.
+    #[test]
+    fn the_edges_match_the_page() {
+        let want: [u32; BAR_COUNT] = [
+            8, 17, 27, 38, 50, 63, 78, 94, 111, 131, 152, 175, 201, 230, 261, 295, 333, 375, 421,
+            471, 527, 588, 656, 730,
+        ];
+        assert_eq!(bar_edges(), want, "the ribbon's bars moved");
+    }
+
+    /// A bar's colour is the colour the rows in it get.
+    #[test]
+    fn a_band_is_one_of_six() {
+        assert_eq!(band_of(0.5), 0);
+        assert_eq!(band_of(3.0), 1);
+        assert_eq!(band_of(10.0), 2);
+        assert_eq!(band_of(100.0), 3);
+        assert_eq!(band_of(400.0), 4);
+        assert_eq!(band_of(1000.0), 5);
+    }
+}
