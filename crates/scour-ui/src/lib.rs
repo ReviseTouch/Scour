@@ -580,3 +580,29 @@ mod ribbon_tests {
         assert_eq!(band_of(1000.0), 5);
     }
 }
+
+/// The colour a kind's icon is drawn in.
+///
+/// **One hue a kind, and the same one in both windows.** These are what makes
+/// a list of two hundred rows readable at a glance without reading a word of
+/// it: the eye learns "blue-grey is a folder, green is code" in about a
+/// screenful. The browser page paints an SVG mask with them; the native window
+/// tints the same SVG. `file` has no colour — a plain file is drawn in the
+/// window's own quiet ink, because "nothing in particular" is not a category.
+pub fn kind_colour(token: &str) -> Option<Rgba> {
+    Some(match token {
+        "folder" => Rgba::hex(0x7d9bc4),
+        "doc" => Rgba::hex(0x9aa5b1),
+        "code" => Rgba::hex(0x7fbfa8),
+        "image" => Rgba::hex(0xb98fc4),
+        "video" | "media" => Rgba::hex(0xc48f9b),
+        "audio" => Rgba::hex(0x8f9dc4),
+        "archive" => Rgba::hex(0xc4a87f),
+        "exec" => Rgba::hex(0xc49a7f),
+        "data" => Rgba::hex(0x7fb3c4),
+        "config" => Rgba::hex(0xa3a97f),
+        "font" => Rgba::hex(0xc4b87f),
+        "build" => Rgba::hex(0x8a8f99),
+        _ => return None,
+    })
+}

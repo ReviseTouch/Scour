@@ -77,6 +77,21 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
 }
 
 /// One hit, formatted.
+/// The colour a kind's icon is drawn in, or the window's quiet ink when the
+/// kind has none — a plain file is not a category worth a hue.
+fn tint_of(token: &str) -> slint::Brush {
+    match scour_ui::kind_colour(token) {
+        Some(c) => {
+            let (a, r, g, b) = c.argb();
+            slint::Brush::SolidColor(slint::Color::from_argb_u8(a, r, g, b))
+        }
+        None => {
+            let (a, r, g, b) = scour_ui::DARK.ink_3.argb();
+            slint::Brush::SolidColor(slint::Color::from_argb_u8(a, r, g, b))
+        }
+    }
+}
+
 pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str) -> Row {
     let (pre, hit, post) = split_at_match(h.name(), terms);
     Row {
@@ -85,6 +100,8 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str) -> Row {
         post: post.into(),
         folder: h.parent().into(),
         kind: kind.into(),
+        ktoken: h.kind.token().into(),
+        tint: tint_of(h.kind.token()),
         size: if h.is_dir {
             slint::SharedString::new()
         } else {

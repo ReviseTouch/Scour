@@ -28,6 +28,11 @@ export struct Row {
     post: string,
     // The directory, without the name. Shown quieter and to the right.
     folder: string,
+    // The kind's own token — `folder`, `code`, `build` — used to pick the icon
+    // and its colour. Separate from `kind` below, which is the translated word
+    // a person reads: one is vocabulary, the other is language.
+    ktoken: string,
+    tint: brush,
     // What kind of thing it is, already translated — the engine's own
     // vocabulary, so the window never invents a word for a kind it does not
     // know about.
@@ -830,6 +835,108 @@ export component MainWindow inherits Window {
                             padding-left: 12px;
                             padding-right: 12px;
                             spacing: 8px;
+
+                            // **The kind's icon, and it has to be spelled out
+                            // one kind at a time.** `@image-url` is resolved at
+                            // build time, so there is no way to index into a
+                            // set of them from a property — the alternative is
+                            // loading fourteen SVGs at run time and handing
+                            // each row an `image`, which is fourteen decodes
+                            // and a cache to get wrong. Fourteen `if`s are
+                            // fourteen comparisons per visible row, which at
+                            // thirty rows is nothing.
+                            //
+                            // Tinted rather than drawn in colour: the files are
+                            // the page's own, black on nothing, and the hue is
+                            // `scour-ui`'s so the two windows agree.
+                            VerticalLayout {
+                                alignment: center;
+                                width: 15px;
+                            if row.ktoken == "folder": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/folder.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "doc": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/doc.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "code": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/code.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "image": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/image.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "video": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/video.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "media": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/media.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "audio": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/audio.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "archive": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/archive.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "exec": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/exec.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "data": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/data.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "config": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/config.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "font": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/font.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "build": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/build.svg");
+                                colorize: row.tint;
+                            }
+                            if row.ktoken == "file": Image {
+                                width: 15px;
+                                height: 15px;
+                                source: @image-url("icons/file.svg");
+                                colorize: row.tint;
+                            }
+                            }
 
                             // The name, with the match picked out. A folder is
                             // drawn in the query's key colour, which is what
