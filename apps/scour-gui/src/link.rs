@@ -58,6 +58,16 @@ pub enum Ask {
         query_revision: u64,
         query: String,
     },
+    /// What the walk skips, in three groups.
+    Rules,
+    /// Keep a choice: the language, the view shape, a column width.
+    ///
+    /// Fire and forget — the reply is `Accepted` and there is nothing to do
+    /// with it. What matters is that it goes to the service rather than to a
+    /// file this window owns, so the browser page opens in the same language.
+    Remember {
+        change: scour_settings::Change,
+    },
     /// This desktop's own folders, asked once at start-up.
     ///
     /// **Of the service, not of `scour-places` directly**, even though the
@@ -88,6 +98,7 @@ pub enum Got {
         reply: Box<Response>,
     },
     Places(Box<Response>),
+    Rules(Box<Response>),
     Explain {
         query_revision: u64,
         reply: Box<Response>,
@@ -161,7 +172,7 @@ impl Freshness {
             }
             // Asked once and never superseded: there is no newer answer to
             // what this desktop's folders are called.
-            Ask::Places => true,
+            Ask::Places | Ask::Rules | Ask::Remember { .. } => true,
             Ask::Stop => true,
         }
     }
@@ -199,9 +210,12 @@ impl Link {
             // lane keeps only the newest queued request, and a search sent a
             // microsecond later takes the colouring with it. Every one of
             // these is cheap enough that the slow lane is not slow for them.
-            Ask::Facets { .. } | Ask::Count { .. } | Ask::Places | Ask::Explain { .. } => {
-                &self.slow
-            }
+            Ask::Facets { .. }
+            | Ask::Count { .. }
+            | Ask::Places
+            | Ask::Rules
+            | Ask::Remember { .. }
+            | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
         // A closed channel means the lane died, and the window finds out from
@@ -227,6 +241,8 @@ enum Lane {
     Places,
     /// The query read back, for the colouring.
     Explain,
+    /// The exclusion rules.
+    Rules,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -347,6 +363,8 @@ fn spawn_lane(
                     },
                     Lane::Explain,
                 ),
+                Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
+                Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Places => (0, Request::Places {}, Lane::Places),
                 Ask::Count {
                     query_revision,
@@ -378,6 +396,7 @@ fn spawn_lane(
                             reply,
                         },
                         Lane::Places => Got::Places(reply),
+                        Lane::Rules => Got::Rules(reply),
                         Lane::Explain => Got::Explain {
                             query_revision: revision,
                             reply,
@@ -401,7 +420,9 @@ fn spawn_lane(
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
-                            Lane::Places | Lane::Explain => ReplyRevision::Query(revision),
+                            Lane::Places | Lane::Rules | Lane::Explain => {
+                                ReplyRevision::Query(revision)
+                            }
                         };
                         sink(Got::Refused {
                             revision,

@@ -32,6 +32,9 @@ scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
 # The palette, shared with the browser page so the two cannot drift.
 scour-ui       = { workspace = true }
+# For `Change` alone: what this window remembers goes to the service, so the
+# browser page opens in the same language and the same shape.
+scour-settings = { workspace = true }
 # For the `Places` reply's type alone; the answer comes over the socket.
 scour-places   = { workspace = true }
 anyhow       = { workspace = true }

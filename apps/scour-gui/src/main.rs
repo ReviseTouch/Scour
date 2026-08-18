@@ -349,6 +349,28 @@ fn main() -> Result<()> {
     .collect();
     window.set_sizes(ModelRc::new(VecModel::from(sizes)));
     window.set_ribbon_label(t(&cat, "Time distribution"));
+    window.set_help_title(t(&cat, "Help"));
+    window.set_lang_title(t(&cat, "language"));
+    window.set_rules_title(t(&cat, "What is skipped"));
+    // The help is the page's own opening paragraph — what a person can type —
+    // rather than a second explanation written for this window.
+    window.set_help_body(t(
+        &cat,
+        "A word on its own matches the name. Put <code>!</code> in front of any term to exclude it, and write several to mean all of them at once.",
+    ));
+    // The two languages the catalogue has. `""` is "whatever the desktop
+    // says", which is what the config file means by an empty string.
+    let langs: Vec<Facet> = [("English", "en"), ("Türkçe", "tr")]
+        .iter()
+        .map(|(label, tag)| Facet {
+            label: (*label).into(),
+            token: (*tag).into(),
+            count: slint::SharedString::new(),
+            share: 0.0,
+        })
+        .collect();
+    window.set_languages(ModelRc::new(VecModel::from(langs)));
+    window.set_language(language(&config).as_str().into());
     window.set_ribbon_hint(t(&cat, "results by date changed"));
     window.set_axis_oldest(t(&cat, "2 years ago"));
     window.set_axis_year(t(&cat, "1 year"));
@@ -472,6 +494,101 @@ fn main() -> Result<()> {
     }
 
     // --- the column headers ----------------------------------------------
+    // The four window buttons. Three open a panel; the fourth writes a file.
+    //
+    // **A second press closes it**, which is what a person expects of a
+    // button that opened something, and what the browser's own `?` does.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_tool_clicked(move |what| {
+            let Some(w) = weak.upgrade() else { return };
+            match what.as_str() {
+                "export" => {
+                    // Not built here yet: the export is a stream the service
+                    // writes, and where it should land is a question this
+                    // window has no answer for until it can ask one.
+                }
+                other => {
+                    let open = w.get_panel() == other;
+                    w.set_panel(if open { "".into() } else { other.into() });
+                    // Asked when it opens rather than kept fresh: the rules
+                    // change when somebody changes them, and this window is
+                    // the one changing them.
+                    if !open && other == "rules" {
+                        link.send(Ask::Rules);
+                    }
+                }
+            }
+        });
+    }
+
+    // The view switch. Remembered like every other choice a person makes, so
+    // the window opens in the shape they left it.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_view_clicked(move |mode| {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_view_mode(mode.clone());
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    layout: Some(mode.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // Switching a rule off, or back on. The list of what is off is kept whole
+    // rather than patched, because that is what `Change` carries — and the
+    // service takes it from there: the engine re-tunes, the watchers re-tune,
+    // and a scan brings the index in line.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let off: Rc<RefCell<Vec<String>>> = Rc::default();
+        window.on_rule_toggled(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            let mut held = off.borrow_mut();
+            let id = id.to_string();
+            if let Some(at) = held.iter().position(|o| o.eq_ignore_ascii_case(&id)) {
+                held.remove(at);
+            } else {
+                held.push(id);
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    exclude_off: Some(held.clone()),
+                    ..Default::default()
+                },
+            });
+            // Ask again rather than guessing what the service made of it: the
+            // reply is the truth about what is in force.
+            link.send(Ask::Rules);
+            let _ = w;
+        });
+    }
+
+    // A language is a restart of the words, not of the window: the catalogue
+    // is rebuilt, every visible string is written again, and the choice is
+    // kept by the service so the browser page opens in the same language.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_language_picked(move |tag| {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_language(tag.clone());
+            w.set_panel("".into());
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    language: Some(tag.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
     {
         let state = state.clone();
         let link = link.clone();
@@ -633,6 +750,15 @@ fn main() -> Result<()> {
     FIRST.with(|f| f.set(Some(launched)));
     // Type a query before the window opens, for the same reason `SCOUR_GUI_SNAP`
     // exists: a picture of an empty box says nothing about how a query looks.
+    // Open a panel before the window does, for the same reason the query flag
+    // exists: a picture of a closed panel says nothing about the panel.
+    if let Ok(which) = std::env::var("SCOUR_GUI_PANEL") {
+        // Press it, do not set it: the handler is what asks the service for
+        // what the panel shows, and setting the property first made the press
+        // read as a second one — which closes it and sends nothing.
+        window.invoke_tool_clicked(which.as_str().into());
+    }
+
     if let Ok(q) = std::env::var("SCOUR_GUI_QUERY") {
         // Set, then tell the window once. Calling `query-changed` *and*
         // letting the two-way binding fire it produced "rapor", "erapor",
@@ -1074,6 +1200,63 @@ fn apply(
                 })
                 .collect();
             w.set_spans(ModelRc::new(VecModel::from(runs)));
+        }
+        // The exclusion rules, in the three groups the service keeps them in:
+        // what a window added, what `config.toml` says, what is built in. Only
+        // the first can be deleted; any of them can be switched off, and the
+        // ones that are come back marked.
+        Got::Rules(reply) => {
+            let Response::Rules {
+                builtin_paths,
+                builtin_dirs,
+                builtin_files,
+                config_paths,
+                config_dirs,
+                config_files,
+                config_allow,
+                added_paths,
+                added_dirs,
+                added_files,
+                added_allow,
+                off,
+            } = *reply
+            else {
+                return;
+            };
+            let is_off = |id: &str| off.iter().any(|o| o.eq_ignore_ascii_case(id));
+            let mut rows: Vec<Facet> = Vec::new();
+            for (group, kind, list) in [
+                ("added", "path", added_paths),
+                ("added", "dir", added_dirs),
+                ("added", "file", added_files),
+                ("added", "allow", added_allow),
+                ("config", "path", config_paths),
+                ("config", "dir", config_dirs),
+                ("config", "file", config_files),
+                ("config", "allow", config_allow),
+                ("builtin", "path", builtin_paths),
+                ("builtin", "dir", builtin_dirs),
+                ("builtin", "file", builtin_files),
+            ] {
+                for value in list {
+                    let id = scour_settings::rule_id(kind, &value);
+                    rows.push(Facet {
+                        label: value.as_str().into(),
+                        token: id.as_str().into(),
+                        // The group and the state, in the place a count goes:
+                        // a rule that is listed but not in force reads as in
+                        // force otherwise, which is the one misreading that
+                        // matters here.
+                        count: if is_off(&id) {
+                            format!("{group} · {}", t(cat, "off")).into()
+                        } else {
+                            group.into()
+                        },
+                        share: 0.0,
+                    });
+                }
+            }
+            w.set_rules(ModelRc::new(VecModel::from(rows)));
         }
         Got::Places(reply) => {
             let Response::Places(p) = *reply else {

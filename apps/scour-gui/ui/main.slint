@@ -165,6 +165,50 @@ component FacetRow inherits Rectangle {
 // One of the window's own controls. Square, 18px, the page's size — and the
 // same shape as the view switch beside it, because they are the same kind of
 // thing: something done to the window rather than to what it is looking at.
+// A panel over the window: help, the rules, the languages.
+//
+// One component because all three are the same thing — a card that opens over
+// the list, closes on Escape or on a click outside, and does not move what is
+// under it. The page's `.sheet`, at the page's size.
+component Sheet inherits Rectangle {
+    in property <string> title;
+    in property <bool> open;
+
+    // Placed by whoever puts it in the window: a component cannot read its
+    // own parent's size in Slint, and hard-coding one here would be a panel
+    // that only fits the window it was written against.
+    in property <length> room-w;
+    in property <length> room-h;
+
+    visible: root.open;
+    x: root.room-w - self.width - 20px;
+    y: 64px;
+    width: min(400px, root.room-w - 40px);
+    height: min(560px, root.room-h - 120px);
+    background: Theme.panel;
+    border-width: 1px;
+    border-color: Theme.line;
+    border-radius: 4px;
+    // Above everything, including the list it covers.
+    z: 60;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 8px;
+
+        Text {
+            text: root.title;
+            color: Theme.ink;
+            font-size: 13px;
+            font-weight: 650;
+            letter-spacing: 2px;
+            height: 20px;
+        }
+
+        @children
+    }
+}
+
 component Tool inherits Rectangle {
     in property <string> glyph;
     in property <bool> on;
@@ -374,6 +418,17 @@ export component MainWindow inherits Window {
     callback tool-clicked(string);
     callback view-clicked(string);
     in-out property <string> view-mode: "detail";
+    // Which panel is open, if any: "", "help", "language", "rules".
+    in-out property <string> panel: "";
+    in property <string> help-title;
+    in property <string> help-body;
+    in property <string> lang-title;
+    in property <string> rules-title;
+    in property <string> language;
+    in property <[Facet]> languages;
+    in property <[Facet]> rules;
+    callback language-picked(string);
+    callback rule-toggled(string);
     // direction: -1 for the preceding window, +1 for the following one.
     // first-visible anchors the same global row after the bounded model slides.
     callback need-page(int, int);
@@ -554,6 +609,12 @@ export component MainWindow inherits Window {
                         }
                         if (e.text == Key.Return) {
                             root.activated(root.selected);
+                            return accept;
+                        }
+                        if (e.text == Key.Escape && root.panel != "") {
+                            // A panel first: Escape closes what is on top,
+                            // which is the one thing every window agrees on.
+                            root.panel = "";
                             return accept;
                         }
                         if (e.text == Key.Escape) {
@@ -1167,5 +1228,66 @@ export component MainWindow inherits Window {
 
 
     }
-    }
+
+        }
+
+        // ------------------------------------------------------------------
+        // The panels. Drawn last so they are over the list, and only one of
+        // them is ever open — a second card behind the first is a card nobody
+        // can reach.
+        // ------------------------------------------------------------------
+        Sheet {
+            title: root.help-title;
+            open: root.panel == "help";
+            room-w: root.width - 40px;
+            room-h: root.height - 40px;
+
+            Text {
+                text: root.help-body;
+                color: Theme.ink-2;
+                font-size: 12.5px;
+                wrap: word-wrap;
+                vertical-alignment: top;
+            }
+        }
+
+        Sheet {
+            title: root.lang-title;
+            open: root.panel == "language";
+            room-w: root.width - 40px;
+            room-h: root.height - 40px;
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+
+                for l[i] in root.languages: FacetRow {
+                    label: l.label;
+                    count: l.count;
+                    on: root.language == l.token;
+                    clicked => { root.language-picked(l.token); }
+                }
+            }
+        }
+
+        Sheet {
+            title: root.rules-title;
+            open: root.panel == "rules";
+            room-w: root.width - 40px;
+            room-h: root.height - 40px;
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 1px;
+                    alignment: start;
+
+                    for r[i] in root.rules: FacetRow {
+                        label: r.label;
+                        count: r.count;
+                        on: false;
+                        clicked => { root.rule-toggled(r.token); }
+                    }
+                }
+            }
+        }
 }
