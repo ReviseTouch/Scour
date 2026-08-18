@@ -1180,6 +1180,16 @@ fn apply(
             }
             let any_fresh = fresh.iter().any(|r| r.fresh);
             rows.set_vec(fresh);
+            {
+                let s = state.borrow();
+                let known = s
+                    .exact_count
+                    .map(|c| c.total)
+                    .unwrap_or(r.total)
+                    .min(i32::MAX as u64) as i32;
+                w.set_total_rows(known.max(n as i32));
+                w.set_window_offset(s.page_offset as i32);
+            }
 
             // **Put the flags out again.** Slint's `animate` interpolates when
             // a property *changes*; nothing here was changing it back, so a
@@ -1253,10 +1263,17 @@ fn apply(
                     page_move,
                 )
             };
+            // **Nothing here moves the viewport any more, and that is the
+            // fix.** Rows are drawn at their place in the list, so when the
+            // window slides they are already where the eye left them —
+            // `anchor_row` used to convert a window-relative index into a
+            // scroll position, which is a jump every time a page is fetched.
+            // Only a *new query* goes back to the top; a refresh of the same
+            // one stays where it is, which is what a live list has to do.
+            let refresh = state.borrow().shown_revision == state.borrow().query_revision;
             match page_move {
                 Some(PageMove::Expand) => {
                     w.set_selected(selected.max(0).min(n.saturating_sub(1) as i32));
-                    w.set_scroll_y(scroll_y);
                 }
                 Some(PageMove::Slide {
                     offset,
@@ -1270,13 +1287,14 @@ fn apply(
                         .filter(|&local| local < n as u32)
                         .unwrap_or(anchor);
                     w.set_selected(selected as i32);
-                    w.invoke_anchor_row(anchor as i32);
                 }
+                None if refresh => {}
                 None => {
                     w.set_selected(0);
                     w.set_scroll_y(0.0);
                 }
             }
+            let _ = scroll_y;
             w.set_busy(false);
             // Now, and only now, the sidebar. A facet count costs about what
             // the search did, and asking for it beside every keystroke doubled
