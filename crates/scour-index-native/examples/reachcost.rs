@@ -24,8 +24,8 @@ fn main() {
     let walked = std::env::var_os("SCOUR_NO_REACH").is_some();
     println!("{} — {}", dir, if walked { "walked to" } else { "reached" });
     println!(
-        "{:>10}  {:>10}  {:>14}  {:>6}  {}",
-        "offset", "median ms", "rows visited", "rows", "page digest"
+        "{:>10}  {:>10}  {:>14}  {:>6}  page digest",
+        "offset", "median ms", "rows visited", "rows"
     );
     for offset in OFFSETS {
         let mut runs = Vec::new();

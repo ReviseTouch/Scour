@@ -157,12 +157,11 @@ mod tests {
         let alive = bitmap(&bits);
         let rank = LiveRank::build(&alive, rows);
         let mut walked = 0usize;
-        for row in 0..=rows {
+        for (row, live) in bits.iter().enumerate() {
             assert_eq!(rank.upto(&alive, row), walked, "at row {row}");
-            if row < rows && bits[row] {
-                walked += 1;
-            }
+            walked += usize::from(*live);
         }
+        assert_eq!(rank.upto(&alive, rows), walked, "and one past the last row");
         assert_eq!(rank.total(&alive), walked);
     }
 
