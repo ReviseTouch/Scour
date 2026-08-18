@@ -1784,7 +1784,16 @@ export component MainWindow inherits Window {
                 // that simply grew pushed the time ribbon off the bottom of
                 // the window — drawn, laid out, and nowhere to be seen.
                 ScrollView {
-                    VerticalLayout {
+                    // **And it has to be told how tall it is.** A `ScrollView`
+                    // does not learn that from a layout inside it: the
+                    // viewport stayed the height of the view, so there was no
+                    // overflow to scroll and the sections below the fold —
+                    // the scopes, the sizes — were not cut off so much as
+                    // unreachable. The same two lines the report needed.
+                    viewport-height: rail.preferred-height;
+
+                    rail := VerticalLayout {
+                    height: self.preferred-height;
                     padding-top: 12px;
                     padding-bottom: 12px;
                     padding-left: 0px;
@@ -2614,7 +2623,10 @@ export component MainWindow inherits Window {
             room-h: root.height - 40px;
 
             ScrollView {
-                VerticalLayout {
+                viewport-height: sheetlist.preferred-height;
+
+                sheetlist := VerticalLayout {
+                    height: self.preferred-height;
                     spacing: 1px;
                     alignment: start;
 
