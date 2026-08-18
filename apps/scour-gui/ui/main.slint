@@ -257,10 +257,12 @@ component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
     in property <string> sorted-by;
-    // The two tab words, from the catalogue like every other visible string.
-    in property <string> tab-search;
-    in property <string> tab-report;
     in property <length> w;
+    // Which column this is, for remembering what it was dragged to. Not `id`,
+    // which Slint keeps for element names, and not `col`, which the grid loop
+    // below already uses.
+    in property <string> which;
+    callback dragged(string, length);
     // `right` alone collides with the alignment enum of the same name.
     in property <bool> align-right;
     callback clicked(string);
@@ -268,6 +270,30 @@ component Head inherits Rectangle {
     // A width, not a stretch: the numbers are worked out once by the window
     // so that every row and this header agree on them.
     width: root.w;
+
+    // **The grip is the edge, and it is 7px wide.** Narrower than that and it
+    // is a target people miss; wider and it eats the heading beside it. The
+    // page uses the same idea and the same feel: the column follows the
+    // pointer while the button is down, and what it lands on is kept.
+    grip := TouchArea {
+        x: parent.width - 4px;
+        width: 7px;
+        height: parent.height;
+        mouse-cursor: col-resize;
+
+        moved => {
+            if (self.pressed) {
+                root.dragged(root.which, self.mouse-x - self.pressed-x);
+            }
+        }
+    }
+
+    if grip.has-hover || grip.pressed: Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        height: parent.height;
+        background: Theme.focus;
+    }
 
     TouchArea {
         clicked => { root.clicked(root.sort); }
@@ -421,8 +447,19 @@ export component MainWindow inherits Window {
     property <length> gaps: 8px * 4;
     property <length> flex: max(240px,
         root.width - root.chrome - root.gaps - root.w-kind - root.w-mtime - root.w-size);
-    out property <length> cw-name: root.flex * 0.44;
-    out property <length> cw-path: root.flex * 0.56;
+    // **What a person dragged wins over what was computed.** Zero means "not
+    // chosen", which is how the settings file says it too — a width of zero is
+    // not a column somebody wanted, it is a column nobody has touched.
+    in-out property <length> uw-name;
+    in-out property <length> uw-kind;
+    in-out property <length> uw-path;
+    in-out property <length> uw-mtime;
+    in-out property <length> uw-size;
+    out property <length> cw-name: root.uw-name > 0 ? root.uw-name : root.flex * 0.44;
+    out property <length> cw-path: root.uw-path > 0 ? root.uw-path : root.flex * 0.56;
+    out property <length> cw-kind: root.uw-kind > 0 ? root.uw-kind : root.w-kind;
+    out property <length> cw-mtime: root.uw-mtime > 0 ? root.uw-mtime : root.w-mtime;
+    out property <length> cw-size: root.uw-size > 0 ? root.uw-size : root.w-size;
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
@@ -463,6 +500,7 @@ export component MainWindow inherits Window {
     callback language-picked(string);
     callback rule-toggled(string);
     callback bar-clicked(int);
+    callback column-dragged(string, length);
     // direction: -1 for the preceding window, +1 for the following one.
     // first-visible anchors the same global row after the bounded model slides.
     callback need-page(int, int);
@@ -932,15 +970,15 @@ export component MainWindow inherits Window {
                         padding-right: 12px;
                         spacing: 8px;
 
-                        Head { text: root.head-name; sort: "name"; w: root.cw-name;
+                        Head { which: "name"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-name; sort: "name"; w: root.cw-name;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { text: root.head-kind; sort: "kind"; w: root.w-kind;
+                        Head { which: "kind"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-kind; sort: "kind"; w: root.cw-kind;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { text: root.head-path; sort: "path"; w: root.cw-path;
+                        Head { which: "path"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-path; sort: "path"; w: root.cw-path;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { text: root.head-mtime; sort: "modified"; w: root.w-mtime;
+                        Head { which: "mtime"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-mtime; sort: "modified"; w: root.cw-mtime;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { text: root.head-size; sort: "size"; w: root.w-size; align-right: true;
+                        Head { which: "size"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-size; sort: "size"; w: root.cw-size; align-right: true;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
                     }
                 }
@@ -1002,7 +1040,7 @@ export component MainWindow inherits Window {
                             padding-right: 12px;
                             alignment: start;
 
-                            for col[c] in root.per-line: Rectangle {
+                            for slot[c] in root.per-line: Rectangle {
                                 width: root.tile-w;
                                 height: root.tile-h;
                                 background: (i * root.per-line + c) == root.selected
@@ -1185,7 +1223,7 @@ export component MainWindow inherits Window {
                             }
 
                             Text {
-                                width: root.w-kind;
+                                width: root.cw-kind;
                                 text: here.kind;
                                 color: Theme.ink-3;
                                 font-size: Fonts.small;
@@ -1209,7 +1247,7 @@ export component MainWindow inherits Window {
                             // out when, so the answer and how-long-ago are one
                             // glance rather than two.
                             Text {
-                                width: root.w-mtime;
+                                width: root.cw-mtime;
                                 text: here.stamp;
                                 font-family: Fonts.mono;
                                 color: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
@@ -1221,7 +1259,7 @@ export component MainWindow inherits Window {
                             }
 
                             Text {
-                                width: root.w-size;
+                                width: root.cw-size;
                                 text: here.size;
                                 color: Theme.ink-2;
                                 font-family: Fonts.mono;

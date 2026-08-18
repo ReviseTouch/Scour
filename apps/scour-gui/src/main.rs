@@ -391,7 +391,22 @@ fn main() -> Result<()> {
     // The shape the window was left in. `detail` when nothing was chosen —
     // and when something unknown was, which is the same answer a frontend
     // should give to a word it does not have a drawing for.
-    let kept_layout = scour_settings::Settings::load(&state_dir(&config)).layout;
+    let kept = scour_settings::Settings::load(&state_dir(&config));
+    // The widths somebody dragged, in either window: they are keyed by column
+    // id and kept beside the index, so a column widened in the browser opens
+    // that wide here.
+    for (id, px) in &kept.widths {
+        let v = *px as f32;
+        match id.as_str() {
+            "name" => window.set_uw_name(v),
+            "kind" => window.set_uw_kind(v),
+            "path" => window.set_uw_path(v),
+            "mtime" => window.set_uw_mtime(v),
+            "size" => window.set_uw_size(v),
+            _ => {}
+        }
+    }
+    let kept_layout = kept.layout;
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
     }
@@ -558,6 +573,56 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     layout: Some(mode.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // Dragging a column edge. The width follows the pointer and what it lands
+    // on is kept by the service, keyed by column id — the same key the browser
+    // page uses, so a column dragged in one window is that wide in the other.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_column_dragged(move |which, delta| {
+            let Some(w) = weak.upgrade() else { return };
+            // A floor, because a column dragged to nothing cannot be dragged
+            // back: there is no edge left to take hold of.
+            let clamp = |v: f32| v.max(48.0);
+            let now = match which.as_str() {
+                "name" => {
+                    let v = clamp(w.get_cw_name() + delta);
+                    w.set_uw_name(v);
+                    v
+                }
+                "kind" => {
+                    let v = clamp(w.get_cw_kind() + delta);
+                    w.set_uw_kind(v);
+                    v
+                }
+                "path" => {
+                    let v = clamp(w.get_cw_path() + delta);
+                    w.set_uw_path(v);
+                    v
+                }
+                "mtime" => {
+                    let v = clamp(w.get_cw_mtime() + delta);
+                    w.set_uw_mtime(v);
+                    v
+                }
+                "size" => {
+                    let v = clamp(w.get_cw_size() + delta);
+                    w.set_uw_size(v);
+                    v
+                }
+                _ => return,
+            };
+            let mut widths = std::collections::BTreeMap::new();
+            widths.insert(which.to_string(), now as u32);
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    widths: Some(widths),
                     ..Default::default()
                 },
             });
