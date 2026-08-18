@@ -765,6 +765,7 @@ fn main() -> Result<()> {
     // slow lane, because the fast one coalesces and would drop this the
     // instant a keystroke followed it.
     link.send(Ask::Places);
+    link.send(Ask::Status);
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
     FIRST.with(|f| f.set(Some(launched)));
@@ -1328,6 +1329,24 @@ fn apply(
             }
             w.set_rules(ModelRc::new(VecModel::from(rows)));
         }
+        // What the service is holding, said once. The page has this beside the
+        // counts and it is the answer to "is this everything?" — an index of
+        // 636 MB over three sources is a different claim from one over one.
+        Got::Status(reply) => {
+            let Response::Status(st) = *reply else { return };
+            w.set_holding(
+                format!(
+                    "{} {}  ·  {} {}  ·  {} {}",
+                    t(cat, "index"),
+                    compact_bytes(st.index_bytes),
+                    st.sources,
+                    t(cat, "sources"),
+                    st.watching,
+                    t(cat, "watching"),
+                )
+                .into(),
+            );
+        }
         Got::Places(reply) => {
             let Response::Places(p) = *reply else {
                 trace(&format!("places: unexpected reply {reply:?}"));
@@ -1759,6 +1778,16 @@ fn snapshot(window: &MainWindow, path: &str) {
     match std::fs::write(path, out) {
         Ok(()) => eprintln!("gui: {w}x{h} written to {path}"),
         Err(e) => eprintln!("gui: {path} could not be written: {e}"),
+    }
+}
+
+/// Bytes, the way the meter says them: `636,3 MB`.
+fn compact_bytes(n: u64) -> String {
+    let mb = n as f64 / 1_048_576.0;
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0).replace('.', ",")
+    } else {
+        format!("{mb:.1} MB").replace('.', ",")
     }
 }
 

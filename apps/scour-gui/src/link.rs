@@ -60,6 +60,11 @@ pub enum Ask {
     },
     /// What the walk skips, in three groups.
     Rules,
+    /// How big the index is, how many sources, how many watched.
+    ///
+    /// Asked once: these move slowly, and a meter that re-asked on every
+    /// keystroke would be paying for a number nobody watches change.
+    Status,
     /// Keep a choice: the language, the view shape, a column width.
     ///
     /// Fire and forget — the reply is `Accepted` and there is nothing to do
@@ -99,6 +104,7 @@ pub enum Got {
     },
     Places(Box<Response>),
     Rules(Box<Response>),
+    Status(Box<Response>),
     Explain {
         query_revision: u64,
         reply: Box<Response>,
@@ -172,7 +178,7 @@ impl Freshness {
             }
             // Asked once and never superseded: there is no newer answer to
             // what this desktop's folders are called.
-            Ask::Places | Ask::Rules | Ask::Remember { .. } => true,
+            Ask::Places | Ask::Rules | Ask::Status | Ask::Remember { .. } => true,
             Ask::Stop => true,
         }
     }
@@ -214,6 +220,7 @@ impl Link {
             | Ask::Count { .. }
             | Ask::Places
             | Ask::Rules
+            | Ask::Status
             | Ask::Remember { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
@@ -243,6 +250,8 @@ enum Lane {
     Explain,
     /// The exclusion rules.
     Rules,
+    /// What the service is holding.
+    Status,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -365,6 +374,7 @@ fn spawn_lane(
                 ),
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
+                Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Places => (0, Request::Places {}, Lane::Places),
                 Ask::Count {
                     query_revision,
@@ -397,6 +407,7 @@ fn spawn_lane(
                         },
                         Lane::Places => Got::Places(reply),
                         Lane::Rules => Got::Rules(reply),
+                        Lane::Status => Got::Status(reply),
                         Lane::Explain => Got::Explain {
                             query_revision: revision,
                             reply,
@@ -420,7 +431,7 @@ fn spawn_lane(
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
-                            Lane::Places | Lane::Rules | Lane::Explain => {
+                            Lane::Places | Lane::Rules | Lane::Status | Lane::Explain => {
                                 ReplyRevision::Query(revision)
                             }
                         };

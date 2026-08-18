@@ -360,6 +360,7 @@ export component MainWindow inherits Window {
     in property <string> axis-week;
     in property <string> axis-today;
     in property <string> meter;
+    in property <string> holding;
     in property <string> hint;
     in property <bool> busy;
     in property <string> scope-label;
@@ -576,7 +577,12 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.query == "": Text {
+                    // **Hidden when there is anything to read, not when the
+                    // box is empty.** Pressing a rail row puts its term in the
+                    // filter slot rather than in the text, so the box stayed
+                    // "empty" while the coloured layer under it said `dm:17d`
+                    // — and the placeholder sat on top of it.
+                    if root.spans.length == 0: Text {
                         x: 0;
                         width: parent.width;
                         text: root.hint;
@@ -688,6 +694,16 @@ export component MainWindow inherits Window {
                     font-size: 11.5px;
                     letter-spacing: 0.2px;
                     vertical-alignment: center;
+                }
+
+                // What the service is holding, quieter than what it just
+                // answered: one is about this query, the other about the index.
+                Text {
+                    text: root.holding == "" ? "" : "  ·  " + root.holding;
+                    color: Theme.ink-3;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
                 }
 
                 Rectangle { }
@@ -1018,6 +1034,20 @@ export component MainWindow inherits Window {
                                     }
                                 }
                             }
+                        }
+
+                        // The age, as a stripe down the left edge. The page
+                        // has this *and* the coloured stamp: the stripe is
+                        // read without looking — a run of orange is a run of
+                        // things touched today — and the date is read when
+                        // somebody asks which day.
+                        if !root.grid: Rectangle {
+                            x: 0;
+                            width: 3px;
+                            height: parent.height;
+                            background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
+                                 : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
+                                 : here.age == 4 ? Theme.t4 : Theme.t5;
                         }
 
                         if !root.grid: HorizontalLayout {
