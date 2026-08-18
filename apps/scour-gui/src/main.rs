@@ -783,7 +783,7 @@ fn apply(
                 // browser page use. A window that spelled these itself would
                 // be a second vocabulary, and the day the engine learned a
                 // fourteenth kind this one would show a blank.
-                .map(|h| rows::row_of(h, &terms, now, &t(&cat, h.kind.msgid())))
+                .map(|h| rows::row_of(h, &terms, now, &t(cat, h.kind.msgid())))
                 .collect();
             let n = fresh.len();
             let refused_forward_page = {
