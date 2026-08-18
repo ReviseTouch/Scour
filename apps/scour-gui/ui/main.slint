@@ -1816,15 +1816,24 @@ export component MainWindow inherits Window {
                     // Letter-spaced small capitals, 10px — the page's section
                     // heading, and the only text in the window smaller than
                     // the counts it introduces.
-                    Text {
-                        text: root.scope-label;
-                        color: Theme.ink-3;
-                        font-size: 10px;
-                        font-weight: 650;
-                        letter-spacing: 1.8px;
-                        overflow: elide;
-                        height: 15px;
-                        x: 14px;
+                    // **Indented by a layout, not by an `x`.** Moving the
+                    // text right while the box it is in stays where it was
+                    // leaves the first glyph sitting on the edge that clips —
+                    // the `T` of `Tür` came out with the left arm of its
+                    // crossbar shaved off, which is a thing you see and cannot
+                    // name until you know where to look.
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        Text {
+                            text: root.scope-label;
+                            color: Theme.ink-3;
+                            font-size: 10px;
+                            font-weight: 650;
+                            letter-spacing: 1.8px;
+                            overflow: elide;
+                            height: 15px;
+                        }
                     }
 
                     Rectangle { height: 8px; }
@@ -1843,14 +1852,18 @@ export component MainWindow inherits Window {
                     // `~/Documents` would be wrong in every language but one.
                     Rectangle { height: 12px; }
 
-                    Text {
-                        text: root.scope-heading;
-                        color: Theme.ink-3;
-                        font-size: 10px;
-                        font-weight: 650;
-                        letter-spacing: 1.8px;
-                        height: 15px;
-                        x: 14px;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        Text {
+                            text: root.scope-heading;
+                            color: Theme.ink-3;
+                            font-size: 10px;
+                            font-weight: 650;
+                            letter-spacing: 1.8px;
+                            overflow: elide;
+                            height: 15px;
+                        }
                     }
 
                     Rectangle { height: 8px; }
@@ -1868,14 +1881,18 @@ export component MainWindow inherits Window {
                     // and everything between is served better by sorting.
                     Rectangle { height: 12px; }
 
-                    Text {
-                        text: root.size-heading;
-                        color: Theme.ink-3;
-                        font-size: 10px;
-                        font-weight: 650;
-                        letter-spacing: 1.8px;
-                        height: 15px;
-                        x: 14px;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        Text {
+                            text: root.size-heading;
+                            color: Theme.ink-3;
+                            font-size: 10px;
+                            font-weight: 650;
+                            letter-spacing: 1.8px;
+                            overflow: elide;
+                            height: 15px;
+                        }
                     }
 
                     Rectangle { height: 8px; }
