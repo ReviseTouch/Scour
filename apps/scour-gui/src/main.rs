@@ -1859,10 +1859,25 @@ mod tests {
             down: false,
         };
         assert_eq!(full_query(&s), "rapor");
-        s.facet = Some("image".into());
+
+        // **The slot holds a whole term.** It used to hold a kind's bare token
+        // and `full_query` glued `kind:` on, which was fine while the rail
+        // only offered kinds — and started producing `kind:dm:38d` the day the
+        // ribbon and the scopes began using the same slot.
+        s.facet = Some("kind:image".into());
         assert_eq!(full_query(&s), "rapor kind:image");
+        s.facet = Some("under:/home/u/Belgeler".into());
+        assert_eq!(full_query(&s), "rapor under:/home/u/Belgeler");
+        s.facet = Some("dm:38d".into());
+        assert_eq!(full_query(&s), "rapor dm:38d");
+
         s.query = "  ".into();
-        assert_eq!(full_query(&s), "kind:image");
+        assert_eq!(full_query(&s), "dm:38d");
+
+        // And the rail is counted over what was typed, never over the term it
+        // offered — otherwise pressing one leaves the rail with a single row.
+        s.query = "rapor".into();
+        assert_eq!(facet_query(&s), "rapor");
     }
 
     #[test]
