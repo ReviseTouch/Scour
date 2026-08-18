@@ -28,6 +28,10 @@ export struct Row {
     post: string,
     // The directory, without the name. Shown quieter and to the right.
     folder: string,
+    // The whole path. Not drawn — it is what opening, revealing and copying
+    // the row read, and it lives on the row so that those can never be looking
+    // at a different row from the one under the pointer.
+    path: string,
     // Arrived since the last answer. The list updates itself while it is open,
     // and a list that changes under you without saying so is one you stop
     // trusting — so what arrived is shown arriving, and then stops being

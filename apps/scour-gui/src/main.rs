@@ -124,32 +124,22 @@ const DEBOUNCE_MS: u64 = 0;
 /// prefix.
 const BACKGROUND_IDLE_MS: u64 = 200;
 
-/// The most rows held at once, however far somebody scrolls.
+/// What a page has to cost before the next one is guessed at, in microseconds.
+///
+/// A page is a walk of the whole matching set above it: 1 ms near the top of
+/// this index, 17 ms at a hundred thousand rows, 125 ms at two and a half
+/// million. Reading one ahead of the eye is what keeps scrolling from waiting,
+/// and it is only worth it while the answer is cheap enough that a wrong guess
+/// costs nothing anybody notices.
+const CHEAP_PAGE_US: u64 = 20_000;
+
+/// Rows in a page, which is the unit every request after the first asks for.
 ///
 /// The list itself is as long as the result — the view is told the real total
-/// and asks for the rows it is about to draw — so this is only how much is
-/// fetched around wherever the eye is. Big enough that ordinary scrolling
-/// stays inside it; small enough that the paths, the strings and the six Slint
-/// fields per row are a fixed cost rather than one that grows with the index.
-const PAGE_MAX: u32 = scour_core::PAGE_ROWS;
-
-/// How much of a fetched page sits *above* the first visible row.
-///
-/// Scrolling is mostly downward, so the window is not centred on where the eye
-/// is: a third behind, two thirds ahead. Either way there is room to move
-/// before the next fetch, and the fetch that follows a flick lands where the
-/// flick was going.
-const PAGE_LEAD: u32 = PAGE_MAX / 3;
-
-/// How close the eye may come to the edge of what is loaded.
-///
-/// **A page is asked for before it is needed.** Waiting for the visible rows
-/// to actually leave the loaded page means the blank ones are already on
-/// screen when the request goes out, and however quick the answer is — 2 to
-/// 20 ms, measured — the gap is visible as a stutter at every page boundary.
-/// A screenful of margin turns that into a fetch that lands before anybody
-/// reaches the rows it carries.
-const PAGE_EDGE: u32 = 24;
+/// and asks for the rows it is about to draw — so this is only how the rows
+/// arrive. It is [`rows::SPAN`], because pages are kept and found again by
+/// dividing, and that only works if they all line up.
+const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
     generation: u64,
@@ -170,6 +160,12 @@ struct State {
     page_offset: u32,
     /// When the page now in flight was asked for, for the trace.
     page_sent: Option<std::time::Instant>,
+    /// What the last page cost the service, in microseconds.
+    ///
+    /// Read to decide whether guessing at the next one is worth it: a page is
+    /// a walk of everything above it, so at the bottom of a long result a
+    /// guess is expensive and a wrong guess is wasted.
+    page_cost_us: u64,
     /// A question was asked whose answer belongs at the top of the list.
     ///
     /// A new query, a new sort, a rail press. Not a page fetch and not the
@@ -244,15 +240,9 @@ impl State {
     }
 }
 
-/// The hit the list calls `i`, out of the page that is loaded.
-///
-/// `i` counts from the top of the whole result, because the list is as long as
-/// the result; `hits` is only the page around wherever the eye is. Subtracting
-/// is the difference between opening the file under the pointer and opening
-/// one two hundred rows from it — silently, and only once somebody scrolls.
-fn hit_at(s: &State, i: i32) -> Option<&scour_core::Hit> {
-    let i = usize::try_from(i).ok()?;
-    s.hits.get(i.checked_sub(s.page_offset as usize)?)
+/// The path of the row the list calls `i`, if that row is in hand.
+fn path_of(rows: &Rc<rows::Rows>, i: i32) -> Option<String> {
+    rows.path_at(usize::try_from(i).ok()?)
 }
 
 fn main() -> Result<()> {
@@ -284,6 +274,7 @@ fn main() -> Result<()> {
         row_limit: 20,
         page_offset: 0,
         page_sent: None,
+        page_cost_us: 0,
         rewind: true,
         typed_at: None,
         shown: 0,
@@ -423,6 +414,7 @@ fn main() -> Result<()> {
         let state = state.clone();
         let link = link.clone();
         let facets = facets.clone();
+        let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
             trace(&format!("query-changed {text:?}"));
@@ -447,11 +439,12 @@ fn main() -> Result<()> {
                 .map_or(60, |w| w.get_visible_rows().max(0) as u32);
             if DEBOUNCE_MS == 0 {
                 trace(&format!("dispatch {generation}, {rows} rows"));
-                dispatch(&state, &link, rows);
+                dispatch(&state, &link, &model, rows);
                 return;
             }
             let state = state.clone();
             let link = link.clone();
+            let model = Rc::clone(&model);
             let weak = weak.clone();
             slint::Timer::single_shot(std::time::Duration::from_millis(DEBOUNCE_MS), move || {
                 if state.borrow().generation != generation {
@@ -460,7 +453,7 @@ fn main() -> Result<()> {
                 }
                 let _ = weak;
                 trace(&format!("dispatch {generation}"));
-                dispatch(&state, &link, rows);
+                dispatch(&state, &link, &model, rows);
             });
         });
     }
@@ -470,6 +463,7 @@ fn main() -> Result<()> {
         let state = state.clone();
         let link = link.clone();
         let facets = facets.clone();
+        let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_facet_clicked(move |token| {
             let token = token.to_string();
@@ -494,7 +488,7 @@ fn main() -> Result<()> {
                 }
                 None => 60,
             };
-            dispatch(&state, &link, rows);
+            dispatch(&state, &link, &model, rows);
         });
     }
 
@@ -660,6 +654,7 @@ fn main() -> Result<()> {
     {
         let state = state.clone();
         let link = link.clone();
+        let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_sort_by(move |key| {
             let key = key.to_string();
@@ -688,28 +683,31 @@ fn main() -> Result<()> {
                 }
                 None => 60,
             };
-            dispatch(&state, &link, rows);
+            dispatch(&state, &link, &model, rows);
         });
     }
 
     // --- opening things ---------------------------------------------------
+    //
+    // **The path comes off the row.** It used to be read out of the last page
+    // of hits by the list's own row number — which is a number in the whole
+    // result, so row 4,000 of a page of two hundred opened whatever happened
+    // to be fourth in it. There is no second list to keep in step now.
     {
-        let state = state.clone();
+        let rows = Rc::clone(&rows);
         window.on_activated(move |i| {
-            let s = state.borrow();
-            if let Some(h) = hit_at(&s, i) {
-                open(&h.path);
+            if let Some(path) = path_of(&rows, i) {
+                open(&path);
             }
         });
     }
     {
-        let state = state.clone();
+        let rows = Rc::clone(&rows);
         window.on_reveal(move |i| {
-            let s = state.borrow();
-            if let Some(h) = hit_at(&s, i) {
-                let dir = match h.path.rfind('/') {
+            if let Some(path) = path_of(&rows, i) {
+                let dir = match path.rfind('/') {
                     Some(0) => "/",
-                    Some(at) => &h.path[..at],
+                    Some(at) => &path[..at],
                     None => ".",
                 };
                 open(dir);
@@ -717,19 +715,18 @@ fn main() -> Result<()> {
         });
     }
     {
-        let state = state.clone();
+        let rows = Rc::clone(&rows);
         let weak = window.as_weak();
         let cat = cat.clone();
         window.on_copy_path(move |i| {
-            let s = state.borrow();
-            let Some(h) = hit_at(&s, i) else {
+            let Some(path) = path_of(&rows, i) else {
                 return;
             };
             // No clipboard dependency: the window is a client of a service, and
             // adding an X11/Wayland clipboard crate to copy one string is a
             // dependency for a line of text. The path goes to stdout, where a
             // shell pipeline can take it, and the hint says so.
-            println!("{}", h.path);
+            println!("{path}");
             if let Some(w) = weak.upgrade() {
                 w.set_hint(t(&cat, "path printed to the terminal"));
             }
@@ -821,7 +818,12 @@ fn main() -> Result<()> {
     link.send(Ask::Places);
     link.send(Ask::Status);
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
-    dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
+    dispatch(
+        &state,
+        &link,
+        &rows,
+        window.get_visible_rows().max(0) as u32,
+    );
     FIRST.with(|f| f.set(Some(launched)));
     // Type a query before the window opens, for the same reason `SCOUR_GUI_SNAP`
     // exists: a picture of an empty box says nothing about how a query looks.
@@ -951,39 +953,24 @@ fn main() -> Result<()> {
 /// because then there is no missing row to draw and the view says nothing.
 /// That is the shape of "only the first page ever loads".
 fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
-    let visible = w.get_visible_rows().max(0) as u32;
-    let first = w.get_first_row().max(0) as u32;
+    let visible = w.get_visible_rows().max(0) as usize;
+    let first = w.get_first_row().max(0) as usize;
     // A row the view drew and could not fill wins over the viewport: it is the
     // same place, one frame earlier.
-    let anchor = rows.wanted().map_or(first, |row| row as u32);
-    // A screenful either side, so the answer is asked for before the rows it
-    // carries are looked at. See [`PAGE_EDGE`].
-    let from = anchor.saturating_sub(PAGE_EDGE) as usize;
-    let span = (visible + 2 * PAGE_EDGE) as usize;
-    if !rows.needs(from, span) {
-        return;
-    }
-    let limit = {
-        let mut s = state.borrow_mut();
-        s.row_limit = s.row_limit.max(visible).max(PAGE_MAX);
-        s.row_limit
+    let first = rows.wanted().unwrap_or(first);
+    let (revision, cost) = {
+        let s = state.borrow();
+        (s.revision, s.page_cost_us)
     };
-    let offset = page_around(anchor, rows.served() as u32, rows.total() as u64);
-    // **The margin asks early; it does not ask twice.** At the ends of the
-    // result, and in a window taller than a page, the page that reaches the
-    // margin is the page already loaded — and asking for it again on every
-    // frame is a request per frame for rows that are already on screen.
-    if offset as usize == rows.at() && rows.covers(anchor as usize, visible as usize) {
+    let Some(page) = rows.next_page(first, first + visible, cost < CHEAP_PAGE_US) else {
         return;
-    }
+    };
     trace(&format!(
-        "row {anchor} wants page {offset}..{}, holding {}..{}",
-        offset + limit,
-        rows.at(),
-        rows.at() + rows.loaded_len(),
+        "row {first} wants page {page}, {} rows in hand",
+        rows.held()
     ));
-    rows.asking(offset as usize, limit as usize);
-    send_page(state, link, offset, limit);
+    rows.asking(page, revision);
+    send_page(state, link, (page * rows::SPAN) as u32, PAGE_MAX);
 }
 
 /// Send the search for the current state.
@@ -993,7 +980,7 @@ fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc
 /// and sending it beside every search doubled the traffic to answer a question
 /// nobody had finished asking. It goes out once the search it belongs to has
 /// actually been shown — see [`apply`].
-fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: u32) {
+fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, model: &Rc<rows::Rows>, rows: u32) {
     let limit = rows.clamp(20, PAGE_MAX);
     {
         let mut s = state.borrow_mut();
@@ -1001,6 +988,11 @@ fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: u32) {
         s.page_offset = 0;
         s.rewind = true;
     }
+    // **The pages in hand answer a question nobody is asking any more.** They
+    // are kept so that scrolling back is free; keeping them across a new query
+    // would mean scrolling down into the last query's results, because a page
+    // that is held is a page that is not fetched again.
+    model.empty();
     send_search(state, link, 0, limit);
 }
 
@@ -1025,22 +1017,6 @@ fn list_length(counted: usize, offset: usize, got: usize, asked: usize, served: 
     }
     // Otherwise the count stands — but never below what is already in hand.
     counted.max(offset + got)
-}
-
-/// Where to start a page so that `anchor` is inside it.
-///
-/// Not centred: [`PAGE_LEAD`] rows behind, the rest ahead, because scrolling
-/// is mostly downward. Clamped to the end of the result so the last page is a
-/// full one rather than a handful of rows with blank space under them.
-///
-/// `served` is how many rows a page actually holds — what the service gave,
-/// not what was asked for. Clamping by the request while the service served
-/// fewer put the last page's end short of the list's end, and the rows down
-/// there were then asked for, drawn blank, and asked for again, four times a
-/// second, for as long as anybody looked at them.
-fn page_around(anchor: u32, served: u32, total: u64) -> u32 {
-    let last_start = total.saturating_sub(u64::from(served)).min(u32::MAX as u64) as u32;
-    anchor.saturating_sub(PAGE_LEAD).min(last_start)
 }
 
 fn send_search(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: u32) {
@@ -1290,8 +1266,8 @@ fn apply(
                 // hundred rows from where its rows belong.
                 s.page_offset = offset;
                 // The whole result's length, so the view sizes itself from it;
-                // the page and where it begins, so the model can answer for it.
-                rows.put(fresh, offset as usize, total);
+                // the page and which one it is, so the model can find it again.
+                rows.put(offset as usize / rows::SPAN, fresh, total);
             }
 
             // **Put the flags out again.** Slint's `animate` interpolates when
@@ -1312,6 +1288,7 @@ fn apply(
                     t.elapsed()
                 ));
             }
+            state.borrow_mut().page_cost_us = r.took_us;
             trace(&format!(
                 "page {offset} landed in {:.1} ms round trip, {:.2} ms in the engine, {} rows visited",
                 state
@@ -1454,7 +1431,7 @@ fn apply(
                 w.set_meter(
                     format!(
                         "{} / {}{}",
-                        grouped(rows.loaded_len() as u64),
+                        grouped(rows.held() as u64),
                         grouped(total),
                         if capped { "+" } else { "" },
                     )
@@ -1586,22 +1563,13 @@ fn apply(
                 }
                 s.revision = st.revision;
             }
-            // **The window that is loaded, not the window that is visible.**
-            // This asked for `visible_rows` — about two dozen — so every live
-            // refresh threw away the two hundred rows scrolling had just
-            // fetched and put the list back to one screenful. Scroll down,
-            // wait a second, and the list was short again.
-            let (offset, limit) = {
-                let s = state.borrow();
-                (
-                    // Where the list is going, not where it has been: a scroll
-                    // and an index change a moment apart used to answer each
-                    // other, and the older page won.
-                    rows.page_now() as u32,
-                    s.row_limit.max(w.get_visible_rows().max(0) as u32),
-                )
-            };
-            send_page(state, link, offset, limit);
+            // **Marked, not thrown away.** Every page in hand is now a
+            // little out of date, and the one being looked at is re-read at
+            // once — but the others are left alone until somebody looks at
+            // them, or an index that changes every second would have this
+            // window fetching every page it has ever seen.
+            rows.mark(state.borrow().revision);
+            follow(w, state, link, rows);
             link.send(Ask::Await {
                 since: state.borrow().revision,
             });
@@ -1763,7 +1731,7 @@ fn apply(
             w.set_meter(
                 format!(
                     "{} / {}{}",
-                    grouped(rows.loaded_len() as u64),
+                    grouped(rows.held() as u64),
                     grouped(f.total),
                     if f.capped { "+" } else { "" },
                 )
@@ -2136,6 +2104,7 @@ mod tests {
             row_limit: 32,
             page_offset: 0,
             page_sent: None,
+            page_cost_us: 0,
             rewind: false,
             typed_at: None,
             shown: 0,
@@ -2207,6 +2176,7 @@ mod tests {
             row_limit: 20,
             page_offset: 0,
             page_sent: None,
+            page_cost_us: 0,
             rewind: false,
             typed_at: None,
             shown: 0,
@@ -2257,6 +2227,7 @@ mod tests {
             row_limit: 40,
             page_offset: 0,
             page_sent: None,
+            page_cost_us: 0,
             rewind: false,
             typed_at: None,
             shown: 4,
@@ -2325,26 +2296,6 @@ mod tests {
     }
 
     #[test]
-    fn a_page_is_fetched_around_where_the_eye_is_not_centred_on_it() {
-        // Scrolling is mostly downward, so a quarter of the page sits behind
-        // the first visible row and three quarters ahead of it.
-        assert_eq!(page_around(0, PAGE_MAX, 5_000_000), 0);
-        assert_eq!(page_around(30, PAGE_MAX, 5_000_000), 0, "not below zero");
-        assert_eq!(page_around(1_000, PAGE_MAX, 5_000_000), 1_000 - PAGE_LEAD);
-        // The end of the result is a full page, not a handful of rows with
-        // blank space under them.
-        assert_eq!(
-            page_around(4_999_990, PAGE_MAX, 5_000_000),
-            5_000_000 - PAGE_MAX
-        );
-        // And a result shorter than a page starts at its own beginning.
-        assert_eq!(page_around(3, PAGE_MAX, 12), 0);
-        // A service that serves less than it was asked for still reaches the
-        // end: clamping by the request would stop 56 rows short of it.
-        assert_eq!(page_around(960, 200, 973), 773);
-    }
-
-    #[test]
     fn a_page_that_comes_back_short_is_the_end_of_the_result() {
         // The ordinary case: a full page in the middle of a long result, and
         // the count is what says how long it is.
@@ -2361,23 +2312,6 @@ mod tests {
         // And a count that is somehow shorter than what is already in hand
         // does not make the loaded rows unreachable.
         assert_eq!(list_length(10, 400, 200, 200, 200), 600);
-    }
-
-    #[test]
-    fn the_row_a_list_of_millions_calls_forty_is_the_fortieth_of_the_page() {
-        // The list is as long as the result, so what it hands back is a global
-        // row; `hits` is the page around it. Opening the wrong file is what
-        // forgetting this looks like, and only after somebody scrolls.
-        let mut s = a_state();
-        s.page_offset = 1_000;
-        s.hits = vec![hit("/a/one.txt"), hit("/a/two.txt")];
-        assert_eq!(
-            hit_at(&s, 1_001).map(|h| h.path.as_str()),
-            Some("/a/two.txt")
-        );
-        assert!(hit_at(&s, 999).is_none(), "above the page that is loaded");
-        assert!(hit_at(&s, 1_002).is_none(), "below it");
-        assert!(hit_at(&s, -1).is_none());
     }
 
     #[test]

@@ -101,6 +101,7 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
         hit: hit.into(),
         post: post.into(),
         folder: h.parent().into(),
+        path: h.path.as_str().into(),
         kind: kind.into(),
         fresh,
         ktoken: h.kind.token().into(),
@@ -218,6 +219,28 @@ mod tests {
     }
 }
 
+/// Rows in one page, and the size of every request the list makes.
+///
+/// Aligned, so that a page is a *thing*: asked for once, kept, and found again
+/// by dividing. Sliding windows at arbitrary offsets cannot be kept, because
+/// no two of them line up.
+pub const SPAN: usize = scour_core::PAGE_ROWS as usize;
+
+/// How many pages are held at once.
+///
+/// **This is what makes the list feel like it is in memory.** Everything
+/// already looked at is still here, so scrolling back is a lookup rather than
+/// a request — and the request is what somebody sees as a stutter. Thirty-two
+/// pages is 6,400 rows of strings, a few megabytes, and about fifty screens
+/// in either direction.
+const KEPT: usize = 32;
+
+struct Held {
+    rows: Vec<Row>,
+    /// The index revision these rows were read at. See [`Rows::mark`].
+    revision: u64,
+}
+
 /// The list, as a model the view pulls from rather than a vector it is handed.
 ///
 /// **Why this shape.** A `VecModel` holds every row the view can show, so a
@@ -227,11 +250,14 @@ mod tests {
 ///
 /// `Model` inverts it: `row_count` is the real total, so the view sizes itself
 /// and its scrollbar correctly and asks for exactly the rows it is about to
-/// draw. `row_data` answers from the loaded window, and a row that has not
+/// draw. `row_data` answers from the pages in hand, and a row that has not
 /// arrived is drawn empty for one frame rather than left as a hole.
 ///
 /// Taken from `Hukuk-Dosyalar`'s `RowsModel`, which does the same thing over a
-/// store that is already in memory.
+/// store that is already in memory — and this is as close to that as a list
+/// whose rows live in another process can get. What that one never does is
+/// wait, so this one keeps [`KEPT`] pages and asks for the next one before
+/// anybody reaches it: waiting is then only for somewhere nobody has been.
 ///
 /// ## What the notifications have to be
 ///
@@ -248,19 +274,20 @@ mod tests {
 /// actually differ, which leaves the viewport, the scrollbar and every element
 /// outside those rows exactly where they were.
 pub struct Rows {
-    loaded: RefCell<Vec<Row>>,
-    /// Where `loaded` begins in the whole result.
-    offset: Cell<usize>,
+    pages: RefCell<std::collections::HashMap<usize, Held>>,
+    /// Which page was used least recently, first. What eviction reads.
+    order: RefCell<Vec<usize>>,
+    /// The page `row_data` last answered from, so the order is only rewritten
+    /// when the eye crosses a page boundary rather than on every row drawn.
+    touched: Cell<usize>,
     /// How long the result is, which is what the view is sized from.
     total: Cell<usize>,
-    /// The page a fetch is out for.
-    ///
-    /// Without it, every frame drawn between asking and answering reports the
-    /// same miss again, and each one moves the window somewhere slightly
-    /// different — a list that fetches forever and never settles.
-    asked: Cell<Option<(usize, usize)>>,
+    /// The page a fetch is out for, and the index revision it was asked at.
+    asked: Cell<Option<(usize, u64)>>,
     /// A row the view asked for and this could not answer.
     want: Cell<Option<usize>>,
+    /// What "up to date" means now. See [`Rows::mark`].
+    revision: Cell<u64>,
     /// The most rows a page has ever actually held.
     ///
     /// What the service gives, which is not always what was asked for: it has
@@ -277,11 +304,13 @@ pub struct Rows {
 impl Default for Rows {
     fn default() -> Self {
         Rows {
-            loaded: RefCell::new(Vec::new()),
-            offset: Cell::new(0),
+            pages: RefCell::new(std::collections::HashMap::new()),
+            order: RefCell::new(Vec::new()),
+            touched: Cell::new(usize::MAX),
             total: Cell::new(0),
             asked: Cell::new(None),
             want: Cell::new(None),
+            revision: Cell::new(0),
             served: Cell::new(0),
             resets: Cell::new(0),
             notify: slint::ModelNotify::default(),
@@ -290,23 +319,39 @@ impl Default for Rows {
 }
 
 impl Rows {
-    /// Hand over a page: the rows, where they start, and how long the whole
-    /// result is.
-    pub fn put(&self, rows: Vec<Row>, offset: usize, total: usize) {
-        let before = (self.offset.get(), self.loaded.borrow().len());
-        let grew = total != self.total.get();
+    /// Which page a row belongs to.
+    pub fn page_of(row: usize) -> usize {
+        row / SPAN
+    }
+
+    /// Hand over a page: which one, its rows, and how long the whole result is.
+    pub fn put(&self, page: usize, rows: Vec<Row>, total: usize) {
+        // Stamped with the revision the *request* went out at, not the one
+        // that is current now: an index that moved while the page was in
+        // flight has not been read yet, and stamping it as read would leave
+        // the change unfetched until the next one.
+        let revision = match self.asked.get() {
+            Some((asked, revision)) if asked == page => revision,
+            _ => self.revision.get(),
+        };
         self.served.set(self.served.get().max(rows.len()));
-        *self.loaded.borrow_mut() = rows;
-        self.offset.set(offset);
-        self.total.set(total);
+        let held = Held { rows, revision };
+        let touched: Vec<usize> = {
+            let mut pages = self.pages.borrow_mut();
+            let n = held.rows.len();
+            pages.insert(page, held);
+            self.use_page(page);
+            (page * SPAN..page * SPAN + n).collect()
+        };
+        self.evict();
         self.asked.set(None);
         self.want.set(None);
-        if grew {
+        if total != self.total.get() {
+            self.total.set(total);
             self.reset();
             return;
         }
-        let after = (offset, self.loaded.borrow().len());
-        for row in touched(before, after, total) {
+        for row in touched {
             self.notify.row_changed(row);
         }
     }
@@ -320,7 +365,7 @@ impl Rows {
     pub fn set_total(&self, total: usize) {
         // Never shorter than what is already loaded: a list that says it holds
         // fewer rows than it is holding cannot draw the ones it has.
-        let total = total.max(self.offset.get() + self.loaded.borrow().len());
+        let total = total.max(self.held_to());
         if total == self.total.get() {
             return;
         }
@@ -328,22 +373,43 @@ impl Rows {
         self.reset();
     }
 
-    /// Take the arrival flags off the rows that are loaded.
+    /// Everything here belongs to a different question. Start again.
+    pub fn empty(&self) {
+        self.pages.borrow_mut().clear();
+        self.order.borrow_mut().clear();
+        self.touched.set(usize::MAX);
+        self.asked.set(None);
+        self.want.set(None);
+    }
+
+    /// The index has moved past what these pages were read at.
     ///
-    /// **Only the ones that are loaded**, which is the whole point. This used
-    /// to walk `0..row_count()` — the whole result — asking the model for
-    /// every row: seconds of frozen window on a large index, and every one of
-    /// those millions of misses looked to the model like the view asking for a
-    /// row it could not see, which sent the list somewhere else entirely.
+    /// **Marked, not thrown away.** A page that is a second out of date is far
+    /// better than a blank one: it is drawn at once and corrected when its
+    /// answer arrives. Only what is on screen is re-read — a page nobody is
+    /// looking at is re-read when somebody looks at it, and an index that
+    /// changes every second would otherwise have this window fetching for ever.
+    pub fn mark(&self, revision: u64) {
+        self.revision.set(revision);
+    }
+
+    /// Take the arrival flags off the rows that are held.
+    ///
+    /// **Only the ones that are held**, which is the whole point. This used to
+    /// walk `0..row_count()` — the whole result — asking the model for every
+    /// row: seconds of frozen window on a large index, and every one of those
+    /// millions of misses looked to the model like the view asking for a row
+    /// it could not see, which sent the list somewhere else entirely.
     pub fn clear_fresh(&self) {
-        let offset = self.offset.get();
         let mut cleared = Vec::new();
         {
-            let mut loaded = self.loaded.borrow_mut();
-            for (i, row) in loaded.iter_mut().enumerate() {
-                if row.fresh {
-                    row.fresh = false;
-                    cleared.push(offset + i);
+            let mut pages = self.pages.borrow_mut();
+            for (page, held) in pages.iter_mut() {
+                for (i, row) in held.rows.iter_mut().enumerate() {
+                    if row.fresh {
+                        row.fresh = false;
+                        cleared.push(page * SPAN + i);
+                    }
                 }
             }
         }
@@ -352,10 +418,10 @@ impl Rows {
         }
     }
 
-    /// Note that a page has been asked for, so the same miss is not asked for
-    /// again on every frame until it lands.
-    pub fn asking(&self, offset: usize, limit: usize) {
-        self.asked.set(Some((offset, limit)));
+    /// Note that a page has been asked for, at this index revision, so the
+    /// same one is not asked for again on every frame until it lands.
+    pub fn asking(&self, page: usize, revision: u64) {
+        self.asked.set(Some((page, revision)));
         self.want.set(None);
     }
 
@@ -368,62 +434,58 @@ impl Rows {
         self.asked.set(None);
     }
 
-    /// Where the page that is current *or on its way* begins.
-    ///
-    /// The two differ for as long as a fetch is in flight, and the live
-    /// refresh has to ask about the second one: re-fetching the page that is
-    /// on screen while a scroll is being answered put the answer to the scroll
-    /// on screen and then replaced it with where the list used to be.
-    pub fn page_now(&self) -> usize {
-        match self.asked.get() {
-            Some((offset, _)) => offset,
-            None => self.offset.get(),
-        }
-    }
-
-    /// Whether `count` rows from `first` still have to be fetched: not loaded,
-    /// and not already on their way.
-    pub fn needs(&self, first: usize, count: usize) -> bool {
-        if self.covers(first, count) {
-            return false;
-        }
-        match self.asked.get() {
-            Some((offset, limit)) => first < offset || first + count > offset + limit,
-            None => true,
-        }
-    }
-
     /// The row the view asked for and did not get, if any. Taken, not read:
     /// one fetch per miss.
     pub fn wanted(&self) -> Option<usize> {
         self.want.take()
     }
 
-    /// Whether `count` rows from `first` can all be drawn from what is loaded.
+    /// The page to ask for next, if any: what the eye is on, then where it is
+    /// going, then where it has been.
     ///
-    /// What the window polls, rather than waiting to be told. A miss reported
-    /// by `row_data` only arrives if the view draws the missing row, and after
-    /// a page lands somewhere the eye is not, it never does — which is a list
-    /// that loads its first page and then stops.
-    pub fn covers(&self, first: usize, count: usize) -> bool {
+    /// **The last two are why scrolling does not wait.** A page is about fifty
+    /// screens; asking for the next one the moment this one is complete means
+    /// the answer — 2 to 25 ms of it — is already here when somebody arrives.
+    /// They are asked for only when *missing*, never merely because the index
+    /// moved: a page nobody is looking at is not worth a request, and an index
+    /// that changes every second would otherwise keep this fetching for ever.
+    pub fn next_page(&self, first: usize, last: usize, speculate: bool) -> Option<usize> {
         let total = self.total.get();
         if total == 0 {
-            return true;
+            return None;
         }
-        let first = first.min(total - 1);
-        let last = first.saturating_add(count).min(total);
-        let offset = self.offset.get();
-        let len = self.loaded.borrow().len();
-        first >= offset && last <= offset + len
+        let end = (total - 1) / SPAN;
+        let from = Self::page_of(first.min(total - 1));
+        let to = Self::page_of(last.min(total - 1));
+        // On screen: fetched when missing, and re-read when the index has
+        // moved under them.
+        for page in from..=to {
+            if self.asked.get().map(|(p, _)| p) != Some(page)
+                && self
+                    .pages
+                    .borrow()
+                    .get(&page)
+                    .is_none_or(|held| held.revision != self.revision.get() || held.rows.is_empty())
+            {
+                return Some(page);
+            }
+        }
+        // Ahead, then behind: only what is missing altogether, and only while
+        // a page is cheap. **Speculation is worth what it costs**, and deep in
+        // a long result a page costs the service a walk of everything above it
+        // — 125 ms at two and a half million rows, measured. Guessing wrong
+        // there spends that on rows nobody asked for.
+        if !speculate {
+            return None;
+        }
+        let near = [(to < end).then_some(to + 1), from.checked_sub(1)];
+        near.into_iter()
+            .flatten()
+            .find(|page| self.asked.get().map(|(p, _)| p) != Some(*page) && !self.holds(*page))
     }
 
-    /// Where the loaded page begins.
-    pub fn at(&self) -> usize {
-        self.offset.get()
-    }
-
-    pub fn loaded_len(&self) -> usize {
-        self.loaded.borrow().len()
+    fn holds(&self, page: usize) -> bool {
+        self.pages.borrow().contains_key(&page)
     }
 
     /// How many rows a page actually holds.
@@ -437,8 +499,25 @@ impl Rows {
         self.served.get().max(1)
     }
 
-    pub fn total(&self) -> usize {
-        self.total.get()
+    /// The path of a row, if it is in hand.
+    ///
+    /// What opening, revealing and copying read. It comes off the row itself
+    /// rather than out of a separate list of hits, because the two would then
+    /// have to be kept in step — and while they were a window and a page they
+    /// were not: the list's row 4,000 was read as the four-thousandth of a
+    /// page of two hundred, which opened a file two hundred rows away.
+    pub fn path_at(&self, row: usize) -> Option<String> {
+        let pages = self.pages.borrow();
+        let held = pages.get(&Self::page_of(row))?;
+        held.rows
+            .get(row % SPAN)
+            .map(|r| r.path.to_string())
+            .filter(|p| !p.is_empty())
+    }
+
+    /// How many rows are held, over all the pages kept.
+    pub fn held(&self) -> usize {
+        self.pages.borrow().values().map(|h| h.rows.len()).sum()
     }
 
     /// How many times the view has been told to re-measure. See [`Rows`].
@@ -447,27 +526,35 @@ impl Rows {
         self.resets.get()
     }
 
+    /// One past the last row held, over all the pages kept.
+    fn held_to(&self) -> usize {
+        self.pages
+            .borrow()
+            .iter()
+            .map(|(page, held)| page * SPAN + held.rows.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Say a page has just been used, for eviction's sake.
+    fn use_page(&self, page: usize) {
+        let mut order = self.order.borrow_mut();
+        order.retain(|p| *p != page);
+        order.push(page);
+    }
+
+    fn evict(&self) {
+        let mut order = self.order.borrow_mut();
+        while order.len() > KEPT {
+            let oldest = order.remove(0);
+            self.pages.borrow_mut().remove(&oldest);
+        }
+    }
+
     fn reset(&self) {
         self.resets.set(self.resets.get() + 1);
         self.notify.reset();
     }
-}
-
-/// The rows two windows disagree about: everything either of them held.
-///
-/// A page arriving in place changes the rows it lands on and the rows it
-/// leaves behind, and nothing else in a result of millions.
-fn touched(
-    before: (usize, usize),
-    after: (usize, usize),
-    total: usize,
-) -> impl Iterator<Item = usize> {
-    let ends = |(offset, len): (usize, usize)| (offset, offset + len);
-    let (a0, a1) = ends(before);
-    let (b0, b1) = ends(after);
-    let from = a0.min(b0);
-    let to = a1.max(b1).min(total);
-    from..to.max(from)
 }
 
 impl slint::Model for Rows {
@@ -478,20 +565,21 @@ impl slint::Model for Rows {
     }
 
     fn row_data(&self, row: usize) -> Option<Row> {
-        let offset = self.offset.get();
-        let loaded = self.loaded.borrow();
-        if row >= offset && row < offset + loaded.len() {
-            return Some(loaded[row - offset].clone());
-        }
-        // Outside the loaded window. Remember the first such row — the view
-        // asks for a run of them and they all want the same page — and give
-        // back a blank so the list keeps its shape while it arrives.
-        if let Some((offset, limit)) = self.asked.get()
-            && row >= offset
-            && row < offset + limit
+        let page = Self::page_of(row);
+        if let Some(held) = self.pages.borrow().get(&page)
+            && let Some(found) = held.rows.get(row % SPAN)
         {
-            return Some(Row::default());
+            // Only when the eye crosses into another page, so drawing a screen
+            // is not thirty rewrites of the same list.
+            if self.touched.get() != page {
+                self.touched.set(page);
+                self.use_page(page);
+            }
+            return Some(found.clone());
         }
+        // Not in hand. Remember the first such row — the view asks for a run
+        // of them and they all want the same page — and give back a blank so
+        // the list keeps its shape while it arrives.
         if self.want.get().is_none() {
             self.want.set(Some(row));
         }
@@ -512,12 +600,22 @@ mod model_tests {
         (0..n).map(|_| Row::default()).collect()
     }
 
+    fn named(paths: &[&str]) -> Vec<Row> {
+        paths
+            .iter()
+            .map(|p| Row {
+                path: (*p).into(),
+                ..Row::default()
+            })
+            .collect()
+    }
+
     #[test]
     fn the_list_is_as_long_as_the_result_not_as_the_page() {
         let rows = Rows::default();
-        rows.put(page(256), 0, 2_500_000);
+        rows.put(0, page(SPAN), 2_500_000);
         assert_eq!(rows.row_count(), 2_500_000);
-        assert_eq!(rows.loaded_len(), 256);
+        assert_eq!(rows.held(), SPAN);
     }
 
     #[test]
@@ -526,10 +624,10 @@ mod model_tests {
         // here is a rebuilt list and a re-clamped viewport, which is what the
         // scrolling jump was.
         let rows = Rows::default();
-        rows.put(page(256), 0, 10_000);
+        rows.put(0, page(SPAN), 10_000);
         let after_first = rows.resets();
-        rows.put(page(256), 0, 10_000);
-        rows.put(page(256), 128, 10_000);
+        rows.put(0, page(SPAN), 10_000);
+        rows.put(1, page(SPAN), 10_000);
         assert_eq!(
             rows.resets(),
             after_first,
@@ -537,7 +635,7 @@ mod model_tests {
         );
 
         // And when the length really does change, the view has to be told.
-        rows.put(page(256), 128, 20_000);
+        rows.put(2, page(SPAN), 20_000);
         assert_eq!(rows.resets(), after_first + 1);
     }
 
@@ -546,78 +644,154 @@ mod model_tests {
         // The search counts to its cap; the exact total follows a moment
         // later. Until this existed the list stayed as long as the cap.
         let rows = Rows::default();
-        rows.put(page(256), 0, 1_000);
+        rows.put(0, page(SPAN), 1_000);
         rows.set_total(2_481_902);
         assert_eq!(rows.row_count(), 2_481_902);
-        assert_eq!(rows.loaded_len(), 256, "the page it was showing is intact");
+        assert_eq!(rows.held(), SPAN, "the page it was showing is intact");
         rows.set_total(2_481_902);
         assert_eq!(rows.resets(), 2, "and saying it twice costs nothing");
     }
 
     #[test]
-    fn a_row_outside_the_window_is_asked_for_once() {
+    fn a_row_outside_the_pages_in_hand_is_asked_for_once() {
         let rows = Rows::default();
-        rows.put(page(256), 0, 10_000);
-        assert!(rows.row_data(300).is_some(), "drawn blank, not left a hole");
-        rows.row_data(301);
-        assert_eq!(rows.wanted(), Some(300), "the first miss, not the last");
+        rows.put(0, page(SPAN), 10_000);
+        assert!(
+            rows.row_data(SPAN + 44).is_some(),
+            "drawn blank, not left a hole"
+        );
+        rows.row_data(SPAN + 45);
+        assert_eq!(
+            rows.wanted(),
+            Some(SPAN + 44),
+            "the first miss, not the last"
+        );
         assert_eq!(rows.wanted(), None, "taken, so one fetch per miss");
     }
 
     #[test]
-    fn a_page_already_on_its_way_is_not_asked_for_again() {
+    fn what_is_asked_for_is_where_the_eye_is_then_where_it_is_going() {
         let rows = Rows::default();
-        rows.put(page(256), 0, 10_000);
-        rows.asking(256, 256);
-        rows.row_data(300);
-        assert_eq!(rows.wanted(), None, "the answer to this is already coming");
-        assert!(!rows.needs(300, 30), "and the window does not ask twice");
-        // Somewhere else entirely, though, is a different question.
-        rows.row_data(9_000);
-        assert_eq!(rows.wanted(), Some(9_000));
-        assert!(rows.needs(9_000, 30));
-        assert_eq!(rows.page_now(), 256, "the refresh follows the fetch");
-        // A refusal or a service that went away leaves the page unanswered,
-        // and the window has to be able to ask again.
-        rows.forget_asking();
-        assert!(rows.needs(300, 30));
+        rows.put(0, page(SPAN), 10_000);
+        // The screen is covered, so the next page is the one ahead of it.
+        assert_eq!(rows.next_page(0, 24, true), Some(1));
+        rows.asking(1, 0);
+        assert_eq!(
+            rows.next_page(0, 24, true),
+            None,
+            "and it is not asked for twice"
+        );
+        rows.put(1, page(SPAN), 10_000);
+        // Now ahead is held too, so nothing is wanted until the eye moves.
+        assert_eq!(rows.next_page(0, 24, true), None);
+        // Two pages down, what is on screen wins over what is beside it.
+        assert_eq!(rows.next_page(SPAN * 3, SPAN * 3 + 24, true), Some(3));
+        // At the top of the list there is nothing behind to fetch.
+        rows.put(2, page(SPAN), 10_000);
+        rows.put(3, page(SPAN), 10_000);
+        assert_eq!(rows.next_page(0, 24, true), None);
     }
 
     #[test]
-    fn a_page_is_as_big_as_the_service_makes_it() {
+    fn nothing_is_guessed_at_while_a_page_is_expensive() {
+        // Deep in a long result a page costs the service a walk of everything
+        // above it. What is on screen is still fetched; what somebody might
+        // scroll to is not.
         let rows = Rows::default();
-        // The first page is only what fits on screen; the ones after it are
-        // full. What a page holds is the biggest of them, not the latest.
-        rows.put(page(24), 0, 10_000);
-        assert_eq!(rows.served(), 24);
-        rows.put(page(200), 0, 10_000);
-        rows.put(page(13), 9_987, 10_000);
-        assert_eq!(rows.served(), 200, "the short tail is not a smaller page");
+        rows.put(9, page(SPAN), 4_000_000);
+        assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, false), None);
+        assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, true), Some(10));
+        assert_eq!(
+            rows.next_page(20 * SPAN, 20 * SPAN + 24, false),
+            Some(20),
+            "but the page being looked at is not a guess"
+        );
     }
 
     #[test]
-    fn what_is_loaded_is_what_can_be_drawn() {
+    fn a_page_the_index_has_moved_past_is_re_read_only_where_it_is_seen() {
         let rows = Rows::default();
-        rows.put(page(256), 128, 10_000);
-        assert!(rows.covers(128, 30));
-        assert!(rows.covers(354, 30));
-        assert!(!rows.covers(127, 30), "one row above the window");
-        assert!(!rows.covers(355, 30), "runs off the end of it");
-        // The end of the result is covered by whatever is left of it.
-        rows.put(page(40), 9_960, 10_000);
-        assert!(rows.covers(9_990, 30));
+        rows.put(0, page(SPAN), 10_000);
+        rows.put(1, page(SPAN), 10_000);
+        rows.mark(7);
+        // On screen: re-read, because what it shows may be out of date.
+        assert_eq!(rows.next_page(0, 24, true), Some(0));
+        rows.asking(0, 7);
+        rows.put(0, page(SPAN), 10_000);
+        // Off screen: left alone. An index that moves every second would
+        // otherwise have this window fetching every page it has ever seen.
+        assert_eq!(rows.next_page(0, 24, true), None);
     }
 
     #[test]
-    fn the_arrival_flags_come_off_what_is_loaded_and_nothing_else() {
+    fn scrolling_back_over_something_already_seen_asks_for_nothing() {
+        // The whole point of keeping pages: a request is what somebody sees as
+        // a stutter, and going back over what you have just read makes none.
+        let rows = Rows::default();
+        for p in 0..8 {
+            rows.put(p, page(SPAN), 10_000);
+        }
+        // Page 7 still wants the one after it — that is the fetch that runs
+        // ahead of the eye, not a re-read of anything.
+        assert_eq!(rows.next_page(7 * SPAN, 7 * SPAN + 24, true), Some(8));
+        for p in (0..7).rev() {
+            let first = p * SPAN;
+            assert_eq!(
+                rows.next_page(first, first + 24, true),
+                None,
+                "page {p} was already read, and so were both beside it"
+            );
+        }
+    }
+
+    #[test]
+    fn only_so_many_pages_are_kept() {
+        let rows = Rows::default();
+        for p in 0..KEPT + 4 {
+            rows.put(p, page(SPAN), 100_000);
+        }
+        assert_eq!(rows.held(), KEPT * SPAN);
+        assert!(
+            rows.next_page(0, 24, true).is_some(),
+            "the oldest went first"
+        );
+        assert!(
+            rows.next_page(KEPT * SPAN, KEPT * SPAN + 24, true)
+                .is_none(),
+            "and the newest stayed"
+        );
+    }
+
+    #[test]
+    fn the_arrival_flags_come_off_what_is_held_and_nothing_else() {
         let rows = Rows::default();
         let mut marked = page(4);
         marked[1].fresh = true;
-        rows.put(marked, 1_000, 2_000_000);
+        rows.put(5, marked, 2_000_000);
         let before = rows.resets();
         rows.clear_fresh();
-        assert!(!rows.row_data(1_001).unwrap().fresh);
+        assert!(!rows.row_data(5 * SPAN + 1).unwrap().fresh);
         assert_eq!(rows.resets(), before, "clearing a flag is not a re-measure");
         assert_eq!(rows.wanted(), None, "and it asks for nothing");
+    }
+
+    #[test]
+    fn the_row_a_list_of_millions_calls_four_thousand_is_the_right_file() {
+        // Reading it out of a page as though the page began at row zero is
+        // what opened a file two hundred rows away.
+        let rows = Rows::default();
+        rows.put(20, named(&["/a/one.txt", "/a/two.txt"]), 2_000_000);
+        assert_eq!(rows.path_at(20 * SPAN + 1).as_deref(), Some("/a/two.txt"));
+        assert_eq!(rows.path_at(20 * SPAN + 2), None, "past the page's end");
+        assert_eq!(rows.path_at(0), None, "a page that is not in hand");
+    }
+
+    #[test]
+    fn a_new_question_empties_the_pages() {
+        let rows = Rows::default();
+        rows.put(0, named(&["/old"]), 10_000);
+        rows.empty();
+        assert_eq!(rows.path_at(0), None);
+        assert_eq!(rows.next_page(0, 24, true), Some(0));
     }
 }
