@@ -52,6 +52,26 @@ pub fn start(
         return started;
     }
 
+    // **Say so.** Falling back is ordinary, but its price is not: one watch a
+    // directory out of a budget shared with every other program the person is
+    // running. On this machine the two roots cost 524,044 of 524,288, and the
+    // first thing anyone noticed was four unrelated tests failing with a
+    // sentence that did not mention watches. The service is the only thing in
+    // a position to say what it just took.
+    #[cfg(target_os = "linux")]
+    {
+        let dirs = count_dirs(source.roots());
+        let budget = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        scour_core::note!(
+            "scourd: no fanotify mark for {} — falling back to inotify, about {dirs} \
+             watches of a {budget} budget shared with the whole session",
+            scour_core::Source::describe(&source).name,
+        );
+    }
+
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
     let real_modes = source.real_modes();
@@ -126,8 +146,18 @@ pub fn start(
 
     let mut watched = 0usize;
     let mut skipped = Vec::new();
+    // **Why the last one was refused, carried out.**
+    //
+    // This said `no root could be watched` and stopped there, which is the one
+    // sentence that cannot be acted on. The reason is nearly always the same
+    // and nearly always fixable — `inotify` ran out of watches, because the
+    // budget is per user and shared with every other program on the desktop —
+    // and `notify` says so in words this was throwing away. Four tests in this
+    // crate failed for days with the useless sentence while the machine's
+    // budget sat at 524,169 of 524,288.
+    let mut refused: Option<String> = None;
     for r in &roots {
-        if cover(
+        match cover(
             &mut watcher,
             r,
             sink.as_ref(),
@@ -135,12 +165,20 @@ pub fn start(
             0,
             opts.follow_symlinks,
         ) {
-            watched += 1;
+            Covered::Yes => watched += 1,
+            Covered::No(why) => {
+                if let Some(why) = why {
+                    refused = Some(why);
+                }
+            }
         }
     }
     if watched == 0 && !roots.is_empty() {
         return Err(Error::Io {
-            detail: "no root could be watched".into(),
+            detail: match refused {
+                Some(why) => format!("no root could be watched: {why}"),
+                None => "no root could be watched".into(),
+            },
         });
     }
     Ok(Box::new(FsWatch {
@@ -202,6 +240,45 @@ fn remember(skipped: &mut Vec<String>, path: String) {
 /// child separately. The branch that is really unreadable is the only one that
 /// gets split, and it gets split down to itself rather than costing its
 /// siblings anything.
+/// Roughly how many watches a set of roots will cost.
+///
+/// One a directory, which is inotify's rule. Counted rather than estimated
+/// because the number is the point of the warning, and walking a tree to say
+/// so once at start-up is cheap beside installing a watch on every directory
+/// in it. Bounded so that a pathological tree cannot turn a log line into a
+/// minute of walking.
+#[cfg(target_os = "linux")]
+fn count_dirs(roots: &[std::path::PathBuf]) -> String {
+    const CEILING: u64 = 400_000;
+    let mut n: u64 = 0;
+    let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
+    while let Some(dir) = stack.pop() {
+        if n >= CEILING {
+            return format!("{CEILING}+");
+        }
+        let Ok(children) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for c in children.flatten() {
+            if c.file_type().is_ok_and(|t| t.is_dir()) {
+                n += 1;
+                stack.push(c.path());
+            }
+        }
+    }
+    n.to_string()
+}
+
+/// What happened to one attempt at covering a directory.
+///
+/// The `String` is the watcher's own words for the refusal — `OS file watch
+/// limit reached`, most often — kept because it is the difference between a
+/// message somebody can act on and one they cannot.
+enum Covered {
+    Yes,
+    No(Option<String>),
+}
+
 fn cover(
     watcher: &mut notify::RecommendedWatcher,
     dir: &std::path::Path,
@@ -209,7 +286,7 @@ fn cover(
     skipped: &mut Vec<String>,
     depth: u32,
     follow_symlinks: bool,
-) -> bool {
+) -> Covered {
     // A link is covered by whoever owns its target, exactly as in the walk.
     // Descending here would index the same files a second time under a path
     // nothing else in the system produces.
@@ -217,11 +294,16 @@ fn cover(
         && depth > 0
         && std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink())
     {
-        return false;
+        return Covered::No(None);
     }
-    if watcher.watch(dir, RecursiveMode::Recursive).is_ok() {
-        return true;
-    }
+    // The refusal is kept, not just the failure: `notify` says *why* — the
+    // watch budget, a vanished directory, a permission — and that sentence is
+    // the whole difference between a message somebody can act on and one they
+    // cannot.
+    let refused = match watcher.watch(dir, RecursiveMode::Recursive) {
+        Ok(()) => return Covered::Yes,
+        Err(e) => e.to_string(),
+    };
     // Out of patience. Readable, so a walk can still cover what a watch will
     // not — say so and let the engine schedule it.
     if depth >= SPLIT_DEPTH {
@@ -231,7 +313,7 @@ fn cover(
                 path: path::from_path(dir),
             });
         }
-        return false;
+        return Covered::No(Some(refused));
     }
     // Not readable at all, which is the ordinary reason a watch is refused —
     // 191 root-owned Waydroid directories, here.
@@ -243,7 +325,7 @@ fn cover(
     // nobody can read is not pending work. It is recorded and left alone.
     let Ok(children) = std::fs::read_dir(dir) else {
         remember(skipped, path::from_path(dir));
-        return false;
+        return Covered::No(Some(refused));
     };
     // The directory itself, without its contents, so that a file created
     // directly in it is still seen.
@@ -252,19 +334,26 @@ fn cover(
         // Only directories: a file is covered by the watch on its parent, and
         // a symlink is followed by whoever owns the target.
         if child.file_type().is_ok_and(|t| t.is_dir())
-            && cover(
-                watcher,
-                &child.path(),
-                sink,
-                skipped,
-                depth + 1,
-                follow_symlinks,
+            && matches!(
+                cover(
+                    watcher,
+                    &child.path(),
+                    sink,
+                    skipped,
+                    depth + 1,
+                    follow_symlinks,
+                ),
+                Covered::Yes
             )
         {
             any = true;
         }
     }
-    any
+    if any {
+        Covered::Yes
+    } else {
+        Covered::No(Some(refused))
+    }
 }
 
 /// Turn one `notify` event into changes.
