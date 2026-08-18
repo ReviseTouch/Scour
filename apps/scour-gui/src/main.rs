@@ -2093,44 +2093,6 @@ mod tests {
     /// otherwise be invisible: Slint takes alpha first and the browser takes
     /// it last, so a channel swapped here would be right for `#ffffff` and
     /// wrong for everything else.
-    /// A window's state with nothing asked of it yet.
-    fn a_state() -> State {
-        State {
-            generation: 0,
-            query_revision: 0,
-            background_query: None,
-            count_query: None,
-            exact_count: None,
-            row_limit: 32,
-            page_offset: 0,
-            page_sent: None,
-            page_cost_us: 0,
-            rewind: false,
-            typed_at: None,
-            shown: 0,
-            query: String::new(),
-            sort: "relevance".into(),
-            descending: true,
-            facet: None,
-            hits: Vec::new(),
-            shown_paths: std::collections::HashSet::new(),
-            shown_revision: 0,
-            revision: 0,
-            down: false,
-        }
-    }
-
-    fn hit(path: &str) -> scour_core::Hit {
-        scour_core::Hit {
-            id: scour_core::EntryId::path_hash(scour_core::SourceId(0), path),
-            path: path.into(),
-            is_dir: false,
-            kind: scour_core::Kind::Doc,
-            meta: scour_core::Meta::UNKNOWN,
-            under: None,
-        }
-    }
-
     #[test]
     fn the_window_wears_the_shared_palette() {
         let dark = scheme(&scour_ui::DARK);

@@ -4440,3 +4440,239 @@ fn a_scan_does_not_export_what_a_pending_removal_took() {
         .expect("scan");
     assert_eq!(got, ["/a/keep.txt".to_owned()]);
 }
+
+/// A page **reached** rather than walked to, checked against the truth.
+///
+/// Past a few thousand rows `search` stops passing over everything above the
+/// page: it bisects for the date the page begins at, counts the rows above it
+/// out of a rank over the live bitmap, and merges from there. That replaces
+/// two million row visits with a few thousand column reads, and every way it
+/// can be wrong returns a *fast, plausible* page — one row late, a segment's
+/// dead rows counted as live, a group of files sharing a second entered at the
+/// wrong place. None of those is visible to a benchmark, so every offset here
+/// is compared with brute force.
+#[test]
+fn a_reached_page_is_the_page_the_walk_would_have_found() {
+    let f = Fixture::new(16_000, 2_000);
+    assert!(
+        f.index.stats().expect("stats").segments >= 8,
+        "the fixture is supposed to be fragmented"
+    );
+    for &(offset, limit) in &[
+        (1_999usize, 60usize),
+        (2_000, 100),
+        (2_001, 40),
+        (5_000, 200),
+        (9_999, 37),
+        (15_800, 200),
+        (16_000, 50),
+    ] {
+        // `brute_force` takes a limit and not an offset, so the reference is
+        // the whole prefix, sliced.
+        let whole = brute_force(
+            &f.entries,
+            &parse_at("", NOW),
+            SortKey::Modified,
+            true,
+            offset + limit,
+        );
+        let want: Vec<String> = whole[offset.min(whole.len())..]
+            .iter()
+            .map(|h| h.path.clone())
+            .collect();
+        let got = f
+            .index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: offset as u32,
+                    limit: limit as u32,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        let paths: Vec<String> = got.hits.iter().map(|h| h.path.clone()).collect();
+        assert_eq!(
+            paths, want,
+            "the page at {offset}+{limit} disagrees with brute force"
+        );
+        // **And that it was reached, not walked to.** The list being right is
+        // half the claim; the other half is that the rows above it were never
+        // visited, and without this assertion a reach that silently declined
+        // would leave this test passing and the cost unchanged.
+        if offset >= 2_000 {
+            // Not merely fewer than the offset: a reach that lands on the
+            // wrong date is still *correct* — the merge walks forward from
+            // wherever it started — and would pass a looser bound while
+            // costing what the walk cost. This corpus has no group of any
+            // size sharing a second, so a page here is the page and little
+            // else.
+            assert!(
+                got.rows_visited < (limit * 4) as u64,
+                "the page at {offset} visited {} rows for {limit} — it was walked to",
+                got.rows_visited
+            );
+        }
+    }
+}
+
+/// A reach over segments whose dates do not overlap.
+///
+/// The case that caught the first version of the bisection. Its bracket was
+/// the newest date the segments had *in common* rather than the newest in any
+/// of them, so an index holding one segment written this morning and one
+/// holding last year's files searched a window that did not contain the
+/// answer. It still returned the right page — the merge walks forward from
+/// wherever it starts — while visiting ninety thousand rows to do it, which
+/// is the shape of a fast path that has quietly stopped being one.
+#[test]
+fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut all: Vec<Entry> = Vec::new();
+    // Four segments, each a year apart and each written after the last, so no
+    // two of them hold a date between them.
+    for era in 0..4i64 {
+        let part: Vec<Entry> = (0..3_000)
+            .map(|i| {
+                entry(
+                    &format!("/corpus/{era}/file{i:06}.txt"),
+                    NOW - era * 31_536_000 - i as i64,
+                    (era * 100_000 + i) as u64 + 1,
+                )
+            })
+            .collect();
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+        all.extend(part);
+    }
+    for &(offset, limit) in &[(2_500usize, 50usize), (6_000, 100), (9_500, 200)] {
+        let whole = brute_force(
+            &all,
+            &parse_at("", NOW),
+            SortKey::Modified,
+            true,
+            offset + limit,
+        );
+        let want: Vec<String> = whole[offset.min(whole.len())..]
+            .iter()
+            .map(|h| h.path.clone())
+            .collect();
+        let answer = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: offset as u32,
+                    limit: limit as u32,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        let got: Vec<String> = answer.hits.into_iter().map(|h| h.path).collect();
+        assert_eq!(
+            got, want,
+            "the page at {offset}+{limit} disagrees with brute force"
+        );
+        assert!(
+            answer.rows_visited < (limit * 4) as u64,
+            "the page at {offset} visited {} rows — the bracket missed it",
+            answer.rows_visited
+        );
+    }
+}
+
+/// The same, over an index where a thousand files share every timestamp and
+/// one in seven has been deleted.
+///
+/// Both of those are what the reach has to get right and what a generated
+/// corpus is too tidy to exercise. A date shared by a thousand rows has no
+/// rank inside it — the merge has to step through the part of the group that
+/// precedes the page — and a deleted row is one the bisection must not count
+/// but the row numbering still spends a place on.
+#[test]
+fn a_reached_page_survives_shared_dates_and_deleted_rows() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    // Twelve thousand files, a thousand to a date, spread over twelve folders
+    // so that path order and row order are not the same thing.
+    let all: Vec<Entry> = (0..12_000)
+        .map(|i| {
+            entry(
+                &format!("/corpus/{:02}/file{i:06}.txt", i % 12),
+                NOW - (i / 1_000) as i64 * 86_400,
+                i as u64 + 1,
+            )
+        })
+        .collect();
+    for part in all.chunks(2_000) {
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    let (gone, alive): (Vec<Entry>, Vec<Entry>) = all
+        .iter()
+        .cloned()
+        .partition(|e| e.meta.mtime % 7 == 0 && e.path.ends_with("3.txt"));
+    assert!(!gone.is_empty(), "the fixture is supposed to lose rows");
+    index
+        .apply(&mut gone.iter().map(|e| Change::RemoveSubtree {
+            path: e.path.clone(),
+        }))
+        .expect("remove");
+    index.commit().expect("commit");
+
+    for &(offset, limit) in &[
+        (2_000usize, 100usize),
+        (2_500, 60),
+        (4_999, 200),
+        (8_000, 120),
+        (11_000, 200),
+    ] {
+        let whole = brute_force(
+            &alive,
+            &parse_at("", NOW),
+            SortKey::Modified,
+            true,
+            offset + limit,
+        );
+        let want: Vec<String> = whole[offset.min(whole.len())..]
+            .iter()
+            .map(|h| h.path.clone())
+            .collect();
+        let answer = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort: SortKey::Modified,
+                descending: true,
+                page: Page {
+                    offset: offset as u32,
+                    limit: limit as u32,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search");
+        let got: (Vec<String>, u64) = (
+            answer.hits.into_iter().map(|h| h.path).collect(),
+            answer.rows_visited,
+        );
+        assert_eq!(
+            got.0, want,
+            "the page at {offset}+{limit} disagrees with brute force"
+        );
+        // A thousand rows share every date here, so a page inside one of
+        // those groups steps through the part of it that comes first — but
+        // never through the two, five or eleven thousand rows above the group.
+        assert!(
+            got.1 < 1_200 + limit as u64,
+            "the page at {offset} visited {} rows — it was walked to",
+            got.1
+        );
+    }
+}

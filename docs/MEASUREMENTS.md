@@ -5250,3 +5250,84 @@ None of the three is needed to answer "the two hundred rows at rank N".
 * `matches_all` — the query has no conditions and no rule conceals anything —
   is already computed in `index.rs` and is exactly the case a scrollbar drag
   is: browsing the whole index.
+
+## A page reached instead of walked to — 2026-08-18
+
+The walk's cost is everything above the page, and the page contains none of
+it. Rows inside a segment are stored newest-first, so where a page begins is a
+binary search over the `Mtime` column plus a rank over the live bitmap —
+neither of which touches a row in between.
+
+Both claims were checked before anything was built on them. `examples/
+rankcheck.rs` reads every row of a copied index:
+
+```
+2,950,347 rows, 2,623,591 live, 0 inversions,
+rank built in 1,285 µs for the whole index
+```
+
+Zero inversions in eleven segments: the column never rises with the row
+number, so the bisection is sound. The rank costs a millisecond to build with
+a bit test a row, and the real one counts bytes.
+
+### What it is worth
+
+Same copied index, empty query, `modified ↓`, page of 200, count cap 1,000,
+median of three. One binary, one index, two runs — `SCOUR_NO_REACH=1` keeps
+every page on the walk, which is the switch this exists to be measured
+against:
+
+| offset | walked to | rows visited | reached | rows visited |
+|---|---:|---:|---:|---:|
+| 0 | 1.41 ms | 1,607 | — | — |
+| 1,000 | 1.45 ms | 4,752 | — | — |
+| 10,000 | 3.59 ms | 28,509 | **1.20 ms** | 216 |
+| 100,000 | 19.60 ms | 206,659 | **1.38 ms** | 357 |
+| 500,000 | 60.17 ms | 609,683 | **0.76 ms** | 364 |
+| 1,000,000 | 101.38 ms | 1,112,149 | **0.73 ms** | 230 |
+| 2,000,000 | 196.71 ms | 2,118,280 | **0.97 ms** | 4,977 |
+| 2,400,000 | 214.20 ms | 2,518,539 | **1.04 ms** | 203 |
+| 2,600,000 | 236.69 ms | 2,648,535 | **0.57 ms** | 200 |
+
+```bash
+cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
+rm -f /var/tmp/idx/native/index.lock
+cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx/native
+SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx/native
+```
+
+**Depth stops costing anything.** The last row of two and a half million is a
+millisecond away, against a quarter of a second — and the rows visited say why:
+two hundred, which is the page. The 4,977 at two million is a group of files
+sharing one second, stepped through because there is no rank inside a tie.
+
+Below `REACH_FROM` the walk keeps every page it already answered in single-digit
+milliseconds, which is also every keystroke.
+
+### What it is allowed to answer
+
+Only the shape it can: the stored order, no conditions in the query, nothing
+concealed by a rule, and deep enough to be worth it. Everything else falls
+through to the walk unchanged — that is the whole safety argument, and it is
+why a filtered deep page is still linear.
+
+Correctness is not argued, it is compared. Three tests in `tests/whole.rs` put
+every page against `brute_force` — a fragmented index, an index where a
+thousand files share every date and one in seven has been deleted, and one
+whose segments share no dates at all — and each also asserts the page was
+*reached*, because a reach that quietly declines returns the right rows at the
+old price. The third of those was written after the first bisection bracketed
+by the newest date the segments had in common rather than the newest in any of
+them: right page, ninety thousand rows visited to produce it.
+
+### Still linear, and known
+
+* A filtered query — anything with a term or a `kind:` in it — walks as before.
+  The count that a rank replaces is a count of *matches*, and nothing here
+  knows how many of those are above a date without looking.
+* A tie group is stepped through, so a page whose offset lands inside one pays
+  for the part of it that comes first. Bounded at `TIE_STEPS`, past which the
+  reach declines rather than becoming the slower of the two.
+* The rank is rebuilt per request. It is a millisecond on this index and it is
+  now the largest part of what a reached page costs; `Live::deaths` is the
+  stamp a cached one would be checked against.

@@ -43,6 +43,7 @@ use crate::directory_bytes::{DirectoryBytes, dir_size};
 use crate::durable::replace_synced;
 use crate::ids::digest;
 use crate::lock::DirLock;
+use crate::rank::{LiveRank, first_at_or_below};
 use crate::search::{Plan, Segment, Wanted, run_with};
 use crate::segment::Live;
 use crate::usage::Rollup;
@@ -1736,6 +1737,228 @@ impl PartialEq for Cursor {
 }
 impl Eq for Cursor {}
 
+/// Below this offset a page is walked to, as it always was.
+///
+/// The walk is a few milliseconds near the top of a result and the reach costs
+/// a rank table to be built; there is no sense in paying that where the thing
+/// it replaces is already invisible. It also keeps every ordinary keystroke on
+/// the path whose tests have covered it for months.
+const REACH_FROM: usize = 2_000;
+
+/// How far the merge will step through a group of rows that share a second
+/// before giving up and letting the walk do it.
+///
+/// A checkout stamps tens of thousands of files with one timestamp, and a page
+/// whose offset lands inside such a group has to step through the part of it
+/// that precedes the page — there is no rank *within* a tie. Bounded so that
+/// the reach can never be slower than what it replaces: past this, it declines
+/// and the caller walks.
+const TIE_STEPS: usize = 100_000;
+
+/// Whether to keep every page on the walk, for measuring the reach against it.
+///
+/// The walk is not going anywhere — it answers every query the reach declines
+/// — so the honest way to say what the reach is worth is to run the same index
+/// both ways. `SCOUR_NO_REACH=1` is that switch, read once.
+fn walk_only() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("SCOUR_NO_REACH").is_some())
+}
+
+/// A page **reached** rather than walked to.
+///
+/// The walk's cost is everything above the page: 105 ms and 2,080,974 rows
+/// visited for the two hundred at offset two million, none of which the answer
+/// contains. Nothing about those rows is needed to say where the page starts —
+/// only *how many* of them there are — and that is a binary search over a
+/// column plus a rank over a bitmap. See [`crate::rank`].
+///
+/// Returns `None` whenever the shape is not one this can answer, and the
+/// caller then walks exactly as before. That is the whole safety argument:
+/// this adds a path, it changes none.
+#[allow(clippy::too_many_arguments)]
+fn reach(
+    segments: &[Live],
+    views: &[Segment<'_>],
+    offset: usize,
+    limit: usize,
+    cap: usize,
+    started: Instant,
+) -> Option<SearchResponse> {
+    // Live rows before any given row, per segment. Built here rather than kept
+    // because a kept one would have to be invalidated on every commit, and a
+    // rank that is one deletion stale returns a page from the wrong place.
+    let ranks: Vec<LiveRank> = segments
+        .iter()
+        .zip(views)
+        .map(|(live, seg)| LiveRank::build(seg.alive, live.rows()))
+        .collect();
+    let counted: usize = ranks
+        .iter()
+        .zip(views)
+        .map(|(rank, seg)| rank.total(seg.alive))
+        .sum();
+    let empty = |visited: u64| SearchResponse {
+        hits: Vec::new(),
+        total: (counted as u64).min(cap as u64),
+        capped: counted >= cap,
+        took_us: started.elapsed().as_micros() as u64,
+        fast_path: true,
+        rows_visited: visited,
+        rows_built: 0,
+        misread: Vec::new(),
+    };
+    if offset >= counted {
+        return Some(empty(0));
+    }
+
+    // How many live rows are newer than `t`, over the whole index. Two reads a
+    // segment: where the column crosses `t`, and how many rows before that are
+    // live.
+    let newer = |t: i64| -> usize {
+        segments
+            .iter()
+            .zip(views)
+            .zip(&ranks)
+            .map(|((live, seg), rank)| {
+                let at = first_at_or_below(live.rows(), t, |row| seg.num_of(Field::Mtime, row));
+                rank.upto(seg.alive, at)
+            })
+            .sum()
+    };
+
+    // The date of the row at `offset`: the smallest `t` with no more than
+    // `offset` rows above it. `newer` never rises with `t`, so this is a
+    // bisection — and because it only ever steps at a date some row actually
+    // carries, what it lands on is that row's own date.
+    // The bracket is the whole index: the newest date in **any** segment and
+    // the oldest in any. Not the newest they have in common — a segment
+    // written this morning has a floor of this morning, and bracketing by that
+    // leaves the answer outside the search, which returns a date far too
+    // recent and a page that has to be walked to from there anyway.
+    let mut low = i64::MAX;
+    let mut high = i64::MIN;
+    for (live, seg) in segments.iter().zip(views) {
+        if live.rows() > 0 {
+            high = high.max(seg.num_of(Field::Mtime, 0));
+            low = low.min(seg.num_of(Field::Mtime, live.rows() - 1));
+        }
+    }
+    if low > high {
+        return Some(empty(0));
+    }
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if newer(mid) <= offset {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    let when = high;
+    let above = newer(when);
+    // Rows of that same date that still precede the page. There is no rank
+    // inside a tie, so these are stepped through — see [`TIE_STEPS`].
+    let mut skip = offset.checked_sub(above)?;
+    if skip > TIE_STEPS {
+        return None;
+    }
+
+    // Where each segment's part of the page begins: its first row not newer
+    // than `when`.
+    let mut at: Vec<usize> = segments
+        .iter()
+        .zip(views)
+        .map(|(live, seg)| {
+            first_at_or_below(live.rows(), when, |row| seg.num_of(Field::Mtime, row))
+        })
+        .collect();
+    for (i, cursor) in at.iter_mut().enumerate() {
+        *cursor = next_live(views, segments, i, *cursor);
+    }
+
+    // The merge, and it holds one row a segment. Ordered as `sort_hits` orders
+    // it and as the comparator above does: newest first, and a date shared by
+    // two rows broken by their paths — which are compared as if joined, out of
+    // the directory table and the name arena, without building either.
+    let mut dirs: HashMap<(usize, u32), String> = HashMap::new();
+    let mut hits: Vec<Hit> = Vec::with_capacity(limit);
+    let mut visited = 0u64;
+    while hits.len() < limit {
+        let mut best: Option<usize> = None;
+        for i in 0..views.len() {
+            if at[i] >= segments[i].rows() {
+                continue;
+            }
+            let Some(b) = best else {
+                best = Some(i);
+                continue;
+            };
+            if first_of(views, &mut dirs, (i, at[i]), (b, at[b])) {
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else { break };
+        let row = at[i];
+        visited += 1;
+        if skip > 0 {
+            skip -= 1;
+        } else {
+            let seg = &views[i];
+            if let Some(name) = seg.names.get(row) {
+                hits.push(seg.hit(row, name));
+            }
+        }
+        at[i] = next_live(views, segments, i, row + 1);
+    }
+
+    Some(SearchResponse {
+        rows_built: hits.len() as u64,
+        hits,
+        rows_visited: visited,
+        ..empty(0)
+    })
+}
+
+/// The next live row at or after `from`, or one past the end.
+fn next_live(views: &[Segment<'_>], segments: &[Live], i: usize, from: usize) -> usize {
+    let rows = segments[i].rows();
+    (from..rows)
+        .find(|&row| views[i].is_alive(row))
+        .unwrap_or(rows)
+}
+
+/// Whether `a` comes before `b` in the merged stored order.
+fn first_of(
+    views: &[Segment<'_>],
+    dirs: &mut HashMap<(usize, u32), String>,
+    a: (usize, usize),
+    b: (usize, usize),
+) -> bool {
+    let mtime = |(seg, row): (usize, usize)| views[seg].num_of(Field::Mtime, row);
+    match mtime(a).cmp(&mtime(b)) {
+        std::cmp::Ordering::Greater => return true,
+        std::cmp::Ordering::Less => return false,
+        std::cmp::Ordering::Equal => {}
+    }
+    // The same date. Inside one segment the row number is the path order, so
+    // there is nothing to compare.
+    if a.0 == b.0 {
+        return a.1 < b.1;
+    }
+    for (seg, row) in [a, b] {
+        let key = (seg, views[seg].dir_id(row));
+        dirs.entry(key)
+            .or_insert_with(|| views[seg].dirs.get(key.1).unwrap_or_default());
+    }
+    let joined = |(seg, row): (usize, usize)| {
+        let dir = dirs[&(seg, views[seg].dir_id(row))].as_str();
+        let name = views[seg].names.get(row).unwrap_or_default();
+        joined_path(dir, name)
+    };
+    joined(a).lt(joined(b))
+}
+
 /// Emit every live row of every segment, in the merged stored order.
 ///
 /// Each segment is already in that order, so this is a k-way merge and the
@@ -2367,6 +2590,26 @@ impl Index for NativeIndex {
             .iter()
             .map(|live| live.view())
             .collect::<Result<Vec<_>>>()?;
+
+        // **A page reached instead of walked to**, for the one shape that
+        // allows it: the stored order, nothing filtering, nothing concealed,
+        // and deep enough that the walk is worth avoiding. See [`reach`].
+        // Everything else falls through to the walk below, unchanged — which
+        // is the whole of the safety argument for it.
+        let stored_order = matches!(
+            req.sort,
+            scour_core::SortKey::Modified | scour_core::SortKey::Relevance
+        ) && req.descending;
+        if offset >= REACH_FROM
+            && !walk_only()
+            && stored_order
+            && req.query.groups.is_empty()
+            && inner.hidden_prefixes.is_empty()
+            && let Some(found) = reach(&inner.segments, &views, offset, limit, cap, started)
+        {
+            return Ok(found);
+        }
+
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;

@@ -67,6 +67,7 @@ mod lock;
 mod name_order;
 mod names;
 mod order;
+mod rank;
 mod search;
 mod segment;
 mod sizes;
