@@ -174,6 +174,11 @@ struct State {
     facet: Option<String>,
     hits: Vec<scour_core::Hit>,
     down: bool,
+    /// The paths on screen when this list was last drawn, and which query
+    /// they belonged to. A row is "new" only against the same query — after a
+    /// keystroke every row is new by definition.
+    shown_paths: std::collections::HashSet<String>,
+    shown_revision: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -196,6 +201,12 @@ enum PageMove {
 }
 
 impl State {
+    /// Remember what is on screen, so the next answer can say what is new.
+    fn remember_shown(&mut self, paths: Vec<String>) {
+        self.shown_paths = paths.into_iter().collect();
+        self.shown_revision = self.query_revision;
+    }
+
     fn advance_query(&mut self) {
         self.generation += 1;
         self.query_revision += 1;
@@ -312,6 +323,8 @@ fn main() -> Result<()> {
         descending: true,
         facet: None,
         hits: Vec::new(),
+        shown_paths: std::collections::HashSet::new(),
+        shown_revision: 0,
         down: false,
     }));
 
@@ -1055,6 +1068,10 @@ fn apply(
             };
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
+            let (same_query, seen) = {
+                let s = state.borrow();
+                (s.shown_revision == s.query_revision, s.shown_paths.clone())
+            };
             let selected = w.get_selected();
             let scroll_y = w.get_scroll_y();
             let fresh: Vec<Row> = r
@@ -1065,7 +1082,14 @@ fn apply(
                 // browser page use. A window that spelled these itself would
                 // be a second vocabulary, and the day the engine learned a
                 // fourteenth kind this one would show a blank.
-                .map(|h| rows::row_of(h, &terms, now, &t(cat, h.kind.msgid())))
+                // **What is new is what was not here a moment ago.** Only for
+                // a list that refreshed itself under the same query: after a
+                // keystroke every row is new by definition, and marking all of
+                // them would be a screen that flashes on every letter.
+                .map(|h| {
+                    let fresh = same_query && !seen.contains(&h.path);
+                    rows::row_of(h, &terms, now, &t(cat, h.kind.msgid()), fresh)
+                })
                 .collect();
             let n = fresh.len();
             let refused_forward_page = {
@@ -1112,6 +1136,9 @@ fn apply(
                         capped: false,
                     });
                 }
+                // Remembered *after* the fresh flags were worked out above,
+                // and before the next answer asks the same question.
+                s.remember_shown(r.hits.iter().map(|h| h.path.clone()).collect());
                 s.hits = r.hits;
                 let page_move = s.page_move.take();
                 if let Some(PageMove::Slide { offset, .. }) = page_move {
@@ -1891,6 +1918,8 @@ mod tests {
             descending: true,
             facet: None,
             hits: Vec::new(),
+            shown_paths: std::collections::HashSet::new(),
+            shown_revision: 0,
             down: false,
         };
         assert_eq!(full_query(&s), "rapor");
@@ -1939,6 +1968,8 @@ mod tests {
             descending: true,
             facet: None,
             hits: Vec::new(),
+            shown_paths: std::collections::HashSet::new(),
+            shown_revision: 0,
             down: false,
         };
 
@@ -2015,6 +2046,8 @@ mod tests {
             descending: true,
             facet: None,
             hits: Vec::new(),
+            shown_paths: std::collections::HashSet::new(),
+            shown_revision: 0,
             down: false,
         };
 

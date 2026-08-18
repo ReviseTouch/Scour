@@ -28,6 +28,11 @@ export struct Row {
     post: string,
     // The directory, without the name. Shown quieter and to the right.
     folder: string,
+    // Arrived since the last answer. The list updates itself while it is open,
+    // and a list that changes under you without saying so is one you stop
+    // trusting — so what arrived is shown arriving, and then stops being
+    // shown: this marks the event, not the row.
+    fresh: bool,
     // The kind's own token — `folder`, `code`, `build` — used to pick the icon
     // and its colour. Separate from `kind` below, which is the translated word
     // a person reads: one is vocabulary, the other is language.
@@ -968,7 +973,11 @@ export component MainWindow inherits Window {
                         background: root.grid ? transparent
                             : i == root.selected ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
+                            : here.fresh ? Theme.t0.with-alpha(0.22)
                             : transparent;
+                        // Fades rather than staying. A permanent badge would
+                        // still be there tomorrow.
+                        animate background { duration: 1600ms; easing: ease-out; }
 
                         rowtouch := TouchArea {
                             clicked => {
@@ -1043,7 +1052,9 @@ export component MainWindow inherits Window {
                         // somebody asks which day.
                         if !root.grid: Rectangle {
                             x: 0;
-                            width: 3px;
+                            // Thicker while it is new, which is the page's own
+                            // mark for the same thing.
+                            width: here.fresh ? 5px : 3px;
                             height: parent.height;
                             background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
                                  : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3

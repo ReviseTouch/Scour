@@ -92,7 +92,7 @@ fn tint_of(token: &str) -> slint::Brush {
     }
 }
 
-pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str) -> Row {
+pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> Row {
     let (pre, hit, post) = split_at_match(h.name(), terms);
     Row {
         pre: pre.into(),
@@ -100,6 +100,7 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str) -> Row {
         post: post.into(),
         folder: h.parent().into(),
         kind: kind.into(),
+        fresh,
         ktoken: h.kind.token().into(),
         tint: tint_of(h.kind.token()),
         size: if h.is_dir {
