@@ -930,3 +930,12 @@ msgstr "satır okundu"
 
 msgid "results by date changed"
 msgstr "sonuçların değişme tarihine göre"
+
+msgid "writing…"
+msgstr "yazılıyor…"
+
+msgid "written to"
+msgstr "yazıldı:"
+
+msgid "could not be written"
+msgstr "yazılamadı"

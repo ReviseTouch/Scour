@@ -399,7 +399,7 @@ fn main() -> Result<()> {
         let _ = slint::invoke_from_event_loop(move || deliver(got));
     };
 
-    let link = Rc::new(Link::start(addr, sink));
+    let link = Rc::new(Link::start(addr.clone(), sink));
 
     {
         // Registered after the link exists, because answering a search now
@@ -501,13 +501,13 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
+        let addr = addr.clone();
+        let cat_for_tools = Rc::clone(&cat);
         window.on_tool_clicked(move |what| {
             let Some(w) = weak.upgrade() else { return };
             match what.as_str() {
                 "export" => {
-                    // Not built here yet: the export is a stream the service
-                    // writes, and where it should land is a question this
-                    // window has no answer for until it can ask one.
+                    export(&w, &addr, &cat_for_tools);
                 }
                 other => {
                     let open = w.get_panel() == other;
@@ -1564,6 +1564,82 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
         q_not: c(&p.q_not),
         q_bad: c(&p.q_bad),
     }
+}
+
+/// Write the whole matching set to a file, without stopping the window.
+///
+/// **Its own connection and its own thread.** The export is a stream — 2.25 M
+/// rows and 3.6 seconds on this machine — and the lanes are request/response;
+/// putting it on one would hold every keystroke behind it. Nothing is held in
+/// memory here either: the service writes pieces and each goes straight to the
+/// file, which is why the size of the answer is bounded by the disk and by
+/// nothing else.
+///
+/// The file lands beside the person rather than behind a dialog this window
+/// does not have yet. Where it went is said in the meter, because a file
+/// written somewhere nobody was told about is a file that was not written.
+fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
+    let query = window.get_query().to_string();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let path = std::path::PathBuf::from(home).join(format!("scour-{stamp}.csv"));
+    let weak = window.as_weak();
+    let addr = addr.to_string();
+    let waiting = t(cat, "writing…");
+    let wrote = t(cat, "written to");
+    let failed = t(cat, "could not be written");
+    window.set_meter(waiting);
+
+    std::thread::spawn(move || {
+        let outcome = (|| -> std::io::Result<u64> {
+            let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+            let mut client = scour_ipc::Client::connect(&addr)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            let mut bytes = 0u64;
+            let mut hit: Option<std::io::Error> = None;
+            let _ = client.stream(
+                scour_proto::Request::Export {
+                    query,
+                    columns: Vec::new(),
+                },
+                |piece| match piece {
+                    scour_proto::Response::ExportChunk { csv } => {
+                        use std::io::Write;
+                        match file.write_all(csv.as_bytes()) {
+                            Ok(()) => {
+                                bytes += csv.len() as u64;
+                                true
+                            }
+                            Err(e) => {
+                                hit = Some(e);
+                                false
+                            }
+                        }
+                    }
+                    _ => true,
+                },
+            );
+            use std::io::Write;
+            file.flush()?;
+            match hit {
+                Some(e) => Err(e),
+                None => Ok(bytes),
+            }
+        })();
+
+        let said = match outcome {
+            Ok(bytes) => format!("{wrote} {} · {}", path.display(), compact(bytes)),
+            Err(e) => format!("{failed}: {e}"),
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_meter(said.into());
+            }
+        });
+    });
 }
 
 /// Save what the window actually looks like, then leave.
