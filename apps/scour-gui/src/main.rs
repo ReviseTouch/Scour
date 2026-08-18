@@ -1126,11 +1126,11 @@ fn apply(
                     std::time::Duration::from_millis(1600),
                     move || {
                         for i in 0..slint::Model::row_count(&*model) {
-                            if let Some(mut row) = slint::Model::row_data(&*model, i) {
-                                if row.fresh {
-                                    row.fresh = false;
-                                    slint::Model::set_row_data(&*model, i, row);
-                                }
+                            if let Some(mut row) = slint::Model::row_data(&*model, i)
+                                && row.fresh
+                            {
+                                row.fresh = false;
+                                slint::Model::set_row_data(&*model, i, row);
                             }
                         }
                     },
