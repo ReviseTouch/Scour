@@ -863,8 +863,10 @@ fn main() -> Result<()> {
 
     // Scroll somewhere before the snapshot, so fetching can be tested without
     // a hand on a wheel.
-    if let Ok(px) = std::env::var("SCOUR_GUI_SCROLL") {
-        if let Ok(px) = px.parse::<f32>() {
+    if let Ok(px) = std::env::var("SCOUR_GUI_SCROLL")
+        && let Ok(px) = px.parse::<f32>()
+    {
+        {
             let weak = window.as_weak();
             let t = Box::leak(Box::new(slint::Timer::default()));
             t.start(
