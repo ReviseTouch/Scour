@@ -257,13 +257,6 @@ component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
     in property <string> sorted-by;
-    // **What the scrollbar is about.** The model holds a window of about forty
-    // rows and slides; a `ListView` sizes its scrollbar from the model, so the
-    // bar described the window rather than the list — five million rows read
-    // as forty. These two say how long the list really is and where the window
-    // sits in it, and the view is sized from them.
-    in property <int> total-rows;
-    in property <int> window-offset;
     in property <length> w;
     // Which column this is, for remembering what it was dragged to. Not `id`,
     // which Slint keeps for element names, and not `col`, which the grid loop
@@ -433,13 +426,6 @@ export component MainWindow inherits Window {
 
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
-    // **What the scrollbar is about.** The model holds a window of about forty
-    // rows and slides; a `ListView` sizes its scrollbar from the model, so the
-    // bar described the window rather than the list — five million rows read
-    // as forty. These two say how long the list really is and where the window
-    // sits in it, and the view is sized from them.
-    in property <int> total-rows;
-    in property <int> window-offset;
 
     // **The widths are computed once, here, and every row is handed the same
     // numbers.** A `HorizontalLayout` per row works out its own stretch from
@@ -1009,11 +995,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                list := ScrollView {
-                    // The whole list's height, not the window's: this is the
-                    // page's `sizer` and it is what makes the bar honest.
-                    viewport-height: max(1px, root.total-rows * Theme.row-height);
-
+                list := ListView {
                     scrolled => {
                         let first = max(0,
                             Math.floor((0px - self.viewport-y) / Theme.row-height));
@@ -1032,12 +1014,7 @@ export component MainWindow inherits Window {
                     // added: two hundred rows became two hundred live
                     // elements, and scrolling stopped fetching. The model is
                     // what `ListView` knows how to be lazy about.
-                    // Placed where the row actually is in the list, not where
-                    // it is in the window: the view is five million rows tall
-                    // and these forty sit at their own offset inside it.
                     for here[i] in root.rows: Rectangle {
-                        y: (root.window-offset + i) * Theme.row-height;
-                        width: parent.width;
                         height: Theme.row-height;
                         // **Only in the table.** A line of tiles holds several
                         // results, so painting the line for one of them lit up

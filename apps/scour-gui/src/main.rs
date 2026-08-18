@@ -1180,18 +1180,6 @@ fn apply(
             }
             let any_fresh = fresh.iter().any(|r| r.fresh);
             rows.set_vec(fresh);
-            // How long the list is and where this window sits in it — the two
-            // numbers the scrollbar needs and the model cannot carry.
-            {
-                let s = state.borrow();
-                let known = s
-                    .exact_count
-                    .map(|c| c.total)
-                    .unwrap_or(r.total)
-                    .min(i32::MAX as u64) as i32;
-                w.set_total_rows(known);
-                w.set_window_offset(s.page_offset as i32);
-            }
 
             // **Put the flags out again.** Slint's `animate` interpolates when
             // a property *changes*; nothing here was changing it back, so a
