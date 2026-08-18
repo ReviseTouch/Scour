@@ -1325,17 +1325,26 @@ fn apply(
             // The ribbon. Keys are the edges as text, newest first, and
             // `older` is everything past the last one — the service's own
             // wording, so nothing here has to know how the bands were made.
+            // **Oldest on the left, which means reversing what the service
+            // was asked for.** `bar_edges()` is newest first — it is the list
+            // of upper bounds, and the smallest bound is the newest bar — but
+            // the ribbon reads left to right as time does, and its axis says
+            // "2 years ago" at the left end. Drawn in the asked-for order the
+            // bars ran backwards under an axis that did not, which is worse
+            // than no ribbon: it is a ribbon that is confidently wrong.
             let edges = scour_ui::bar_edges();
+            let count_of = |key: &str| -> i32 {
+                ages.iter()
+                    .find(|x| x.key == key)
+                    .map(|x| x.count)
+                    .unwrap_or(0) as i32
+            };
             let mut peak = 1i32;
-            let bars: Vec<Bar> = edges
+            let mut bars: Vec<Bar> = edges
                 .iter()
+                .rev()
                 .map(|days| {
-                    let key = days.to_string();
-                    let count = ages
-                        .iter()
-                        .find(|x| x.key == key)
-                        .map(|x| x.count)
-                        .unwrap_or(0) as i32;
+                    let count = count_of(&days.to_string());
                     peak = peak.max(count);
                     Bar {
                         count,
@@ -1344,6 +1353,13 @@ fn apply(
                     }
                 })
                 .collect();
+            // Anything older than the last edge belongs to the oldest bar
+            // rather than to nothing: two years is where the scale ends, not
+            // where the files do.
+            if let Some(first) = bars.first_mut() {
+                first.count += count_of("older");
+                peak = peak.max(first.count);
+            }
             w.set_bar_peak(peak);
             w.set_bars(ModelRc::new(VecModel::from(bars)));
             let count_query = {

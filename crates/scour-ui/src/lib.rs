@@ -569,6 +569,29 @@ mod ribbon_tests {
         assert_eq!(bar_edges(), want, "the ribbon's bars moved");
     }
 
+    /// The ribbon reads left to right as time does.
+    ///
+    /// **`bar_edges()` is newest first and a ribbon is not.** The edges are
+    /// upper bounds, so the smallest one is the newest bar; the ribbon's axis
+    /// says "2 years ago" at its left end. A window drawing them in the order
+    /// they arrive gets bars running backwards under an axis that does not —
+    /// which is worse than no ribbon, because it is a ribbon that is
+    /// confidently wrong. Both windows reverse; this says why in one place.
+    #[test]
+    fn the_edges_are_newest_first_and_the_ribbon_is_not() {
+        let e = bar_edges();
+        assert!(
+            e[0] < e[e.len() - 1],
+            "the edges stopped being newest first"
+        );
+        let drawn: Vec<u32> = e.iter().rev().copied().collect();
+        assert_eq!(drawn[0], 730, "the leftmost bar is not the oldest");
+        assert!(
+            drawn[drawn.len() - 1] < 10,
+            "the rightmost bar is not the newest"
+        );
+    }
+
     /// A bar's colour is the colour the rows in it get.
     #[test]
     fn a_band_is_one_of_six() {
