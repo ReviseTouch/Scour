@@ -70,6 +70,26 @@ export struct Bar {
     about: string,
 }
 
+// One folder in the report: what it weighs, what share of its parent that is,
+// and how those bytes are spread over the six age bands.
+//
+// The bands are six fields rather than an array because the bar that draws
+// them is six rectangles, and six named widths read better at the point of use
+// than an index into a model would.
+export struct Kid {
+    name: string,
+    path: string,
+    size: string,
+    share: string,
+    files: string,
+    a0: float,
+    a1: float,
+    a2: float,
+    a3: float,
+    a4: float,
+    a5: float,
+}
+
 // One coloured run of the query, as the engine cut it.
 //
 // **The engine cuts it, not this window.** A frontend that tokenised the query
@@ -102,6 +122,13 @@ export struct Facet {
 component Tab inherits Rectangle {
     in property <string> label;
     in property <bool> on;
+    callback clicked();
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
     // The width comes from the word plus its padding — asking the text for
     // the box's width while the box asks the text for its own is a binding
     // loop, which Slint refuses at compile time rather than at run time.
@@ -111,7 +138,7 @@ component Tab inherits Rectangle {
 
         Text {
             text: root.label;
-            color: root.on ? Theme.ink : Theme.ink-3;
+            color: root.on ? Theme.ink : touch.has-hover ? Theme.ink-2 : Theme.ink-3;
             font-size: 10.5px;
             font-weight: 650;
             letter-spacing: 1.7px;
@@ -636,6 +663,31 @@ export component MainWindow inherits Window {
     callback tool-clicked(string);
     callback view-clicked(string);
     in-out property <string> view-mode: "detail";
+    // --- the report -------------------------------------------------------
+    //
+    // The second tab: what a folder weighs, where the weight sits, and how old
+    // it is. Every number in it is the service's — this window formats and
+    // draws, and computes nothing about a disk.
+    in-out property <string> tab: "search";
+    /// The scope, one segment a button, so any ancestor is one press away.
+    in property <[Facet]> crumb;
+    in property <string> report-total;
+    in property <string> report-files;
+    in property <string> report-stale;
+    in property <string> report-took;
+    in property <[Kid]> kids;
+    in property <string> kids-empty;
+    /// How wide the age bar is. Fixed, because six widths taken from the width
+    /// of the layout that holds them is a binding loop.
+    property <length> age-bar: 260px;
+    /// The six band words, in the order the colours run.
+    in property <[string]> age-words;
+    in property <string> head-folder;
+    in property <string> head-age;
+    in property <string> head-share;
+    in property <string> head-files;
+    callback report-open(string);
+
     // Which panel is open, if any: "", "help", "language", "rules".
     in-out property <string> panel: "";
     in property <string> help-title;
@@ -1032,14 +1084,329 @@ export component MainWindow inherits Window {
                 spacing: 0px;
                 alignment: start;
 
-                Tab { label: root.tab-search; on: true; }
-                Tab { label: root.tab-report; on: false; }
+                Tab {
+                    label: root.tab-search;
+                    on: root.tab != "report";
+                    clicked => {
+                        root.tab = "search";
+                    }
+                }
+                Tab {
+                    label: root.tab-report;
+                    on: root.tab == "report";
+                    clicked => {
+                        root.tab = "report";
+                        // Asked for when it is looked at, not before: weighing
+                        // a folder is a walk of everything under it.
+                        root.report-open("");
+                    }
+                }
                 Rectangle { }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // The report. What a folder weighs, where the weight sits, and how old
+        // it is — the second tab, and the other half of what this program is
+        // for: a search answers "where is it", this answers "what is all this".
+        //
+        // Capped to nothing while the search tab is showing, for the reason
+        // the two lists are: an id inside an `if` is out of scope, and the
+        // window has to be able to reach both.
+        // ------------------------------------------------------------------
+        VerticalLayout {
+            visible: root.tab == "report";
+            max-height: root.tab == "report" ? 100000px : 0px;
+            min-height: 0px;
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 14px;
+            spacing: 10px;
+
+            // The scope, one segment a button: any ancestor is one press away.
+            HorizontalLayout {
+                spacing: 4px;
+                alignment: start;
+                height: 22px;
+
+                for step[i] in root.crumb: Rectangle {
+                    width: label.preferred-width + 12px;
+                    border-radius: 3px;
+                    background: steptouch.has-hover ? Theme.hover : transparent;
+
+                    steptouch := TouchArea {
+                        clicked => {
+                            root.report-open(step.token);
+                        }
+                    }
+
+                    label := Text {
+                        text: step.label;
+                        color: i == root.crumb.length - 1 ? Theme.ink : Theme.ink-3;
+                        font-family: Fonts.mono;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+            }
+
+            // What the whole scope comes to, and three quieter facts under it.
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: start;
+
+                Text {
+                    text: root.report-total;
+                    color: Theme.ink;
+                    font-family: Fonts.mono;
+                    font-size: 30px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+
+                    Text {
+                        text: root.report-files;
+                        color: Theme.ink-3;
+                        font-size: Fonts.small;
+                    }
+                    Text {
+                        text: root.report-stale;
+                        color: Theme.ink-3;
+                        font-size: Fonts.small;
+                    }
+                    Text {
+                        text: root.report-took;
+                        color: Theme.ink-3;
+                        font-size: Fonts.small;
+                    }
+                }
+            }
+
+            // The children, heaviest first. The engine ordered them; this
+            // draws what it was handed and sorts nothing.
+            Rectangle {
+                height: 24px;
+                background: Theme.panel;
+
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.line;
+                }
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text: root.head-folder;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                        width: 34%;
+                    }
+                    Text {
+                        text: root.head-age;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                        width: root.age-bar;
+                    }
+                    Text {
+                        text: root.head-size;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 90px;
+                    }
+                    Text {
+                        text: root.head-share;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 70px;
+                    }
+                    Text {
+                        text: root.head-files;
+                        color: Theme.ink-3;
+                        font-size: 10.5px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                        vertical-alignment: center;
+                        horizontal-alignment: right;
+                        width: 80px;
+                    }
+                }
+            }
+
+            kidlist := ListView {
+                vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+
+                for kid[i] in root.kids: Rectangle {
+                    height: 30px;
+                    background: kidtouch.has-hover ? Theme.hover : transparent;
+
+                    kidtouch := TouchArea {
+                        clicked => {
+                            root.report-open(kid.path);
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        Text {
+                            text: kid.name;
+                            color: Theme.q-key;
+                            font-family: Fonts.mono;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            width: 34%;
+                        }
+
+                        // The bytes by age, as one bar. The same six colours
+                        // the rows' dates and the ribbon use, so a wall of
+                        // orange means the same thing everywhere in the window.
+                        //
+                        // **Placed, not laid out.** Six widths taken from the
+                        // width of the thing that holds them is a binding
+                        // loop, and Slint refuses it at build time: a layout
+                        // asks its children how wide they want to be, and they
+                        // were answering "as wide as you are".
+                        VerticalLayout {
+                            alignment: center;
+                            width: root.age-bar;
+                            Rectangle {
+                                height: 12px;
+                                Rectangle {
+                                    x: 0;
+                                    width: root.age-bar * kid.a0;
+                                    height: parent.height;
+                                    background: Theme.t0;
+                                }
+                                Rectangle {
+                                    x: root.age-bar * kid.a0;
+                                    width: root.age-bar * kid.a1;
+                                    height: parent.height;
+                                    background: Theme.t1;
+                                }
+                                Rectangle {
+                                    x: root.age-bar * (kid.a0 + kid.a1);
+                                    width: root.age-bar * kid.a2;
+                                    height: parent.height;
+                                    background: Theme.t2;
+                                }
+                                Rectangle {
+                                    x: root.age-bar * (kid.a0 + kid.a1 + kid.a2);
+                                    width: root.age-bar * kid.a3;
+                                    height: parent.height;
+                                    background: Theme.t3;
+                                }
+                                Rectangle {
+                                    x: root.age-bar * (kid.a0 + kid.a1 + kid.a2 + kid.a3);
+                                    width: root.age-bar * kid.a4;
+                                    height: parent.height;
+                                    background: Theme.t4;
+                                }
+                                Rectangle {
+                                    x: root.age-bar * (kid.a0 + kid.a1 + kid.a2 + kid.a3 + kid.a4);
+                                    width: root.age-bar * kid.a5;
+                                    height: parent.height;
+                                    background: Theme.t5;
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: kid.size;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 12px;
+                            font-weight: 650;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            width: 90px;
+                        }
+                        Text {
+                            text: kid.share;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            width: 70px;
+                        }
+                        Text {
+                            text: kid.files;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: right;
+                            width: 80px;
+                        }
+                    }
+                }
+            }
+
+            if root.kids.length == 0: Text {
+                text: root.kids-empty;
+                color: Theme.ink-3;
+                font-size: Fonts.small;
+                height: 40px;
+                vertical-alignment: center;
+            }
+
+            // What the six colours mean, said once.
+            HorizontalLayout {
+                height: 30px;
+                spacing: 14px;
+                alignment: start;
+
+                for word[i] in root.age-words: HorizontalLayout {
+                    spacing: 5px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 9px;
+                            height: 9px;
+                            border-radius: 2px;
+                            background: i == 0 ? Theme.t0 : i == 1 ? Theme.t1 : i == 2 ? Theme.t2
+                                : i == 3 ? Theme.t3 : i == 4 ? Theme.t4 : Theme.t5;
+                        }
+                    }
+                    Text {
+                        text: word;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
 
         HorizontalLayout {
             spacing: 0px;
+            visible: root.tab != "report";
+            max-height: root.tab == "report" ? 0px : 100000px;
 
             // --------------------------------------------------------------
             // The rail: what the matching set consists of.
@@ -1623,7 +1990,7 @@ export component MainWindow inherits Window {
         // window spent on a question nobody asked. The page puts it in the
         // same place and words it the same way.
         // ------------------------------------------------------------------
-        if root.picked > 0: Rectangle {
+        if root.picked > 0 && root.tab != "report": Rectangle {
             height: 38px;
             background: Theme.panel-2;
 
@@ -1712,7 +2079,9 @@ export component MainWindow inherits Window {
         // also where the page gets them.
         // ------------------------------------------------------------------
         Rectangle {
-            height: 107px;
+            visible: root.tab != "report";
+            min-height: root.tab == "report" ? 0px : 107px;
+            max-height: root.tab == "report" ? 0px : 107px;
             background: Theme.panel-2;
 
             Rectangle {

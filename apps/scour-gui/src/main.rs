@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Facet, Fonts, MainWindow, Row, Scheme, Span, Theme};
+pub use ui::{Bar, Facet, Fonts, Kid, MainWindow, Row, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -203,6 +203,8 @@ struct State {
     descending: bool,
     /// The `kind:` term the rail has active, if any.
     facet: Option<String>,
+    /// The folder the report is weighing. Empty is everything indexed.
+    scope: String,
     hits: Vec<scour_core::Hit>,
     down: bool,
     /// The index revision this window has already seen. The long poll waits
@@ -246,6 +248,118 @@ impl State {
         self.count_query = Some(self.query_revision);
         true
     }
+}
+
+/// The six age bands, in the order the colours run.
+const BANDS: [&str; 6] = [
+    "today",
+    "this week",
+    "this month",
+    "six months",
+    "this year",
+    "older",
+];
+
+/// The scope, as a run of buttons: everything, then each ancestor.
+fn crumb_of(cat: &Catalogue, path: &str) -> Vec<Facet> {
+    let mut steps = vec![Facet {
+        label: t(cat, "Everything"),
+        token: slint::SharedString::new(),
+        count: slint::SharedString::new(),
+        share: 0.0,
+    }];
+    let mut walked = String::new();
+    for part in path.split('/').filter(|p| !p.is_empty()) {
+        walked.push('/');
+        walked.push_str(part);
+        steps.push(Facet {
+            label: part.into(),
+            token: walked.as_str().into(),
+            count: slint::SharedString::new(),
+            share: 0.0,
+        });
+    }
+    steps
+}
+
+/// The last component of a path — what a folder is called.
+fn leaf_of(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some((_, leaf)) if !leaf.is_empty() => leaf,
+        _ => path,
+    }
+}
+
+/// Draw a weighed folder: what it comes to, and where the weight sits.
+fn show_usage(w: &MainWindow, cat: &Catalogue, path: &str, u: &scour_core::UsageResponse) {
+    w.set_crumb(ModelRc::new(VecModel::from(crumb_of(cat, path))));
+    w.set_report_total(compact_bytes(u.root.bytes).into());
+    w.set_report_files(
+        t(cat, "{files} files · {disk} on disk")
+            .replace("{files}", &grouped(u.root.files))
+            .replace("{disk}", &compact_bytes(u.root.disk))
+            .into(),
+    );
+    // **The one number no disk-usage tool shows**, and the one that decides
+    // what to delete: how much of this weight nothing has touched in a year.
+    let stale = if u.root.bytes > 0 {
+        ((u.root.age[4] + u.root.age[5]) as f64 / u.root.bytes as f64 * 100.0).round()
+    } else {
+        0.0
+    };
+    w.set_report_stale(
+        t(cat, "{percent}% of it older than a year")
+            .replace("{percent}", &format!("{stale:.0}"))
+            .into(),
+    );
+    // Said when the list is cut, because a list that silently stops at
+    // twenty-four reads as a folder with twenty-four children.
+    let cut = if u.child_count as usize > u.children.len() {
+        format!(
+            "  ·  {}",
+            t(cat, "the heaviest {shown} of {total} folders")
+                .replace("{shown}", &grouped(u.children.len() as u64))
+                .replace("{total}", &grouped(u.child_count as u64))
+        )
+    } else {
+        String::new()
+    };
+    w.set_report_took(format!("{:.1} ms{cut}", u.took_us as f64 / 1000.0).into());
+    let kids: Vec<Kid> = u
+        .children
+        .iter()
+        .map(|c| {
+            let band = |at: usize| {
+                if c.bytes == 0 {
+                    0.0
+                } else {
+                    c.age[at] as f32 / c.bytes as f32
+                }
+            };
+            Kid {
+                name: leaf_of(&c.path).into(),
+                path: c.path.as_str().into(),
+                size: compact_bytes(c.bytes).into(),
+                share: format!(
+                    "{:.1}%",
+                    if u.root.bytes == 0 {
+                        0.0
+                    } else {
+                        c.bytes as f64 / u.root.bytes as f64 * 100.0
+                    }
+                )
+                .into(),
+                files: grouped(c.files).into(),
+                a0: band(0),
+                a1: band(1),
+                a2: band(2),
+                a3: band(3),
+                a4: band(4),
+                a5: band(5),
+            }
+        })
+        .collect();
+    w.set_kids(ModelRc::new(VecModel::from(kids)));
 }
 
 /// The engine's own numbers, in three pieces.
@@ -393,6 +507,7 @@ fn main() -> Result<()> {
         sort: "relevance".into(),
         descending: true,
         facet: None,
+        scope: String::new(),
         hits: Vec::new(),
         revision: 0,
         down: false,
@@ -812,6 +927,40 @@ fn main() -> Result<()> {
         });
     }
 
+    // --- the report -------------------------------------------------------
+    //
+    // Weighed when it is looked at and again whenever a folder in it is
+    // pressed. Nothing is weighed while the search tab is showing: it is a
+    // walk of everything under the scope, and a tab nobody has opened should
+    // not be spending it.
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let cat = cat.clone();
+        let weak = window.as_weak();
+        window.on_report_open(move |path| {
+            let Some(w) = weak.upgrade() else { return };
+            state.borrow_mut().scope = path.to_string();
+            // The words the table is headed with, said once here rather than
+            // in the interface — the catalogue is the service's vocabulary and
+            // the window does not keep a second one.
+            w.set_head_folder(t(&cat, "Folder"));
+            w.set_head_age(t(&cat, "By age"));
+            w.set_head_share(t(&cat, "Share"));
+            w.set_head_files(t(&cat, "Files"));
+            w.set_kids_empty(t(
+                &cat,
+                "There are no further folders to show under this one.",
+            ));
+            w.set_age_words(ModelRc::new(VecModel::from(
+                BANDS.iter().map(|b| t(&cat, b)).collect::<Vec<_>>(),
+            )));
+            link.send(Ask::Usage {
+                path: path.to_string(),
+            });
+        });
+    }
+
     // --- the selection ----------------------------------------------------
     //
     // Plain replaces it, `Ctrl` adds one, `Shift` takes the run — the browser
@@ -1130,6 +1279,13 @@ fn main() -> Result<()> {
             }
             show_picks(&w, &cat, &rows, &held, false);
         });
+    }
+
+    // Open the report before the window does, for the same reason the panel
+    // flag exists: a picture of the search tab says nothing about the other one.
+    if std::env::var("SCOUR_GUI_TAB").as_deref() == Ok("report") {
+        window.set_tab("report".into());
+        window.invoke_report_open(slint::SharedString::new());
     }
 
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
@@ -1773,6 +1929,17 @@ fn apply(
         // what a window added, what `config.toml` says, what is built in. Only
         // the first can be deleted; any of them can be switched off, and the
         // ones that are come back marked.
+        // What a folder weighs. Asked for when the report tab is looked at
+        // and whenever a folder in it is pressed.
+        Got::Usage { path, reply } => {
+            let Response::Usage(u) = *reply else { return };
+            // A folder nobody is looking at any more: weighing is a walk, and
+            // a slow answer for a scope that has been left is not an answer.
+            if path != state.borrow().scope {
+                return;
+            }
+            show_usage(w, cat, &path, &u);
+        }
         Got::Rules(reply) => {
             let Response::Rules {
                 builtin_paths,
@@ -2446,6 +2613,7 @@ mod tests {
             sort: "relevance".into(),
             descending: true,
             facet: None,
+            scope: String::new(),
             hits: Vec::new(),
             revision: 0,
             down: false,
@@ -2496,6 +2664,7 @@ mod tests {
             sort: "modified".into(),
             descending: true,
             facet: None,
+            scope: String::new(),
             hits: Vec::new(),
             revision: 0,
             down: false,

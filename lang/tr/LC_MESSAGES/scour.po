@@ -732,6 +732,16 @@ msgstr "{files} dosya · diskte {disk}"
 msgid "<b>{percent}%</b> of it older than a year"
 msgstr "<b>%{percent}</b>'i bir yıldan eski"
 
+# The same without the markup, for the window. Turkish writes the sign in
+# front of the number, which is why the placeholder is inside the string.
+msgid "{percent}% of it older than a year"
+msgstr "%{percent}'i bir yıldan eski"
+
+# The top of the report's breadcrumb: no folder chosen, so every root the
+# index holds.
+msgid "Everything"
+msgstr "Tümü"
+
 msgid "{shown} of {total} folders have a match"
 msgstr "{total} klasörün {shown} tanesinde eşleşme var"
 

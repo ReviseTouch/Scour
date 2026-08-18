@@ -58,6 +58,13 @@ pub enum Ask {
         query_revision: u64,
         query: String,
     },
+    /// What a folder weighs, and which of its children weigh the most.
+    ///
+    /// The report tab's whole first screen: the scope's own total, its
+    /// children heaviest first, and each one's bytes split by age.
+    Usage {
+        path: String,
+    },
     /// What the walk skips, in three groups.
     Rules,
     /// Wait until the index is no longer at `since`, then say so.
@@ -122,6 +129,12 @@ pub enum Got {
         reply: Box<Response>,
     },
     Places(Box<Response>),
+    Usage {
+        /// The folder this weighs, so a slow answer for a folder nobody is
+        /// looking at any more can be dropped.
+        path: String,
+        reply: Box<Response>,
+    },
     Rules(Box<Response>),
     Status(Box<Response>),
     Awake(Box<Response>),
@@ -203,9 +216,12 @@ impl Freshness {
             }
             // Asked once and never superseded: there is no newer answer to
             // what this desktop's folders are called.
-            Ask::Places | Ask::Rules | Ask::Status | Ask::Await { .. } | Ask::Remember { .. } => {
-                true
-            }
+            Ask::Places
+            | Ask::Rules
+            | Ask::Status
+            | Ask::Await { .. }
+            | Ask::Remember { .. }
+            | Ask::Usage { .. } => true,
             Ask::Stop => true,
         }
     }
@@ -259,6 +275,7 @@ impl Link {
             | Ask::Rules
             | Ask::Status
             | Ask::Remember { .. }
+            | Ask::Usage { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -286,6 +303,8 @@ enum Lane {
     Places,
     /// The query read back, for the colouring.
     Explain,
+    /// What a folder weighs.
+    Usage,
     /// The exclusion rules.
     Rules,
     /// What the service is holding.
@@ -413,6 +432,19 @@ fn spawn_lane(
                     Lane::Explain,
                 ),
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
+                Ask::Usage { ref path } => (
+                    0,
+                    Request::Usage {
+                        path: path.clone(),
+                        // What the page asks for: enough children that the
+                        // heaviest handful is never a lie by omission, few
+                        // enough that a folder of ten thousand subfolders is
+                        // still one screen.
+                        top: 24,
+                        query: String::new(),
+                    },
+                    Lane::Usage,
+                ),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Await { since } => (
@@ -442,6 +474,13 @@ fn spawn_lane(
             };
             // The page this request asked for, read back off the request
             // itself so the answer can say where it goes. See `Got::Search`.
+            // Which folder a usage answer is about, read back off the
+            // request so a slow one for a folder nobody is looking at any
+            // more can be dropped rather than drawn.
+            let weighed = match &request {
+                Request::Usage { path, .. } => path.clone(),
+                _ => String::new(),
+            };
             let (offset, limit) = match &request {
                 Request::Search { page, .. } => (page.offset, page.limit),
                 _ => (0, 0),
@@ -465,6 +504,10 @@ fn spawn_lane(
                             reply,
                         },
                         Lane::Places => Got::Places(reply),
+                        Lane::Usage => Got::Usage {
+                            path: weighed.clone(),
+                            reply,
+                        },
                         Lane::Rules => Got::Rules(reply),
                         Lane::Status => Got::Status(reply),
                         Lane::Await => Got::Awake(reply),
@@ -495,6 +538,7 @@ fn spawn_lane(
                             | Lane::Rules
                             | Lane::Status
                             | Lane::Await
+                            | Lane::Usage
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {
