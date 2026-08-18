@@ -921,3 +921,6 @@ msgstr "ekle"
 
 msgid "remove"
 msgstr "kaldır"
+
+msgid "window controls"
+msgstr "pencere denetimleri"

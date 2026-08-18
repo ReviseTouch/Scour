@@ -1308,18 +1308,35 @@
   .panel .line em { font-style: normal; color: var(--ink-3); }
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
 
-  /* The `?` in the meter bar. The tool gets the width and the explaining gets
-     a button, which is what this always said; what has changed is that the
-     button now opens something over the window rather than a column beside it,
-     so pressing it no longer costs the width it was protecting. `margin-left:
-     auto` still pushes it to the end of that flex bar. */
+  /* What the window can be told to do: language, rules, export, help.
+     
+     **The group carries the alignment, not the buttons.** Each of these used
+     to declare `margin-left: auto` for itself — a line copied forward every
+     time one was added — which in a flex row means "take the slack before me".
+     The first one took it and the rest inherited a rule that did nothing,
+     leaving four buttons that looked placed by accident because they were.
+     One `auto`, on the group, is the whole of the alignment now.
+     
+     Square rather than round, to match the view switch beside them: two shapes
+     in eighteen pixels of bar read as two unrelated things, and these are the
+     same kind of thing — a control over the window. */
+  .tools { display: flex; gap: 2px; margin-left: auto; align-items: center; }
   .about {
     background: none; border: 1px solid var(--line); color: var(--ink-3);
-    width: 18px; height: 18px; border-radius: 9px; cursor: pointer;
-    font: 600 11px/1 var(--sans); padding: 0; margin-left: auto;
+    width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
+    font: 600 11px/1 var(--sans); padding: 0;
   }
   .about:hover { color: var(--ink); border-color: var(--ink-3); }
   .about[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
+  .about[aria-expanded="true"] { color: var(--q-key); border-color: var(--q-key); }
+  .about:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* The line is the sentence: everything left of it is about the window,
+     everything right of it is about the shape of the list. */
+  .tools + .views {
+    margin-left: calc(var(--u) * 3);
+    padding-left: calc(var(--u) * 3);
+    border-left: 1px solid var(--line);
+  }
 
   /* ---------------- the row menu ---------------- */
   tbody tr { cursor: default; }
@@ -1646,18 +1663,30 @@
       <!-- The glyph switch used to be here. It is in the heading of the column
            it fills now: this bar is for what is true of the whole window, and
            a picture in every row is true of one column. -->
-      <button type="button" id="about" class="about" aria-pressed="false"
-              data-t-title="help" data-t-aria="show the help">?</button>
-      <!-- The language menu. Beside the other thing in this bar that changes
-           how the window looks rather than what it is looking at. -->
-      <button type="button" id="csv" class="about"
-              data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
-      <button type="button" id="rules" class="about" aria-haspopup="dialog"
-              aria-expanded="false" data-t-title="what is skipped"
-              data-t-aria="the rules that keep files out of the index">⊘</button>
-      <button type="button" id="lang" class="about" aria-haspopup="menu"
-              aria-expanded="false" data-t-title="language"
-              data-t-aria="choose the language">文</button>
+      <!-- **One group, and it had to become one.** These four arrived one at a
+           time and each carried `margin-left: auto` from the first of them, so
+           the bar ended up with four independently right-floating buttons in
+           two different shapes — round here, square for the views beside them.
+           Nothing said they belonged together and nothing said where one set
+           ended and the next began.
+           They do belong together: every one of them is about the *window*
+           rather than about what the window is looking at. So: one group, one
+           shape, and a rule between them and the view switch — which is a
+           different question, "what shape is the list", and is the only thing
+           here that changes what you are reading rather than what the program
+           is doing. -->
+      <div class="tools" role="group" data-t-aria="window controls">
+        <button type="button" id="lang" class="about" aria-haspopup="menu"
+                aria-expanded="false" data-t-title="language"
+                data-t-aria="choose the language">文</button>
+        <button type="button" id="rules" class="about" aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="what is skipped"
+                data-t-aria="the rules that keep files out of the index">⊘</button>
+        <button type="button" id="csv" class="about"
+                data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
+        <button type="button" id="about" class="about" aria-pressed="false"
+                data-t-title="help" data-t-aria="show the help">?</button>
+      </div>
       <!-- The shape of the list. Three buttons rather than one that cycles:
            a cycling button is a button whose next state you have to remember,
            and these say which one you are in. `data-view` is the word the
