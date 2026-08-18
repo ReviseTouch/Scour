@@ -365,6 +365,21 @@ export component MainWindow inherits Window {
     in property <length> w-path;
     in property <length> w-mtime;
     in property <length> w-size;
+    // **The grid counts lines, not rows.** A tile view puts several results on
+    // one scrolled line, so everything the virtual list rests on — how many
+    // fit, which one is on top, how far a page moves — is counted in lines and
+    // converted at the edges. Getting this wrong does not look wrong; it
+    // scrolls wrong, which is harder to notice and worse to use.
+    out property <bool> grid: root.view-mode != "detail";
+    out property <length> tile-w: root.view-mode == "large" ? 132px : 96px;
+    out property <length> tile-h: root.view-mode == "large" ? 172px : 104px;
+    out property <length> pic: root.view-mode == "large" ? 110px : 52px;
+    out property <int> per-line: max(1, Math.floor(
+        (root.width - root.chrome - 40px) / root.tile-w));
+    out property <int> lines: root.grid
+        ? Math.ceil(root.rows.length / max(1, root.per-line))
+        : root.rows.length;
+
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
 
@@ -909,9 +924,20 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    for row[i] in root.rows: Rectangle {
-                        height: Theme.row-height;
-                        background: i == root.selected ? Theme.selection
+                    for line[i] in root.lines: Rectangle {
+                        // One row in the table, one line of tiles in the grid.
+                        height: root.grid ? root.tile-h : Theme.row-height;
+                        // `line` is the loop's own name for the index; the
+                        // row it stands for in the table view is this. Named
+                        // `here` because `row` is already the loop variable's
+                        // property in the grid branch below.
+                        property <Row> here: root.rows[i];
+                        // **Only in the table.** A line of tiles holds several
+                        // results, so painting the line for one of them lit up
+                        // everything beside it — the selection has to be the
+                        // tile, and it is, below.
+                        background: root.grid ? transparent
+                            : i == root.selected ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
                             : transparent;
 
@@ -933,7 +959,55 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        HorizontalLayout {
+                        if root.grid: HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            alignment: start;
+
+                            for col[c] in root.per-line: Rectangle {
+                                width: root.tile-w;
+                                height: root.tile-h;
+                                background: (i * root.per-line + c) == root.selected
+                                    ? Theme.selection : transparent;
+
+                                if (i * root.per-line + c) < root.rows.length: VerticalLayout {
+                                    padding: 6px;
+                                    spacing: 4px;
+                                    alignment: center;
+
+                                    // A wall of squares is read by hue before
+                                    // it is read by name, so the kind's colour
+                                    // is the tile and the name sits under it.
+                                    Rectangle {
+                                        height: root.pic;
+                                        Rectangle {
+                                            width: root.pic * 0.55;
+                                            height: root.pic * 0.55;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 5px;
+                                            background: root.rows[i * root.per-line + c].tint;
+                                            opacity: 0.5;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: root.rows[i * root.per-line + c].pre
+                                            + root.rows[i * root.per-line + c].hit
+                                            + root.rows[i * root.per-line + c].post;
+                                        color: Theme.ink;
+                                        font-family: Fonts.mono;
+                                        font-size: root.view-mode == "large" ? 12px : 11px;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                        overflow: elide;
+                                        height: 30px;
+                                    }
+                                }
+                            }
+                        }
+
+                        if !root.grid: HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
                             spacing: 8px;
@@ -954,89 +1028,89 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 width: 15px;
-                            if row.ktoken == "folder": Image {
+                            if here.ktoken == "folder": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/folder.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "doc": Image {
+                            if here.ktoken == "doc": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/doc.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "code": Image {
+                            if here.ktoken == "code": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/code.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "image": Image {
+                            if here.ktoken == "image": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/image.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "video": Image {
+                            if here.ktoken == "video": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/video.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "media": Image {
+                            if here.ktoken == "media": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/media.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "audio": Image {
+                            if here.ktoken == "audio": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/audio.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "archive": Image {
+                            if here.ktoken == "archive": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/archive.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "exec": Image {
+                            if here.ktoken == "exec": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/exec.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "data": Image {
+                            if here.ktoken == "data": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/data.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "config": Image {
+                            if here.ktoken == "config": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/config.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "font": Image {
+                            if here.ktoken == "font": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/font.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "build": Image {
+                            if here.ktoken == "build": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/build.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
-                            if row.ktoken == "file": Image {
+                            if here.ktoken == "file": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/file.svg");
-                                colorize: row.tint;
+                                colorize: here.tint;
                             }
                             }
 
@@ -1045,16 +1119,16 @@ export component MainWindow inherits Window {
                             // the page does: the one distinction worth a
                             // colour in a list of names is "this one opens".
                             Marked {
-                                pre: row.pre;
-                                hit: row.hit;
-                                post: row.post;
-                                colour: row.is-dir ? Theme.q-key : Theme.ink;
+                                pre: here.pre;
+                                hit: here.hit;
+                                post: here.post;
+                                colour: here.is-dir ? Theme.q-key : Theme.ink;
                                 width: root.cw-name;
                             }
 
                             Text {
                                 width: root.w-kind;
-                                text: row.kind;
+                                text: here.kind;
                                 color: Theme.ink-3;
                                 font-size: Fonts.small;
                                 vertical-alignment: center;
@@ -1063,7 +1137,7 @@ export component MainWindow inherits Window {
 
                             Text {
                                 width: root.cw-path;
-                                text: row.folder;
+                                text: here.folder;
                                 color: Theme.ink-3;
                                 font-family: Fonts.mono;
                                 font-size: 11.5px;
@@ -1078,11 +1152,11 @@ export component MainWindow inherits Window {
                             // glance rather than two.
                             Text {
                                 width: root.w-mtime;
-                                text: row.stamp;
+                                text: here.stamp;
                                 font-family: Fonts.mono;
-                                color: row.age == 0 ? Theme.t0 : row.age == 1 ? Theme.t1
-                                     : row.age == 2 ? Theme.t2 : row.age == 3 ? Theme.t3
-                                     : row.age == 4 ? Theme.t4 : Theme.t5;
+                                color: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
+                                     : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
+                                     : here.age == 4 ? Theme.t4 : Theme.t5;
                                 font-size: Fonts.small;
                                 vertical-alignment: center;
                                 overflow: elide;
@@ -1090,7 +1164,7 @@ export component MainWindow inherits Window {
 
                             Text {
                                 width: root.w-size;
-                                text: row.size;
+                                text: here.size;
                                 color: Theme.ink-2;
                                 font-family: Fonts.mono;
                                 font-size: 11.5px;

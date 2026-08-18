@@ -371,6 +371,13 @@ fn main() -> Result<()> {
         .collect();
     window.set_languages(ModelRc::new(VecModel::from(langs)));
     window.set_language(language(&config).as_str().into());
+    // The shape the window was left in. `detail` when nothing was chosen —
+    // and when something unknown was, which is the same answer a frontend
+    // should give to a word it does not have a drawing for.
+    let kept_layout = scour_settings::Settings::load(&state_dir(&config)).layout;
+    if matches!(kept_layout.as_str(), "icons" | "large") {
+        window.set_view_mode(kept_layout.as_str().into());
+    }
     window.set_ribbon_hint(t(&cat, "results by date changed"));
     window.set_axis_oldest(t(&cat, "2 years ago"));
     window.set_axis_year(t(&cat, "1 year"));
@@ -752,6 +759,10 @@ fn main() -> Result<()> {
     // exists: a picture of an empty box says nothing about how a query looks.
     // Open a panel before the window does, for the same reason the query flag
     // exists: a picture of a closed panel says nothing about the panel.
+    if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
+        window.set_view_mode(mode.as_str().into());
+    }
+
     if let Ok(which) = std::env::var("SCOUR_GUI_PANEL") {
         // Press it, do not set it: the handler is what asks the service for
         // what the panel shows, and setting the property first made the press
@@ -1699,6 +1710,15 @@ fn grouped(n: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// Where the settings this window shares with the others live.
+fn state_dir(cfg: &scour_config::Config) -> std::path::PathBuf {
+    cfg.index
+        .dir
+        .parent()
+        .unwrap_or(cfg.index.dir.as_path())
+        .join("state")
 }
 
 fn language(cfg: &scour_config::Config) -> String {
