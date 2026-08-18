@@ -270,11 +270,23 @@ fn switch_off(list: &mut Vec<String>, kind: &str, added: &scour_settings::Settin
 mod tests {
     use super::*;
 
+    /// The rules with nothing switched off, whatever this machine's owner has
+    /// done to their own.
+    ///
+    /// **These used to call `scan_options`, which reads the real settings
+    /// file** — so the moment somebody switched off `node_modules` from a
+    /// panel, two tests here started failing on their machine and nowhere
+    /// else. A test that depends on the state of the desktop it runs on is a
+    /// test that will be believed right up until it is not.
+    fn plain(config: &Config) -> scour_core::ScanOptions {
+        scan_options_with(config, &scour_settings::Settings::default())
+    }
+
     #[test]
     fn platform_exclusions_are_added_to_the_configured_ones() {
         let mut c = Config::default();
         c.exclude.dirs = vec!["my-own".into()];
-        let o = scan_options(&c);
+        let o = plain(&c);
         assert!(
             o.exclude_dirs.iter().any(|d| d == "my-own"),
             "the user's rule survives"
@@ -379,7 +391,7 @@ mod tests {
         // a circle at 8.25% of a core. Nothing under here is searchable in
         // any sense a person means.
         let c = Config::default();
-        let o = scan_options(&c);
+        let o = plain(&c);
         let rules = scour_source_fs::Rules::from_options(&o);
         let data = scour_config::data_dir();
         assert!(
@@ -400,7 +412,7 @@ mod tests {
         // case where the two answers agree.
         let mut elsewhere = Config::default();
         elsewhere.index.dir = "/srv/scour-elsewhere/index".into();
-        let o = scan_options(&elsewhere);
+        let o = plain(&elsewhere);
         let rules = scour_source_fs::Rules::from_options(&o);
         assert!(
             rules.excludes_path("/srv/scour-elsewhere/app/Default/Cache/Cache_Data/x_0"),
@@ -420,7 +432,7 @@ mod tests {
         // them, and indexing them writes segments. On an idle machine that
         // loop was 62% of a core and two thirds of every filesystem event.
         let c = Config::default();
-        let o = scan_options(&c);
+        let o = plain(&c);
         let dir = index_dir(&c).to_string_lossy().into_owned();
         assert!(
             o.deny.iter().any(|p| dir.starts_with(p.as_str())),
@@ -431,7 +443,7 @@ mod tests {
         // list is for: the feedback loop it prevents cost two cores.
         let mut c2 = Config::default();
         c2.exclude.allow = vec!["/".into()];
-        let o2 = scan_options(&c2);
+        let o2 = plain(&c2);
         let rules = scour_source_fs::Rules::from_options(&o2);
         assert!(
             rules.excludes_path(&format!("{dir}/seg-00000001.cols")),
@@ -443,7 +455,7 @@ mod tests {
     fn a_rule_is_not_duplicated_when_it_is_already_there() {
         let mut c = Config::default();
         c.exclude.dirs = vec!["NODE_MODULES".into()];
-        let o = scan_options(&c);
+        let o = plain(&c);
         assert_eq!(
             o.exclude_dirs
                 .iter()
