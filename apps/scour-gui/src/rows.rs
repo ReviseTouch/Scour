@@ -215,3 +215,96 @@ mod tests {
         assert_eq!(band(now, now + DAY), 0);
     }
 }
+
+/// The list, as a model the view pulls from rather than a vector it is handed.
+///
+/// **Why this shape.** A `VecModel` holds every row the view can show, so a
+/// window over five million results has to be a sliding window — and then the
+/// scrollbar measures the window, scrolling past its edge shows blank, and
+/// every fetch has to move the viewport back to where the eye was. All three
+/// were fixed separately today and all three came back.
+///
+/// `Model` inverts it: `row_count` is the real total, so the view sizes itself
+/// and its scrollbar correctly and asks for exactly the rows it is about to
+/// draw. `row_data` answers from the loaded window, and when it is asked for a
+/// row outside that window it says so — [`Rows::wanted`] is how the window
+/// learns which page to fetch next. A row that has not arrived is drawn empty
+/// for one frame rather than left as a hole.
+///
+/// Taken from `Hukuk-Dosyalar`'s `RowsModel`, which does the same thing over a
+/// store that is already in memory.
+pub struct Rows {
+    loaded: std::cell::RefCell<Vec<Row>>,
+    /// Where `loaded` begins in the whole result.
+    offset: std::cell::Cell<usize>,
+    /// How long the result is, which is what the view is sized from.
+    total: std::cell::Cell<usize>,
+    /// A row the view asked for and this could not answer.
+    want: std::cell::Cell<Option<usize>>,
+    notify: slint::ModelNotify,
+}
+
+impl Default for Rows {
+    fn default() -> Self {
+        Rows {
+            loaded: std::cell::RefCell::new(Vec::new()),
+            offset: std::cell::Cell::new(0),
+            total: std::cell::Cell::new(0),
+            want: std::cell::Cell::new(None),
+            notify: slint::ModelNotify::default(),
+        }
+    }
+}
+
+impl Rows {
+    /// Hand over a page: the rows, where they start, and how long the whole
+    /// result is.
+    pub fn put(&self, rows: Vec<Row>, offset: usize, total: usize) {
+        *self.loaded.borrow_mut() = rows;
+        self.offset.set(offset);
+        self.total.set(total);
+        self.want.set(None);
+        self.notify.reset();
+    }
+
+    /// The row the view asked for and did not get, if any. Taken, not read:
+    /// one fetch per miss.
+    pub fn wanted(&self) -> Option<usize> {
+        self.want.take()
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset.get()
+    }
+
+    pub fn loaded_len(&self) -> usize {
+        self.loaded.borrow().len()
+    }
+}
+
+impl slint::Model for Rows {
+    type Data = Row;
+
+    fn row_count(&self) -> usize {
+        self.total.get()
+    }
+
+    fn row_data(&self, row: usize) -> Option<Row> {
+        let offset = self.offset.get();
+        let loaded = self.loaded.borrow();
+        if row >= offset && row < offset + loaded.len() {
+            return Some(loaded[row - offset].clone());
+        }
+        // Outside the loaded window. Remember the first such row — the view
+        // asks for a run of them and they all want the same page — and give
+        // back a blank so the list keeps its shape while it arrives.
+        if self.want.get().is_none() {
+            self.want.set(Some(row));
+        }
+        Some(Row::default())
+    }
+
+    fn model_tracker(&self) -> &dyn slint::ModelTracker {
+        &self.notify
+    }
+}

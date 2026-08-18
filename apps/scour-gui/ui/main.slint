@@ -1012,36 +1012,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                list := ScrollView {
-                    // The whole list's height — the page's `sizer`, and what
-                    // makes the bar honest.
-                    viewport-height: max(1px, root.total-rows * Theme.row-height);
-                    // **And the width, or there is nothing to see.** A
-                    // `ScrollView` whose viewport width is never set leaves it
-                    // at zero, so absolutely-positioned children are laid out
-                    // into a strip with no room in it — a correct scrollbar
-                    // over an empty list.
-                    viewport-width: self.visible-width;
-
-                    // **`changed`, not `scrolled`.** That callback belongs to
-                    // `ListView`; on a `ScrollView` it is never called, so the
-                    // list fetched its first page and then sat there however
-                    // far it was scrolled.
-                    changed viewport-y => {
-                        // Which row is at the top, in the list's own numbering,
-                        // and which is at the bottom.
-                        let first = max(0,
-                            Math.floor((0px - self.viewport-y) / Theme.row-height));
-                        let last = first + Math.ceil(self.visible-height / Theme.row-height);
-                        // `need-page` is given the position *inside the window*,
-                        // which is what the other side works in.
-                        let local = max(0, first - root.window-offset);
-                        if (last >= root.window-offset + root.rows.length - 4) {
-                            root.need-page(1, local);
-                        } else if (first <= root.window-offset + 4 && root.window-offset > 0) {
-                            root.need-page(-1, local);
-                        }
-                    }
+                list := ListView {
 
                     // **Over the model, not over a count.** A `for` on an
                     // integer builds every element at once, which took the
@@ -1049,14 +1020,12 @@ export component MainWindow inherits Window {
                     // added: two hundred rows became two hundred live
                     // elements, and scrolling stopped fetching. The model is
                     // what `ListView` knows how to be lazy about.
-                    // Placed where the row is in the *list*, not in the
-                    // window: the view is as tall as the whole result and
-                    // these forty sit at their own offset inside it. This is
-                    // also what makes a refresh keep its place — nothing has
-                    // to move the viewport when the window slides.
+                    // **The view pulls.** `root.rows` is a model whose
+                    // `row_count` is the whole result, so `ListView` sizes
+                    // itself and its scrollbar from the real length and asks
+                    // for exactly the rows it is about to draw. Nothing here
+                    // places a row or moves a viewport any more.
                     for here[i] in root.rows: Rectangle {
-                        y: (root.window-offset + i) * Theme.row-height;
-                        width: list.visible-width;
                         height: Theme.row-height;
                         // **Only in the table.** A line of tiles holds several
                         // results, so painting the line for one of them lit up

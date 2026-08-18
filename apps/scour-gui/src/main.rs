@@ -332,7 +332,7 @@ fn main() -> Result<()> {
         down: false,
     }));
 
-    let rows: Rc<VecModel<Row>> = Rc::new(VecModel::default());
+    let rows: Rc<rows::Rows> = Rc::new(rows::Rows::default());
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
     window.set_rows(ModelRc::from(rows.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
@@ -843,6 +843,36 @@ fn main() -> Result<()> {
 
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
+    // **What the model asked for.** `row_data` is called while the view is
+    // laying out, which is no place to start a request — so a miss is recorded
+    // and picked up here, a few times a second. One fetch per miss: the view
+    // asks for a run of rows and they all want the same page.
+    {
+        let rows = Rc::clone(&rows);
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(120),
+            move || {
+                let Some(want) = rows.wanted() else { return };
+                let Some(w) = weak.upgrade() else { return };
+                let limit = {
+                    let s = state.borrow();
+                    s.row_limit.max(w.get_visible_rows().max(0) as u32)
+                };
+                // Centre the page on what was asked for, so scrolling either
+                // way from here has room before the next miss.
+                let half = limit / 2;
+                let offset = (want as u32).saturating_sub(half);
+                state.borrow_mut().page_offset = offset;
+                send_search(&state, &link, offset, limit);
+            },
+        );
+    }
+
     // The scopes, once: they do not change while the window is open. On the
     // slow lane, because the fast one coalesces and would drop this the
     // instant a keystroke followed it.
@@ -1092,7 +1122,7 @@ fn facet_query(s: &State) -> String {
 fn apply(
     w: &MainWindow,
     state: &Rc<RefCell<State>>,
-    rows: &Rc<VecModel<Row>>,
+    rows: &Rc<rows::Rows>,
     facets: &Rc<VecModel<Facet>>,
     cat: &Rc<Catalogue>,
     link: &Rc<Link>,
@@ -1199,16 +1229,16 @@ fn apply(
                 return;
             }
             let any_fresh = fresh.iter().any(|r| r.fresh);
-            rows.set_vec(fresh);
             {
                 let s = state.borrow();
-                let known = s
+                let total = s
                     .exact_count
                     .map(|c| c.total)
                     .unwrap_or(r.total)
-                    .min(i32::MAX as u64) as i32;
-                w.set_total_rows(known.max(n as i32));
-                w.set_window_offset(s.page_offset as i32);
+                    .min(i32::MAX as u64) as usize;
+                // The whole result's length, so the view sizes itself from it;
+                // the page and where it begins, so the model can answer for it.
+                rows.put(fresh, s.page_offset as usize, total.max(n));
             }
 
             // **Put the flags out again.** Slint's `animate` interpolates when
@@ -1218,7 +1248,7 @@ fn apply(
             // The wash is 1.6s in the page, so the flags come off then and the
             // animation carries the fade.
             if any_fresh {
-                let model = Rc::clone(rows);
+                let model: Rc<rows::Rows> = Rc::clone(rows);
                 let t = Box::leak(Box::new(slint::Timer::default()));
                 t.start(
                     slint::TimerMode::SingleShot,
