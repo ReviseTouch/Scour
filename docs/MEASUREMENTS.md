@@ -5342,3 +5342,38 @@ them: right page, ninety thousand rows visited to produce it.
 * The rank is rebuilt per request. It is a millisecond on this index and it is
   now the largest part of what a reached page costs; `Live::deaths` is the
   stamp a cached one would be checked against.
+
+## Skia, asked for and measured — 2026-08-18
+
+The window draws on the CPU and the browser page scrolls on a compositor, so
+the obvious suspicion was the renderer. `--features skia` has been kept behind
+a flag for exactly this question. Same window, same service, same live index,
+same scripted drag — a scrollbar thrown from the top to row 2,133 in twenty
+frames, repeated six times at one stop per frame:
+
+| | software (CPU) | skia (GL) |
+|---|---:|---:|
+| page latency, median | **4.6 ms** | 6.8 ms |
+| page latency, 90th | **27.2 ms** | 45.6 ms |
+| page latency, worst | **77.7 ms** | 90.1 ms |
+| CPU while dragging | 67% of a core | **63%** |
+| RSS | **60 MB** | 207 MB |
+| binary | **14.0 MB** | 20.4 MB |
+| window built | **77 ms** | 77 ms |
+| first rows on screen | **251 ms** | 357 ms |
+
+```bash
+cargo build --release -p scour-gui --features skia
+SCOUR_TRACE=1 SCOUR_GUI_SCROLL_MS=16 SCOUR_GUI_SCROLL=<stops> scour-gui
+```
+
+**Skia is slower here and three and a half times the memory.** The scene is
+text on flat rectangles: no gradients, no transforms, nothing a GPU is for.
+What it adds is a context to set up and a driver to go through, and the
+latency numbers say so at every percentile.
+
+So the software renderer stays, and the remaining wait is not the renderer.
+The engine's share of those round trips is 0.3–1.2 ms; the rest is the window
+returning to its event loop, which on a 60 Hz screen is one frame of
+granularity. After the hand stops, the page it stopped on arrives within about
+a frame — which is what smooth means.
