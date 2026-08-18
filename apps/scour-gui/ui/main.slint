@@ -443,7 +443,13 @@ export component MainWindow inherits Window {
     // pieces between the window edge and the list are all fixed and known: the
     // card's 20px margins, its 1px border, the 186px rail with its divider,
     // and the list's own 12px padding on each side.
-    property <length> chrome: 40px + 2px + 186px + 1px + 24px;
+    // **And the scrollbar's own lane.** It is drawn over the list rather than
+    // beside it, so without a gutter it sits on top of the last column — the
+    // size column, whose digits are the ones that must not be cut. The page
+    // says `scrollbar-gutter: stable` for the same reason; here it is 14px
+    // taken off the width the columns divide up, and the header loses it too
+    // so the two stay in line.
+    property <length> chrome: 40px + 2px + 186px + 1px + 24px + 14px;
     property <length> gaps: 8px * 4;
     property <length> flex: max(240px,
         root.width - root.chrome - root.gaps - root.w-kind - root.w-mtime - root.w-size);
