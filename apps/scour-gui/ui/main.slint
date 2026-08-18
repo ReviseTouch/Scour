@@ -1023,18 +1023,23 @@ export component MainWindow inherits Window {
                     // over an empty list.
                     viewport-width: self.visible-width;
 
-                    scrolled => {
-                        // Which row is at the top of the view, in the list's
-                        // own numbering. The window has to cover it and a
-                        // little beyond; when it does not, ask for the page
-                        // that does.
+                    // **`changed`, not `scrolled`.** That callback belongs to
+                    // `ListView`; on a `ScrollView` it is never called, so the
+                    // list fetched its first page and then sat there however
+                    // far it was scrolled.
+                    changed viewport-y => {
+                        // Which row is at the top, in the list's own numbering,
+                        // and which is at the bottom.
                         let first = max(0,
                             Math.floor((0px - self.viewport-y) / Theme.row-height));
                         let last = first + Math.ceil(self.visible-height / Theme.row-height);
+                        // `need-page` is given the position *inside the window*,
+                        // which is what the other side works in.
+                        let local = max(0, first - root.window-offset);
                         if (last >= root.window-offset + root.rows.length - 4) {
-                            root.need-page(1, first);
+                            root.need-page(1, local);
                         } else if (first <= root.window-offset + 4 && root.window-offset > 0) {
-                            root.need-page(-1, first);
+                            root.need-page(-1, local);
                         }
                     }
 

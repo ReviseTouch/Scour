@@ -861,6 +861,24 @@ fn main() -> Result<()> {
         window.global::<Theme>().set_dark(scheme != "light");
     }
 
+    // Scroll somewhere before the snapshot, so fetching can be tested without
+    // a hand on a wheel.
+    if let Ok(px) = std::env::var("SCOUR_GUI_SCROLL") {
+        if let Ok(px) = px.parse::<f32>() {
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(600),
+                move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_scroll_y(-px);
+                    }
+                },
+            );
+        }
+    }
+
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
         window.set_view_mode(mode.as_str().into());
     }
@@ -1494,8 +1512,19 @@ fn apply(
                 }
                 s.revision = st.revision;
             }
-            let limit = w.get_visible_rows().max(0) as u32;
-            send_search(state, link, state.borrow().page_offset, limit);
+            // **The window that is loaded, not the window that is visible.**
+            // This asked for `visible_rows` — about two dozen — so every live
+            // refresh threw away the two hundred rows scrolling had just
+            // fetched and put the list back to one screenful. Scroll down,
+            // wait a second, and the list was short again.
+            let (offset, limit) = {
+                let s = state.borrow();
+                (
+                    s.page_offset,
+                    s.row_limit.max(w.get_visible_rows().max(0) as u32),
+                )
+            };
+            send_search(state, link, offset, limit);
             link.send(Ask::Await {
                 since: state.borrow().revision,
             });
