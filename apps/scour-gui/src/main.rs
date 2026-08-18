@@ -289,6 +289,9 @@ fn main() -> Result<()> {
     // Nothing is marked to begin with: the first list is by relevance, which
     // is not a column and has no heading to point at.
     window.set_sorted_by("relevance".into());
+    // The two tab words, from the catalogue like every other visible string.
+    window.set_tab_search(t(&cat, "Search"));
+    window.set_tab_report(t(&cat, "Report"));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
