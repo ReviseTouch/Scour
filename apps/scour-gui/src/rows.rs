@@ -449,25 +449,43 @@ impl Rows {
     /// They are asked for only when *missing*, never merely because the index
     /// moved: a page nobody is looking at is not worth a request, and an index
     /// that changes every second would otherwise keep this fetching for ever.
-    pub fn next_page(&self, first: usize, last: usize, speculate: bool) -> Option<usize> {
+    pub fn next_page(
+        &self,
+        first: usize,
+        last: usize,
+        speculate: bool,
+        refresh: bool,
+    ) -> Option<usize> {
         let total = self.total.get();
         if total == 0 {
+            return None;
+        }
+        // **One request at a time, always for where the eye is now.** A hand
+        // that throws the scrollbar across a million rows crosses a page every
+        // frame, and a request per crossing is sixty requests for the one page
+        // anybody will look at — each of them queued ahead of it. So nothing
+        // is asked for while an answer is on its way, and when it lands the
+        // next question is asked about wherever the list has got to by then.
+        if self.asked.get().is_some() {
             return None;
         }
         let end = (total - 1) / SPAN;
         let from = Self::page_of(first.min(total - 1));
         let to = Self::page_of(last.min(total - 1));
-        // On screen: fetched when missing, and re-read when the index has
-        // moved under them.
+        // On screen: fetched when missing, and re-read when the index has moved
+        // under them — but the second only when the caller says there is time
+        // for it. During a scan the index moves several times a second, and a
+        // list that re-read the page under the pointer every time it did would
+        // spend a drag fetching the same rows over and over.
         for page in from..=to {
-            if self.asked.get().map(|(p, _)| p) != Some(page)
-                && self
-                    .pages
-                    .borrow()
-                    .get(&page)
-                    .is_none_or(|held| held.revision != self.revision.get() || held.rows.is_empty())
-            {
-                return Some(page);
+            let held = self.pages.borrow();
+            match held.get(&page) {
+                None => return Some(page),
+                Some(held) if held.rows.is_empty() => return Some(page),
+                Some(held) if refresh && held.revision != self.revision.get() => {
+                    return Some(page);
+                }
+                Some(_) => {}
             }
         }
         // Ahead, then behind: only what is missing altogether, and only while
@@ -479,9 +497,7 @@ impl Rows {
             return None;
         }
         let near = [(to < end).then_some(to + 1), from.checked_sub(1)];
-        near.into_iter()
-            .flatten()
-            .find(|page| self.asked.get().map(|(p, _)| p) != Some(*page) && !self.holds(*page))
+        near.into_iter().flatten().find(|page| !self.holds(*page))
     }
 
     fn holds(&self, page: usize) -> bool {
@@ -674,22 +690,22 @@ mod model_tests {
         let rows = Rows::default();
         rows.put(0, page(SPAN), 10_000);
         // The screen is covered, so the next page is the one ahead of it.
-        assert_eq!(rows.next_page(0, 24, true), Some(1));
+        assert_eq!(rows.next_page(0, 24, true, true), Some(1));
         rows.asking(1, 0);
         assert_eq!(
-            rows.next_page(0, 24, true),
+            rows.next_page(0, 24, true, true),
             None,
             "and it is not asked for twice"
         );
         rows.put(1, page(SPAN), 10_000);
         // Now ahead is held too, so nothing is wanted until the eye moves.
-        assert_eq!(rows.next_page(0, 24, true), None);
+        assert_eq!(rows.next_page(0, 24, true, true), None);
         // Two pages down, what is on screen wins over what is beside it.
-        assert_eq!(rows.next_page(SPAN * 3, SPAN * 3 + 24, true), Some(3));
+        assert_eq!(rows.next_page(SPAN * 3, SPAN * 3 + 24, true, true), Some(3));
         // At the top of the list there is nothing behind to fetch.
         rows.put(2, page(SPAN), 10_000);
         rows.put(3, page(SPAN), 10_000);
-        assert_eq!(rows.next_page(0, 24, true), None);
+        assert_eq!(rows.next_page(0, 24, true, true), None);
     }
 
     #[test]
@@ -699,10 +715,13 @@ mod model_tests {
         // scroll to is not.
         let rows = Rows::default();
         rows.put(9, page(SPAN), 4_000_000);
-        assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, false), None);
-        assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, true), Some(10));
+        assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, false, true), None);
         assert_eq!(
-            rows.next_page(20 * SPAN, 20 * SPAN + 24, false),
+            rows.next_page(9 * SPAN, 9 * SPAN + 24, true, true),
+            Some(10)
+        );
+        assert_eq!(
+            rows.next_page(20 * SPAN, 20 * SPAN + 24, false, true),
             Some(20),
             "but the page being looked at is not a guess"
         );
@@ -715,12 +734,12 @@ mod model_tests {
         rows.put(1, page(SPAN), 10_000);
         rows.mark(7);
         // On screen: re-read, because what it shows may be out of date.
-        assert_eq!(rows.next_page(0, 24, true), Some(0));
+        assert_eq!(rows.next_page(0, 24, true, true), Some(0));
         rows.asking(0, 7);
         rows.put(0, page(SPAN), 10_000);
         // Off screen: left alone. An index that moves every second would
         // otherwise have this window fetching every page it has ever seen.
-        assert_eq!(rows.next_page(0, 24, true), None);
+        assert_eq!(rows.next_page(0, 24, true, true), None);
     }
 
     #[test]
@@ -733,11 +752,11 @@ mod model_tests {
         }
         // Page 7 still wants the one after it — that is the fetch that runs
         // ahead of the eye, not a re-read of anything.
-        assert_eq!(rows.next_page(7 * SPAN, 7 * SPAN + 24, true), Some(8));
+        assert_eq!(rows.next_page(7 * SPAN, 7 * SPAN + 24, true, true), Some(8));
         for p in (0..7).rev() {
             let first = p * SPAN;
             assert_eq!(
-                rows.next_page(first, first + 24, true),
+                rows.next_page(first, first + 24, true, true),
                 None,
                 "page {p} was already read, and so were both beside it"
             );
@@ -752,11 +771,11 @@ mod model_tests {
         }
         assert_eq!(rows.held(), KEPT * SPAN);
         assert!(
-            rows.next_page(0, 24, true).is_some(),
+            rows.next_page(0, 24, true, true).is_some(),
             "the oldest went first"
         );
         assert!(
-            rows.next_page(KEPT * SPAN, KEPT * SPAN + 24, true)
+            rows.next_page(KEPT * SPAN, KEPT * SPAN + 24, true, true)
                 .is_none(),
             "and the newest stayed"
         );
@@ -792,6 +811,6 @@ mod model_tests {
         rows.put(0, named(&["/old"]), 10_000);
         rows.empty();
         assert_eq!(rows.path_at(0), None);
-        assert_eq!(rows.next_page(0, 24, true), Some(0));
+        assert_eq!(rows.next_page(0, 24, true, true), Some(0));
     }
 }

@@ -124,6 +124,14 @@ const DEBOUNCE_MS: u64 = 0;
 /// prefix.
 const BACKGROUND_IDLE_MS: u64 = 200;
 
+/// How long the list has to have been still before a page is re-read.
+///
+/// Re-reading is for a page the index has moved under, and the index moves
+/// constantly while anything is being scanned. Missing pages are never held
+/// back by this — only the ones that are already on screen and merely a moment
+/// out of date.
+const SETTLED: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// What a page has to cost before the next one is guessed at, in microseconds.
 ///
 /// A page is a walk of the whole matching set above it: 1 ms near the top of
@@ -160,6 +168,13 @@ struct State {
     page_offset: u32,
     /// When the page now in flight was asked for, for the trace.
     page_sent: Option<std::time::Instant>,
+    /// When a page was last asked for.
+    ///
+    /// Read to decide whether there is time to re-read a page the index has
+    /// moved under. During a scan it moves several times a second, and a list
+    /// that re-read the page under the pointer every time would spend a drag
+    /// fetching the same rows.
+    asked_at: Option<std::time::Instant>,
     /// What the last page cost the service, in microseconds.
     ///
     /// Read to decide whether guessing at the next one is worth it: a page is
@@ -274,6 +289,7 @@ fn main() -> Result<()> {
         row_limit: 20,
         page_offset: 0,
         page_sent: None,
+        asked_at: None,
         page_cost_us: 0,
         rewind: true,
         typed_at: None,
@@ -847,12 +863,19 @@ fn main() -> Result<()> {
             .split(',')
             .filter_map(|px| px.trim().parse().ok())
             .collect();
+        // How long a stop lasts. A wheel crosses a row boundary every frame,
+        // so a drag is measured at `SCOUR_GUI_SCROLL_MS=16` and a settled list
+        // at the default.
+        let every = std::env::var("SCOUR_GUI_SCROLL_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(600);
         let weak = window.as_weak();
         let at = std::cell::Cell::new(0usize);
         let t = Box::leak(Box::new(slint::Timer::default()));
         t.start(
             slint::TimerMode::Repeated,
-            std::time::Duration::from_millis(600),
+            std::time::Duration::from_millis(every),
             move || {
                 let i = at.get();
                 let Some(w) = weak.upgrade() else { return };
@@ -958,11 +981,15 @@ fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc
     // A row the view drew and could not fill wins over the viewport: it is the
     // same place, one frame earlier.
     let first = rows.wanted().unwrap_or(first);
-    let (revision, cost) = {
+    let (revision, cost, quiet) = {
         let s = state.borrow();
-        (s.revision, s.page_cost_us)
+        (
+            s.revision,
+            s.page_cost_us,
+            s.asked_at.is_none_or(|at| at.elapsed() >= SETTLED),
+        )
     };
-    let Some(page) = rows.next_page(first, first + visible, cost < CHEAP_PAGE_US) else {
+    let Some(page) = rows.next_page(first, first + visible, cost < CHEAP_PAGE_US, quiet) else {
         return;
     };
     trace(&format!(
@@ -970,6 +997,7 @@ fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc
         rows.held()
     ));
     rows.asking(page, revision);
+    state.borrow_mut().asked_at = Some(std::time::Instant::now());
     send_page(state, link, (page * rows::SPAN) as u32, PAGE_MAX);
 }
 
@@ -1359,6 +1387,11 @@ fn apply(
                 w.invoke_scroll_to(0.0);
             }
             w.set_busy(false);
+            // **And straight on to the next one.** Nothing is asked for while
+            // an answer is on its way, so this is where a drag continues: the
+            // page that just landed may already be behind the hand, and the
+            // question is asked again about where the list is now.
+            follow(w, state, link, rows);
             // Now, and only now, the sidebar. A facet count costs about what
             // the search did, and asking for it beside every keystroke doubled
             // the work to answer a question the user had not finished typing.
@@ -2138,6 +2171,7 @@ mod tests {
             row_limit: 20,
             page_offset: 0,
             page_sent: None,
+            asked_at: None,
             page_cost_us: 0,
             rewind: false,
             typed_at: None,
@@ -2189,6 +2223,7 @@ mod tests {
             row_limit: 40,
             page_offset: 0,
             page_sent: None,
+            asked_at: None,
             page_cost_us: 0,
             rewind: false,
             typed_at: None,
