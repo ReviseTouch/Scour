@@ -248,6 +248,70 @@ impl State {
     }
 }
 
+/// What the selection bar says, in the catalogue's words and the reader's
+/// order.
+///
+/// Folders are counted, never weighed. What a folder holds is the `~` number
+/// in the size column — the part of it this index has — and adding that into a
+/// total beside exact file sizes would make one number out of two different
+/// kinds of claim.
+fn picked_line(cat: &Catalogue, picks: &std::collections::BTreeMap<usize, rows::Pick>) -> String {
+    let dirs = picks.values().filter(|p| p.is_dir).count();
+    let files = picks.len() - dirs;
+    let bytes: u64 = picks
+        .values()
+        .filter(|p| !p.is_dir)
+        .map(|p| p.bytes.max(0) as u64)
+        .sum();
+    let mut parts = vec![t(cat, "{n} selected").replace("{n}", &grouped(picks.len() as u64))];
+    if files > 0 {
+        parts.push(compact_bytes(bytes));
+    }
+    if dirs > 0 {
+        parts.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
+    }
+    parts.join("  ·  ")
+}
+
+/// The folders a selection sits in, each one once.
+///
+/// Eleven files from the same directory is one window, not eleven — and that
+/// is the ordinary shape of a selection, because a search that found them
+/// together usually found them together somewhere.
+fn folders_of(picks: &std::collections::BTreeMap<usize, rows::Pick>) -> Vec<String> {
+    let mut seen: Vec<String> = picks.values().map(|p| p.folder().to_string()).collect();
+    seen.sort();
+    seen.dedup();
+    seen
+}
+
+/// Put the selection on screen: the sentence, the buttons, and the rows.
+fn show_picks(
+    w: &MainWindow,
+    cat: &Catalogue,
+    rows: &Rc<rows::Rows>,
+    picks: &std::collections::BTreeMap<usize, rows::Pick>,
+    asking: bool,
+) {
+    w.set_picked(picks.len() as i32);
+    w.set_picked_line(picked_line(cat, picks).into());
+    w.set_pick_copy(t(cat, "Copy the paths"));
+    w.set_pick_drop(t(cat, "Drop it"));
+    w.set_pick_asking(asking);
+    let folders = folders_of(picks).len();
+    w.set_pick_folders(
+        if asking {
+            t(cat, "Open {n} windows?").replace("{n}", &grouped(folders as u64))
+        } else {
+            t(cat, "Open their folders ({n})").replace("{n}", &grouped(folders as u64))
+        }
+        .into(),
+    );
+    let marked: std::collections::HashSet<String> =
+        picks.values().map(|p| p.path.clone()).collect();
+    rows.mark_picked(&marked);
+}
+
 /// The path of the row the list calls `i`, if that row is in hand.
 fn path_of(rows: &Rc<rows::Rows>, i: i32) -> Option<String> {
     rows.path_at(usize::try_from(i).ok()?)
@@ -297,6 +361,14 @@ fn main() -> Result<()> {
     }));
 
     let rows: Rc<rows::Rows> = Rc::new(rows::Rows::default());
+    // **What is selected, by path.** By path and not by row number, because a
+    // row number is a place in a result that moves under it: the index changes,
+    // the sort changes, and the fourth row is a different file. A selection is
+    // of files.
+    let picks: Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>> =
+        Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+    // Where the last press was, so `Shift` has a run to take.
+    let anchor: Rc<std::cell::Cell<i32>> = Rc::new(std::cell::Cell::new(0));
     // The same rows, a line at a time, for the tile views. It reads the model
     // above rather than holding anything of its own.
     let lines: Rc<rows::Lines> = Rc::new(rows::Lines::new(Rc::clone(&rows)));
@@ -400,6 +472,7 @@ fn main() -> Result<()> {
     let ui_state = state.clone();
     let ui_rows = rows.clone();
     let ui_lines = lines.clone();
+    let ui_picks = Rc::clone(&picks);
     let ui_facets = facets.clone();
     let ui_cat = cat.clone();
 
@@ -417,7 +490,7 @@ fn main() -> Result<()> {
             *slot.borrow_mut() = Some(Rc::new(move |got: Got| {
                 let Some(w) = weak.upgrade() else { return };
                 apply(
-                    &w, &ui_state, &ui_rows, &ui_lines, &ui_facets, &ui_cat, &link, got,
+                    &w, &ui_state, &ui_rows, &ui_lines, &ui_picks, &ui_facets, &ui_cat, &link, got,
                 );
             }));
         });
@@ -701,6 +774,107 @@ fn main() -> Result<()> {
         });
     }
 
+    // --- the selection ----------------------------------------------------
+    //
+    // Plain replaces it, `Ctrl` adds one, `Shift` takes the run — the browser
+    // page's gestures, because the two windows are the same program.
+    {
+        let picks = Rc::clone(&picks);
+        let anchor = Rc::clone(&anchor);
+        let rows = Rc::clone(&rows);
+        let cat = cat.clone();
+        let weak = window.as_weak();
+        window.on_pick(move |row, adding, run| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some(here) = rows.pick_at(row.max(0) as usize) else {
+                return;
+            };
+            let mut held = picks.borrow_mut();
+            if run {
+                // **The run, out of what is in hand.** A range over a result
+                // of millions can cross pages nobody has fetched, and a
+                // selection of rows this window has never seen is a promise it
+                // cannot keep — so the run is what it holds between the two
+                // ends, which is what is on screen and near it.
+                held.clear();
+                let (from, to) = if anchor.get() <= row {
+                    (anchor.get(), row)
+                } else {
+                    (row, anchor.get())
+                };
+                for at in from.max(0)..=to.max(0) {
+                    if let Some(pick) = rows.pick_at(at as usize) {
+                        held.insert(at as usize, pick);
+                    }
+                }
+            } else if adding {
+                anchor.set(row);
+                if held.values().any(|p| p.path == here.path) {
+                    held.retain(|_, p| p.path != here.path);
+                } else {
+                    held.insert(row.max(0) as usize, here);
+                }
+            } else {
+                anchor.set(row);
+                held.clear();
+                held.insert(row.max(0) as usize, here);
+            }
+            show_picks(&w, &cat, &rows, &held, false);
+        });
+    }
+    {
+        let picks = Rc::clone(&picks);
+        let rows = Rc::clone(&rows);
+        let cat = cat.clone();
+        let weak = window.as_weak();
+        window.on_pick_dropped(move || {
+            let Some(w) = weak.upgrade() else { return };
+            picks.borrow_mut().clear();
+            show_picks(&w, &cat, &rows, &picks.borrow(), false);
+        });
+    }
+    {
+        let picks = Rc::clone(&picks);
+        let weak = window.as_weak();
+        let cat = cat.clone();
+        window.on_pick_copied(move || {
+            // Where a single path goes, and for the same reason: this window
+            // is a client of a service and a clipboard crate to copy a string
+            // is a dependency for a line of text.
+            for pick in picks.borrow().values() {
+                println!("{}", pick.path);
+            }
+            if let Some(w) = weak.upgrade() {
+                w.set_hint(t(&cat, "path printed to the terminal"));
+            }
+        });
+    }
+    {
+        let picks = Rc::clone(&picks);
+        let rows = Rc::clone(&rows);
+        let cat = cat.clone();
+        let asking = Rc::new(std::cell::Cell::new(false));
+        let weak = window.as_weak();
+        window.on_pick_opened(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let folders = folders_of(&picks.borrow());
+            // **More than a couple of windows is asked about first.** Opening
+            // eleven file managers because somebody selected eleven files is
+            // not a thing to do without being sure, and the page asks the same
+            // question in the same place.
+            if folders.len() > 2 && !asking.get() {
+                asking.set(true);
+                show_picks(&w, &cat, &rows, &picks.borrow(), true);
+                return;
+            }
+            asking.set(false);
+            for folder in folders {
+                open(&folder);
+            }
+            show_picks(&w, &cat, &rows, &picks.borrow(), false);
+        });
+    }
+
     // --- opening things ---------------------------------------------------
     //
     // **The path comes off the row.** It used to be read out of the last page
@@ -896,6 +1070,28 @@ fn main() -> Result<()> {
                 trace(&format!("scrolled to {px}px, row {}", w.get_first_row()));
             },
         );
+    }
+
+    // Pick a few rows before the window opens, for the same reason the query
+    // flag exists: a picture of a list with nothing selected says nothing
+    // about the bar that appears when something is.
+    if let Ok(n) = std::env::var("SCOUR_GUI_PICK")
+        && let Ok(n) = n.parse::<usize>()
+    {
+        let picks = Rc::clone(&picks);
+        let rows = Rc::clone(&rows);
+        let cat = cat.clone();
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1200), move || {
+            let Some(w) = weak.upgrade() else { return };
+            let mut held = picks.borrow_mut();
+            for row in 0..n {
+                if let Some(pick) = rows.pick_at(row) {
+                    held.insert(row, pick);
+                }
+            }
+            show_picks(&w, &cat, &rows, &held, false);
+        });
     }
 
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
@@ -1191,11 +1387,13 @@ fn facet_query(s: &State) -> String {
     s.query.trim().to_owned()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply(
     w: &MainWindow,
     state: &Rc<RefCell<State>>,
     rows: &Rc<rows::Rows>,
     lines: &Rc<rows::Lines>,
+    picks: &Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>>,
     facets: &Rc<VecModel<Facet>>,
     cat: &Rc<Catalogue>,
     link: &Rc<Link>,
@@ -1280,6 +1478,9 @@ fn apply(
                 // `Rows::put`.
                 .map(|h| rows::row_of(h, &terms, now, &t(cat, h.kind.msgid()), false))
                 .collect();
+            // What each row weighs, beside the page rather than on it: Slint
+            // counts in 32 bits and a file does not.
+            let weights: Vec<i64> = r.hits.iter().map(|h| h.meta.size.max(0)).collect();
             let n = page.len();
             let any_fresh = {
                 let mut s = state.borrow_mut();
@@ -1297,7 +1498,7 @@ fn apply(
                 s.page_offset = offset;
                 // The whole result's length, so the view sizes itself from it;
                 // the page and which one it is, so the model can find it again.
-                let arrived = rows.put(offset as usize / rows::SPAN, page, total);
+                let arrived = rows.put(offset as usize / rows::SPAN, page, weights, total);
                 // The tiles hold the same rows, so the lines carrying them
                 // have changed too — and the result may have got longer.
                 lines.touched(offset as usize, offset as usize + n);
@@ -1390,6 +1591,15 @@ fn apply(
             if rewind {
                 w.set_selected(0);
                 w.invoke_scroll_to(0.0);
+                // A different question, so what was picked out of the answer
+                // to the last one is not an answer to anything.
+                picks.borrow_mut().clear();
+            }
+            // The marks live on the rows and a page that has just landed is
+            // carrying new ones, so what is picked has to be painted again.
+            if !picks.borrow().is_empty() || w.get_picked() > 0 {
+                let asking = w.get_pick_asking() && !picks.borrow().is_empty();
+                show_picks(w, cat, rows, &picks.borrow(), asking);
             }
             w.set_busy(false);
             // **And straight on to the next one.** Nothing is asked for while

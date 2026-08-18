@@ -114,6 +114,7 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
         stamp: stamp(h.meta.mtime).into(),
         is_dir: h.is_dir,
         age: band(now, h.meta.mtime),
+        picked: false,
     }
 }
 
@@ -237,8 +238,33 @@ const KEPT: usize = 32;
 
 struct Held {
     rows: Vec<Row>,
+    /// What each row weighs, which its drawn size does not say.
+    ///
+    /// The column holds `1.30 MiB`; a selection has to add them up, and adding
+    /// up strings is not a thing. Kept beside the rows rather than on them
+    /// because Slint's numbers are 32-bit and a file is not.
+    bytes: Vec<i64>,
     /// The index revision these rows were read at. See [`Rows::mark`].
     revision: u64,
+}
+
+/// One row of a selection: what it is, where, and what it weighs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pick {
+    pub path: String,
+    pub is_dir: bool,
+    pub bytes: i64,
+}
+
+impl Pick {
+    /// The directory it sits in — what "open their folders" opens.
+    pub fn folder(&self) -> &str {
+        match self.path.rfind('/') {
+            Some(0) => "/",
+            Some(at) => &self.path[..at],
+            None => ".",
+        }
+    }
 }
 
 /// The list, as a model the view pulls from rather than a vector it is handed.
@@ -328,7 +354,7 @@ impl Rows {
     ///
     /// Returns whether anything in it is new, which is what arms the arrival
     /// wash — see below for what "new" has to mean.
-    pub fn put(&self, page: usize, mut rows: Vec<Row>, total: usize) -> bool {
+    pub fn put(&self, page: usize, mut rows: Vec<Row>, bytes: Vec<i64>, total: usize) -> bool {
         // **New means new *here*.** A row is an arrival when this page has
         // been read before and did not have it; a page nobody had read yet has
         // no arrivals in it at all.
@@ -356,7 +382,11 @@ impl Rows {
             _ => self.revision.get(),
         };
         self.served.set(self.served.get().max(rows.len()));
-        let held = Held { rows, revision };
+        let held = Held {
+            rows,
+            bytes,
+            revision,
+        };
         let touched: Vec<usize> = {
             let mut pages = self.pages.borrow_mut();
             let n = held.rows.len();
@@ -537,6 +567,46 @@ impl Rows {
     /// looks at them. This is the evidence for how big a page really is.
     pub fn served(&self) -> usize {
         self.served.get().max(1)
+    }
+
+    /// Everything a selection needs about a row, if it is in hand.
+    pub fn pick_at(&self, row: usize) -> Option<Pick> {
+        let pages = self.pages.borrow();
+        let held = pages.get(&Self::page_of(row))?;
+        let at = row % SPAN;
+        let found = held.rows.get(at)?;
+        if found.path.is_empty() {
+            return None;
+        }
+        Some(Pick {
+            path: found.path.to_string(),
+            is_dir: found.is_dir,
+            bytes: held.bytes.get(at).copied().unwrap_or(0),
+        })
+    }
+
+    /// Paint the rows a selection holds, and unpaint the rest.
+    ///
+    /// Walks what is in hand rather than what is on screen, because a row
+    /// scrolled past and back has to come back still selected — and the pages
+    /// are where it went in the meantime.
+    pub fn mark_picked(&self, picked: &std::collections::HashSet<String>) {
+        let mut changed = Vec::new();
+        {
+            let mut pages = self.pages.borrow_mut();
+            for (page, held) in pages.iter_mut() {
+                for (at, row) in held.rows.iter_mut().enumerate() {
+                    let now = !row.path.is_empty() && picked.contains(row.path.as_str());
+                    if now != row.picked {
+                        row.picked = now;
+                        changed.push(page * SPAN + at);
+                    }
+                }
+            }
+        }
+        for row in changed {
+            self.notify.row_changed(row);
+        }
     }
 
     /// The path of a row, if it is in hand.
@@ -778,7 +848,7 @@ mod model_tests {
     #[test]
     fn the_list_is_as_long_as_the_result_not_as_the_page() {
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 2_500_000);
+        rows.put(0, page(SPAN), Vec::new(), 2_500_000);
         assert_eq!(rows.row_count(), 2_500_000);
         assert_eq!(rows.held(), SPAN);
     }
@@ -789,10 +859,10 @@ mod model_tests {
         // here is a rebuilt list and a re-clamped viewport, which is what the
         // scrolling jump was.
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
         let after_first = rows.resets();
-        rows.put(0, page(SPAN), 10_000);
-        rows.put(1, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
+        rows.put(1, page(SPAN), Vec::new(), 10_000);
         assert_eq!(
             rows.resets(),
             after_first,
@@ -800,7 +870,7 @@ mod model_tests {
         );
 
         // And when the length really does change, the view has to be told.
-        rows.put(2, page(SPAN), 20_000);
+        rows.put(2, page(SPAN), Vec::new(), 20_000);
         assert_eq!(rows.resets(), after_first + 1);
     }
 
@@ -809,7 +879,7 @@ mod model_tests {
         // The search counts to its cap; the exact total follows a moment
         // later. Until this existed the list stayed as long as the cap.
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 1_000);
+        rows.put(0, page(SPAN), Vec::new(), 1_000);
         rows.set_total(2_481_902);
         assert_eq!(rows.row_count(), 2_481_902);
         assert_eq!(rows.held(), SPAN, "the page it was showing is intact");
@@ -820,7 +890,7 @@ mod model_tests {
     #[test]
     fn a_row_outside_the_pages_in_hand_is_asked_for_once() {
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
         assert!(
             rows.row_data(SPAN + 44).is_some(),
             "drawn blank, not left a hole"
@@ -837,7 +907,7 @@ mod model_tests {
     #[test]
     fn what_is_asked_for_is_where_the_eye_is_then_where_it_is_going() {
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
         // The screen is covered, so the next page is the one ahead of it.
         assert_eq!(rows.next_page(0, 24, true, true), Some(1));
         rows.asking(1, 0);
@@ -846,14 +916,14 @@ mod model_tests {
             None,
             "and it is not asked for twice"
         );
-        rows.put(1, page(SPAN), 10_000);
+        rows.put(1, page(SPAN), Vec::new(), 10_000);
         // Now ahead is held too, so nothing is wanted until the eye moves.
         assert_eq!(rows.next_page(0, 24, true, true), None);
         // Two pages down, what is on screen wins over what is beside it.
         assert_eq!(rows.next_page(SPAN * 3, SPAN * 3 + 24, true, true), Some(3));
         // At the top of the list there is nothing behind to fetch.
-        rows.put(2, page(SPAN), 10_000);
-        rows.put(3, page(SPAN), 10_000);
+        rows.put(2, page(SPAN), Vec::new(), 10_000);
+        rows.put(3, page(SPAN), Vec::new(), 10_000);
         assert_eq!(rows.next_page(0, 24, true, true), None);
     }
 
@@ -863,7 +933,7 @@ mod model_tests {
         // above it. What is on screen is still fetched; what somebody might
         // scroll to is not.
         let rows = Rows::default();
-        rows.put(9, page(SPAN), 4_000_000);
+        rows.put(9, page(SPAN), Vec::new(), 4_000_000);
         assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, false, true), None);
         assert_eq!(
             rows.next_page(9 * SPAN, 9 * SPAN + 24, true, true),
@@ -879,13 +949,13 @@ mod model_tests {
     #[test]
     fn a_page_the_index_has_moved_past_is_re_read_only_where_it_is_seen() {
         let rows = Rows::default();
-        rows.put(0, page(SPAN), 10_000);
-        rows.put(1, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
+        rows.put(1, page(SPAN), Vec::new(), 10_000);
         rows.mark(7);
         // On screen: re-read, because what it shows may be out of date.
         assert_eq!(rows.next_page(0, 24, true, true), Some(0));
         rows.asking(0, 7);
-        rows.put(0, page(SPAN), 10_000);
+        rows.put(0, page(SPAN), Vec::new(), 10_000);
         // Off screen: left alone. An index that moves every second would
         // otherwise have this window fetching every page it has ever seen.
         assert_eq!(rows.next_page(0, 24, true, true), None);
@@ -897,7 +967,7 @@ mod model_tests {
         // a stutter, and going back over what you have just read makes none.
         let rows = Rows::default();
         for p in 0..8 {
-            rows.put(p, page(SPAN), 10_000);
+            rows.put(p, page(SPAN), Vec::new(), 10_000);
         }
         // Page 7 still wants the one after it — that is the fetch that runs
         // ahead of the eye, not a re-read of anything.
@@ -916,7 +986,7 @@ mod model_tests {
     fn only_so_many_pages_are_kept() {
         let rows = Rows::default();
         for p in 0..KEPT + 4 {
-            rows.put(p, page(SPAN), 100_000);
+            rows.put(p, page(SPAN), Vec::new(), 100_000);
         }
         assert_eq!(rows.held(), KEPT * SPAN);
         assert!(
@@ -938,32 +1008,32 @@ mod model_tests {
         // page had been fetched last rather than against this one.
         let rows = Rows::default();
         assert!(
-            !rows.put(0, named(&["/a", "/b"]), 10_000),
+            !rows.put(0, named(&["/a", "/b"]), Vec::new(), 10_000),
             "the first read of a page is not an arrival"
         );
         assert!(
-            !rows.put(7, named(&["/c", "/d"]), 10_000),
+            !rows.put(7, named(&["/c", "/d"]), Vec::new(), 10_000),
             "nor is the first read of another page"
         );
         assert!(!rows.row_data(7 * SPAN).unwrap().fresh);
 
         // But a page that comes back holding something it did not before is
         // exactly what the wash is for.
-        assert!(rows.put(7, named(&["/c", "/new", "/d"]), 10_000));
+        assert!(rows.put(7, named(&["/c", "/new", "/d"]), Vec::new(), 10_000));
         assert!(!rows.row_data(7 * SPAN).unwrap().fresh, "/c was here");
         assert!(rows.row_data(7 * SPAN + 1).unwrap().fresh, "/new was not");
         assert!(!rows.row_data(7 * SPAN + 2).unwrap().fresh, "/d was here");
 
         // And the same page unchanged says nothing at all.
-        assert!(!rows.put(7, named(&["/c", "/new", "/d"]), 10_000));
+        assert!(!rows.put(7, named(&["/c", "/new", "/d"]), Vec::new(), 10_000));
     }
 
     #[test]
     fn the_arrival_flags_come_off_what_is_held_and_nothing_else() {
         let rows = Rows::default();
         // Read twice, the second time with a row the first did not have.
-        rows.put(5, named(&["/a", "/b", "/c", "/d"]), 2_000_000);
-        assert!(rows.put(5, named(&["/a", "/new", "/c", "/d"]), 2_000_000));
+        rows.put(5, named(&["/a", "/b", "/c", "/d"]), Vec::new(), 2_000_000);
+        assert!(rows.put(5, named(&["/a", "/new", "/c", "/d"]), Vec::new(), 2_000_000));
         let before = rows.resets();
         rows.clear_fresh();
         assert!(!rows.row_data(5 * SPAN + 1).unwrap().fresh);
@@ -972,11 +1042,58 @@ mod model_tests {
     }
 
     #[test]
+    fn a_selection_knows_what_it_holds_and_what_it_weighs() {
+        // The size column holds `1.30 MiB`; a selection has to add them up,
+        // and adding up strings is not a thing — so the weights come with the
+        // page and never go through Slint, whose numbers are 32-bit.
+        let rows = Rows::default();
+        rows.put(
+            3,
+            named(&["/a/one.txt", "/a/two.txt", "/b"]),
+            vec![1_000, 3_000_000_000, 0],
+            10_000,
+        );
+        let pick = rows.pick_at(3 * SPAN + 1).expect("in hand");
+        assert_eq!(pick.path, "/a/two.txt");
+        assert_eq!(pick.bytes, 3_000_000_000, "past what an i32 holds");
+        assert_eq!(pick.folder(), "/a");
+        assert_eq!(rows.pick_at(3 * SPAN + 9), None, "past the page's end");
+        assert_eq!(rows.pick_at(0), None, "a page that is not in hand");
+        // A path at the root has the root for a folder, not an empty string.
+        assert_eq!(rows.pick_at(3 * SPAN + 2).unwrap().folder(), "/");
+    }
+
+    #[test]
+    fn what_is_picked_stays_picked_while_it_scrolls_away_and_back() {
+        // The selection is by path, and the rows it paints come and go with
+        // the pages — so what marks them has to walk what is in hand rather
+        // than what is on screen.
+        let rows = Rows::default();
+        rows.put(0, named(&["/a", "/b", "/c"]), Vec::new(), 10_000);
+        let picked: std::collections::HashSet<String> = ["/b".to_string()].into_iter().collect();
+        rows.mark_picked(&picked);
+        assert!(rows.row_data(1).unwrap().picked);
+        assert!(!rows.row_data(0).unwrap().picked);
+        // The page is read again — a live refresh — and the mark is put back.
+        rows.put(0, named(&["/a", "/b", "/c"]), Vec::new(), 10_000);
+        rows.mark_picked(&picked);
+        assert!(rows.row_data(1).unwrap().picked);
+        // And dropping the selection unpaints it.
+        rows.mark_picked(&std::collections::HashSet::new());
+        assert!(!rows.row_data(1).unwrap().picked);
+    }
+
+    #[test]
     fn the_row_a_list_of_millions_calls_four_thousand_is_the_right_file() {
         // Reading it out of a page as though the page began at row zero is
         // what opened a file two hundred rows away.
         let rows = Rows::default();
-        rows.put(20, named(&["/a/one.txt", "/a/two.txt"]), 2_000_000);
+        rows.put(
+            20,
+            named(&["/a/one.txt", "/a/two.txt"]),
+            Vec::new(),
+            2_000_000,
+        );
         assert_eq!(rows.path_at(20 * SPAN + 1).as_deref(), Some("/a/two.txt"));
         assert_eq!(rows.path_at(20 * SPAN + 2), None, "past the page's end");
         assert_eq!(rows.path_at(0), None, "a page that is not in hand");
@@ -985,7 +1102,7 @@ mod model_tests {
     #[test]
     fn a_new_question_empties_the_pages() {
         let rows = Rows::default();
-        rows.put(0, named(&["/old"]), 10_000);
+        rows.put(0, named(&["/old"]), Vec::new(), 10_000);
         rows.empty();
         assert_eq!(rows.path_at(0), None);
         assert_eq!(rows.next_page(0, 24, true, true), Some(0));

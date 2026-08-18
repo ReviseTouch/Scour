@@ -601,6 +601,20 @@ msgstr "<span class=\"n\">{n}</span> seçili"
 msgid "<span class=\"sum\">{n} folders</span>"
 msgstr "<span class=\"sum\">{n} klasör</span>"
 
+# The same two counts without the markup, for the window — which has no
+# stylesheet to hang a `<span>` on and puts its own colour on the number.
+msgid "{n} selected"
+msgstr "{n} seçili"
+
+msgid "{n} folders"
+msgstr "{n} klasör"
+
+# Said after a path has gone to stdout. The window has no clipboard: it is a
+# client of a service, and a crate to copy one string is a dependency for a
+# line of text.
+msgid "path printed to the terminal"
+msgstr "yol terminale yazıldı"
+
 msgid "Copy the paths"
 msgstr "Yolları kopyala"
 

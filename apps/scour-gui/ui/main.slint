@@ -51,6 +51,9 @@ export struct Row {
     is-dir: bool,
     // Which age band the row falls in, 0 (minutes) to 5 (older).
     age: int,
+    // In the selection. Several rows can be, and what is done with them is
+    // done to all of them at once — see the bar under the list.
+    picked: bool,
 }
 
 // One facet of the rail: a kind, its count, and the token that filters by it.
@@ -252,6 +255,39 @@ component Tool inherits Rectangle {
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
+/// A button with a word on it, for the selection bar.
+///
+/// The page's own: quiet until the pointer is over it, and the one that opens
+/// several windows turns the colour of a question while it is asking.
+component Push inherits Rectangle {
+    in property <string> label;
+    in property <bool> asking;
+    callback clicked();
+
+    width: text.preferred-width + 24px;
+    height: 26px;
+    border-width: 1px;
+    border-radius: 3px;
+    border-color: root.asking ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
+    background: touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    text := Text {
+        text: root.label;
+        color: root.asking ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-2;
+        font-size: Fonts.small;
+        vertical-alignment: center;
+        horizontal-alignment: center;
         width: parent.width;
         height: parent.height;
     }
@@ -607,6 +643,23 @@ export component MainWindow inherits Window {
     in property <[Facet]> rules;
     callback language-picked(string);
     callback rule-toggled(string);
+    // --- the selection ----------------------------------------------------
+    //
+    // Several rows at once, and what is done with them is done to all of them:
+    // the same thing the browser page does, and the same words for it. The
+    // sentence is written in Rust because it is three counts and a size in a
+    // language's own word order, and this window does not spell any of those.
+    in property <int> picked;
+    in property <string> picked-line;
+    in property <string> pick-copy;
+    in property <string> pick-folders;
+    in property <string> pick-drop;
+    in property <bool> pick-asking;
+    /// row, adding, and taking the run from the last one picked.
+    callback pick(int, bool, bool);
+    callback pick-copied();
+    callback pick-opened();
+    callback pick-dropped();
     callback bar-clicked(int);
     callback column-dragged(string, length);
     // **No page callbacks.** The list is a model whose length is the whole
@@ -781,6 +834,13 @@ export component MainWindow inherits Window {
                             // A panel first: Escape closes what is on top,
                             // which is the one thing every window agrees on.
                             root.panel = "";
+                            return accept;
+                        }
+                        if (e.text == Key.Escape && root.picked > 0) {
+                            // Then the selection, before the query: dropping
+                            // what is picked is the smaller undo, and the one
+                            // somebody pressing Escape usually means.
+                            root.pick-dropped();
                             return accept;
                         }
                         if (e.text == Key.Escape) {
@@ -1110,7 +1170,7 @@ export component MainWindow inherits Window {
                         // results, so painting the line for one of them lit up
                         // everything beside it — the selection has to be the
                         // tile, and it is, below.
-                        background: i == root.selected ? Theme.selection
+                        background: (here.picked || i == root.selected) ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
                             : here.fresh ? Theme.t0.with-alpha(0.22)
                             : transparent;
@@ -1127,7 +1187,17 @@ export component MainWindow inherits Window {
                                 root.selected = i;
                                 root.activated(i);
                             }
+                            // **Picking is a press, not a click**, because a
+                            // click carries no modifiers here: plain replaces
+                            // the selection, `Ctrl` adds one, `Shift` takes
+                            // the run from the last one picked.
                             pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down
+                                    && e.button == PointerEventButton.left) {
+                                    root.selected = i;
+                                    root.pick(i, e.modifiers.control || e.modifiers.meta,
+                                        e.modifiers.shift);
+                                }
                                 if (e.button == PointerEventButton.right
                                     && e.kind == PointerEventKind.down) {
                                     root.selected = i;
@@ -1358,7 +1428,7 @@ export component MainWindow inherits Window {
                                 // A line holds several results, so painting the
                                 // line for one of them lights up everything
                                 // beside it.
-                                background: (i * root.per-line + c) == root.selected
+                                background: (cell.picked || (i * root.per-line + c) == root.selected)
                                     ? Theme.selection
                                     : tiletouch.has-hover ? Theme.hover
                                     : cell.fresh ? Theme.t0.with-alpha(0.22)
@@ -1375,10 +1445,16 @@ export component MainWindow inherits Window {
                                         root.activated(root.selected);
                                     }
                                     pointer-event(e) => {
-                                        if (e.button == PointerEventButton.right
-                                            && e.kind == PointerEventKind.down) {
-                                            root.selected = i * root.per-line + c;
+                                        if (e.kind != PointerEventKind.down) {
+                                            return;
+                                        }
+                                        root.selected = i * root.per-line + c;
+                                        if (e.button == PointerEventButton.right) {
                                             root.copy-path(root.selected);
+                                        } else if (e.button == PointerEventButton.left) {
+                                            root.pick(root.selected,
+                                                e.modifiers.control || e.modifiers.meta,
+                                                e.modifiers.shift);
                                         }
                                     }
                                 }
@@ -1476,6 +1552,73 @@ export component MainWindow inherits Window {
 
                         moved => {
                             root.scroll-thumb-to(self.from + self.mouse-y - self.pressed-y);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // What is selected, and what can be done with it.
+        //
+        // Absent when nothing is: a bar that is always there is a strip of
+        // window spent on a question nobody asked. The page puts it in the
+        // same place and words it the same way.
+        // ------------------------------------------------------------------
+        if root.picked > 0: Rectangle {
+            height: 38px;
+            background: Theme.panel-2;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 8px;
+                alignment: start;
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.picked-line;
+                        color: Theme.ink-2;
+                        font-size: Fonts.small;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { }
+
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.pick-copy;
+                        clicked => {
+                            root.pick-copied();
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.pick-folders;
+                        asking: root.pick-asking;
+                        clicked => {
+                            root.pick-opened();
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.pick-drop;
+                        clicked => {
+                            root.pick-dropped();
                         }
                     }
                 }
