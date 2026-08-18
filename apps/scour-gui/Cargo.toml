@@ -18,6 +18,12 @@ workspace = true
 # A frontend, exactly like `apps/scour`: it holds no index, walks no
 # filesystem, and does not link the engine. Everything it knows it learned
 # over a socket.
+# Skia, behind a flag and off by default. **The only alternative kept**, for
+# the day the scene stops being flat rectangles — thumbnails at grid size, say.
+# femtovg is not a choice here; see the dependency below.
+[features]
+skia = ["slint/renderer-skia"]
+
 [dependencies]
 scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
@@ -31,7 +37,16 @@ humansize    = { workspace = true }
 # Pinned exactly, and not out of caution. 1.17's winit backend divides by a
 # refresh rate it reads as zero (`frame_throttle.rs:58`), which crashes on
 # every start under Wine — and a caret is enough for Cargo to pick it.
-slint        = "=1.16.1"
+# **CPU drawing, and no OpenGL.** The owner's call, and the numbers do not
+# argue: this window is a list of text on flat rectangles, the idle cost is
+# 0.00% of a core, and femtovg drags in a GL stack for a scene that has no
+# gradients, no transforms and no images bigger than an icon. Software
+# rendering also works where a GL context is not there to be had — a virtual
+# machine, a remote session, a broken driver — which for a file search tool is
+# the difference between running and not.
+slint        = { version = "=1.16.1", default-features = false, features = [
+    "compat-1-2", "backend-winit", "renderer-software", "std",
+] }
 
 [build-dependencies]
 slint-build  = "=1.16.1"

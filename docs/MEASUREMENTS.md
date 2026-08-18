@@ -5148,3 +5148,39 @@ settles: 73 subtrees dropped, then 36, then 36, then 36.
 Asking `Rules::excludes(path, name, is_dir)` — the same call the walk itself
 makes — takes it to 0, and takes the pass from **5.5 s to 2.1 s**, because most
 of that time was removal work that should never have happened.
+
+## The window draws on the CPU — 2026-08-18
+
+Slint offers three renderers. The owner's call was software, and the numbers do
+not argue with it. Same window, same live service, same query:
+
+| | femtovg (OpenGL) | **software (CPU)** |
+|---|---|---|
+| window built | 293 ms | **215 ms** |
+| first rows on screen | 1.8 s | **251 ms** |
+| idle CPU, settled | 0.00% | **0.00%** |
+| `RssAnon` | 31 MB | **5 MB** |
+| `RssFile` | 97 MB | **18 MB** |
+| binary | — | 14.0 MB |
+
+Seven times quicker to first rows and a sixth of the memory, for a scene that
+is text on flat rectangles: no gradients, no transforms, no image larger than
+an icon. It also runs where a GL context cannot be had — a virtual machine, a
+remote session, a driver having a bad day — which for a search tool is the
+difference between working and not.
+
+**A false alarm worth recording.** The first idle measurement said **38.8% of a
+core**, which would have sunk the whole idea. It was measured over the fifteen
+seconds *after launch*: first paint, the first page of rows arriving, and the
+live refresh catching up. Measured again once the window had settled: 0.00%.
+Idle means idle, and the clock has to start after the thing has stopped
+starting.
+
+**Not measured:** frame time while scrolling. `SLINT_DEBUG_PERFORMANCE=refresh_full_speed`
+reports `0` under the software backend, so the number that would say whether a
+long list stays smooth on a large display is still missing. It is a question
+for a real window and a real hand on a wheel.
+
+femtovg is gone rather than kept behind a flag — a renderer nobody will select
+is a dependency nobody audits. Skia stays behind `--features skia`, for the day
+the scene stops being flat rectangles.
