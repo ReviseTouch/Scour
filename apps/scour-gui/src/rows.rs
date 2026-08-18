@@ -325,7 +325,28 @@ impl Rows {
     }
 
     /// Hand over a page: which one, its rows, and how long the whole result is.
-    pub fn put(&self, page: usize, rows: Vec<Row>, total: usize) {
+    ///
+    /// Returns whether anything in it is new, which is what arms the arrival
+    /// wash — see below for what "new" has to mean.
+    pub fn put(&self, page: usize, mut rows: Vec<Row>, total: usize) -> bool {
+        // **New means new *here*.** A row is an arrival when this page has
+        // been read before and did not have it; a page nobody had read yet has
+        // no arrivals in it at all.
+        //
+        // What it was: every row whose path was not in the *previous answer*,
+        // whichever page that was for. So dragging the scrollbar washed the
+        // whole list orange at every stop — two hundred files that had not
+        // changed since 2019, announcing themselves as changes — and the
+        // animation that says so kept the window repainting while it did.
+        let mut arrived = false;
+        if let Some(before) = self.pages.borrow().get(&page) {
+            let had: std::collections::HashSet<&str> =
+                before.rows.iter().map(|r| r.path.as_str()).collect();
+            for row in rows.iter_mut() {
+                row.fresh = !row.path.is_empty() && !had.contains(row.path.as_str());
+                arrived |= row.fresh;
+            }
+        }
         // Stamped with the revision the *request* went out at, not the one
         // that is current now: an index that moved while the page was in
         // flight has not been read yet, and stamping it as read would leave
@@ -349,11 +370,12 @@ impl Rows {
         if total != self.total.get() {
             self.total.set(total);
             self.reset();
-            return;
+            return arrived;
         }
         for row in touched {
             self.notify.row_changed(row);
         }
+        arrived
     }
 
     /// The length changed and nothing else did.
@@ -782,11 +804,39 @@ mod model_tests {
     }
 
     #[test]
+    fn a_page_nobody_had_read_holds_no_arrivals() {
+        // Dragging the scrollbar washed the whole list orange at every stop:
+        // two hundred files that had not changed in years, each announcing
+        // itself as a change, because "new" was measured against whichever
+        // page had been fetched last rather than against this one.
+        let rows = Rows::default();
+        assert!(
+            !rows.put(0, named(&["/a", "/b"]), 10_000),
+            "the first read of a page is not an arrival"
+        );
+        assert!(
+            !rows.put(7, named(&["/c", "/d"]), 10_000),
+            "nor is the first read of another page"
+        );
+        assert!(!rows.row_data(7 * SPAN).unwrap().fresh);
+
+        // But a page that comes back holding something it did not before is
+        // exactly what the wash is for.
+        assert!(rows.put(7, named(&["/c", "/new", "/d"]), 10_000));
+        assert!(!rows.row_data(7 * SPAN).unwrap().fresh, "/c was here");
+        assert!(rows.row_data(7 * SPAN + 1).unwrap().fresh, "/new was not");
+        assert!(!rows.row_data(7 * SPAN + 2).unwrap().fresh, "/d was here");
+
+        // And the same page unchanged says nothing at all.
+        assert!(!rows.put(7, named(&["/c", "/new", "/d"]), 10_000));
+    }
+
+    #[test]
     fn the_arrival_flags_come_off_what_is_held_and_nothing_else() {
         let rows = Rows::default();
-        let mut marked = page(4);
-        marked[1].fresh = true;
-        rows.put(5, marked, 2_000_000);
+        // Read twice, the second time with a row the first did not have.
+        rows.put(5, named(&["/a", "/b", "/c", "/d"]), 2_000_000);
+        assert!(rows.put(5, named(&["/a", "/new", "/c", "/d"]), 2_000_000));
         let before = rows.resets();
         rows.clear_fresh();
         assert!(!rows.row_data(5 * SPAN + 1).unwrap().fresh);
