@@ -136,10 +136,20 @@ const PAGE_MAX: u32 = scour_core::PAGE_ROWS;
 /// How much of a fetched page sits *above* the first visible row.
 ///
 /// Scrolling is mostly downward, so the window is not centred on where the eye
-/// is: a quarter behind, three quarters ahead. Either way there is room to
-/// move before the next fetch, and the fetch that follows a flick lands where
-/// the flick was going.
-const PAGE_LEAD: u32 = PAGE_MAX / 4;
+/// is: a third behind, two thirds ahead. Either way there is room to move
+/// before the next fetch, and the fetch that follows a flick lands where the
+/// flick was going.
+const PAGE_LEAD: u32 = PAGE_MAX / 3;
+
+/// How close the eye may come to the edge of what is loaded.
+///
+/// **A page is asked for before it is needed.** Waiting for the visible rows
+/// to actually leave the loaded page means the blank ones are already on
+/// screen when the request goes out, and however quick the answer is — 2 to
+/// 20 ms, measured — the gap is visible as a stutter at every page boundary.
+/// A screenful of margin turns that into a fetch that lands before anybody
+/// reaches the rows it carries.
+const PAGE_EDGE: u32 = 24;
 
 struct State {
     generation: u64,
@@ -158,6 +168,8 @@ struct State {
     row_limit: u32,
     /// Where the page on screen begins in the whole result.
     page_offset: u32,
+    /// When the page now in flight was asked for, for the trace.
+    page_sent: Option<std::time::Instant>,
     /// A question was asked whose answer belongs at the top of the list.
     ///
     /// A new query, a new sort, a rail press. Not a page fetch and not the
@@ -271,6 +283,7 @@ fn main() -> Result<()> {
         exact_count: None,
         row_limit: 20,
         page_offset: 0,
+        page_sent: None,
         rewind: true,
         typed_at: None,
         shown: 0,
@@ -766,16 +779,25 @@ fn main() -> Result<()> {
 
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
-    // **What scrolled into sight.** Fetching cannot happen where it is
-    // noticed: `row_data` is called while the view is laying out, and a
-    // request started there would re-enter the model it is laying out. So the
-    // decision is taken here, a few times a second, from the position itself.
-    //
-    // From the position, and not only from a reported miss. A miss is the
-    // view saying "I drew a row you do not hold" — true while the eye is
-    // inside the loaded page, useless the moment a page lands somewhere else,
-    // because then the view has no missing row to draw and says nothing. That
-    // is the shape of "only the first page ever loads".
+    // **What scrolled into sight.** The list says when it has moved and this
+    // asks for what moved into view — see [`follow`], which is where the
+    // decision lives, and `first-row` in `main.slint`, which is what raises
+    // it.
+    {
+        let rows = Rc::clone(&rows);
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_moved(move || {
+            if let Some(w) = weak.upgrade() {
+                follow(&w, &state, &link, &rows);
+            }
+        });
+    }
+    // And the backstop, for what changes the view without moving the list: a
+    // window somebody made taller, a page that came back short, an answer that
+    // never came. Ten times a second is cheap enough to leave running and slow
+    // enough that it is never what scrolling waits for.
     {
         let rows = Rc::clone(&rows);
         let state = Rc::clone(&state);
@@ -786,27 +808,9 @@ fn main() -> Result<()> {
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(100),
             move || {
-                let Some(w) = weak.upgrade() else { return };
-                let visible = w.get_visible_rows().max(0) as u32;
-                let first = w.get_first_row().max(0) as u32;
-                // A row the view drew and could not fill wins over the
-                // viewport: it is the same place, one frame earlier.
-                let anchor = rows.wanted().map_or(first, |row| row as u32);
-                if !rows.needs(anchor as usize, visible as usize) {
-                    return;
+                if let Some(w) = weak.upgrade() {
+                    follow(&w, &state, &link, &rows);
                 }
-                let limit = {
-                    let mut s = state.borrow_mut();
-                    s.row_limit = s.row_limit.max(visible).max(PAGE_MAX);
-                    s.row_limit
-                };
-                let offset = page_around(anchor, rows.served() as u32, rows.total() as u64);
-                trace(&format!(
-                    "row {anchor} wants page {offset}..{}",
-                    offset + limit
-                ));
-                rows.asking(offset as usize, limit as usize);
-                send_page(&state, &link, offset, limit);
             },
         );
     }
@@ -935,6 +939,53 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Fetch the page the list is about to need, if it is not already coming.
+///
+/// **Fetching cannot happen where the need is noticed.** `row_data` is called
+/// while the view is laying out, and a request started there would re-enter
+/// the model being laid out. So the need is recorded and acted on here.
+///
+/// And the position is what is read, not only a reported miss. A miss is the
+/// view saying "I drew a row you do not hold" — true while the eye is inside
+/// the loaded page, useless the moment a page lands somewhere the eye is not,
+/// because then there is no missing row to draw and the view says nothing.
+/// That is the shape of "only the first page ever loads".
+fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
+    let visible = w.get_visible_rows().max(0) as u32;
+    let first = w.get_first_row().max(0) as u32;
+    // A row the view drew and could not fill wins over the viewport: it is the
+    // same place, one frame earlier.
+    let anchor = rows.wanted().map_or(first, |row| row as u32);
+    // A screenful either side, so the answer is asked for before the rows it
+    // carries are looked at. See [`PAGE_EDGE`].
+    let from = anchor.saturating_sub(PAGE_EDGE) as usize;
+    let span = (visible + 2 * PAGE_EDGE) as usize;
+    if !rows.needs(from, span) {
+        return;
+    }
+    let limit = {
+        let mut s = state.borrow_mut();
+        s.row_limit = s.row_limit.max(visible).max(PAGE_MAX);
+        s.row_limit
+    };
+    let offset = page_around(anchor, rows.served() as u32, rows.total() as u64);
+    // **The margin asks early; it does not ask twice.** At the ends of the
+    // result, and in a window taller than a page, the page that reaches the
+    // margin is the page already loaded — and asking for it again on every
+    // frame is a request per frame for rows that are already on screen.
+    if offset as usize == rows.at() && rows.covers(anchor as usize, visible as usize) {
+        return;
+    }
+    trace(&format!(
+        "row {anchor} wants page {offset}..{}, holding {}..{}",
+        offset + limit,
+        rows.at(),
+        rows.at() + rows.loaded_len(),
+    ));
+    rows.asking(offset as usize, limit as usize);
+    send_page(state, link, offset, limit);
+}
+
 /// Send the search for the current state.
 ///
 /// The facet count is **not** sent here, and that is the fix for the second
@@ -951,6 +1002,29 @@ fn dispatch(state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: u32) {
         s.rewind = true;
     }
     send_search(state, link, 0, limit);
+}
+
+/// How long the result is, given a page of it and a count of it.
+///
+/// **A page shorter than the service is willing to give is the end of the
+/// result**, whatever a count taken a moment ago says. The index moves while
+/// somebody is scrolling, so a total measured before the last page was
+/// fetched can claim rows that are no longer there — and the list then asks
+/// for them, draws them blank, and asks again, for as long as anybody looks
+/// at the bottom of it.
+///
+/// Two conditions, and both are needed. Shorter than what was **asked for**,
+/// because the first page of a new query is deliberately only what fits on
+/// screen and that is not an ending. And shorter than any page this service
+/// has ever **served**, because a service whose own page ceiling is lower
+/// than the request answers every page short and none of them is an ending
+/// either.
+fn list_length(counted: usize, offset: usize, got: usize, asked: usize, served: usize) -> usize {
+    if got < asked && got < served {
+        return offset + got;
+    }
+    // Otherwise the count stands — but never below what is already in hand.
+    counted.max(offset + got)
 }
 
 /// Where to start a page so that `anchor` is inside it.
@@ -991,7 +1065,9 @@ fn send_search(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: 
 /// colouring is a parse per page for an answer that is already drawn.
 fn send_page(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: u32) {
     let (generation, query_revision, query, sort, descending) = {
-        let s = state.borrow();
+        let mut s = state.borrow_mut();
+        s.page_sent = Some(std::time::Instant::now());
+        let s = &*s;
         (
             s.generation,
             s.query_revision,
@@ -1154,6 +1230,7 @@ fn apply(
         Got::Search {
             generation,
             offset,
+            limit,
             reply,
         } => {
             trace(&format!(
@@ -1200,11 +1277,12 @@ fn apply(
             let any_fresh = fresh.iter().any(|r| r.fresh);
             {
                 let mut s = state.borrow_mut();
-                let total = s
+                let counted = s
                     .exact_count
                     .map(|c| c.total)
                     .unwrap_or(r.total)
                     .min(i32::MAX as u64) as usize;
+                let total = list_length(counted, offset as usize, n, limit as usize, rows.served());
                 // **Where this page was asked for, carried by the answer.**
                 // Read off the window's own state it was whichever page had
                 // been requested most recently, which after a flick of the
@@ -1213,7 +1291,7 @@ fn apply(
                 s.page_offset = offset;
                 // The whole result's length, so the view sizes itself from it;
                 // the page and where it begins, so the model can answer for it.
-                rows.put(fresh, offset as usize, total.max(offset as usize + n));
+                rows.put(fresh, offset as usize, total);
             }
 
             // **Put the flags out again.** Slint's `animate` interpolates when
@@ -1234,6 +1312,16 @@ fn apply(
                     t.elapsed()
                 ));
             }
+            trace(&format!(
+                "page {offset} landed in {:.1} ms round trip, {:.2} ms in the engine, {} rows visited",
+                state
+                    .borrow()
+                    .page_sent
+                    .map(|t| t.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0),
+                r.took_us as f64 / 1000.0,
+                r.rows_visited,
+            ));
             trace(&format!(
                 "drew {n} rows {:.1} ms after the key",
                 state
@@ -2047,6 +2135,7 @@ mod tests {
             exact_count: None,
             row_limit: 32,
             page_offset: 0,
+            page_sent: None,
             rewind: false,
             typed_at: None,
             shown: 0,
@@ -2117,6 +2206,7 @@ mod tests {
             exact_count: None,
             row_limit: 20,
             page_offset: 0,
+            page_sent: None,
             rewind: false,
             typed_at: None,
             shown: 0,
@@ -2166,6 +2256,7 @@ mod tests {
             }),
             row_limit: 40,
             page_offset: 0,
+            page_sent: None,
             rewind: false,
             typed_at: None,
             shown: 4,
@@ -2251,6 +2342,25 @@ mod tests {
         // A service that serves less than it was asked for still reaches the
         // end: clamping by the request would stop 56 rows short of it.
         assert_eq!(page_around(960, 200, 973), 773);
+    }
+
+    #[test]
+    fn a_page_that_comes_back_short_is_the_end_of_the_result() {
+        // The ordinary case: a full page in the middle of a long result, and
+        // the count is what says how long it is.
+        assert_eq!(list_length(2_500_000, 400, 200, 200, 200), 2_500_000);
+        // The last page of a result that shrank while somebody scrolled to it.
+        // Believing the count here leaves six rows that can never arrive, and
+        // they are asked for for ever.
+        assert_eq!(list_length(979, 779, 194, 200, 200), 973);
+        // The first page of a new query is only what fits on screen. It is
+        // short, and it is not an ending.
+        assert_eq!(list_length(2_500_000, 0, 24, 24, 200), 2_500_000);
+        // Nor is a service whose own page ceiling is below the request.
+        assert_eq!(list_length(5_000, 0, 200, 256, 200), 5_000);
+        // And a count that is somehow shorter than what is already in hand
+        // does not make the loaded rows unreachable.
+        assert_eq!(list_length(10, 400, 200, 200, 200), 600);
     }
 
     #[test]

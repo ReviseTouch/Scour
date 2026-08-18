@@ -108,6 +108,9 @@ pub enum Got {
         /// for" off its own state put the first answer at the second answer's
         /// place, and drew rows a hundred lines from where they belong.
         offset: u32,
+        /// How many rows were asked for, so a page that comes back short can
+        /// be told from one that came back full.
+        limit: u32,
         reply: Box<Response>,
     },
     Facets {
@@ -439,9 +442,9 @@ fn spawn_lane(
             };
             // The page this request asked for, read back off the request
             // itself so the answer can say where it goes. See `Got::Search`.
-            let offset = match &request {
-                Request::Search { page, .. } => page.offset,
-                _ => 0,
+            let (offset, limit) = match &request {
+                Request::Search { page, .. } => (page.offset, page.limit),
+                _ => (0, 0),
             };
             match c.call(request) {
                 Ok(reply) => {
@@ -458,6 +461,7 @@ fn spawn_lane(
                         Lane::Search => Got::Search {
                             generation: revision,
                             offset,
+                            limit,
                             reply,
                         },
                         Lane::Places => Got::Places(reply),

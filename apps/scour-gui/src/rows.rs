@@ -417,6 +417,11 @@ impl Rows {
         first >= offset && last <= offset + len
     }
 
+    /// Where the loaded page begins.
+    pub fn at(&self) -> usize {
+        self.offset.get()
+    }
+
     pub fn loaded_len(&self) -> usize {
         self.loaded.borrow().len()
     }

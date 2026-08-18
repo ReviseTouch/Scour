@@ -547,6 +547,20 @@ export component MainWindow inherits Window {
     /// reported.
     out property <int> first-row:
         max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
+    /// The list moved by at least one row.
+    ///
+    /// **Why a change handler and not only the timer.** A timer that polls
+    /// often enough to be invisible is a timer that wakes the process sixty
+    /// times a second for the rest of the day; one that is cheap enough to
+    /// leave running adds its own period to every fetch, and at 100ms that is
+    /// most of the wait. This fires only while somebody is scrolling, and it
+    /// fires at once. The timer stays as the backstop for everything that
+    /// changes what is visible without moving the list — a resize, a window
+    /// that grew.
+    callback moved();
+    changed first-row => {
+        root.moved();
+    }
     // The query as Rust folded it back — set only when Rust changes the text
     // itself (a facet click), never on every keystroke, or the caret jumps.
     in-out property <string> query;
