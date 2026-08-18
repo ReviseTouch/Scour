@@ -217,12 +217,19 @@ component FacetRow inherits Rectangle {
             horizontal-stretch: 1;
         }
 
+        // **A width of its own, and the name gives way to it.** Without one
+        // the two share what is left over, and on a machine whose text is a
+        // shade larger than this one's the name takes it all and the count —
+        // the thing the row is *for* — is the part that goes. Elide a name;
+        // never a number.
         Text {
             text: root.count;
             color: Theme.ink-3;
             font-size: 11.5px;
             font-family: Fonts.mono;
             vertical-alignment: center;
+            horizontal-alignment: right;
+            width: 46px;
         }
     }
 }
