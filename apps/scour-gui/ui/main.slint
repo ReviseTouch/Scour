@@ -645,6 +645,11 @@ export component MainWindow inherits Window {
     /// loads its first page and then stops. This is the position itself, read
     /// off the viewport, so the fetch decision never depends on a miss being
     /// reported.
+    /// Scroll the rail from outside, for `SCOUR_GUI_RAIL` — which is how
+    /// "can the scopes be reached" is checked without a hand on a wheel.
+    public function scroll-rail(down: length) {
+        railview.viewport-y = 0px - down;
+    }
     out property <int> first-row: root.grid
         ? max(0, Math.floor((0px - tiles.viewport-y) / root.tile-h)) * root.per-line
         : max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
@@ -1783,7 +1788,7 @@ export component MainWindow inherits Window {
                 // sections and thirteen kinds do not fit at 700px, and a rail
                 // that simply grew pushed the time ribbon off the bottom of
                 // the window — drawn, laid out, and nowhere to be seen.
-                ScrollView {
+                railview := ScrollView {
                     // **And it has to be told how tall it is.** A `ScrollView`
                     // does not learn that from a layout inside it: the
                     // viewport stayed the height of the view, so there was no

@@ -1423,6 +1423,17 @@ fn main() -> Result<()> {
         window.invoke_report_open(slint::SharedString::new());
     }
 
+    if let Ok(px) = std::env::var("SCOUR_GUI_RAIL")
+        && let Ok(px) = px.parse::<f32>()
+    {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_scroll_rail(px);
+            }
+        });
+    }
+
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
         window.set_view_mode(mode.as_str().into());
     }
