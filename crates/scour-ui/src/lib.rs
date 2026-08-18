@@ -329,3 +329,179 @@ mod tests {
         assert_eq!(DARK.mark.argb().0, 43);
     }
 }
+
+/// Which way a column's text sits in its cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Start,
+    /// Numbers, right-aligned so the digits line up down the column — the
+    /// whole reason a size column is readable at a glance.
+    End,
+}
+
+/// One column a window can show.
+///
+/// **The definition, not the drawing.** How a cell is painted is each window's
+/// own business — one writes a `<td>`, the other a `Text` — but *which*
+/// columns exist, what they are called, what sorting them asks the service
+/// for, and how wide they start out are the same in both or the two windows
+/// are two programs.
+#[derive(Debug, Clone, Copy)]
+pub struct Column {
+    /// What the settings file calls it. Stable; the sort key is not.
+    pub id: &'static str,
+    /// The English source string, and therefore the catalogue key.
+    pub msgid: &'static str,
+    /// What `sort:` this column asks the service for. Empty means the column
+    /// cannot be sorted by.
+    pub sort: &'static str,
+    /// Starting width in pixels. A person dragging the edge overrides it, and
+    /// what they chose is kept per column id — see `scour_settings::widths`.
+    pub width: u32,
+    pub align: Align,
+}
+
+/// Every column, in the order a window shows them when nobody has said
+/// otherwise.
+///
+/// The first five are the default set. The rest are there to be turned on.
+pub const COLUMNS: &[Column] = &[
+    Column {
+        id: "name",
+        msgid: "Name",
+        sort: "name",
+        width: 240,
+        align: Align::Start,
+    },
+    Column {
+        id: "kind",
+        msgid: "Kind",
+        sort: "kind",
+        width: 110,
+        align: Align::Start,
+    },
+    Column {
+        id: "path",
+        msgid: "Location",
+        sort: "path",
+        width: 320,
+        align: Align::Start,
+    },
+    Column {
+        id: "mtime",
+        msgid: "Modified",
+        sort: "modified",
+        width: 120,
+        align: Align::Start,
+    },
+    Column {
+        id: "size",
+        msgid: "Size",
+        sort: "size",
+        width: 90,
+        align: Align::End,
+    },
+    Column {
+        id: "ext",
+        msgid: "Extension",
+        sort: "ext",
+        width: 80,
+        align: Align::Start,
+    },
+    Column {
+        id: "ctime",
+        msgid: "Created",
+        sort: "created",
+        width: 120,
+        align: Align::Start,
+    },
+    Column {
+        id: "atime",
+        msgid: "Accessed",
+        sort: "accessed",
+        width: 120,
+        align: Align::Start,
+    },
+    Column {
+        id: "perm",
+        msgid: "Mode",
+        sort: "mode",
+        width: 108,
+        align: Align::Start,
+    },
+    Column {
+        id: "user",
+        msgid: "Owner",
+        sort: "uid",
+        width: 100,
+        align: Align::Start,
+    },
+    Column {
+        id: "group",
+        msgid: "Group",
+        sort: "gid",
+        width: 100,
+        align: Align::Start,
+    },
+    Column {
+        id: "disk",
+        msgid: "On disk",
+        sort: "disk",
+        width: 90,
+        align: Align::End,
+    },
+];
+
+/// What a window shows before anybody has chosen.
+///
+/// Five, and the order is the reading order of the question people actually
+/// ask: what is it called, what kind of thing is it, where does it live, when
+/// did it change, how big is it.
+pub const DEFAULT_COLUMNS: &[&str] = &["name", "kind", "path", "mtime", "size"];
+
+/// Look one up by the id the settings file uses.
+pub fn column(id: &str) -> Option<&'static Column> {
+    COLUMNS.iter().find(|c| c.id == id)
+}
+
+#[cfg(test)]
+mod column_tests {
+    use super::*;
+
+    /// Every default is a column that exists.
+    ///
+    /// A typo here is a window that starts with four columns and no complaint.
+    #[test]
+    fn the_defaults_all_name_real_columns() {
+        for id in DEFAULT_COLUMNS {
+            assert!(column(id).is_some(), "`{id}` is not a column");
+        }
+    }
+
+    /// Ids are unique, because the settings file keys widths by them.
+    #[test]
+    fn no_id_is_used_twice() {
+        let mut seen: Vec<&str> = Vec::new();
+        for c in COLUMNS {
+            assert!(!seen.contains(&c.id), "`{}` appears twice", c.id);
+            seen.push(c.id);
+        }
+    }
+
+    /// Numbers are the ones that right-align, and only those.
+    ///
+    /// Stated as a test because it is the rule a new column will be added
+    /// against, and "size-ish" is not something the type can check.
+    #[test]
+    fn only_the_sizes_are_right_aligned() {
+        for c in COLUMNS {
+            let numeric = c.id == "size" || c.id == "disk";
+            assert_eq!(
+                c.align == Align::End,
+                numeric,
+                "`{}` is aligned the wrong way",
+                c.id
+            );
+        }
+    }
+}

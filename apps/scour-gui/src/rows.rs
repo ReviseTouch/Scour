@@ -77,13 +77,14 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
 }
 
 /// One hit, formatted.
-pub fn row_of(h: &Hit, terms: &[String], now: i64) -> Row {
+pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str) -> Row {
     let (pre, hit, post) = split_at_match(h.name(), terms);
     Row {
         pre: pre.into(),
         hit: hit.into(),
         post: post.into(),
         folder: h.parent().into(),
+        kind: kind.into(),
         size: if h.is_dir {
             slint::SharedString::new()
         } else {

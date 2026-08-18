@@ -1817,6 +1817,41 @@ mod tests {
         );
     }
 
+    /// The page's columns are the ones `scour-ui` names, at its widths.
+    ///
+    /// **The page still paints its own cells** — a `<td>` is not a `Text` and
+    /// the writers here know about thumbnails, permissions and owner lookups
+    /// that the native window does not. What is shared is the list: which
+    /// columns exist, what they are called, what sorting one asks the service
+    /// for, and how wide it starts. A column added on one side and not the
+    /// other is two programs.
+    #[test]
+    fn the_page_shows_the_columns_the_shared_crate_names() {
+        for c in scour_ui::COLUMNS {
+            let decl = format!("id: \"{}\",", c.id);
+            let at = PAGE
+                .find(&decl)
+                .unwrap_or_else(|| panic!("the page has no `{}` column", c.id));
+            // The declaration is one line: id, msgid, sort key, width.
+            let line = &PAGE[at..PAGE[at..].find('\n').map(|n| at + n).unwrap_or(PAGE.len())];
+            assert!(
+                line.contains(&format!("msgid: \"{}\"", c.msgid)),
+                "`{}` is called something else here: {line}",
+                c.id
+            );
+            assert!(
+                line.contains(&format!("key: \"{}\"", c.sort)),
+                "`{}` sorts by something else here: {line}",
+                c.id
+            );
+            assert!(
+                line.contains(&format!("w: {}", c.width)),
+                "`{}` starts at a different width here: {line}",
+                c.id
+            );
+        }
+    }
+
     /// **Nor on the catalogue**, which is the same property one layer out.
     ///
     /// The taxonomy and the words now arrive together — `loadLanguage` asks for

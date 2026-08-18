@@ -285,6 +285,10 @@ fn main() -> Result<()> {
     let cat = Rc::new(Catalogue::for_language(&language(&config)));
     let window = MainWindow::new().context("the window could not be created")?;
     dress(&window);
+    columns(&window, &cat);
+    // Nothing is marked to begin with: the first list is by relevance, which
+    // is not a column and has no heading to point at.
+    window.set_sorted_by("relevance".into());
     trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
@@ -449,6 +453,12 @@ fn main() -> Result<()> {
                     s.descending = s.sort != "name" && s.sort != "path";
                 }
                 s.advance_order();
+            }
+            // The heading marks itself, so the window has to be told which one
+            // won. Read back rather than assumed: `sort` may have been left
+            // alone and only the direction flipped.
+            if let Some(w) = weak.upgrade() {
+                w.set_sorted_by(state.borrow().sort.as_str().into());
             }
             let rows = match weak.upgrade() {
                 Some(w) => {
@@ -768,7 +778,12 @@ fn apply(
             let fresh: Vec<Row> = r
                 .hits
                 .iter()
-                .map(|h| rows::row_of(h, &terms, now))
+                // The kind's word comes from the catalogue, by the engine's
+                // own msgid — the same string the rail's labels and the
+                // browser page use. A window that spelled these itself would
+                // be a second vocabulary, and the day the engine learned a
+                // fourteenth kind this one would show a blank.
+                .map(|h| rows::row_of(h, &terms, now, &t(&cat, h.kind.msgid())))
                 .collect();
             let n = fresh.len();
             let refused_forward_page = {
@@ -1095,6 +1110,38 @@ fn dress(window: &MainWindow) {
     fonts.set_mono("monospace".into());
 }
 
+/// The column headings and their widths, from `scour-ui`.
+///
+/// **The same five the browser page shows, in the same order, at the same
+/// widths.** Which columns exist and what they are called is shared; how a
+/// cell is painted is not, and this window paints its own.
+///
+/// A column named in `scour_ui::DEFAULT_COLUMNS` but missing from `COLUMNS`
+/// would be a heading with no word, so the lookup is checked there by a test
+/// rather than unwrapped here.
+fn columns(window: &MainWindow, cat: &Catalogue) {
+    let w = |id: &str| {
+        scour_ui::column(id)
+            .map(|c| c.width as f32)
+            .unwrap_or(100.0)
+    };
+    let head = |id: &str| {
+        scour_ui::column(id)
+            .map(|c| t(cat, c.msgid))
+            .unwrap_or_default()
+    };
+    window.set_head_name(head("name"));
+    window.set_head_kind(head("kind"));
+    window.set_head_path(head("path"));
+    window.set_head_mtime(head("mtime"));
+    window.set_head_size(head("size"));
+    window.set_w_name(w("name"));
+    window.set_w_kind(w("kind"));
+    window.set_w_path(w("path"));
+    window.set_w_mtime(w("mtime"));
+    window.set_w_size(w("size"));
+}
+
 /// One `scour-ui` palette, in the shape the window's generated struct wants.
 fn scheme(p: &scour_ui::Palette) -> Scheme {
     let c = |x: &scour_ui::Rgba| {
@@ -1260,19 +1307,34 @@ mod tests {
     }
 
     #[test]
-    fn every_visible_header_requests_its_own_sort_key() {
+    fn every_visible_header_requests_the_sort_key_the_shared_crate_names() {
         let ui = include_str!("../ui/main.slint");
-        for (label, key) in [("Name", "name"), ("Size", "size"), ("Modified", "modified")] {
-            let label_at = ui
-                .find(&format!("text: @tr(\"{label}\")"))
-                .unwrap_or_else(|| panic!("no {label} header"));
-            let click_at = ui[..label_at]
-                .rfind("clicked =>")
-                .unwrap_or_else(|| panic!("the {label} header is not clickable"));
-            let click = &ui[click_at..label_at];
+        // The five the window shows, and `scour-ui` is what says which five
+        // and what each one sorts by. A heading wired to the wrong key is a
+        // column that reorders the list by something else — visible, but only
+        // if you know what you were expecting.
+        for id in scour_ui::DEFAULT_COLUMNS {
+            let c = scour_ui::column(id).unwrap_or_else(|| panic!("`{id}` is not a column"));
+            let want = format!("sort: \"{}\"", c.sort);
             assert!(
-                click.contains(&format!("root.sort-by(\"{key}\")")),
-                "the {label} header does not request {key}: {click}"
+                ui.contains(&want),
+                "no heading asks for `{}`, which is what `{id}` sorts by",
+                c.sort
+            );
+        }
+        // And the headings take their words from the crate rather than
+        // spelling them here — `@tr("Name")` in this file would be a second
+        // place the column is named.
+        for prop in [
+            "head-name",
+            "head-kind",
+            "head-path",
+            "head-mtime",
+            "head-size",
+        ] {
+            assert!(
+                ui.contains(&format!("root.{prop}")),
+                "the window does not use `{prop}`"
             );
         }
     }

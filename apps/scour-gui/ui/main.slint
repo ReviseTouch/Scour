@@ -28,6 +28,10 @@ export struct Row {
     post: string,
     // The directory, without the name. Shown quieter and to the right.
     folder: string,
+    // What kind of thing it is, already translated — the engine's own
+    // vocabulary, so the window never invents a word for a kind it does not
+    // know about.
+    kind: string,
     size: string,
     stamp: string,
     is-dir: bool,
@@ -42,26 +46,41 @@ export struct Facet {
     count: string,
 }
 
-component AgeDot inherits Rectangle {
-    in property <int> band;
-    width: 6px;
-    height: 6px;
-    border-radius: 3px;
-    background: band == 0 ? Theme.t0
-        : band == 1 ? Theme.t1
-        : band == 2 ? Theme.t2
-        : band == 3 ? Theme.t3
-        : band == 4 ? Theme.t4
-        : Theme.t5;
+// The age used to be a dot beside the date. It is the date's own colour now —
+// the page's answer, and the better one: the eye is already at the stamp to
+// find out *when*, so when and how-long-ago are one glance rather than two.
+// `Theme.t0`-`t5` are the six bands; `rows::band` decides which.
+
+component Head inherits Rectangle {
+    in property <string> text;
+    in property <string> sort;
+    in property <string> sorted-by;
+    in property <length> w;
+    // `right` alone collides with the alignment enum of the same name.
+    in property <bool> align-right;
+    in property <int> stretch: 0;
+    callback clicked(string);
+
+    width: w;
+    horizontal-stretch: stretch;
+
+    TouchArea {
+        clicked => { root.clicked(root.sort); }
+        Text {
+            width: parent.width;
+            // The arrow is drawn in the text rather than beside it: a
+            // separate glyph has to be laid out, and a heading that shifts
+            // sideways when it becomes the sort is a heading that flickers.
+            text: root.sorted-by == root.sort ? root.text + " ▾" : root.text;
+            color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
+            font-size: Fonts.small;
+            horizontal-alignment: root.align-right ? right : left;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
 }
 
-// A name with the matched run picked out.
-//
-// Three `Text` elements in a row rather than one with markup, because Slint
-// has no rich text — and the middle one carries the highlight. When there is
-// no match the outer two are empty strings; an empty `Text` costs a layout
-// slot and nothing else, which is why this is not a conditional element (one
-// of those is left out of the parent's `spacing` and the name would jump).
 component Marked inherits HorizontalLayout {
     in property <string> pre;
     in property <string> hit;
@@ -120,6 +139,22 @@ export component MainWindow inherits Window {
     in property <string> hint;
     in property <bool> busy;
     in property <string> scope-label;
+
+    // The columns, handed in from `scour-ui` so that this window and the
+    // browser page cannot disagree about what they are called or how wide
+    // they start. See `dress()` in `main.rs`.
+    in property <string> head-name;
+    in property <string> head-kind;
+    in property <string> head-path;
+    in property <string> head-mtime;
+    in property <string> head-size;
+    in property <length> w-name;
+    in property <length> w-kind;
+    in property <length> w-path;
+    in property <length> w-mtime;
+    in property <length> w-size;
+    // Which column the list is ordered by, as the protocol's own word.
+    in property <string> sorted-by;
     /// How many rows would fit, plus a little to scroll into.
     ///
     /// Reported by the window rather than guessed by Rust, because only the
@@ -352,6 +387,12 @@ export component MainWindow inherits Window {
                 spacing: 0px;
 
                 // Column headers, and each is a sort.
+                //
+                // **Five columns, the widths handed in from `scour-ui`.** The
+                // browser page shows exactly these five in exactly this order,
+                // and the order is the order of the question a person is
+                // asking: what is it called, what kind of thing is it, where
+                // does it live, when did it change, how big is it.
                 Rectangle {
                     height: 24px;
                     background: Theme.panel-2;
@@ -367,44 +408,16 @@ export component MainWindow inherits Window {
                         padding-right: 12px;
                         spacing: 8px;
 
-                        TouchArea {
-                            clicked => { root.sort-by("name"); }
-                            Text {
-                                x: 0;
-                                text: @tr("Name");
-                                color: Theme.ink-3;
-                                font-size: Fonts.small;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        Rectangle { }
-
-                        TouchArea {
-                            width: 90px;
-                            clicked => { root.sort-by("size"); }
-                            Text {
-                                text: @tr("Size");
-                                color: Theme.ink-3;
-                                font-size: Fonts.small;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                                width: parent.width;
-                            }
-                        }
-
-                        TouchArea {
-                            width: 130px;
-                            clicked => { root.sort-by("modified"); }
-                            Text {
-                                text: @tr("Modified");
-                                color: Theme.ink-3;
-                                font-size: Fonts.small;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
-                                width: parent.width;
-                            }
-                        }
+                        Head { text: root.head-name; sort: "name"; w: root.w-name; stretch: 1;
+                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
+                        Head { text: root.head-kind; sort: "kind"; w: root.w-kind;
+                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
+                        Head { text: root.head-path; sort: "path"; w: root.w-path; stretch: 2;
+                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
+                        Head { text: root.head-mtime; sort: "modified"; w: root.w-mtime;
+                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
+                        Head { text: root.head-size; sort: "size"; w: root.w-size; align-right: true;
+                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
                     }
                 }
 
@@ -450,24 +463,30 @@ export component MainWindow inherits Window {
                             padding-right: 12px;
                             spacing: 8px;
 
-                            VerticalLayout {
-                                alignment: center;
-                                AgeDot { band: row.age; }
-                            }
-
-                            // The name, with the match picked out, then the
-                            // folder in the same line but quieter: two lines a
-                            // row halves how many fit and the folder is read
-                            // second in every case.
+                            // The name, with the match picked out. A folder is
+                            // drawn in the query's key colour, which is what
+                            // the page does: the one distinction worth a
+                            // colour in a list of names is "this one opens".
                             Marked {
                                 pre: row.pre;
                                 hit: row.hit;
                                 post: row.post;
                                 colour: row.is-dir ? Theme.q-key : Theme.ink;
+                                width: root.w-name;
                                 horizontal-stretch: 1;
                             }
 
                             Text {
+                                width: root.w-kind;
+                                text: row.kind;
+                                color: Theme.ink-3;
+                                font-size: Fonts.small;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            Text {
+                                width: root.w-path;
                                 text: row.folder;
                                 color: Theme.ink-3;
                                 font-size: Fonts.small;
@@ -476,18 +495,25 @@ export component MainWindow inherits Window {
                                 horizontal-stretch: 2;
                             }
 
+                            // **The age is the date's colour, not a dot beside
+                            // it.** The page paints the stamp itself, and it
+                            // reads better: the eye is already there to find
+                            // out when, so the answer and how-long-ago are one
+                            // glance rather than two.
                             Text {
-                                width: 90px;
-                                text: row.size;
-                                color: Theme.ink-2;
+                                width: root.w-mtime;
+                                text: row.stamp;
+                                color: row.age == 0 ? Theme.t0 : row.age == 1 ? Theme.t1
+                                     : row.age == 2 ? Theme.t2 : row.age == 3 ? Theme.t3
+                                     : row.age == 4 ? Theme.t4 : Theme.t5;
                                 font-size: Fonts.small;
-                                horizontal-alignment: right;
                                 vertical-alignment: center;
+                                overflow: elide;
                             }
 
                             Text {
-                                width: 130px;
-                                text: row.stamp;
+                                width: root.w-size;
+                                text: row.size;
                                 color: Theme.ink-2;
                                 font-size: Fonts.small;
                                 horizontal-alignment: right;
