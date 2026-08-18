@@ -5184,3 +5184,69 @@ for a real window and a real hand on a wheel.
 femtovg is gone rather than kept behind a flag — a renderer nobody will select
 is a dependency nobody audits. Skia stays behind `--features skia`, for the day
 the scene stops being flat rectangles.
+
+## Deep paging, where the time actually goes — 2026-08-18
+
+The window now keeps its pages, fetches one ahead of the eye and never asks
+twice, and ordinary scrolling costs nothing anybody can see. Dragging the
+scrollbar into a long result still stops, and this is why.
+
+Live index, 2,581,723 entries, thirteen segments (51,393 rows outside the
+largest), empty query, `modified ↓`, count cap 1,000:
+
+| offset | took | rows visited |
+|---|---:|---:|
+| 0 | 3.6 ms | 1,953 |
+| 10,000 | 11.2 ms | 33,795 |
+| 100,000 | 13.1 ms | 169,609 |
+| 500,000 | 31.9 ms | 572,378 |
+| 1,000,000 | 46.9 ms | 1,074,843 |
+| 2,000,000 | 119.4 ms | 2,080,974 |
+
+```bash
+scour search --json -n 200 -o N --count-cap 1000
+```
+
+**Asking for less does not cost less.** The same offset, three window sizes —
+which settles again, on this index and against the service rather than the
+bridge, what the browser page measured on 2026-08-17:
+
+| | @ offset 0 | @ offset 2,000,000 |
+|---|---:|---:|
+| 24 rows | 9.8 ms | 106.3 ms |
+| 50 rows | — | 110.4 ms |
+| 200 rows | 0.0 ms | 104.7 ms |
+
+So "fetch exactly what the dragged area needs" cannot be the answer: what costs
+is *reaching* the offset, not what is taken from it.
+
+### The three costs, in the order they are paid
+
+Reading `search::run_with` and `NativeIndex::search` with these numbers beside
+them:
+
+1. **The walk.** `need = offset + limit`, and the stored-order branch of
+   `visit` counts every live row above the page. 15–70 ns a row here.
+2. **A key per row kept.** `kept` holds `need` row numbers — 8 MB of `u32` at
+   offset two million — and `ranked` then builds a `SortValue` for every one of
+   them, not for the page.
+3. **A candidate per row, in the merge.** `index.rs` extends `pool` with every
+   segment's `ranked`, so a page at offset two million pools ~2.5 M
+   `Candidate`s at 48 bytes each before `select_nth_unstable` throws all but
+   two hundred away. Measured: one such request grows the service's RSS by
+   25 MB and the walk is only part of the 105 ms.
+
+None of the three is needed to answer "the two hundred rows at rank N".
+
+### What the index already knows
+
+* Rows inside a segment are stored **newest-first** — `order.rs` says so and
+  `stored_forward` already depends on it — so a segment's `Mtime` column is
+  monotone in the row number, and "how many rows are newer than *t*" is a
+  binary search rather than a walk.
+* Which rows are live is a bitmap. Popcounts over it, one per block, are a
+  **rank** structure: 4 bytes per 512 rows, ~20 KB for this index, buildable at
+  open in tens of microseconds. No new file, no format change.
+* `matches_all` — the query has no conditions and no rule conceals anything —
+  is already computed in `index.rs` and is exactly the case a scrollbar drag
+  is: browsing the whole index.
