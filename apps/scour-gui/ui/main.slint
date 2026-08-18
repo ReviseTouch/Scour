@@ -11,7 +11,7 @@ import { Theme, Fonts } from "theme.slint";
 // Re-exported for the generated Rust API; its colours follow Slint's platform
 // palette directly.
 export { Theme, Fonts }
-import { ListView } from "std-widgets.slint";
+import { ListView, ScrollView } from "std-widgets.slint";
 
 // One result. Flat, and deliberately: a struct of strings is what crosses the
 // language boundary cheaply, and the formatting was done in Rust where the
@@ -51,6 +51,9 @@ export struct Bar {
 }
 
 export struct Facet {
+    // How tall this row's bar is, 0..1 of the largest count in its section.
+    // Computed in Rust: a max over a model is a loop per row per frame.
+    share: float,
     label: string,
     token: string,
     count: string,
@@ -88,6 +91,87 @@ component Tab inherits Rectangle {
         y: parent.height - 2px;
         height: 2px;
         background: Theme.q-not;
+    }
+}
+
+// One row of the rail: a word, a count, and a bar behind them showing what
+// share of the matching set it is.
+//
+// The bar sits *behind* the text rather than beside it, which is the page's
+// shape: a rail 186px wide cannot spare a lane for a bar, and the eye reads a
+// length without being given one.
+component FacetRow inherits Rectangle {
+    in property <string> label;
+    in property <string> count;
+    in property <float> share;
+    in property <bool> on;
+    callback clicked();
+
+    height: 24px;
+    background: root.on ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
+
+    if root.share > 0: Rectangle {
+        x: 0;
+        width: parent.width * root.share;
+        background: Theme.line;
+        opacity: 0.55;
+    }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+
+        Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 12.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: root.count;
+            color: Theme.ink-3;
+            font-size: 11.5px;
+            font-family: Fonts.mono;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// One of the window's own controls. Square, 18px, the page's size — and the
+// same shape as the view switch beside it, because they are the same kind of
+// thing: something done to the window rather than to what it is looking at.
+component Tool inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> on;
+    callback clicked();
+
+    width: 18px;
+    height: 18px;
+    border-width: 1px;
+    border-radius: 3px;
+    border-color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.glyph;
+        color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-3;
+        font-size: 11px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
     }
 }
 
@@ -186,6 +270,10 @@ export component MainWindow inherits Window {
     // --- what Rust sets ---------------------------------------------------
     in property <[Row]> rows;
     in property <[Facet]> facets;
+    in property <[Facet]> scopes;
+    in property <[Facet]> sizes;
+    in property <string> scope-heading;
+    in property <string> size-heading;
     in property <[Bar]> bars;
     // The tallest bar, so every other one is drawn as a share of it. Computed
     // in Rust: a max over a Slint model is a loop per bar per frame.
@@ -265,6 +353,9 @@ export component MainWindow inherits Window {
     callback copy-path(int);
     callback facet-clicked(string);
     callback sort-by(string);
+    callback tool-clicked(string);
+    callback view-clicked(string);
+    in-out property <string> view-mode: "detail";
     // direction: -1 for the preceding window, +1 for the following one.
     // first-visible anchors the same global row after the bounded model slides.
     callback need-page(int, int);
@@ -472,6 +563,46 @@ export component MainWindow inherits Window {
                     font-size: 11.5px;
                     vertical-alignment: center;
                 }
+
+                // The window's own controls, in the page's order: the two that
+                // change what the index *is*, then the one that takes it
+                // elsewhere, then help. A rule separates them from the view
+                // switch — the only control here that changes what you are
+                // reading rather than what the program is doing.
+                Rectangle { width: 10px; }
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        Tool { glyph: "文"; clicked => { root.tool-clicked("language"); } }
+                        Tool { glyph: "⊘"; clicked => { root.tool-clicked("rules"); } }
+                        Tool { glyph: "⤓"; clicked => { root.tool-clicked("export"); } }
+                        Tool { glyph: "?"; clicked => { root.tool-clicked("help"); } }
+                    }
+                }
+
+                Rectangle { width: 12px; }
+
+                Rectangle {
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                Rectangle { width: 12px; }
+
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        Tool { glyph: "≣"; on: root.view-mode == "detail";
+                               clicked => { root.view-clicked("detail"); } }
+                        Tool { glyph: "▦"; on: root.view-mode == "icons";
+                               clicked => { root.view-clicked("icons"); } }
+                        Tool { glyph: "▣"; on: root.view-mode == "large";
+                               clicked => { root.view-clicked("large"); } }
+                    }
+                }
             }
         }
 
@@ -523,7 +654,12 @@ export component MainWindow inherits Window {
                     background: Theme.line;
                 }
 
-                VerticalLayout {
+                // **Scrolled, because it is taller than the window.** Three
+                // sections and thirteen kinds do not fit at 700px, and a rail
+                // that simply grew pushed the time ribbon off the bottom of
+                // the window — drawn, laid out, and nowhere to be seen.
+                ScrollView {
+                    VerticalLayout {
                     padding-top: 12px;
                     padding-bottom: 12px;
                     padding-left: 0px;
@@ -547,42 +683,66 @@ export component MainWindow inherits Window {
 
                     Rectangle { height: 8px; }
 
-                    for f[i] in root.facets: Rectangle {
-                        height: 26px;
-                        border-radius: 4px;
-                        background: root.active-facet == f.token ? Theme.selection
-                            : touch.has-hover ? Theme.hover
-                            : transparent;
-
-                        touch := TouchArea {
-                            clicked => {
-                                root.facet-clicked(f.token);
-                            }
-                        }
-
-                        HorizontalLayout {
-                            padding-left: 8px;
-                            padding-right: 8px;
-                            spacing: 6px;
-
-                            Text {
-                                text: f.label;
-                                color: root.active-facet == f.token ? Theme.ink : Theme.ink-2;
-                                font-size: Fonts.size;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            Rectangle { }
-
-                            Text {
-                                text: f.count;
-                                color: Theme.ink-3;
-                                font-size: Fonts.small;
-                                vertical-alignment: center;
-                            }
-                        }
+                    for f[i] in root.facets: FacetRow {
+                        label: f.label;
+                        count: f.count;
+                        share: f.share;
+                        on: root.active-facet == f.token;
+                        clicked => { root.facet-clicked(f.token); }
                     }
+
+                    // **Where, not what.** The scopes are this desktop's own
+                    // folders — the service answers `places` because it runs
+                    // where the files are, and a window guessing at
+                    // `~/Documents` would be wrong in every language but one.
+                    Rectangle { height: 12px; }
+
+                    Text {
+                        text: root.scope-heading;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        font-weight: 650;
+                        letter-spacing: 1.8px;
+                        height: 15px;
+                        x: 14px;
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    for sc[i] in root.scopes: FacetRow {
+                        label: sc.label;
+                        count: sc.count;
+                        share: sc.share;
+                        on: root.active-facet == sc.token;
+                        clicked => { root.facet-clicked(sc.token); }
+                    }
+
+                    // Three bands rather than a histogram: a size filter
+                    // answers "what is taking the room" and "what is empty",
+                    // and everything between is served better by sorting.
+                    Rectangle { height: 12px; }
+
+                    Text {
+                        text: root.size-heading;
+                        color: Theme.ink-3;
+                        font-size: 10px;
+                        font-weight: 650;
+                        letter-spacing: 1.8px;
+                        height: 15px;
+                        x: 14px;
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    for sz[i] in root.sizes: FacetRow {
+                        label: sz.label;
+                        count: sz.count;
+                        share: sz.share;
+                        on: root.active-facet == sz.token;
+                        clicked => { root.facet-clicked(sz.token); }
+                    }
+                    }
+
                 }
             }
 

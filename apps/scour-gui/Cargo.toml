@@ -32,6 +32,8 @@ scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
 # The palette, shared with the browser page so the two cannot drift.
 scour-ui       = { workspace = true }
+# For the `Places` reply's type alone; the answer comes over the socket.
+scour-places   = { workspace = true }
 anyhow       = { workspace = true }
 humansize    = { workspace = true }
 # Pinned exactly, and not out of caution. 1.17's winit backend divides by a

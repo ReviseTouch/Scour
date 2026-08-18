@@ -329,6 +329,25 @@ fn main() -> Result<()> {
     // The rail's first section is the kinds, and the page calls it `Kind`.
     // `Everything` was this window's own word for the same thing.
     window.set_scope_label(t(&cat, "Kind"));
+    window.set_scope_heading(t(&cat, "Scope"));
+    window.set_size_heading(t(&cat, "Size"));
+    // Three bands, the page's own: what is taking the room, and what is empty.
+    // Fixed rather than counted — a count here would cost a walk per band for
+    // a filter people apply, look at, and drop.
+    let sizes: Vec<Facet> = [
+        (">10 MB", "size:>10mb"),
+        (">1 MB", "size:>1mb"),
+        ("= 0", "size:=0"),
+    ]
+    .iter()
+    .map(|(label, token)| Facet {
+        label: (*label).into(),
+        token: (*token).into(),
+        count: slint::SharedString::new(),
+        share: 0.0,
+    })
+    .collect();
+    window.set_sizes(ModelRc::new(VecModel::from(sizes)));
     window.set_ribbon_label(t(&cat, "Time distribution"));
     window.set_ribbon_hint(t(&cat, "results by date changed"));
     window.set_axis_oldest(t(&cat, "2 years ago"));
@@ -605,6 +624,10 @@ fn main() -> Result<()> {
 
     // The first search is the empty one: everything, newest first, which is
     // what the window should already be showing when it appears.
+    // The scopes, once: they do not change while the window is open. On the
+    // slow lane, because the fast one coalesces and would drop this the
+    // instant a keystroke followed it.
+    link.send(Ask::Places);
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
     FIRST.with(|f| f.set(Some(launched)));
@@ -982,6 +1005,27 @@ fn apply(
                 );
             }
         }
+        // The scopes: this desktop's own folders, each a `under:` term. The
+        // labels are the desktop's own words — `user-dirs.dirs` is written in
+        // the language the desktop was set up in — so nothing here translates
+        // them and nothing here guesses at `~/Documents`.
+        Got::Places(reply) => {
+            let Response::Places(p) = *reply else {
+                trace(&format!("places: unexpected reply {reply:?}"));
+                return;
+            };
+            let scopes: Vec<Facet> = p
+                .places
+                .iter()
+                .map(|place| Facet {
+                    label: place.label.as_str().into(),
+                    token: format!("under:{}", place.path).into(),
+                    count: slint::SharedString::new(),
+                    share: 0.0,
+                })
+                .collect();
+            w.set_scopes(ModelRc::new(VecModel::from(scopes)));
+        }
         Got::Facets {
             query_revision,
             reply,
@@ -1010,6 +1054,10 @@ fn apply(
                 .map(|g| g.facets.as_slice())
                 .unwrap_or(&[]);
 
+            // The bar behind each row is that kind's share of the largest,
+            // which is the page's rule: it answers "is this most of what
+            // matched" without a second number to read.
+            let top = kinds.iter().map(|x| x.count).max().unwrap_or(1).max(1);
             let mut fresh: Vec<Facet> = Vec::new();
             for k in rows::offered_kinds() {
                 let token = k.token();
@@ -1020,6 +1068,7 @@ fn apply(
                     label: t(cat, k.msgid()),
                     token: token.into(),
                     count: compact(hit.count).into(),
+                    share: hit.count as f32 / top as f32,
                 });
             }
             facets.set_vec(fresh);

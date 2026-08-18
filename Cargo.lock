@@ -4396,6 +4396,7 @@ dependencies = [
  "scour-core",
  "scour-i18n",
  "scour-ipc",
+ "scour-places",
  "scour-proto",
  "scour-ui",
  "slint",

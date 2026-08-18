@@ -49,6 +49,14 @@ pub enum Ask {
         query: String,
     },
     /// How many match, exactly, once the typing has stopped.
+    /// This desktop's own folders, asked once at start-up.
+    ///
+    /// **Of the service, not of `scour-places` directly**, even though the
+    /// window runs on the same desktop and could read `user-dirs.dirs` itself.
+    /// That is the rule the whole architecture rests on: a frontend asks, and
+    /// the four of them get the same answer. The browser page cannot read that
+    /// file at all, which is what made the rule visible in the first place.
+    Places,
     Count {
         query_revision: u64,
         query: String,
@@ -70,6 +78,7 @@ pub enum Got {
         query_revision: u64,
         reply: Box<Response>,
     },
+    Places(Box<Response>),
     /// The service answered, and the answer was no.
     ///
     /// Distinct from [`Got::Down`] because the two want opposite handling: a
@@ -135,6 +144,9 @@ impl Freshness {
             Ask::Facets { query_revision, .. } | Ask::Count { query_revision, .. } => {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
+            // Asked once and never superseded: there is no newer answer to
+            // what this desktop's folders are called.
+            Ask::Places => true,
             Ask::Stop => true,
         }
     }
@@ -162,7 +174,13 @@ impl Link {
         // forwarded the new message yet.
         self.freshness.note(&ask);
         let lane = match &ask {
-            Ask::Facets { .. } | Ask::Count { .. } => &self.slow,
+            // **Not the fast lane, and this cost an hour.** That lane
+            // coalesces — it takes the newest queued request and drops the
+            // rest, which is exactly right for keystrokes and exactly wrong
+            // for anything asked once: `Places` went in and the search that
+            // followed it a microsecond later swallowed it, every time, with
+            // no error anywhere.
+            Ask::Facets { .. } | Ask::Count { .. } | Ask::Places => &self.slow,
             _ => &self.fast,
         };
         // A closed channel means the lane died, and the window finds out from
@@ -184,6 +202,8 @@ enum Lane {
     Search,
     Facets,
     Count,
+    /// This desktop's folders, asked once and never superseded.
+    Places,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -293,6 +313,7 @@ fn spawn_lane(
                     },
                     Lane::Facets,
                 ),
+                Ask::Places => (0, Request::Places {}, Lane::Places),
                 Ask::Count {
                     query_revision,
                     query,
@@ -322,6 +343,7 @@ fn spawn_lane(
                             generation: revision,
                             reply,
                         },
+                        Lane::Places => Got::Places(reply),
                     });
                 }
                 Err(e) => {
@@ -341,6 +363,7 @@ fn spawn_lane(
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
+                            Lane::Places => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {
                             revision,
