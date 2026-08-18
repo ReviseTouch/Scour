@@ -60,6 +60,14 @@ pub enum Ask {
     },
     /// What the walk skips, in three groups.
     Rules,
+    /// Wait until the index is no longer at `since`, then say so.
+    ///
+    /// This is what makes the list live: the service answers when something it
+    /// holds has changed, the window searches again, and asks to wait once
+    /// more. Without it a window shows what was true when it was opened.
+    Await {
+        since: u64,
+    },
     /// How big the index is, how many sources, how many watched.
     ///
     /// Asked once: these move slowly, and a meter that re-asked on every
@@ -105,6 +113,7 @@ pub enum Got {
     Places(Box<Response>),
     Rules(Box<Response>),
     Status(Box<Response>),
+    Awake(Box<Response>),
     Explain {
         query_revision: u64,
         reply: Box<Response>,
@@ -140,6 +149,11 @@ pub enum ReplyRevision {
 pub struct Link {
     fast: Sender<Ask>,
     slow: Sender<Ask>,
+    /// **A lane of its own, because it is the one request that is meant to
+    /// block.** `Await` sits on the socket until the index moves or the
+    /// timeout runs out; on either of the other two lanes it would hold every
+    /// keystroke behind it for up to a minute.
+    wait: Sender<Ask>,
     freshness: Freshness,
 }
 
@@ -178,7 +192,9 @@ impl Freshness {
             }
             // Asked once and never superseded: there is no newer answer to
             // what this desktop's folders are called.
-            Ask::Places | Ask::Rules | Ask::Status | Ask::Remember { .. } => true,
+            Ask::Places | Ask::Rules | Ask::Status | Ask::Await { .. } | Ask::Remember { .. } => {
+                true
+            }
             Ask::Stop => true,
         }
     }
@@ -191,11 +207,20 @@ impl Link {
         let (slow_tx, slow_rx) = channel::<Ask>();
         let freshness = Freshness::default();
 
+        let (wait_tx, wait_rx) = channel::<Ask>();
         spawn_lane(addr.clone(), fast_rx, sink.clone(), freshness.clone(), true);
-        spawn_lane(addr, slow_rx, sink, freshness.clone(), false);
+        spawn_lane(
+            addr.clone(),
+            slow_rx,
+            sink.clone(),
+            freshness.clone(),
+            false,
+        );
+        spawn_lane(addr, wait_rx, sink, freshness.clone(), false);
         Link {
             fast: fast_tx,
             slow: slow_tx,
+            wait: wait_tx,
             freshness,
         }
     }
@@ -206,6 +231,7 @@ impl Link {
         // forwarded the new message yet.
         self.freshness.note(&ask);
         let lane = match &ask {
+            Ask::Await { .. } => &self.wait,
             // **Not the fast lane, and this cost an hour.** That lane
             // coalesces — it takes the newest queued request and drops the
             // rest, which is exactly right for keystrokes and exactly wrong
@@ -235,6 +261,7 @@ impl Drop for Link {
     fn drop(&mut self) {
         let _ = self.fast.send(Ask::Stop);
         let _ = self.slow.send(Ask::Stop);
+        let _ = self.wait.send(Ask::Stop);
     }
 }
 
@@ -252,6 +279,8 @@ enum Lane {
     Rules,
     /// What the service is holding.
     Status,
+    /// The long poll that keeps the list live.
+    Await,
 }
 
 /// One lane: connect, serve, reconnect when the service comes back.
@@ -375,6 +404,17 @@ fn spawn_lane(
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
+                Ask::Await { since } => (
+                    0,
+                    Request::Await {
+                        since,
+                        // Long enough that an idle window is nearly silent —
+                        // one request a minute — and short enough that a
+                        // service restarted underneath is noticed.
+                        timeout_ms: 30_000,
+                    },
+                    Lane::Await,
+                ),
                 Ask::Places => (0, Request::Places {}, Lane::Places),
                 Ask::Count {
                     query_revision,
@@ -408,6 +448,7 @@ fn spawn_lane(
                         Lane::Places => Got::Places(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Status => Got::Status(reply),
+                        Lane::Await => Got::Awake(reply),
                         Lane::Explain => Got::Explain {
                             query_revision: revision,
                             reply,
@@ -431,9 +472,11 @@ fn spawn_lane(
                         let revision = match facets {
                             Lane::Search => ReplyRevision::Search(revision),
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
-                            Lane::Places | Lane::Rules | Lane::Status | Lane::Explain => {
-                                ReplyRevision::Query(revision)
-                            }
+                            Lane::Places
+                            | Lane::Rules
+                            | Lane::Status
+                            | Lane::Await
+                            | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {
                             revision,

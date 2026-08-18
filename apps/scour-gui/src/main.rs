@@ -179,6 +179,9 @@ struct State {
     /// keystroke every row is new by definition.
     shown_paths: std::collections::HashSet<String>,
     shown_revision: u64,
+    /// The index revision this window has already seen. The long poll waits
+    /// for anything past it.
+    revision: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -325,6 +328,7 @@ fn main() -> Result<()> {
         hits: Vec::new(),
         shown_paths: std::collections::HashSet::new(),
         shown_revision: 0,
+        revision: 0,
         down: false,
     }));
 
@@ -1385,8 +1389,45 @@ fn apply(
         // What the service is holding, said once. The page has this beside the
         // counts and it is the answer to "is this everything?" — an index of
         // 636 MB over three sources is a different claim from one over one.
+        // **The index moved.** This is what makes the list live: the service
+        // holds the request open until something it holds changes, and then
+        // the window searches again and waits again. A list that only shows
+        // what was true when the window opened is a list that quietly goes
+        // wrong while somebody watches it.
+        //
+        // The search goes out *before* the next wait, so a burst of changes
+        // does not queue a search per change: the next `Await` carries the
+        // revision the answer came back with, which has already moved past
+        // everything in the burst.
+        Got::Awake(reply) => {
+            let Response::Status(st) = *reply else { return };
+            {
+                let mut s = state.borrow_mut();
+                if st.revision == s.revision {
+                    // The timeout ran out rather than the index moving. Ask
+                    // again; nothing else to do.
+                    link.send(Ask::Await { since: s.revision });
+                    return;
+                }
+                s.revision = st.revision;
+            }
+            let limit = w.get_visible_rows().max(0) as u32;
+            send_search(state, link, state.borrow().page_offset, limit);
+            link.send(Ask::Await {
+                since: state.borrow().revision,
+            });
+        }
         Got::Status(reply) => {
             let Response::Status(st) = *reply else { return };
+            // The first revision, and the start of the long poll: everything
+            // after this is the service telling the window when to look again.
+            {
+                let mut s = state.borrow_mut();
+                if s.revision == 0 {
+                    s.revision = st.revision;
+                    link.send(Ask::Await { since: st.revision });
+                }
+            }
             w.set_holding(
                 format!(
                     "{} {}  ·  {} {}  ·  {} {}",
@@ -1946,6 +1987,7 @@ mod tests {
             hits: Vec::new(),
             shown_paths: std::collections::HashSet::new(),
             shown_revision: 0,
+            revision: 0,
             down: false,
         };
         assert_eq!(full_query(&s), "rapor");
@@ -1996,6 +2038,7 @@ mod tests {
             hits: Vec::new(),
             shown_paths: std::collections::HashSet::new(),
             shown_revision: 0,
+            revision: 0,
             down: false,
         };
 
@@ -2074,6 +2117,7 @@ mod tests {
             hits: Vec::new(),
             shown_paths: std::collections::HashSet::new(),
             shown_revision: 0,
+            revision: 0,
             down: false,
         };
 
