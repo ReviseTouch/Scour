@@ -293,7 +293,7 @@ pub struct Rows {
     /// What the service gives, which is not always what was asked for: it has
     /// a page ceiling of its own. See [`Rows::served`].
     served: Cell<usize>,
-    /// How many times the view has been told to re-measure.
+    /// How many times the view has been told the list changed length.
     ///
     /// Kept because it is the number the scrolling bug was made of: it should
     /// move when the result's length changes and at no other time.
@@ -367,9 +367,10 @@ impl Rows {
         self.evict();
         self.asked.set(None);
         self.want.set(None);
-        if total != self.total.get() {
+        let was = self.total.get();
+        if total != was {
             self.total.set(total);
-            self.reset();
+            self.resized(was, total);
             return arrived;
         }
         for row in touched {
@@ -388,11 +389,12 @@ impl Rows {
         // Never shorter than what is already loaded: a list that says it holds
         // fewer rows than it is holding cannot draw the ones it has.
         let total = total.max(self.held_to());
-        if total == self.total.get() {
+        let was = self.total.get();
+        if total == was {
             return;
         }
         self.total.set(total);
-        self.reset();
+        self.resized(was, total);
     }
 
     /// Everything here belongs to a different question. Start again.
@@ -553,6 +555,11 @@ impl Rows {
             .filter(|p| !p.is_empty())
     }
 
+    /// How long the result is.
+    pub fn length(&self) -> usize {
+        self.total.get()
+    }
+
     /// How many rows are held, over all the pages kept.
     pub fn held(&self) -> usize {
         self.pages.borrow().values().map(|h| h.rows.len()).sum()
@@ -589,9 +596,23 @@ impl Rows {
         }
     }
 
-    fn reset(&self) {
+    /// The list is a different length than the view thinks.
+    ///
+    /// **Added and removed, not reset.** A reset makes the view throw its
+    /// layout state away with its elements, and what it rebuilds it from is
+    /// the top — so a list that grew while somebody was reading row nine
+    /// thousand put them back at row one. Saying which rows appeared leaves
+    /// the viewport where it is.
+    fn resized(&self, was: usize, now: usize) {
+        if was == now {
+            return;
+        }
         self.resets.set(self.resets.get() + 1);
-        self.notify.reset();
+        if now > was {
+            self.notify.row_added(was, now - was);
+        } else {
+            self.notify.row_removed(now, was - now);
+        }
     }
 }
 
@@ -622,6 +643,112 @@ impl slint::Model for Rows {
             self.want.set(Some(row));
         }
         Some(Row::default())
+    }
+
+    fn model_tracker(&self) -> &dyn slint::ModelTracker {
+        &self.notify
+    }
+}
+
+/// The same results, a line at a time, for the tile views.
+///
+/// **A model over a model, which is the whole reason the tile view came back.**
+/// The first one laid itself out by looping over a count and indexing into the
+/// rows — and a `for` over an integer builds every element at once, so the list
+/// stopped being lazy and stopped fetching. Here a line *is* a model: the view
+/// asks for the lines it is about to draw, each of those asks [`Rows`] for its
+/// tiles, and a tile that has not arrived records the same miss a row does.
+pub struct Lines {
+    rows: std::rc::Rc<Rows>,
+    /// Tiles on a line, and zero while the table is showing — a model nobody
+    /// is looking at should not be building anything.
+    per: Cell<usize>,
+    /// The length this last told the view about. See [`Lines::sync`].
+    shown: Cell<usize>,
+    notify: slint::ModelNotify,
+}
+
+impl Lines {
+    pub fn new(rows: std::rc::Rc<Rows>) -> Lines {
+        Lines {
+            rows,
+            per: Cell::new(0),
+            shown: Cell::new(0),
+            notify: slint::ModelNotify::default(),
+        }
+    }
+
+    /// How many tiles fit on a line, or zero while the table is showing.
+    pub fn per_line(&self, per: usize) {
+        if per != self.per.get() {
+            self.per.set(per);
+            // Every line holds different results now, not merely a different
+            // number of them, so this one really is a reset.
+            self.shown.set(self.lines());
+            self.notify.reset();
+        }
+    }
+
+    /// Tell the view if the result has changed length under it.
+    ///
+    /// Checked rather than announced, because the length is the row count
+    /// divided by the tiles on a line and both of those move — the window is
+    /// resized, the count arrives, a page lands past the end. One comparison
+    /// on a timer is cheaper than four callers remembering to say so.
+    pub fn sync(&self) {
+        self.stretch();
+    }
+
+    /// The rows in `from..to` have changed, so the lines holding them have.
+    pub fn touched(&self, from: usize, to: usize) {
+        let per = self.per.get();
+        if per == 0 || to <= from {
+            return;
+        }
+        for line in (from / per)..=((to - 1) / per) {
+            self.notify.row_changed(line);
+        }
+    }
+
+    fn lines(&self) -> usize {
+        match self.per.get() {
+            0 => 0,
+            per => self.rows.length().div_ceil(per),
+        }
+    }
+
+    /// A different number of lines, said as an addition or a removal — see
+    /// [`Rows::resized`] for why not a reset.
+    fn stretch(&self) {
+        let was = self.shown.get();
+        let now = self.lines();
+        self.shown.set(now);
+        match now.cmp(&was) {
+            std::cmp::Ordering::Greater => self.notify.row_added(was, now - was),
+            std::cmp::Ordering::Less => self.notify.row_removed(now, was - now),
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+}
+
+impl slint::Model for Lines {
+    type Data = slint::ModelRc<Row>;
+
+    fn row_count(&self) -> usize {
+        self.shown.get()
+    }
+
+    fn row_data(&self, line: usize) -> Option<slint::ModelRc<Row>> {
+        let per = self.per.get();
+        if per == 0 {
+            return None;
+        }
+        let total = self.rows.length();
+        let from = line * per;
+        let tiles: Vec<Row> = (from..(from + per).min(total))
+            .map(|row| slint::Model::row_data(&*self.rows, row).unwrap_or_default())
+            .collect();
+        Some(slint::ModelRc::new(slint::VecModel::from(tiles)))
     }
 
     fn model_tracker(&self) -> &dyn slint::ModelTracker {

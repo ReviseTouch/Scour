@@ -435,9 +435,14 @@ export component MainWindow inherits Window {
     out property <length> pic: root.view-mode == "large" ? 110px : 52px;
     out property <int> per-line: max(1, Math.floor(
         (root.width - root.chrome - 40px) / root.tile-w));
-    out property <int> lines: root.grid
-        ? Math.ceil(root.rows.length / max(1, root.per-line))
-        : root.rows.length;
+    /// The tiles, a line at a time.
+    ///
+    /// **A model of models, and that is the whole of the lesson.** The first
+    /// tile view laid itself out by looping over a *count* and indexing into
+    /// the rows — which builds every element at once, so `ListView` stopped
+    /// being lazy and the list stopped fetching. A line is a model now, so
+    /// the view asks for the lines it is about to draw and nothing else.
+    in property <[[Row]]> lines;
 
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
@@ -497,7 +502,13 @@ export component MainWindow inherits Window {
     /// edge. Every row fetched costs a path rebuilt in the engine and six
     /// strings allocated here, so asking for two hundred to draw twenty was
     /// paying nine tenths of that for nothing.
-    out property <int> visible-rows: max(20, Math.floor(list.height / Theme.row-height) + 12);
+    // **Counted in rows in both views**, because what fetches them counts in
+    // rows: a line of tiles is `per-line` results, and the arithmetic that
+    // converts is here rather than in six places that would each get it right
+    // separately.
+    out property <int> visible-rows: root.grid
+        ? (Math.floor(tiles.height / root.tile-h) + 2) * root.per-line
+        : max(20, Math.floor(list.height / Theme.row-height) + 12);
     // --- the scrollbar ----------------------------------------------------
     //
     // **Drawn by this window, in a lane of its own.** The style's own bar is a
@@ -512,23 +523,25 @@ export component MainWindow inherits Window {
     // flickable's own: how far there is to scroll, how much of it is on
     // screen, and where in it the viewport currently sits.
     property <length> sb-inset: 4px;
-    property <length> sb-span: max(0px, list.viewport-height - list.visible-height);
-    property <length> sb-track: list.visible-height - 2 * root.sb-inset;
+    property <length> sb-reach: root.grid ? tiles.viewport-height : list.viewport-height;
+    property <length> sb-shown: root.grid ? tiles.visible-height : list.visible-height;
+    property <length> sb-span: max(0px, root.sb-reach - root.sb-shown);
+    property <length> sb-track: root.sb-shown - 2 * root.sb-inset;
     /// Never shorter than this, however long the result is. Two and a half
     /// million rows would otherwise put a thumb on screen too small to hit.
     property <length> sb-thumb: root.sb-span <= 0px ? 0px
-        : max(36px, root.sb-track * list.visible-height / list.viewport-height);
+        : max(36px, root.sb-track * root.sb-shown / root.sb-reach);
     property <length> sb-travel: max(0px, root.sb-track - root.sb-thumb);
+    property <length> sb-at: 0px - (root.grid ? tiles.viewport-y : list.viewport-y);
     property <length> sb-y: root.sb-inset + (root.sb-span <= 0px ? 0px
-        : root.sb-travel * min(1.0, max(0.0, (0px - list.viewport-y) / root.sb-span)));
+        : root.sb-travel * min(1.0, max(0.0, root.sb-at / root.sb-span)));
 
     /// Put the thumb's top at `y` and take the list with it.
     function scroll-thumb-to(y: length) {
         if (root.sb-travel <= 0px) {
             return;
         }
-        list.viewport-y = 0px - root.sb-span
-            * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel));
+        root.scroll-to(root.sb-span * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel)));
     }
 
     /// Put the list back to the top, or a measured distance down it.
@@ -540,6 +553,7 @@ export component MainWindow inherits Window {
     /// it is a thing the window does twice, and only ever on purpose.
     public function scroll-to(down: length) {
         list.viewport-y = 0px - down;
+        tiles.viewport-y = 0px - down;
     }
     /// The first row of the result the list is showing.
     ///
@@ -549,8 +563,9 @@ export component MainWindow inherits Window {
     /// loads its first page and then stops. This is the position itself, read
     /// off the viewport, so the fetch decision never depends on a miss being
     /// reported.
-    out property <int> first-row:
-        max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
+    out property <int> first-row: root.grid
+        ? max(0, Math.floor((0px - tiles.viewport-y) / root.tile-h)) * root.per-line
+        : max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
     /// The list moved by at least one row.
     ///
     /// **Why a change handler and not only the timer.** A timer that polls
@@ -1066,6 +1081,17 @@ export component MainWindow inherits Window {
                 list := ListView {
                     // The window draws its own, in the lane below. See `sb-`.
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    // Capped to nothing while the tiles are showing, rather
+                    // than put behind an `if`: an id inside a conditional is
+                    // out of scope for everything that has to read the list's
+                    // position, and both views have to be readable.
+                    visible: !root.grid;
+                    // **And `min-height` with it.** A `ScrollView` asks for
+                    // fifty pixels whatever it holds, so capping the height
+                    // alone left the view that is not showing occupying a
+                    // band of empty panel above the one that is.
+                    min-height: 0px;
+                    max-height: root.grid ? 0px : 100000px;
 
                     // **Over the model, not over a count.** A `for` on an
                     // integer builds every element at once, which took the
@@ -1297,6 +1323,98 @@ export component MainWindow inherits Window {
                                 font-size: 11.5px;
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                // ------------------------------------------------------
+                // The same results as tiles, when that is what was asked for.
+                //
+                // **A second list rather than a second shape for the first.**
+                // A `ListView` lays out one repeater; two `for`s inside one of
+                // them is not a thing it can be lazy about. So there are two,
+                // each over its own model, and the one that is not showing is
+                // capped to no height — which leaves both reachable by name,
+                // where an `if` would put the active one's id out of scope.
+                // ------------------------------------------------------
+                tiles := ListView {
+                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    visible: root.grid;
+                    min-height: 0px;
+                    max-height: root.grid ? 100000px : 0px;
+
+                    for line[i] in root.lines: Rectangle {
+                        height: root.tile-h;
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            alignment: start;
+
+                            for cell[c] in line: Rectangle {
+                                width: root.tile-w;
+                                height: root.tile-h;
+                                // **The tile is the selection, not the line.**
+                                // A line holds several results, so painting the
+                                // line for one of them lights up everything
+                                // beside it.
+                                background: (i * root.per-line + c) == root.selected
+                                    ? Theme.selection
+                                    : tiletouch.has-hover ? Theme.hover
+                                    : cell.fresh ? Theme.t0.with-alpha(0.22)
+                                    : transparent;
+                                animate background { duration: 1600ms; easing: ease-out; }
+
+                                tiletouch := TouchArea {
+                                    clicked => {
+                                        root.selected = i * root.per-line + c;
+                                        root.focus-query();
+                                    }
+                                    double-clicked => {
+                                        root.selected = i * root.per-line + c;
+                                        root.activated(root.selected);
+                                    }
+                                    pointer-event(e) => {
+                                        if (e.button == PointerEventButton.right
+                                            && e.kind == PointerEventKind.down) {
+                                            root.selected = i * root.per-line + c;
+                                            root.copy-path(root.selected);
+                                        }
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    padding: 6px;
+                                    spacing: 4px;
+                                    alignment: center;
+
+                                    // A wall of squares is read by hue before
+                                    // it is read by name, so the kind's colour
+                                    // is the tile and the name sits under it.
+                                    Rectangle {
+                                        height: root.pic;
+                                        Rectangle {
+                                            width: root.pic * 0.55;
+                                            height: root.pic * 0.55;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 5px;
+                                            background: cell.tint;
+                                            opacity: 0.5;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: cell.pre + cell.hit + cell.post;
+                                        color: cell.is-dir ? Theme.q-key : Theme.ink;
+                                        font-family: Fonts.mono;
+                                        font-size: root.view-mode == "large" ? 12px : 11px;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                        overflow: elide;
+                                        height: 30px;
+                                    }
+                                }
                             }
                         }
                     }

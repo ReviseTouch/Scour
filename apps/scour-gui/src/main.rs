@@ -297,8 +297,12 @@ fn main() -> Result<()> {
     }));
 
     let rows: Rc<rows::Rows> = Rc::new(rows::Rows::default());
+    // The same rows, a line at a time, for the tile views. It reads the model
+    // above rather than holding anything of its own.
+    let lines: Rc<rows::Lines> = Rc::new(rows::Lines::new(Rc::clone(&rows)));
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
     window.set_rows(ModelRc::from(rows.clone()));
+    window.set_lines(ModelRc::from(lines.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
     // The page's own placeholder, so an empty window says the same thing in
     // both: what you can type, by example.
@@ -395,6 +399,7 @@ fn main() -> Result<()> {
     let weak = window.as_weak();
     let ui_state = state.clone();
     let ui_rows = rows.clone();
+    let ui_lines = lines.clone();
     let ui_facets = facets.clone();
     let ui_cat = cat.clone();
 
@@ -411,7 +416,9 @@ fn main() -> Result<()> {
         INBOX.with(|slot| {
             *slot.borrow_mut() = Some(Rc::new(move |got: Got| {
                 let Some(w) = weak.upgrade() else { return };
-                apply(&w, &ui_state, &ui_rows, &ui_facets, &ui_cat, &link, got);
+                apply(
+                    &w, &ui_state, &ui_rows, &ui_lines, &ui_facets, &ui_cat, &link, got,
+                );
             }));
         });
     }
@@ -804,6 +811,7 @@ fn main() -> Result<()> {
     // enough that it is never what scrolling waits for.
     {
         let rows = Rc::clone(&rows);
+        let lines = Rc::clone(&lines);
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let weak = window.as_weak();
@@ -812,9 +820,18 @@ fn main() -> Result<()> {
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(100),
             move || {
-                if let Some(w) = weak.upgrade() {
-                    follow(&w, &state, &link, &rows);
-                }
+                let Some(w) = weak.upgrade() else { return };
+                // **The window is what knows how wide a line is.** The mode
+                // and the width both decide it, and both change without
+                // asking anybody — a resize, a press on a view button — so it
+                // is read here rather than announced from four places.
+                lines.per_line(if w.get_grid() {
+                    w.get_per_line().max(1) as usize
+                } else {
+                    0
+                });
+                lines.sync();
+                follow(&w, &state, &link, &rows);
             },
         );
     }
@@ -1178,6 +1195,7 @@ fn apply(
     w: &MainWindow,
     state: &Rc<RefCell<State>>,
     rows: &Rc<rows::Rows>,
+    lines: &Rc<rows::Lines>,
     facets: &Rc<VecModel<Facet>>,
     cat: &Rc<Catalogue>,
     link: &Rc<Link>,
@@ -1279,7 +1297,12 @@ fn apply(
                 s.page_offset = offset;
                 // The whole result's length, so the view sizes itself from it;
                 // the page and which one it is, so the model can find it again.
-                rows.put(offset as usize / rows::SPAN, page, total)
+                let arrived = rows.put(offset as usize / rows::SPAN, page, total);
+                // The tiles hold the same rows, so the lines carrying them
+                // have changed too — and the result may have got longer.
+                lines.touched(offset as usize, offset as usize + n);
+                lines.sync();
+                arrived
             };
 
             // **Put the flags out again.** Slint's `animate` interpolates when
