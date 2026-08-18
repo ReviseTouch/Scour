@@ -248,6 +248,26 @@ impl State {
     }
 }
 
+/// The engine's own numbers, in three pieces.
+///
+/// Three claims of different weight and they are drawn differently — see the
+/// meter row in `main.slint`. Passing them as one string is what made the
+/// window's line grey where the page's is coloured.
+fn meter(w: &MainWindow, count: String, ms: String, rows: String) {
+    w.set_meter_count(count.into());
+    w.set_meter_ms(ms.into());
+    w.set_meter_rows(rows.into());
+    w.set_meter(slint::SharedString::new());
+}
+
+/// A sentence instead of numbers: connecting, refused, not running.
+fn said(w: &MainWindow, sentence: slint::SharedString) {
+    w.set_meter_count(slint::SharedString::new());
+    w.set_meter_ms(slint::SharedString::new());
+    w.set_meter_rows(slint::SharedString::new());
+    w.set_meter(sentence);
+}
+
 /// What the selection bar says, in the catalogue's words and the reader's
 /// order.
 ///
@@ -400,7 +420,7 @@ fn main() -> Result<()> {
         &cat,
         "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
     ));
-    window.set_meter(t(&cat, "connecting…"));
+    said(&window, t(&cat, "connecting…"));
     // The rail's first section is the kinds, and the page calls it `Kind`.
     // `Everything` was this window's own word for the same thing.
     window.set_scope_label(t(&cat, "Kind"));
@@ -1423,7 +1443,10 @@ fn apply(
             s.down = true;
             rows.forget_asking();
             w.set_busy(false);
-            w.set_meter(format!("{} — {why}", cat.get("the service is not running")).into());
+            said(
+                w,
+                format!("{} — {why}", cat.get("the service is not running")).into(),
+            );
         }
         Got::Refused { revision, why } => {
             match revision {
@@ -1447,7 +1470,7 @@ fn apply(
             // is how someone concludes the tool is broken while the tool is
             // telling them something.
             w.set_busy(false);
-            w.set_meter(why.into());
+            said(w, why.into());
         }
         Got::Up => {
             state.borrow_mut().down = false;
@@ -1639,17 +1662,16 @@ fn apply(
             // total, then what it cost, then how much of the index was walked
             // to get it. Grouped with the locale's own separator, because a
             // seven-digit number without one is a number nobody reads.
-            w.set_meter(
+            meter(
+                w,
                 format!(
-                    "{} / {}{}  ·  {:.2} ms  ·  {} {}",
+                    "{} / {}{}",
                     grouped(n as u64),
                     grouped(total),
                     if capped { "+" } else { "" },
-                    r.took_us as f64 / 1000.0,
-                    grouped(r.rows_visited),
-                    cat.get("rows read"),
-                )
-                .into(),
+                ),
+                format!("{:.2} ms", r.took_us as f64 / 1000.0),
+                format!("{} {}", grouped(r.rows_visited), cat.get("rows read")),
             );
         }
         // The exact total, which the interactive search deliberately did not
@@ -1694,7 +1716,7 @@ fn apply(
                 // only the second number moves. Keeping the sentence's shape
                 // is the point: a meter that reflows when a background answer
                 // lands reads as the window having changed its mind.
-                w.set_meter(
+                w.set_meter_count(
                     format!(
                         "{} / {}{}",
                         grouped(rows.held() as u64),
@@ -2005,7 +2027,7 @@ fn apply(
             if !f.capped {
                 rows.set_total(f.total.min(i32::MAX as u64) as usize);
             }
-            w.set_meter(
+            w.set_meter_count(
                 format!(
                     "{} / {}{}",
                     grouped(rows.held() as u64),
@@ -2237,7 +2259,7 @@ fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
     let waiting = t(cat, "writing…");
     let wrote = t(cat, "written to");
     let failed = t(cat, "could not be written");
-    window.set_meter(waiting);
+    said(window, waiting);
 
     std::thread::spawn(move || {
         let outcome = (|| -> std::io::Result<u64> {
@@ -2276,13 +2298,13 @@ fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
             }
         })();
 
-        let said = match outcome {
+        let told = match outcome {
             Ok(bytes) => format!("{wrote} {} · {}", path.display(), compact(bytes)),
             Err(e) => format!("{failed}: {e}"),
         };
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_meter(said.into());
+                said(&w, told.into());
             }
         });
     });

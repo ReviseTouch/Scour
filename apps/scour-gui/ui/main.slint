@@ -442,6 +442,10 @@ export component MainWindow inherits Window {
     in property <string> axis-week;
     in property <string> axis-today;
     in property <string> meter;
+    // The same line in pieces, when it is the numeric one. See the meter row.
+    in property <string> meter-count;
+    in property <string> meter-ms;
+    in property <string> meter-rows;
     in property <string> holding;
     in property <string> hint;
     in property <bool> busy;
@@ -886,7 +890,55 @@ export component MainWindow inherits Window {
                 padding-right: 20px;
                 spacing: 10px;
 
-                Text {
+                // **The engine's work, in the page's colours.** Three
+                // claims of different weight: how many out of how many is the
+                // answer and is drawn as one, what it cost is the number this
+                // program is about and wears the "today" hue, and how much of
+                // the index was walked is context and stays quiet. One `Text`
+                // in one ink said all three in the same voice.
+                //
+                // `meter` is what is left for the sentences that are not
+                // numbers — connecting, refused, the service is not running —
+                // and one or the other is showing, never both.
+                if root.meter-count != "": HorizontalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: root.meter-count;
+                        color: Theme.ink;
+                        font-size: 12.5px;
+                        font-weight: 650;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-ms == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-ms;
+                        color: Theme.t0;
+                        font-size: 11.5px;
+                        font-weight: 650;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-rows == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-rows;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        letter-spacing: 0.2px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.meter-count == "": Text {
                     text: root.meter;
                     color: Theme.ink-3;
                     font-size: 11.5px;
