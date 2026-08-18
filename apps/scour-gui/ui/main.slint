@@ -1052,9 +1052,13 @@ export component MainWindow inherits Window {
                         // somebody asks which day.
                         if !root.grid: Rectangle {
                             x: 0;
-                            // Thicker while it is new, which is the page's own
-                            // mark for the same thing.
-                            width: here.fresh ? 5px : 3px;
+                            // **A fixed 3px.** It grew to 5 while a row was
+                            // new, which put two marks for one event on top of
+                            // each other and made a list of arrivals look like
+                            // a list with a ragged edge. The arrival is the
+                            // wash behind the row; the stripe is the age, and
+                            // the age did not change.
+                            width: 3px;
                             height: parent.height;
                             background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
                                  : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3

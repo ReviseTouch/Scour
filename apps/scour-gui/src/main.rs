@@ -1109,7 +1109,33 @@ fn apply(
                 w.set_busy(false);
                 return;
             }
+            let any_fresh = fresh.iter().any(|r| r.fresh);
             rows.set_vec(fresh);
+
+            // **Put the flags out again.** Slint's `animate` interpolates when
+            // a property *changes*; nothing here was changing it back, so a
+            // row marked as new stayed washed orange until the next answer
+            // replaced it — an arrival highlight that never finished arriving.
+            // The wash is 1.6s in the page, so the flags come off then and the
+            // animation carries the fade.
+            if any_fresh {
+                let model = Rc::clone(rows);
+                let t = Box::leak(Box::new(slint::Timer::default()));
+                t.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(1600),
+                    move || {
+                        for i in 0..slint::Model::row_count(&*model) {
+                            if let Some(mut row) = slint::Model::row_data(&*model, i) {
+                                if row.fresh {
+                                    row.fresh = false;
+                                    slint::Model::set_row_data(&*model, i, row);
+                                }
+                            }
+                        }
+                    },
+                );
+            }
             if let Some(t) = FIRST.with(std::cell::Cell::take) {
                 trace(&format!(
                     "first rows on screen {:.1?} after launch",
