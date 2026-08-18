@@ -50,6 +50,9 @@ export struct Row {
 // a bar and the rows it stands for are the same colour.
 export struct Bar {
     count: int,
+    // The bar's upper bound in days, and `0` for the oldest — which has no
+    // bound, so pressing it would select everything.
+    days: int,
     band: int,
     // What the bar covers, already worded: "up to 38 days", "older than 730".
     about: string,
@@ -444,6 +447,7 @@ export component MainWindow inherits Window {
     in property <[Facet]> rules;
     callback language-picked(string);
     callback rule-toggled(string);
+    callback bar-clicked(int);
     // direction: -1 for the preceding window, +1 for the following one.
     // first-visible anchors the same global row after the bounded model slides.
     callback need-page(int, int);
@@ -1232,6 +1236,21 @@ export component MainWindow inherits Window {
 
                     for b[i] in root.bars: Rectangle {
                         horizontal-stretch: 1;
+
+                        // A bar is a filter, the same as a rail row: clicking
+                        // it adds a `dm:` term to the *text*, so what is on
+                        // screen is always exactly what the query says. The
+                        // oldest bar has no upper bound — `dm:730d` would
+                        // select everything — so it does nothing and says so
+                        // by not lighting up.
+                        bartouch := TouchArea {
+                            mouse-cursor: b.days > 0 ? pointer : default;
+                            clicked => {
+                                if (b.days > 0) {
+                                    root.bar-clicked(b.days);
+                                }
+                            }
+                        }
                         // Bottom-aligned: the bars grow up from a shared floor,
                         // which is what makes twenty-four of them readable as
                         // one shape rather than twenty-four rectangles.
@@ -1249,6 +1268,9 @@ export component MainWindow inherits Window {
                                     : b.band == 0 ? Theme.t0 : b.band == 1 ? Theme.t1
                                     : b.band == 2 ? Theme.t2 : b.band == 3 ? Theme.t3
                                     : b.band == 4 ? Theme.t4 : Theme.t5;
+                                // Lighter under the pointer, so a bar that can
+                                // be pressed says so before it is.
+                                opacity: bartouch.has-hover && b.days > 0 ? 0.75 : 1.0;
                             }
                         }
                     }

@@ -547,6 +547,19 @@ fn main() -> Result<()> {
         });
     }
 
+    // A bar is a filter, and the same one the rail rows are: it adds a term
+    // to the text rather than to a hidden state, and pressing it again takes
+    // it off. `dm:38d` is "changed within the last 38 days", which is what the
+    // bar's upper bound means.
+    {
+        let weak = window.as_weak();
+        window.on_bar_clicked(move |days| {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_facet_clicked(format!("dm:{days}d").into());
+            }
+        });
+    }
+
     // Switching a rule off, or back on. The list of what is off is kept whole
     // rather than patched, because that is what `Change` carries — and the
     // service takes it from there: the engine re-tunes, the watchers re-tune,
@@ -763,6 +776,23 @@ fn main() -> Result<()> {
         window.set_view_mode(mode.as_str().into());
     }
 
+    // Press a rail row before the window opens — the filter slot, not the
+    // text, which are two different things and only one of them leaves the
+    // rail whole.
+    if let Ok(term) = std::env::var("SCOUR_GUI_FACET") {
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(120),
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_facet_clicked(term.as_str().into());
+                }
+            },
+        );
+    }
+
     if let Ok(which) = std::env::var("SCOUR_GUI_PANEL") {
         // Press it, do not set it: the handler is what asks the service for
         // what the panel shows, and setting the property first made the press
@@ -923,12 +953,31 @@ fn order_for(query: &str, sort: &str) -> String {
 /// choice: putting `kind:image` into the box would let the user delete half of
 /// it and leave the rail lit with nothing behind it. The rail is a lens over
 /// the query, not an edit of it.
+/// The query as the engine gets it: what was typed, plus whatever filter is
+/// pressed.
+///
+/// **The filter is a whole term now**, not a kind's token with `kind:` glued
+/// on in front. It started as one — the rail only offered kinds — and the day
+/// the ribbon and the scopes started using the same slot it began producing
+/// `kind:dm:38d`, which parses as a search for that text and answers nothing.
 fn full_query(s: &State) -> String {
     match &s.facet {
-        Some(k) if s.query.trim().is_empty() => format!("kind:{k}"),
-        Some(k) => format!("{} kind:{k}", s.query.trim()),
+        Some(term) if s.query.trim().is_empty() => term.clone(),
+        Some(term) => format!("{} {term}", s.query.trim()),
         None => s.query.trim().to_owned(),
     }
+}
+
+/// What the rail and the ribbon are counted over: the typed query, without the
+/// filter they themselves offered.
+///
+/// **A rail counted through its own filter is a rail with one row in it.**
+/// Press `kind:code` and every count but that one becomes zero, so the rail
+/// answers "there is nothing else" about a question nobody asked — and there
+/// is then no way back to the other kinds except by editing the text. The
+/// browser page has a test with this name; this is the same rule.
+fn facet_query(s: &State) -> String {
+    s.query.trim().to_owned()
 }
 
 fn apply(
@@ -1065,7 +1114,11 @@ fn apply(
                 let ask_background = s.start_background();
                 (
                     query_revision,
-                    full_query(&s),
+                    // **Without the filter the rail itself offered.** The
+                    // search below wants `full_query`; the rail and the ribbon
+                    // want what was typed, or pressing `kind:code` leaves the
+                    // rail with one row and no way back to the others.
+                    facet_query(&s),
                     ask_background,
                     s.exact_count.filter(|c| c.query_revision == query_revision),
                     page_move,
@@ -1326,7 +1379,11 @@ fn apply(
                 };
                 fresh.push(Facet {
                     label: t(cat, k.msgid()),
-                    token: token.into(),
+                    // The whole term, not the bare token: the filter slot
+                    // holds `kind:code`, `under:/home/x`, `dm:38d` — one kind
+                    // of thing, so the query is built by joining rather than
+                    // by remembering which prefix goes with which.
+                    token: format!("kind:{token}").into(),
                     count: compact(hit.count).into(),
                     share: hit.count as f32 / top as f32,
                 });
@@ -1359,6 +1416,7 @@ fn apply(
                     peak = peak.max(count);
                     Bar {
                         count,
+                        days: *days as i32,
                         band: scour_ui::band_of(*days as f64) as i32,
                         about: String::new().into(),
                     }
@@ -1368,6 +1426,9 @@ fn apply(
             // rather than to nothing: two years is where the scale ends, not
             // where the files do.
             if let Some(first) = bars.first_mut() {
+                // The oldest bar is not a filter: it has no upper bound, so
+                // `dm:730d` would select everything rather than narrow.
+                first.days = 0;
                 first.count += count_of("older");
                 peak = peak.max(first.count);
             }
