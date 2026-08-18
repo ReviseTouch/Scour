@@ -797,10 +797,16 @@ export component MainWindow inherits Window {
                         spacing: 2px;
                         Tool { glyph: "≣"; on: root.view-mode == "detail";
                                clicked => { root.view-clicked("detail"); } }
-                        Tool { glyph: "▦"; on: root.view-mode == "icons";
-                               clicked => { root.view-clicked("icons"); } }
-                        Tool { glyph: "▣"; on: root.view-mode == "large";
-                               clicked => { root.view-clicked("large"); } }
+                        // **Drawn, not wired.** The tile views were built and
+                        // taken back out: they need the list to be laid out in
+                        // lines rather than rows, and doing that by looping
+                        // over a count instead of the model cost the list its
+                        // virtualisation — two hundred rows became two hundred
+                        // live elements and scrolling stopped fetching. A
+                        // button that quietly breaks the list is worse than one
+                        // that does nothing, and this says which it is.
+                        Tool { glyph: "▦"; }
+                        Tool { glyph: "▣"; }
                     }
                 }
             }
@@ -1002,20 +1008,19 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    for line[i] in root.lines: Rectangle {
-                        // One row in the table, one line of tiles in the grid.
-                        height: root.grid ? root.tile-h : Theme.row-height;
-                        // `line` is the loop's own name for the index; the
-                        // row it stands for in the table view is this. Named
-                        // `here` because `row` is already the loop variable's
-                        // property in the grid branch below.
-                        property <Row> here: root.rows[i];
+                    // **Over the model, not over a count.** A `for` on an
+                    // integer builds every element at once, which took the
+                    // virtualisation out of the list the moment the grid was
+                    // added: two hundred rows became two hundred live
+                    // elements, and scrolling stopped fetching. The model is
+                    // what `ListView` knows how to be lazy about.
+                    for here[i] in root.rows: Rectangle {
+                        height: Theme.row-height;
                         // **Only in the table.** A line of tiles holds several
                         // results, so painting the line for one of them lit up
                         // everything beside it — the selection has to be the
                         // tile, and it is, below.
-                        background: root.grid ? transparent
-                            : i == root.selected ? Theme.selection
+                        background: i == root.selected ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
                             : here.fresh ? Theme.t0.with-alpha(0.22)
                             : transparent;
@@ -1041,60 +1046,7 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        if root.grid: HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            alignment: start;
-
-                            for slot[c] in root.per-line: Rectangle {
-                                width: root.tile-w;
-                                height: root.tile-h;
-                                background: (i * root.per-line + c) == root.selected
-                                    ? Theme.selection : transparent;
-
-                                if (i * root.per-line + c) < root.rows.length: VerticalLayout {
-                                    padding: 6px;
-                                    spacing: 4px;
-                                    alignment: center;
-
-                                    // A wall of squares is read by hue before
-                                    // it is read by name, so the kind's colour
-                                    // is the tile and the name sits under it.
-                                    Rectangle {
-                                        height: root.pic;
-                                        Rectangle {
-                                            width: root.pic * 0.55;
-                                            height: root.pic * 0.55;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            border-radius: 5px;
-                                            background: root.rows[i * root.per-line + c].tint;
-                                            opacity: 0.5;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: root.rows[i * root.per-line + c].pre
-                                            + root.rows[i * root.per-line + c].hit
-                                            + root.rows[i * root.per-line + c].post;
-                                        color: Theme.ink;
-                                        font-family: Fonts.mono;
-                                        font-size: root.view-mode == "large" ? 12px : 11px;
-                                        horizontal-alignment: center;
-                                        wrap: word-wrap;
-                                        overflow: elide;
-                                        height: 30px;
-                                    }
-                                }
-                            }
-                        }
-
-                        // The age, as a stripe down the left edge. The page
-                        // has this *and* the coloured stamp: the stripe is
-                        // read without looking — a run of orange is a run of
-                        // things touched today — and the date is read when
-                        // somebody asks which day.
-                        if !root.grid: Rectangle {
+                        Rectangle {
                             x: 0;
                             // **A fixed 3px.** It grew to 5 while a row was
                             // new, which put two marks for one event on top of
@@ -1109,7 +1061,7 @@ export component MainWindow inherits Window {
                                  : here.age == 4 ? Theme.t4 : Theme.t5;
                         }
 
-                        if !root.grid: HorizontalLayout {
+                        HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
                             spacing: 8px;
