@@ -924,3 +924,6 @@ msgstr "kaldır"
 
 msgid "window controls"
 msgstr "pencere denetimleri"
+
+msgid "rows read"
+msgstr "satır okundu"

@@ -91,11 +91,11 @@ component Head inherits Rectangle {
     in property <length> w;
     // `right` alone collides with the alignment enum of the same name.
     in property <bool> align-right;
-    in property <int> stretch: 0;
     callback clicked(string);
 
-    width: w;
-    horizontal-stretch: stretch;
+    // A width, not a stretch: the numbers are worked out once by the window
+    // so that every row and this header agree on them.
+    width: root.w;
 
     TouchArea {
         clicked => { root.clicked(root.sort); }
@@ -116,6 +116,9 @@ component Head inherits Rectangle {
     }
 }
 
+// A name with the match picked out. Monospace, like the page: a file name is
+// read character by character — an `l` against a `1`, a run of digits — and a
+// proportional face makes that work.
 component Marked inherits HorizontalLayout {
     in property <string> pre;
     in property <string> hit;
@@ -126,7 +129,8 @@ component Marked inherits HorizontalLayout {
     Text {
         text: root.pre;
         color: root.colour;
-        font-size: Fonts.size;
+        font-family: Fonts.mono;
+        font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -141,7 +145,8 @@ component Marked inherits HorizontalLayout {
         label := Text {
             text: root.hit;
             color: Theme.mark-ink;
-            font-size: Fonts.size;
+            font-family: Fonts.mono;
+        font-size: 13px;
             vertical-alignment: center;
         }
     }
@@ -149,7 +154,8 @@ component Marked inherits HorizontalLayout {
     Text {
         text: root.post;
         color: root.colour;
-        font-size: Fonts.size;
+        font-family: Fonts.mono;
+        font-size: 13px;
         overflow: elide;
         vertical-alignment: center;
     }
@@ -190,6 +196,29 @@ export component MainWindow inherits Window {
     in property <length> w-size;
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
+
+    // **The widths are computed once, here, and every row is handed the same
+    // numbers.** A `HorizontalLayout` per row works out its own stretch from
+    // its own content, so a wide name in row three pushed that row's kind
+    // column right while row four's stayed put — a table whose columns do not
+    // line up is not a table. The browser page gets this from `<table>`; here
+    // it has to be said.
+    //
+    // Three columns keep the width `scour-ui` gives them. What is left over
+    // goes to the two that hold text, and the location gets more of it because
+    // a path is longer than a name and elides worse.
+    // **Worked out from the window's own width, not the list's.** Asking the
+    // list how wide it is makes the rows' widths depend on a layout that
+    // depends on the rows' widths, and Slint refuses that at build time. The
+    // pieces between the window edge and the list are all fixed and known: the
+    // card's 20px margins, its 1px border, the 186px rail with its divider,
+    // and the list's own 12px padding on each side.
+    property <length> chrome: 40px + 2px + 186px + 1px + 24px;
+    property <length> gaps: 8px * 4;
+    property <length> flex: max(240px,
+        root.width - root.chrome - root.gaps - root.w-kind - root.w-mtime - root.w-size);
+    out property <length> cw-name: root.flex * 0.44;
+    out property <length> cw-path: root.flex * 0.56;
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
@@ -302,6 +331,25 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
+                // The box and its placeholder, stacked. Slint's `TextInput`
+                // has no placeholder of its own, so the hint is drawn under it
+                // and hidden the moment anything is typed — which is how the
+                // page does it too, and why the two look the same when empty.
+                Rectangle {
+                    horizontal-stretch: 1;
+
+                    if root.query == "": Text {
+                        x: 0;
+                        width: parent.width;
+                        text: root.hint;
+                        color: Theme.ink-3;
+                        font-family: Fonts.mono;
+                        font-size: 20px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
                 input := TextInput {
                     text <=> root.query;
                     color: Theme.ink;
@@ -362,11 +410,6 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Text {
-                    text: root.hint;
-                    color: Theme.ink-3;
-                    font-size: Fonts.small;
-                    vertical-alignment: center;
                 }
             }
         }
@@ -552,11 +595,11 @@ export component MainWindow inherits Window {
                         padding-right: 12px;
                         spacing: 8px;
 
-                        Head { text: root.head-name; sort: "name"; w: root.w-name; stretch: 1;
+                        Head { text: root.head-name; sort: "name"; w: root.cw-name;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
                         Head { text: root.head-kind; sort: "kind"; w: root.w-kind;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { text: root.head-path; sort: "path"; w: root.w-path; stretch: 2;
+                        Head { text: root.head-path; sort: "path"; w: root.cw-path;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
                         Head { text: root.head-mtime; sort: "modified"; w: root.w-mtime;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
@@ -616,8 +659,7 @@ export component MainWindow inherits Window {
                                 hit: row.hit;
                                 post: row.post;
                                 colour: row.is-dir ? Theme.q-key : Theme.ink;
-                                width: root.w-name;
-                                horizontal-stretch: 1;
+                                width: root.cw-name;
                             }
 
                             Text {
@@ -630,13 +672,13 @@ export component MainWindow inherits Window {
                             }
 
                             Text {
-                                width: root.w-path;
+                                width: root.cw-path;
                                 text: row.folder;
                                 color: Theme.ink-3;
-                                font-size: Fonts.small;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
                                 vertical-alignment: center;
                                 overflow: elide;
-                                horizontal-stretch: 2;
                             }
 
                             // **The age is the date's colour, not a dot beside
@@ -647,6 +689,7 @@ export component MainWindow inherits Window {
                             Text {
                                 width: root.w-mtime;
                                 text: row.stamp;
+                                font-family: Fonts.mono;
                                 color: row.age == 0 ? Theme.t0 : row.age == 1 ? Theme.t1
                                      : row.age == 2 ? Theme.t2 : row.age == 3 ? Theme.t3
                                      : row.age == 4 ? Theme.t4 : Theme.t5;
@@ -659,7 +702,8 @@ export component MainWindow inherits Window {
                                 width: root.w-size;
                                 text: row.size;
                                 color: Theme.ink-2;
-                                font-size: Fonts.small;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
                             }

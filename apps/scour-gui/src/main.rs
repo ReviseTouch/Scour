@@ -319,9 +319,16 @@ fn main() -> Result<()> {
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
     window.set_rows(ModelRc::from(rows.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
-    window.set_hint(t(&cat, "type to search"));
+    // The page's own placeholder, so an empty window says the same thing in
+    // both: what you can type, by example.
+    window.set_hint(t(
+        &cat,
+        "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
+    ));
     window.set_meter(t(&cat, "connecting…"));
-    window.set_scope_label(t(&cat, "Everything"));
+    // The rail's first section is the kinds, and the page calls it `Kind`.
+    // `Everything` was this window's own word for the same thing.
+    window.set_scope_label(t(&cat, "Kind"));
 
     let addr = config.socket();
 
@@ -594,6 +601,24 @@ fn main() -> Result<()> {
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(&state, &link, window.get_visible_rows().max(0) as u32);
     FIRST.with(|f| f.set(Some(launched)));
+    // Photograph the window and leave, when asked. See [`snapshot`].
+    if let Ok(path) = std::env::var("SCOUR_GUI_SNAP") {
+        let weak = window.as_weak();
+        // Held rather than dropped: a `Timer` that goes out of scope never
+        // fires. Late enough that the first page of rows has arrived and been
+        // laid out — anything earlier photographs an empty list.
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(2500),
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    snapshot(&w, &path);
+                }
+                slint::quit_event_loop().ok();
+            },
+        );
+    }
     window.run().context("the event loop failed")?;
     Ok(())
 }
@@ -754,7 +779,10 @@ fn apply(
         }
         Got::Up => {
             state.borrow_mut().down = false;
-            w.set_hint(t(cat, "type to search"));
+            w.set_hint(t(
+                cat,
+                "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
+            ));
         }
         Got::Search { generation, reply } => {
             trace(&format!(
@@ -883,13 +911,19 @@ fn apply(
             let (total, capped) = exact_count
                 .map(|c| (c.total, c.capped))
                 .unwrap_or((r.total, r.capped));
+            // **The page's sentence, in the page's order.** Shown out of
+            // total, then what it cost, then how much of the index was walked
+            // to get it. Grouped with the locale's own separator, because a
+            // seven-digit number without one is a number nobody reads.
             w.set_meter(
                 format!(
-                    "{}{} {} · {:.1} ms",
-                    total,
+                    "{} / {}{}  ·  {:.2} ms  ·  {} {}",
+                    grouped(n as u64),
+                    grouped(total),
                     if capped { "+" } else { "" },
-                    cat.get("matches"),
-                    r.took_us as f64 / 1000.0
+                    r.took_us as f64 / 1000.0,
+                    grouped(r.rows_visited),
+                    cat.get("rows read"),
                 )
                 .into(),
             );
@@ -926,11 +960,16 @@ fn apply(
                     total,
                     capped,
                 });
+                // The exact total arrives after the list is on screen, so
+                // only the second number moves. Keeping the sentence's shape
+                // is the point: a meter that reflows when a background answer
+                // lands reads as the window having changed its mind.
                 w.set_meter(
                     format!(
-                        "{total}{} {}",
+                        "{} / {}{}",
+                        grouped(slint::Model::row_count(&w.get_rows()) as u64),
+                        grouped(total),
                         if capped { "+" } else { "" },
-                        cat.get("matches")
                     )
                     .into(),
                 );
@@ -974,10 +1013,10 @@ fn apply(
             };
             w.set_meter(
                 format!(
-                    "{}{} {}",
-                    f.total,
+                    "{} / {}{}",
+                    grouped(slint::Model::row_count(&w.get_rows()) as u64),
+                    grouped(f.total),
                     if f.capped { "+" } else { "" },
-                    cat.get("matches")
                 )
                 .into(),
             );
@@ -1177,6 +1216,49 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
         q_not: c(&p.q_not),
         q_bad: c(&p.q_bad),
     }
+}
+
+/// Save what the window actually looks like, then leave.
+///
+/// **Because the person writing this cannot see it.** The window is drawn by a
+/// compositor that will not hand a screenshot to a process asking from a
+/// terminal, so every claim about how close this is to the browser page was
+/// somebody else's eyes and a round trip. Slint can render its own window to a
+/// buffer; that is enough to look.
+///
+/// `SCOUR_GUI_SNAP=/path/to.ppm` — plain PPM, so nothing has to be linked to
+/// write it. `convert` or `magick` turns it into a PNG.
+fn snapshot(window: &MainWindow, path: &str) {
+    let Ok(buf) = window.window().take_snapshot() else {
+        eprintln!("gui: the window could not be captured");
+        return;
+    };
+    let (w, h) = (buf.width(), buf.height());
+    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+    for px in buf.as_slice() {
+        out.extend_from_slice(&[px.r, px.g, px.b]);
+    }
+    match std::fs::write(path, out) {
+        Ok(()) => eprintln!("gui: {w}x{h} written to {path}"),
+        Err(e) => eprintln!("gui: {path} could not be written: {e}"),
+    }
+}
+
+/// A number a person can read: `5356281` becomes `5.356.281`.
+///
+/// The separator is the catalogue's, not the platform's — the window may be
+/// asked for English on a Turkish desktop, and the number belongs to the
+/// language of the text around it.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn language(cfg: &scour_config::Config) -> String {
