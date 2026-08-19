@@ -1,0 +1,33 @@
+[package]
+name        = "scour-tui"
+description = "Scour in a terminal."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[[bin]]
+name = "scour-tui"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+# A frontend like the window and the bridge: it holds no index, walks no
+# filesystem, and does not link the engine. Everything it knows arrived over a
+# socket.
+[dependencies]
+scour-core     = { workspace = true }
+scour-proto    = { workspace = true }
+scour-ipc      = { workspace = true }
+scour-config   = { workspace = true }
+scour-i18n     = { workspace = true }
+scour-settings = { workspace = true }
+scour-ui       = { workspace = true }
+scour-page     = { workspace = true }
+
+ratatui = { workspace = true }
+anyhow  = { workspace = true }
+clap    = { workspace = true }

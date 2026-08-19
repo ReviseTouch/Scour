@@ -5377,3 +5377,29 @@ The engine's share of those round trips is 0.3–1.2 ms; the rest is the window
 returning to its event loop, which on a 60 Hz screen is one frame of
 granularity. After the hand stops, the page it stopped on arrives within about
 a frame — which is what smooth means.
+
+## 2026-08-19 — the terminal's first frame
+
+`scour-tui`, Phase 1: launch to a drawn frame, including the search round trip
+to a live service over a 2.7 M row index.
+
+```
+for i in 1 2 3 4 5; do
+  s=$(date +%s%N); ./target/release/scour-tui --query "kind:code" --once 120x30 >/dev/null
+  e=$(date +%s%N); echo "$(( (e-s)/1000000 )) ms"
+done
+```
+
+| what | measured | the plan asked for |
+|---|---:|---:|
+| launch → first frame | **5–9 ms** | < 50 ms |
+| idle CPU, 10 s untouched | **0 ticks** (nothing at all) | ~0 |
+| RSS | **8,7 MB** | < 30 MB |
+
+The window, for the same index: 55 ms to a built window, 80 ms to first rows,
+60 MB. The terminal is an order of magnitude cheaper to start, which is what
+`--once` was written to be able to say.
+
+Idle is zero because nothing is drawn on a timer: both threads block, and a
+frame is drawn only when the channel produces something. Measured from
+`/proc/<pid>/stat` fields 14 and 15 (user + system ticks) over ten seconds.

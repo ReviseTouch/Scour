@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Open Scour as whichever face was last switched to.
+#
+#   scripts/scour-open            the face somebody last switched to
+#   scripts/scour-open tui        that one, whatever the preference says
+#
+# **The terminal list lives here and nowhere else.** The window and the page
+# both offer "open the terminal", and neither can run `scour-tui` directly —
+# it needs a tty. So they run this, and there is one list of terminals to keep
+# right rather than three.
+#
+# **The launcher does not name a program.** A desktop entry and a hotkey ask
+# for *Scour*; which face that means is a preference somebody set from inside
+# one of them, and it is kept beside the index with everything else they have
+# chosen — the column widths, the language, the rules. See
+# `Settings::face` in `crates/scour-settings`.
+#
+# Empty, missing or unrecognised means the window. That is the default because
+# it is the one that needs nothing: no port, no terminal.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+state="${XDG_DATA_HOME:-$HOME/.local/share}/scour/state/settings.json"
+
+# Said outright, or read from what somebody last switched to.
+face="${1:-}"
+if [ -z "$face" ] && [ -r "$state" ]; then
+    # One value out of a small JSON file, without a JSON parser in the
+    # dependency list of a launcher: the key is written by `serde` and is
+    # always `"face":"…"`.
+    face="$(sed -n 's/.*"face"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$state" | head -1)"
+fi
+
+# Beside this script first, then the installed copy — the same order the
+# faces themselves use when they start each other, and for the same reason: a
+# build being tried out should not quietly start the installed one.
+run() {
+    local name="$1"
+    if [ -x "$here/../target/release/$name" ]; then
+        exec "$here/../target/release/$name"
+    fi
+    exec "$name"
+}
+
+case "$face" in
+    browser)
+        exec "$here/scour-app"
+        ;;
+    tui)
+        # The terminal is chosen the way the panels choose it: what the person
+        # said, then the freedesktop spec's utility, then the Debian
+        # alternative, then the ones that are actually installed. Each takes
+        # its command after a different flag, which is why this is a list
+        # rather than a loop over names.
+        cmd="$here/../target/release/scour-tui"
+        [ -x "$cmd" ] || cmd="scour-tui"
+        if [ -n "${TERMINAL:-}" ]; then exec "$TERMINAL" -e "$cmd"; fi
+        if command -v xdg-terminal-exec >/dev/null; then exec xdg-terminal-exec "$cmd"; fi
+        if command -v x-terminal-emulator >/dev/null; then exec x-terminal-emulator -e "$cmd"; fi
+        if command -v ptyxis >/dev/null; then exec ptyxis -x "$cmd"; fi
+        if command -v kgx >/dev/null; then exec kgx -- "$cmd"; fi
+        if command -v gnome-terminal >/dev/null; then exec gnome-terminal -- "$cmd"; fi
+        if command -v konsole >/dev/null; then exec konsole -e "$cmd"; fi
+        if command -v foot >/dev/null; then exec foot "$cmd"; fi
+        if command -v kitty >/dev/null; then exec kitty "$cmd"; fi
+        if command -v wezterm >/dev/null; then exec wezterm start -- "$cmd"; fi
+        if command -v alacritty >/dev/null; then exec alacritty -e "$cmd"; fi
+        if command -v xterm >/dev/null; then exec xterm -e "$cmd"; fi
+        echo "scour-open: no terminal found. Set TERMINAL to the one you use." >&2
+        exit 1
+        ;;
+    *)
+        run scour-gui
+        ;;
+esac
