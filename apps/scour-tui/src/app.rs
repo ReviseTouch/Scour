@@ -395,6 +395,30 @@ impl App {
         out
     }
 
+    /// Which of the rail's offers is drawn on this line of it, if any.
+    ///
+    /// The rail has headings and blank lines between its sections, and they
+    /// are not stops — a press on `KIND` should do nothing rather than press
+    /// whatever is nearest. The shape has to agree with `draw::side`, and this
+    /// is the one place that knows it.
+    pub fn rail_hit(&self, line: usize) -> Option<usize> {
+        let kinds = self.kinds.len().min(9);
+        let places = self.places.len().min(6);
+        let sizes = scour_ui::query::SIZES.len();
+        // heading, kinds…, blank, heading, places…, blank, heading, sizes…
+        let mut at = 0usize;
+        let mut row = 0usize;
+        for section in [kinds, places, sizes] {
+            row += 1; // the heading
+            if line >= row && line < row + section {
+                return Some(at + (line - row));
+            }
+            at += section;
+            row += section + 1; // the rows, then the blank line after them
+        }
+        None
+    }
+
     /// Move the cursor in the rail.
     pub fn rail_walk(&mut self, by: isize) {
         let lines = self.rail_lines().len();
@@ -600,14 +624,19 @@ impl App {
         self.dirty = true;
     }
 
-    /// Move the cursor inside whatever panel is open.
-    pub fn panel_walk(&mut self, by: isize) {
-        let lines = match self.panel {
+    /// How many lines the open panel offers.
+    pub fn panel_lines(&self) -> usize {
+        match self.panel {
             Panel::Rules => self.rules.len(),
             Panel::Language => 2,
             Panel::Faces => 3,
             Panel::None => 0,
-        };
+        }
+    }
+
+    /// Move the cursor inside whatever panel is open.
+    pub fn panel_walk(&mut self, by: isize) {
+        let lines = self.panel_lines();
         if lines == 0 {
             return;
         }

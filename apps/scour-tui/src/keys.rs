@@ -230,18 +230,107 @@ fn panel_press(app: &mut App) -> Want {
     }
 }
 
-/// What the mouse does: the wheel scrolls, a press puts the cursor on a row.
-pub fn mouse(app: &mut App, m: MouseEvent) -> Want {
+/// What the mouse does: the wheel moves whatever is under it, a press acts on
+/// wherever it landed.
+///
+/// **Where it landed decides what it means**, which is the rule `Tab` follows
+/// on the keyboard: in the rail a press presses a filter, in the list it puts
+/// the cursor on a row, on the strip it narrows to that band of time.
+///
+/// The geometry has to agree with `draw`, and there is no way round that — a
+/// terminal reports a row and a column and says nothing about what is drawn
+/// there. It is kept to the three numbers here rather than spread about.
+pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
+    /// Lines above the list: the query, the meter, the heading.
+    const ABOVE: u16 = 3;
+    /// Where the rail starts, which is one line higher: it takes the heading
+    /// line as well, and its own `KIND` is drawn there.
+    const RAIL_TOP: u16 = 2;
+    /// How wide the rail is, when it is drawn at all.
+    const RAIL: u16 = 22;
+
+    let (width, height) = size;
+    // A panel takes every press while it is open: inside it, the line under
+    // the pointer; outside, the panel closes. Clicking through an open panel
+    // into the list is how somebody opens a file they cannot see.
+    if app.panel != Panel::None {
+        if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return Want::Nothing;
+        }
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        let lines = app.panel_lines();
+        let box_area = crate::draw::panel_rect(area, lines);
+        let inside = m.column >= box_area.x
+            && m.column < box_area.x + box_area.width
+            && m.row >= box_area.y
+            && m.row < box_area.y + box_area.height;
+        if !inside {
+            app.show(app.panel);
+            return Want::Nothing;
+        }
+        // One line of border, one of title.
+        let room = box_area.height.saturating_sub(3) as usize;
+        let from = app.panel_at.saturating_sub(room.saturating_sub(1));
+        let line = m.row.saturating_sub(box_area.y + 2) as usize;
+        if m.row < box_area.y + 2 || from + line >= lines {
+            return Want::Nothing;
+        }
+        app.panel_at = from + line;
+        app.dirty = true;
+        return panel_press(app);
+    }
+    let railed = width >= 80 && app.rail;
+    let in_rail = railed && m.column < RAIL;
+    let strip_high: u16 = if height >= 20 && !app.strip.is_empty() {
+        3
+    } else {
+        0
+    };
+    let list_to = height.saturating_sub(1 + strip_high);
+    let on_strip = strip_high > 0 && m.row >= list_to && m.row < list_to + 2;
+
     match m.kind {
+        MouseEventKind::ScrollDown if in_rail => {
+            app.rail_walk(1);
+            Want::Nothing
+        }
+        MouseEventKind::ScrollUp if in_rail => {
+            app.rail_walk(-1);
+            Want::Nothing
+        }
         MouseEventKind::ScrollDown => app.walk(3),
         MouseEventKind::ScrollUp => app.walk(-3),
         MouseEventKind::Down(MouseButton::Left) => {
-            // Three lines of chrome sit above the list: query, meter, heading.
-            let row = m.row as usize;
-            if row < 3 {
+            if on_strip {
+                // Which band was hit, in the shares `draw` gives them.
+                let bands = app.strip.len().max(1);
+                let room = width.saturating_sub(2).max(1) as usize;
+                let at = (m.column.saturating_sub(1) as usize * bands / room).min(bands - 1);
+                let days = app.strip[at].0;
+                return app.press_filter(&scour_ui::query::of_age(days));
+            }
+            if in_rail {
+                if m.row < RAIL_TOP || m.row >= list_to {
+                    return Want::Nothing;
+                }
+                // The rail has headings and blank lines, and they are not
+                // stops: a press on `KIND` does nothing rather than pressing
+                // whatever is nearest.
+                app.in_rail = true;
+                app.dirty = true;
+                return match app.rail_hit((m.row - RAIL_TOP) as usize) {
+                    Some(at) => {
+                        app.rail_at = at;
+                        app.rail_press()
+                    }
+                    None => Want::Nothing,
+                };
+            }
+            if m.row < ABOVE || m.row >= list_to {
                 return Want::Nothing;
             }
-            app.go(app.top + (row - 3))
+            app.in_rail = false;
+            app.go(app.top + (m.row - ABOVE) as usize)
         }
         _ => Want::Nothing,
     }

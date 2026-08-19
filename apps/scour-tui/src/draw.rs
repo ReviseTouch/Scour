@@ -88,6 +88,22 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     }
 }
 
+/// Where a panel of this many lines is drawn.
+///
+/// **One function, two callers**: this and the mouse. A panel drawn in one
+/// place and hit-tested in another is the fault the window spent two days on,
+/// and the only defence a terminal has is that the arithmetic is written once.
+pub fn panel_rect(area: Rect, lines: usize) -> Rect {
+    let wide = 66u16.min(area.width.saturating_sub(4));
+    let tall = (lines as u16 + 3).min(area.height.saturating_sub(2));
+    Rect {
+        x: area.x + area.width.saturating_sub(wide) / 2,
+        y: area.y + 2,
+        width: wide,
+        height: tall,
+    }
+}
+
 /// Whatever panel is open, over the middle of the screen.
 ///
 /// One drawing for the three of them, because they are the same shape: a
@@ -126,18 +142,11 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Panel::None => return,
     };
 
-    let wide = 66u16.min(area.width.saturating_sub(4));
-    let tall = (lines.len() as u16 + 3).min(area.height.saturating_sub(2));
-    let box_area = Rect {
-        x: area.x + area.width.saturating_sub(wide) / 2,
-        y: area.y + 2,
-        width: wide,
-        height: tall,
-    };
+    let box_area = panel_rect(area, lines.len());
     f.render_widget(Clear, box_area);
     // Only what fits, scrolled to keep the cursor on it: the skip list is
     // forty rules long and the panel is not.
-    let room = tall.saturating_sub(3) as usize;
+    let room = box_area.height.saturating_sub(3) as usize;
     let from = app.panel_at.saturating_sub(room.saturating_sub(1));
     let mut drawn = vec![Line::from(Span::styled(
         format!(" {title}"),
@@ -179,7 +188,7 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
         )
     };
-    let line = Line::from(vec![
+    let mut parts = vec![
         Span::styled(
             " SCOUR ",
             Style::new()
@@ -187,7 +196,19 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .add_modifier(Modifier::BOLD | Modifier::DIM),
         ),
         typed,
-    ]);
+    ];
+    // **What is pressed is shown beside what was typed.** A filter with a rail
+    // row of its own is visible there, but a band of the time strip has none —
+    // so a result narrowed by pressing the strip looked, until this, exactly
+    // like a result that was simply short.
+    if let Some(term) = &app.filter {
+        parts.push(Span::styled("  ·  ", Style::new().fg(theme.ink_3())));
+        parts.push(Span::styled(
+            term.clone(),
+            Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
+        ));
+    }
+    let line = Line::from(parts);
     f.render_widget(Paragraph::new(line), area);
     // The caret is the terminal's own, which means it blinks the way every
     // other caret on that screen blinks — and costs nothing to keep alive.

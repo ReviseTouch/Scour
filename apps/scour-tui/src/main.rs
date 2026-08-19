@@ -63,6 +63,11 @@ struct Args {
     /// the first frame is taken.
     #[arg(long, value_name = "KEYS")]
     press: Option<String>,
+    /// Click here before drawing: `--click "5:6,110:21"` — column:row, from
+    /// the top left. The only way to check that a press lands where it looks
+    /// like it lands.
+    #[arg(long, value_name = "COL:ROW")]
+    click: Option<String>,
 }
 
 /// What the loop waits on: one of these, from either thread.
@@ -108,13 +113,34 @@ fn main() -> Result<()> {
             &theme,
             mark,
             args.press.as_deref().unwrap_or_default(),
+            args.click.as_deref().unwrap_or_default(),
         );
         link.send(Ask::Done);
         return outcome;
     }
 
     let mut terminal = ratatui::init();
+    // **`init` does not turn the mouse on.** Without this the terminal never
+    // sends a press and the handling for one may as well not be written —
+    // which is exactly how it was: a wheel that did nothing and a click that
+    // did nothing, with the code for both sitting there.
+    //
+    // What it costs is the terminal's own drag-to-select, which is why it is
+    // switched off again on the way out rather than left on for whatever runs
+    // next in that window. `Shift` still selects in every terminal worth
+    // using.
+    let mousing = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::event::EnableMouseCapture
+    )
+    .is_ok();
     let outcome = run(&mut terminal, &mut state, &link, &waiting, &theme, mark);
+    if mousing {
+        let _ = ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::event::DisableMouseCapture
+        );
+    }
     ratatui::restore();
     link.send(Ask::Done);
     outcome
@@ -130,6 +156,7 @@ fn snap(
     theme: &Theme,
     mark: (char, char),
     press: &str,
+    click: &str,
 ) -> Result<()> {
     let (w, h) = size.split_once('x').unwrap_or(("120", "30"));
     let (w, h) = (w.parse().unwrap_or(120), h.parse().unwrap_or(30));
@@ -177,6 +204,24 @@ fn snap(
         // **Everything waiting, not one answer.** Pairing a key with the next
         // reply on the channel drifts by one the moment a key asks for
         // nothing: the picture then shows the answer to the key before last.
+        settle(state, link, waiting, 400);
+    }
+    // Let the rail and the strip arrive before anything is clicked on them:
+    // a click on a strip that is not there yet lands on the list instead.
+    if !click.is_empty() {
+        settle(state, link, waiting, 600);
+    }
+    for at in click.split(',').filter(|n| !n.trim().is_empty()) {
+        let (col, row) = at.trim().split_once(':').unwrap_or(("0", "0"));
+        let press = ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Down(
+                ratatui::crossterm::event::MouseButton::Left,
+            ),
+            column: col.parse().unwrap_or(0),
+            row: row.parse().unwrap_or(0),
+            modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
+        };
+        act(keys::mouse(state, press, (w, h)), link);
         settle(state, link, waiting, 400);
     }
     // And a last wait, longer, for whatever the final key set going: sorting
@@ -253,7 +298,13 @@ fn run(
                 act(state.resized(draw::room(h)), link);
             }
             Beat::Key(Event::Mouse(m)) => {
-                let want = keys::mouse(state, m);
+                // The terminal's size, because where a press landed is the
+                // only thing that says what it meant.
+                let size = terminal
+                    .size()
+                    .map(|s| (s.width, s.height))
+                    .unwrap_or((80, 24));
+                let want = keys::mouse(state, m, size);
                 act(want, link);
             }
             Beat::Key(_) => {}
