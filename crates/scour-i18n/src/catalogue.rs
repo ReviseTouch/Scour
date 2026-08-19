@@ -66,6 +66,17 @@ impl Catalogue {
     }
 
     /// Is this language actually translated, or only accepted?
+    /// The language this catalogue speaks, as a primary subtag: `tr`, `en`.
+    ///
+    /// **A window punctuates numbers in the language of the text around them**
+    /// — `5.356.281` in Turkish, `5,356,281` in English — and the catalogue is
+    /// the only thing that knows which one is being spoken. Asking the desktop
+    /// instead was wrong on the case that matters: a Turkish desktop showing
+    /// an English window.
+    pub fn language(&self) -> &'static str {
+        self.tag
+    }
+
     pub fn is_translated(&self) -> bool {
         self.map.is_some_and(|m| !m.is_empty())
     }

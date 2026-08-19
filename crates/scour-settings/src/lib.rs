@@ -223,6 +223,19 @@ pub struct Settings {
     /// heard of is a person's preferences gone.
     #[serde(default)]
     pub layout: String,
+    /// Which face opens when somebody asks for Scour without saying which:
+    /// `window`, `browser` or `tui`.
+    ///
+    /// **Written by whichever face somebody switched *to*.** The desktop entry
+    /// and the hotkey do not name a program; they ask for Scour, and this says
+    /// what that means today. Empty is "nobody has chosen", which the launcher
+    /// reads as the window — the same rule [`Settings::layout`] follows.
+    ///
+    /// Not validated here. A word no launcher knows degrades to the window,
+    /// and settings that refuse to load because a fourth face wrote its name
+    /// would be a person's preferences gone.
+    #[serde(default)]
+    pub face: String,
     /// Past queries, most recent first.
     ///
     /// **Only queries somebody meant.** A search box runs a query per
@@ -275,6 +288,8 @@ pub struct Change {
     pub language: Option<String>,
     /// `detail`, `icons`, `large` — or `""` to go back to no opinion at all.
     pub layout: Option<String>,
+    /// `window`, `browser`, `tui` — or `""` to go back to no opinion.
+    pub face: Option<String>,
     /// Replace the list outright. For clearing it, mostly.
     pub history: Option<Vec<String>>,
     /// Put one query at the front instead.
@@ -331,6 +346,9 @@ impl Change {
         }
         if let Some(v) = self.language {
             to.language = v;
+        }
+        if let Some(v) = self.face {
+            to.face = v;
         }
         if let Some(v) = self.layout {
             to.layout = v;
@@ -494,6 +512,40 @@ mod tests {
         assert!(s.history.is_empty());
         assert_eq!(s.descending, None);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **Which face opens is a preference, not a launcher's guess.**
+    ///
+    /// A window switching to the terminal writes it; the next time somebody
+    /// asks for Scour, the terminal is what they get. The empty string stays a
+    /// distinct answer — "nobody has chosen" is what makes the window the
+    /// default without anybody having said so.
+    #[test]
+    fn the_face_somebody_switched_to_is_the_one_that_opens() {
+        let mut s = Settings::default();
+        assert_eq!(s.face, "", "nobody has chosen, to start with");
+
+        Change {
+            face: Some("tui".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.face, "tui");
+
+        // A frontend saying something else says nothing about this.
+        Change {
+            language: Some("tr".into()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.face, "tui", "a language change is not a face change");
+
+        Change {
+            face: Some(String::new()),
+            ..Change::default()
+        }
+        .apply(&mut s);
+        assert_eq!(s.face, "", "and it can be handed back");
     }
 
     /// **The shape of the list is a shared field, and behaves like one.**

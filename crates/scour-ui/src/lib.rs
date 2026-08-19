@@ -22,6 +22,9 @@
 //! vocabulary: this colour means "a field name", that one means "changed this
 //! week", a row is thirty pixels tall.
 
+pub mod format;
+pub mod path;
+
 /// A colour, and the one representation both sides can be built from.
 ///
 /// Alpha is carried because the palette needs it: the match wash and the

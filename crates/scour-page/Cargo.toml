@@ -1,0 +1,19 @@
+[package]
+name        = "scour-page"
+description = "Which page of a result to hold, and which one to ask for next."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **`scour-core` for one number and nothing else.** The page size is the
+# service's ceiling, and a second copy of it here is how a window ends up
+# asking for more rows than any answer can carry. No toolkit, no transport:
+# this is the policy a window follows, not the drawing it does.
+[dependencies]
+scour-core = { workspace = true }
