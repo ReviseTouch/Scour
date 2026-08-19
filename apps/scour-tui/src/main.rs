@@ -222,6 +222,13 @@ fn snap(
             modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
         };
         act(keys::mouse(state, press, (w, h)), link);
+        let release = ratatui::crossterm::event::MouseEvent {
+            kind: ratatui::crossterm::event::MouseEventKind::Up(
+                ratatui::crossterm::event::MouseButton::Left,
+            ),
+            ..press
+        };
+        act(keys::mouse(state, release, (w, h)), link);
         settle(state, link, waiting, 400);
     }
     // And a last wait, longer, for whatever the final key set going: sorting

@@ -19,12 +19,19 @@ use ratatui::widgets::{
 
 use scour_ui::format;
 
-use crate::app::{App, Mode, Panel};
+use crate::app::{App, Mode, Panel, Spot};
 use crate::theme::Theme;
 
-/// Lines the list does not get: the query, the meter, the rule under them,
-/// the column heading, and the footer.
-const CHROME: u16 = 5;
+/// How tall the query field is.
+///
+/// **Three rows rather than one.** A line of text among other lines of text is
+/// not something anybody can see is a box to type in; three rows of panel with
+/// the query in the middle of them is.
+pub const QUERY_HIGH: u16 = 3;
+
+/// Lines the list does not get: the query field, the meter, the rule under
+/// them, the column heading, and the footer.
+const CHROME: u16 = QUERY_HIGH + 4;
 
 /// Where the list starts, and where the rail starts — one line higher,
 /// because the rail takes the heading line as its own.
@@ -32,8 +39,8 @@ const CHROME: u16 = 5;
 /// **Exported, because the mouse counts in them too.** A press is a row and a
 /// column and nothing else; the arithmetic that turns it into a row of the
 /// list has to be the arithmetic that drew it.
-pub const LIST_TOP: u16 = 4;
-pub const RAIL_TOP: u16 = 3;
+pub const LIST_TOP: u16 = QUERY_HIGH + 3;
+pub const RAIL_TOP: u16 = QUERY_HIGH + 2;
 /// How wide the rail is when it is drawn at all.
 pub const RAIL_WIDE: u16 = 22;
 
@@ -53,7 +60,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
         0
     };
     let [top, meter, rule, heads, list, strip, foot] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(QUERY_HIGH),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -91,7 +98,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     } else {
         (heads, list, None)
     };
-    heading(f, heads, theme);
+    heading(f, heads, app, theme);
     rows(f, list, app, theme, mark);
     if let Some(area) = rail {
         // A line between the rail and the list, because the age stripe down
@@ -188,16 +195,26 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     ))];
     for (at, (text, dimmed)) in lines.iter().enumerate().skip(from).take(room) {
         let on = at == app.panel_at;
-        drawn.push(Line::from(Span::styled(
-            format!("{}{text}", if on { " ▸ " } else { "   " }),
-            Style::new().fg(if on {
-                theme.key()
-            } else if *dimmed {
-                theme.ink_3()
-            } else {
-                theme.ink_2()
-            }),
-        )));
+        let lit = if app.pressed == Spot::Panel(at) {
+            Style::new().bg(theme.key()).fg(theme.back())
+        } else if app.hover == Spot::Panel(at) {
+            Style::new().bg(theme.hover())
+        } else {
+            Style::new()
+        };
+        drawn.push(
+            Line::from(Span::styled(
+                format!("{}{text}", if on { " ▸ " } else { "   " }),
+                Style::new().fg(if on {
+                    theme.key()
+                } else if *dimmed {
+                    theme.ink_3()
+                } else {
+                    theme.ink_2()
+                }),
+            ))
+            .style(lit),
+        );
     }
     f.render_widget(
         Paragraph::new(drawn).block(
@@ -216,6 +233,14 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // like every other line, and the one thing nobody could tell was where to
     // type.
     f.render_widget(Block::new().style(Style::new().bg(theme.panel())), area);
+    // The text sits on the middle row of the field, with a row of quiet above
+    // and below it — which is what makes three rows read as one box rather
+    // than as three lines that happen to share a colour.
+    let area = Rect {
+        y: area.y + area.height / 2,
+        height: 1,
+        ..area
+    };
     let typed = if app.query.is_empty() {
         // **Quiet, and short.** The examples were drawn as brightly as a
         // typed query and filled the line: it read as something already
@@ -319,13 +344,48 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     f.render_widget(Paragraph::new(Line::from(parts)), area);
 }
 
-/// The column names, in the page's order.
-fn heading(f: &mut Frame, area: Rect, theme: &Theme) {
-    let style = Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM);
+/// Which column covers this offset into the list's own width.
+pub fn column_at(col: u16, width: u16) -> Option<usize> {
+    let area = Rect::new(0, 0, width, 1);
+    let columns = Layout::horizontal(widths_for(width)).spacing(1).split(area);
+    columns
+        .iter()
+        .position(|c| col >= c.x && col < c.x + c.width)
+}
+
+/// The column names, and which one the list is sorted by.
+///
+/// **The arrow is the answer to "sorted how?"** and it is on the column it is
+/// about, which is where everybody looks for it — the footer says it too, for
+/// the terminal that is too narrow to draw the column at all.
+fn heading(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let quiet = Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM);
     let names = ["  NAME", "WHERE", "CHANGED", "SIZE"];
+    let sorted = app.sorted_column();
     let cells: Vec<Cell> = names
         .iter()
-        .map(|n| Cell::from(Span::styled(*n, style)))
+        .enumerate()
+        .map(|(at, name)| {
+            let by = sorted == Some(at);
+            let arrow = if by {
+                if app.descending { " ↓" } else { " ↑" }
+            } else {
+                ""
+            };
+            let style = if app.pressed == Spot::Head(at) {
+                Style::new().bg(theme.key()).fg(theme.back())
+            } else if app.hover == Spot::Head(at) {
+                Style::new()
+                    .fg(theme.ink())
+                    .bg(theme.hover())
+                    .add_modifier(Modifier::UNDERLINED)
+            } else if by {
+                Style::new().fg(theme.key()).add_modifier(Modifier::BOLD)
+            } else {
+                quiet
+            };
+            Cell::from(Span::styled(format!("{name}{arrow}"), style))
+        })
         .collect();
     f.render_widget(
         Table::new(vec![Row::new(cells)], widths_for(area.width)).column_spacing(1),
@@ -401,6 +461,8 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         let ink = if here { theme.ink() } else { theme.ink_2() };
         let line = Style::new().fg(ink);
         let picked = app.picked.contains_key(&hit.path);
+        let under = app.hover == Spot::Row(row);
+        let pushed = app.pressed == Spot::Row(row);
         let cells = vec![
             Cell::from(Line::from(vec![
                 // The age stripe: one cell of colour, the same six bands the
@@ -432,8 +494,14 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                 line,
             )),
         ];
-        let style = if here {
+        // Pressed is brighter than hovered is brighter than nothing, which is
+        // the order every interface anybody has used says it in.
+        let style = if pushed {
+            Style::new().bg(theme.key()).fg(theme.back())
+        } else if here {
             Style::new().bg(theme.pick())
+        } else if under {
+            Style::new().bg(theme.hover())
         } else {
             Style::new()
         };
@@ -479,6 +547,16 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     // than the lines drawn: the headings and the blanks are not stops.
     let mut at = 0usize;
     let here = |at: usize, app: &App| app.in_rail && app.rail_at == at;
+    // The rail answers the pointer the same way the list does.
+    let touched = |at: usize, app: &App| {
+        if app.pressed == Spot::Rail(at) {
+            Some(Style::new().bg(theme.key()).fg(theme.back()))
+        } else if app.hover == Spot::Rail(at) {
+            Some(Style::new().bg(theme.hover()))
+        } else {
+            None
+        }
+    };
     lines.push(head("KIND"));
     for (token, count) in app.kinds.iter().take(kinds_shown) {
         let term = scour_ui::query::of_kind(token);
@@ -495,26 +573,30 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
             .max(3);
         let width = ((*count as f64 / most as f64) * bar as f64).round() as usize;
         let cursor = here(at, app);
+        let lit = touched(at, app);
         at += 1;
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(
-                    "{}{:<name$}",
-                    if cursor { "▸" } else { " " },
-                    cut(token, name)
+        lines.push(
+            Line::from(vec![
+                Span::styled(
+                    format!(
+                        "{}{:<name$}",
+                        if cursor { "▸" } else { " " },
+                        cut(token, name)
+                    ),
+                    Style::new().fg(if on || cursor {
+                        theme.key()
+                    } else {
+                        theme.ink_2()
+                    }),
                 ),
-                Style::new().fg(if on || cursor {
-                    theme.key()
-                } else {
-                    theme.ink_2()
-                }),
-            ),
-            Span::styled(
-                format!("{:<bar$}", "▇".repeat(width.clamp(1, bar))),
-                Style::new().fg(theme.kind(token)),
-            ),
-            Span::styled(format!(" {said}"), Style::new().fg(theme.ink_3())),
-        ]));
+                Span::styled(
+                    format!("{:<bar$}", "▇".repeat(width.clamp(1, bar))),
+                    Style::new().fg(theme.kind(token)),
+                ),
+                Span::styled(format!(" {said}"), Style::new().fg(theme.ink_3())),
+            ])
+            .style(lit.unwrap_or_default()),
+        );
     }
     lines.push(Line::from(""));
     lines.push(head("WHERE"));
@@ -522,30 +604,38 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         let term = scour_ui::query::of_place(path);
         let on = app.filter.as_deref() == Some(term.as_str());
         let cursor = here(at, app);
+        let lit = touched(at, app);
         at += 1;
-        lines.push(Line::from(Span::styled(
-            format!("{}{}", if cursor { "▸" } else { " " }, cut(label, 19)),
-            Style::new().fg(if on || cursor {
-                theme.key()
-            } else {
-                theme.ink_2()
-            }),
-        )));
+        lines.push(
+            Line::from(Span::styled(
+                format!("{}{}", if cursor { "▸" } else { " " }, cut(label, 19)),
+                Style::new().fg(if on || cursor {
+                    theme.key()
+                } else {
+                    theme.ink_2()
+                }),
+            ))
+            .style(lit.unwrap_or_default()),
+        );
     }
     lines.push(Line::from(""));
     lines.push(head("SIZE"));
     for (label, term) in scour_ui::query::SIZES {
         let on = app.filter.as_deref() == Some(term);
         let cursor = here(at, app);
+        let lit = touched(at, app);
         at += 1;
-        lines.push(Line::from(Span::styled(
-            format!("{}{label}", if cursor { "▸" } else { " " }),
-            Style::new().fg(if on || cursor {
-                theme.key()
-            } else {
-                theme.ink_2()
-            }),
-        )));
+        lines.push(
+            Line::from(Span::styled(
+                format!("{}{label}", if cursor { "▸" } else { " " }),
+                Style::new().fg(if on || cursor {
+                    theme.key()
+                } else {
+                    theme.ink_2()
+                }),
+            ))
+            .style(lit.unwrap_or_default()),
+        );
     }
     f.render_widget(Paragraph::new(lines), area);
 }

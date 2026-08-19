@@ -78,6 +78,11 @@ impl Theme {
     pub fn bad(&self) -> Color {
         self.of(self.palette.q_bad)
     }
+    /// What a row goes when the pointer is over it — the same tint the window
+    /// uses, which is a shade of the panel rather than a colour of its own.
+    pub fn hover(&self) -> Color {
+        self.of(self.palette.hover)
+    }
     pub fn pick(&self) -> Color {
         self.of(self.palette.pick)
     }

@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use crate::app::{App, Mode, Panel, Want};
+use crate::app::{App, Mode, Panel, Spot, Want};
 
 /// Every key, and what it does. **The help screen is printed from this**, so
 /// that what is documented and what happens cannot drift apart.
@@ -24,7 +24,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Shift+Enter", "open the folder"),
     ("Space", "pick · Shift+↑↓ for a run"),
     ("Ctrl+A", "pick nothing"),
-    ("Ctrl+← →", "sort by the next column"),
+    ("Ctrl+← →", "sort by the next column · or click a heading"),
     ("Ctrl+↑ ↓", "reverse the order"),
     ("Tab", "the rail, and back"),
     ("Ctrl+K", "what is skipped"),
@@ -241,95 +241,160 @@ fn panel_press(app: &mut App) -> Want {
 /// terminal reports a row and a column and says nothing about what is drawn
 /// there. It is kept to the three numbers here rather than spread about.
 pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
-    // The three numbers come from the drawing rather than being written again
-    // here: a press landing where nothing is drawn is what happens when the
-    // two drift apart, and there is no way to notice until somebody clicks.
-    use crate::draw::{LIST_TOP as ABOVE, RAIL_TOP, RAIL_WIDE as RAIL};
-
-    let (width, height) = size;
-    // A panel takes every press while it is open: inside it, the line under
-    // the pointer; outside, the panel closes. Clicking through an open panel
-    // into the list is how somebody opens a file they cannot see.
-    if app.panel != Panel::None {
-        if !matches!(m.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return Want::Nothing;
+    let spot = spot_at(app, m.column, m.row, size);
+    // **Everything the pointer passes over answers to it.** A terminal draws
+    // no hover of its own, so this is the whole of it: what is under the
+    // pointer is remembered, and the drawing lights it.
+    if app.hover != spot {
+        app.hover = spot;
+        app.dirty = true;
+    }
+    match m.kind {
+        MouseEventKind::Moved => Want::Nothing,
+        MouseEventKind::ScrollDown => match spot {
+            Spot::Rail(_) => {
+                app.rail_walk(1);
+                Want::Nothing
+            }
+            Spot::Panel(_) => {
+                app.panel_walk(1);
+                Want::Nothing
+            }
+            _ => app.walk(3),
+        },
+        MouseEventKind::ScrollUp => match spot {
+            Spot::Rail(_) => {
+                app.rail_walk(-1);
+                Want::Nothing
+            }
+            Spot::Panel(_) => {
+                app.panel_walk(-1);
+                Want::Nothing
+            }
+            _ => app.walk(-3),
+        },
+        // **Pressed, then done on the release** — which is what every button
+        // anywhere does, and it is what lets somebody press, think better of
+        // it, and slide off before letting go.
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.pressed = spot;
+            app.dirty = true;
+            Want::Nothing
         }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let pressed = std::mem::take(&mut app.pressed);
+            app.dirty = true;
+            if pressed != spot || pressed == Spot::Nothing {
+                // Let go somewhere else: nothing happens, as everywhere else.
+                if app.panel != Panel::None && !matches!(spot, Spot::Panel(_)) {
+                    app.show(app.panel);
+                }
+                return Want::Nothing;
+            }
+            match spot {
+                Spot::Row(row) => {
+                    app.in_rail = false;
+                    app.go(row)
+                }
+                Spot::Rail(at) => {
+                    app.in_rail = true;
+                    app.rail_at = at;
+                    app.rail_press()
+                }
+                Spot::Strip(at) => {
+                    let days = app.strip[at].0;
+                    app.press_filter(&scour_ui::query::of_age(days))
+                }
+                Spot::Panel(at) => {
+                    app.panel_at = at;
+                    panel_press(app)
+                }
+                Spot::Head(column) => app.sort_by(column),
+                Spot::Query => {
+                    app.mode = Mode::Search;
+                    Want::Nothing
+                }
+                Spot::Nothing => Want::Nothing,
+            }
+        }
+        _ => Want::Nothing,
+    }
+}
+
+/// What is drawn at this column and row.
+///
+/// The one piece of arithmetic that turns a place on the screen into a thing,
+/// and the reason there is exactly one: `draw` and this have to agree, and
+/// nothing tells you when they stop.
+pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
+    use crate::draw::{LIST_TOP, QUERY_HIGH, RAIL_TOP, RAIL_WIDE};
+    let (width, height) = size;
+
+    if app.panel != Panel::None {
         let area = ratatui::layout::Rect::new(0, 0, width, height);
         let lines = app.panel_lines();
         let box_area = crate::draw::panel_rect(area, lines);
-        let inside = m.column >= box_area.x
-            && m.column < box_area.x + box_area.width
-            && m.row >= box_area.y
-            && m.row < box_area.y + box_area.height;
-        if !inside {
-            app.show(app.panel);
-            return Want::Nothing;
+        let inside = col >= box_area.x
+            && col < box_area.x + box_area.width
+            && row >= box_area.y
+            && row < box_area.y + box_area.height;
+        if !inside || row < box_area.y + 2 {
+            return Spot::Nothing;
         }
-        // One line of border, one of title.
         let room = box_area.height.saturating_sub(3) as usize;
         let from = app.panel_at.saturating_sub(room.saturating_sub(1));
-        let line = m.row.saturating_sub(box_area.y + 2) as usize;
-        if m.row < box_area.y + 2 || from + line >= lines {
-            return Want::Nothing;
-        }
-        app.panel_at = from + line;
-        app.dirty = true;
-        return panel_press(app);
+        let at = from + (row - (box_area.y + 2)) as usize;
+        return if at < lines {
+            Spot::Panel(at)
+        } else {
+            Spot::Nothing
+        };
     }
-    let railed = width >= 100 && app.rail;
-    let in_rail = railed && m.column < RAIL;
+
+    if row < QUERY_HIGH {
+        return Spot::Query;
+    }
+
     let strip_high: u16 = if height >= 20 && !app.strip.is_empty() {
         3
     } else {
         0
     };
     let list_to = height.saturating_sub(1 + strip_high);
-    let on_strip = strip_high > 0 && m.row >= list_to && m.row < list_to + 2;
+    if strip_high > 0 && row >= list_to && row < list_to + 2 {
+        let bands = app.strip.len().max(1);
+        let room = width.saturating_sub(2).max(1) as usize;
+        let at = (col.saturating_sub(1) as usize * bands / room).min(bands - 1);
+        return Spot::Strip(at);
+    }
 
-    match m.kind {
-        MouseEventKind::ScrollDown if in_rail => {
-            app.rail_walk(1);
-            Want::Nothing
+    let railed = width >= 100 && app.rail;
+    if railed && col < RAIL_WIDE {
+        if row < RAIL_TOP || row >= list_to {
+            return Spot::Nothing;
         }
-        MouseEventKind::ScrollUp if in_rail => {
-            app.rail_walk(-1);
-            Want::Nothing
-        }
-        MouseEventKind::ScrollDown => app.walk(3),
-        MouseEventKind::ScrollUp => app.walk(-3),
-        MouseEventKind::Down(MouseButton::Left) => {
-            if on_strip {
-                // Which band was hit, in the shares `draw` gives them.
-                let bands = app.strip.len().max(1);
-                let room = width.saturating_sub(2).max(1) as usize;
-                let at = (m.column.saturating_sub(1) as usize * bands / room).min(bands - 1);
-                let days = app.strip[at].0;
-                return app.press_filter(&scour_ui::query::of_age(days));
-            }
-            if in_rail {
-                if m.row < RAIL_TOP || m.row >= list_to {
-                    return Want::Nothing;
-                }
-                // The rail has headings and blank lines, and they are not
-                // stops: a press on `KIND` does nothing rather than pressing
-                // whatever is nearest.
-                app.in_rail = true;
-                app.dirty = true;
-                return match app.rail_hit((m.row - RAIL_TOP) as usize) {
-                    Some(at) => {
-                        app.rail_at = at;
-                        app.rail_press()
-                    }
-                    None => Want::Nothing,
-                };
-            }
-            if m.row < ABOVE || m.row >= list_to {
-                return Want::Nothing;
-            }
-            app.in_rail = false;
-            app.go(app.top + (m.row - ABOVE) as usize)
-        }
-        _ => Want::Nothing,
+        return match app.rail_hit((row - RAIL_TOP) as usize) {
+            Some(at) => Spot::Rail(at),
+            None => Spot::Nothing,
+        };
+    }
+    // The heading row, one above the list: which column was hit is the same
+    // arithmetic that drew them.
+    if row == LIST_TOP - 1 {
+        let from = if railed { RAIL_WIDE } else { 0 };
+        return match crate::draw::column_at(col.saturating_sub(from), width - from) {
+            Some(column) => Spot::Head(column),
+            None => Spot::Nothing,
+        };
+    }
+    if row < LIST_TOP || row >= list_to {
+        return Spot::Nothing;
+    }
+    let at = app.top + (row - LIST_TOP) as usize;
+    if at < app.pages.total() {
+        Spot::Row(at)
+    } else {
+        Spot::Nothing
     }
 }
 

@@ -19,6 +19,30 @@ const KINDS_LEAST: usize = 4;
 /// More places than this is a list of somebody's whole home directory.
 const PLACES_MOST: usize = 6;
 
+/// What the pointer is over, if anything that answers to it.
+///
+/// **One value, computed once**, and both the drawing and the click use it —
+/// so a row that lights up under the pointer is the row a press would take.
+/// Two functions with the same arithmetic in them would drift the first time
+/// a line was added anywhere above the list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Spot {
+    #[default]
+    Nothing,
+    /// A row of the result, by its number in the whole result.
+    Row(usize),
+    /// A line of the rail, by its place among what the rail offers.
+    Rail(usize),
+    /// A band of the time strip.
+    Strip(usize),
+    /// A line of whatever panel is open.
+    Panel(usize),
+    /// The query line.
+    Query,
+    /// A column heading, by its place along the row.
+    Head(usize),
+}
+
 /// What is over the list, if anything.
 ///
 /// One at a time, and the same rule the window follows: a second panel behind
@@ -125,6 +149,14 @@ pub struct App {
     /// What was said about the last thing done — a file written, a language
     /// changed. Cleared by the next keystroke.
     pub note: String,
+    /// What the pointer is over, and what it is holding down.
+    ///
+    /// A terminal has no idea what is drawn where, so these are the whole of
+    /// what makes it feel like something is being touched: the thing under the
+    /// pointer lights, and the thing being pressed is brighter still until the
+    /// button comes back up.
+    pub hover: Spot,
+    pub pressed: Spot,
     /// True while the key list is over everything.
     pub helping: bool,
     /// The rail: what the matching rows are made of, and where they live.
@@ -171,6 +203,8 @@ impl Default for App {
             panel_at: 0,
             rules: Vec::new(),
             note: String::new(),
+            hover: Spot::default(),
+            pressed: Spot::default(),
             helping: false,
             kinds: Vec::new(),
             places: Vec::new(),
@@ -189,10 +223,9 @@ impl Default for App {
 ///
 /// The same five the window's headings offer, so that a list sorted in one
 /// face and then opened in another is in the same order.
-pub const SORTS: [(SortKey, &str); 5] = [
+pub const SORTS: [(SortKey, &str); 4] = [
     (SortKey::Name, "name"),
-    (SortKey::Kind, "kind"),
-    (SortKey::Path, "path"),
+    (SortKey::Path, "where"),
     (SortKey::Modified, "changed"),
     (SortKey::Size, "size"),
 ];
@@ -205,6 +238,28 @@ impl App {
             .find(|(key, _)| *key == self.sort)
             .map(|(_, name)| *name)
             .unwrap_or("relevance")
+    }
+
+    /// Sort by a column, or turn it round when it is the one already sorted by.
+    ///
+    /// **What a heading does everywhere**: the first press sorts, the second
+    /// reverses. Newest first to begin with, because that is what a date
+    /// column is for.
+    pub fn sort_by(&mut self, column: usize) -> Want {
+        let Some((key, _)) = SORTS.get(column) else {
+            return Want::Nothing;
+        };
+        if self.sort == *key {
+            return self.flip();
+        }
+        self.sort = *key;
+        self.descending = true;
+        self.reask()
+    }
+
+    /// Which column is being sorted by, if it is one of the four drawn.
+    pub fn sorted_column(&self) -> Option<usize> {
+        SORTS.iter().position(|(key, _)| *key == self.sort)
     }
 
     /// Sort by the next column along, or the previous one.
