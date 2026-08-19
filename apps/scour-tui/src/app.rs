@@ -341,15 +341,26 @@ impl App {
                         .collect();
                 }
                 scour_core::FacetBy::Age { .. } => {
-                    // The keys are the edges as text, and `older` is the
-                    // overflow band — which the strip does not draw: it is
-                    // everything before the axis starts, not a bar on it.
-                    self.strip = group
+                    // **Every band, including the empty ones.** The answer
+                    // leaves out bands nothing fell into, and a strip built
+                    // from what came back has a different number of bars for
+                    // every query — so the axis stops meaning anything and two
+                    // strips cannot be compared. The bands are ours to begin
+                    // with; the answer only fills them.
+                    //
+                    // `older` is the overflow and is not a bar: it is
+                    // everything before the axis starts.
+                    let counts: std::collections::HashMap<u32, u64> = group
                         .facets
                         .into_iter()
                         .filter_map(|f| f.key.parse::<u32>().ok().map(|days| (days, f.count)))
                         .collect();
-                    self.strip.sort_by_key(|(days, _)| std::cmp::Reverse(*days));
+                    let mut edges = scour_ui::bar_edges();
+                    edges.sort_unstable_by(|a, b| b.cmp(a));
+                    self.strip = edges
+                        .into_iter()
+                        .map(|days| (days, counts.get(&days).copied().unwrap_or(0)))
+                        .collect();
                 }
                 _ => {}
             }

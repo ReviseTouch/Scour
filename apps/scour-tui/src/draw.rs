@@ -36,7 +36,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     // The strip of time is worth two lines and only where there are lines to
     // spare: under twenty rows it would take a fifth of the list.
     let strip_high = if area.height >= 20 && !app.strip.is_empty() {
-        2
+        3
     } else {
         0
     };
@@ -454,39 +454,67 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
 /// bar that is either there or not says nothing about how much of the result
 /// is a week old.
 fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // Eight heights in a cell, two cells of height: sixteen steps rather than
+    // eight. A distribution drawn in eight is a staircase — which is what the
+    // first one looked like, and it was the first thing anybody said about it.
     const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    let [upper, lower, axis] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+
+    let bands = app.strip.len().max(1);
+    let room = upper.width.saturating_sub(2) as usize;
+    // **The strip is as wide as the window.** One cell per band left it
+    // twenty-four columns wide in the middle of a hundred and twenty, which
+    // reads as a decoration rather than a reading of the result. Every band
+    // gets the same share, and what is left over is spread from the left so
+    // the whole width is used and no band is wider than its neighbour by more
+    // than one.
+    let each = (room / bands).max(1);
+    let spare = room.saturating_sub(each * bands);
     let most = app.strip.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
-    let bars: Vec<Span> = app
-        .strip
-        .iter()
-        .map(|(days, count)| {
-            // **Nothing is nothing, and anything is at least a tick.** A band
-            // holding four files out of nine thousand rounds to nought, and a
-            // blank there reads as "no files this week" rather than "few".
-            let step = if *count == 0 {
-                0
-            } else {
-                (((*count as f64 / most as f64) * 8.0).round() as usize).max(1)
-            };
-            Span::styled(
-                BLOCKS[step.min(8)],
-                Style::new().fg(theme.band(scour_ui::band_of(*days as f64))),
-            )
-        })
-        .collect();
-    let [bar_line, axis] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
-    let mut line = vec![Span::raw(" ")];
-    line.extend(bars);
-    f.render_widget(Paragraph::new(Line::from(line)), bar_line);
+
+    let mut top: Vec<Span> = vec![Span::raw(" ")];
+    let mut bottom: Vec<Span> = vec![Span::raw(" ")];
+    for (i, (days, count)) in app.strip.iter().enumerate() {
+        let wide = each + usize::from(i < spare);
+        // A column of space between bars where there is room for one. Without
+        // it the twenty-four bands run together into a mountain range, and a
+        // reader cannot tell which of two neighbouring heights is one band.
+        let (wide, gap) = if wide >= 3 { (wide - 1, 1) } else { (wide, 0) };
+        let step = if *count == 0 {
+            0
+        } else {
+            // Nothing is nothing, and anything is at least a tick: a band of
+            // four files out of nine thousand rounds to nought otherwise, and
+            // a blank reads as "none that week".
+            (((*count as f64 / most as f64) * 16.0).round() as usize).max(1)
+        };
+        let colour = Style::new().fg(theme.band(scour_ui::band_of(*days as f64)));
+        top.push(Span::styled(
+            BLOCKS[step.saturating_sub(8).min(8)].repeat(wide),
+            colour,
+        ));
+        bottom.push(Span::styled(BLOCKS[step.min(8)].repeat(wide), colour));
+        if gap > 0 {
+            top.push(Span::raw(" "));
+            bottom.push(Span::raw(" "));
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(top)), upper);
+    f.render_widget(Paragraph::new(Line::from(bottom)), lower);
+
+    // The axis under the ends of the strip, not the ends of the terminal.
     let dim = Style::new().fg(theme.ink_3());
-    // The axis ends where the bars end, not where the terminal does.
-    let span = app.strip.len().max(6);
     let left = "two years ago";
-    let gap = span.saturating_sub(left.chars().count() + 5);
+    let right = "today";
+    let gap = room.saturating_sub(left.chars().count() + right.chars().count());
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!(" {left}{}today", " ".repeat(gap)),
+            format!(" {left}{}{right}", " ".repeat(gap)),
             dim,
         ))),
         axis,
