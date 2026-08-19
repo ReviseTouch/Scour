@@ -689,6 +689,9 @@ fn main() -> Result<()> {
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
             trace(&format!("query-changed {text:?}"));
+            if let Some(w) = weak.upgrade() {
+                w.set_note(slint::SharedString::new());
+            }
             let generation = {
                 let mut s = state.borrow_mut();
                 s.query = text.to_string();
@@ -2976,14 +2979,19 @@ fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // **Where a desktop puts what it downloads**, and the home only when it
+    // does not say. The browser page hands the file to the browser, which
+    // knows this; this window was dropping it in the home directory without
+    // saying so out loud, which is a file somebody finds a week later.
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let path = std::path::PathBuf::from(home).join(format!("scour-{stamp}.csv"));
+    let into = scour_places::downloads().unwrap_or(home);
+    let path = std::path::PathBuf::from(into).join(format!("scour-{stamp}.csv"));
     let weak = window.as_weak();
     let addr = addr.to_string();
     let waiting = t(cat, "writing…");
     let wrote = t(cat, "written to");
     let failed = t(cat, "could not be written");
-    said(window, waiting);
+    window.set_note(waiting);
 
     std::thread::spawn(move || {
         let outcome = (|| -> std::io::Result<u64> {
@@ -3023,12 +3031,16 @@ fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
         })();
 
         let told = match outcome {
-            Ok(bytes) => format!("{wrote} {} · {}", path.display(), compact(bytes)),
+            Ok(bytes) => format!("{wrote} {}  ·  {}", path.display(), compact(bytes)),
             Err(e) => format!("{failed}: {e}"),
         };
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                said(&w, told.into());
+                // **Where it went, and it has to stay put.** The meter is
+                // rewritten by every answer — several a second with a live
+                // list — so the line saying where a file was written was gone
+                // before anybody could read it.
+                w.set_note(told.into());
             }
         });
     });

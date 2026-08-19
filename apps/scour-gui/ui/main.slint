@@ -602,6 +602,13 @@ export component MainWindow inherits Window {
     in property <string> meter-ms;
     in property <string> meter-rows;
     in property <string> holding;
+    /// Something the window did, said until the next keystroke.
+    ///
+    /// Not the meter, which every answer rewrites — with a live list that is
+    /// several a second, and the line saying where a file was written was gone
+    /// before it could be read. Not the hint either: that is the query box's
+    /// placeholder and is invisible the moment anything is typed.
+    in property <string> note;
     in property <string> hint;
     in property <bool> busy;
     in property <string> scope-label;
@@ -1179,6 +1186,14 @@ export component MainWindow inherits Window {
                 }
 
                 Rectangle { }
+
+                if root.note != "": Text {
+                    text: root.note;
+                    color: Theme.q-key;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
 
                 if root.busy: Text {
                     text: "…";

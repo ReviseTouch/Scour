@@ -77,6 +77,39 @@ fn read_mounts() -> String {
     std::fs::read_to_string("/proc/self/mounts").unwrap_or_default()
 }
 
+/// Where a desktop puts what it downloads, if it says.
+///
+/// Read from the same file as the rest, and by key rather than by name: the
+/// folder is called `İndirilenler` on this machine and something else on the
+/// next, and a frontend guessing at the word would be a frontend that saves a
+/// file somewhere nobody looks.
+pub fn download_dir(home: &str, text: &str) -> Option<String> {
+    if home.is_empty() {
+        return None;
+    }
+    for line in text.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+        if key.trim() != "XDG_DOWNLOAD_DIR" {
+            continue;
+        }
+        let path = value.trim().trim_matches('"').replace("$HOME", home);
+        // The home itself is not a download folder, it is the absence of one.
+        if path.is_empty() || path == home {
+            return None;
+        }
+        return Some(path);
+    }
+    None
+}
+
+/// The same, read off this machine.
+pub fn downloads() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    download_dir(&home, &user_dirs(&home))
+}
+
 /// The folders named in `user-dirs.dirs`, in the desktop's own words.
 ///
 /// The format is `XDG_DOCUMENTS_DIR="$HOME/Belgeler"` a line, and both the
@@ -146,6 +179,28 @@ pub fn mounts_from(text: &str) -> Vec<Mount> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_folder_is_found_by_key_not_by_name() {
+        // It is `İndirilenler` here and `Downloads` on the next machine, so
+        // the key is what says which one it is.
+        let text = concat!(
+            "XDG_DOCUMENTS_DIR=\"$HOME/Belgeler\"\n",
+            "XDG_DOWNLOAD_DIR=\"$HOME/İndirilenler\"\n",
+        );
+        assert_eq!(
+            download_dir("/home/u", text).as_deref(),
+            Some("/home/u/İndirilenler")
+        );
+        // A desktop that points it at the home has no download folder, and
+        // saying it does would put a file where nobody looks for one.
+        assert_eq!(
+            download_dir("/home/u", "XDG_DOWNLOAD_DIR=\"$HOME\"\n"),
+            None
+        );
+        assert_eq!(download_dir("/home/u", ""), None);
+        assert_eq!(download_dir("", "XDG_DOWNLOAD_DIR=\"/x\"\n"), None);
+    }
 
     #[test]
     fn the_desktops_own_names_survive_the_quoting() {
