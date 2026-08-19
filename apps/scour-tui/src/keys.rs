@@ -241,13 +241,10 @@ fn panel_press(app: &mut App) -> Want {
 /// terminal reports a row and a column and says nothing about what is drawn
 /// there. It is kept to the three numbers here rather than spread about.
 pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
-    /// Lines above the list: the query, the meter, the heading.
-    const ABOVE: u16 = 3;
-    /// Where the rail starts, which is one line higher: it takes the heading
-    /// line as well, and its own `KIND` is drawn there.
-    const RAIL_TOP: u16 = 2;
-    /// How wide the rail is, when it is drawn at all.
-    const RAIL: u16 = 22;
+    // The three numbers come from the drawing rather than being written again
+    // here: a press landing where nothing is drawn is what happens when the
+    // two drift apart, and there is no way to notice until somebody clicks.
+    use crate::draw::{LIST_TOP as ABOVE, RAIL_TOP, RAIL_WIDE as RAIL};
 
     let (width, height) = size;
     // A panel takes every press while it is open: inside it, the line under
@@ -279,7 +276,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
         app.dirty = true;
         return panel_press(app);
     }
-    let railed = width >= 80 && app.rail;
+    let railed = width >= 100 && app.rail;
     let in_rail = railed && m.column < RAIL;
     let strip_high: u16 = if height >= 20 && !app.strip.is_empty() {
         3

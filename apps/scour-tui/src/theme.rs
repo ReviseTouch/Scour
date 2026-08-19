@@ -64,6 +64,11 @@ impl Theme {
     pub fn back(&self) -> Color {
         self.of(self.palette.ground)
     }
+    /// The panel colour, which the query line is drawn on so that it reads as
+    /// a field rather than as one more row of text.
+    pub fn panel(&self) -> Color {
+        self.of(self.palette.panel)
+    }
     pub fn line(&self) -> Color {
         self.of(self.palette.line)
     }

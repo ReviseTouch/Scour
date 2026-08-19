@@ -22,8 +22,20 @@ use scour_ui::format;
 use crate::app::{App, Mode, Panel};
 use crate::theme::Theme;
 
-/// Lines the list does not get: query, meter, heading, footer.
-const CHROME: u16 = 4;
+/// Lines the list does not get: the query, the meter, the rule under them,
+/// the column heading, and the footer.
+const CHROME: u16 = 5;
+
+/// Where the list starts, and where the rail starts — one line higher,
+/// because the rail takes the heading line as its own.
+///
+/// **Exported, because the mouse counts in them too.** A press is a row and a
+/// column and nothing else; the arithmetic that turns it into a row of the
+/// list has to be the arithmetic that drew it.
+pub const LIST_TOP: u16 = 4;
+pub const RAIL_TOP: u16 = 3;
+/// How wide the rail is when it is drawn at all.
+pub const RAIL_WIDE: u16 = 22;
 
 /// How much room the list has, given a terminal this tall.
 pub fn room(height: u16) -> usize {
@@ -40,7 +52,8 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     } else {
         0
     };
-    let [top, meter, heads, list, strip, foot] = Layout::vertical([
+    let [top, meter, rule, heads, list, strip, foot] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -52,6 +65,10 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
 
     query(f, top, app, theme);
     counts(f, meter, app, theme, mark);
+    // **A line under the two of them.** Without it the query, the counts and
+    // the column headings were three rows of text with nothing saying which
+    // was which — and the query line has to look like something you type in.
+    across(f, rule, theme);
     // **The rail goes when the terminal is narrow.** Twenty-two columns out of
     // eighty is a quarter of the list, and the list is what somebody came for.
     // **A hundred columns before the rail is worth its room.** At eighty it
@@ -60,9 +77,9 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     let wide = area.width >= 100 && app.rail;
     let (heads, list, rail) = if wide {
         let [rail, heads] =
-            Layout::horizontal([Constraint::Length(22), Constraint::Fill(1)]).areas(heads);
+            Layout::horizontal([Constraint::Length(RAIL_WIDE), Constraint::Fill(1)]).areas(heads);
         let [_, list] =
-            Layout::horizontal([Constraint::Length(22), Constraint::Fill(1)]).areas(list);
+            Layout::horizontal([Constraint::Length(RAIL_WIDE), Constraint::Fill(1)]).areas(list);
         (
             heads,
             list,
@@ -95,6 +112,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     if strip_high > 0 {
         when(f, strip, app, theme);
     }
+
     footer(f, foot, app, theme, mark);
     if app.panel != Panel::None {
         panel(f, area, app, theme);
@@ -193,10 +211,20 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 
 /// The query line: the brand, what has been typed, and the caret.
 fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // The whole line is the field: a strip of panel across the window, the way
+    // the browser page draws one. Before this it was text on the background
+    // like every other line, and the one thing nobody could tell was where to
+    // type.
+    f.render_widget(Block::new().style(Style::new().bg(theme.panel())), area);
     let typed = if app.query.is_empty() {
+        // **Quiet, and short.** The examples were drawn as brightly as a
+        // typed query and filled the line: it read as something already
+        // searched for rather than as an empty box.
         Span::styled(
-            "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
-            Style::new().fg(theme.ink_3()),
+            "search…",
+            Style::new()
+                .fg(theme.ink_3())
+                .add_modifier(Modifier::ITALIC | Modifier::DIM),
         )
     } else {
         Span::styled(
@@ -445,24 +473,36 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                 .add_modifier(Modifier::BOLD | Modifier::DIM),
         ))
     };
+    let (kinds_shown, places_shown) = app.rail_room();
     let most = app.kinds.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
     // Where the rail's own cursor is, counted over the lines it offers rather
     // than the lines drawn: the headings and the blanks are not stops.
     let mut at = 0usize;
     let here = |at: usize, app: &App| app.in_rail && app.rail_at == at;
     lines.push(head("KIND"));
-    for (token, count) in app.kinds.iter().take(crate::app::KINDS_SHOWN) {
+    for (token, count) in app.kinds.iter().take(kinds_shown) {
         let term = scour_ui::query::of_kind(token);
         let on = app.filter.as_deref() == Some(term.as_str());
-        // A bar as wide as the count is large, in the kind's own colour: the
-        // same reading the window's rail offers, in eight characters.
-        let width = ((*count as f64 / most as f64) * 6.0).round() as usize;
+        // **The count is never cut, and the arithmetic says so out loud**: one
+        // column for the cursor, four for the bar, whatever the number needs,
+        // and the name takes what is left. `507.69` is not a number — it was
+        // `507.691` with its last digit run off the end of a line that had
+        // been counted at a width the rail does not have.
         let said = format::grouped(*count, mark.0);
+        let bar = 4usize;
+        let name = (area.width as usize)
+            .saturating_sub(2 + bar + said.chars().count())
+            .max(3);
+        let width = ((*count as f64 / most as f64) * bar as f64).round() as usize;
         let cursor = here(at, app);
         at += 1;
         lines.push(Line::from(vec![
             Span::styled(
-                format!("{}{:<7}", if cursor { "▸" } else { " " }, cut(token, 7)),
+                format!(
+                    "{}{:<name$}",
+                    if cursor { "▸" } else { " " },
+                    cut(token, name)
+                ),
                 Style::new().fg(if on || cursor {
                     theme.key()
                 } else {
@@ -470,15 +510,15 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                 }),
             ),
             Span::styled(
-                format!("{:<6}", "▇".repeat(width.max(1))),
+                format!("{:<bar$}", "▇".repeat(width.clamp(1, bar))),
                 Style::new().fg(theme.kind(token)),
             ),
-            Span::styled(format!("{said:>6}"), Style::new().fg(theme.ink_3())),
+            Span::styled(format!(" {said}"), Style::new().fg(theme.ink_3())),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(head("WHERE"));
-    for (label, path) in app.places.iter().take(crate::app::PLACES_SHOWN) {
+    for (label, path) in app.places.iter().take(places_shown) {
         let term = scour_ui::query::of_place(path);
         let on = app.filter.as_deref() == Some(term.as_str());
         let cursor = here(at, app);
@@ -508,6 +548,17 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         )));
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// A rule across the window, in the quietest line colour there is.
+fn across(f: &mut Frame, area: Rect, theme: &Theme) {
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::new().fg(theme.line()),
+        ))),
+        area,
+    );
 }
 
 /// The twenty-four bars of the time strip, and the axis under them.
@@ -613,6 +664,9 @@ fn tail(text: &str, to: usize) -> String {
 /// The one line at the bottom: what is picked or where the cursor is, the
 /// order, and which mode.
 fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
+    // The same strip of panel the query line is drawn on, which closes the
+    // window at the bottom without spending a row on a rule.
+    f.render_widget(Block::new().style(Style::new().bg(theme.panel())), area);
     let dim = Style::new().fg(theme.ink_3());
     let (picked, folders, bytes) = app.weighed();
     // **What is picked displaces where the cursor is**, because a selection is

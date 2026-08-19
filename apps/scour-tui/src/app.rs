@@ -10,15 +10,14 @@ use scour_page::{Change, Pages};
 
 use crate::link::TYPING_CAP;
 
-/// How many kinds and how many places the rail offers.
-///
-/// **Both the drawing and the hit test count in these**, so they are here
-/// rather than in either. Five and four is what fits beside a list on a
-/// twenty-four-line terminal once the three headings and the two blank lines
-/// are paid for; more than that and the size section falls off the bottom,
-/// which is how it was.
-pub const KINDS_SHOWN: usize = 5;
-pub const PLACES_SHOWN: usize = 4;
+/// The three size bands are always offered, and the rail's fixed furniture is
+/// three headings and two blank lines.
+const RAIL_FIXED: usize = 3 + 3 + 2;
+/// Never fewer than this many kinds, even on a short terminal: a rail showing
+/// two of them says less than the query line already does.
+const KINDS_LEAST: usize = 4;
+/// More places than this is a list of somebody's whole home directory.
+const PLACES_MOST: usize = 6;
 
 /// What is over the list, if anything.
 ///
@@ -378,6 +377,26 @@ impl App {
         self.dirty = true;
     }
 
+    /// How many kinds and how many places the rail has room for.
+    ///
+    /// **Counted from the terminal rather than fixed.** Five was what fitted a
+    /// twenty-four-line window, and on a fifty-line one it left two thirds of
+    /// the rail empty while the list showed a hundred kinds' worth of rows.
+    /// Both the drawing and the hit test ask this, so they cannot disagree.
+    pub fn rail_room(&self) -> (usize, usize) {
+        // The rail spans the heading line as well as the list.
+        let lines = (self.room + 1).saturating_sub(RAIL_FIXED);
+        let places = self.places.len().min(PLACES_MOST);
+        let kinds = self
+            .kinds
+            .len()
+            .min(lines.saturating_sub(places).max(KINDS_LEAST));
+        // A short terminal gives the kinds their floor and takes it out of the
+        // places: what is in the index matters more than where it is kept.
+        let places = places.min(lines.saturating_sub(kinds));
+        (kinds, places)
+    }
+
     /// Everything the rail offers, in the order it is drawn: what it says and
     /// what pressing it asks for.
     ///
@@ -385,16 +404,17 @@ impl App {
     /// cursor moves down all of it and a section boundary is a blank line, not
     /// a place to get stuck.
     pub fn rail_lines(&self) -> Vec<(String, String)> {
+        let (kinds, places) = self.rail_room();
         let mut out: Vec<(String, String)> = self
             .kinds
             .iter()
-            .take(KINDS_SHOWN)
+            .take(kinds)
             .map(|(token, _)| (token.clone(), scour_ui::query::of_kind(token)))
             .collect();
         out.extend(
             self.places
                 .iter()
-                .take(PLACES_SHOWN)
+                .take(places)
                 .map(|(label, path)| (label.clone(), scour_ui::query::of_place(path))),
         );
         out.extend(
@@ -412,8 +432,7 @@ impl App {
     /// whatever is nearest. The shape has to agree with `draw::side`, and this
     /// is the one place that knows it.
     pub fn rail_hit(&self, line: usize) -> Option<usize> {
-        let kinds = self.kinds.len().min(KINDS_SHOWN);
-        let places = self.places.len().min(PLACES_SHOWN);
+        let (kinds, places) = self.rail_room();
         let sizes = scour_ui::query::SIZES.len();
         // heading, kinds…, blank, heading, places…, blank, heading, sizes…
         let mut at = 0usize;
