@@ -26,6 +26,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+A", "pick nothing"),
     ("Ctrl+← →", "sort by the next column"),
     ("Ctrl+↑ ↓", "reverse the order"),
+    ("Tab", "the rail, and back"),
     ("F1", "this"),
     ("Esc", "clear the query, then move mode"),
     ("j k · g G · d u", "move, in move mode"),
@@ -81,12 +82,30 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             let to = app.cursor + 1;
             return app.pick_to(to);
         }
+        // **`Tab` decides where the arrows go**, and the footer says which.
+        KeyCode::Tab | KeyCode::BackTab => {
+            app.in_rail = !app.in_rail && app.rail;
+            app.dirty = true;
+            return Want::Nothing;
+        }
+        KeyCode::Up if app.in_rail => {
+            app.rail_walk(-1);
+            return Want::Nothing;
+        }
+        KeyCode::Down if app.in_rail => {
+            app.rail_walk(1);
+            return Want::Nothing;
+        }
         KeyCode::Up => return app.walk(-1),
         KeyCode::Down => return app.walk(1),
         KeyCode::PageUp => return app.walk(-page),
         KeyCode::PageDown => return app.walk(page),
         KeyCode::Home => return app.go(0),
         KeyCode::End => return app.go(usize::MAX),
+        // In the rail, `Enter` presses the filter under the cursor; in the
+        // list it opens what is under it. One key, two places, and the cursor
+        // says which — the same rule the arrows follow.
+        KeyCode::Enter if app.in_rail => return app.rail_press(),
         KeyCode::Enter => return open(app, shift),
         _ => {}
     }
@@ -284,6 +303,40 @@ mod tests {
         press(&mut app, key(KeyCode::Char('x')));
         assert!(!app.helping);
         assert_eq!(app.query, "", "and that key did nothing else");
+    }
+
+    #[test]
+    fn tab_moves_the_arrows_into_the_rail_and_back() {
+        let mut app = App::default();
+        app.room = 4;
+        app.pages.set_total(100);
+        app.kinds = vec![("doc".into(), 9), ("code".into(), 4)];
+        press(&mut app, key(KeyCode::Tab));
+        assert!(app.in_rail);
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(app.rail_at, 1, "in the rail, down moves the rail");
+        assert_eq!(app.cursor, 0, "and leaves the list alone");
+        press(&mut app, key(KeyCode::Tab));
+        assert!(!app.in_rail);
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(app.cursor, 1, "and now it moves the list again");
+    }
+
+    #[test]
+    fn pressing_a_filter_narrows_the_query_and_pressing_it_again_does_not() {
+        let mut app = App::default();
+        app.room = 4;
+        app.kinds = vec![("doc".into(), 9)];
+        app.in_rail = true;
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.filter.as_deref(), Some("kind:doc"));
+        assert_eq!(
+            app.asking(),
+            "kind:doc",
+            "and it is what the service is asked"
+        );
+        press(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.filter, None, "the same press clears it");
     }
 
     #[test]

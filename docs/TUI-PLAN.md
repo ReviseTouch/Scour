@@ -271,8 +271,14 @@ söylüyor. `Enter` açar, `Shift+Enter` klasörünü. *Doğrulama:* `--press` i
 sentetik tuşlar — seçim, yardım ve boyuta göre sıralama ekran dökümüyle
 görüldü.
 
-**Aşama 3 — ray ve şerit.** Tür/kapsam/boyut rayı, zaman şeridi, süzgeç
-birleştirme. *Kabul:* aynı sorgu üç yüzde aynı sayıyı veriyor.
+**Aşama 3 — ray ve şerit. ✔ 2026-08-19.** Tür rayı (kendi renginde çubuklar ve
+sayılar), kapsam rayı (`places`), üç boyut aralığı, 24 çubuklu zaman şeridi
+(bir bandın tek dosyası bile en az bir tik — sıfırla karışmasın diye). `Tab`
+okları raya alır, `Enter` basar, aynı satıra tekrar basmak temizler. Süzgeç
+birleştirme artık `scour-ui::query`'de — üçüncü kopya yazılmadı. Ray, yeni
+sayılar gelene kadar eskisini gösteriyor: boşalan bir ray imlecin altındaki
+satırı kaydırır. *Kabul karşılandı:* `kind:folder rapor` uçbirimde 347,
+komut satırında 347.
 
 **Aşama 4 — paneller.** Kurallar, dil, yardım, arayüz geçişi, CSV.
 *Kabul:* kural değiştirmek üç yüzde de aynı sonucu doğuruyor.

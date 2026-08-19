@@ -24,6 +24,7 @@
 
 pub mod format;
 pub mod path;
+pub mod query;
 
 /// A colour, and the one representation both sides can be built from.
 ///

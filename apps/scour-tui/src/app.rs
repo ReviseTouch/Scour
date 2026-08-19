@@ -83,6 +83,21 @@ pub struct App {
     pub anchor: usize,
     /// True while the key list is over everything.
     pub helping: bool,
+    /// The rail: what the matching rows are made of, and where they live.
+    pub kinds: Vec<(String, u64)>,
+    pub places: Vec<(String, String)>,
+    /// The twenty-four bars of the time strip, oldest first, and the day
+    /// each of them stands for.
+    pub strip: Vec<(u32, u64)>,
+    /// Which filter is in force, if any — `kind:code`, `under:"…"`, `dm:7d`.
+    pub filter: Option<String>,
+    /// Whether the rail is on screen. Off under eighty columns, where it
+    /// would take a third of the list.
+    pub rail: bool,
+    /// True while the arrows move in the rail rather than the list.
+    pub in_rail: bool,
+    /// Which line of the rail the cursor is on.
+    pub rail_at: usize,
     /// Set when a redraw is owed. **Nothing is drawn without one** — a
     /// terminal that redraws on a timer burns a core doing nothing.
     pub dirty: bool,
@@ -109,6 +124,13 @@ impl Default for App {
             picked: std::collections::BTreeMap::new(),
             anchor: 0,
             helping: false,
+            kinds: Vec::new(),
+            places: Vec::new(),
+            strip: Vec::new(),
+            filter: None,
+            rail: true,
+            in_rail: false,
+            rail_at: 0,
             dirty: true,
             leaving: false,
         }
@@ -264,6 +286,100 @@ impl App {
         self.follow()
     }
 
+    /// The rail's counts arrived.
+    pub fn counted(&mut self, generation: u64, reply: scour_core::FacetResponse) {
+        if generation != self.generation {
+            return;
+        }
+        for group in reply.groups {
+            match group.by {
+                scour_core::FacetBy::Kind => {
+                    self.kinds = group
+                        .facets
+                        .into_iter()
+                        .filter(|f| f.count > 0)
+                        .map(|f| (f.key, f.count))
+                        .collect();
+                }
+                scour_core::FacetBy::Age { .. } => {
+                    // The keys are the edges as text, and `older` is the
+                    // overflow band — which the strip does not draw: it is
+                    // everything before the axis starts, not a bar on it.
+                    self.strip = group
+                        .facets
+                        .into_iter()
+                        .filter_map(|f| f.key.parse::<u32>().ok().map(|days| (days, f.count)))
+                        .collect();
+                    self.strip.sort_by_key(|(days, _)| std::cmp::Reverse(*days));
+                }
+                _ => {}
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Everything the rail offers, in the order it is drawn: what it says and
+    /// what pressing it asks for.
+    ///
+    /// **One list rather than three sections walked separately**, because the
+    /// cursor moves down all of it and a section boundary is a blank line, not
+    /// a place to get stuck.
+    pub fn rail_lines(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .kinds
+            .iter()
+            .take(9)
+            .map(|(token, _)| (token.clone(), scour_ui::query::of_kind(token)))
+            .collect();
+        out.extend(
+            self.places
+                .iter()
+                .take(6)
+                .map(|(label, path)| (label.clone(), scour_ui::query::of_place(path))),
+        );
+        out.extend(
+            scour_ui::query::SIZES
+                .iter()
+                .map(|(label, term)| ((*label).to_string(), (*term).to_string())),
+        );
+        out
+    }
+
+    /// Move the cursor in the rail.
+    pub fn rail_walk(&mut self, by: isize) {
+        let lines = self.rail_lines().len();
+        if lines == 0 {
+            return;
+        }
+        self.rail_at = self
+            .rail_at
+            .saturating_add_signed(by)
+            .min(lines.saturating_sub(1));
+        self.dirty = true;
+    }
+
+    /// Press whatever the rail's cursor is on.
+    pub fn rail_press(&mut self) -> Want {
+        let lines = self.rail_lines();
+        match lines.get(self.rail_at) {
+            Some((_, term)) => {
+                let term = term.clone();
+                self.press_filter(&term)
+            }
+            None => Want::Nothing,
+        }
+    }
+
+    /// Press a filter in the rail, or press the one in force to clear it.
+    pub fn press_filter(&mut self, term: &str) -> Want {
+        self.filter = scour_ui::query::pressed(self.filter.as_deref(), term);
+        // **The rail keeps what it is showing until new counts arrive.**
+        // Emptying it moves every line under the cursor, so the next press
+        // lands on something nobody aimed at — and a rail that blinks empty
+        // after every press is one people stop trusting.
+        self.typed()
+    }
+
     /// The service said no.
     pub fn upset(&mut self, generation: u64, why: String) -> Want {
         if generation != self.generation {
@@ -290,11 +406,16 @@ impl App {
         }
     }
 
+    /// What the service is asked: what was typed, and whatever is pressed.
+    pub fn asking(&self) -> String {
+        scour_ui::query::compose(&self.query, self.filter.as_deref())
+    }
+
     fn ask(&mut self, offset: u32, limit: u32, cap: u32) -> Want {
         self.pages.asking(Pages::<Hit>::page_of(offset as usize));
         Want::Page {
             generation: self.generation,
-            query: self.query.clone(),
+            query: self.asking(),
             sort: self.sort,
             descending: self.descending,
             offset,

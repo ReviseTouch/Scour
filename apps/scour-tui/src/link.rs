@@ -16,7 +16,7 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
-use scour_core::{Page, SortKey};
+use scour_core::{FacetBy, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
@@ -41,6 +41,15 @@ pub enum Ask {
         limit: u32,
         cap: u32,
     },
+    /// What the rail shows: the kinds, and the time strip's bands.
+    ///
+    /// **A lane of its own**, because a facet count walks the matching set and
+    /// a keystroke must not queue behind one. The window learned this the same
+    /// way: twenty milliseconds in front of every search is a search box that
+    /// feels broken.
+    Facets { generation: u64, query: String },
+    /// Where this desktop keeps things.
+    Places,
     /// Stop: the terminal is closing.
     Done,
 }
@@ -57,6 +66,13 @@ pub enum Got {
         limit: u32,
         reply: Box<scour_core::SearchResponse>,
     },
+    /// The rail's counts.
+    Facets {
+        generation: u64,
+        reply: Box<scour_core::FacetResponse>,
+    },
+    /// The desktop's own folders.
+    Places(Vec<(String, String)>),
     /// The service could not be reached, or said no.
     Trouble { generation: u64, why: String },
 }
@@ -64,6 +80,7 @@ pub enum Got {
 /// The service, at the far end of a thread.
 pub struct Link {
     asks: Sender<Ask>,
+    slow: Sender<Ask>,
 }
 
 impl Link {
@@ -71,33 +88,36 @@ impl Link {
     /// receiver, which the event loop selects on alongside the keyboard.
     pub fn start(addr: String) -> (Link, Receiver<Got>) {
         let (asks, inbox) = channel::<Ask>();
+        let (slow, waiting) = channel::<Ask>();
         let (gots, answers) = channel::<Got>();
-        thread::spawn(move || serve(&addr, &inbox, &gots));
-        (Link { asks }, answers)
+        let fast_addr = addr.clone();
+        let fast_out = gots.clone();
+        thread::spawn(move || serve(&fast_addr, &inbox, &fast_out));
+        // Two connections, because `scour-ipc` is one call at a time and
+        // `scourd` is a thread per connection.
+        thread::spawn(move || serve(&addr, &waiting, &gots));
+        (Link { asks, slow }, answers)
     }
 
+    /// What a keystroke needs.
     pub fn send(&self, ask: Ask) {
         // A closed channel means the thread is gone, which happens only while
         // shutting down. Nothing to report to anybody who could act on it.
         let _ = self.asks.send(ask);
+    }
+
+    /// What a keystroke can wait for.
+    pub fn later(&self, ask: Ask) {
+        let _ = self.slow.send(ask);
     }
 }
 
 fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
     let mut client: Option<Client> = None;
     while let Ok(ask) = inbox.recv() {
-        let Ask::Search {
-            generation,
-            query,
-            sort,
-            descending,
-            offset,
-            limit,
-            cap,
-        } = ask
-        else {
+        if matches!(ask, Ask::Done) {
             return;
-        };
+        }
         // **Reconnect on every failure rather than once at startup.** The
         // service is restarted far more often than this is — a rebuild, a
         // config change, `systemctl restart` — and an interface that dies with
@@ -105,6 +125,10 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
         if client.is_none() {
             client = Client::connect(addr).ok();
         }
+        let generation = match &ask {
+            Ask::Search { generation, .. } | Ask::Facets { generation, .. } => *generation,
+            _ => 0,
+        };
         let Some(link) = client.as_mut() else {
             let _ = out.send(Got::Trouble {
                 generation,
@@ -112,30 +136,72 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             });
             continue;
         };
-        let request = Request::Search {
-            query,
-            sort,
-            descending,
-            page: Page {
+        let request = match ask {
+            Ask::Search {
+                query,
+                sort,
+                descending,
                 offset,
                 limit,
-                count_cap: cap,
-                ..Page::default()
+                cap,
+                ..
+            } => Request::Search {
+                query,
+                sort,
+                descending,
+                page: Page {
+                    offset,
+                    limit,
+                    count_cap: cap,
+                    ..Page::default()
+                },
             },
+            // The kinds and the twenty-four bars of the strip, from one walk of
+            // the matching set rather than two.
+            Ask::Facets { query, .. } => Request::Facets {
+                query,
+                by: vec![
+                    FacetBy::Kind,
+                    FacetBy::Age {
+                        edges: scour_ui::bar_edges(),
+                    },
+                ],
+            },
+            Ask::Places => Request::Places {},
+            Ask::Done => return,
+        };
+        let offsets = match &request {
+            Request::Search { page, .. } => (page.offset, page.limit),
+            _ => (0, 0),
         };
         match link.call(request) {
             Ok(Response::Search(reply)) => {
                 let _ = out.send(Got::Search {
                     generation,
-                    offset,
-                    limit,
+                    offset: offsets.0,
+                    limit: offsets.1,
                     reply: Box::new(reply),
                 });
             }
-            Ok(_) => {
+            Ok(Response::Facets(reply)) => {
+                let _ = out.send(Got::Facets {
+                    generation,
+                    reply: Box::new(reply),
+                });
+            }
+            Ok(Response::Places(places)) => {
+                let _ = out.send(Got::Places(
+                    places
+                        .places
+                        .into_iter()
+                        .map(|p| (p.label, p.path))
+                        .collect(),
+                ));
+            }
+            Ok(other) => {
                 let _ = out.send(Got::Trouble {
                     generation,
-                    why: "unexpected reply".into(),
+                    why: format!("unexpected reply: {other:?}"),
                 });
             }
             Err(e) => {

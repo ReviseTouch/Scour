@@ -89,6 +89,9 @@ fn main() -> Result<()> {
     let (beats, waiting) = channel::<Beat>();
     let (link, answers) = Link::start(addr);
     pump(&beats, answers);
+    // Where this desktop keeps things. Asked once: it is a file the desktop
+    // wrote, not something that changes while somebody searches.
+    link.later(Ask::Places);
 
     let mut state = App {
         query: args.query.clone(),
@@ -152,6 +155,13 @@ fn snap(
                 act(state.upset(generation, why), link);
                 break;
             }
+            // **Taken, not dropped.** The rail's counts and the desktop's
+            // folders arrive on the other lane and usually first; a wait that
+            // threw them away photographed an empty rail every time.
+            Ok(Beat::Reply(Got::Facets { generation, reply })) => {
+                state.counted(generation, *reply);
+            }
+            Ok(Beat::Reply(Got::Places(places))) => state.places = places,
             Ok(_) => {}
             Err(_) => break,
         }
@@ -250,6 +260,13 @@ fn run(
                 let want = state.landed(generation, offset, limit, *reply);
                 act(want, link);
             }
+            Beat::Reply(Got::Facets { generation, reply }) => {
+                state.counted(generation, *reply);
+            }
+            Beat::Reply(Got::Places(places)) => {
+                state.places = places;
+                state.dirty = true;
+            }
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
@@ -279,6 +296,10 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
+            Beat::Reply(Got::Facets { generation, reply }) => {
+                state.counted(generation, *reply);
+            }
+            Beat::Reply(Got::Places(places)) => state.places = places,
             _ => {}
         }
     }
@@ -302,6 +323,9 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
         "home" => KeyCode::Home,
         "end" => KeyCode::End,
         "space" => KeyCode::Char(' '),
+        "tab" => KeyCode::Tab,
+        "enter" => KeyCode::Enter,
+        "backspace" => KeyCode::Backspace,
         "esc" => KeyCode::Esc,
         "f1" => KeyCode::F(1),
         "left" => KeyCode::Left,
@@ -312,6 +336,10 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
 }
 
 /// Do what a step asked for.
+///
+/// The rail's counts go out beside the first page of a query and on the slow
+/// lane — they walk the matching set, and a keystroke must not queue behind
+/// one.
 fn act(want: Want, link: &Link) {
     match want {
         Want::Nothing | Want::Leave => {}
@@ -323,14 +351,22 @@ fn act(want: Want, link: &Link) {
             offset,
             limit,
             cap,
-        } => link.send(Ask::Search {
-            generation,
-            query,
-            sort,
-            descending,
-            offset,
-            limit,
-            cap,
-        }),
+        } => {
+            if offset == 0 {
+                link.later(Ask::Facets {
+                    generation,
+                    query: query.clone(),
+                });
+            }
+            link.send(Ask::Search {
+                generation,
+                query,
+                sort,
+                descending,
+                offset,
+                limit,
+                cap,
+            });
+        }
     }
 }

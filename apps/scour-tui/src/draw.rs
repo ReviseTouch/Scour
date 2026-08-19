@@ -33,19 +33,52 @@ pub fn room(height: u16) -> usize {
 pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     let area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(theme.back())), area);
-    let [top, meter, heads, list, foot] = Layout::vertical([
+    // The strip of time is worth two lines and only where there are lines to
+    // spare: under twenty rows it would take a fifth of the list.
+    let strip_high = if area.height >= 20 && !app.strip.is_empty() {
+        2
+    } else {
+        0
+    };
+    let [top, meter, heads, list, strip, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
+        Constraint::Length(strip_high),
         Constraint::Length(1),
     ])
     .areas(area);
 
     query(f, top, app, theme);
     counts(f, meter, app, theme, mark);
+    // **The rail goes when the terminal is narrow.** Twenty-two columns out of
+    // eighty is a quarter of the list, and the list is what somebody came for.
+    let wide = area.width >= 80 && app.rail;
+    let (heads, list, rail) = if wide {
+        let [rail, heads] =
+            Layout::horizontal([Constraint::Length(22), Constraint::Fill(1)]).areas(heads);
+        let [_, list] =
+            Layout::horizontal([Constraint::Length(22), Constraint::Fill(1)]).areas(list);
+        (
+            heads,
+            list,
+            Some(rail.union(Rect {
+                height: list.height + 1,
+                ..rail
+            })),
+        )
+    } else {
+        (heads, list, None)
+    };
     heading(f, heads, theme);
     rows(f, list, app, theme, mark);
+    if let Some(area) = rail {
+        side(f, area, app, theme, mark);
+    }
+    if strip_high > 0 {
+        when(f, strip, app, theme);
+    }
     footer(f, foot, app, theme, mark);
     if app.helping {
         help(f, area, theme);
@@ -246,6 +279,137 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     }
 }
 
+/// The rail: what the matching rows are made of, where they live, how big
+/// they are — and the strip of time under the list.
+fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
+    let mut lines: Vec<Line> = Vec::new();
+    let head = |what: &str| {
+        Line::from(Span::styled(
+            format!(" {what}"),
+            Style::new()
+                .fg(theme.ink_3())
+                .add_modifier(Modifier::BOLD | Modifier::DIM),
+        ))
+    };
+    let most = app.kinds.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+    // Where the rail's own cursor is, counted over the lines it offers rather
+    // than the lines drawn: the headings and the blanks are not stops.
+    let mut at = 0usize;
+    let here = |at: usize, app: &App| app.in_rail && app.rail_at == at;
+    lines.push(head("KIND"));
+    for (token, count) in app.kinds.iter().take(9) {
+        let term = scour_ui::query::of_kind(token);
+        let on = app.filter.as_deref() == Some(term.as_str());
+        // A bar as wide as the count is large, in the kind's own colour: the
+        // same reading the window's rail offers, in eight characters.
+        let width = ((*count as f64 / most as f64) * 6.0).round() as usize;
+        let said = format::grouped(*count, mark.0);
+        let cursor = here(at, app);
+        at += 1;
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}{:<7}", if cursor { "▸" } else { " " }, cut(token, 7)),
+                Style::new().fg(if on || cursor {
+                    theme.key()
+                } else {
+                    theme.ink_2()
+                }),
+            ),
+            Span::styled(
+                format!("{:<6}", "▇".repeat(width.max(1))),
+                Style::new().fg(theme.kind(token)),
+            ),
+            Span::styled(format!("{said:>6}"), Style::new().fg(theme.ink_3())),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(head("WHERE"));
+    for (label, path) in app.places.iter().take(6) {
+        let term = scour_ui::query::of_place(path);
+        let on = app.filter.as_deref() == Some(term.as_str());
+        let cursor = here(at, app);
+        at += 1;
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", if cursor { "▸" } else { " " }, cut(label, 19)),
+            Style::new().fg(if on || cursor {
+                theme.key()
+            } else {
+                theme.ink_2()
+            }),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(head("SIZE"));
+    for (label, term) in scour_ui::query::SIZES {
+        let on = app.filter.as_deref() == Some(term);
+        let cursor = here(at, app);
+        at += 1;
+        lines.push(Line::from(Span::styled(
+            format!("{}{label}", if cursor { "▸" } else { " " }),
+            Style::new().fg(if on || cursor {
+                theme.key()
+            } else {
+                theme.ink_2()
+            }),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// The twenty-four bars of the time strip, and the axis under them.
+///
+/// **Eight heights out of one block character**, because a terminal row is
+/// one cell tall and the shape of the distribution is the whole point: a
+/// bar that is either there or not says nothing about how much of the result
+/// is a week old.
+fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    let most = app.strip.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+    let bars: Vec<Span> = app
+        .strip
+        .iter()
+        .map(|(days, count)| {
+            // **Nothing is nothing, and anything is at least a tick.** A band
+            // holding four files out of nine thousand rounds to nought, and a
+            // blank there reads as "no files this week" rather than "few".
+            let step = if *count == 0 {
+                0
+            } else {
+                (((*count as f64 / most as f64) * 8.0).round() as usize).max(1)
+            };
+            Span::styled(
+                BLOCKS[step.min(8)],
+                Style::new().fg(theme.band(scour_ui::band_of(*days as f64))),
+            )
+        })
+        .collect();
+    let [bar_line, axis] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
+    let mut line = vec![Span::raw(" ")];
+    line.extend(bars);
+    f.render_widget(Paragraph::new(Line::from(line)), bar_line);
+    let dim = Style::new().fg(theme.ink_3());
+    // The axis ends where the bars end, not where the terminal does.
+    let span = app.strip.len().max(6);
+    let left = "two years ago";
+    let gap = span.saturating_sub(left.chars().count() + 5);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {left}{}today", " ".repeat(gap)),
+            dim,
+        ))),
+        axis,
+    );
+}
+
+/// A label, cut to fit rather than wrapped: a rail is one line per thing.
+fn cut(text: &str, to: usize) -> String {
+    if text.chars().count() <= to {
+        return text.to_string();
+    }
+    text.chars().take(to.saturating_sub(1)).collect::<String>() + "…"
+}
+
 /// The one line at the bottom: what is picked or where the cursor is, the
 /// order, and which mode.
 fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
@@ -270,9 +434,13 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             .map(|h| h.path.clone())
             .unwrap_or_else(|| "—".into())
     };
-    let mode = match app.mode {
-        Mode::Search => "search",
-        Mode::Move => "move",
+    let mode = if app.in_rail {
+        "rail"
+    } else {
+        match app.mode {
+            Mode::Search => "search",
+            Mode::Move => "move",
+        }
     };
     let [left, right] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)]).areas(area);
