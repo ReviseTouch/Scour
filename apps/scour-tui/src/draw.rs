@@ -54,7 +54,10 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     counts(f, meter, app, theme, mark);
     // **The rail goes when the terminal is narrow.** Twenty-two columns out of
     // eighty is a quarter of the list, and the list is what somebody came for.
-    let wide = area.width >= 80 && app.rail;
+    // **A hundred columns before the rail is worth its room.** At eighty it
+    // took twenty-two of them and left the name ten characters wide, which is
+    // not a name — it is a hint that there was one.
+    let wide = area.width >= 100 && app.rail;
     let (heads, list, rail) = if wide {
         let [rail, heads] =
             Layout::horizontal([Constraint::Length(22), Constraint::Fill(1)]).areas(heads);
@@ -74,7 +77,20 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     heading(f, heads, theme);
     rows(f, list, app, theme, mark);
     if let Some(area) = rail {
-        side(f, area, app, theme, mark);
+        // A line between the rail and the list, because the age stripe down
+        // the left of every row butted straight against the rail's text and
+        // the two read as one column of noise.
+        let [rail, rule] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(2)]).areas(area);
+        side(f, rail, app, theme, mark);
+        f.render_widget(
+            Paragraph::new(
+                (0..rule.height)
+                    .map(|_| Line::from(Span::styled("│ ", Style::new().fg(theme.line()))))
+                    .collect::<Vec<_>>(),
+            ),
+            rule,
+        );
     }
     if strip_high > 0 {
         when(f, strip, app, theme);
@@ -247,9 +263,9 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         Span::styled(" ", dim),
         Span::styled(
             format!(
-                "{} / {}{}",
+                "{} of {}{}",
                 format::grouped(shown as u64, mark.0),
-                if app.capped { "≥" } else { "" },
+                if app.capped { "at least " } else { "" },
                 format::grouped(total as u64, mark.0)
             ),
             Style::new().fg(theme.ink_2()),
@@ -263,7 +279,9 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             Style::new().fg(theme.key()),
         ));
     }
-    if app.rows_visited > 0 {
+    // **What it cost the index is not what a reader came for.** It is the
+    // number this was tuned against and it belongs where the tuning happens.
+    if app.rows_visited > 0 && std::env::var("SCOUR_TRACE").is_ok() {
         parts.push(Span::styled("  ·  ", dim));
         parts.push(Span::styled(
             format!("{} rows read", format::grouped(app.rows_visited, mark.0)),
@@ -276,27 +294,43 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
 /// The column names, in the page's order.
 fn heading(f: &mut Frame, area: Rect, theme: &Theme) {
     let style = Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM);
-    let names = ["  NAME", "KIND", "WHERE", "CHANGED", "SIZE"];
+    let names = ["  NAME", "WHERE", "CHANGED", "SIZE"];
     let cells: Vec<Cell> = names
         .iter()
         .map(|n| Cell::from(Span::styled(*n, style)))
         .collect();
     f.render_widget(
-        Table::new(vec![Row::new(cells)], widths()).column_spacing(1),
+        Table::new(vec![Row::new(cells)], widths_for(area.width)).column_spacing(1),
         area,
     );
 }
 
 /// What each column gets. `Fill` on the two that can take it, so a narrow
 /// terminal eats the path before it eats the name.
-fn widths() -> [Constraint; 5] {
+fn widths_for(width: u16) -> [Constraint; 4] {
     [
-        Constraint::Fill(2),
-        Constraint::Length(10),
+        // **No kind column.** It was ten columns of the same English word
+        // repeated down the screen — `doc doc doc doc` — while the name beside
+        // it was already drawn in that kind's colour and the rail already said
+        // how many of each there were. The room went to the two columns that
+        // were being cut mid-word.
         Constraint::Fill(3),
-        Constraint::Length(16),
-        Constraint::Length(10),
+        Constraint::Fill(4),
+        // The time of day goes first when there is no room for it: the date
+        // orders the list and the minute is read once in a hundred rows.
+        Constraint::Length(if width >= 110 { 16 } else { 10 }),
+        Constraint::Length(9),
     ]
+}
+
+/// The stamp, cut to what the column can hold.
+fn when_of(secs: i64, width: u16) -> String {
+    let said = format::stamp(secs);
+    if width >= 110 {
+        said
+    } else {
+        said.chars().take(10).collect()
+    }
 }
 
 fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
@@ -316,6 +350,15 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+    // What each column actually comes to, so that a name can be cut with a
+    // mark rather than by the table, which cuts silently and mid-word.
+    let columns = Layout::horizontal(widths_for(area.width))
+        .spacing(1)
+        .split(area);
+    let (name_w, where_w) = (
+        columns[0].width.saturating_sub(2) as usize,
+        columns[1].width as usize,
+    );
     let mut drawn: Vec<Row> = Vec::with_capacity(app.room);
     for row in app.top..(app.top + app.room).min(total.max(app.top)) {
         let here = row == app.cursor;
@@ -345,17 +388,13 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                     },
                     Style::new().fg(theme.key()),
                 ),
-                Span::styled(name.to_string(), line),
+                Span::styled(cut(name, name_w), line),
             ])),
             Cell::from(Span::styled(
-                hit.kind.token().to_string(),
-                Style::new().fg(theme.kind(hit.kind.token())),
-            )),
-            Cell::from(Span::styled(
-                scour_ui::path::folder(&hit.path).to_string(),
+                tail(scour_ui::path::folder(&hit.path), where_w),
                 Style::new().fg(theme.ink_3()),
             )),
-            Cell::from(Span::styled(format::stamp(hit.meta.mtime), line)),
+            Cell::from(Span::styled(when_of(hit.meta.mtime, area.width), line)),
             Cell::from(Span::styled(
                 if hit.is_dir {
                     String::new()
@@ -372,7 +411,10 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         };
         drawn.push(Row::new(cells).style(style));
     }
-    f.render_widget(Table::new(drawn, widths()).column_spacing(1), area);
+    f.render_widget(
+        Table::new(drawn, widths_for(area.width)).column_spacing(1),
+        area,
+    );
 
     // Our own scrollbar, on the right, because the list is a window onto a
     // result rather than a scrolled buffer: ratatui's needs to be told where
@@ -409,7 +451,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     let mut at = 0usize;
     let here = |at: usize, app: &App| app.in_rail && app.rail_at == at;
     lines.push(head("KIND"));
-    for (token, count) in app.kinds.iter().take(9) {
+    for (token, count) in app.kinds.iter().take(crate::app::KINDS_SHOWN) {
         let term = scour_ui::query::of_kind(token);
         let on = app.filter.as_deref() == Some(term.as_str());
         // A bar as wide as the count is large, in the kind's own colour: the
@@ -436,7 +478,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     }
     lines.push(Line::from(""));
     lines.push(head("WHERE"));
-    for (label, path) in app.places.iter().take(6) {
+    for (label, path) in app.places.iter().take(crate::app::PLACES_SHOWN) {
         let term = scour_ui::query::of_place(path);
         let on = app.filter.as_deref() == Some(term.as_str());
         let cursor = here(at, app);
@@ -543,11 +585,29 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 /// A label, cut to fit rather than wrapped: a rail is one line per thing.
+///
+/// **With a mark saying it was cut.** Four rows reading `COLPAN_Teknik` are
+/// four rows nobody can tell apart; `COLPAN_Teknik…` at least says the name
+/// goes on.
 fn cut(text: &str, to: usize) -> String {
     if text.chars().count() <= to {
         return text.to_string();
     }
     text.chars().take(to.saturating_sub(1)).collect::<String>() + "…"
+}
+
+/// A path, cut from the **front**.
+///
+/// Every path on this machine starts `/home/hasan/`, and cutting the end
+/// throws away the part that says which folder this is — which is the only
+/// part being read.
+fn tail(text: &str, to: usize) -> String {
+    let len = text.chars().count();
+    if len <= to {
+        return text.to_string();
+    }
+    let from = len - to.saturating_sub(1);
+    "…".to_string() + &text.chars().skip(from).collect::<String>()
 }
 
 /// The one line at the bottom: what is picked or where the cursor is, the
@@ -558,6 +618,7 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     // **What is picked displaces where the cursor is**, because a selection is
     // something somebody is about to act on and a path is something they can
     // already see in the list.
+    let room = area.width.saturating_sub(32) as usize;
     let path = if picked > 0 {
         let mut said = format!("{picked} picked");
         if folders > 0 {
@@ -571,7 +632,7 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         said
     } else {
         app.here()
-            .map(|h| h.path.clone())
+            .map(|h| tail(&h.path, room))
             .unwrap_or_else(|| "—".into())
     };
     let mode = if app.in_rail {

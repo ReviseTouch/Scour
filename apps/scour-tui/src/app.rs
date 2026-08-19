@@ -10,6 +10,16 @@ use scour_page::{Change, Pages};
 
 use crate::link::TYPING_CAP;
 
+/// How many kinds and how many places the rail offers.
+///
+/// **Both the drawing and the hit test count in these**, so they are here
+/// rather than in either. Five and four is what fits beside a list on a
+/// twenty-four-line terminal once the three headings and the two blank lines
+/// are paid for; more than that and the size section falls off the bottom,
+/// which is how it was.
+pub const KINDS_SHOWN: usize = 5;
+pub const PLACES_SHOWN: usize = 4;
+
 /// What is over the list, if anything.
 ///
 /// One at a time, and the same rule the window follows: a second panel behind
@@ -378,13 +388,13 @@ impl App {
         let mut out: Vec<(String, String)> = self
             .kinds
             .iter()
-            .take(9)
+            .take(KINDS_SHOWN)
             .map(|(token, _)| (token.clone(), scour_ui::query::of_kind(token)))
             .collect();
         out.extend(
             self.places
                 .iter()
-                .take(6)
+                .take(PLACES_SHOWN)
                 .map(|(label, path)| (label.clone(), scour_ui::query::of_place(path))),
         );
         out.extend(
@@ -402,8 +412,8 @@ impl App {
     /// whatever is nearest. The shape has to agree with `draw::side`, and this
     /// is the one place that knows it.
     pub fn rail_hit(&self, line: usize) -> Option<usize> {
-        let kinds = self.kinds.len().min(9);
-        let places = self.places.len().min(6);
+        let kinds = self.kinds.len().min(KINDS_SHOWN);
+        let places = self.places.len().min(PLACES_SHOWN);
         let sizes = scour_ui::query::SIZES.len();
         // heading, kinds…, blank, heading, places…, blank, heading, sizes…
         let mut at = 0usize;
