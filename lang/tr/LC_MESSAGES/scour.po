@@ -971,3 +971,46 @@ msgstr "yazıldı:"
 
 msgid "could not be written"
 msgstr "yazılamadı"
+
+# The interface switcher: which way of running Scour, and what choosing one does.
+msgid "how to run it"
+msgstr "nasıl çalışsın"
+
+msgid "Window"
+msgstr "Pencere"
+
+msgid "running now"
+msgstr "şu an bu"
+
+msgid "Terminal"
+msgstr "Uçbirim"
+
+msgid "Opens a terminal and runs Scour in it. This window stays where it is."
+msgstr "Bir uçbirim açar ve Scour'u orada çalıştırır. Bu pencere yerinde kalır."
+
+msgid "not built yet"
+msgstr "henüz yok"
+
+msgid "Browser"
+msgstr "Tarayıcı"
+
+msgid "Starts scour-web, which listens on 127.0.0.1:7621 and opens your browser. Nothing outside this computer can reach it, and the link carries a token that changes every run."
+msgstr "scour-web'i başlatır: 127.0.0.1:7621'i dinler ve tarayıcını açar. Bu bilgisayarın dışından erişilemez, ve bağlantı her koşumda değişen bir jeton taşır."
+
+msgid "open"
+msgstr "aç"
+
+msgid "not found"
+msgstr "bulunamadı"
+
+msgid "starting…"
+msgstr "başlatılıyor…"
+
+msgid "Starts the Scour window on this machine. This page stays open."
+msgstr "Bu makinede Scour penceresini başlatır. Bu sayfa açık kalır."
+
+msgid "Opens a terminal and runs Scour in it. This page stays open."
+msgstr "Bir uçbirim açar ve Scour'u orada çalıştırır. Bu sayfa açık kalır."
+
+msgid "switch between the window, the terminal and the browser"
+msgstr "pencere, uçbirim ve tarayıcı arasında geçiş yap"

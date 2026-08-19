@@ -8,27 +8,15 @@
 
 use std::cell::{Cell, RefCell};
 
-use humansize::{BINARY, format_size};
 use scour_core::{Hit, Kind, text::Folder};
 
 use crate::Row;
 
-const DAY: i64 = 86_400;
-
-/// Which of the six age bands a timestamp falls in.
-///
-/// The same bands the disk-usage report uses, and for the same reason: how old
-/// a thing is answers "is this what I was just working on" faster than a date
-/// does, and it does it in six pixels.
+/// Which of the six age bands a row falls in — the stripe down its left.
+/// [`scour_ui::format::band`] is the one that decides; this is the cast the
+/// generated Slint struct wants.
 pub fn band(now: i64, mtime: i64) -> i32 {
-    match now - mtime {
-        a if a < DAY => 0,
-        a if a < 7 * DAY => 1,
-        a if a < 30 * DAY => 2,
-        a if a < 180 * DAY => 3,
-        a if a < 365 * DAY => 4,
-        _ => 5,
-    }
+    scour_ui::format::band(now, mtime) as i32
 }
 
 /// A name cut into what precedes the match, the match, and what follows.
@@ -109,7 +97,7 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
         size: if h.is_dir {
             slint::SharedString::new()
         } else {
-            format_size(h.meta.size.max(0) as u64, BINARY).into()
+            scour_ui::format::size(h.meta.size.max(0) as u64, decimal()).into()
         },
         stamp: stamp(h.meta.mtime).into(),
         is_dir: h.is_dir,
@@ -118,38 +106,16 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
     }
 }
 
-/// `YYYY-MM-DD HH:MM`, in UTC.
-///
-/// The same choice the CLI makes and for the same reason: local time needs the
-/// zone database, and a listing is read for ordering far more often than for
-/// the exact minute. A window will want a real clock eventually; this is not
-/// the thing to stop and get right before it opens.
+/// `YYYY-MM-DD HH:MM`, in UTC. The shared one — see
+/// [`scour_ui::format::stamp`] for why it is UTC.
 pub fn stamp(secs: i64) -> String {
-    if secs <= 0 {
-        return String::new();
-    }
-    let days = secs.div_euclid(DAY);
-    let rest = secs.rem_euclid(DAY);
-    let (y, m, d) = civil(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
-        rest / 3600,
-        rest % 3600 / 60
-    )
+    scour_ui::format::stamp(secs)
 }
 
-/// Days since the epoch to a calendar date. Howard Hinnant's `civil_from_days`.
-fn civil(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
+/// The decimal mark this window is punctuating with. `main` owns the language;
+/// this module only draws rows.
+fn decimal() -> char {
+    crate::marks().1
 }
 
 /// The kinds the rail offers, in the order it shows them.
@@ -209,43 +175,33 @@ mod tests {
         assert_eq!(stamp(0), "");
     }
 
+    /// The bands themselves are `scour-ui`'s and tested there; this is the
+    /// cast, which is the part that could quietly go wrong here.
     #[test]
-    fn the_bands_run_from_today_to_older() {
+    fn the_band_a_row_carries_is_the_shared_one() {
         let now = 1_800_000_000;
+        let day = scour_ui::format::DAY;
         assert_eq!(band(now, now), 0);
-        assert_eq!(band(now, now - 3 * DAY), 1);
-        assert_eq!(band(now, now - 400 * DAY), 5);
-        // A timestamp in the future is today, not older than everything.
-        assert_eq!(band(now, now + DAY), 0);
+        assert_eq!(band(now, now - 3 * day), 1);
+        assert_eq!(band(now, now - 400 * day), 5);
+        assert_eq!(band(now, now + day), 0, "the future is today");
     }
 }
 
 /// Rows in one page, and the size of every request the list makes.
 ///
-/// Aligned, so that a page is a *thing*: asked for once, kept, and found again
-/// by dividing. Sliding windows at arbitrary offsets cannot be kept, because
-/// no two of them line up.
-pub const SPAN: usize = scour_core::PAGE_ROWS as usize;
+/// [`scour_page`] owns the number and the rules that go with it; this is the
+/// name this window has always used for it.
+pub use scour_page::SPAN;
 
-/// How many pages are held at once.
+/// A row and what it weighs.
 ///
-/// **This is what makes the list feel like it is in memory.** Everything
-/// already looked at is still here, so scrolling back is a lookup rather than
-/// a request — and the request is what somebody sees as a stutter. Thirty-two
-/// pages is 6,400 rows of strings, a few megabytes, and about fifty screens
-/// in either direction.
-const KEPT: usize = 32;
-
-struct Held {
-    rows: Vec<Row>,
-    /// What each row weighs, which its drawn size does not say.
-    ///
-    /// The column holds `1.30 MiB`; a selection has to add them up, and adding
-    /// up strings is not a thing. Kept beside the rows rather than on them
-    /// because Slint's numbers are 32-bit and a file is not.
-    bytes: Vec<i64>,
-    /// The index revision these rows were read at. See [`Rows::mark`].
-    revision: u64,
+/// The column holds `1.30 MiB`; a selection has to add them up, and adding up
+/// strings is not a thing. Beside the row rather than on it because Slint's
+/// numbers are 32-bit and a file is not.
+pub struct Kept {
+    pub row: Row,
+    pub bytes: i64,
 }
 
 /// One row of a selection: what it is, where, and what it weighs.
@@ -259,10 +215,12 @@ pub struct Pick {
 impl Pick {
     /// The directory it sits in — what "open their folders" opens.
     pub fn folder(&self) -> &str {
-        match self.path.rfind('/') {
-            Some(0) => "/",
-            Some(at) => &self.path[..at],
-            None => ".",
+        // `.` where the shared one says nothing, because this answer is handed
+        // to a file manager: a name with no path in it is in the working
+        // directory, and an empty string is not somewhere to open.
+        match scour_ui::path::folder(&self.path) {
+            "" => ".",
+            up => up,
         }
     }
 }
@@ -282,7 +240,7 @@ impl Pick {
 /// Taken from `Hukuk-Dosyalar`'s `RowsModel`, which does the same thing over a
 /// store that is already in memory — and this is as close to that as a list
 /// whose rows live in another process can get. What that one never does is
-/// wait, so this one keeps [`KEPT`] pages and asks for the next one before
+/// wait, so this one keeps [`scour_page::KEPT`] pages and asks for the next one before
 /// anybody reaches it: waiting is then only for somewhere nobody has been.
 ///
 /// ## What the notifications have to be
@@ -300,25 +258,13 @@ impl Pick {
 /// actually differ, which leaves the viewport, the scrollbar and every element
 /// outside those rows exactly where they were.
 pub struct Rows {
-    pages: RefCell<std::collections::HashMap<usize, Held>>,
-    /// Which page was used least recently, first. What eviction reads.
-    order: RefCell<Vec<usize>>,
+    /// The pages, and every rule about which ones to have. See [`scour_page`].
+    pages: RefCell<scour_page::Pages<Kept>>,
     /// The page `row_data` last answered from, so the order is only rewritten
     /// when the eye crosses a page boundary rather than on every row drawn.
     touched: Cell<usize>,
-    /// How long the result is, which is what the view is sized from.
-    total: Cell<usize>,
-    /// The page a fetch is out for, and the index revision it was asked at.
-    asked: Cell<Option<(usize, u64)>>,
     /// A row the view asked for and this could not answer.
     want: Cell<Option<usize>>,
-    /// What "up to date" means now. See [`Rows::mark`].
-    revision: Cell<u64>,
-    /// The most rows a page has ever actually held.
-    ///
-    /// What the service gives, which is not always what was asked for: it has
-    /// a page ceiling of its own. See [`Rows::served`].
-    served: Cell<usize>,
     /// How many times the view has been told the list changed length.
     ///
     /// Kept because it is the number the scrolling bug was made of: it should
@@ -330,14 +276,9 @@ pub struct Rows {
 impl Default for Rows {
     fn default() -> Self {
         Rows {
-            pages: RefCell::new(std::collections::HashMap::new()),
-            order: RefCell::new(Vec::new()),
+            pages: RefCell::new(scour_page::Pages::default()),
             touched: Cell::new(usize::MAX),
-            total: Cell::new(0),
-            asked: Cell::new(None),
             want: Cell::new(None),
-            revision: Cell::new(0),
-            served: Cell::new(0),
             resets: Cell::new(0),
             notify: slint::ModelNotify::default(),
         }
@@ -347,13 +288,13 @@ impl Default for Rows {
 impl Rows {
     /// Which page a row belongs to.
     pub fn page_of(row: usize) -> usize {
-        row / SPAN
+        scour_page::Pages::<Kept>::page_of(row)
     }
 
     /// Hand over a page: which one, its rows, and how long the whole result is.
     ///
     /// Returns whether anything in it is new, which is what arms the arrival
-    /// wash — see below for what "new" has to mean.
+    /// wash.
     pub fn put(&self, page: usize, mut rows: Vec<Row>, bytes: Vec<i64>, total: usize) -> bool {
         // **New means new *here*.** A row is an arrival when this page has
         // been read before and did not have it; a page nobody had read yet has
@@ -362,77 +303,76 @@ impl Rows {
         // What it was: every row whose path was not in the *previous answer*,
         // whichever page that was for. So dragging the scrollbar washed the
         // whole list orange at every stop — two hundred files that had not
-        // changed since 2019, announcing themselves as changes — and the
-        // animation that says so kept the window repainting while it did.
+        // changed since 2019, announcing themselves as changes.
         let mut arrived = false;
-        if let Some(before) = self.pages.borrow().get(&page) {
-            let had: std::collections::HashSet<&str> =
-                before.rows.iter().map(|r| r.path.as_str()).collect();
-            for row in rows.iter_mut() {
-                row.fresh = !row.path.is_empty() && !had.contains(row.path.as_str());
-                arrived |= row.fresh;
+        {
+            let pages = self.pages.borrow();
+            if pages.holds(page) {
+                let had: std::collections::HashSet<String> = (0..SPAN)
+                    .filter_map(|i| pages.at(page * SPAN + i))
+                    .map(|k| k.row.path.to_string())
+                    .collect();
+                for row in rows.iter_mut() {
+                    row.fresh = !row.path.is_empty() && !had.contains(row.path.as_str());
+                    arrived |= row.fresh;
+                }
             }
         }
-        // Stamped with the revision the *request* went out at, not the one
-        // that is current now: an index that moved while the page was in
-        // flight has not been read yet, and stamping it as read would leave
-        // the change unfetched until the next one.
-        let revision = match self.asked.get() {
-            Some((asked, revision)) if asked == page => revision,
-            _ => self.revision.get(),
-        };
-        self.served.set(self.served.get().max(rows.len()));
-        let held = Held {
-            rows,
-            bytes,
-            revision,
-        };
-        let touched: Vec<usize> = {
-            let mut pages = self.pages.borrow_mut();
-            let n = held.rows.len();
-            pages.insert(page, held);
-            self.use_page(page);
-            (page * SPAN..page * SPAN + n).collect()
-        };
-        self.evict();
-        self.asked.set(None);
+        let kept: Vec<Kept> = rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, row)| Kept {
+                row,
+                bytes: bytes.get(i).copied().unwrap_or(0),
+            })
+            .collect();
+        let change = self.pages.borrow_mut().put(page, kept, total);
         self.want.set(None);
-        let was = self.total.get();
-        if total != was {
-            self.total.set(total);
-            self.resized(was, total);
-            return arrived;
-        }
-        for row in touched {
-            self.notify.row_changed(row);
-        }
+        self.tell(change);
         arrived
+    }
+
+    /// Pass on what a page call changed, in the terms the view understands.
+    fn tell(&self, change: scour_page::Change) {
+        match change {
+            scour_page::Change::Nothing => {}
+            scour_page::Change::Rows { from, to } => {
+                for row in from..to {
+                    self.notify.row_changed(row);
+                }
+            }
+            // **Added and removed, not reset.** A reset makes the view throw
+            // its layout state away with its elements, and what it rebuilds
+            // from is the top — so a list that grew while somebody was reading
+            // row nine thousand put them back at row one.
+            scour_page::Change::Length { was, now } => {
+                self.resets.set(self.resets.get() + 1);
+                if now > was {
+                    self.notify.row_added(was, now - was);
+                } else {
+                    self.notify.row_removed(now, was - now);
+                }
+            }
+        }
     }
 
     /// The length changed and nothing else did.
     ///
     /// The interactive search counts only to its cap, so the first answer to
     /// `a` says a thousand and the exact count arrives a moment later. Without
-    /// this the list stays a thousand rows tall over an index of millions —
-    /// and then jumps the first time a page happens to be fetched.
+    /// this the list stays a thousand rows tall over an index of millions.
     pub fn set_total(&self, total: usize) {
         // Never shorter than what is already loaded: a list that says it holds
         // fewer rows than it is holding cannot draw the ones it has.
         let total = total.max(self.held_to());
-        let was = self.total.get();
-        if total == was {
-            return;
-        }
-        self.total.set(total);
-        self.resized(was, total);
+        let change = self.pages.borrow_mut().set_total(total);
+        self.tell(change);
     }
 
     /// Everything here belongs to a different question. Start again.
     pub fn empty(&self) {
-        self.pages.borrow_mut().clear();
-        self.order.borrow_mut().clear();
+        self.pages.borrow_mut().empty();
         self.touched.set(usize::MAX);
-        self.asked.set(None);
         self.want.set(None);
     }
 
@@ -440,28 +380,29 @@ impl Rows {
     ///
     /// **Marked, not thrown away.** A page that is a second out of date is far
     /// better than a blank one: it is drawn at once and corrected when its
-    /// answer arrives. Only what is on screen is re-read — a page nobody is
-    /// looking at is re-read when somebody looks at it, and an index that
-    /// changes every second would otherwise have this window fetching for ever.
+    /// answer arrives.
     pub fn mark(&self, revision: u64) {
-        self.revision.set(revision);
+        self.pages.borrow_mut().mark(revision);
     }
 
     /// Take the arrival flags off the rows that are held.
     ///
     /// **Only the ones that are held**, which is the whole point. This used to
-    /// walk `0..row_count()` — the whole result — asking the model for every
-    /// row: seconds of frozen window on a large index, and every one of those
-    /// millions of misses looked to the model like the view asking for a row
-    /// it could not see, which sent the list somewhere else entirely.
+    /// walk the whole result asking the model for every row: seconds of frozen
+    /// window on a large index, and every one of those millions of misses
+    /// looked to the model like the view asking for a row it could not see.
     pub fn clear_fresh(&self) {
         let mut cleared = Vec::new();
         {
             let mut pages = self.pages.borrow_mut();
-            for (page, held) in pages.iter_mut() {
-                for (i, row) in held.rows.iter_mut().enumerate() {
-                    if row.fresh {
-                        row.fresh = false;
+            let held: Vec<usize> = pages.pages().collect();
+            for page in held {
+                let Some(rows) = pages.rows_mut(page) else {
+                    continue;
+                };
+                for (i, kept) in rows.iter_mut().enumerate() {
+                    if kept.row.fresh {
+                        kept.row.fresh = false;
                         cleared.push(page * SPAN + i);
                     }
                 }
@@ -472,10 +413,13 @@ impl Rows {
         }
     }
 
-    /// Note that a page has been asked for, at this index revision, so the
-    /// same one is not asked for again on every frame until it lands.
+    /// Note that a page has been asked for, so the same one is not asked for
+    /// again on every frame until it lands.
     pub fn asking(&self, page: usize, revision: u64) {
-        self.asked.set(Some((page, revision)));
+        let mut pages = self.pages.borrow_mut();
+        pages.mark(revision);
+        pages.asking(page);
+        drop(pages);
         self.want.set(None);
     }
 
@@ -485,7 +429,7 @@ impl Rows {
     /// unanswered, and without this the window would sit behind a page that
     /// will never land and never ask for another.
     pub fn forget_asking(&self) {
-        self.asked.set(None);
+        self.pages.borrow_mut().forget_asking();
     }
 
     /// The row the view asked for and did not get, if any. Taken, not read:
@@ -495,14 +439,7 @@ impl Rows {
     }
 
     /// The page to ask for next, if any: what the eye is on, then where it is
-    /// going, then where it has been.
-    ///
-    /// **The last two are why scrolling does not wait.** A page is about fifty
-    /// screens; asking for the next one the moment this one is complete means
-    /// the answer — 2 to 25 ms of it — is already here when somebody arrives.
-    /// They are asked for only when *missing*, never merely because the index
-    /// moved: a page nobody is looking at is not worth a request, and an index
-    /// that changes every second would otherwise keep this fetching for ever.
+    /// going, then where it has been. See [`scour_page::Pages::next_page`].
     pub fn next_page(
         &self,
         first: usize,
@@ -510,78 +447,27 @@ impl Rows {
         speculate: bool,
         refresh: bool,
     ) -> Option<usize> {
-        let total = self.total.get();
-        if total == 0 {
-            return None;
-        }
-        // **One request at a time, always for where the eye is now.** A hand
-        // that throws the scrollbar across a million rows crosses a page every
-        // frame, and a request per crossing is sixty requests for the one page
-        // anybody will look at — each of them queued ahead of it. So nothing
-        // is asked for while an answer is on its way, and when it lands the
-        // next question is asked about wherever the list has got to by then.
-        if self.asked.get().is_some() {
-            return None;
-        }
-        let end = (total - 1) / SPAN;
-        let from = Self::page_of(first.min(total - 1));
-        let to = Self::page_of(last.min(total - 1));
-        // On screen: fetched when missing, and re-read when the index has moved
-        // under them — but the second only when the caller says there is time
-        // for it. During a scan the index moves several times a second, and a
-        // list that re-read the page under the pointer every time it did would
-        // spend a drag fetching the same rows over and over.
-        for page in from..=to {
-            let held = self.pages.borrow();
-            match held.get(&page) {
-                None => return Some(page),
-                Some(held) if held.rows.is_empty() => return Some(page),
-                Some(held) if refresh && held.revision != self.revision.get() => {
-                    return Some(page);
-                }
-                Some(_) => {}
-            }
-        }
-        // Ahead, then behind: only what is missing altogether, and only while
-        // a page is cheap. **Speculation is worth what it costs**, and deep in
-        // a long result a page costs the service a walk of everything above it
-        // — 125 ms at two and a half million rows, measured. Guessing wrong
-        // there spends that on rows nobody asked for.
-        if !speculate {
-            return None;
-        }
-        let near = [(to < end).then_some(to + 1), from.checked_sub(1)];
-        near.into_iter().flatten().find(|page| !self.holds(*page))
+        self.pages
+            .borrow()
+            .next_page(first, last, speculate, refresh)
     }
 
-    fn holds(&self, page: usize) -> bool {
-        self.pages.borrow().contains_key(&page)
-    }
-
-    /// How many rows a page actually holds.
-    ///
-    /// **Observed, not assumed.** The service has a page ceiling of its own,
-    /// and if it is lower than what this asks for, a page pinned to the end of
-    /// the result stops short of it — so the last rows of a long list are
-    /// asked for, drawn blank, and asked for again for as long as anybody
-    /// looks at them. This is the evidence for how big a page really is.
+    /// How many rows a page actually holds, as observed rather than assumed.
     pub fn served(&self) -> usize {
-        self.served.get().max(1)
+        self.pages.borrow().served()
     }
 
     /// Everything a selection needs about a row, if it is in hand.
     pub fn pick_at(&self, row: usize) -> Option<Pick> {
         let pages = self.pages.borrow();
-        let held = pages.get(&Self::page_of(row))?;
-        let at = row % SPAN;
-        let found = held.rows.get(at)?;
-        if found.path.is_empty() {
+        let found = pages.at(row)?;
+        if found.row.path.is_empty() {
             return None;
         }
         Some(Pick {
-            path: found.path.to_string(),
-            is_dir: found.is_dir,
-            bytes: held.bytes.get(at).copied().unwrap_or(0),
+            path: found.row.path.to_string(),
+            is_dir: found.row.is_dir,
+            bytes: found.bytes,
         })
     }
 
@@ -594,12 +480,16 @@ impl Rows {
         let mut changed = Vec::new();
         {
             let mut pages = self.pages.borrow_mut();
-            for (page, held) in pages.iter_mut() {
-                for (at, row) in held.rows.iter_mut().enumerate() {
-                    let now = !row.path.is_empty() && picked.contains(row.path.as_str());
-                    if now != row.picked {
-                        row.picked = now;
-                        changed.push(page * SPAN + at);
+            let held: Vec<usize> = pages.pages().collect();
+            for page in held {
+                let Some(rows) = pages.rows_mut(page) else {
+                    continue;
+                };
+                for (i, kept) in rows.iter_mut().enumerate() {
+                    let want = picked.contains(kept.row.path.as_str());
+                    if kept.row.picked != want {
+                        kept.row.picked = want;
+                        changed.push(page * SPAN + i);
                     }
                 }
             }
@@ -609,30 +499,31 @@ impl Rows {
         }
     }
 
-    /// The path of a row, if it is in hand.
-    ///
-    /// What opening, revealing and copying read. It comes off the row itself
-    /// rather than out of a separate list of hits, because the two would then
-    /// have to be kept in step — and while they were a window and a page they
-    /// were not: the list's row 4,000 was read as the four-thousandth of a
-    /// page of two hundred, which opened a file two hundred rows away.
+    /// The path of a row, if its page is in hand.
     pub fn path_at(&self, row: usize) -> Option<String> {
         let pages = self.pages.borrow();
-        let held = pages.get(&Self::page_of(row))?;
-        held.rows
-            .get(row % SPAN)
-            .map(|r| r.path.to_string())
+        pages
+            .at(row)
+            .map(|k| k.row.path.to_string())
             .filter(|p| !p.is_empty())
     }
 
     /// How long the result is.
     pub fn length(&self) -> usize {
-        self.total.get()
+        self.pages.borrow().total()
     }
 
     /// How many rows are held, over all the pages kept.
     pub fn held(&self) -> usize {
-        self.pages.borrow().values().map(|h| h.rows.len()).sum()
+        let pages = self.pages.borrow();
+        let held: Vec<usize> = pages.pages().collect();
+        held.iter()
+            .map(|page| {
+                (0..SPAN)
+                    .filter(|i| pages.at(page * SPAN + i).is_some())
+                    .count()
+            })
+            .sum()
     }
 
     /// How many times the view has been told to re-measure. See [`Rows`].
@@ -643,46 +534,17 @@ impl Rows {
 
     /// One past the last row held, over all the pages kept.
     fn held_to(&self) -> usize {
-        self.pages
-            .borrow()
-            .iter()
-            .map(|(page, held)| page * SPAN + held.rows.len())
+        let pages = self.pages.borrow();
+        pages
+            .pages()
+            .map(|page| {
+                page * SPAN
+                    + (0..SPAN)
+                        .filter(|i| pages.at(page * SPAN + i).is_some())
+                        .count()
+            })
             .max()
             .unwrap_or(0)
-    }
-
-    /// Say a page has just been used, for eviction's sake.
-    fn use_page(&self, page: usize) {
-        let mut order = self.order.borrow_mut();
-        order.retain(|p| *p != page);
-        order.push(page);
-    }
-
-    fn evict(&self) {
-        let mut order = self.order.borrow_mut();
-        while order.len() > KEPT {
-            let oldest = order.remove(0);
-            self.pages.borrow_mut().remove(&oldest);
-        }
-    }
-
-    /// The list is a different length than the view thinks.
-    ///
-    /// **Added and removed, not reset.** A reset makes the view throw its
-    /// layout state away with its elements, and what it rebuilds it from is
-    /// the top — so a list that grew while somebody was reading row nine
-    /// thousand put them back at row one. Saying which rows appeared leaves
-    /// the viewport where it is.
-    fn resized(&self, was: usize, now: usize) {
-        if was == now {
-            return;
-        }
-        self.resets.set(self.resets.get() + 1);
-        if now > was {
-            self.notify.row_added(was, now - was);
-        } else {
-            self.notify.row_removed(now, was - now);
-        }
     }
 }
 
@@ -690,21 +552,23 @@ impl slint::Model for Rows {
     type Data = Row;
 
     fn row_count(&self) -> usize {
-        self.total.get()
+        self.pages.borrow().total()
     }
 
     fn row_data(&self, row: usize) -> Option<Row> {
-        let page = Self::page_of(row);
-        if let Some(held) = self.pages.borrow().get(&page)
-            && let Some(found) = held.rows.get(row % SPAN)
-        {
+        // The borrow ends with this statement, because what comes next takes a
+        // mutable one — and a `Ref` still alive at that point is a panic, not
+        // a compile error.
+        let drawn = self.pages.borrow().at(row).map(|k| k.row.clone());
+        if let Some(drawn) = drawn {
             // Only when the eye crosses into another page, so drawing a screen
             // is not thirty rewrites of the same list.
+            let page = Self::page_of(row);
             if self.touched.get() != page {
                 self.touched.set(page);
-                self.use_page(page);
+                self.pages.borrow_mut().touched(row);
             }
-            return Some(found.clone());
+            return Some(drawn);
         }
         // Not in hand. Remember the first such row — the view asks for a run
         // of them and they all want the same page — and give back a blank so
@@ -985,17 +849,22 @@ mod model_tests {
     #[test]
     fn only_so_many_pages_are_kept() {
         let rows = Rows::default();
-        for p in 0..KEPT + 4 {
+        for p in 0..scour_page::KEPT + 4 {
             rows.put(p, page(SPAN), Vec::new(), 100_000);
         }
-        assert_eq!(rows.held(), KEPT * SPAN);
+        assert_eq!(rows.held(), scour_page::KEPT * SPAN);
         assert!(
             rows.next_page(0, 24, true, true).is_some(),
             "the oldest went first"
         );
         assert!(
-            rows.next_page(KEPT * SPAN, KEPT * SPAN + 24, true, true)
-                .is_none(),
+            rows.next_page(
+                scour_page::KEPT * SPAN,
+                scour_page::KEPT * SPAN + 24,
+                true,
+                true
+            )
+            .is_none(),
             "and the newest stayed"
         );
     }

@@ -276,8 +276,13 @@ component Sheet inherits Rectangle {
     border-width: 1px;
     border-color: Theme.line;
     border-radius: 4px;
-    // Above everything, including the list it covers.
-    z: 60;
+    // **No `z`.** It was here to put the panel over the list, which it did —
+    // and Slint hoists an element with a `z` into a pass of its own, where the
+    // hit test does not follow it. The panel drew on top and every press went
+    // through it to whatever was underneath: not one tick, × or button in any
+    // of the three panels had ever worked. Being the last child is what puts
+    // it on top, and the panels are the window's last three children.
+    
 
     VerticalLayout {
         padding: 16px;
@@ -359,6 +364,94 @@ component Push inherits Rectangle {
 /// One line of the skip list: a box that says whether it is in force, the
 /// thing being skipped, and — where this window is allowed to — a way to
 /// delete it.
+/// One way of running Scour, and what choosing it would do.
+///
+/// **The doing is a second press.** Two of the three start something — a
+/// terminal, a program that listens on a port — and a list where one press
+/// starts a listener is a list nobody can read safely. So a press arms the
+/// row and says what will happen; the button beside the sentence is the
+/// thing that does it.
+component FaceRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    in property <string> aside;
+    in property <bool> here;
+    in property <bool> armed;
+    in property <bool> ready: true;
+    in property <string> go;
+    callback picked();
+    callback confirmed();
+
+    height: layout.preferred-height;
+    border-radius: 3px;
+    background: root.armed ? Theme.hover : touch.has-hover && root.ready ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            if (root.ready) {
+                root.picked();
+            }
+        }
+    }
+
+    layout := VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            height: 20px;
+
+            Text {
+                text: root.here ? "●" : "○";
+                color: root.here ? Theme.q-key : Theme.ink-3;
+                font-size: 11px;
+                vertical-alignment: center;
+                width: 12px;
+            }
+            Text {
+                text: root.label;
+                color: root.ready ? Theme.ink : Theme.ink-3;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.aside;
+                color: Theme.ink-3;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // The sentence and the button appear together, because the sentence is
+        // what the button is asking permission for.
+        if root.armed: HorizontalLayout {
+            spacing: 8px;
+            padding-left: 20px;
+
+            Text {
+                text: root.note;
+                color: Theme.ink-2;
+                font-size: 11px;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                Push {
+                    label: root.go;
+                    asking: true;
+                    clicked => {
+                        root.confirmed();
+                    }
+                }
+            }
+        }
+    }
+}
+
 component RuleRow inherits Rectangle {
     in property <string> value;
     in property <string> word;
@@ -833,6 +926,19 @@ export component MainWindow inherits Window {
     in property <string> jump-label;
     in property <string> jump-note;
     callback report-search();
+    // Which way of running Scour to offer, and which one is running now.
+    in-out property <string> armed-face;
+    in property <string> faces-title;
+    in property <string> face-window;
+    in property <string> face-window-aside;
+    in property <string> face-tui;
+    in property <string> face-tui-note;
+    in property <string> face-tui-aside;
+    in property <string> face-web;
+    in property <string> face-web-note;
+    in property <bool> face-tui-ready;
+    in property <string> face-go;
+    callback face-picked(string);
     // The same file, several times over.
     in property <bool> dupes-open;
     in property <string> dupes-show;
@@ -1213,6 +1319,7 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
+                        Tool { glyph: "⇄"; clicked => { root.tool-clicked("faces"); } }
                         Tool { glyph: "文"; clicked => { root.tool-clicked("language"); } }
                         Tool { glyph: "⊘"; clicked => { root.tool-clicked("rules"); } }
                         Tool { glyph: "⤓"; clicked => { root.tool-clicked("export"); } }
@@ -2771,6 +2878,47 @@ export component MainWindow inherits Window {
         }
 
         Sheet {
+            title: root.faces-title;
+            open: root.panel == "faces";
+            room-w: root.width - 40px;
+            room-h: root.height - 40px;
+            changed open => {
+                // Nothing stays armed behind a closed panel.
+                root.armed-face = "";
+            }
+
+            VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+
+                FaceRow {
+                    label: root.face-window;
+                    aside: root.face-window-aside;
+                    here: true;
+                    ready: false;
+                }
+                FaceRow {
+                    label: root.face-tui;
+                    note: root.face-tui-note;
+                    aside: root.face-tui-ready ? "" : root.face-tui-aside;
+                    ready: root.face-tui-ready;
+                    armed: root.armed-face == "tui";
+                    go: root.face-go;
+                    picked => { root.armed-face = "tui"; }
+                    confirmed => { root.face-picked("tui"); }
+                }
+                FaceRow {
+                    label: root.face-web;
+                    note: root.face-web-note;
+                    armed: root.armed-face == "web";
+                    go: root.face-go;
+                    picked => { root.armed-face = "web"; }
+                    confirmed => { root.face-picked("web"); }
+                }
+            }
+        }
+
+        Sheet {
             title: root.lang-title;
             open: root.panel == "language";
             room-w: root.width - 40px;
@@ -2794,12 +2942,22 @@ export component MainWindow inherits Window {
             open: root.panel == "rules";
             room-w: root.width - 40px;
             room-h: root.height - 40px;
+            // **The field takes the focus when the panel opens.** Clicking it
+            // does not: the window hands focus to the query line whenever it
+            // is activated, so a click that both raises the window and lands
+            // in the field ends with the caret back in the query.
+            changed open => {
+                if (self.open) {
+                    fresh.focus();
+                } else {
+                    root.focus-query();
+                }
+            }
 
             ScrollView {
                 viewport-height: sheetlist.preferred-height;
 
                 sheetlist := VerticalLayout {
-                    height: self.preferred-height;
                     spacing: 4px;
                     alignment: start;
 

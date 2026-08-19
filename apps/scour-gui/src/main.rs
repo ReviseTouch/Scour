@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use scour_core::Catalog;
 use scour_i18n::Catalogue;
 use scour_proto::Response;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use link::{Ask, Got, Link, ReplyRevision};
 
@@ -210,6 +210,24 @@ struct State {
     added_paths: Vec<String>,
     added_dirs: Vec<String>,
     added_files: Vec<String>,
+    /// The switched-off list this window last sent, while the service has yet
+    /// to say it back.
+    ///
+    /// **A late answer must not undo a fresh press.** `Rules` answers arrive
+    /// coalesced and out of order — seven presses were answered twice, and
+    /// each answer carried a list two changes old — so an answer that
+    /// disagrees with what was just sent is an answer about the past, and the
+    /// tick it would draw is the tick somebody just cleared.
+    sent_off: Option<Vec<String>>,
+    /// What the three rule lists were last built from.
+    ///
+    /// **A model that is replaced takes its rows with it**, and a row that is
+    /// destroyed between a press and the release is a row whose `clicked`
+    /// never fires: the release finds a different element, which was never
+    /// pressed. The service answers `Rules` whenever it is asked — opening
+    /// the panel asks — so an answer that says nothing new must change
+    /// nothing, or every such answer is a press thrown away.
+    rules_shown: [String; 3],
     /// The skip rules that are switched off, as the service last reported
     /// them.
     ///
@@ -327,32 +345,15 @@ const BANDS: [&str; 6] = [
 
 /// The scope, as a run of buttons: everything, then each ancestor.
 fn crumb_of(cat: &Catalogue, path: &str) -> Vec<Facet> {
-    let mut steps = vec![Facet {
-        label: t(cat, "Everything"),
-        token: slint::SharedString::new(),
-        count: slint::SharedString::new(),
-        share: 0.0,
-    }];
-    let mut walked = String::new();
-    for part in path.split('/').filter(|p| !p.is_empty()) {
-        walked.push('/');
-        walked.push_str(part);
-        steps.push(Facet {
-            label: part.into(),
+    scour_ui::path::steps(path, &t(cat, "Everything"))
+        .into_iter()
+        .map(|(label, walked)| Facet {
+            label: label.as_str().into(),
             token: walked.as_str().into(),
             count: slint::SharedString::new(),
             share: 0.0,
-        });
-    }
-    steps
-}
-
-/// The last component of a path — what a folder is called.
-fn leaf_of(path: &str) -> &str {
-    match path.rsplit_once('/') {
-        Some((_, leaf)) if !leaf.is_empty() => leaf,
-        _ => path,
-    }
+        })
+        .collect()
 }
 
 /// Draw a weighed folder: what it comes to, and where the weight sits.
@@ -402,7 +403,7 @@ fn show_usage(w: &MainWindow, cat: &Catalogue, path: &str, u: &scour_core::Usage
                 }
             };
             Kid {
-                name: leaf_of(&c.path).into(),
+                name: scour_ui::path::leaf(&c.path).into(),
                 path: c.path.as_str().into(),
                 size: compact_bytes(c.bytes).into(),
                 share: format!(
@@ -556,6 +557,31 @@ fn main() -> Result<()> {
     // is not a column and has no heading to point at.
     window.set_sorted_by("relevance".into());
     trace(&format!("window built {:.1?} in", launched.elapsed()));
+    {
+        // What the window believes the display does to it, asked once it is on
+        // screen. A window whose scale is not the compositor's puts every
+        // pointer a percentage away from where it was aimed — nothing at the
+        // top of the panel, a whole row down at the bottom.
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(3000),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                let w = w.window();
+                let s = w.scale_factor();
+                let size = w.size();
+                trace(&format!(
+                    "scale {s} — {}x{} physical, {:.1}x{:.1} logical",
+                    size.width,
+                    size.height,
+                    size.width as f32 / s,
+                    size.height as f32 / s
+                ));
+            },
+        );
+    }
 
     let state = Rc::new(RefCell::new(State {
         generation: 0,
@@ -578,6 +604,8 @@ fn main() -> Result<()> {
         added_paths: Vec::new(),
         added_dirs: Vec::new(),
         added_files: Vec::new(),
+        sent_off: None,
+        rules_shown: Default::default(),
         exclude_off: Vec::new(),
         scope: String::new(),
         hits: Vec::new(),
@@ -598,9 +626,24 @@ fn main() -> Result<()> {
     // above rather than holding anything of its own.
     let lines: Rc<rows::Lines> = Rc::new(rows::Lines::new(Rc::clone(&rows)));
     let facets: Rc<VecModel<Facet>> = Rc::new(VecModel::default());
+    // **The three rule lists are made once and never replaced.** Handing the
+    // window a new model destroys every row in it, and a row destroyed between
+    // a press and the release is a press nobody receives: the release lands on
+    // a row that was never pressed. The service answers `Rules` after every
+    // change — so replacing the model on each answer took away the very press
+    // that caused it, and then delivered it again to whatever moved into that
+    // place, which switched a second rule nobody touched.
+    let rules: [Rc<VecModel<Rule>>; 3] = [
+        Rc::new(VecModel::default()),
+        Rc::new(VecModel::default()),
+        Rc::new(VecModel::default()),
+    ];
     window.set_rows(ModelRc::from(rows.clone()));
     window.set_lines(ModelRc::from(lines.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
+    window.set_rules_added(ModelRc::from(rules[0].clone()));
+    window.set_rules_config(ModelRc::from(rules[1].clone()));
+    window.set_rules_builtin(ModelRc::from(rules[2].clone()));
     // The page's own placeholder, so an empty window says the same thing in
     // both: what you can type, by example.
     window.set_hint(t(
@@ -650,6 +693,7 @@ fn main() -> Result<()> {
     let ui_lines = lines.clone();
     let ui_picks = Rc::clone(&picks);
     let ui_facets = facets.clone();
+    let ui_rules = rules.clone();
     let ui_cat = Rc::clone(&cat);
 
     let sink = move |got: Got| {
@@ -672,6 +716,7 @@ fn main() -> Result<()> {
                     &ui_lines,
                     &ui_picks,
                     &ui_facets,
+                    &ui_rules,
                     &ui_cat.borrow().clone(),
                     &link,
                     got,
@@ -884,6 +929,7 @@ fn main() -> Result<()> {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
         let state = Rc::clone(&state);
+        let tick = rules.clone();
         window.on_rule_toggled(move |id| {
             let Some(w) = weak.upgrade() else { return };
             let id = id.to_string();
@@ -896,10 +942,30 @@ fn main() -> Result<()> {
                 {
                     s.exclude_off.remove(at);
                 } else {
-                    s.exclude_off.push(id);
+                    s.exclude_off.push(id.clone());
                 }
+                s.sent_off = Some(s.exclude_off.clone());
                 s.exclude_off.clone()
             };
+            // **The tick moves on the press.** Waiting for the answer means
+            // waiting for a round trip that may be coalesced away, and a tick
+            // that does not move is a tick somebody presses again.
+            for model in tick.iter() {
+                for at in 0..model.row_count() {
+                    let Some(row) = model.row_data(at) else {
+                        continue;
+                    };
+                    if row.id.eq_ignore_ascii_case(&id) {
+                        model.set_row_data(
+                            at,
+                            Rule {
+                                off: !row.off,
+                                ..row
+                            },
+                        );
+                    }
+                }
+            }
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     exclude_off: Some(held),
@@ -1127,6 +1193,16 @@ fn main() -> Result<()> {
     // From the report into the search: the scope becomes an `under:` term and
     // the search tab opens with it. One query rather than a second kind of
     // scope the search would have to know about.
+    {
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        let link = Rc::clone(&link);
+        window.on_face_picked(move |which_one| {
+            let Some(w) = weak.upgrade() else { return };
+            open_face(&w, &which_one, &cat.borrow().clone(), &link);
+        });
+    }
+
     {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
@@ -1651,6 +1727,125 @@ fn main() -> Result<()> {
     }
 
     // Photograph the window and leave, when asked. See [`snapshot`].
+    // Press and release at a point of the window, without a pointer. The
+    // compositor here refuses to warp one, and a click that never leaves the
+    // program is the only way to ask whether the window's own hit test agrees
+    // with what it drew. Logical pixels, comma separated: `SCOUR_GUI_CLICK=900,146`.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_CLICK") {
+        let point: Vec<f32> = spec
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect();
+        if let [x, first, last, step] = point[..] {
+            // A walk of presses down a column: `x,first,last,step`.
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            let mut y = first;
+            t.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(500),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if y > last {
+                        return;
+                    }
+                    let at = slint::LogicalPosition::new(x, y);
+                    trace(&format!("press at {x},{y}"));
+                    for e in [
+                        slint::platform::WindowEvent::PointerMoved { position: at },
+                        slint::platform::WindowEvent::PointerPressed {
+                            position: at,
+                            button: slint::platform::PointerEventButton::Left,
+                        },
+                        slint::platform::WindowEvent::PointerReleased {
+                            position: at,
+                            button: slint::platform::PointerEventButton::Left,
+                        },
+                    ] {
+                        w.window().dispatch_event(e);
+                    }
+                    y += step;
+                },
+            );
+        } else if let [x, y] = point[..] {
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            let after = std::env::var("SCOUR_GUI_CLICK_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(2500);
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(after),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let at = slint::LogicalPosition::new(x, y);
+                    trace(&format!("synthetic click at {x},{y}"));
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                            position: at,
+                        });
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                            position: at,
+                            button: slint::platform::PointerEventButton::Left,
+                        });
+                    // Released a moment later, because a press and a release in
+                    // the same tick is not what a hand does and a `Flickable`
+                    // is entitled to treat it differently.
+                    let weak = w.as_weak();
+                    let r = Box::leak(Box::new(slint::Timer::default()));
+                    r.start(
+                        slint::TimerMode::SingleShot,
+                        std::time::Duration::from_millis(90),
+                        move || {
+                            let Some(w) = weak.upgrade() else { return };
+                            w.window().dispatch_event(
+                                slint::platform::WindowEvent::PointerReleased {
+                                    position: at,
+                                    button: slint::platform::PointerEventButton::Left,
+                                },
+                            );
+                        },
+                    );
+                },
+            );
+        }
+    }
+
+    // Walk a pointer down the window without a hand, printing which row each
+    // stop lands on: `SCOUR_GUI_HOVER=900:120,160,200`.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_HOVER") {
+        if let Some((x, ys)) = spec.split_once(':') {
+            let x: f32 = x.trim().parse().unwrap_or(0.0);
+            let stops: Vec<f32> = ys
+                .split(',')
+                .filter_map(|n| n.trim().parse().ok())
+                .collect();
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            let mut left = stops.into_iter();
+            let mut first = true;
+            t.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(400),
+                move || {
+                    if first {
+                        first = false;
+                        return;
+                    }
+                    let Some(w) = weak.upgrade() else { return };
+                    let Some(y) = left.next() else { return };
+                    trace(&format!("pointer to {x},{y}"));
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                            position: slint::LogicalPosition::new(x, y),
+                        });
+                },
+            );
+        }
+    }
+
     if let Ok(path) = std::env::var("SCOUR_GUI_SNAP") {
         let weak = window.as_weak();
         // Held rather than dropped: a `Timer` that goes out of scope never
@@ -1904,6 +2099,7 @@ fn apply(
     lines: &Rc<rows::Lines>,
     picks: &Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>>,
     facets: &Rc<VecModel<Facet>>,
+    rules: &[Rc<VecModel<Rule>>; 3],
     cat: &Rc<Catalogue>,
     link: &Rc<Link>,
     got: Got,
@@ -2402,6 +2598,21 @@ fn apply(
             };
             // The answer is the truth about what is in force, so this is
             // where the window learns it — pressing a rule edits *this* list.
+            // An answer that repeats what was sent means the service has
+            // caught up; one that does not is older than this window.
+            let off = {
+                let mut s = state.borrow_mut();
+                match &s.sent_off {
+                    Some(sent)
+                        if sent.len() == off.len() && sent.iter().all(|o| off.contains(o)) =>
+                    {
+                        s.sent_off = None;
+                        off
+                    }
+                    Some(sent) => sent.clone(),
+                    None => off,
+                }
+            };
             state.borrow_mut().exclude_off = off.clone();
             let is_off = |id: &str| off.iter().any(|o| o.eq_ignore_ascii_case(id));
             // **What this window may delete, kept as the answer gave it.**
@@ -2428,34 +2639,66 @@ fn apply(
                         });
                     }
                 }
-                ModelRc::new(VecModel::from(out))
+                out
             };
-            w.set_rules_added(group(
-                vec![
-                    ("path", added_paths),
-                    ("dir", added_dirs),
-                    ("file", added_files),
-                    ("allow", added_allow),
-                ],
-                true,
-            ));
-            w.set_rules_config(group(
-                vec![
-                    ("path", config_paths),
-                    ("dir", config_dirs),
-                    ("file", config_files),
-                    ("allow", config_allow),
-                ],
-                false,
-            ));
-            w.set_rules_builtin(group(
-                vec![
-                    ("path", builtin_paths),
-                    ("dir", builtin_dirs),
-                    ("file", builtin_files),
-                ],
-                false,
-            ));
+            // One string per list, so an answer that repeats itself is
+            // recognised before it costs anybody their press.
+            let mark = |rows: &[(&str, Vec<String>)]| -> String {
+                let mut out = String::new();
+                for (kind, list) in rows {
+                    for value in list {
+                        let id = scour_settings::rule_id(kind, value);
+                        out.push_str(&id);
+                        out.push(if is_off(&id) { '-' } else { '+' });
+                        out.push('\n');
+                    }
+                }
+                out
+            };
+            let added = vec![
+                ("path", added_paths),
+                ("dir", added_dirs),
+                ("file", added_files),
+                ("allow", added_allow),
+            ];
+            let config = vec![
+                ("path", config_paths),
+                ("dir", config_dirs),
+                ("file", config_files),
+                ("allow", config_allow),
+            ];
+            let builtin = vec![
+                ("path", builtin_paths),
+                ("dir", builtin_dirs),
+                ("file", builtin_files),
+            ];
+            let fresh = [mark(&added), mark(&config), mark(&builtin)];
+            let was = state.borrow().rules_shown.clone();
+            let next = [
+                group(added, true),
+                group(config, false),
+                group(builtin, false),
+            ];
+            for ((model, rows), (before, after)) in
+                rules.iter().zip(next).zip(was.iter().zip(fresh.iter()))
+            {
+                if before == after {
+                    continue;
+                }
+                // Same rules in the same order, one of them switched: write
+                // the rows that differ and leave the rest of the list — and
+                // every one of its elements — where it is.
+                if model.row_count() == rows.len() {
+                    for (at, row) in rows.into_iter().enumerate() {
+                        if model.row_data(at).as_ref() != Some(&row) {
+                            model.set_row_data(at, row);
+                        }
+                    }
+                } else {
+                    model.set_vec(rows);
+                }
+            }
+            state.borrow_mut().rules_shown = fresh;
         }
         // What the service is holding, said once. The page has this beside the
         // counts and it is the answer to "is this everything?" — an index of
@@ -2788,6 +3031,14 @@ fn open(path: &str) {
 /// catalogue and calls this again; before it existed the choice was only
 /// remembered and the window went on speaking the language it had opened in.
 fn words(window: &MainWindow, cat: &Catalogue) {
+    // Punctuation is part of the language, and this runs whenever the language
+    // does — so a window switched to English starts saying `5,356,281`.
+    MARKS.with(|m| {
+        m.set((
+            scour_ui::format::group_mark(cat.language()),
+            scour_ui::format::decimal_mark(cat.language()),
+        ))
+    });
     columns(window, cat);
     window.set_tab_search(t(cat, "Search"));
     window.set_tab_report(t(cat, "Report"));
@@ -2815,6 +3066,26 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     window.set_sizes(ModelRc::new(VecModel::from(sizes)));
     window.set_ribbon_label(t(cat, "Time distribution"));
     window.set_help_title(t(cat, "Help"));
+    window.set_faces_title(t(cat, "how to run it"));
+    window.set_face_window(t(cat, "Window"));
+    window.set_face_window_aside(t(cat, "running now"));
+    window.set_face_tui(t(cat, "Terminal"));
+    window.set_face_tui_note(t(
+        cat,
+        "Opens a terminal and runs Scour in it. This window stays where it is.",
+    ));
+    window.set_face_tui_aside(t(cat, "not built yet"));
+    window.set_face_web(t(cat, "Browser"));
+    // **The sentence says what it opens, before it opens it.** A listening
+    // port is not what somebody asked for when they asked for a browser, and
+    // a person who would rather not have one has to be told in time to say no.
+    window.set_face_web_note(t(
+        cat,
+        "Starts scour-web, which listens on 127.0.0.1:7621 and opens your browser. Nothing outside this computer can reach it, and the link carries a token that changes every run.",
+    ));
+    window.set_face_go(t(cat, "open"));
+    // The terminal one is offered when there is something to run.
+    window.set_face_tui_ready(which("scour-tui").is_some() && which("scour-open").is_some());
     window.set_lang_title(t(cat, "language"));
     window.set_rules_title(t(cat, "What is skipped"));
     window.set_rules_added_title(t(cat, "Added here"));
@@ -2973,27 +3244,125 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
 /// The file lands beside the person rather than behind a dialog this window
 /// does not have yet. Where it went is said in the meter, because a file
 /// written somewhere nobody was told about is a file that was not written.
+/// The first `name` on the `PATH`, or beside this program.
+///
+/// **Beside this program first.** A build being tried out is run from its own
+/// directory, and a switch that quietly starts the installed copy is a switch
+/// that tests the wrong thing.
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    if let Ok(here) = std::env::current_exe() {
+        if let Some(dir) = here.parent() {
+            let beside = dir.join(name);
+            if beside.is_file() {
+                return Some(beside);
+            }
+            // A build being run out of `target/release` has the scripts two
+            // directories up, which is where the launcher lives.
+            let script = dir.join("../../scripts").join(name);
+            if script.is_file() {
+                return Some(script);
+            }
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// Start another way of running Scour, after somebody has said to.
+///
+/// Started detached, so closing this window does not take the other one with
+/// it — and never waited for: a window that blocks on a browser is a window
+/// that looks broken while the browser starts.
+fn open_face(window: &MainWindow, which_one: &str, cat: &Catalogue, link: &Link) {
+    // **The terminal is opened through the launcher, not directly.** A
+    // terminal interface without a tty exits before anybody sees it, and which
+    // terminal to start is a list of nine programs with nine different flags
+    // — kept in `scripts/scour-open` so there is one of it rather than one per
+    // face.
+    let (program, args): (&str, Vec<&str>) = match which_one {
+        "web" => ("scour-web", Vec::new()),
+        "tui" => ("scour-open", vec!["tui"]),
+        _ => return,
+    };
+    let Some(binary) = which(program) else {
+        said(
+            window,
+            format!("{} — {program}", t(cat, "not found")).into(),
+        );
+        return;
+    };
+    match std::process::Command::new(&binary)
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => {
+            // **Switching is also choosing.** The desktop entry and the hotkey
+            // ask for Scour without saying which face; this is what makes
+            // that mean the one somebody switched to.
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    face: Some(which_one.to_string()),
+                    ..Default::default()
+                },
+            });
+            said(window, t(cat, "starting…"));
+        }
+        Err(e) => said(window, format!("{program}: {e}").into()),
+    }
+    window.set_panel("".into());
+    window.set_armed_face("".into());
+}
+
 fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
     let query = window.get_query().to_string();
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // **Where a desktop puts what it downloads**, and the home only when it
-    // does not say. The browser page hands the file to the browser, which
-    // knows this; this window was dropping it in the home directory without
-    // saying so out loud, which is a file somebody finds a week later.
+    // **Where a desktop puts what it downloads**, offered rather than
+    // decided: the dialog opens there with a name already in it, and whoever
+    // presses the button says where it really goes. It used to drop the file
+    // in the home directory without asking and without saying, which is a
+    // file somebody finds a week later.
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let into = scour_places::downloads().unwrap_or(home);
-    let path = std::path::PathBuf::from(into).join(format!("scour-{stamp}.csv"));
+    let name = format!("scour-{stamp}.csv");
     let weak = window.as_weak();
     let addr = addr.to_string();
     let waiting = t(cat, "writing…");
     let wrote = t(cat, "written to");
     let failed = t(cat, "could not be written");
-    window.set_note(waiting);
 
     std::thread::spawn(move || {
+        // **Asked for on this thread**, not on the one drawing the window: the
+        // portal takes as long as somebody takes to choose, and a window that
+        // stops repainting while a dialog is open looks like a window that has
+        // crashed.
+        let Some(path) = rfd::FileDialog::new()
+            .set_directory(&into)
+            .set_file_name(&name)
+            .add_filter("CSV", &["csv"])
+            .save_file()
+        else {
+            // Cancelled. Nothing was written and nothing is said: the person
+            // who closed the dialog knows what they did.
+            return;
+        };
+        let told_path = path.display().to_string();
+        let _ = slint::invoke_from_event_loop({
+            let weak = weak.clone();
+            let waiting = waiting.clone();
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_note(waiting);
+                }
+            }
+        });
         let outcome = (|| -> std::io::Result<u64> {
             let mut file = std::io::BufWriter::new(std::fs::File::create(&path)?);
             let mut client = scour_ipc::Client::connect(&addr)
@@ -3031,7 +3400,7 @@ fn export(window: &MainWindow, addr: &str, cat: &Catalogue) {
         })();
 
         let told = match outcome {
-            Ok(bytes) => format!("{wrote} {}  ·  {}", path.display(), compact(bytes)),
+            Ok(bytes) => format!("{wrote} {told_path}  ·  {}", compact(bytes)),
             Err(e) => format!("{failed}: {e}"),
         };
         let _ = slint::invoke_from_event_loop(move || {
@@ -3072,31 +3441,28 @@ fn snapshot(window: &MainWindow, path: &str) {
     }
 }
 
-/// Bytes, the way the meter says them: `636,3 MB`.
+/// Bytes, the way the meter says them: `636,4 MB`.
 fn compact_bytes(n: u64) -> String {
-    let mb = n as f64 / 1_048_576.0;
-    if mb >= 1024.0 {
-        format!("{:.1} GB", mb / 1024.0).replace('.', ",")
-    } else {
-        format!("{mb:.1} MB").replace('.', ",")
-    }
+    scour_ui::format::compact_bytes(n, marks().1)
+}
+
+/// How this window is punctuating numbers, set when the language is.
+///
+/// **A thread-local rather than an argument**, because every caller of these
+/// two is drawing one string in the middle of a sentence and threading a mark
+/// through all of them would say nothing a reader does not already know. The
+/// window is one thread and the language changes in one place.
+fn marks() -> (char, char) {
+    MARKS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static MARKS: std::cell::Cell<(char, char)> = const { std::cell::Cell::new(('.', ',')) };
 }
 
 /// A number a person can read: `5356281` becomes `5.356.281`.
-///
-/// The separator is the catalogue's, not the platform's — the window may be
-/// asked for English on a Turkish desktop, and the number belongs to the
-/// language of the text around it.
 fn grouped(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push('.');
-        }
-        out.push(c);
-    }
-    out
+    scour_ui::format::grouped(n, marks().0)
 }
 
 /// Where the settings this window shares with the others live.
@@ -3185,6 +3551,8 @@ mod tests {
             added_paths: Vec::new(),
             added_dirs: Vec::new(),
             added_files: Vec::new(),
+            sent_off: None,
+            rules_shown: Default::default(),
             exclude_off: Vec::new(),
             scope: String::new(),
             hits: Vec::new(),
@@ -3216,6 +3584,8 @@ mod tests {
     #[test]
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
+            sent_off: None,
+            rules_shown: Default::default(),
             generation: 4,
             query_revision: 2,
             background_query: None,
