@@ -15,6 +15,24 @@ use ratatui::crossterm::event::{
 
 use crate::app::{App, Mode, Want};
 
+/// Every key, and what it does. **The help screen is printed from this**, so
+/// that what is documented and what happens cannot drift apart.
+pub const MAP: &[(&str, &str)] = &[
+    ("type", "search"),
+    ("↑ ↓ · PgUp PgDn · Home End", "move"),
+    ("Enter", "open"),
+    ("Shift+Enter", "open the folder"),
+    ("Space", "pick · Shift+↑↓ for a run"),
+    ("Ctrl+A", "pick nothing"),
+    ("Ctrl+← →", "sort by the next column"),
+    ("Ctrl+↑ ↓", "reverse the order"),
+    ("F1", "this"),
+    ("Esc", "clear the query, then move mode"),
+    ("j k · g G · d u", "move, in move mode"),
+    ("i · /", "back to typing"),
+    ("Ctrl+C · Ctrl+Q", "leave"),
+];
+
 /// What a key does. Returns what to ask the service for, if anything.
 pub fn press(app: &mut App, key: KeyEvent) -> Want {
     // Windows sends a key twice — down and up — and a terminal that acted on
@@ -23,7 +41,16 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         return Want::Nothing;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let page = app.room.max(1) as isize;
+
+    // The help is a panel over everything, and any key at all closes it: a
+    // panel somebody has read is a panel in the way.
+    if app.helping {
+        app.helping = false;
+        app.dirty = true;
+        return Want::Nothing;
+    }
 
     // The keys that mean the same thing in both modes, first — so that nothing
     // below can shadow them.
@@ -32,18 +59,42 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.leaving = true;
             return Want::Leave;
         }
+        KeyCode::Char('a') if ctrl => {
+            app.unpick();
+            return Want::Nothing;
+        }
+        KeyCode::F(1) => {
+            app.helping = true;
+            app.dirty = true;
+            return Want::Nothing;
+        }
+        // Sorting: left and right along the columns, up and down for the
+        // direction. `Ctrl` because the bare arrows move and always will.
+        KeyCode::Left if ctrl => return app.resort(-1),
+        KeyCode::Right if ctrl => return app.resort(1),
+        KeyCode::Up | KeyCode::Down if ctrl => return app.flip(),
+        KeyCode::Up if shift => {
+            let to = app.cursor.saturating_sub(1);
+            return app.pick_to(to);
+        }
+        KeyCode::Down if shift => {
+            let to = app.cursor + 1;
+            return app.pick_to(to);
+        }
         KeyCode::Up => return app.walk(-1),
         KeyCode::Down => return app.walk(1),
         KeyCode::PageUp => return app.walk(-page),
         KeyCode::PageDown => return app.walk(page),
         KeyCode::Home => return app.go(0),
         KeyCode::End => return app.go(usize::MAX),
-        KeyCode::Enter => return open(app),
+        KeyCode::Enter => return open(app, shift),
         _ => {}
     }
 
     match app.mode {
         Mode::Search => match key.code {
+            // Space picks only when there is nothing to type into; in search
+            // mode a space is a space, which is how two terms are separated.
             KeyCode::Char(c) if !ctrl => app.insert(c),
             KeyCode::Backspace => app.backspace(),
             KeyCode::Left => {
@@ -80,6 +131,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             _ => Want::Nothing,
         },
         Mode::Move => match key.code {
+            KeyCode::Char(' ') => app.pick(),
             KeyCode::Char('j') => app.walk(1),
             KeyCode::Char('k') => app.walk(-1),
             KeyCode::Char('d') => app.walk(page / 2),
@@ -123,16 +175,20 @@ pub fn mouse(app: &mut App, m: MouseEvent) -> Want {
     }
 }
 
-/// Hand the row under the cursor to the desktop.
+/// Hand the row under the cursor to the desktop — or its folder.
 ///
 /// **Detached, and nothing is waited for.** A file manager that takes two
 /// seconds to start would otherwise be two seconds of a terminal that does not
 /// answer the keyboard.
-fn open(app: &mut App) -> Want {
+fn open(app: &mut App, folder: bool) -> Want {
     let Some(hit) = app.here() else {
         return Want::Nothing;
     };
-    let path = hit.path.clone();
+    let path = if folder {
+        scour_ui::path::folder(&hit.path).to_string()
+    } else {
+        hit.path.clone()
+    };
     let _ = std::process::Command::new("xdg-open")
         .arg(&path)
         .stdin(std::process::Stdio::null())
@@ -183,6 +239,51 @@ mod tests {
         app.mode = Mode::Move;
         press(&mut app, key(KeyCode::Down));
         assert_eq!(app.cursor, 2);
+    }
+
+    #[test]
+    fn space_picks_in_move_mode_and_types_in_search() {
+        let mut app = App::default();
+        app.room = 4;
+        app.pages.set_total(10);
+        press(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(app.query, " ", "a space is a space while typing");
+
+        let mut app = App {
+            mode: Mode::Move,
+            ..App::default()
+        };
+        app.room = 4;
+        press(&mut app, key(KeyCode::Char(' ')));
+        assert!(app.picked.is_empty(), "nothing under the cursor to pick");
+    }
+
+    #[test]
+    fn sorting_is_ctrl_and_never_the_bare_arrows() {
+        let mut app = App::default();
+        app.room = 4;
+        app.pages.set_total(10);
+        let was = app.sort;
+        press(&mut app, key(KeyCode::Right));
+        assert_eq!(app.sort, was, "a bare arrow does not re-sort");
+        press(
+            &mut app,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL),
+        );
+        assert_ne!(app.sort, was, "with ctrl it does");
+        let down = app.descending;
+        press(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
+        assert_ne!(app.descending, down);
+    }
+
+    #[test]
+    fn the_help_is_closed_by_whatever_is_pressed_next() {
+        let mut app = App::default();
+        press(&mut app, key(KeyCode::F(1)));
+        assert!(app.helping);
+        press(&mut app, key(KeyCode::Char('x')));
+        assert!(!app.helping);
+        assert_eq!(app.query, "", "and that key did nothing else");
     }
 
     #[test]

@@ -56,6 +56,13 @@ struct Args {
     /// the interface says without a person reading it.
     #[arg(long, value_name = "WxH")]
     once: Option<String>,
+    /// Press these before drawing: `--press "down,down,space,f1"`.
+    ///
+    /// The keyboard cannot be reached from a test and the alternate screen
+    /// cannot be photographed, so this is how a picture of anything other than
+    /// the first frame is taken.
+    #[arg(long, value_name = "KEYS")]
+    press: Option<String>,
 }
 
 /// What the loop waits on: one of these, from either thread.
@@ -90,7 +97,15 @@ fn main() -> Result<()> {
     };
 
     if let Some(size) = args.once.clone() {
-        let outcome = snap(&size, &mut state, &link, &waiting, &theme, mark);
+        let outcome = snap(
+            &size,
+            &mut state,
+            &link,
+            &waiting,
+            &theme,
+            mark,
+            args.press.as_deref().unwrap_or_default(),
+        );
         link.send(Ask::Done);
         return outcome;
     }
@@ -103,6 +118,7 @@ fn main() -> Result<()> {
 }
 
 /// One frame, into a buffer of a given size, printed as text.
+#[allow(clippy::too_many_arguments)]
 fn snap(
     size: &str,
     state: &mut App,
@@ -110,6 +126,7 @@ fn snap(
     waiting: &Receiver<Beat>,
     theme: &Theme,
     mark: (char, char),
+    press: &str,
 ) -> Result<()> {
     let (w, h) = size.split_once('x').unwrap_or(("120", "30"));
     let (w, h) = (w.parse().unwrap_or(120), h.parse().unwrap_or(30));
@@ -139,6 +156,16 @@ fn snap(
             Err(_) => break,
         }
     }
+    for name in press.split(',').filter(|n| !n.trim().is_empty()) {
+        act(keys::press(state, named(name.trim())), link);
+        // **Everything waiting, not one answer.** Pairing a key with the next
+        // reply on the channel drifts by one the moment a key asks for
+        // nothing: the picture then shows the answer to the key before last.
+        settle(state, link, waiting, 400);
+    }
+    // And a last wait, longer, for whatever the final key set going: sorting
+    // by size walks the whole index and takes tens of milliseconds.
+    settle(state, link, waiting, 1_500);
     terminal.draw(|f| draw::frame(f, state, theme, mark))?;
     for line in terminal.backend().buffer().content.chunks(w as usize) {
         let text: String = line.iter().map(|c| c.symbol()).collect();
@@ -236,6 +263,52 @@ fn run(
         }
     }
     Ok(())
+}
+
+/// Take everything the service has said, until it says nothing for `quiet`
+/// milliseconds.
+fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
+    while let Ok(beat) = waiting.recv_timeout(Duration::from_millis(quiet)) {
+        match beat {
+            Beat::Reply(Got::Search {
+                generation,
+                offset,
+                limit,
+                reply,
+            }) => act(state.landed(generation, offset, limit, *reply), link),
+            Beat::Reply(Got::Trouble { generation, why }) => {
+                act(state.upset(generation, why), link);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A key by name, for `--press`.
+fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let (mods, name) = match name.strip_prefix("shift+") {
+        Some(rest) => (KeyModifiers::SHIFT, rest),
+        None => match name.strip_prefix("ctrl+") {
+            Some(rest) => (KeyModifiers::CONTROL, rest),
+            None => (KeyModifiers::NONE, name),
+        },
+    };
+    let code = match name {
+        "down" => KeyCode::Down,
+        "up" => KeyCode::Up,
+        "pgdn" => KeyCode::PageDown,
+        "pgup" => KeyCode::PageUp,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "space" => KeyCode::Char(' '),
+        "esc" => KeyCode::Esc,
+        "f1" => KeyCode::F(1),
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        other => KeyCode::Char(other.chars().next().unwrap_or(' ')),
+    };
+    KeyEvent::new(code, mods)
 }
 
 /// Do what a step asked for.

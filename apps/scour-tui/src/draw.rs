@@ -14,7 +14,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+    Block, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
 };
 
 use scour_ui::format;
@@ -46,7 +46,10 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     counts(f, meter, app, theme, mark);
     heading(f, heads, theme);
     rows(f, list, app, theme, mark);
-    footer(f, foot, app, theme);
+    footer(f, foot, app, theme, mark);
+    if app.helping {
+        help(f, area, theme);
+    }
 }
 
 /// The query line: the brand, what has been typed, and the caret.
@@ -181,12 +184,22 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         let name = scour_ui::path::leaf(&hit.path);
         let ink = if here { theme.ink() } else { theme.ink_2() };
         let line = Style::new().fg(ink);
+        let picked = app.picked.contains_key(&hit.path);
         let cells = vec![
             Cell::from(Line::from(vec![
                 // The age stripe: one cell of colour, the same six bands the
                 // window draws down the left of every row.
                 Span::styled("▎", Style::new().fg(theme.band(band))),
-                Span::styled(if here { "▸" } else { " " }, Style::new().fg(theme.key())),
+                Span::styled(
+                    if picked {
+                        "✓"
+                    } else if here {
+                        "▸"
+                    } else {
+                        " "
+                    },
+                    Style::new().fg(theme.key()),
+                ),
                 Span::styled(name.to_string(), line),
             ])),
             Cell::from(Span::styled(
@@ -233,29 +246,89 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     }
 }
 
-/// The one line at the bottom: where the cursor is, and which mode.
-fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+/// The one line at the bottom: what is picked or where the cursor is, the
+/// order, and which mode.
+fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
     let dim = Style::new().fg(theme.ink_3());
-    let path = app
-        .here()
-        .map(|h| h.path.clone())
-        .unwrap_or_else(|| "—".into());
+    let (picked, folders, bytes) = app.weighed();
+    // **What is picked displaces where the cursor is**, because a selection is
+    // something somebody is about to act on and a path is something they can
+    // already see in the list.
+    let path = if picked > 0 {
+        let mut said = format!("{picked} picked");
+        if folders > 0 {
+            said.push_str(&format!(" · {folders} folders"));
+        }
+        if bytes > 0 {
+            // The column's format rather than the meter's: a selection of two
+            // small files is `13,3 KiB`, and `0,0 MB` says nothing at all.
+            said.push_str(&format!(" · {}", format::size(bytes, mark.1)));
+        }
+        said
+    } else {
+        app.here()
+            .map(|h| h.path.clone())
+            .unwrap_or_else(|| "—".into())
+    };
     let mode = match app.mode {
         Mode::Search => "search",
         Mode::Move => "move",
     };
     let [left, right] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(10)]).areas(area);
+        Layout::horizontal([Constraint::Fill(1), Constraint::Length(30)]).areas(area);
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(format!(" {path}"), dim))),
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {path}"),
+            if picked > 0 {
+                Style::new().fg(theme.key())
+            } else {
+                dim
+            },
+        ))),
         left,
+    );
+    let order = format!(
+        "{} {}  {mode} ",
+        app.sort_name(),
+        if app.descending { "↓" } else { "↑" }
     );
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            format!("{mode} "),
-            Style::new().fg(theme.key()),
+            order,
+            Style::new().fg(theme.ink_3()),
         )))
         .right_aligned(),
         right,
+    );
+}
+
+/// The key list, over everything, printed from the one table there is.
+fn help(f: &mut Frame, area: Rect, theme: &Theme) {
+    let wide = 60u16.min(area.width.saturating_sub(4));
+    let tall = (crate::keys::MAP.len() as u16 + 4).min(area.height);
+    let box_area = Rect {
+        x: area.x + (area.width.saturating_sub(wide)) / 2,
+        y: area.y + (area.height.saturating_sub(tall)) / 2,
+        width: wide,
+        height: tall,
+    };
+    f.render_widget(Clear, box_area);
+    let mut lines = vec![Line::from(Span::styled(
+        " KEYS",
+        Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
+    ))];
+    for (key, what) in crate::keys::MAP {
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {key:<28}"), Style::new().fg(theme.key())),
+            Span::styled(*what, Style::new().fg(theme.ink_2())),
+        ]));
+    }
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .border_style(Style::new().fg(theme.line()))
+                .style(Style::new().bg(theme.back())),
+        ),
+        box_area,
     );
 }

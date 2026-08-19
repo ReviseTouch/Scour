@@ -263,8 +263,13 @@ tekerleği, iki kip, `Enter` ile açma. *Ölçüldü:* ilk kare **5–9 ms** (he
 < 50), boşta CPU **sıfır tik**, RSS **8,7 MB**. Karenin metin dökümü
 `--once 120x30` ile alınıyor — penceredeki `SCOUR_GUI_SNAP`'in karşılığı.
 
-**Aşama 2 — gezinme ve açma.** Tuş tablosu, seçim, dosya/klasör açma,
-sıralama, kaydırma çubuğu. *Kabul:* fareye hiç dokunmadan tam tur.
+**Aşama 2 — gezinme ve açma. ✔ 2026-08-19.** Tek tuş tablosu (`keys::MAP`) ve
+yardım paneli **o tablodan** basılıyor — belge ile davranış ayrışamaz. Seçim
+(`Space`, `Shift+↑↓`, `Ctrl+A`) yola göre tutuluyor, alt şeritte "2 picked ·
+13,3 KiB". Sıralama `Ctrl+←→` sütun, `Ctrl+↑↓` yön; alt şerit hangisi olduğunu
+söylüyor. `Enter` açar, `Shift+Enter` klasörünü. *Doğrulama:* `--press` ile
+sentetik tuşlar — seçim, yardım ve boyuta göre sıralama ekran dökümüyle
+görüldü.
 
 **Aşama 3 — ray ve şerit.** Tür/kapsam/boyut rayı, zaman şeridi, süzgeç
 birleştirme. *Kabul:* aynı sorgu üç yüzde aynı sayıyı veriyor.

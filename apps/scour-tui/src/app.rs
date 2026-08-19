@@ -73,6 +73,16 @@ pub struct App {
     pub capped: bool,
     /// Something to say instead of the counts.
     pub trouble: String,
+    /// The rows somebody has picked, by path, and what they weigh.
+    ///
+    /// **By path rather than by row number.** A row number means nothing
+    /// across a re-sort or a new query, and a selection that survives neither
+    /// is not a selection anybody can act on.
+    pub picked: std::collections::BTreeMap<String, i64>,
+    /// Where a run of `Shift` presses started.
+    pub anchor: usize,
+    /// True while the key list is over everything.
+    pub helping: bool,
     /// Set when a redraw is owed. **Nothing is drawn without one** — a
     /// terminal that redraws on a timer burns a core doing nothing.
     pub dirty: bool,
@@ -96,13 +106,116 @@ impl Default for App {
             rows_visited: 0,
             capped: false,
             trouble: String::new(),
+            picked: std::collections::BTreeMap::new(),
+            anchor: 0,
+            helping: false,
             dirty: true,
             leaving: false,
         }
     }
 }
 
+/// The keys a column can be sorted by, in the order the columns are drawn.
+///
+/// The same five the window's headings offer, so that a list sorted in one
+/// face and then opened in another is in the same order.
+pub const SORTS: [(SortKey, &str); 5] = [
+    (SortKey::Name, "name"),
+    (SortKey::Kind, "kind"),
+    (SortKey::Path, "path"),
+    (SortKey::Modified, "changed"),
+    (SortKey::Size, "size"),
+];
+
 impl App {
+    /// What the sort is called, for the meter.
+    pub fn sort_name(&self) -> &'static str {
+        SORTS
+            .iter()
+            .find(|(key, _)| *key == self.sort)
+            .map(|(_, name)| *name)
+            .unwrap_or("relevance")
+    }
+
+    /// Sort by the next column along, or the previous one.
+    ///
+    /// **The query stays and the selection stays**; only the order changes.
+    /// Re-asking is unavoidable — the order is the service's — but a re-sort
+    /// that emptied the selection would make sorting something people avoid.
+    pub fn resort(&mut self, by: isize) -> Want {
+        let at = SORTS.iter().position(|(key, _)| *key == self.sort);
+        let next = match at {
+            Some(at) => at.saturating_add_signed(by).min(SORTS.len() - 1),
+            None => 0,
+        };
+        self.sort = SORTS[next].0;
+        self.reask()
+    }
+
+    /// Ascending or descending.
+    pub fn flip(&mut self) -> Want {
+        self.descending = !self.descending;
+        self.reask()
+    }
+
+    /// The same query, asked again: a new order, or a new direction.
+    fn reask(&mut self) -> Want {
+        self.generation += 1;
+        self.pages.empty();
+        self.cursor = 0;
+        self.top = 0;
+        self.dirty = true;
+        self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
+    }
+
+    /// Pick or unpick the row under the cursor.
+    pub fn pick(&mut self) -> Want {
+        let Some(hit) = self.pages.at(self.cursor) else {
+            return Want::Nothing;
+        };
+        let path = hit.path.clone();
+        let bytes = if hit.is_dir { 0 } else { hit.meta.size.max(0) };
+        if self.picked.remove(&path).is_none() {
+            self.picked.insert(path, bytes);
+        }
+        self.anchor = self.cursor;
+        self.dirty = true;
+        Want::Nothing
+    }
+
+    /// Extend the selection from the anchor to wherever the cursor now is.
+    pub fn pick_to(&mut self, row: usize) -> Want {
+        let (from, to) = if row < self.anchor {
+            (row, self.anchor)
+        } else {
+            (self.anchor, row)
+        };
+        for at in from..=to {
+            if let Some(hit) = self.pages.at(at) {
+                let bytes = if hit.is_dir { 0 } else { hit.meta.size.max(0) };
+                self.picked.insert(hit.path.clone(), bytes);
+            }
+        }
+        self.dirty = true;
+        self.go(row)
+    }
+
+    /// Nothing is picked any more.
+    pub fn unpick(&mut self) {
+        if !self.picked.is_empty() {
+            self.picked.clear();
+            self.dirty = true;
+        }
+    }
+
+    /// What a selection comes to: how many, how many of them folders, and the
+    /// bytes of the files among them.
+    pub fn weighed(&self) -> (usize, usize, u64) {
+        let folders = self.picked.values().filter(|b| **b == 0).count();
+        let bytes = self.picked.values().map(|b| *b as u64).sum();
+        (self.picked.len(), folders, bytes)
+    }
+
     /// The query changed: everything in hand belongs to the old one.
     pub fn typed(&mut self) -> Want {
         self.generation += 1;
@@ -110,7 +223,12 @@ impl App {
         self.pages.set_total(0);
         self.cursor = 0;
         self.top = 0;
+        self.anchor = 0;
         self.trouble.clear();
+        // **A new question, a new selection.** What was picked belongs to the
+        // rows that were on screen; carrying it into a different result means
+        // acting later on files somebody cannot see.
+        self.picked.clear();
         self.dirty = true;
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
     }
