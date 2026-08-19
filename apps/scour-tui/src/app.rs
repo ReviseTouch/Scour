@@ -10,6 +10,21 @@ use scour_page::{Change, Pages};
 
 use crate::link::TYPING_CAP;
 
+/// What is over the list, if anything.
+///
+/// One at a time, and the same rule the window follows: a second panel behind
+/// the first is a panel nobody can reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    None,
+    /// What the walk skips, and which of those are switched off.
+    Rules,
+    /// Which of the two languages to speak.
+    Language,
+    /// Window, terminal, browser.
+    Faces,
+}
+
 /// Which of the two the bare letters go to.
 ///
 /// **Search is where it starts, and that is the whole argument for having
@@ -44,6 +59,14 @@ pub enum Want {
         limit: u32,
         cap: u32,
     },
+    /// Ask what the walk skips.
+    Rules,
+    /// Replace the list of switched-off rules.
+    OffRules(Vec<String>),
+    /// Remember a preference.
+    Remember(scour_settings::Change),
+    /// Write the whole result to this file.
+    Export { query: String, to: String },
     /// Close the terminal.
     Leave,
 }
@@ -81,6 +104,18 @@ pub struct App {
     pub picked: std::collections::BTreeMap<String, i64>,
     /// Where a run of `Shift` presses started.
     pub anchor: usize,
+    /// Which panel is over everything, if any.
+    pub panel: Panel,
+    /// Where the cursor is inside the open panel.
+    pub panel_at: usize,
+    /// The skip rules, as the service last reported them: three groups and
+    /// what is switched off. **Kept from the answer**, because deleting one
+    /// means sending the list without it, and a window that has not been told
+    /// what is in the list cannot take anything out of it.
+    pub rules: Vec<(String, String, bool, bool)>,
+    /// What was said about the last thing done — a file written, a language
+    /// changed. Cleared by the next keystroke.
+    pub note: String,
     /// True while the key list is over everything.
     pub helping: bool,
     /// The rail: what the matching rows are made of, and where they live.
@@ -123,6 +158,10 @@ impl Default for App {
             trouble: String::new(),
             picked: std::collections::BTreeMap::new(),
             anchor: 0,
+            panel: Panel::None,
+            panel_at: 0,
+            rules: Vec::new(),
+            note: String::new(),
             helping: false,
             kinds: Vec::new(),
             places: Vec::new(),
@@ -497,6 +536,147 @@ impl App {
         self.query.remove(at);
         self.caret = at;
         self.typed()
+    }
+
+    /// The rules arrived. Kept as the answer gave them.
+    pub fn ruled(
+        &mut self,
+        added: Vec<(String, String)>,
+        config: Vec<(String, String)>,
+        builtin: Vec<(String, String)>,
+        off: Vec<String>,
+    ) {
+        let is_off = |id: &str| off.iter().any(|o| o.eq_ignore_ascii_case(id));
+        let mut out = Vec::new();
+        for (group, removable) in [(added, true), (config, false), (builtin, false)] {
+            for (kind, value) in group {
+                let id = scour_settings::rule_id(&kind, &value);
+                let off = is_off(&id);
+                out.push((id, value, off, removable));
+            }
+        }
+        self.rules = out;
+        self.dirty = true;
+    }
+
+    /// Switch the rule under the panel's cursor off, or back on.
+    ///
+    /// Returns the whole switched-off list to send: the service replaces it
+    /// outright, and a list built from what this window has pressed rather
+    /// than from what the service said would switch every other rule on.
+    pub fn toggle_rule(&mut self) -> Option<Vec<String>> {
+        let (_, _, off, _) = self.rules.get_mut(self.panel_at)?;
+        *off = !*off;
+        self.dirty = true;
+        Some(
+            self.rules
+                .iter()
+                .filter(|(_, _, off, _)| *off)
+                .map(|(id, _, _, _)| id.clone())
+                .collect(),
+        )
+    }
+
+    /// Open a panel, or close the one that is open.
+    pub fn show(&mut self, panel: Panel) {
+        self.panel = if self.panel == panel {
+            Panel::None
+        } else {
+            panel
+        };
+        self.panel_at = 0;
+        self.note.clear();
+        self.dirty = true;
+    }
+
+    /// Move the cursor inside whatever panel is open.
+    pub fn panel_walk(&mut self, by: isize) {
+        let lines = match self.panel {
+            Panel::Rules => self.rules.len(),
+            Panel::Language => 2,
+            Panel::Faces => 3,
+            Panel::None => 0,
+        };
+        if lines == 0 {
+            return;
+        }
+        self.panel_at = self
+            .panel_at
+            .saturating_add_signed(by)
+            .min(lines.saturating_sub(1));
+        self.dirty = true;
+    }
+
+    /// Speak this language from now on: 0 is Turkish, 1 is English.
+    ///
+    /// **Remembered rather than applied here.** The catalogue is read once at
+    /// startup and the strings in this interface are few and English; what
+    /// this changes is what every face opens in next.
+    pub fn speak(&mut self, which: usize) -> Want {
+        let tag = if which == 0 { "tr" } else { "en" };
+        self.note = format!("language: {tag} — takes effect on the next start");
+        self.dirty = true;
+        Want::Remember(scour_settings::Change {
+            language: Some(tag.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Start another face, and remember that it is the one to open.
+    ///
+    /// 0 is the window, 1 is this, 2 is the browser. **Through the launcher**,
+    /// which owns the list of terminals and the rule about which face opens by
+    /// default.
+    pub fn run_face(&mut self, which: usize) -> Want {
+        let face = match which {
+            0 => "window",
+            1 => "tui",
+            _ => "browser",
+        };
+        if face == "tui" {
+            self.note = "already running here".into();
+            self.dirty = true;
+            return Want::Nothing;
+        }
+        let started = std::process::Command::new("scour-open")
+            .arg(face)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        self.note = match started {
+            Ok(_) => format!("starting the {face}"),
+            Err(e) => format!("scour-open: {e}"),
+        };
+        self.panel = Panel::None;
+        self.dirty = true;
+        Want::Remember(scour_settings::Change {
+            face: Some(face.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Write the whole result to a spreadsheet in the download folder.
+    ///
+    /// **Where downloads go, and said outright.** A file appearing silently in
+    /// somebody's home is a file they find a week later; the window learned
+    /// that one the same way.
+    pub fn write_sheet(&mut self) -> Want {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = scour_places::downloads()
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| home.clone());
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let to = format!("{dir}/scour-{stamp}.csv");
+        self.note = format!("writing {to}…");
+        self.dirty = true;
+        Want::Export {
+            query: self.asking(),
+            to,
+        }
     }
 
     /// The row under the cursor, if its page is in hand.

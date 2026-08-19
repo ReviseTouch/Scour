@@ -5236,6 +5236,7 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-page",
+ "scour-places",
  "scour-proto",
  "scour-settings",
  "scour-ui",

@@ -50,6 +50,14 @@ pub enum Ask {
     Facets { generation: u64, query: String },
     /// Where this desktop keeps things.
     Places,
+    /// What the walk skips, in three groups, and which of them are off.
+    Rules,
+    /// Switch a rule off or on: the whole list, replaced.
+    OffRules(Vec<String>),
+    /// Remember something small — the language, the face.
+    Remember(scour_settings::Change),
+    /// The whole result as a spreadsheet, written where the caller says.
+    Export { query: String, to: String },
     /// Stop: the terminal is closing.
     Done,
 }
@@ -73,6 +81,23 @@ pub enum Got {
     },
     /// The desktop's own folders.
     Places(Vec<(String, String)>),
+    /// The skip rules: three groups of `(kind, value)`, and the ids switched
+    /// off. The groups are kept apart because only the first can be deleted
+    /// and a flat list said none of that.
+    Rules {
+        added: Vec<(String, String)>,
+        config: Vec<(String, String)>,
+        builtin: Vec<(String, String)>,
+        off: Vec<String>,
+    },
+    /// A spreadsheet was written, and where.
+    Wrote(String),
+    /// Something that is not about a search went wrong.
+    ///
+    /// **Not a `Trouble`**, which carries the keystroke it belongs to and is
+    /// dropped when that keystroke is old — which is right for a page and
+    /// silently wrong for a file that failed to be written.
+    Failed(String),
     /// The service could not be reached, or said no.
     Trouble { generation: u64, why: String },
 }
@@ -109,6 +134,40 @@ impl Link {
     /// What a keystroke can wait for.
     pub fn later(&self, ask: Ask) {
         let _ = self.slow.send(ask);
+    }
+}
+
+/// Write the whole result to a file, in the pieces the service sends it in.
+///
+/// **Not through `call`.** This is the one request answered in more than one
+/// frame, and reading only the first would leave the rest in the buffer for
+/// the next question to be answered by.
+fn export(link: &mut Client, query: &str, to: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut file =
+        std::io::BufWriter::new(std::fs::File::create(to).map_err(|e| format!("{to}: {e}"))?);
+    let mut trouble: Option<String> = None;
+    link.stream(
+        Request::Export {
+            query: query.to_string(),
+            columns: Vec::new(),
+        },
+        |piece| match piece {
+            Response::ExportChunk { csv } => match file.write_all(csv.as_bytes()) {
+                Ok(()) => true,
+                Err(e) => {
+                    trouble = Some(e.to_string());
+                    false
+                }
+            },
+            _ => true,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    file.flush().map_err(|e| e.to_string())?;
+    match trouble {
+        Some(why) => Err(why),
+        None => Ok(()),
     }
 }
 
@@ -168,6 +227,27 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 ],
             },
             Ask::Places => Request::Places {},
+            Ask::Rules => Request::Rules {},
+            Ask::OffRules(off) => Request::SetSettings {
+                change: scour_settings::Change {
+                    exclude_off: Some(off),
+                    ..Default::default()
+                },
+            },
+            Ask::Remember(change) => Request::SetSettings { change },
+            Ask::Export { query, to } => {
+                // The one request answered in pieces, so it cannot go through
+                // `call` — see `Client::stream`.
+                match export(link, &query, &to) {
+                    Ok(()) => {
+                        let _ = out.send(Got::Wrote(to));
+                    }
+                    Err(why) => {
+                        let _ = out.send(Got::Failed(why));
+                    }
+                }
+                continue;
+            }
             Ask::Done => return,
         };
         let offsets = match &request {
@@ -189,6 +269,51 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     reply: Box::new(reply),
                 });
             }
+            Ok(Response::Rules {
+                builtin_paths,
+                builtin_dirs,
+                builtin_files,
+                config_paths,
+                config_dirs,
+                config_files,
+                config_allow,
+                added_paths,
+                added_dirs,
+                added_files,
+                added_allow,
+                off,
+            }) => {
+                let group = |rows: Vec<(&str, Vec<String>)>| -> Vec<(String, String)> {
+                    rows.into_iter()
+                        .flat_map(|(kind, list)| {
+                            list.into_iter().map(move |v| (kind.to_string(), v))
+                        })
+                        .collect()
+                };
+                let _ = out.send(Got::Rules {
+                    added: group(vec![
+                        ("path", added_paths),
+                        ("dir", added_dirs),
+                        ("file", added_files),
+                        ("allow", added_allow),
+                    ]),
+                    config: group(vec![
+                        ("path", config_paths),
+                        ("dir", config_dirs),
+                        ("file", config_files),
+                        ("allow", config_allow),
+                    ]),
+                    builtin: group(vec![
+                        ("path", builtin_paths),
+                        ("dir", builtin_dirs),
+                        ("file", builtin_files),
+                    ]),
+                    off,
+                });
+            }
+            // Settings come back as the whole object; nothing here reads it,
+            // and asking again is how anything checks what took.
+            Ok(Response::Settings(_)) => {}
             Ok(Response::Places(places)) => {
                 let _ = out.send(Got::Places(
                     places

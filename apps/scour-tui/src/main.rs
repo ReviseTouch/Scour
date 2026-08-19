@@ -162,6 +162,12 @@ fn snap(
                 state.counted(generation, *reply);
             }
             Ok(Beat::Reply(Got::Places(places))) => state.places = places,
+            Ok(Beat::Reply(Got::Rules {
+                added,
+                config,
+                builtin,
+                off,
+            })) => state.ruled(added, config, builtin, off),
             Ok(_) => {}
             Err(_) => break,
         }
@@ -267,6 +273,20 @@ fn run(
                 state.places = places;
                 state.dirty = true;
             }
+            Beat::Reply(Got::Rules {
+                added,
+                config,
+                builtin,
+                off,
+            }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Wrote(path)) => {
+                state.note = format!("written to {path}");
+                state.dirty = true;
+            }
+            Beat::Reply(Got::Failed(why)) => {
+                state.note = why;
+                state.dirty = true;
+            }
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
@@ -300,6 +320,14 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 state.counted(generation, *reply);
             }
             Beat::Reply(Got::Places(places)) => state.places = places,
+            Beat::Reply(Got::Rules {
+                added,
+                config,
+                builtin,
+                off,
+            }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Wrote(path)) => state.note = format!("written to {path}"),
+            Beat::Reply(Got::Failed(why)) => state.note = why,
             _ => {}
         }
     }
@@ -368,5 +396,9 @@ fn act(want: Want, link: &Link) {
                 cap,
             });
         }
+        Want::Rules => link.later(Ask::Rules),
+        Want::OffRules(off) => link.later(Ask::OffRules(off)),
+        Want::Remember(change) => link.later(Ask::Remember(change)),
+        Want::Export { query, to } => link.later(Ask::Export { query, to }),
     }
 }

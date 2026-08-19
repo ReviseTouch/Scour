@@ -280,8 +280,13 @@ sayılar gelene kadar eskisini gösteriyor: boşalan bir ray imlecin altındaki
 satırı kaydırır. *Kabul karşılandı:* `kind:folder rapor` uçbirimde 347,
 komut satırında 347.
 
-**Aşama 4 — paneller.** Kurallar, dil, yardım, arayüz geçişi, CSV.
-*Kabul:* kural değiştirmek üç yüzde de aynı sonucu doğuruyor.
+**Aşama 4 — paneller. ✔ 2026-08-19.** `Ctrl+K` kurallar (üç grup, tikler,
+listeden uzun olsa da imleçle kaydırılıyor), `Ctrl+L` dil, `Ctrl+U` arayüz
+geçişi (`scour-open` üzerinden), `Ctrl+E` CSV — indirilenler klasörüne yazıyor
+ve nereye yazdığını söylüyor. `F1` yardım zaten vardı. *Kabul karşılandı:*
+uçbirimden bir kural kapatıldı, `settings.json` 8'den 9'a çıktı, geri açıldı,
+8'e döndü. Dışa aktarmanın hatası artık aramanın kuşağına bağlı değil —
+öyleyken sessizce yutuluyordu (`Got::Failed`).
 
 **Aşama 5 — rapor.** Panolar, en büyükler, yinelenenler, klasör boyutu.
 *Kabul:* rakamlar sayfadakiyle birebir.

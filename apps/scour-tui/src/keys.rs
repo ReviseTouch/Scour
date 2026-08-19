@@ -13,7 +13,7 @@ use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use crate::app::{App, Mode, Want};
+use crate::app::{App, Mode, Panel, Want};
 
 /// Every key, and what it does. **The help screen is printed from this**, so
 /// that what is documented and what happens cannot drift apart.
@@ -27,6 +27,10 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+← →", "sort by the next column"),
     ("Ctrl+↑ ↓", "reverse the order"),
     ("Tab", "the rail, and back"),
+    ("Ctrl+K", "what is skipped"),
+    ("Ctrl+L", "language"),
+    ("Ctrl+U", "which face to run"),
+    ("Ctrl+E", "write the result as a spreadsheet"),
     ("F1", "this"),
     ("Esc", "clear the query, then move mode"),
     ("j k · g G · d u", "move, in move mode"),
@@ -53,6 +57,27 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         return Want::Nothing;
     }
 
+    // A panel takes the arrows and `Enter` while it is open, and nothing else
+    // about the keyboard changes: the query still types, `Ctrl+C` still leaves.
+    if app.panel != Panel::None {
+        match key.code {
+            KeyCode::Esc => {
+                app.show(app.panel);
+                return Want::Nothing;
+            }
+            KeyCode::Up => {
+                app.panel_walk(-1);
+                return Want::Nothing;
+            }
+            KeyCode::Down => {
+                app.panel_walk(1);
+                return Want::Nothing;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => return panel_press(app),
+            _ => {}
+        }
+    }
+
     // The keys that mean the same thing in both modes, first — so that nothing
     // below can shadow them.
     match key.code {
@@ -69,6 +94,21 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.dirty = true;
             return Want::Nothing;
         }
+        KeyCode::Char('k') if ctrl => {
+            app.show(Panel::Rules);
+            // Asked when it opens rather than kept fresh: the rules change
+            // when somebody changes them, and this is the thing changing them.
+            return Want::Rules;
+        }
+        KeyCode::Char('l') if ctrl => {
+            app.show(Panel::Language);
+            return Want::Nothing;
+        }
+        KeyCode::Char('u') if ctrl => {
+            app.show(Panel::Faces);
+            return Want::Nothing;
+        }
+        KeyCode::Char('e') if ctrl => return app.write_sheet(),
         // Sorting: left and right along the columns, up and down for the
         // direction. `Ctrl` because the bare arrows move and always will.
         KeyCode::Left if ctrl => return app.resort(-1),
@@ -174,6 +214,19 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             }
             _ => Want::Nothing,
         },
+    }
+}
+
+/// Press whatever the open panel's cursor is on.
+fn panel_press(app: &mut App) -> Want {
+    match app.panel {
+        Panel::Rules => match app.toggle_rule() {
+            Some(off) => Want::OffRules(off),
+            None => Want::Nothing,
+        },
+        Panel::Language => app.speak(app.panel_at),
+        Panel::Faces => app.run_face(app.panel_at),
+        Panel::None => Want::Nothing,
     }
 }
 
@@ -337,6 +390,53 @@ mod tests {
         );
         press(&mut app, key(KeyCode::Enter));
         assert_eq!(app.filter, None, "the same press clears it");
+    }
+
+    #[test]
+    fn a_panel_takes_the_arrows_and_gives_them_back() {
+        let mut app = App::default();
+        app.room = 4;
+        app.pages.set_total(100);
+        app.rules = vec![
+            ("dir:target".into(), "target".into(), false, true),
+            ("path:/proc".into(), "/proc".into(), true, false),
+        ];
+        press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.panel, Panel::Rules);
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(app.panel_at, 1);
+        assert_eq!(app.cursor, 0, "the list did not move");
+        press(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.panel, Panel::None);
+        press(&mut app, key(KeyCode::Down));
+        assert_eq!(app.cursor, 1, "and the arrows are the list's again");
+    }
+
+    #[test]
+    fn switching_a_rule_off_sends_the_whole_list_the_service_gave() {
+        // The window's data loss, which this must not repeat: a list built
+        // from what has been pressed rather than from the answer switches
+        // every other rule back on.
+        let mut app = App::default();
+        app.rules = vec![
+            ("dir:target".into(), "target".into(), false, true),
+            ("path:/proc".into(), "/proc".into(), true, false),
+            ("path:/sys".into(), "/sys".into(), true, false),
+        ];
+        app.panel = Panel::Rules;
+        app.panel_at = 0;
+        let want = panel_press(&mut app);
+        match want {
+            Want::OffRules(off) => assert_eq!(
+                off,
+                vec!["dir:target", "path:/proc", "path:/sys"],
+                "the one pressed, and everything already off"
+            ),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

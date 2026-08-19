@@ -19,7 +19,7 @@ use ratatui::widgets::{
 
 use scour_ui::format;
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, Panel};
 use crate::theme::Theme;
 
 /// Lines the list does not get: query, meter, heading, footer.
@@ -80,9 +80,90 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
         when(f, strip, app, theme);
     }
     footer(f, foot, app, theme, mark);
+    if app.panel != Panel::None {
+        panel(f, area, app, theme);
+    }
     if app.helping {
         help(f, area, theme);
     }
+}
+
+/// Whatever panel is open, over the middle of the screen.
+///
+/// One drawing for the three of them, because they are the same shape: a
+/// title, a list, and a cursor on one line of it. What differs is the lines.
+fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let (title, lines): (&str, Vec<(String, bool)>) = match app.panel {
+        Panel::Rules => (
+            "WHAT IS SKIPPED",
+            app.rules
+                .iter()
+                .map(|(_, value, off, added)| {
+                    (
+                        format!(
+                            "{} {}{}",
+                            if *off { "☐" } else { "☑" },
+                            value,
+                            if *added { "  ·  added here" } else { "" }
+                        ),
+                        false,
+                    )
+                })
+                .collect(),
+        ),
+        Panel::Language => (
+            "LANGUAGE",
+            vec![("Türkçe".into(), false), ("English".into(), false)],
+        ),
+        Panel::Faces => (
+            "HOW TO RUN IT",
+            vec![
+                ("Window".into(), false),
+                ("Terminal  ·  running now".into(), true),
+                ("Browser  ·  opens a port on 127.0.0.1".into(), false),
+            ],
+        ),
+        Panel::None => return,
+    };
+
+    let wide = 66u16.min(area.width.saturating_sub(4));
+    let tall = (lines.len() as u16 + 3).min(area.height.saturating_sub(2));
+    let box_area = Rect {
+        x: area.x + area.width.saturating_sub(wide) / 2,
+        y: area.y + 2,
+        width: wide,
+        height: tall,
+    };
+    f.render_widget(Clear, box_area);
+    // Only what fits, scrolled to keep the cursor on it: the skip list is
+    // forty rules long and the panel is not.
+    let room = tall.saturating_sub(3) as usize;
+    let from = app.panel_at.saturating_sub(room.saturating_sub(1));
+    let mut drawn = vec![Line::from(Span::styled(
+        format!(" {title}"),
+        Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
+    ))];
+    for (at, (text, dimmed)) in lines.iter().enumerate().skip(from).take(room) {
+        let on = at == app.panel_at;
+        drawn.push(Line::from(Span::styled(
+            format!("{}{text}", if on { " ▸ " } else { "   " }),
+            Style::new().fg(if on {
+                theme.key()
+            } else if *dimmed {
+                theme.ink_3()
+            } else {
+                theme.ink_2()
+            }),
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(drawn).block(
+            Block::bordered()
+                .border_style(Style::new().fg(theme.line()))
+                .style(Style::new().bg(theme.back())),
+        ),
+        box_area,
+    );
 }
 
 /// The query line: the brand, what has been typed, and the caret.
@@ -123,6 +204,16 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             Paragraph::new(Line::from(Span::styled(
                 format!(" {}", app.trouble),
                 Style::new().fg(theme.bad()),
+            ))),
+            area,
+        );
+        return;
+    }
+    if !app.note.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {}", app.note),
+                Style::new().fg(theme.key()),
             ))),
             area,
         );
