@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Dupe, Facet, Fonts, Kid, MainWindow, Row, Scheme, Span, Theme};
+pub use ui::{Bar, Dupe, Facet, Fonts, Kid, MainWindow, Row, Rule, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -203,6 +203,13 @@ struct State {
     descending: bool,
     /// The `kind:` term the rail has active, if any.
     facet: Option<String>,
+    /// The skip rules this window added, as the service last reported them.
+    ///
+    /// Deleting one means sending the list without it, so the list has to be
+    /// the service's rather than this window's guess at it.
+    added_paths: Vec<String>,
+    added_dirs: Vec<String>,
+    added_files: Vec<String>,
     /// The skip rules that are switched off, as the service last reported
     /// them.
     ///
@@ -568,6 +575,9 @@ fn main() -> Result<()> {
         sort: "relevance".into(),
         descending: true,
         facet: None,
+        added_paths: Vec::new(),
+        added_dirs: Vec::new(),
+        added_files: Vec::new(),
         exclude_off: Vec::new(),
         scope: String::new(),
         hits: Vec::new(),
@@ -897,6 +907,76 @@ fn main() -> Result<()> {
             // reply is the truth about what is in force.
             link.send(Ask::Rules);
             let _ = w;
+        });
+    }
+
+    // **A rule is added as a name whatever it looks like**, because that is the
+    // rule people mean: matched wherever it appears. One that starts with a
+    // slash is a path instead, and telling them apart by anything subtler
+    // would be a rule nobody was told about.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        window.on_rule_added(move |text| {
+            let value = text.trim().to_string();
+            if value.is_empty() {
+                return;
+            }
+            let change = {
+                let mut s = state.borrow_mut();
+                if value.starts_with('/') {
+                    s.added_paths.push(value);
+                    scour_settings::Change {
+                        exclude_paths: Some(s.added_paths.clone()),
+                        ..Default::default()
+                    }
+                } else {
+                    s.added_dirs.push(value);
+                    scour_settings::Change {
+                        exclude_dirs: Some(s.added_dirs.clone()),
+                        ..Default::default()
+                    }
+                }
+            };
+            link.send(Ask::Remember { change });
+            link.send(Ask::Rules);
+            let _ = weak.upgrade();
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        window.on_rule_dropped(move |kind, value| {
+            let value = value.to_string();
+            let change = {
+                let mut s = state.borrow_mut();
+                let list = match kind.as_str() {
+                    "path" => &mut s.added_paths,
+                    "file" => &mut s.added_files,
+                    _ => &mut s.added_dirs,
+                };
+                list.retain(|v| v != &value);
+                let list = list.clone();
+                match kind.as_str() {
+                    "path" => scour_settings::Change {
+                        exclude_paths: Some(list),
+                        ..Default::default()
+                    },
+                    "file" => scour_settings::Change {
+                        exclude_files: Some(list),
+                        ..Default::default()
+                    },
+                    _ => scour_settings::Change {
+                        exclude_dirs: Some(list),
+                        ..Default::default()
+                    },
+                }
+            };
+            link.send(Ask::Remember { change });
+            link.send(Ask::Rules);
+            let _ = weak.upgrade();
         });
     }
 
@@ -1452,6 +1532,28 @@ fn main() -> Result<()> {
     // this is how "does the button work" is answered without a hand on it.
     // Switch a skip rule off and on again — the round trip, so that "does the
     // button work" is answered without leaving anybody's rules changed.
+    // Add a skip rule and take it away again, so that "does the field work"
+    // is answered without anybody typing into it.
+    if let Ok(text) = std::env::var("SCOUR_GUI_ADD_RULE") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_rule_added(text.as_str().into());
+            }
+        });
+    }
+    if let Ok(spec) = std::env::var("SCOUR_GUI_DROP_RULE")
+        && let Some((kind, value)) = spec.split_once(':')
+    {
+        let weak = window.as_weak();
+        let (kind, value) = (kind.to_string(), value.to_string());
+        slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_rule_dropped(kind.as_str().into(), value.as_str().into());
+            }
+        });
+    }
+
     if let Ok(id) = std::env::var("SCOUR_GUI_RULE") {
         let weak = window.as_weak();
         slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
@@ -2299,39 +2401,58 @@ fn apply(
             // where the window learns it — pressing a rule edits *this* list.
             state.borrow_mut().exclude_off = off.clone();
             let is_off = |id: &str| off.iter().any(|o| o.eq_ignore_ascii_case(id));
-            let mut rows: Vec<Facet> = Vec::new();
-            for (group, kind, list) in [
-                ("added", "path", added_paths),
-                ("added", "dir", added_dirs),
-                ("added", "file", added_files),
-                ("added", "allow", added_allow),
-                ("config", "path", config_paths),
-                ("config", "dir", config_dirs),
-                ("config", "file", config_files),
-                ("config", "allow", config_allow),
-                ("builtin", "path", builtin_paths),
-                ("builtin", "dir", builtin_dirs),
-                ("builtin", "file", builtin_files),
-            ] {
-                for value in list {
-                    let id = scour_settings::rule_id(kind, &value);
-                    rows.push(Facet {
-                        label: value.as_str().into(),
-                        token: id.as_str().into(),
-                        // The group and the state, in the place a count goes:
-                        // a rule that is listed but not in force reads as in
-                        // force otherwise, which is the one misreading that
-                        // matters here.
-                        count: if is_off(&id) {
-                            format!("{group} · {}", t(cat, "off")).into()
-                        } else {
-                            group.into()
-                        },
-                        share: 0.0,
-                    });
-                }
+            // **What this window may delete, kept as the answer gave it.**
+            // Deleting one means sending the list without it, so a window that
+            // has not been told what is in the list cannot take one out of it
+            // — the same trap the switched-off list was in.
+            {
+                let mut s = state.borrow_mut();
+                s.added_paths = added_paths.clone();
+                s.added_dirs = added_dirs.clone();
+                s.added_files = added_files.clone();
             }
-            w.set_rules(ModelRc::new(VecModel::from(rows)));
+            let group = |rows: Vec<(&str, Vec<String>)>, removable: bool| {
+                let mut out: Vec<Rule> = Vec::new();
+                for (kind, list) in rows {
+                    for value in list {
+                        let id = scour_settings::rule_id(kind, &value);
+                        out.push(Rule {
+                            off: is_off(&id),
+                            id: id.as_str().into(),
+                            value: value.as_str().into(),
+                            kind: kind.into(),
+                            removable,
+                        });
+                    }
+                }
+                ModelRc::new(VecModel::from(out))
+            };
+            w.set_rules_added(group(
+                vec![
+                    ("path", added_paths),
+                    ("dir", added_dirs),
+                    ("file", added_files),
+                    ("allow", added_allow),
+                ],
+                true,
+            ));
+            w.set_rules_config(group(
+                vec![
+                    ("path", config_paths),
+                    ("dir", config_dirs),
+                    ("file", config_files),
+                    ("allow", config_allow),
+                ],
+                false,
+            ));
+            w.set_rules_builtin(group(
+                vec![
+                    ("path", builtin_paths),
+                    ("dir", builtin_dirs),
+                    ("file", builtin_files),
+                ],
+                false,
+            ));
         }
         // What the service is holding, said once. The page has this beside the
         // counts and it is the answer to "is this everything?" — an index of
@@ -2693,6 +2814,24 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     window.set_help_title(t(cat, "Help"));
     window.set_lang_title(t(cat, "language"));
     window.set_rules_title(t(cat, "What is skipped"));
+    window.set_rules_added_title(t(cat, "Added here"));
+    window.set_rules_added_note(t(
+        cat,
+        "The only ones this window may delete. Any rule can be switched off.",
+    ));
+    window.set_rules_config_title(t(cat, "From config.toml"));
+    window.set_rules_config_note(t(
+        cat,
+        "Written by hand, and left alone — deleting it here would rewrite the file. Switch it off instead.",
+    ));
+    window.set_rules_builtin_title(t(cat, "Built in"));
+    window.set_rules_builtin_note(t(
+        cat,
+        "Part of the program. Mostly build output and package caches, which churn constantly and bury real results.",
+    ));
+    window.set_rules_hint(t(cat, "a directory name, or a path"));
+    window.set_rules_add(t(cat, "add"));
+    window.set_rules_off_word(t(cat, "off"));
     // The help is the page's own legend, in the page's order — the same six
     // sections, each a heading and a paragraph — rather than a second
     // explanation written for this window. **Stripped of the markup they
@@ -3031,6 +3170,9 @@ mod tests {
             sort: "relevance".into(),
             descending: true,
             facet: None,
+            added_paths: Vec::new(),
+            added_dirs: Vec::new(),
+            added_files: Vec::new(),
             exclude_off: Vec::new(),
             scope: String::new(),
             hits: Vec::new(),
@@ -3083,6 +3225,9 @@ mod tests {
             sort: "modified".into(),
             descending: true,
             facet: None,
+            added_paths: Vec::new(),
+            added_dirs: Vec::new(),
+            added_files: Vec::new(),
             exclude_off: Vec::new(),
             scope: String::new(),
             hits: Vec::new(),

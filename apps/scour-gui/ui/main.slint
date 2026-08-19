@@ -70,6 +70,21 @@ export struct Bar {
     about: string,
 }
 
+// One skip rule: what it is, whether it is in force, and whether this window
+// is allowed to delete it.
+//
+// **Off is a note, not a deletion**, and that is what lets the two groups this
+// window cannot edit — the program's own set and a hand-written `config.toml`
+// — still be switched off. The note is kept beside the index; neither the file
+// nor the binary is touched.
+export struct Rule {
+    id: string,
+    value: string,
+    kind: string,
+    off: bool,
+    removable: bool,
+}
+
 // One folder in the report: what it weighs, what share of its parent that is,
 // and how those bytes are spread over the six age bands.
 //
@@ -338,6 +353,98 @@ component Push inherits Rectangle {
         horizontal-alignment: center;
         width: parent.width;
         height: parent.height;
+    }
+}
+
+/// One line of the skip list: a box that says whether it is in force, the
+/// thing being skipped, and — where this window is allowed to — a way to
+/// delete it.
+component RuleRow inherits Rectangle {
+    in property <string> value;
+    in property <string> word;
+    in property <bool> off;
+    in property <bool> removable;
+    callback toggled();
+    callback dropped();
+
+    height: 24px;
+    background: touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 4px;
+        padding-right: 4px;
+        spacing: 8px;
+
+        // The box is the whole row's business, so the row is the target: these
+        // are short strings and a thirteen-pixel box beside them is a hard
+        // thing to hit.
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-width: 1px;
+                border-radius: 2px;
+                border-color: root.off ? Theme.line : Theme.q-key;
+                background: root.off ? transparent : Theme.q-key;
+
+                Text {
+                    text: root.off ? "" : "✓";
+                    color: Theme.panel;
+                    font-size: 9px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: root.off ? Theme.ink-3 : Theme.ink-2;
+            font-family: Fonts.mono;
+            font-size: 11.5px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.off: Text {
+            text: root.word;
+            color: Theme.q-bad;
+            font-size: 11px;
+            vertical-alignment: center;
+        }
+
+        if root.removable: Rectangle {
+            width: 18px;
+            border-radius: 3px;
+            background: drop.has-hover ? Theme.selection : transparent;
+
+            drop := TouchArea {
+                clicked => {
+                    root.dropped();
+                }
+            }
+
+            Text {
+                text: "×";
+                color: drop.has-hover ? Theme.q-bad : Theme.ink-3;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: parent.width;
+                height: parent.height;
+            }
+        }
     }
 }
 
@@ -746,7 +853,20 @@ export component MainWindow inherits Window {
     in property <string> rules-title;
     in property <string> language;
     in property <[Facet]> languages;
-    in property <[Facet]> rules;
+    in property <[Rule]> rules-added;
+    in property <[Rule]> rules-config;
+    in property <[Rule]> rules-builtin;
+    in property <string> rules-added-title;
+    in property <string> rules-added-note;
+    in property <string> rules-config-title;
+    in property <string> rules-config-note;
+    in property <string> rules-builtin-title;
+    in property <string> rules-builtin-note;
+    in property <string> rules-hint;
+    in property <string> rules-add;
+    in property <string> rules-off-word;
+    callback rule-dropped(string, string);
+    callback rule-added(string);
     callback language-picked(string);
     callback rule-toggled(string);
     // --- the selection ----------------------------------------------------
@@ -2665,14 +2785,149 @@ export component MainWindow inherits Window {
 
                 sheetlist := VerticalLayout {
                     height: self.preferred-height;
-                    spacing: 1px;
+                    spacing: 4px;
                     alignment: start;
 
-                    for r[i] in root.rules: FacetRow {
-                        label: r.label;
-                        count: r.count;
-                        on: false;
-                        clicked => { root.rule-toggled(r.token); }
+                    // **Three groups, because they are three different kinds
+                    // of thing** — what somebody added here, what a file says,
+                    // and what the program itself skips — and only the first
+                    // can be deleted. A flat list said none of that, and there
+                    // was no way to tell a rule in force from one switched off.
+                    Text {
+                        text: root.rules-added-title;
+                        color: Theme.ink;
+                        font-size: 11px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                    }
+                    Text {
+                        text: root.rules-added-note;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    for r[i] in root.rules-added: RuleRow {
+                        value: r.value;
+                        off: r.off;
+                        word: root.rules-off-word;
+                        removable: true;
+                        toggled => {
+                            root.rule-toggled(r.id);
+                        }
+                        dropped => {
+                            root.rule-dropped(r.kind, r.value);
+                        }
+                    }
+
+                    // A rule is added as a *name* whatever it looks like,
+                    // because that is the rule people mean: matched wherever
+                    // it appears. One that starts with a slash is a path, and
+                    // guessing between them by anything subtler would be a
+                    // rule nobody was told about.
+                    Rectangle { height: 4px; }
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: 26px;
+
+                        Rectangle {
+                            border-width: 1px;
+                            border-radius: 3px;
+                            border-color: Theme.line;
+                            background: Theme.panel;
+
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+
+                                fresh := TextInput {
+                                    color: Theme.ink;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    single-line: true;
+                                    vertical-alignment: center;
+                                    selection-background-color: Theme.selection;
+                                    selection-foreground-color: Theme.ink;
+                                    accepted => {
+                                        root.rule-added(self.text);
+                                        self.text = "";
+                                    }
+                                }
+                            }
+
+                            // The placeholder sits *under* the field rather
+                            // than beside it: a layout owns its children's
+                            // positions, and this one has to start where the
+                            // text does.
+                            if fresh.text == "": Text {
+                                text: root.rules-hint;
+                                color: Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                vertical-alignment: center;
+                                x: 8px;
+                                height: parent.height;
+                            }
+                        }
+
+                        Push {
+                            label: root.rules-add;
+                            clicked => {
+                                root.rule-added(fresh.text);
+                                fresh.text = "";
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 10px; }
+
+                    Text {
+                        text: root.rules-config-title;
+                        color: Theme.ink;
+                        font-size: 11px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                    }
+                    Text {
+                        text: root.rules-config-note;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    for r[i] in root.rules-config: RuleRow {
+                        value: r.value;
+                        off: r.off;
+                        word: root.rules-off-word;
+                        toggled => {
+                            root.rule-toggled(r.id);
+                        }
+                    }
+
+                    Rectangle { height: 10px; }
+
+                    Text {
+                        text: root.rules-builtin-title;
+                        color: Theme.ink;
+                        font-size: 11px;
+                        font-weight: 650;
+                        letter-spacing: 1.2px;
+                    }
+                    Text {
+                        text: root.rules-builtin-note;
+                        color: Theme.ink-3;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    for r[i] in root.rules-builtin: RuleRow {
+                        value: r.value;
+                        off: r.off;
+                        word: root.rules-off-word;
+                        toggled => {
+                            root.rule-toggled(r.id);
+                        }
                     }
                 }
             }
