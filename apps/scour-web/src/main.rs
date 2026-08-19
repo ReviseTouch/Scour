@@ -297,6 +297,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     // `<img src>` that quietly makes a machine decode a video — which is
     // exactly the shape this split exists to stop.
     let acting = req.path == "/api/open"
+        || req.path == "/api/face"
         || req.path == "/api/thumb"
         || (req.path == "/api/settings" && req.param("set").is_some());
     if req.method != if acting { "POST" } else { "GET" } {
@@ -356,6 +357,12 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
             "403 Forbidden",
             "previewing is off (--no-preview)",
         ),
+        // Starting the other faces of the same program. Fenced by what
+        // starting anything is fenced by here — `POST`, the token, the origin,
+        // and `--no-launch` — because "run a program on this machine" is one
+        // capability whatever the program is.
+        "/api/face" if doing.launch => api_face(&mut stream, client, &req),
+        "/api/face" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
@@ -1244,6 +1251,82 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// executes it; on an executable a file manager offers to run it. Those get
 /// their folder revealed instead, which is what someone searching for them
 /// wanted. There is no flag to override it.
+/// Start the window or the terminal, once a person has asked for it.
+///
+/// **Two names, not a path.** The page says which face it wants and this
+/// decides what that is; taking a program name from the page would make a
+/// route that runs anything on the machine out of one that switches between
+/// two known things.
+fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let which = req.param("face").unwrap_or_default();
+    // The terminal goes through the launcher: it needs a tty, and which
+    // terminal to open is one list, in `scripts/scour-open`.
+    let program = match which {
+        "window" => "scour-gui",
+        "tui" => "scour-open",
+        _ => {
+            http::fail(stream, "400 Bad Request", "no such face");
+            return;
+        }
+    };
+    let Some(binary) = beside_or_path(program) else {
+        http::fail(
+            stream,
+            "404 Not Found",
+            &format!("{program} is not installed"),
+        );
+        return;
+    };
+    match std::process::Command::new(&binary)
+        .args(if which == "tui" {
+            &["tui"][..]
+        } else {
+            &[][..]
+        })
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        // Detached and not waited for: this server outlives the click and the
+        // program outlives this server.
+        Ok(_) => {
+            // **Switching is also choosing**, the same as in the window: what
+            // the desktop entry and the hotkey open is whichever face somebody
+            // last moved to. Best effort — the face is already starting, and
+            // failing to write a preference is not a reason to say it did not.
+            // Built as JSON rather than as a `Change`, because this bridge
+            // does not depend on the settings crate: it passes changes through
+            // from the page and this is one more of them.
+            if let Ok(change) = serde_json::from_value(serde_json::json!({ "face": which })) {
+                let _ = call(client, Request::SetSettings { change });
+            }
+            http::respond(stream, "200 OK", "application/json", b"{\"started\":true}")
+        }
+        Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+    }
+}
+
+/// The first `name` beside this program, then on the `PATH`.
+fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
+    if let Ok(here) = std::env::current_exe() {
+        if let Some(dir) = here.parent() {
+            let beside = dir.join(name);
+            if beside.is_file() {
+                return Some(beside);
+            }
+            let script = dir.join("../../scripts").join(name);
+            if script.is_file() {
+                return Some(script);
+            }
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
 fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");

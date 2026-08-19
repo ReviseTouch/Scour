@@ -994,6 +994,31 @@
     line-height: 1.55;
   }
   .sheet[hidden] { display: none; }
+  /* One face per row: a dot saying which one is running, the name, and — once
+     the row is armed — the sentence and the button that acts on it. */
+  .face { border-radius: 3px; }
+  .face.armed { background: var(--hover); }
+  .face .pick {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 6px; background: none; border: 0; color: var(--ink);
+    font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  }
+  .face .pick:hover:not(:disabled) { background: var(--hover); border-radius: 3px; }
+  .face .pick:disabled { color: var(--ink-3); cursor: default; }
+  .face .dot { width: 12px; color: var(--ink-3); }
+  .face .pick:disabled .dot { color: var(--q-key); }
+  .face .name { flex: 1; }
+  .face .aside { color: var(--ink-3); font-size: 11px; }
+  .face .say {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 6px 8px 26px;
+  }
+  .face .say p { flex: 1; margin: 0; color: var(--ink-2); font-size: 11px; }
+  .face .say .go {
+    padding: 5px 12px; border: 1px solid var(--q-key); border-radius: 3px;
+    background: none; color: var(--q-key); font: inherit; font-size: 11px;
+    cursor: pointer; white-space: nowrap;
+  }
   .sheet h2 {
     font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
     font-weight: 650; color: var(--ink); margin: 0 0 calc(var(--u) * 3);
@@ -1587,6 +1612,9 @@
            here that changes what you are reading rather than what the program
            is doing. -->
       <div class="tools" role="group" data-t-aria="window controls">
+        <button type="button" id="faces" class="about" aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="how to run it"
+                data-t-aria="switch between the window, the terminal and the browser">⇄</button>
         <button type="button" id="lang" class="about" aria-haspopup="menu"
                 aria-expanded="false" data-t-title="language"
                 data-t-aria="choose the language">文</button>
@@ -1610,6 +1638,16 @@
         <button type="button" data-view="large" aria-pressed="false"
                 data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
       </div>
+    </div>
+
+    <!-- The three faces of the same index. Choosing one *starts a program*,
+         and two of the three start something that outlives this page — so the
+         row says what will happen and a second press does it. The browser row
+         is the one already running and cannot be pressed. -->
+    <div id="faces-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="how to run it">
+      <h2 data-t="how to run it"></h2>
+      <div id="faces-body"></div>
     </div>
 
     <div id="rules-panel" class="sheet" hidden role="dialog" aria-modal="false"
@@ -1955,6 +1993,17 @@
         body: paths.join("\n"),
       });
       if (!r.ok) throw new Error(`thumb: ${r.status}`);
+      return r.json();
+    },
+    /* Start another face. `POST`, like everything else here that runs a
+       program, and the name is one of two words the server knows rather than
+       a path it would run. */
+    face: async (which) => {
+      const r = await fetch(
+        `/api/face?${new URLSearchParams({ face: which, t: TOKEN })}`,
+        { method: "POST" },
+      );
+      if (!r.ok) throw new Error(await r.text());
       return r.json();
     },
     status: () => SERVICE.get("status", {}),
@@ -7158,6 +7207,74 @@
 
   const loadRules = () =>
     SERVICE.get("rules", {}).then((r) => { RULES = r; drawRules(); }).catch(() => {});
+
+  /* ---------------------------------------------------------------- *
+   * Which face to run.
+   *
+   * A press arms a row and says what choosing it would do; the button beside
+   * that sentence is the thing that starts anything. The same shape as the
+   * window's panel, for the same reason: a list where one press starts a
+   * program is a list nobody can read safely.
+   * ---------------------------------------------------------------- */
+  const facesPanel = document.getElementById("faces-panel");
+  const facesBtn = document.getElementById("faces");
+  let ARMED = "";
+
+  const drawFaces = () => {
+    const row = (id, label, aside, note) => {
+      const here = id === "browser";
+      const armed = ARMED === id;
+      return `<div class="face ${armed ? "armed" : ""}" data-face="${id}">` +
+        `<button type="button" class="pick" ${here ? "disabled" : ""}>` +
+        `<span class="dot">${here ? "●" : "○"}</span>` +
+        `<span class="name">${esc(label)}</span>` +
+        `<span class="aside">${esc(aside)}</span></button>` +
+        (armed ? `<div class="say"><p>${esc(note)}</p>` +
+                 `<button type="button" class="go">${esc(T("open"))}</button></div>` : "") +
+        `</div>`;
+    };
+    document.getElementById("faces-body").innerHTML =
+      row("browser", T("Browser"), T("running now"), "") +
+      row("window", T("Window"),
+          "",
+          T("Starts the Scour window on this machine. This page stays open.")) +
+      row("tui", T("Terminal"),
+          "",
+          T("Opens a terminal and runs Scour in it. This page stays open."));
+  };
+
+  facesPanel.addEventListener("click", (e) => {
+    const pick = e.target.closest(".pick");
+    if (pick) {
+      const id = pick.closest(".face").dataset.face;
+      ARMED = ARMED === id ? "" : id;
+      drawFaces();
+      return;
+    }
+    const go = e.target.closest(".go");
+    if (!go) return;
+    const id = go.closest(".face").dataset.face;
+    go.disabled = true;
+    SERVICE.face(id === "window" ? "window" : "tui")
+      .then(() => {
+        ARMED = "";
+        facesPanel.hidden = true;
+        facesBtn.setAttribute("aria-expanded", "false");
+      })
+      .catch((err) => {
+        go.disabled = false;
+        go.textContent = T("not found");
+        console.warn("face:", err);
+      });
+  });
+
+  facesBtn.addEventListener("click", () => {
+    const open = facesPanel.hidden;
+    ARMED = "";
+    facesPanel.hidden = !open;
+    facesBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) drawFaces();
+  });
 
   rulesBtn.addEventListener("click", () => {
     const open = rulesPanel.hidden;
