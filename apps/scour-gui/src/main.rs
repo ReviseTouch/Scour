@@ -203,6 +203,15 @@ struct State {
     descending: bool,
     /// The `kind:` term the rail has active, if any.
     facet: Option<String>,
+    /// The skip rules that are switched off, as the service last reported
+    /// them.
+    ///
+    /// **Kept from the answer, not from what this window has pressed.** It was
+    /// a list that started empty every time the window opened, so the first
+    /// rule anybody switched off sent a list of exactly one — and the service
+    /// takes that list as the whole truth. Everything switched off in the
+    /// browser page, or in this window yesterday, came back on.
+    exclude_off: Vec<String>,
     /// The folder the report is weighing. Empty is everything indexed.
     scope: String,
     hits: Vec<scour_core::Hit>,
@@ -526,16 +535,19 @@ fn main() -> Result<()> {
     // One read serves both the language and the socket. This used to load and
     // parse the same config file twice before the first request left.
     let config = scour_config::Config::load_or_default().0;
-    let cat = Rc::new(Catalogue::for_language(&language(&config)));
+    // **The words, and they can be changed while the window is open.** Held
+    // behind a cell so that picking a language rebuilds the catalogue and
+    // rewrites every visible string — it used to only remember the choice,
+    // and the window went on speaking the old language until it was restarted.
+    let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
+        &language(&config),
+    ))));
     let window = MainWindow::new().context("the window could not be created")?;
     dress(&window);
-    columns(&window, &cat);
+    words(&window, &cat.borrow());
     // Nothing is marked to begin with: the first list is by relevance, which
     // is not a column and has no heading to point at.
     window.set_sorted_by("relevance".into());
-    // The two tab words, from the catalogue like every other visible string.
-    window.set_tab_search(t(&cat, "Search"));
-    window.set_tab_report(t(&cat, "Report"));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
 
     let state = Rc::new(RefCell::new(State {
@@ -556,6 +568,7 @@ fn main() -> Result<()> {
         sort: "relevance".into(),
         descending: true,
         facet: None,
+        exclude_off: Vec::new(),
         scope: String::new(),
         hits: Vec::new(),
         revision: 0,
@@ -581,73 +594,12 @@ fn main() -> Result<()> {
     // The page's own placeholder, so an empty window says the same thing in
     // both: what you can type, by example.
     window.set_hint(t(
-        &cat,
+        &cat.borrow(),
         "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
     ));
-    said(&window, t(&cat, "connecting…"));
-    // The rail's first section is the kinds, and the page calls it `Kind`.
-    // `Everything` was this window's own word for the same thing.
-    window.set_scope_label(t(&cat, "Kind"));
-    window.set_scope_heading(t(&cat, "Scope"));
-    window.set_size_heading(t(&cat, "Size"));
-    // Three bands, the page's own: what is taking the room, and what is empty.
-    // Fixed rather than counted — a count here would cost a walk per band for
-    // a filter people apply, look at, and drop.
-    let sizes: Vec<Facet> = [
-        (">10 MB", "size:>10mb"),
-        (">1 MB", "size:>1mb"),
-        ("= 0", "size:=0"),
-    ]
-    .iter()
-    .map(|(label, token)| Facet {
-        label: (*label).into(),
-        token: (*token).into(),
-        count: slint::SharedString::new(),
-        share: 0.0,
-    })
-    .collect();
-    window.set_sizes(ModelRc::new(VecModel::from(sizes)));
-    window.set_ribbon_label(t(&cat, "Time distribution"));
-    window.set_help_title(t(&cat, "Help"));
-    window.set_lang_title(t(&cat, "language"));
-    window.set_rules_title(t(&cat, "What is skipped"));
-    // The help is the page's own legend, in the page's order — the same six
-    // sections, each a heading and a paragraph — rather than a second
-    // explanation written for this window. **Stripped of the markup they
-    // carry**: the catalogue is shared with a page that hangs a stylesheet on
-    // `<code>` and `<b>`, and this window has none, so it was showing tags.
-    window.set_help_body(
-        [
-            "A word on its own matches the name. Put <code>!</code> in front of any term to exclude it, and write several to mean all of them at once.",
-            "The freshness ruler",
-            "The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column.",
-            "The query is the interface",
-            "Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: <code>kind:</code> <code>under:</code> <code>dm:</code>. Clicking a filter adds the term to the <em>text</em>, not to a hidden state.",
-            "The measurement is not hidden",
-            "<code>0.29 ms · 4,864 rows read</code> — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so.",
-            "The report: bytes by age",
-            "Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; <b>25 GB nobody has touched in a year</b> does. No tool has this, TreeSize included, because none of them has a date per row to hand.",
-            "The time ribbon",
-            "The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a <code>dm:</code> term to the query. Possible only because filter counts take microseconds.",
-        ]
-        .iter()
-        .map(|line| plain(&t(&cat, line)))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .into(),
-    );
+    said(&window, t(&cat.borrow(), "connecting…"));
     // The two languages the catalogue has. `""` is "whatever the desktop
     // says", which is what the config file means by an empty string.
-    let langs: Vec<Facet> = [("English", "en"), ("Türkçe", "tr")]
-        .iter()
-        .map(|(label, tag)| Facet {
-            label: (*label).into(),
-            token: (*tag).into(),
-            count: slint::SharedString::new(),
-            share: 0.0,
-        })
-        .collect();
-    window.set_languages(ModelRc::new(VecModel::from(langs)));
     window.set_language(language(&config).as_str().into());
     // The shape the window was left in. `detail` when nothing was chosen —
     // and when something unknown was, which is the same answer a frontend
@@ -671,13 +623,6 @@ fn main() -> Result<()> {
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
     }
-    window.set_ribbon_hint(t(&cat, "results by date changed"));
-    window.set_axis_oldest(t(&cat, "2 years ago"));
-    window.set_axis_year(t(&cat, "1 year"));
-    window.set_axis_month(t(&cat, "1 month"));
-    window.set_axis_week(t(&cat, "1 week"));
-    window.set_axis_today(t(&cat, "today"));
-
     let addr = config.socket();
 
     // The bridge from the worker threads to the UI thread.
@@ -695,7 +640,7 @@ fn main() -> Result<()> {
     let ui_lines = lines.clone();
     let ui_picks = Rc::clone(&picks);
     let ui_facets = facets.clone();
-    let ui_cat = cat.clone();
+    let ui_cat = Rc::clone(&cat);
 
     let sink = move |got: Got| {
         let _ = slint::invoke_from_event_loop(move || deliver(got));
@@ -711,7 +656,15 @@ fn main() -> Result<()> {
             *slot.borrow_mut() = Some(Rc::new(move |got: Got| {
                 let Some(w) = weak.upgrade() else { return };
                 apply(
-                    &w, &ui_state, &ui_rows, &ui_lines, &ui_picks, &ui_facets, &ui_cat, &link, got,
+                    &w,
+                    &ui_state,
+                    &ui_rows,
+                    &ui_lines,
+                    &ui_picks,
+                    &ui_facets,
+                    &ui_cat.borrow().clone(),
+                    &link,
+                    got,
                 );
             }));
         });
@@ -814,7 +767,7 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             match what.as_str() {
                 "export" => {
-                    export(&w, &addr, &cat_for_tools);
+                    export(&w, &addr, &cat_for_tools.borrow());
                 }
                 other => {
                     let open = w.get_panel() == other;
@@ -917,19 +870,26 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
-        let off: Rc<RefCell<Vec<String>>> = Rc::default();
+        let state = Rc::clone(&state);
         window.on_rule_toggled(move |id| {
             let Some(w) = weak.upgrade() else { return };
-            let mut held = off.borrow_mut();
             let id = id.to_string();
-            if let Some(at) = held.iter().position(|o| o.eq_ignore_ascii_case(&id)) {
-                held.remove(at);
-            } else {
-                held.push(id);
-            }
+            let held = {
+                let mut s = state.borrow_mut();
+                if let Some(at) = s
+                    .exclude_off
+                    .iter()
+                    .position(|o| o.eq_ignore_ascii_case(&id))
+                {
+                    s.exclude_off.remove(at);
+                } else {
+                    s.exclude_off.push(id);
+                }
+                s.exclude_off.clone()
+            };
             link.send(Ask::Remember {
                 change: scour_settings::Change {
-                    exclude_off: Some(held.clone()),
+                    exclude_off: Some(held),
                     ..Default::default()
                 },
             });
@@ -946,16 +906,35 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
+        let held = Rc::clone(&cat);
+        let state = Rc::clone(&state);
+        let model = Rc::clone(&rows);
         window.on_language_picked(move |tag| {
             let Some(w) = weak.upgrade() else { return };
             w.set_language(tag.clone());
             w.set_panel("".into());
+            // **The words change now, not on the next start.** The catalogue
+            // is rebuilt and every visible string written again; what comes
+            // from an answer — the rail's kinds, the meter, the report — is
+            // re-asked for, because those are worded where they arrive.
+            *held.borrow_mut() = Rc::new(Catalogue::for_language(&tag));
+            words(&w, &held.borrow());
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     language: Some(tag.to_string()),
                     ..Default::default()
                 },
             });
+            // **A new question, so that the sidebar is asked again too.**
+            // The facet walk is done once per matching set; without this the
+            // rail kept the words it was filled with and the kinds beside the
+            // counts stayed in the language nobody chose.
+            state.borrow_mut().advance_query();
+            dispatch(&state, &link, &model, w.get_visible_rows().max(0) as u32);
+            if w.get_tab() == "report" {
+                let scope = state.borrow().scope.clone();
+                w.invoke_report_open(scope.as_str().into());
+            }
         });
     }
 
@@ -1004,10 +983,11 @@ fn main() -> Result<()> {
     {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         let weak = window.as_weak();
         window.on_report_open(move |path| {
             let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
             state.borrow_mut().scope = path.to_string();
             // The words the table is headed with, said once here rather than
             // in the interface — the catalogue is the service's vocabulary and
@@ -1141,10 +1121,11 @@ fn main() -> Result<()> {
         let picks = Rc::clone(&picks);
         let anchor = Rc::clone(&anchor);
         let rows = Rc::clone(&rows);
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         let weak = window.as_weak();
         window.on_pick(move |row, adding, run| {
             let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
             let Some(here) = rows.pick_at(row.max(0) as usize) else {
                 return;
             };
@@ -1184,10 +1165,11 @@ fn main() -> Result<()> {
     {
         let picks = Rc::clone(&picks);
         let rows = Rc::clone(&rows);
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         let weak = window.as_weak();
         window.on_pick_dropped(move || {
             let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
             picks.borrow_mut().clear();
             show_picks(&w, &cat, &rows, &picks.borrow(), false);
         });
@@ -1195,8 +1177,9 @@ fn main() -> Result<()> {
     {
         let picks = Rc::clone(&picks);
         let weak = window.as_weak();
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         window.on_pick_copied(move || {
+            let cat = cat.borrow().clone();
             // Where a single path goes, and for the same reason: this window
             // is a client of a service and a clipboard crate to copy a string
             // is a dependency for a line of text.
@@ -1211,11 +1194,12 @@ fn main() -> Result<()> {
     {
         let picks = Rc::clone(&picks);
         let rows = Rc::clone(&rows);
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         let asking = Rc::new(std::cell::Cell::new(false));
         let weak = window.as_weak();
         window.on_pick_opened(move || {
             let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
             let folders = folders_of(&picks.borrow());
             // **More than a couple of windows is asked about first.** Opening
             // eleven file managers because somebody selected eleven files is
@@ -1264,8 +1248,9 @@ fn main() -> Result<()> {
     {
         let rows = Rc::clone(&rows);
         let weak = window.as_weak();
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         window.on_copy_path(move |i| {
+            let cat = cat.borrow().clone();
             let Some(path) = path_of(&rows, i) else {
                 return;
             };
@@ -1374,6 +1359,11 @@ fn main() -> Result<()> {
     // instant a keystroke followed it.
     link.send(Ask::Places);
     link.send(Ask::Status);
+    // **The rules, at the start and not only when the panel opens.** Which of
+    // them are switched off is a list the service holds whole: a window that
+    // has not been told cannot edit it without replacing it, and the first
+    // rule anybody pressed used to turn every other one back on.
+    link.send(Ask::Rules);
     trace(&format!("first search sent {:.1?} in", launched.elapsed()));
     dispatch(
         &state,
@@ -1439,10 +1429,11 @@ fn main() -> Result<()> {
     {
         let picks = Rc::clone(&picks);
         let rows = Rc::clone(&rows);
-        let cat = cat.clone();
+        let cat = Rc::clone(&cat);
         let weak = window.as_weak();
         slint::Timer::single_shot(std::time::Duration::from_millis(1200), move || {
             let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
             let mut held = picks.borrow_mut();
             for row in 0..n {
                 if let Some(pick) = rows.pick_at(row) {
@@ -1455,6 +1446,39 @@ fn main() -> Result<()> {
 
     // Open the report before the window does, for the same reason the panel
     // flag exists: a picture of the search tab says nothing about the other one.
+    // Pick a language before the window opens, to see that the words really
+    // change rather than only being remembered.
+    // Press a window button before anybody does — `export` writes a file, so
+    // this is how "does the button work" is answered without a hand on it.
+    // Switch a skip rule off and on again — the round trip, so that "does the
+    // button work" is answered without leaving anybody's rules changed.
+    if let Ok(id) = std::env::var("SCOUR_GUI_RULE") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_rule_toggled(id.as_str().into());
+            }
+        });
+    }
+
+    if let Ok(what) = std::env::var("SCOUR_GUI_TOOL") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1200), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_tool_clicked(what.as_str().into());
+            }
+        });
+    }
+
+    if let Ok(tag) = std::env::var("SCOUR_GUI_LANG") {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_language_picked(tag.as_str().into());
+            }
+        });
+    }
+
     if std::env::var("SCOUR_GUI_TAB").as_deref() == Ok("report") {
         window.set_tab("report".into());
         // With the duplicate hunt open, when asked: it is the one part of the
@@ -2271,6 +2295,9 @@ fn apply(
             else {
                 return;
             };
+            // The answer is the truth about what is in force, so this is
+            // where the window learns it — pressing a rule edits *this* list.
+            state.borrow_mut().exclude_off = off.clone();
             let is_off = |id: &str| off.iter().any(|o| o.eq_ignore_ascii_case(id));
             let mut rows: Vec<Facet> = Vec::new();
             for (group, kind, list) in [
@@ -2631,6 +2658,84 @@ fn open(path: &str) {
 /// Both schemes are pushed, not one: which of them applies is Slint's to
 /// decide, because it is the only side that hears the desktop change its mind
 /// while the window is open.
+/// Write every string the window shows, out of the words it is given.
+///
+/// **One place, and it runs more than once.** Picking a language rebuilds the
+/// catalogue and calls this again; before it existed the choice was only
+/// remembered and the window went on speaking the language it had opened in.
+fn words(window: &MainWindow, cat: &Catalogue) {
+    columns(window, cat);
+    window.set_tab_search(t(cat, "Search"));
+    window.set_tab_report(t(cat, "Report"));
+    // The rail's first section is the kinds, and the page calls it `Kind`.
+    // `Everything` was this window's own word for the same thing.
+    window.set_scope_label(t(cat, "Kind"));
+    window.set_scope_heading(t(cat, "Scope"));
+    window.set_size_heading(t(cat, "Size"));
+    // Three bands, the page's own: what is taking the room, and what is empty.
+    // Fixed rather than counted — a count here would cost a walk per band for
+    // a filter people apply, look at, and drop.
+    let sizes: Vec<Facet> = [
+        (">10 MB", "size:>10mb"),
+        (">1 MB", "size:>1mb"),
+        ("= 0", "size:=0"),
+    ]
+    .iter()
+    .map(|(label, token)| Facet {
+        label: (*label).into(),
+        token: (*token).into(),
+        count: slint::SharedString::new(),
+        share: 0.0,
+    })
+    .collect();
+    window.set_sizes(ModelRc::new(VecModel::from(sizes)));
+    window.set_ribbon_label(t(cat, "Time distribution"));
+    window.set_help_title(t(cat, "Help"));
+    window.set_lang_title(t(cat, "language"));
+    window.set_rules_title(t(cat, "What is skipped"));
+    // The help is the page's own legend, in the page's order — the same six
+    // sections, each a heading and a paragraph — rather than a second
+    // explanation written for this window. **Stripped of the markup they
+    // carry**: the catalogue is shared with a page that hangs a stylesheet on
+    // `<code>` and `<b>`, and this window has none, so it was showing tags.
+    window.set_help_body(
+        [
+            "A word on its own matches the name. Put <code>!</code> in front of any term to exclude it, and write several to mean all of them at once.",
+            "The freshness ruler",
+            "The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column.",
+            "The query is the interface",
+            "Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: <code>kind:</code> <code>under:</code> <code>dm:</code>. Clicking a filter adds the term to the <em>text</em>, not to a hidden state.",
+            "The measurement is not hidden",
+            "<code>0.29 ms · 4,864 rows read</code> — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so.",
+            "The report: bytes by age",
+            "Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; <b>25 GB nobody has touched in a year</b> does. No tool has this, TreeSize included, because none of them has a date per row to hand.",
+            "The time ribbon",
+            "The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a <code>dm:</code> term to the query. Possible only because filter counts take microseconds.",
+        ]
+        .iter()
+        .map(|line| plain(&t(cat, line)))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+        .into(),
+    );
+    let langs: Vec<Facet> = [("English", "en"), ("Türkçe", "tr")]
+        .iter()
+        .map(|(label, tag)| Facet {
+            label: (*label).into(),
+            token: (*tag).into(),
+            count: slint::SharedString::new(),
+            share: 0.0,
+        })
+        .collect();
+    window.set_languages(ModelRc::new(VecModel::from(langs)));
+    window.set_ribbon_hint(t(cat, "results by date changed"));
+    window.set_axis_oldest(t(cat, "2 years ago"));
+    window.set_axis_year(t(cat, "1 year"));
+    window.set_axis_month(t(cat, "1 month"));
+    window.set_axis_week(t(cat, "1 week"));
+    window.set_axis_today(t(cat, "today"));
+}
+
 fn dress(window: &MainWindow) {
     let theme = window.global::<Theme>();
     theme.set_dark_scheme(scheme(&scour_ui::DARK));
@@ -2926,6 +3031,7 @@ mod tests {
             sort: "relevance".into(),
             descending: true,
             facet: None,
+            exclude_off: Vec::new(),
             scope: String::new(),
             hits: Vec::new(),
             revision: 0,
@@ -2977,6 +3083,7 @@ mod tests {
             sort: "modified".into(),
             descending: true,
             facet: None,
+            exclude_off: Vec::new(),
             scope: String::new(),
             hits: Vec::new(),
             revision: 0,
