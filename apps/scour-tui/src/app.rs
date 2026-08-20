@@ -408,12 +408,26 @@ impl App {
         for group in reply.groups {
             match group.by {
                 scour_core::FacetBy::Kind => {
-                    self.kinds = group
-                        .facets
-                        .into_iter()
-                        .filter(|f| f.count > 0)
-                        .map(|f| (f.key, f.count))
+                    // **Every kind, including the ones with none.** A kind
+                    // that vanishes when a query has none of it takes the rest
+                    // of the rail with it — every line below moves — and it
+                    // answers a question nobody asked: "are there any
+                    // videos?" is answered by `video 0`, not by silence where
+                    // the row used to be.
+                    let counted: std::collections::HashMap<String, u64> =
+                        group.facets.into_iter().map(|f| (f.key, f.count)).collect();
+                    let mut kinds: Vec<(String, u64)> = scour_core::Kind::OFFERED
+                        .iter()
+                        .map(|kind| {
+                            let token = kind.token().to_string();
+                            let count = counted.get(&token).copied().unwrap_or(0);
+                            (token, count)
+                        })
                         .collect();
+                    // Largest first, and the empty ones fall to the bottom
+                    // where a short rail drops them first.
+                    kinds.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+                    self.kinds = kinds;
                 }
                 scour_core::FacetBy::Age { .. } => {
                     // **Every band, including the empty ones.** The answer
