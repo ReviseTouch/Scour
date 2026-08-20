@@ -10,6 +10,33 @@ use scour_page::{Change, Pages};
 
 use crate::link::TYPING_CAP;
 
+/// A line of working out, when `SCOUR_TUI_TRACE` is set.
+///
+/// To standard error, which the alternate screen does not cover: run it with
+/// `2>/tmp/log` and read the log while it is up.
+pub fn trace(what: &str) {
+    let Some(where_to) = std::env::var_os("SCOUR_TUI_TRACE") else {
+        return;
+    };
+    // **A path, when one is given.** Standard error is the terminal this is
+    // drawing on: a line written there lands in the middle of the frame. Set
+    // it to a file and the working out can be read while the thing is up.
+    let line = format!("tui: {what}\n");
+    match where_to.to_str() {
+        Some(path) if path.starts_with('/') => {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+        _ => eprint!("{line}"),
+    }
+}
+
 /// The three size bands are always offered, and the rail's fixed furniture is
 /// three headings and two blank lines.
 const RAIL_FIXED: usize = 3 + 3 + 2;
@@ -686,6 +713,10 @@ impl App {
         if revision == self.revision {
             return Want::Nothing;
         }
+        trace(&format!(
+            "index moved to {revision}; cursor {} on {:?}",
+            self.cursor, self.cursor_at
+        ));
         self.revision = revision;
         self.pages.mark(revision);
         self.dirty = true;
@@ -831,6 +862,12 @@ impl App {
     /// the list appearing to jump by one every time a file is saved.
     fn refollow(&mut self) {
         let Some(want) = self.cursor_at.clone() else {
+            // **Nothing to follow yet, so adopt what is there.** The cursor
+            // starts on row zero before any row has arrived, and a cursor that
+            // waits to be moved before it learns what it is on never learns:
+            // the first file saved anywhere pushes its row down and it stays
+            // behind. Which is exactly what happened.
+            self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
             return;
         };
         if self.pages.at(self.cursor).is_some_and(|h| h.path == want) {
@@ -842,6 +879,7 @@ impl App {
                 let row = page * scour_page::SPAN + i;
                 if self.pages.at(row).is_some_and(|h| h.path == want) {
                     let moved = row as isize - self.cursor as isize;
+                    trace(&format!("row moved {moved} to {row}"));
                     self.cursor = row;
                     self.top = self.top.saturating_add_signed(moved);
                     self.settle();
