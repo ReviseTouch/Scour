@@ -679,6 +679,78 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
 
     lines.push(Line::from(""));
+    lines.push(head("WHAT A FOLDER WEIGHS"));
+    match &app.usage {
+        Some(usage) => {
+            let where_at = if app.weighing.is_empty() {
+                "everything indexed".to_string()
+            } else {
+                app.weighing.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("   ", Style::new()),
+                Span::styled(
+                    tail(&where_at, area.width.saturating_sub(30) as usize),
+                    Style::new().fg(theme.key()),
+                ),
+                Span::styled(
+                    format!(
+                        "  {}  ·  {} files",
+                        format::compact_bytes(usage.root.bytes, mark.1),
+                        format::grouped(usage.root.files, mark.0)
+                    ),
+                    Style::new().fg(theme.ink_3()),
+                ),
+            ]));
+            // **The heaviest children, with what is old in them.** A folder's
+            // size says what it costs; the share that has not been touched in
+            // a year says whether it is worth anything — which is the whole
+            // reason this panel exists and the thing `du` cannot tell you.
+            let most = usage.children.first().map(|c| c.bytes).unwrap_or(1).max(1);
+            for (at, child) in usage.children.iter().take(crate::app::WEIGHED).enumerate() {
+                let stale = child.age.last().copied().unwrap_or(0);
+                let share = if child.bytes == 0 {
+                    0
+                } else {
+                    (stale * 100 / child.bytes.max(1)) as u32
+                };
+                let bar = ((child.bytes as f64 / most as f64) * 8.0).round() as usize;
+                let here = at == app.weigh_at;
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(
+                            " {} {:>10}",
+                            if here { "▸" } else { " " },
+                            format::compact_bytes(child.bytes, mark.1)
+                        ),
+                        Style::new().fg(if here { theme.ink() } else { theme.ink_2() }),
+                    ),
+                    Span::styled(
+                        format!("  {:<8}", "▇".repeat(bar.clamp(1, 8))),
+                        Style::new().fg(theme.key()),
+                    ),
+                    Span::styled(
+                        format!("{:<40}", cut(scour_ui::path::leaf(&child.path), 40)),
+                        Style::new().fg(theme.ink_2()),
+                    ),
+                    Span::styled(
+                        if share >= 5 {
+                            format!("{share}% older than a year")
+                        } else {
+                            String::new()
+                        },
+                        Style::new().fg(theme.ink_3()),
+                    ),
+                ]));
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            "   weighing…",
+            Style::new().fg(theme.ink_3()),
+        ))),
+    }
+
+    lines.push(Line::from(""));
     lines.push(head("THE SAME FILE, SEVERAL TIMES OVER"));
     if app.waste > 0 {
         lines.push(Line::from(vec![

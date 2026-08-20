@@ -141,12 +141,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "report",
         what: "what the index holds: the largest, the duplicates, what a folder weighs",
-        faces: [
-            Has,
-            Has,
-            Part("what is indexed and the duplicates; no folder weights yet"),
-            Has,
-        ],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "rules",

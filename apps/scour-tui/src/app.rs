@@ -37,6 +37,9 @@ pub fn trace(what: &str) {
     }
 }
 
+/// How many weighed children the report draws, and walks over.
+pub const WEIGHED: usize = 6;
+
 /// The three size bands are always offered, and the rail's fixed furniture is
 /// three headings and two blank lines.
 const RAIL_FIXED: usize = 3 + 3 + 2;
@@ -139,6 +142,8 @@ pub enum Want {
     Rules,
     /// Ask for everything the report shows.
     Report,
+    /// Weigh this folder.
+    Weigh(String),
     /// Replace the list of switched-off rules.
     OffRules(Vec<String>),
     /// Remember a preference.
@@ -207,6 +212,15 @@ pub struct App {
     pub reporting: bool,
     /// What the index holds, for the report.
     pub stats: Option<scour_core::IndexStats>,
+    /// The folder the report is weighing, and what came back.
+    ///
+    /// **Walked, not searched.** A folder's weight is a question about a
+    /// subtree, so the report keeps a place in it: pressing a child asks about
+    /// that child, and the trail back is the path itself.
+    pub weighing: String,
+    pub usage: Option<scour_core::UsageResponse>,
+    /// Which of the weighed children the cursor is on.
+    pub weigh_at: usize,
     /// The duplicate groups: how big one copy is, how many there are, and
     /// where the first of them lives.
     pub dupes: Vec<(u64, u64, String)>,
@@ -282,6 +296,9 @@ impl Default for App {
             anchor: 0,
             reporting: false,
             stats: None,
+            weighing: String::new(),
+            usage: None,
+            weigh_at: 0,
             dupes: Vec::new(),
             waste: 0,
             panel: Panel::None,
@@ -527,11 +544,66 @@ impl App {
     pub fn report(&mut self) -> Want {
         self.reporting = !self.reporting;
         self.dirty = true;
-        if self.reporting {
-            Want::Report
-        } else {
-            Want::Nothing
+        if !self.reporting {
+            return Want::Nothing;
         }
+        // **It opens on the home directory.** Weighing everything indexed
+        // answers with one child — the filesystem root — which is a panel that
+        // opens on a dead end. Home is where the things somebody can act on
+        // are, and `Backspace` still walks out of it.
+        if self.usage.is_none() {
+            self.weighing = std::env::var("HOME").unwrap_or_default();
+        }
+        Want::Report
+    }
+
+    /// Weigh a folder — a child of the one being weighed, or its parent.
+    pub fn weigh(&mut self, path: String) -> Want {
+        self.weighing = path.clone();
+        self.usage = None;
+        self.weigh_at = 0;
+        self.dirty = true;
+        Want::Weigh(path)
+    }
+
+    /// Move the cursor over the weighed children.
+    pub fn weigh_walk(&mut self, by: isize) {
+        let count = self
+            .usage
+            .as_ref()
+            .map(|u| u.children.len().min(WEIGHED))
+            .unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        self.weigh_at = self
+            .weigh_at
+            .saturating_add_signed(by)
+            .min(count.saturating_sub(1));
+        self.dirty = true;
+    }
+
+    /// Go into the child under the cursor.
+    pub fn weigh_into(&mut self) -> Want {
+        let Some(usage) = &self.usage else {
+            return Want::Nothing;
+        };
+        let Some(child) = usage.children.get(self.weigh_at) else {
+            return Want::Nothing;
+        };
+        let path = child.path.clone();
+        self.weigh(path)
+    }
+
+    /// Back out to the folder above.
+    pub fn weigh_up(&mut self) -> Want {
+        if self.weighing.is_empty() {
+            return Want::Nothing;
+        }
+        let up = scour_ui::path::folder(&self.weighing).to_string();
+        // `/` has no parent that means anything here; the whole index does.
+        let up = if up == "/" { String::new() } else { up };
+        self.weigh(up)
     }
 
     /// The rail's counts arrived.

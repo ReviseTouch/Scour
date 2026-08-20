@@ -37,6 +37,10 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
     ("F2 · Ctrl+R", "the report, and back"),
+    (
+        "in the report",
+        "↑↓ a folder · Enter into it · Backspace out",
+    ),
     ("F1", "this · or press `keys` on the counter line"),
     ("Esc", "clear the query, then move mode"),
     ("j k · g G · d u", "move, in move mode"),
@@ -80,6 +84,24 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 return Want::Nothing;
             }
             KeyCode::Enter | KeyCode::Char(' ') => return panel_press(app),
+            _ => {}
+        }
+    }
+
+    // The report reads like a page rather than a list: the arrows walk its
+    // weighed folders, `Enter` goes into one and `Backspace` comes back out.
+    if app.reporting && app.panel == Panel::None {
+        match key.code {
+            KeyCode::Up => {
+                app.weigh_walk(-1);
+                return Want::Nothing;
+            }
+            KeyCode::Down => {
+                app.weigh_walk(1);
+                return Want::Nothing;
+            }
+            KeyCode::Enter => return app.weigh_into(),
+            KeyCode::Backspace | KeyCode::Left => return app.weigh_up(),
             _ => {}
         }
     }
