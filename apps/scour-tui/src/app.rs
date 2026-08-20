@@ -915,14 +915,17 @@ impl App {
             for i in 0..scour_page::SPAN {
                 let row = page * scour_page::SPAN + i;
                 if self.pages.at(row).is_some_and(|h| h.path == want) {
-                    let moved = row as isize - self.cursor as isize;
                     trace(&format!(
-                        "found it at {row}, {moved} away; top {} → {}",
-                        self.top,
-                        self.top.saturating_add_signed(moved)
+                        "found it at {row}, was {}; the view stays at {}",
+                        self.cursor, self.top
                     ));
+                    // **The row moves, the view does not.** Moving both kept
+                    // the row on the same line of the screen, which is a row
+                    // pinned in place — and then a file arriving above it is
+                    // invisible. Left alone, the list holds still, the new row
+                    // appears at the top of it, and the chosen row slides down
+                    // one with its tick still on it.
                     self.cursor = row;
-                    self.top = self.top.saturating_add_signed(moved);
                     self.settle();
                     return;
                 }
@@ -1258,11 +1261,11 @@ mod tests {
             Some("/x/3"),
             "and it is the same file"
         );
-        // The view moved with it, so the row is drawn on the same line it was
-        // on: 3 - 0 before, 4 - 1 after. A view left where it was would slide
-        // every row down one under somebody's eye.
-        assert_eq!(app.top, 1);
-        assert_eq!(app.cursor - app.top, 3);
+        // **The view stays where it is**, so the row visibly slides down a
+        // line and the file that arrived is drawn above it. Moving the view
+        // with it would pin the row to its line and hide the arrival.
+        assert_eq!(app.top, 0);
+        assert_eq!(app.cursor - app.top, 4, "one line further down the screen");
     }
 
     /// **An untouched cursor stays at the top of the list.**
