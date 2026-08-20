@@ -637,19 +637,20 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         lines.push(
             Line::from(vec![
                 Span::styled(
-                    format!(
-                        "{}{:<name$} ",
-                        if cursor { "▸" } else { " " },
-                        cut(token, name)
-                    ),
-                    Style::new().fg(if on || cursor {
-                        theme.key()
-                    } else {
-                        theme.ink_2()
-                    }),
+                    format!("{}{:<name$} ", mark_of(on, cursor), cut(token, name)),
+                    // **Colour means in force, the arrow means the cursor is
+                    // here.** They were the same thing, so a filter somebody
+                    // had just taken off left its row lit as though it were
+                    // still on.
+                    Style::new().fg(if on { theme.key() } else { theme.ink_2() }),
                 ),
                 Span::styled(
-                    format!("{:<bar$}", "▇".repeat(width.clamp(1, bar))),
+                    // A kind with none of it gets no bar: a bar means "some",
+                    // and the shortest one there is would be a lie.
+                    format!(
+                        "{:<bar$}",
+                        "▇".repeat(if *count == 0 { 0 } else { width.clamp(1, bar) })
+                    ),
                     Style::new().fg(theme.kind(token)),
                 ),
                 Span::styled(format!(" {said:>widest$}"), Style::new().fg(theme.ink_3())),
@@ -667,12 +668,18 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         at += 1;
         lines.push(
             Line::from(Span::styled(
-                format!("{}{}", if cursor { "▸" } else { " " }, cut(label, 19)),
-                Style::new().fg(if on || cursor {
-                    theme.key()
-                } else {
-                    theme.ink_2()
-                }),
+                format!(
+                    "{}{}",
+                    if on {
+                        "●"
+                    } else if cursor {
+                        "▸"
+                    } else {
+                        " "
+                    },
+                    cut(label, 19)
+                ),
+                Style::new().fg(if on { theme.key() } else { theme.ink_2() }),
             ))
             .style(lit.unwrap_or_default()),
         );
@@ -686,12 +693,17 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         at += 1;
         lines.push(
             Line::from(Span::styled(
-                format!("{}{label}", if cursor { "▸" } else { " " }),
-                Style::new().fg(if on || cursor {
-                    theme.key()
-                } else {
-                    theme.ink_2()
-                }),
+                format!(
+                    "{}{label}",
+                    if on {
+                        "●"
+                    } else if cursor {
+                        "▸"
+                    } else {
+                        " "
+                    }
+                ),
+                Style::new().fg(if on { theme.key() } else { theme.ink_2() }),
             ))
             .style(lit.unwrap_or_default()),
         );
@@ -819,6 +831,18 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         ))),
         axis,
     );
+}
+
+/// What sits in the rail's first column: a dot for the filter in force, an
+/// arrow for where the keyboard cursor is, a space for everything else.
+fn mark_of(on: bool, cursor: bool) -> &'static str {
+    if on {
+        "●"
+    } else if cursor {
+        "▸"
+    } else {
+        " "
+    }
 }
 
 /// A label, cut to fit rather than wrapped: a rail is one line per thing.
