@@ -5019,6 +5019,7 @@ dependencies = [
  "scour-ipc",
  "scour-proto",
  "scour-settings",
+ "scour-ui",
  "serde_json",
 ]
 

@@ -432,7 +432,6 @@ impl Needle {
         self.finder.find(folded).is_some()
     }
 
-
     /// The needle as the parser folded it — what the trigram index is keyed on.
     fn folded(&self) -> &[u8] {
         self.finder.needle()

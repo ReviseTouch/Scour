@@ -154,6 +154,12 @@ enum Command {
     Explain { query: Vec<String> },
     /// The query language reference.
     Syntax,
+    /// What Scour does, and which of its four faces does it.
+    ///
+    /// **The table is in the code, not in a plan.** Which face is behind on
+    /// what is the thing that goes stale first when four of them share one
+    /// service; it is `scour_ui::faces` and this prints it.
+    Features,
     /// The configured sources.
     Sources,
     /// What the service is doing.
@@ -232,6 +238,12 @@ fn main() -> Result<()> {
     match &args.command {
         Some(Command::McpConfig) => return render::mcp_config(),
         Some(Command::Where) => return render::locations(),
+        // Three, now: what the faces can do is a fact about this build rather
+        // than about any index.
+        Some(Command::Features) => {
+            print!("{}", scour_ui::faces::table());
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -463,6 +475,8 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
         },
-        Some(Command::McpConfig | Command::Where) => unreachable!("handled before connecting"),
+        Some(Command::McpConfig | Command::Where | Command::Features) => {
+            unreachable!("handled before connecting")
+        }
     })
 }

@@ -22,6 +22,7 @@
 //! vocabulary: this colour means "a field name", that one means "changed this
 //! week", a row is thirty pixels tall.
 
+pub mod faces;
 pub mod format;
 pub mod path;
 pub mod query;

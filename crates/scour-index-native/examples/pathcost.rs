@@ -104,7 +104,10 @@ fn main() {
         column_us as f64 / 1000.0
     );
     println!("  ————");
-    println!("  two steps            {two:>8.1} ms   ({:.0}× faster)", whole / two.max(0.001));
+    println!(
+        "  two steps            {two:>8.1} ms   ({:.0}× faster)",
+        whole / two.max(0.001)
+    );
     println!(
         "\nThe two-step answer misses rows whose match straddles the last\n\
          separator — `Scour/main.rs` is a directory's tail, a slash and a\n\

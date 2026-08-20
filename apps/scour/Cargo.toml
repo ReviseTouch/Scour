@@ -20,6 +20,7 @@ workspace = true
 [dependencies]
 scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
+scour-ui     = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }

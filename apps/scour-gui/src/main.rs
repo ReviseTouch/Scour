@@ -788,13 +788,9 @@ fn main() -> Result<()> {
             let token = token.to_string();
             {
                 let mut s = state.borrow_mut();
-                // Clicking the active one clears it. A filter you cannot see
-                // how to remove is worse than no filter.
-                s.facet = if s.facet.as_deref() == Some(token.as_str()) {
-                    None
-                } else {
-                    Some(token.clone())
-                };
+                // Clicking the active one clears it — the shared rule, so
+                // that pressing a filter means the same thing in all three.
+                s.facet = scour_ui::query::pressed(s.facet.as_deref(), &token);
                 s.advance_query();
             }
             facets.set_vec(Vec::new());
@@ -2072,11 +2068,7 @@ fn order_for(query: &str, sort: &str) -> String {
 /// the ribbon and the scopes started using the same slot it began producing
 /// `kind:dm:38d`, which parses as a search for that text and answers nothing.
 fn full_query(s: &State) -> String {
-    match &s.facet {
-        Some(term) if s.query.trim().is_empty() => term.clone(),
-        Some(term) => format!("{} {term}", s.query.trim()),
-        None => s.query.trim().to_owned(),
-    }
+    scour_ui::query::compose(&s.query, s.facet.as_deref())
 }
 
 /// What the rail and the ribbon are counted over: the typed query, without the
