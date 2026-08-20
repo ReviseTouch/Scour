@@ -99,17 +99,11 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
         } else {
             scour_ui::format::size(h.meta.size.max(0) as u64, decimal()).into()
         },
-        stamp: stamp(h.meta.mtime).into(),
+        stamp: scour_ui::format::stamp(h.meta.mtime).into(),
         is_dir: h.is_dir,
         age: band(now, h.meta.mtime),
         picked: false,
     }
-}
-
-/// `YYYY-MM-DD HH:MM`, in UTC. The shared one — see
-/// [`scour_ui::format::stamp`] for why it is UTC.
-pub fn stamp(secs: i64) -> String {
-    scour_ui::format::stamp(secs)
 }
 
 /// The decimal mark this window is punctuating with. `main` owns the language;
@@ -167,12 +161,6 @@ mod tests {
         let odd = "caf\u{fffd}\u{301}.txt";
         let (pre, hit, post) = split_at_match(odd, &["caf".into()]);
         assert_eq!(format!("{pre}{hit}{post}"), odd);
-    }
-
-    #[test]
-    fn stamps_are_the_dates_they_claim_to_be() {
-        assert_eq!(stamp(1_769_817_600), "2026-01-31 00:00");
-        assert_eq!(stamp(0), "");
     }
 
     /// The bands themselves are `scour-ui`'s and tested there; this is the

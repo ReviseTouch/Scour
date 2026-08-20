@@ -10,7 +10,12 @@
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use humansize::{BINARY, format_size};
+/// Sizes as every face says them. See [`scour_ui::format::size`].
+fn format_size(bytes: u64, _unused: ()) -> String {
+    scour_ui::format::size(bytes, '.')
+}
+/// What the old call sites pass as a unit; the shared formatter picks its own.
+const BINARY: () = ();
 use scour_core::{Catalog, FacetBy, Kind, Role, TreeNode};
 use scour_i18n::Catalogue;
 use scour_proto::Response;
@@ -533,36 +538,17 @@ fn facet_word(token: &str) -> String {
     }
 }
 
-/// `YYYY-MM-DD HH:MM` in UTC.
+/// `YYYY-MM-DD HH:MM` in UTC, or a dash for a time nothing set.
 ///
-/// Local time would need the zone database, and a file listing is read for
-/// ordering far more often than for the exact minute. The one place this is
-/// wrong enough to matter is a user interface, which will have a clock.
+/// The shape is [`scour_ui::format::stamp`]'s — the same one every face
+/// prints, because a listing read here and in a window has to be the same
+/// listing. The dash is this one's own: a column of text has nowhere else to
+/// put "nothing".
 fn stamp(secs: i64) -> String {
-    if secs <= 0 {
-        return "—".into();
+    match scour_ui::format::stamp(secs).as_str() {
+        "" => "—".into(),
+        said => said.to_owned(),
     }
-    let days = secs.div_euclid(86_400);
-    let rest = secs.rem_euclid(86_400);
-    let (y, m, d) = civil(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}",
-        rest / 3600,
-        (rest % 3600) / 60
-    )
-}
-
-fn civil(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// Where everything lives. Answered without a service, because this is what
