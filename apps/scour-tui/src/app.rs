@@ -130,6 +130,14 @@ pub struct App {
     pub pages: Pages<Hit>,
     /// The row the cursor is on, in the whole result.
     pub cursor: usize,
+    /// What that row *is*.
+    ///
+    /// **A row number is not an identity.** Sorted by date, a file saved
+    /// anywhere on the machine appears at the top and pushes every row down
+    /// one — so a cursor that remembers only its number is pointing at the
+    /// row below the one somebody left it on, and `Enter` opens the wrong
+    /// file. The number is where to draw; this is what to keep.
+    pub cursor_at: Option<String>,
     /// The first row drawn, which the cursor pushes along.
     pub top: usize,
     /// How many rows the list has room for. The drawing sets it.
@@ -205,6 +213,7 @@ impl Default for App {
             generation: 0,
             pages: Pages::default(),
             cursor: 0,
+            cursor_at: None,
             top: 0,
             room: 1,
             sort: SortKey::Modified,
@@ -422,6 +431,7 @@ impl App {
             Change::Nothing => {}
             _ => self.dirty = true,
         }
+        self.refollow();
         self.follow()
     }
 
@@ -810,12 +820,45 @@ impl App {
         self.follow()
     }
 
+    /// Follow the row the cursor was on, wherever it went.
+    ///
+    /// Called when a page lands: the rows in hand may be a different set from
+    /// the ones that were there. Only what is held is looked through — at most
+    /// thirty-two pages — because a row that has moved out of that is a row
+    /// nobody is looking at.
+    ///
+    /// **The view moves with it**, so the row stays under the eye rather than
+    /// the list appearing to jump by one every time a file is saved.
+    fn refollow(&mut self) {
+        let Some(want) = self.cursor_at.clone() else {
+            return;
+        };
+        if self.pages.at(self.cursor).is_some_and(|h| h.path == want) {
+            return;
+        }
+        let pages: Vec<usize> = self.pages.pages().collect();
+        for page in pages {
+            for i in 0..scour_page::SPAN {
+                let row = page * scour_page::SPAN + i;
+                if self.pages.at(row).is_some_and(|h| h.path == want) {
+                    let moved = row as isize - self.cursor as isize;
+                    self.cursor = row;
+                    self.top = self.top.saturating_add_signed(moved);
+                    self.settle();
+                    return;
+                }
+            }
+        }
+    }
+
     /// Keep the cursor on screen, moving the view the least it can.
     ///
     /// **Not centred.** A list that recentres on every step makes the text
     /// move while the cursor stands still, which is much harder to read than
     /// the other way round.
     fn settle(&mut self) {
+        // Whatever moved the cursor, this is where it is noted what it is on.
+        self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
         if self.cursor < self.top {
             self.top = self.cursor;
         } else if self.cursor >= self.top + self.room {
@@ -1106,6 +1149,37 @@ mod tests {
         // And a page that fills is not the end.
         app.landed(1, 0, 200, reply(hits(0, 200), 5_000));
         assert_eq!(app.pages.total(), 5_000);
+    }
+
+    /// **A row number is not an identity.** This is the test for the thing
+    /// that made a saved file move somebody's cursor: the list shifts down by
+    /// one and the cursor has to shift with it.
+    #[test]
+    fn the_cursor_stays_on_the_file_when_the_list_moves_under_it() {
+        let mut app = App::default();
+        app.room = 10;
+        app.insert('a');
+        app.landed(1, 0, 200, reply(hits(0, 200), 1_000));
+        app.go(3);
+        let was = app.cursor_at.clone();
+        assert_eq!(was.as_deref(), Some("/x/3"));
+
+        // A file appears at the top: every row moves down one.
+        let mut shifted = hits(0, 199);
+        shifted.insert(0, hits(999, 1)[0].clone());
+        app.landed(1, 0, 200, reply(shifted, 1_000));
+
+        assert_eq!(app.cursor, 4, "the cursor moved with the row");
+        assert_eq!(
+            app.cursor_at.as_deref(),
+            Some("/x/3"),
+            "and it is the same file"
+        );
+        // The view moved with it, so the row is drawn on the same line it was
+        // on: 3 - 0 before, 4 - 1 after. A view left where it was would slide
+        // every row down one under somebody's eye.
+        assert_eq!(app.top, 1);
+        assert_eq!(app.cursor - app.top, 3);
     }
 
     #[test]
