@@ -5403,3 +5403,45 @@ The window, for the same index: 55 ms to a built window, 80 ms to first rows,
 Idle is zero because nothing is drawn on a timer: both threads block, and a
 frame is drawn only when the channel produces something. Measured from
 `/proc/<pid>/stat` fields 14 and 15 (user + system ticks) over ten seconds.
+
+## 2026-08-20 — a path term stops building paths
+
+`Projeler/Scour` typed into a search box asks about the path, and the
+index answered it by **building the path of every row**: a directory
+lookup, a join and a fold, three million times.
+
+A path is a directory, a separator and a name — and there are eight
+times fewer directories than rows (326,455 against 2,684,580 here). So
+the table is read once and a number is read per row.
+`examples/pathcost.rs` measured both halves before anything was built:
+
+| over 3,019,671 rows in 313,641 directories | |
+|---|---:|
+| building every path | 1657,7 ms |
+| the directory table, once | 84,5 ms |
+| a number per row | 35,7 ms |
+| **two steps** | **120,1 ms** |
+
+End to end, through the service, **alternating** the two builds three
+rounds each (`/tmp/ab.sh`, the rule from the top of this file):
+
+| query | old | new |
+|---|---|---|
+| `Projeler/Scour` | 2030 · 2004 · 4123 ms | **281 · 269 · 325 ms** |
+| `path:Projeler` | 557 · 936 · 484 ms | **174 · 160 · 217 ms** |
+| `kind:image` | 13,6 · 15,2 · 15,3 ms | 15,0 · 16,9 · 18,6 ms |
+| `ext:pdf` | 96 · 151 · 148 ms | 123 · 114 · 347 ms |
+
+Seven times and three times, and nothing else moved outside the noise of
+a service that is rescanning in the background.
+
+**What the fast answer nearly got wrong.** A path holds a term in three
+different ways and a set of directories sees only one of them: inside
+the directory, straddling the separator (`Scour/main.rs` is a
+directory's tail, a slash and a name), and — for a term with no
+separator at all — inside the name. The brute-force comparison in
+`tests/smoke.rs` failed on the third the first time it was left out, and
+now carries a query of each shape.
+
+Baseline for the run: `scripts/bench before`, tag `baseline-path`.
+

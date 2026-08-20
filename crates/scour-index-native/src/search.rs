@@ -372,7 +372,9 @@ enum Test {
     /// and not at the two call sites deciding separately.
     Ext { list: Vec<String>, dirs: bool },
     /// The whole path contains this, case-folded. The most expensive test.
-    PathHas(Needle),
+    /// Which directories hold the term, and what a row's name has to start
+    /// with for a match that straddles the last separator. See [`PathSet`].
+    PathIn(Box<PathSet>),
     /// Matches nothing. What an impossible condition compiles to — an `under:`
     /// naming a directory that is not in the table, say.
     Never,
@@ -390,7 +392,9 @@ impl Test {
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::NameLen { .. } => 4,
             Test::NameHasCased(_) => 20,
-            Test::PathHas(_) => 30,
+            // Two bitmap lookups and, rarely, a prefix test — dearer than a
+            // number and cheaper than a name search.
+            Test::PathIn(_) => 8,
             Test::Regex(_) => 60,
         }
     }
@@ -428,15 +432,73 @@ impl Needle {
         self.finder.find(folded).is_some()
     }
 
-    /// The same, on text that still has to be folded — for the path, which is
-    /// built at query time and so cannot have been folded in advance.
-    fn found_in_raw(&self, hay: &[u8], fold: &mut Folded) -> bool {
-        self.finder.find(fold.fold_bytes(hay)).is_some()
-    }
 
     /// The needle as the parser folded it — what the trigram index is keyed on.
     fn folded(&self) -> &[u8] {
         self.finder.needle()
+    }
+}
+
+/// Which directories a path term can be answered from.
+///
+/// **A path is a directory, a separator and a name.** So "the path holds `t`"
+/// is true in exactly two ways, and both of them are questions about the
+/// directory table rather than about rows:
+///
+/// * the directory holds `t` — then every row in it matches, whatever it is
+///   called;
+/// * `t` straddles the separator — the directory ends with everything before
+///   `t`'s last slash and the name begins with what comes after it.
+///
+/// The table is read once for a query and answers every row of the segment,
+/// which is where the time goes: 313,641 directories against 3,019,671 rows,
+/// and the directory is where nearly all of a path is.
+#[derive(Debug)]
+pub struct PathSet {
+    /// Directories holding the term anywhere in them.
+    whole: Vec<bool>,
+    /// Directories ending with the part of the term before its last slash.
+    ending: Vec<bool>,
+    /// What a name must start with, for those.
+    tail: Vec<u8>,
+    /// The term again, when it could be in the **name** — which it can be
+    /// whenever it holds no separator. `path:rapor` matches
+    /// `/home/u/x/rapor.pdf` on the name alone, and a set of directories
+    /// cannot see that. The brute-force comparison in `tests/smoke.rs` caught
+    /// this the first time it was left out.
+    in_name: Option<Needle>,
+}
+
+impl PathSet {
+    fn build(term: &str, seg: &Segment<'_>) -> PathSet {
+        // The term is already folded by the parser; the table is not, so it is
+        // folded here — the same fold the built path used to get.
+        let (head, tail) = match term.rsplit_once('/') {
+            Some((head, tail)) => (head, tail),
+            // No separator at all: nothing straddles, and `whole` answers it.
+            None => (term, ""),
+        };
+        let count = seg.dirs.len();
+        let mut set = PathSet {
+            whole: vec![false; count],
+            ending: vec![false; count],
+            tail: tail.as_bytes().to_vec(),
+            in_name: None,
+        };
+        let needle = Needle::new(term);
+        let mut fold = Folded::default();
+        set.in_name = (!term.contains('/')).then(|| Needle::new(term));
+        for id in 0..count {
+            let Some(dir) = seg.dirs.get(id as u32) else {
+                continue;
+            };
+            // Folded once and asked twice — the same folding a built path used
+            // to get, and the same searcher.
+            let folded = fold.fold_bytes(dir.as_bytes());
+            set.whole[id] = needle.found_in(folded);
+            set.ending[id] = folded.ends_with(head.as_bytes());
+        }
+        set
     }
 }
 
@@ -760,7 +822,7 @@ impl Plan {
                 Test::NameHas(_)
                     | Test::NameGlob(_)
                     | Test::Ext { .. }
-                    | Test::PathHas(_)
+                    | Test::PathIn(_)
                     | Test::Regex(_)
                     | Test::NameLen { .. }
                     | Test::NameHasCased(_)
@@ -819,7 +881,12 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             }
             _ => Test::NameGlob(p.clone()),
         },
-        Match::PathContains(t) => Test::PathHas(Needle::new(t)),
+        // **A path is a directory and a name, and there are eight times fewer
+        // directories than rows.** Building every row's path to look in it
+        // cost 1.66 s over three million rows; reading the directory table
+        // once and then a number per row costs 120 ms for the same answer.
+        // Measured — `examples/pathcost.rs`.
+        Match::PathContains(t) => Test::PathIn(Box::new(PathSet::build(t, seg))),
         Match::Ext(list) => Test::Ext {
             list: list.clone(),
             dirs: false,
@@ -986,14 +1053,22 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut 
             Ok(name) => scour_query::glob_matches(p, name),
             Err(_) => false,
         },
-        Test::PathHas(n) => {
-            // The dearest test, and the reason it is sorted last: it builds a
-            // string. Everything else reads what is already there.
-            // The *spelled* name, because a path is shown as well as matched,
-            // and folded here because it was built here.
-            let raw = seg.names.get(row).unwrap_or_default();
-            let path = seg.path(row, raw);
-            n.found_in_raw(path.as_bytes(), fold)
+        Test::PathIn(set) => {
+            let dir = seg.dir_id(row) as usize;
+            if set.whole.get(dir).copied().unwrap_or(false) {
+                return true;
+            }
+            // A term with no separator in it can be in the name — the name is
+            // part of the path.
+            if let Some(needle) = &set.in_name
+                && needle.found_in(name)
+            {
+                return true;
+            }
+            // And the term can straddle the one separator between the
+            // directory and the name: the directory ends with what comes
+            // before the term's last slash, the name begins with the rest.
+            set.ending.get(dir).copied().unwrap_or(false) && name.starts_with(&set.tail)
         }
     }
 }
@@ -2535,7 +2610,7 @@ mod tests {
             let n = Needle::new(needle);
             let want = name.to_ascii_lowercase().contains(needle);
             assert_eq!(
-                n.found_in_raw(name.as_bytes(), &mut fold),
+                n.found_in(fold.fold_bytes(name.as_bytes())),
                 want,
                 "{name:?} contains {needle:?}"
             );
@@ -2546,10 +2621,13 @@ mod tests {
     fn a_non_ascii_name_still_goes_through_the_real_folding() {
         let mut fold = Folded::new();
         // The Turkish rule: the query is folded by the parser, the name here.
-        assert!(Needle::new("istanbul").found_in_raw("İSTANBUL.txt".as_bytes(), &mut fold));
-        assert!(Needle::new("isparta").found_in_raw("ısparta.md".as_bytes(), &mut fold));
-        assert!(Needle::new("öğüt").found_in_raw("Öğüt.docx".as_bytes(), &mut fold));
-        assert!(!Needle::new("zzz").found_in_raw("Öğüt.docx".as_bytes(), &mut fold));
+        let folded = |fold: &mut Folded, text: &str| -> Vec<u8> {
+            fold.fold_bytes(text.as_bytes()).to_vec()
+        };
+        assert!(Needle::new("istanbul").found_in(&folded(&mut fold, "İSTANBUL.txt")));
+        assert!(Needle::new("isparta").found_in(&folded(&mut fold, "ısparta.md")));
+        assert!(Needle::new("öğüt").found_in(&folded(&mut fold, "Öğüt.docx")));
+        assert!(!Needle::new("zzz").found_in(&folded(&mut fold, "Öğüt.docx")));
     }
 
     #[test]

@@ -122,6 +122,15 @@ fn results_match_brute_force_for_every_kind_of_term() {
         "size:<1kb",
         "size:=0",
         "path:eski-arsiv",
+        // **The three shapes a path term comes in**, because the fast answer
+        // is built from a directory table and each of them reaches it a
+        // different way: inside a directory, straddling the separator between
+        // the directory and the name, and — with no separator at all — inside
+        // the name.
+        "Projeler/eski-arsiv",
+        "eski-arsiv/rapor",
+        "path:/home/u",
+        "arsiv/",
         "under:/home/u/Projeler",
         "under:/home/u/Projeler/eski-arsiv",
         "parent:/home/u",
