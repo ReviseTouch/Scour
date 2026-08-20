@@ -36,7 +36,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+L", "language"),
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
-    ("F1", "this"),
+    ("F1", "this · or press `keys` on the counter line"),
     ("Esc", "clear the query, then move mode"),
     ("j k · g G · d u", "move, in move mode"),
     ("i · /", "back to typing"),
@@ -421,6 +421,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.drag_bar(at, list_to.saturating_sub(crate::draw::LIST_TOP + 1))
                 }
                 Spot::Chip => app.unfilter(),
+                Spot::Tool(which) => app.tool(which),
                 Spot::Deed(which) => app.deed(which),
                 Spot::Query => {
                     app.mode = Mode::Search;
@@ -467,6 +468,13 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     if row + 1 == height && !app.picked.is_empty() {
         return match crate::draw::deed_at(app, col, width) {
             Some(which) => Spot::Deed(which),
+            None => Spot::Nothing,
+        };
+    }
+    // The counter line, which carries the tools at its right end.
+    if row == QUERY_HIGH && width >= 90 {
+        return match crate::draw::tool_at(app, col, width) {
+            Some(which) => Spot::Tool(which),
             None => Spot::Nothing,
         };
     }

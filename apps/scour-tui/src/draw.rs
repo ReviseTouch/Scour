@@ -357,6 +357,24 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         ));
     }
     f.render_widget(Paragraph::new(Line::from(parts)), area);
+
+    // The tools, at the other end of the same line. A narrow terminal does
+    // without them — the counts are what the line is for, and the keys still
+    // work.
+    if area.width >= 90 {
+        let mut said: Vec<Span> = Vec::new();
+        for (at, (_, _, label)) in tool_spans(app, area.width).into_iter().enumerate() {
+            let style = if app.pressed == Spot::Tool(at) {
+                Style::new().bg(theme.key()).fg(theme.back())
+            } else if app.hover == Spot::Tool(at) {
+                Style::new().bg(theme.hover()).fg(theme.ink())
+            } else {
+                Style::new().fg(theme.ink_3())
+            };
+            said.push(Span::styled(label, style));
+        }
+        f.render_widget(Paragraph::new(Line::from(said)).right_aligned(), area);
+    }
 }
 
 /// Where the filter is drawn on the query line, if one is pressed.
@@ -840,6 +858,30 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         ))),
         axis,
     );
+}
+
+/// Where each tool is drawn along the counter line, right to left.
+///
+/// **One function, two callers**, like everything else here that can be
+/// pressed: the words that are drawn are the words that are hit.
+pub fn tool_spans(app: &App, width: u16) -> Vec<(u16, u16, String)> {
+    let mut out = Vec::new();
+    let mut from = width.saturating_sub(1);
+    for (label, key) in app.tools().iter().rev() {
+        let said = format!("  {label} {key}");
+        let wide = said.chars().count() as u16;
+        from = from.saturating_sub(wide);
+        out.push((from, from + wide, said));
+    }
+    out.reverse();
+    out
+}
+
+/// Which tool is at this column of the counter line, if any.
+pub fn tool_at(app: &App, col: u16, width: u16) -> Option<usize> {
+    tool_spans(app, width)
+        .iter()
+        .position(|(from, to, _)| col >= *from && col < *to)
 }
 
 /// Where each of the selection's three buttons is drawn, along the bottom.

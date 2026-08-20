@@ -72,6 +72,8 @@ pub enum Spot {
     Deed(usize),
     /// The mark at the left of a row: pressing it picks the row.
     Tick(usize),
+    /// One of the tools along the counter line.
+    Tool(usize),
     /// A column heading, by its place along the row.
     Head(usize),
     /// The scrollbar, by which of its rows the pointer is on.
@@ -632,6 +634,46 @@ impl App {
                 self.press_filter(&term)
             }
             None => Want::Nothing,
+        }
+    }
+
+    /// The tools, in the order they are drawn, and the key that also does it.
+    ///
+    /// **Said in words rather than drawn as glyphs.** The window has `⇄ 文 ⊘ ⤓
+    /// ?` and can measure them; a terminal cell is one column or two depending
+    /// on the font, and a row of icons that is a column wider than it thinks
+    /// puts every press one place out.
+    pub fn tools(&self) -> [(&'static str, &'static str); 5] {
+        [
+            ("faces", "^U"),
+            ("lang", "^L"),
+            ("skips", "^K"),
+            ("csv", "^E"),
+            ("keys", "F1"),
+        ]
+    }
+
+    /// Press one of them — the same thing its key does.
+    pub fn tool(&mut self, which: usize) -> Want {
+        match which {
+            0 => {
+                self.show(Panel::Faces);
+                Want::Nothing
+            }
+            1 => {
+                self.show(Panel::Language);
+                Want::Nothing
+            }
+            2 => {
+                self.show(Panel::Rules);
+                Want::Rules
+            }
+            3 => self.write_sheet(),
+            _ => {
+                self.helping = !self.helping;
+                self.dirty = true;
+                Want::Nothing
+            }
         }
     }
 
