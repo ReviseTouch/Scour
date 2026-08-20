@@ -324,10 +324,24 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                 return Want::Nothing;
             }
             match spot {
+                // **Click selects.** Plainly: this row and nothing else. With
+                // `Ctrl`: this one as well as what is already picked. With
+                // `Shift`: everything from the last one to this. The three
+                // every list anywhere agrees on.
                 Spot::Row(row) => {
                     app.in_rail = false;
-                    app.go(row)
+                    if m.modifiers.contains(KeyModifiers::SHIFT) {
+                        app.pick_to(row)
+                    } else if m.modifiers.contains(KeyModifiers::CONTROL) {
+                        let want = app.go(row);
+                        app.pick();
+                        want
+                    } else {
+                        app.pick_only(row)
+                    }
                 }
+                // The mark at the left is a checkbox: it adds and removes
+                // rather than replacing, whatever is held.
                 Spot::Tick(row) => {
                     app.in_rail = false;
                     let want = app.go(row);

@@ -310,6 +310,25 @@ impl App {
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
     }
 
+    /// Pick this row and nothing else — what a plain click does everywhere.
+    ///
+    /// **A click is a selection, not a cursor move.** It was only moving the
+    /// cursor here, so the bar of things to do with a selection could not be
+    /// reached with the mouse at all: somebody clicked a row, nothing
+    /// appeared, and the way to a selection was a key they had not been told
+    /// about.
+    pub fn pick_only(&mut self, row: usize) -> Want {
+        let want = self.go(row);
+        self.picked.clear();
+        self.anchor = row;
+        if let Some(hit) = self.pages.at(row) {
+            let bytes = if hit.is_dir { 0 } else { hit.meta.size.max(0) };
+            self.picked.insert(hit.path.clone(), bytes);
+        }
+        self.dirty = true;
+        want
+    }
+
     /// Pick or unpick the row under the cursor.
     pub fn pick(&mut self) -> Want {
         let Some(hit) = self.pages.at(self.cursor) else {
