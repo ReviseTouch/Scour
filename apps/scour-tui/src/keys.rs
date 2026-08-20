@@ -339,6 +339,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     let list_to = height.saturating_sub(1 + strip_high);
                     app.drag_bar(at, list_to.saturating_sub(crate::draw::LIST_TOP + 1))
                 }
+                Spot::Chip => app.unfilter(),
                 Spot::Query => {
                     app.mode = Mode::Search;
                     Want::Nothing
@@ -381,6 +382,13 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     }
 
     if row < QUERY_HIGH {
+        if row == crate::draw::QUERY_ROW
+            && let Some((from, to)) = crate::draw::chip_at(app)
+            && col >= from
+            && col < to
+        {
+            return Spot::Chip;
+        }
         return Spot::Query;
     }
 

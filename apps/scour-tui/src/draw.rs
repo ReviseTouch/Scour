@@ -39,6 +39,8 @@ const CHROME: u16 = QUERY_HIGH + 4;
 /// **Exported, because the mouse counts in them too.** A press is a row and a
 /// column and nothing else; the arithmetic that turns it into a row of the
 /// list has to be the arithmetic that drew it.
+/// Which row of the field the text is on.
+pub const QUERY_ROW: u16 = QUERY_HIGH / 2;
 pub const LIST_TOP: u16 = QUERY_HIGH + 3;
 pub const RAIL_TOP: u16 = QUERY_HIGH + 2;
 /// How wide the rail is when it is drawn at all.
@@ -246,7 +248,7 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         // typed query and filled the line: it read as something already
         // searched for rather than as an empty box.
         Span::styled(
-            "search…",
+            HINT,
             Style::new()
                 .fg(theme.ink_3())
                 .add_modifier(Modifier::ITALIC | Modifier::DIM),
@@ -272,10 +274,23 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // like a result that was simply short.
     if let Some(term) = &app.filter {
         parts.push(Span::styled("  ·  ", Style::new().fg(theme.ink_3())));
-        parts.push(Span::styled(
-            term.clone(),
-            Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
-        ));
+        // **Red under the pointer, and gone when it is pressed.** A filter
+        // somebody cannot see how to remove is worse than no filter; the rail
+        // row that set it clears it too, but a `dm:` band has no row and this
+        // is the only place the term is written.
+        let style = if app.pressed == Spot::Chip {
+            Style::new()
+                .fg(theme.back())
+                .bg(theme.bad())
+                .add_modifier(Modifier::BOLD)
+        } else if app.hover == Spot::Chip {
+            Style::new()
+                .fg(theme.bad())
+                .add_modifier(Modifier::BOLD | Modifier::CROSSED_OUT)
+        } else {
+            Style::new().fg(theme.key()).add_modifier(Modifier::BOLD)
+        };
+        parts.push(Span::styled(term.clone(), style));
     }
     let line = Line::from(parts);
     f.render_widget(Paragraph::new(line), area);
@@ -343,6 +358,25 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
     f.render_widget(Paragraph::new(Line::from(parts)), area);
 }
+
+/// Where the filter is drawn on the query line, if one is pressed.
+///
+/// **The same arithmetic that draws it**, so that the thing which turns red
+/// under the pointer is the thing a press removes.
+pub fn chip_at(app: &App) -> Option<(u16, u16)> {
+    let term = app.filter.as_deref()?;
+    let typed = if app.query.is_empty() {
+        HINT.chars().count()
+    } else {
+        app.query.chars().count()
+    };
+    // " SCOUR " and the "  ·  " between the query and the filter.
+    let from = (7 + typed + 5) as u16;
+    Some((from, from + term.chars().count() as u16))
+}
+
+/// What an empty query says instead of nothing.
+const HINT: &str = "search…";
 
 /// Which column covers this offset into the list's own width.
 pub fn column_at(col: u16, width: u16) -> Option<usize> {

@@ -39,6 +39,8 @@ pub enum Spot {
     Panel(usize),
     /// The query line.
     Query,
+    /// The filter written beside the query: pressing it takes the filter off.
+    Chip,
     /// A column heading, by its place along the row.
     Head(usize),
     /// The scrollbar, by which of its rows the pointer is on.
@@ -551,6 +553,15 @@ impl App {
             }
             None => Want::Nothing,
         }
+    }
+
+    /// Take the filter off, whatever it is.
+    pub fn unfilter(&mut self) -> Want {
+        if self.filter.is_none() {
+            return Want::Nothing;
+        }
+        self.filter = None;
+        self.typed()
     }
 
     /// Press a filter in the rail, or press the one in force to clear it.
