@@ -100,8 +100,13 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     } else {
         (heads, list, None)
     };
-    heading(f, heads, app, theme);
-    rows(f, list, app, theme, mark);
+    if app.reporting {
+        // The report takes the heading line as well: it has its own headings.
+        report(f, heads.union(list), app, theme, mark);
+    } else {
+        heading(f, heads, app, theme);
+        rows(f, list, app, theme, mark);
+    }
     if let Some(area) = rail {
         // A line between the rail and the list, because the age stripe down
         // the left of every row butted straight against the rail's text and
@@ -633,6 +638,81 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
             &mut state,
         );
     }
+}
+
+/// What the index holds, the biggest things in it, and what is in it twice.
+///
+/// **The same three panels the window and the page open with**, and the same
+/// numbers — they come from the same two requests. What differs is that a
+/// terminal has one column of them rather than three.
+fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
+    let head = |what: &str| {
+        Line::from(Span::styled(
+            format!(" {what}"),
+            Style::new()
+                .fg(theme.ink_3())
+                .add_modifier(Modifier::BOLD | Modifier::DIM),
+        ))
+    };
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(head("WHAT IS INDEXED"));
+    match &app.stats {
+        Some(stats) => {
+            let say = |what: &str, value: String| {
+                Line::from(vec![
+                    Span::styled(format!("   {what:<16}"), Style::new().fg(theme.ink_3())),
+                    Span::styled(value, Style::new().fg(theme.ink())),
+                ])
+            };
+            lines.push(say("rows", format::grouped(stats.entries, mark.0)));
+            lines.push(say("directories", format::grouped(stats.dirs, mark.0)));
+            lines.push(say(
+                "on disk",
+                format::compact_bytes(stats.bytes_on_disk, mark.1),
+            ));
+        }
+        None => lines.push(Line::from(Span::styled(
+            "   asking…",
+            Style::new().fg(theme.ink_3()),
+        ))),
+    }
+
+    lines.push(Line::from(""));
+    lines.push(head("THE SAME FILE, SEVERAL TIMES OVER"));
+    if app.waste > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("   ", Style::new()),
+            Span::styled(
+                format!(
+                    "{} could be given back",
+                    format::compact_bytes(app.waste, mark.1)
+                ),
+                Style::new().fg(theme.key()),
+            ),
+        ]));
+    }
+    if app.dupes.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "   reading…",
+            Style::new().fg(theme.ink_3()),
+        )));
+    }
+    let room = area.height.saturating_sub(lines.len() as u16 + 2) as usize;
+    for (size, count, path) in app.dupes.iter().take(room) {
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("   {:>10}", format::size(*size, mark.1)),
+                Style::new().fg(theme.ink_2()),
+            ),
+            Span::styled(format!("  ×{count:<4}"), Style::new().fg(theme.ink_3())),
+            Span::styled(
+                tail(path, area.width.saturating_sub(24) as usize),
+                Style::new().fg(theme.ink_2()),
+            ),
+        ]));
+    }
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 /// The rail: what the matching rows are made of, where they live, how big

@@ -394,6 +394,15 @@ fn run(
                 state.places = places;
                 state.dirty = true;
             }
+            Beat::Reply(Got::Stats(stats)) => {
+                state.stats = Some(*stats);
+                state.dirty = true;
+            }
+            Beat::Reply(Got::Dupes { groups, waste }) => {
+                state.dupes = groups;
+                state.waste = waste;
+                state.dirty = true;
+            }
             Beat::Reply(Got::Rules {
                 added,
                 config,
@@ -466,6 +475,11 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 state.counted(generation, *reply);
             }
             Beat::Reply(Got::Places(places)) => state.places = places,
+            Beat::Reply(Got::Stats(stats)) => state.stats = Some(*stats),
+            Beat::Reply(Got::Dupes { groups, waste }) => {
+                state.dupes = groups;
+                state.waste = waste;
+            }
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
@@ -515,6 +529,7 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
         "backspace" => KeyCode::Backspace,
         "esc" => KeyCode::Esc,
         "f1" => KeyCode::F(1),
+        "f2" => KeyCode::F(2),
         "left" => KeyCode::Left,
         "right" => KeyCode::Right,
         other => KeyCode::Char(other.chars().next().unwrap_or(' ')),
@@ -582,6 +597,10 @@ fn act(want: Want, link: &Link) {
             });
         }
         Want::Rules => link.later(Ask::Rules),
+        Want::Report => {
+            link.later(Ask::Stats);
+            link.later(Ask::Dupes);
+        }
         Want::OffRules(off) => link.later(Ask::OffRules(off)),
         Want::Remember(change) => link.later(Ask::Remember(change)),
         Want::Export { query, to } => link.later(Ask::Export { query, to }),

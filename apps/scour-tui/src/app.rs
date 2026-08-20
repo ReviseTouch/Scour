@@ -137,6 +137,8 @@ pub enum Want {
     },
     /// Ask what the walk skips.
     Rules,
+    /// Ask for everything the report shows.
+    Report,
     /// Replace the list of switched-off rules.
     OffRules(Vec<String>),
     /// Remember a preference.
@@ -197,6 +199,18 @@ pub struct App {
     pub picked: std::collections::BTreeMap<String, i64>,
     /// Where a run of `Shift` presses started.
     pub anchor: usize,
+    /// True while the report is being read instead of the list.
+    ///
+    /// **A tab rather than a panel**, like the window and the page: the report
+    /// is about the same query and is read for as long as a list is, not
+    /// glanced at and dismissed.
+    pub reporting: bool,
+    /// What the index holds, for the report.
+    pub stats: Option<scour_core::IndexStats>,
+    /// The duplicate groups: how big one copy is, how many there are, and
+    /// where the first of them lives.
+    pub dupes: Vec<(u64, u64, String)>,
+    pub waste: u64,
     /// Which panel is over everything, if any.
     pub panel: Panel,
     /// Where the cursor is inside the open panel.
@@ -266,6 +280,10 @@ impl Default for App {
             trouble: String::new(),
             picked: std::collections::BTreeMap::new(),
             anchor: 0,
+            reporting: false,
+            stats: None,
+            dupes: Vec::new(),
+            waste: 0,
             panel: Panel::None,
             panel_at: 0,
             rules: Vec::new(),
@@ -499,6 +517,21 @@ impl App {
         trace(&format!("query read back in {} runs", spans.len()));
         self.spans = spans;
         self.dirty = true;
+    }
+
+    /// Show the report, or go back to the list.
+    ///
+    /// Asked for when it opens rather than kept fresh: duplicates read files
+    /// to be sure, and doing that behind a list nobody is looking at is a
+    /// terminal that spins a disk for nothing.
+    pub fn report(&mut self) -> Want {
+        self.reporting = !self.reporting;
+        self.dirty = true;
+        if self.reporting {
+            Want::Report
+        } else {
+            Want::Nothing
+        }
     }
 
     /// The rail's counts arrived.

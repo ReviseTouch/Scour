@@ -57,6 +57,10 @@ pub enum Ask {
     },
     /// Where this desktop keeps things.
     Places,
+    /// What the index holds, for the report.
+    Stats,
+    /// The same file, several times over.
+    Dupes,
     /// The query read back: which run of it is what.
     ///
     /// **Beside every search**, because the colouring has to keep up with the
@@ -97,6 +101,13 @@ pub enum Got {
     },
     /// The desktop's own folders.
     Places(Vec<(String, String)>),
+    /// What the index holds: rows, directories, bytes on disk, sources.
+    Stats(Box<scour_core::IndexStats>),
+    /// Duplicate groups, largest saving first, and what they come to.
+    Dupes {
+        groups: Vec<(u64, u64, String)>,
+        waste: u64,
+    },
     /// The skip rules: three groups of `(kind, value)`, and the ids switched
     /// off. The groups are kept apart because only the first can be deleted
     /// and a flat list said none of that.
@@ -307,6 +318,16 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 timeout_ms: 30_000,
             },
             Ask::Places => Request::Places {},
+            Ask::Stats => Request::Stats {},
+            Ask::Dupes => Request::Duplicates {
+                under: String::new(),
+                // The service's own floor and budget: the report is the same
+                // report in every face, and a terminal that asked for a
+                // different one would answer a different question.
+                min_size: 1_048_576,
+                read_budget: 64 * 1_048_576,
+                top: 12,
+            },
             Ask::Rules => Request::Rules {},
             Ask::OffRules(off) => Request::SetSettings {
                 change: scour_settings::Change {
@@ -402,6 +423,21 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             }
             Ok(Response::Status(st)) => {
                 let _ = out.send(Got::Awake(st.revision));
+            }
+            Ok(Response::Stats(stats)) => {
+                let _ = out.send(Got::Stats(Box::new(stats)));
+            }
+            Ok(Response::Duplicates { groups, waste, .. }) => {
+                let _ = out.send(Got::Dupes {
+                    groups: groups
+                        .into_iter()
+                        .map(|g| {
+                            let count = g.paths.len() as u64;
+                            (g.size, count, g.paths.first().cloned().unwrap_or_default())
+                        })
+                        .collect(),
+                    waste,
+                });
             }
             Ok(Response::Places(places)) => {
                 let _ = out.send(Got::Places(

@@ -36,6 +36,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+L", "language"),
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
+    ("F2 · Ctrl+R", "the report, and back"),
     ("F1", "this · or press `keys` on the counter line"),
     ("Esc", "clear the query, then move mode"),
     ("j k · g G · d u", "move, in move mode"),
@@ -100,6 +101,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         // that needs no modifier at all.
         KeyCode::Char(' ') if ctrl => return app.pick(),
         KeyCode::Insert => return app.pick(),
+        // The report, on the key the window uses for it.
+        KeyCode::F(2) => return app.report(),
+        KeyCode::Char('r') if ctrl => return app.report(),
         KeyCode::F(1) => {
             app.helping = true;
             app.dirty = true;
