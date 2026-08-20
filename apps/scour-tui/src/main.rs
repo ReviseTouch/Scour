@@ -239,9 +239,15 @@ fn snap(
         act(keys::mouse(state, release, (w, h)), link);
         settle(state, link, waiting, 400);
     }
-    // And a last wait, longer, for whatever the final key set going: sorting
-    // by size walks the whole index and takes tens of milliseconds.
-    settle(state, link, waiting, 1_500);
+    // And a last wait, longer, for whatever the final key or press set going:
+    // sorting by size walks the whole index and takes tens of milliseconds.
+    //
+    // **Only when something was pressed.** A plain `--once` is a picture of
+    // the first frame, and a second and a half of waiting for nothing turned
+    // every measurement taken with it into a measurement of this line.
+    if !press.is_empty() || !click.is_empty() {
+        settle(state, link, waiting, 1_500);
+    }
     terminal.draw(|f| draw::frame(f, state, theme, mark))?;
     for line in terminal.backend().buffer().content.chunks(w as usize) {
         let text: String = line.iter().map(|c| c.symbol()).collect();

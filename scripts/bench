@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# What Scour costs right now: queries, the service's CPU and memory, and how
+# long each face takes to say something.
+#
+#   scripts/bench [label]
+#
+# **A baseline is only worth what it can be compared against**, so this writes
+# one file per run and nothing else. Run it, change something, run it again,
+# diff the two. The rule from `docs/MEASUREMENTS.md` still holds for deciding
+# anything: alternate the two builds, do not compare a morning to an afternoon.
+#
+# Read-only. It asks the running service the same questions a person would.
+
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scour="$here/../target/release/scour"
+tui="$here/../target/release/scour-tui"
+label="${1:-run}"
+out="/tmp/scour-bench-$label.txt"
+
+# Each query three times; the middle one is what is reported. One run is a
+# cold cache and a wrong number.
+runs=3
+
+say() { printf '%s\n' "$*" | tee -a "$out"; }
+
+: > "$out"
+say "# scour bench · $label · $(date '+%Y-%m-%d %H:%M')"
+say ""
+say "$("$scour" stats 2>&1 | sed 's/^/    /')"
+say ""
+
+pid="$(pgrep -f 'bin/scourd' | head -1)"
+if [ -n "$pid" ]; then
+    read -r _ _ _ _ _ _ _ _ _ _ _ _ _ utime stime _ < "/proc/$pid/stat"
+    cpu_before=$((utime + stime))
+    rss_before="$(awk '/VmRSS/{print $2}' "/proc/$pid/status")"
+fi
+
+say "## queries — milliseconds, median of $runs"
+say ""
+printf '    %-34s %10s %12s\n' "query" "ms" "rows read" | tee -a "$out"
+while IFS= read -r q; do
+    [ -z "$q" ] && continue
+    times=()
+    rows=""
+    for _ in $(seq $runs); do
+        line="$("$scour" search "$q" --limit 20 2>&1 | tail -1)"
+        # `20 of 540 in 1714.72 ms (2713467 rows)`
+        ms="$(printf '%s' "$line" | sed -n 's/.* in \([0-9.]*\) ms.*/\1/p')"
+        rows="$(printf '%s' "$line" | sed -n 's/.*(\([0-9]*\) rows).*/\1/p')"
+        [ -n "$ms" ] && times+=("$ms")
+    done
+    mid="$(printf '%s\n' "${times[@]}" | sort -n | awk 'NR==2{print}')"
+    printf '    %-34s %10s %12s\n' "$q" "${mid:-—}" "${rows:-—}" | tee -a "$out"
+done <<'QUERIES'
+rapor
+kind:image
+kind:code dm:7d
+size:>10mb
+ext:pdf
+Projeler/Scour
+path:Projeler
+under:"/home/hasan/Projeler" kind:code
+a
+QUERIES
+
+say ""
+say "## the faces — launch to something on screen"
+say ""
+for _ in 1 2 3; do
+    s=$(date +%s%N)
+    "$tui" --query "kind:code" --once 120x30 >/dev/null 2>&1
+    e=$(date +%s%N)
+    printf '    terminal, first frame            %10s ms\n' "$(( (e - s) / 1000000 ))" | tee -a "$out"
+done
+
+if [ -n "$pid" ]; then
+    read -r _ _ _ _ _ _ _ _ _ _ _ _ _ utime stime _ < "/proc/$pid/stat"
+    cpu_after=$((utime + stime))
+    rss_after="$(awk '/VmRSS/{print $2}' "/proc/$pid/status")"
+    say ""
+    say "## the service, over this run"
+    say ""
+    printf '    CPU                              %10s ms\n' "$(( (cpu_after - cpu_before) * 10 ))" | tee -a "$out"
+    printf '    RSS before / after               %8s / %s MB\n' \
+        "$((rss_before / 1024))" "$((rss_after / 1024))" | tee -a "$out"
+fi
+
+say ""
+say "written to $out"
