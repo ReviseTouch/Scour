@@ -41,6 +41,8 @@ pub enum Spot {
     Query,
     /// The filter written beside the query: pressing it takes the filter off.
     Chip,
+    /// One of the three things that can be done with a selection.
+    Deed(usize),
     /// A column heading, by its place along the row.
     Head(usize),
     /// The scrollbar, by which of its rows the pointer is on.
@@ -555,6 +557,53 @@ impl App {
         }
     }
 
+    /// What can be done with a selection, in the order the bar shows them.
+    ///
+    /// The same three the window offers, and the same words — a person who
+    /// has used one of these should not have to learn the other.
+    pub fn deeds(&self) -> [(&'static str, char); 3] {
+        [("copy paths", 'y'), ("open folders", 'o'), ("clear", 'x')]
+    }
+
+    /// Do one of them.
+    pub fn deed(&mut self, which: usize) -> Want {
+        match which {
+            0 => {
+                let paths: Vec<String> = self.picked.keys().cloned().collect();
+                let n = paths.len();
+                self.note = match copy(&paths.join("\n")) {
+                    Ok(how) => format!("{n} paths copied ({how})"),
+                    Err(why) => format!("nothing copied: {why}"),
+                };
+            }
+            1 => {
+                // Each folder once, however many of its files are picked.
+                let mut folders: Vec<&str> = self
+                    .picked
+                    .keys()
+                    .map(|p| scour_ui::path::folder(p))
+                    .collect();
+                folders.sort_unstable();
+                folders.dedup();
+                for folder in &folders {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(folder)
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+                self.note = format!("opening {} folders", folders.len());
+            }
+            _ => {
+                self.unpick();
+                self.note.clear();
+            }
+        }
+        self.dirty = true;
+        Want::Nothing
+    }
+
     /// Take the filter off, whatever it is.
     pub fn unfilter(&mut self) -> Want {
         if self.filter.is_none() {
@@ -1038,4 +1087,63 @@ mod tests {
         app.backspace();
         assert_eq!(app.query, "De", "and did not panic on the ğ");
     }
+}
+
+/// Put text on the clipboard from inside a terminal.
+///
+/// **The terminal's own escape first.** OSC 52 is answered by the terminal
+/// rather than by the desktop, which means it works over ssh — where a
+/// clipboard tool would put the text on the clipboard of the machine being
+/// searched rather than the one being looked at. Some terminals have it off by
+/// default, so a desktop tool is the fallback and the caller is told which one
+/// answered.
+fn copy(text: &str) -> Result<&'static str, String> {
+    use std::io::Write;
+    let coded = base64(text.as_bytes());
+    let mut out = std::io::stdout();
+    if write!(out, "\x1b]52;c;{coded}\x07").is_ok() && out.flush().is_ok() {
+        return Ok("terminal");
+    }
+    for tool in ["wl-copy", "xclip"] {
+        let mut child = match std::process::Command::new(tool)
+            .args(if tool == "xclip" {
+                &["-selection", "clipboard"][..]
+            } else {
+                &[][..]
+            })
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(_) => continue,
+        };
+        if let Some(mut pipe) = child.stdin.take()
+            && pipe.write_all(text.as_bytes()).is_ok()
+        {
+            return Ok(tool);
+        }
+    }
+    Err("no clipboard".into())
+}
+
+/// Base64, because OSC 52 carries its text that way and this is the only
+/// thing in the program that needs it.
+fn base64(bytes: &[u8]) -> String {
+    const ABC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let mut block = [0u8; 3];
+        block[..group.len()].copy_from_slice(group);
+        let n = u32::from(block[0]) << 16 | u32::from(block[1]) << 8 | u32::from(block[2]);
+        for i in 0..4 {
+            if i <= group.len() {
+                out.push(ABC[(n >> (18 - 6 * i)) as usize & 63] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }

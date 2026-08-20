@@ -24,6 +24,10 @@ pub const MAP: &[(&str, &str)] = &[
     ("Shift+Enter", "open the folder"),
     ("Space", "pick · Shift+↑↓ for a run"),
     ("Ctrl+A", "pick nothing"),
+    (
+        "Ctrl+Y · Ctrl+O",
+        "copy the picked paths · open their folders",
+    ),
     ("Ctrl+← →", "sort by the next column · or click a heading"),
     ("Ctrl+↑ ↓", "reverse the order"),
     ("Tab", "the rail, and back"),
@@ -109,6 +113,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             return Want::Nothing;
         }
         KeyCode::Char('e') if ctrl => return app.write_sheet(),
+        // The three things a selection can have done to it, by their letters.
+        KeyCode::Char('y') if ctrl => return app.deed(0),
+        KeyCode::Char('o') if ctrl => return app.deed(1),
         // Sorting: left and right along the columns, up and down for the
         // direction. `Ctrl` because the bare arrows move and always will.
         KeyCode::Left if ctrl => return app.resort(-1),
@@ -340,6 +347,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.drag_bar(at, list_to.saturating_sub(crate::draw::LIST_TOP + 1))
                 }
                 Spot::Chip => app.unfilter(),
+                Spot::Deed(which) => app.deed(which),
                 Spot::Query => {
                     app.mode = Mode::Search;
                     Want::Nothing
@@ -381,6 +389,13 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
         };
     }
 
+    // The bar of things to do with a selection, along the bottom row.
+    if row + 1 == height && !app.picked.is_empty() {
+        return match crate::draw::deed_at(app, col, width) {
+            Some(which) => Spot::Deed(which),
+            None => Spot::Nothing,
+        };
+    }
     if row < QUERY_HIGH {
         if row == crate::draw::QUERY_ROW
             && let Some((from, to)) = crate::draw::chip_at(app)

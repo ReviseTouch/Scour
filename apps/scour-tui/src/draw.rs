@@ -833,6 +833,31 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     );
 }
 
+/// Where each of the selection's three buttons is drawn, along the bottom.
+///
+/// **The same arithmetic that draws them.** They are words on a line, and the
+/// only thing that makes them buttons is that a press on one of them does
+/// what it says.
+pub fn deed_spans(app: &App, width: u16) -> Vec<(u16, u16, String)> {
+    let mut out = Vec::new();
+    let mut from = width;
+    for (label, _) in app.deeds().iter().rev() {
+        let said = format!("  {label}  ");
+        let wide = said.chars().count() as u16;
+        from = from.saturating_sub(wide);
+        out.push((from, from + wide, said));
+    }
+    out.reverse();
+    out
+}
+
+/// Which of them is at this column, if any.
+pub fn deed_at(app: &App, col: u16, width: u16) -> Option<usize> {
+    deed_spans(app, width)
+        .iter()
+        .position(|(from, to, _)| col >= *from && col < *to)
+}
+
 /// What sits in the rail's first column: a dot for the filter in force, an
 /// arrow for where the keyboard cursor is, a space for everything else.
 fn mark_of(on: bool, cursor: bool) -> &'static str {
@@ -920,6 +945,25 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         ))),
         left,
     );
+    // **What can be done with a selection displaces the order and the mode**,
+    // because it is the thing about to be acted on and they are not.
+    if picked > 0 {
+        let mut parts: Vec<Span> = Vec::new();
+        for (at, (_, _, said)) in deed_spans(app, area.width).into_iter().enumerate() {
+            let style = if app.pressed == Spot::Deed(at) {
+                Style::new().bg(theme.key()).fg(theme.back())
+            } else if app.hover == Spot::Deed(at) {
+                Style::new().bg(theme.hover()).fg(theme.ink())
+            } else {
+                Style::new()
+                    .fg(theme.ink_2())
+                    .add_modifier(Modifier::UNDERLINED)
+            };
+            parts.push(Span::styled(said, style));
+        }
+        f.render_widget(Paragraph::new(Line::from(parts)).right_aligned(), area);
+        return;
+    }
     let order = format!(
         "{} {}  {mode} ",
         app.sort_name(),
