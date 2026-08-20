@@ -543,12 +543,17 @@ fn main() -> Result<()> {
     // One read serves both the language and the socket. This used to load and
     // parse the same config file twice before the first request left.
     let config = scour_config::Config::load_or_default().0;
+    // The shape the window was left in, and everything else chosen from
+    // inside a face. **Read before the catalogue** because the language is one
+    // of them: it used to be loaded three hundred lines further down, after
+    // the words had already been chosen without it.
+    let kept = scour_settings::Settings::load(&config.state_dir());
     // **The words, and they can be changed while the window is open.** Held
     // behind a cell so that picking a language rebuilds the catalogue and
     // rewrites every visible string — it used to only remember the choice,
     // and the window went on speaking the old language until it was restarted.
     let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
-        &language(&config),
+        &language(&kept, &config),
     ))));
     let window = MainWindow::new().context("the window could not be created")?;
     dress(&window);
@@ -653,11 +658,7 @@ fn main() -> Result<()> {
     said(&window, t(&cat.borrow(), "connecting…"));
     // The two languages the catalogue has. `""` is "whatever the desktop
     // says", which is what the config file means by an empty string.
-    window.set_language(language(&config).as_str().into());
-    // The shape the window was left in. `detail` when nothing was chosen —
-    // and when something unknown was, which is the same answer a frontend
-    // should give to a word it does not have a drawing for.
-    let kept = scour_settings::Settings::load(&state_dir(&config));
+    window.set_language(language(&kept, &config).as_str().into());
     // The widths somebody dragged, in either window: they are keyed by column
     // id and kept beside the index, so a column widened in the browser opens
     // that wide here.
@@ -3457,17 +3458,15 @@ fn grouped(n: u64) -> String {
     scour_ui::format::grouped(n, marks().0)
 }
 
-/// Where the settings this window shares with the others live.
-fn state_dir(cfg: &scour_config::Config) -> std::path::PathBuf {
-    cfg.index
-        .dir
-        .parent()
-        .unwrap_or(cfg.index.dir.as_path())
-        .join("state")
-}
-
-fn language(cfg: &scour_config::Config) -> String {
-    scour_i18n::choose("", &cfg.ui.language)
+/// The language the window should speak: what was chosen, then what was
+/// configured, then the desktop.
+///
+/// **The chosen one is read now, and used to be ignored.** `Settings::language`
+/// is what every face's language menu writes, and the window passed `""` here —
+/// so a language picked in this very window took effect at once and then was
+/// gone at the next start, with the desktop's answer back in its place.
+fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> String {
+    scour_i18n::choose(&kept.language, &cfg.ui.language)
 }
 
 #[cfg(test)]

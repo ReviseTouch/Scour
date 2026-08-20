@@ -67,11 +67,19 @@ Bunlar bir kez yazılır:
 | `scour-ui::faces` | hangi yüzde ne var | aşağıda, §5 |
 | `scour-page` | sayfa 200 satır, LRU 32, cevabın taşıdığı ofsete yazılır, kısa sayfa iki ölçüye göre sonuçtur | altı hata pahasına öğrenildi; ikinci kez öğrenilmesin |
 | `scour-settings` | sütun genişliği, dil, düzen, **hangi yüz açılır**, atlama kuralları | dört yüzün ortak hafızası; `config.toml` elle yazılan dosya olarak kalır |
-| `scour-i18n` | katalog, dil seçimi | `.po` dosyaları; kodda İngilizce msgid |
+| `scour-i18n` | katalog, **dil sırası**: seçilen → `config.toml` → masaüstü → İngilizce | `.po` dosyaları; kodda İngilizce msgid. Sıra `choose()` içinde bir kez yazılıdır; pencere kendi kopyasını tutuyordu ve `SCOUR_LANG`'i görmüyordu |
 | `scour-places` | masaüstünün kendi klasörleri, hangi bölüm okuma zamanı tutar | bir makine sorusu, bir indeks sorusu değil |
 
 Bir şey **iki yüzde birden** gerekiyorsa yeri buradadır. Üçüncü kopya yazılıyorsa
 bir şey yanlış gidiyordur.
+
+Aynı kural yollar için de geçerli: ayarların nerede durduğunu `Config::state_dir()`
+söyler. Üç yerde ayrı ayrı yazılıydı — servis, pencere ve uçbirim — ve biri
+ayrıştığı gün bir yüzde seçilen dil öteki yüzde görünmeden kaybolurdu.
+
+Metin de öyle: bir yüzün gösterdiği her kelime katalogdan gelir. Uçbirimde bunu
+denetleyen bir test var — kendi kaynağını okuyup `say(...)`'a verilen her msgid'i
+Türkçe katalogda arar, çünkü elle tutulan bir msgid listesi yazıldığı gün doğrudur.
 
 ---
 
@@ -100,7 +108,7 @@ onu basar:
 ```
 feature         page          window        terminal      command line
 search          yes           yes           yes           yes
-report          yes           yes           no            yes
+language        yes           yes           yes           yes
 thumbnails      yes           no            no            —
 ```
 

@@ -834,11 +834,16 @@ impl Plan {
     /// `name` is passed in because the caller already has it — the walk reads
     /// names sequentially, which is the whole reason the arena has no offsets.
     /// `name` is the row's name **already folded** — what the walk yields.
-    pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
+    ///
+    /// **Nothing is folded here any more.** This took a scratch buffer for the
+    /// one test that had to build a string to look at: `path:` used to fold a
+    /// whole path per row. It matches through the directory table now, so the
+    /// buffer had no reader left.
+    pub fn accepts(&self, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
         for clause in &self.clauses {
             let mut any = false;
             for (negated, test) in &clause.alts {
-                if evaluate(test, seg, row, name, fold) != *negated {
+                if evaluate(test, seg, row, name) != *negated {
                     any = true;
                     break;
                 }
@@ -985,9 +990,10 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
 ///
 /// `name` arrives **folded**, out of the second arena, so nothing here folds
 /// it again — that fold was three quarters of the inner loop and now happens
-/// once when the segment is written. `fold` survives for the one thing that
-/// cannot be prepared in advance: the path, which is built here.
-fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8], fold: &mut Folded) -> bool {
+/// once when the segment is written. The last test that folded anything at all
+/// was `path:`, and it stopped when paths began to be matched through the
+/// directory table rather than built per row.
+fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
     match test {
         Test::Never => false,
         Test::Num {
@@ -1163,7 +1169,6 @@ pub fn run_with(
     folders: &[(u32, i64)],
 ) -> Found {
     let has_veto = conceals.is_some();
-    let mut fold = Folded::new();
     // A `Cell` rather than a plain counter because the block loop below reads
     // it while the closure that increments it is alive. Shared, not borrowed:
     // `get`/`set` on a `usize` compile to the same load and store a captured
@@ -1413,7 +1418,7 @@ pub fn run_with(
 
     let mut visit = |row: usize, name: &[u8]| -> bool {
         visited += 1;
-        if !seg.is_alive(row) || !plan.accepts(seg, row, name, &mut fold) {
+        if !seg.is_alive(row) || !plan.accepts(seg, row, name) {
             return true;
         }
         if let Some(veto) = conceals.as_deref_mut()
@@ -2486,7 +2491,6 @@ fn runs_of(blocks: &[u32], rows: usize) -> Vec<(usize, usize)> {
 ///
 /// Returns false if `f` asked it to stop.
 pub fn walk_matches(seg: &Segment<'_>, plan: &Plan, mut f: impl FnMut(usize) -> bool) -> bool {
-    let mut fold = Folded::new();
     let blocks = blocks_worth_opening(seg, plan);
     let by_row = !plan.needs_name();
     let mut i = 0usize;
@@ -2499,7 +2503,7 @@ pub fn walk_matches(seg: &Segment<'_>, plan: &Plan, mut f: impl FnMut(usize) -> 
         let to = ((blocks[j] as usize + 1) * BLOCK).min(seg.rows());
         if by_row {
             for row in from..to {
-                if seg.is_alive(row) && plan.accepts(seg, row, b"", &mut fold) && !f(row) {
+                if seg.is_alive(row) && plan.accepts(seg, row, b"") && !f(row) {
                     return false;
                 }
             }
@@ -2509,7 +2513,7 @@ pub fn walk_matches(seg: &Segment<'_>, plan: &Plan, mut f: impl FnMut(usize) -> 
             // compares against folded needles, and handing it the spelled name
             // means `RAPOR.pdf` quietly does not match `rapor`.
             seg.folded.walk_range(from, to, |row, name| {
-                if seg.is_alive(row) && plan.accepts(seg, row, name, &mut fold) {
+                if seg.is_alive(row) && plan.accepts(seg, row, name) {
                     go = f(row);
                 }
                 go

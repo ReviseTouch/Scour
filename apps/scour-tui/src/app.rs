@@ -280,6 +280,14 @@ pub struct App {
     /// terminal that redraws on a timer burns a core doing nothing.
     pub dirty: bool,
     pub leaving: bool,
+    /// The words this interface speaks.
+    ///
+    /// **In the state rather than in a constant**, because picking a language
+    /// has to change what is on the screen now: immediate mode redraws every
+    /// cell from this struct, so swapping the catalogue here is the whole of
+    /// what a language switch is. The window took a longer road to the same
+    /// place — it has properties to reset — and the terminal has none.
+    pub words: scour_i18n::Catalogue,
 }
 
 impl Default for App {
@@ -330,7 +338,33 @@ impl Default for App {
             rail_at: 0,
             dirty: true,
             leaving: false,
+            words: scour_i18n::Catalogue::english(),
         }
+    }
+}
+
+impl App {
+    /// This string, in the reader's language.
+    ///
+    /// The msgid is the English, so a string with no entry in the catalogue
+    /// comes back as itself — which is why every call site reads as the
+    /// sentence it draws rather than as a key.
+    pub fn say<'a>(&'a self, msgid: &'a str) -> std::borrow::Cow<'a, str> {
+        use scour_core::Catalog;
+        self.words.get(msgid)
+    }
+
+    /// How this language punctuates numbers: the thousands mark, then the
+    /// decimal one.
+    ///
+    /// **Asked of the catalogue rather than of the desktop.** A Turkish
+    /// desktop showing an English interface writes `5,356,281`, and the only
+    /// thing that knows which language is being *spoken* is the catalogue.
+    pub fn mark(&self) -> (char, char) {
+        (
+            scour_ui::format::group_mark(self.words.language()),
+            scour_ui::format::decimal_mark(self.words.language()),
+        )
     }
 }
 
@@ -346,7 +380,11 @@ pub const SORTS: [(SortKey, &str); 4] = [
 ];
 
 impl App {
-    /// What the sort is called, for the meter.
+    /// What the sort is called, for the meter — as a msgid, not as words.
+    ///
+    /// **The word is looked up where it is drawn.** These double as the
+    /// column headings, and a heading and a footer that spelled the same sort
+    /// two ways would be two vocabularies for one thing.
     pub fn sort_name(&self) -> &'static str {
         SORTS
             .iter()
@@ -805,6 +843,9 @@ impl App {
     /// ?` and can measure them; a terminal cell is one column or two depending
     /// on the font, and a row of icons that is a column wider than it thinks
     /// puts every press one place out.
+    /// The labels are msgids; [`crate::draw::tool_spans`] looks them up, and
+    /// it does so because it is the same function that says where a press
+    /// lands — a translated word is a different width.
     pub fn tools(&self) -> [(&'static str, &'static str); 5] {
         [
             ("faces", "^U"),
@@ -857,14 +898,17 @@ impl App {
                 // put an empty string on the clipboard — which is not "no
                 // change", it is somebody's clipboard emptied.
                 if n == 0 {
-                    self.note = "nothing picked".into();
+                    self.note = self.say("nothing picked").into_owned();
                     self.dirty = true;
                     return Want::Nothing;
                 }
                 self.note = match copy(&paths.join("\n")) {
-                    Ok(how) if n == 1 => format!("path copied ({how})"),
-                    Ok(how) => format!("{n} paths copied ({how})"),
-                    Err(why) => format!("nothing copied: {why}"),
+                    Ok(how) if n == 1 => format!("{} ({how})", self.say("path copied")),
+                    Ok(how) => format!(
+                        "{} ({how})",
+                        self.say("{n} paths copied").replace("{n}", &n.to_string())
+                    ),
+                    Err(why) => format!("{}: {why}", self.say("nothing copied")),
                 };
             }
             1 => {
@@ -884,7 +928,9 @@ impl App {
                         .stderr(std::process::Stdio::null())
                         .spawn();
                 }
-                self.note = format!("opening {} folders", folders.len());
+                self.note = self
+                    .say("opening {n} folders")
+                    .replace("{n}", &folders.len().to_string());
             }
             _ => {
                 self.unpick();
@@ -965,7 +1011,12 @@ impl App {
             return Want::Nothing;
         }
         self.pages.forget_asking();
-        self.trouble = why;
+        // **Through the catalogue on the way in.** Two things send trouble:
+        // this program, which sends a msgid, and the service, which sends
+        // whatever went wrong in English. A msgid that is in the catalogue is
+        // translated and one that is not comes back as itself, so both are
+        // handled by the same line.
+        self.trouble = self.say(&why).into_owned();
         self.dirty = true;
         Want::Nothing
     }
@@ -1275,11 +1326,19 @@ impl App {
     /// startup and the strings in this interface are few and English; what
     /// this changes is what every face opens in next.
     pub fn speak(&mut self, which: usize) -> Want {
-        let tag = if which == 0 { "tr" } else { "en" };
-        self.note = format!("language: {tag} — takes effect on the next start");
+        let Some((tag, endonym)) = scour_i18n::LANGUAGES.get(which) else {
+            return Want::Nothing;
+        };
+        // **The words change now, not on the next start.** Immediate mode
+        // redraws every cell from this struct, so a new catalogue here is the
+        // whole of the switch — including how numbers are punctuated, which
+        // comes off the catalogue's language rather than off the desktop's.
+        self.words = scour_i18n::Catalogue::for_language(tag);
+        self.panel = Panel::None;
+        self.note = (*endonym).to_string();
         self.dirty = true;
         Want::Remember(scour_settings::Change {
-            language: Some(tag.to_string()),
+            language: Some((*tag).to_string()),
             ..Default::default()
         })
     }
@@ -1296,7 +1355,7 @@ impl App {
             _ => "browser",
         };
         if face == "tui" {
-            self.note = "already running here".into();
+            self.note = self.say("already running here").into_owned();
             self.dirty = true;
             return Want::Nothing;
         }
@@ -1307,7 +1366,7 @@ impl App {
             .stderr(std::process::Stdio::null())
             .spawn();
         self.note = match started {
-            Ok(_) => format!("starting the {face}"),
+            Ok(_) => self.say("starting…").into_owned(),
             Err(e) => format!("scour-open: {e}"),
         };
         self.panel = Panel::None;
@@ -1333,7 +1392,7 @@ impl App {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let to = format!("{dir}/scour-{stamp}.csv");
-        self.note = format!("writing {to}…");
+        self.note = format!("{} {to}", self.say("writing…"));
         self.dirty = true;
         Want::Export {
             query: self.asking(),
@@ -1585,4 +1644,125 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Every word this interface says, checked against the catalogue.
+///
+/// **The list is read out of the source, not kept beside it.** A hand-written
+/// list of msgids is a list that is right on the day it is written: somebody
+/// adds a panel, the panel says something new, and the only thing that would
+/// have caught it is the thing nobody remembered to update. This reads the
+/// files themselves, so a string added anywhere in the terminal is a string
+/// this test is already asking about.
+///
+/// What it cannot check is that a translation is *good* — only that one is
+/// there. A msgid with no entry falls back to the English, which is a correct
+/// answer and an untranslated one, and is exactly the state this is here to
+/// notice.
+#[cfg(test)]
+mod words {
+    /// Every string handed to [`App::say`] in the terminal, plus the tables
+    /// whose entries are looked up by value rather than written at the call
+    /// site.
+    ///
+    /// It scans its own file among the others, so a msgid written in a comment
+    /// here would be picked up as one this interface says — which is why this
+    /// paragraph does not spell the pattern it looks for.
+    fn asked_for() -> Vec<String> {
+        const SOURCE: [&str; 6] = [
+            include_str!("app.rs"),
+            include_str!("draw.rs"),
+            include_str!("keys.rs"),
+            include_str!("link.rs"),
+            include_str!("main.rs"),
+            include_str!("icons.rs"),
+        ];
+        let mut out: Vec<String> = Vec::new();
+        for text in SOURCE {
+            let mut rest = text;
+            while let Some(at) = rest.find("say(\"") {
+                rest = &rest[at + 5..];
+                // No escapes are used in any of them, and a msgid that needed
+                // one would be a sentence with a quotation mark in it.
+                match rest.find('"') {
+                    Some(end) => {
+                        out.push(rest[..end].to_string());
+                        rest = &rest[end..];
+                    }
+                    None => break,
+                }
+            }
+        }
+        let app = super::App::default();
+        for (label, _) in app.tools() {
+            out.push(label.to_string());
+        }
+        for (label, _) in app.deeds() {
+            out.push(label.to_string());
+        }
+        for (_, name) in super::SORTS {
+            out.push(name.to_string());
+        }
+        out.push("relevance".into());
+        for (key, what) in crate::keys::MAP {
+            out.push(what.to_string());
+            // The left column is mostly keycaps, which are the same in every
+            // language and are deliberately absent from the catalogue. A word
+            // that is all lowercase letters is prose rather than a keycap:
+            // `type` and `click the ✓ column` are asked about, `Ctrl+A` and
+            // `↑ ↓ · PgUp PgDn` are not.
+            if key
+                .split_whitespace()
+                .any(|w| w.len() > 1 && w.chars().all(|c| c.is_ascii_lowercase()))
+            {
+                out.push(key.to_string());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn the_terminal_says_nothing_the_catalogue_has_not_been_told_about() {
+        let turkish = scour_i18n::Catalogue::for_language("tr");
+        let missing: Vec<String> = asked_for()
+            .into_iter()
+            .filter(|id| !turkish.has(id))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{} string(s) would come out in English on a Turkish machine: {missing:#?}",
+            missing.len()
+        );
+    }
+
+    /// A placeholder that survives the translation, or a number lands nowhere.
+    ///
+    /// `{n} klasör açılıyor` is right; `{} klasör açılıyor` is a sentence with
+    /// the count missing, and the substitution is a plain `replace` that would
+    /// say nothing about it.
+    #[test]
+    fn a_translation_keeps_the_holes_the_english_had() {
+        use scour_core::Catalog;
+        let turkish = scour_i18n::Catalogue::for_language("tr");
+        for id in asked_for() {
+            let mut holes: Vec<&str> = id
+                .match_indices('{')
+                .filter_map(|(at, _)| {
+                    let rest = &id[at..];
+                    rest.find('}').map(|end| &rest[..=end])
+                })
+                .collect();
+            holes.sort();
+            holes.dedup();
+            let said = turkish.get(&id);
+            for hole in holes {
+                assert!(
+                    said.contains(hole),
+                    "the Turkish for {id:?} has lost {hole}: {said:?}"
+                );
+            }
+        }
+    }
 }

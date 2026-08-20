@@ -51,8 +51,12 @@ pub fn room(height: u16) -> usize {
     height.saturating_sub(CHROME).max(1) as usize
 }
 
-pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
+pub fn frame(f: &mut Frame, app: &App, theme: &Theme) {
     let area = f.area();
+    // How this language punctuates numbers, asked once a frame and handed
+    // down. It comes off the catalogue rather than off the desktop, so
+    // switching the language switches the digits with the words.
+    let mark = app.mark();
     f.render_widget(Block::new().style(Style::new().bg(theme.back())), area);
     // The strip of time is worth two lines and only where there are lines to
     // spare: under twenty rows it would take a fifth of the list.
@@ -144,7 +148,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
         panel(f, area, app, theme);
     }
     if app.helping {
-        help(f, area, theme);
+        help(f, area, app, theme);
     }
 }
 
@@ -169,9 +173,9 @@ pub fn panel_rect(area: Rect, lines: usize) -> Rect {
 /// One drawing for the three of them, because they are the same shape: a
 /// title, a list, and a cursor on one line of it. What differs is the lines.
 fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let (title, lines): (&str, Vec<(String, bool)>) = match app.panel {
+    let (title, lines): (std::borrow::Cow<str>, Vec<(String, bool)>) = match app.panel {
         Panel::Rules => (
-            "WHAT IS SKIPPED",
+            app.say("WHAT IS SKIPPED"),
             app.rules
                 .iter()
                 .map(|(_, value, off, added)| {
@@ -180,23 +184,44 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                             "{} {}{}",
                             if *off { "☐" } else { "☑" },
                             value,
-                            if *added { "  ·  added here" } else { "" }
+                            if *added {
+                                format!("  ·  {}", app.say("added here"))
+                            } else {
+                                String::new()
+                            }
                         ),
                         false,
                     )
                 })
                 .collect(),
         ),
+        // **The two languages are spelled in themselves**, not translated:
+        // somebody looking for their own language recognises "Türkçe" and may
+        // not recognise what the language they are currently reading calls it.
+        // Same rule as `scour_i18n::LANGUAGES`, which is where these come from.
         Panel::Language => (
-            "LANGUAGE",
-            vec![("Türkçe".into(), false), ("English".into(), false)],
+            app.say("LANGUAGE"),
+            scour_i18n::LANGUAGES
+                .iter()
+                .map(|(_, endonym)| ((*endonym).to_string(), false))
+                .collect(),
         ),
         Panel::Faces => (
-            "HOW TO RUN IT",
+            app.say("HOW TO RUN IT"),
             vec![
-                ("Window".into(), false),
-                ("Terminal  ·  running now".into(), true),
-                ("Browser  ·  opens a port on 127.0.0.1".into(), false),
+                (app.say("Window").into_owned(), false),
+                (
+                    format!("{}  ·  {}", app.say("Terminal"), app.say("running now")),
+                    true,
+                ),
+                (
+                    format!(
+                        "{}  ·  {}",
+                        app.say("Browser"),
+                        app.say("opens a port on 127.0.0.1")
+                    ),
+                    false,
+                ),
             ],
         ),
         Panel::None => return,
@@ -265,7 +290,7 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         // typed query and filled the line: it read as something already
         // searched for rather than as an empty box.
         Span::styled(
-            HINT,
+            hint(app),
             Style::new()
                 .fg(theme.ink_3())
                 .add_modifier(Modifier::ITALIC | Modifier::DIM),
@@ -376,12 +401,18 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     let mut parts = vec![
         Span::styled(" ", dim),
         Span::styled(
-            format!(
-                "{} of {}{}",
-                format::grouped(shown as u64, mark.0),
-                if app.capped { "at least " } else { "" },
-                format::grouped(total as u64, mark.0)
-            ),
+            // **One sentence, not three words glued together.** Turkish puts
+            // the total first — `1.000 içinden 23` — so a msgid per word
+            // would have come out in English order whatever the translator
+            // wrote. Two whole sentences, and the capped one is its own
+            // because "at least" does not sit in the same place either.
+            app.say(if app.capped {
+                "{shown} of at least {total}"
+            } else {
+                "{shown} of {total}"
+            })
+            .replace("{shown}", &format::grouped(shown as u64, mark.0))
+            .replace("{total}", &format::grouped(total as u64, mark.0)),
             Style::new().fg(theme.ink_2()),
         ),
     ];
@@ -398,7 +429,11 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     if app.rows_visited > 0 && std::env::var("SCOUR_TRACE").is_ok() {
         parts.push(Span::styled("  ·  ", dim));
         parts.push(Span::styled(
-            format!("{} rows read", format::grouped(app.rows_visited, mark.0)),
+            format!(
+                "{} {}",
+                format::grouped(app.rows_visited, mark.0),
+                app.say("rows read")
+            ),
             dim,
         ));
     }
@@ -430,7 +465,7 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
 pub fn chip_at(app: &App) -> Option<(u16, u16)> {
     let term = app.filter.as_deref()?;
     let typed = if app.query.is_empty() {
-        HINT.chars().count()
+        hint(app).chars().count()
     } else {
         app.query.chars().count()
     };
@@ -440,7 +475,13 @@ pub fn chip_at(app: &App) -> Option<(u16, u16)> {
 }
 
 /// What an empty query says instead of nothing.
-const HINT: &str = "search…";
+///
+/// **One function, two callers again**: the width of this decides where the
+/// filter chip is drawn and where a press on it lands, and a translated hint
+/// is a different width in every language.
+fn hint(app: &App) -> std::borrow::Cow<'_, str> {
+    app.say("search…")
+}
 
 /// Which column covers this offset into the list's own width.
 pub fn column_at(col: u16, width: u16) -> Option<usize> {
@@ -458,7 +499,12 @@ pub fn column_at(col: u16, width: u16) -> Option<usize> {
 /// the terminal that is too narrow to draw the column at all.
 fn heading(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let quiet = Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM);
-    let names = ["  NAME", "WHERE", "CHANGED", "SIZE"];
+    let names = [
+        format!("  {}", app.say("NAME")),
+        app.say("WHERE").into_owned(),
+        app.say("CHANGED").into_owned(),
+        app.say("SIZE").into_owned(),
+    ];
     let sorted = app.sorted_column();
     let cells: Vec<Cell> = names
         .iter()
@@ -668,7 +714,7 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     };
     let mut lines: Vec<Line> = Vec::new();
 
-    lines.push(head("WHAT IS INDEXED"));
+    lines.push(head(&app.say("WHAT IS INDEXED")));
     match &app.stats {
         Some(stats) => {
             let say = |what: &str, value: String| {
@@ -677,25 +723,31 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
                     Span::styled(value, Style::new().fg(theme.ink())),
                 ])
             };
-            lines.push(say("rows", format::grouped(stats.entries, mark.0)));
-            lines.push(say("directories", format::grouped(stats.dirs, mark.0)));
             lines.push(say(
-                "on disk",
+                &app.say("rows"),
+                format::grouped(stats.entries, mark.0),
+            ));
+            lines.push(say(
+                &app.say("directories"),
+                format::grouped(stats.dirs, mark.0),
+            ));
+            lines.push(say(
+                &app.say("on disk"),
                 format::compact_bytes(stats.bytes_on_disk, mark.1),
             ));
         }
         None => lines.push(Line::from(Span::styled(
-            "   asking…",
+            format!("   {}", app.say("asking…")),
             Style::new().fg(theme.ink_3()),
         ))),
     }
 
     lines.push(Line::from(""));
-    lines.push(head("WHAT A FOLDER WEIGHS"));
+    lines.push(head(&app.say("WHAT A FOLDER WEIGHS")));
     match &app.usage {
         Some(usage) => {
             let where_at = if app.weighing.is_empty() {
-                "everything indexed".to_string()
+                app.say("everything indexed").into_owned()
             } else {
                 app.weighing.clone()
             };
@@ -707,9 +759,10 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
                 ),
                 Span::styled(
                     format!(
-                        "  {}  ·  {} files",
+                        "  {}  ·  {} {}",
                         format::compact_bytes(usage.root.bytes, mark.1),
-                        format::grouped(usage.root.files, mark.0)
+                        format::grouped(usage.root.files, mark.0),
+                        app.say("files")
                     ),
                     Style::new().fg(theme.ink_3()),
                 ),
@@ -747,7 +800,8 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
                     ),
                     Span::styled(
                         if share >= 5 {
-                            format!("{share}% older than a year")
+                            app.say("{percent}% of it older than a year")
+                                .replace("{percent}", &share.to_string())
                         } else {
                             String::new()
                         },
@@ -757,20 +811,21 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             }
         }
         None => lines.push(Line::from(Span::styled(
-            "   weighing…",
+            format!("   {}", app.say("weighing…")),
             Style::new().fg(theme.ink_3()),
         ))),
     }
 
     lines.push(Line::from(""));
-    lines.push(head("THE SAME FILE, SEVERAL TIMES OVER"));
+    lines.push(head(&app.say("THE SAME FILE, SEVERAL TIMES OVER")));
     if app.waste > 0 {
         lines.push(Line::from(vec![
             Span::styled("   ", Style::new()),
             Span::styled(
                 format!(
-                    "{} could be given back",
-                    format::compact_bytes(app.waste, mark.1)
+                    "{} {}",
+                    format::compact_bytes(app.waste, mark.1),
+                    app.say("could be freed")
                 ),
                 Style::new().fg(theme.key()),
             ),
@@ -778,7 +833,7 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
     if app.dupes.is_empty() {
         lines.push(Line::from(Span::styled(
-            "   reading…",
+            format!("   {}", app.say("reading…")),
             Style::new().fg(theme.ink_3()),
         )));
     }
@@ -826,7 +881,7 @@ fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, cha
             ]));
             if look.head.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    " nothing to show of this one",
+                    format!(" {}", app.say("nothing to show of this one")),
                     Style::new().fg(theme.ink_3()),
                 )));
             }
@@ -845,7 +900,7 @@ fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, cha
             }
         }
         None => lines.push(Line::from(Span::styled(
-            " reading…",
+            format!(" {}", app.say("reading…")),
             Style::new().fg(theme.ink_3()),
         ))),
     }
@@ -898,7 +953,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
             None
         }
     };
-    lines.push(head("KIND"));
+    lines.push(head(&app.say("KIND")));
     for (token, count) in app.kinds.iter().take(kinds_shown) {
         let term = scour_ui::query::of_kind(token);
         let on = app.filter.as_deref() == Some(term.as_str());
@@ -908,6 +963,12 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         // `507.691` with its last digit run off the end of a line that had
         // been counted at a width the rail does not have.
         let said = format::grouped(*count, mark.0);
+        // **The word, not the token.** The service counts in the query
+        // language's own vocabulary — `doc`, `exec`, `build` — and that is
+        // what goes back to it in a `kind:` term; what a reader sees is the
+        // word for it in their language, which is the label the window and the
+        // page draw from the same msgid.
+        let word = kind_word(app, token);
         let (bar, name) = (bar_wide, name_wide);
         let width = ((*count as f64 / most as f64) * bar as f64).round() as usize;
         let cursor = here(at, app);
@@ -916,7 +977,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         lines.push(
             Line::from(vec![
                 Span::styled(
-                    format!("{}{:<name$} ", mark_of(on, cursor), cut(token, name)),
+                    format!("{}{:<name$} ", mark_of(on, cursor), cut(&word, name)),
                     // **Colour means in force, the arrow means the cursor is
                     // here.** They were the same thing, so a filter somebody
                     // had just taken off left its row lit as though it were
@@ -938,7 +999,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         );
     }
     lines.push(Line::from(""));
-    lines.push(head("WHERE"));
+    lines.push(head(&app.say("WHERE")));
     for (label, path) in app.places.iter().take(places_shown) {
         let term = scour_ui::query::of_place(path);
         let on = app.filter.as_deref() == Some(term.as_str());
@@ -964,7 +1025,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         );
     }
     lines.push(Line::from(""));
-    lines.push(head("SIZE"));
+    lines.push(head(&app.say("SIZE")));
     for (label, term) in scour_ui::query::SIZES {
         let on = app.filter.as_deref() == Some(term);
         let cursor = here(at, app);
@@ -988,6 +1049,22 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         );
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// The word for a kind, given the token the service counts in.
+///
+/// The engine's own msgid, so the rail says `Belge` where the window says
+/// `Belge` — one vocabulary, and a kind the engine learns tomorrow arrives in
+/// all three faces at once. A token with no kind is drawn as itself rather
+/// than as nothing.
+fn kind_word<'a>(app: &'a App, token: &'a str) -> std::borrow::Cow<'a, str> {
+    match scour_core::Kind::OFFERED
+        .iter()
+        .find(|k| k.token() == token)
+    {
+        Some(kind) => app.say(kind.msgid()),
+        None => std::borrow::Cow::Borrowed(token),
+    }
 }
 
 /// A rule across the window, in the quietest line colour there is.
@@ -1081,17 +1158,23 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         && let Some((days, count)) = app.strip.get(at)
     {
         let said = if *days <= 1 {
-            "since yesterday".to_string()
+            app.say("since yesterday").into_owned()
         } else if *days < 60 {
-            format!("last {days} days")
+            app.say("last {days} days")
+                .replace("{days}", &days.to_string())
         } else {
-            format!("last {} months", days / 30)
+            app.say("last {n} months")
+                .replace("{n}", &(days / 30).to_string())
         };
         f.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(format!(" {said}"), Style::new().fg(theme.key())),
                 Span::styled(
-                    format!("  ·  {} files", format::grouped(*count, mark.0)),
+                    format!(
+                        "  ·  {} {}",
+                        format::grouped(*count, mark.0),
+                        app.say("files")
+                    ),
                     dim,
                 ),
             ])),
@@ -1100,8 +1183,8 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         return;
     }
     // The axis under the ends of the strip, not the ends of the terminal.
-    let left = "two years ago";
-    let right = "today";
+    let left = app.say("2 years ago");
+    let right = app.say("today");
     let gap = room.saturating_sub(left.chars().count() + right.chars().count());
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -1122,6 +1205,9 @@ pub fn tool_spans(app: &App, width: u16) -> Vec<(u16, u16, String)> {
     let all = app.tools();
     for (at, (label, key)) in all.iter().enumerate().rev() {
         let glyph = crate::icons::of_tool(at);
+        // The label is a msgid; it is looked up *here*, where its width is
+        // also measured, because those two have to be the same string.
+        let label = app.say(label);
         let said = if glyph.is_empty() {
             format!("  {label} {key}")
         } else {
@@ -1151,7 +1237,7 @@ pub fn deed_spans(app: &App, width: u16) -> Vec<(u16, u16, String)> {
     let mut out = Vec::new();
     let mut from = width;
     for (label, _) in app.deeds().iter().rev() {
-        let said = format!("  {label}  ");
+        let said = format!("  {}  ", app.say(label));
         let wide = said.chars().count() as u16;
         from = from.saturating_sub(wide);
         out.push((from, from + wide, said));
@@ -1218,9 +1304,12 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     // already see in the list.
     let room = area.width.saturating_sub(32) as usize;
     let path = if picked > 0 {
-        let mut said = format!("{picked} picked");
+        let mut said = app.say("{n} selected").replace("{n}", &picked.to_string());
         if folders > 0 {
-            said.push_str(&format!(" · {folders} folders"));
+            said.push_str(&format!(
+                " · {}",
+                app.say("{n} folders").replace("{n}", &folders.to_string())
+            ));
         }
         if bytes > 0 {
             // The column's format rather than the meter's: a selection of two
@@ -1234,11 +1323,11 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             .unwrap_or_else(|| "—".into())
     };
     let mode = if app.in_rail {
-        "rail"
+        app.say("rail")
     } else {
         match app.mode {
-            Mode::Search => "search",
-            Mode::Move => "move",
+            Mode::Search => app.say("search"),
+            Mode::Move => app.say("move"),
         }
     };
     let [left, right] =
@@ -1275,7 +1364,7 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
     let order = format!(
         "{} {}  {mode} ",
-        app.sort_name(),
+        app.say(app.sort_name()),
         if app.descending { "↓" } else { "↑" }
     );
     f.render_widget(
@@ -1289,8 +1378,12 @@ fn footer(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
 }
 
 /// The key list, over everything, printed from the one table there is.
-fn help(f: &mut Frame, area: Rect, theme: &Theme) {
-    let wide = 60u16.min(area.width.saturating_sub(4));
+fn help(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // Wide enough for the longest line in it rather than a round number:
+    // `sort by the next column · or click a heading` is forty-four characters
+    // in English and fifty-five in Turkish, and at sixty the box cut both of
+    // them — the one panel whose whole job is to be read.
+    let wide = 88u16.min(area.width.saturating_sub(4));
     let tall = (crate::keys::MAP.len() as u16 + 4).min(area.height);
     let box_area = Rect {
         x: area.x + (area.width.saturating_sub(wide)) / 2,
@@ -1300,13 +1393,22 @@ fn help(f: &mut Frame, area: Rect, theme: &Theme) {
     };
     f.render_widget(Clear, box_area);
     let mut lines = vec![Line::from(Span::styled(
-        " KEYS",
+        format!(" {}", app.say("KEYS")),
         Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
     ))];
+    // **Both columns go through the catalogue, and only one of them changes.**
+    // The left column is mostly keycaps — `Ctrl+A`, `Tab`, `F1` — which are
+    // what is printed on the keyboard in every language and are not in the
+    // catalogue, so they come back as themselves. The few that are not
+    // keycaps, `type` and `click the ✓ column`, are sentences and are. One
+    // rule, and nothing to keep in step.
     for (key, what) in crate::keys::MAP {
         lines.push(Line::from(vec![
-            Span::styled(format!(" {key:<28}"), Style::new().fg(theme.key())),
-            Span::styled(*what, Style::new().fg(theme.ink_2())),
+            Span::styled(
+                format!(" {:<28}", app.say(key)),
+                Style::new().fg(theme.key()),
+            ),
+            Span::styled(app.say(what), Style::new().fg(theme.ink_2())),
         ]));
     }
     f.render_widget(

@@ -151,12 +151,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "language",
         what: "Turkish or English, remembered",
-        faces: [
-            Has,
-            Has,
-            Part("chosen here, applied at the next start"),
-            Has,
-        ],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "csv",

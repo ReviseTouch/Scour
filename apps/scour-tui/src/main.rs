@@ -84,12 +84,17 @@ fn main() -> Result<()> {
     // One read serves both the language and the socket.
     let config = scour_config::Config::load_or_default().0;
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
-    let catalogue =
-        scour_i18n::Catalogue::for_language(&scour_i18n::choose("", &config.ui.language));
-    let mark = (
-        scour_ui::format::group_mark(catalogue.language()),
-        scour_ui::format::decimal_mark(catalogue.language()),
-    );
+    // **What was chosen, then what was configured, then the desktop.** The
+    // language menu writes `Settings::language` — from any of the four faces —
+    // and a terminal that read only `config.toml` would have offered a menu
+    // whose answer it then ignored on the next start. The file is read here
+    // rather than asked for over the socket so that the *first* frame is in
+    // the right language; the service owns the file and this only reads it.
+    let kept = scour_settings::Settings::load(&config.state_dir());
+    let catalogue = scour_i18n::Catalogue::for_language(&scour_i18n::choose(
+        &kept.language,
+        &config.ui.language,
+    ));
     let theme = Theme::read(std::env::var("SCOUR_TUI_SCHEME").as_deref() != Ok("light"));
 
     let (beats, waiting) = channel::<Beat>();
@@ -104,6 +109,7 @@ fn main() -> Result<()> {
     let mut state = App {
         query: args.query.clone(),
         caret: args.query.len(),
+        words: catalogue,
         ..App::default()
     };
 
@@ -114,7 +120,6 @@ fn main() -> Result<()> {
             &link,
             &waiting,
             &theme,
-            mark,
             args.press.as_deref().unwrap_or_default(),
             args.click.as_deref().unwrap_or_default(),
         );
@@ -145,7 +150,7 @@ fn main() -> Result<()> {
         ratatui::crossterm::event::EnableBracketedPaste
     )
     .is_ok();
-    let outcome = run(&mut terminal, &mut state, &link, &waiting, &theme, mark);
+    let outcome = run(&mut terminal, &mut state, &link, &waiting, &theme);
     if mousing {
         let _ = ratatui::crossterm::execute!(
             std::io::stdout(),
@@ -166,7 +171,6 @@ fn snap(
     link: &Link,
     waiting: &Receiver<Beat>,
     theme: &Theme,
-    mark: (char, char),
     press: &str,
     click: &str,
 ) -> Result<()> {
@@ -256,7 +260,7 @@ fn snap(
     if !press.is_empty() || !click.is_empty() {
         settle(state, link, waiting, 1_500);
     }
-    terminal.draw(|f| draw::frame(f, state, theme, mark))?;
+    terminal.draw(|f| draw::frame(f, state, theme))?;
     for line in terminal.backend().buffer().content.chunks(w as usize) {
         let text: String = line.iter().map(|c| c.symbol()).collect();
         println!("{}", text.trim_end());
@@ -307,14 +311,13 @@ fn run(
     link: &Link,
     waiting: &Receiver<Beat>,
     theme: &Theme,
-    mark: (char, char),
 ) -> Result<()> {
     // The first frame sizes the list, and the size is what says how many rows
     // to ask for — so the first question goes out after it, not before.
     let size = terminal.size()?;
     act(state.resized(draw::room(size.height)), link);
     act(state.typed(), link);
-    terminal.draw(|f| draw::frame(f, state, theme, mark))?;
+    terminal.draw(|f| draw::frame(f, state, theme))?;
 
     // **A keystroke waits for the ones after it.** Every letter used to send a
     // search, which is right while they cost a millisecond — and a term with a
@@ -419,13 +422,14 @@ fn run(
             }) => state.ruled(added, config, builtin, off),
             Beat::Reply(Got::Writing(bytes)) => {
                 state.note = format!(
-                    "writing… {}",
-                    scour_ui::format::compact_bytes(bytes, mark.1)
+                    "{} {}",
+                    state.say("writing…"),
+                    scour_ui::format::compact_bytes(bytes, state.mark().1)
                 );
                 state.dirty = true;
             }
             Beat::Reply(Got::Wrote(path)) => {
-                state.note = format!("written to {path}");
+                state.note = format!("{} {path}", state.say("written to"));
                 state.dirty = true;
             }
             Beat::Reply(Got::Failed(why)) => {
@@ -459,7 +463,7 @@ fn run(
         }
         if state.dirty {
             state.dirty = false;
-            terminal.draw(|f| draw::frame(f, state, theme, mark))?;
+            terminal.draw(|f| draw::frame(f, state, theme))?;
         }
     }
     Ok(())
@@ -500,7 +504,9 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 off,
             }) => state.ruled(added, config, builtin, off),
             Beat::Reply(Got::Writing(_)) => {}
-            Beat::Reply(Got::Wrote(path)) => state.note = format!("written to {path}"),
+            Beat::Reply(Got::Wrote(path)) => {
+                state.note = format!("{} {path}", state.say("written to"))
+            }
             Beat::Reply(Got::Failed(why)) => state.note = why,
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);

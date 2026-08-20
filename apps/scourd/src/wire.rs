@@ -150,8 +150,11 @@ fn scan_options(config: &Config) -> scour_core::ScanOptions {
 }
 
 /// Where a window's own settings live, beside this index.
+///
+/// [`Config::state_dir`]'s answer, kept here as a name the rest of this
+/// program already uses.
 pub fn state_dir(config: &Config) -> std::path::PathBuf {
-    data_dir(config).join("state")
+    config.state_dir()
 }
 
 /// What `config.toml` itself asks to skip — no built-ins, nothing a window

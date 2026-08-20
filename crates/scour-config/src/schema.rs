@@ -347,6 +347,27 @@ impl Config {
             self.service.socket.clone()
         }
     }
+
+    /// Where everything a person chose from inside a face is kept — the
+    /// column widths, the language, the rules they added, the face to open.
+    ///
+    /// Beside the index rather than in `config.toml`, because that file is
+    /// hand-written and carries the reasoning behind every value in it; see
+    /// [`scour_settings::Settings`]. `--config` therefore isolates the
+    /// settings along with the index, which is what makes a second
+    /// installation a second installation.
+    ///
+    /// **Here rather than in each program.** The service, the window and the
+    /// terminal all need this path, and it was written out three times: the
+    /// day one of them disagreed, a preference set in one face would have
+    /// been invisible to the others with nothing to say why.
+    pub fn state_dir(&self) -> std::path::PathBuf {
+        self.index
+            .dir
+            .parent()
+            .unwrap_or(self.index.dir.as_path())
+            .join("state")
+    }
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use crate::app::{App, Mode, Panel, Spot, Want};
 /// that what is documented and what happens cannot drift apart.
 pub const MAP: &[(&str, &str)] = &[
     ("type", "search"),
-    ("↑ ↓ · PgUp PgDn · Home End", "move"),
+    ("↑ ↓ · PgUp PgDn · Home End", "move through the list"),
     ("Enter", "open"),
     ("Shift+Enter", "open the folder"),
     ("Insert · Ctrl+Space", "pick · Shift+↑↓ for a run"),

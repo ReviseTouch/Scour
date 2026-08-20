@@ -267,9 +267,13 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             _ => 0,
         };
         let Some(link) = client.as_mut() else {
+            // A msgid rather than a sentence: `App::upset` puts it through
+            // the catalogue. The socket it failed on is in `SCOUR_TUI_TRACE`
+            // and in the config; what a reader needs on this line is that
+            // there is nothing to search.
             let _ = out.send(Got::Trouble {
                 generation,
-                why: format!("no service at {addr}"),
+                why: "the service cannot be reached — is scourd running?".into(),
             });
             continue;
         };

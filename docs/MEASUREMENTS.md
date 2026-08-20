@@ -5445,3 +5445,26 @@ now carries a query of each shape.
 
 Baseline for the run: `scripts/bench before`, tag `baseline-path`.
 
+
+## 2026-08-20 — what a catalogue costs a terminal
+
+The terminal's own words went through `scour-i18n`, which is a `.po`
+file parsed into a `HashMap` on first use and asked about forty times a
+frame. Both halves measured directly:
+
+| | |
+|---|---:|
+| the Turkish catalogue, parsed, plus one lookup | 280 µs |
+| one lookup | 23 ns |
+| a frame's worth (≈40 lookups) | under 1 µs |
+
+Once per process and nothing per frame, against a first frame that is
+five to nine milliseconds. **The parse is lazy and English does not do
+it at all**: the msgid *is* the English, so that catalogue has no map
+and the fallback is the answer.
+
+What did not have to be paid for: `App::say` hands back a `Cow` borrowed
+from the catalogue, so a translated string is not copied on its way to
+the screen, and the two places that measure a word's width — the tool
+row and the selection bar — measure the translated one, because they are
+the same function that draws it.

@@ -1014,3 +1014,222 @@ msgstr "Bir uçbirim açar ve Scour'u orada çalıştırır. Bu sayfa açık kal
 
 msgid "switch between the window, the terminal and the browser"
 msgstr "pencere, uçbirim ve tarayıcı arasında geçiş yap"
+
+# --- The terminal's own words. Everything it shows that the other faces also
+# show — kinds, sizes, dates, the counts — is already above; what is here is
+# what only a terminal has: a rail drawn in text, a key list, three panels.
+
+# The headings are drawn in capitals, and the capitals are their own msgids
+# rather than an uppercasing of the entries above. Turkish is why: `i` goes to
+# `İ` and `ı` goes to `I`, which no locale-blind uppercase does — `Değişme`
+# would come out `DEĞIŞME`. A translator writes the capitals once and nothing
+# has to know the rule.
+msgid "NAME"
+msgstr "AD"
+
+msgid "WHERE"
+msgstr "NEREDE"
+
+msgid "CHANGED"
+msgstr "DEĞİŞME"
+
+msgid "SIZE"
+msgstr "BOYUT"
+
+msgid "KIND"
+msgstr "TÜR"
+
+msgid "KEYS"
+msgstr "TUŞLAR"
+
+msgid "LANGUAGE"
+msgstr "DİL"
+
+msgid "WHAT IS SKIPPED"
+msgstr "NELER ATLANIYOR"
+
+msgid "HOW TO RUN IT"
+msgstr "NASIL ÇALIŞTIRILIR"
+
+msgid "WHAT IS INDEXED"
+msgstr "İNDEKSTE NE VAR"
+
+msgid "WHAT A FOLDER WEIGHS"
+msgstr "KLASÖRLER NE KADAR YER KAPLIYOR"
+
+msgid "THE SAME FILE, SEVERAL TIMES OVER"
+msgstr "AYNI DOSYA, DEFALARCA"
+
+# The counter line. One sentence rather than "{shown}", "of" and "{total}"
+# glued together: Turkish puts the total first, and three msgids would have
+# come out in English order whatever the translator wrote.
+msgid "{shown} of {total}"
+msgstr "{total} içinden {shown}"
+
+msgid "{shown} of at least {total}"
+msgstr "en az {total} içinden {shown}"
+
+msgid "search…"
+msgstr "ara…"
+
+# What the footer calls the order and the mode.
+msgid "where"
+msgstr "nerede"
+
+msgid "changed"
+msgstr "değişme"
+
+msgid "relevance"
+msgstr "ilgi"
+
+msgid "rail"
+msgstr "ray"
+
+msgid "search"
+msgstr "arama"
+
+msgid "move"
+msgstr "gezinme"
+
+# The tools along the counter line. These are drawn at the right-hand end and
+# the arithmetic that hit-tests them measures the translated word, so a long
+# one costs room rather than breaking the press — but short is still better.
+msgid "faces"
+msgstr "yüzler"
+
+msgid "lang"
+msgstr "dil"
+
+msgid "skips"
+msgstr "atlanan"
+
+msgid "csv"
+msgstr "csv"
+
+msgid "keys"
+msgstr "tuşlar"
+
+# What can be done with a selection.
+msgid "copy paths"
+msgstr "yolları kopyala"
+
+msgid "open folders"
+msgstr "klasörleri aç"
+
+msgid "clear"
+msgstr "temizle"
+
+# The report.
+msgid "rows"
+msgstr "satır"
+
+msgid "directories"
+msgstr "dizin"
+
+msgid "asking…"
+msgstr "soruluyor…"
+
+msgid "weighing…"
+msgstr "tartılıyor…"
+
+msgid "everything indexed"
+msgstr "indekslenen her şey"
+
+# The strip of time, under the pointer.
+msgid "since yesterday"
+msgstr "dünden beri"
+
+msgid "last {days} days"
+msgstr "son {days} gün"
+
+msgid "last {n} months"
+msgstr "son {n} ay"
+
+# Panels, and what the counter line says after something has been done.
+msgid "added here"
+msgstr "buradan eklendi"
+
+msgid "opens a port on 127.0.0.1"
+msgstr "127.0.0.1 üzerinde bir port açar"
+
+msgid "already running here"
+msgstr "zaten burada çalışıyor"
+
+msgid "nothing picked"
+msgstr "hiçbir şey seçili değil"
+
+msgid "nothing copied"
+msgstr "kopyalanmadı"
+
+msgid "opening {n} folders"
+msgstr "{n} klasör açılıyor"
+
+msgid "nothing to show of this one"
+msgstr "bunda gösterilecek bir şey yok"
+
+# The key list. The keycaps themselves — Ctrl+A, Tab, F1 — are not here and
+# are not meant to be: they are what is printed on the keyboard in every
+# language, and a msgid with no entry comes back as itself. Only the ones that
+# are sentences are translated.
+msgid "type"
+msgstr "yazın"
+
+msgid "click the ✓ column"
+msgstr "✓ sütununa tıklayın"
+
+msgid "in the report"
+msgstr "raporda"
+
+msgid "open the folder"
+msgstr "klasörünü açar"
+
+msgid "pick · Shift+↑↓ for a run"
+msgstr "seçer · Shift+↑↓ ile aralık"
+
+msgid "pick that row"
+msgstr "o satırı seçer"
+
+msgid "pick nothing"
+msgstr "seçimi kaldırır"
+
+msgid "copy the picked paths · open their folders"
+msgstr "seçili yolları kopyalar · klasörlerini açar"
+
+msgid "sort by the next column · or click a heading"
+msgstr "sonraki sütuna göre sıralar · ya da bir başlığa tıklayın"
+
+msgid "reverse the order"
+msgstr "sırayı ters çevirir"
+
+msgid "the rail, and back"
+msgstr "raya geçer, geri döner"
+
+msgid "which face to run"
+msgstr "hangi yüz açılsın"
+
+msgid "write the result as a spreadsheet"
+msgstr "sonucu hesap tablosu olarak yazar"
+
+msgid "the report, and back"
+msgstr "rapora geçer, geri döner"
+
+msgid "the head of the file, without opening it"
+msgstr "dosyayı açmadan başını gösterir"
+
+msgid "↑↓ a folder · Enter into it · Backspace out"
+msgstr "↑↓ klasör · Enter içine · Backspace geri"
+
+msgid "this · or press `keys` on the counter line"
+msgstr "bu · ya da sayaç satırındaki `tuşlar`"
+
+msgid "clear the query, then move mode"
+msgstr "sorguyu temizler, sonra gezinme kipi"
+
+msgid "move, in move mode"
+msgstr "gezinme kipinde gezinir"
+
+msgid "back to typing"
+msgstr "yazmaya döner"
+
+msgid "leave"
+msgstr "çıkar"
