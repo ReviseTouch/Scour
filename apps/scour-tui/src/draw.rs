@@ -42,7 +42,7 @@ const CHROME: u16 = QUERY_HIGH + 4;
 pub const LIST_TOP: u16 = QUERY_HIGH + 3;
 pub const RAIL_TOP: u16 = QUERY_HIGH + 2;
 /// How wide the rail is when it is drawn at all.
-pub const RAIL_WIDE: u16 = 22;
+pub const RAIL_WIDE: u16 = 24;
 
 /// How much room the list has, given a terminal this tall.
 pub fn room(height: u16) -> usize {
@@ -543,6 +543,24 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     };
     let (kinds_shown, places_shown) = app.rail_room();
     let most = app.kinds.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+    // **The columns are measured once, for all of the rows.** Measuring each
+    // row against its own count made the name column as wide as that row
+    // needed — so `audio 332` started its bar four columns right of
+    // `file 382.457`, and the rail read as a ragged staircase instead of a
+    // comparison. The widest number decides, and every bar starts where every
+    // other one does.
+    let widest = app
+        .kinds
+        .iter()
+        .take(kinds_shown)
+        .map(|(_, n)| format::grouped(*n, mark.0).chars().count())
+        .max()
+        .unwrap_or(1);
+    let bar_wide = 4usize;
+    // A space either side of the bar, or `archive▇` runs into it.
+    let name_wide = (area.width as usize)
+        .saturating_sub(1 + 1 + bar_wide + 1 + widest)
+        .max(3);
     // Where the rail's own cursor is, counted over the lines it offers rather
     // than the lines drawn: the headings and the blanks are not stops.
     let mut at = 0usize;
@@ -567,10 +585,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         // `507.691` with its last digit run off the end of a line that had
         // been counted at a width the rail does not have.
         let said = format::grouped(*count, mark.0);
-        let bar = 4usize;
-        let name = (area.width as usize)
-            .saturating_sub(2 + bar + said.chars().count())
-            .max(3);
+        let (bar, name) = (bar_wide, name_wide);
         let width = ((*count as f64 / most as f64) * bar as f64).round() as usize;
         let cursor = here(at, app);
         let lit = touched(at, app);
@@ -579,7 +594,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
             Line::from(vec![
                 Span::styled(
                     format!(
-                        "{}{:<name$}",
+                        "{}{:<name$} ",
                         if cursor { "▸" } else { " " },
                         cut(token, name)
                     ),
@@ -593,7 +608,7 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                     format!("{:<bar$}", "▇".repeat(width.clamp(1, bar))),
                     Style::new().fg(theme.kind(token)),
                 ),
-                Span::styled(format!(" {said}"), Style::new().fg(theme.ink_3())),
+                Span::styled(format!(" {said:>widest$}"), Style::new().fg(theme.ink_3())),
             ])
             .style(lit.unwrap_or_default()),
         );
