@@ -120,6 +120,20 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             return Want::Nothing;
         }
         KeyCode::Char('e') if ctrl => return app.write_sheet(),
+        // **`Ctrl+V` is usually the terminal's own**, which pastes by typing
+        // the text at us — and in the terminals that keep it for themselves
+        // (`Ctrl+Shift+V` is the paste there), it never arrives at all. So it
+        // is handled here too, by reading the clipboard directly.
+        KeyCode::Char('v') if ctrl => {
+            return match paste() {
+                Some(text) => pasted(app, &text),
+                None => {
+                    app.note = "nothing to paste".into();
+                    app.dirty = true;
+                    Want::Nothing
+                }
+            };
+        }
         // The three things a selection can have done to it, by their letters.
         KeyCode::Char('y') if ctrl => return app.deed(0),
         KeyCode::Char('o') if ctrl => return app.deed(1),
@@ -242,6 +256,39 @@ fn panel_press(app: &mut App) -> Want {
         Panel::Faces => app.run_face(app.panel_at),
         Panel::None => Want::Nothing,
     }
+}
+
+/// Text arriving in one piece — a paste rather than typing.
+///
+/// Newlines are what a paste of two paths carries and a query line has one
+/// line: they become spaces, which is also what they mean in a query.
+pub fn pasted(app: &mut App, text: &str) -> Want {
+    let text = text.replace(['\n', '\r', '\t'], " ");
+    let mut want = Want::Nothing;
+    for c in text.chars() {
+        want = app.insert(c);
+    }
+    app.mode = Mode::Search;
+    want
+}
+
+/// What is on the clipboard, if anything can say.
+fn paste() -> Option<String> {
+    for (tool, args) in [
+        ("wl-paste", &["--no-newline"][..]),
+        ("xclip", &["-selection", "clipboard", "-o"][..]),
+        ("xsel", &["--clipboard", "--output"][..]),
+    ] {
+        if let Ok(out) = std::process::Command::new(tool).args(args).output()
+            && out.status.success()
+        {
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
 }
 
 /// What the mouse does: the wheel moves whatever is under it, a press acts on

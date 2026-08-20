@@ -133,14 +133,20 @@ fn main() -> Result<()> {
     // using.
     let mousing = ratatui::crossterm::execute!(
         std::io::stdout(),
-        ratatui::crossterm::event::EnableMouseCapture
+        ratatui::crossterm::event::EnableMouseCapture,
+        // **Pasted text arrives as text.** Without this a paste is the
+        // characters typed one at a time, which is a search per character and
+        // a query line that fills in visibly; with it the whole thing is one
+        // event and one search.
+        ratatui::crossterm::event::EnableBracketedPaste
     )
     .is_ok();
     let outcome = run(&mut terminal, &mut state, &link, &waiting, &theme, mark);
     if mousing {
         let _ = ratatui::crossterm::execute!(
             std::io::stdout(),
-            ratatui::crossterm::event::DisableMouseCapture
+            ratatui::crossterm::event::DisableMouseCapture,
+            ratatui::crossterm::event::DisableBracketedPaste
         );
     }
     ratatui::restore();
@@ -306,6 +312,10 @@ fn run(
             Beat::Key(Event::Resize(_, h)) => {
                 act(state.resized(draw::room(h)), link);
             }
+            Beat::Key(Event::Paste(text)) => {
+                let want = keys::pasted(state, &text);
+                act(want, link);
+            }
             Beat::Key(Event::Mouse(m)) => {
                 // The terminal's size, because where a press landed is the
                 // only thing that says what it meant.
@@ -435,6 +445,7 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
         "space" => KeyCode::Char(' '),
         "tab" => KeyCode::Tab,
         "insert" => KeyCode::Insert,
+        "v" if mods.contains(KeyModifiers::CONTROL) => KeyCode::Char('v'),
         "enter" => KeyCode::Enter,
         "backspace" => KeyCode::Backspace,
         "esc" => KeyCode::Esc,
