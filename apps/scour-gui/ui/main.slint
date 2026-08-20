@@ -1059,10 +1059,16 @@ export component MainWindow inherits Window {
             height: 63px;
             background: Theme.panel;
 
+            // **The line under the query says whether it has the keyboard.**
+            // Nothing did: the caret blinks in a field with no edge to it, and
+            // a window where a panel or the list has focus looked exactly like
+            // one where the query does. The page draws the same line and
+            // brightens it the same way.
             Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.line;
+                y: parent.height - (input.has-focus ? 2px : 1px);
+                height: input.has-focus ? 2px : 1px;
+                background: input.has-focus ? Theme.q-key : Theme.line;
+                animate background { duration: 120ms; }
             }
 
             HorizontalLayout {
