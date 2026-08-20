@@ -592,7 +592,16 @@ impl App {
             0 => {
                 let paths: Vec<String> = self.picked.keys().cloned().collect();
                 let n = paths.len();
+                // **Nothing picked, nothing done.** Copying an empty selection
+                // put an empty string on the clipboard — which is not "no
+                // change", it is somebody's clipboard emptied.
+                if n == 0 {
+                    self.note = "nothing picked".into();
+                    self.dirty = true;
+                    return Want::Nothing;
+                }
                 self.note = match copy(&paths.join("\n")) {
+                    Ok(how) if n == 1 => format!("path copied ({how})"),
                     Ok(how) => format!("{n} paths copied ({how})"),
                     Err(why) => format!("nothing copied: {why}"),
                 };
@@ -1112,39 +1121,56 @@ mod tests {
 
 /// Put text on the clipboard from inside a terminal.
 ///
-/// **The terminal's own escape first.** OSC 52 is answered by the terminal
-/// rather than by the desktop, which means it works over ssh — where a
-/// clipboard tool would put the text on the clipboard of the machine being
-/// searched rather than the one being looked at. Some terminals have it off by
-/// default, so a desktop tool is the fallback and the caller is told which one
-/// answered.
+/// **The desktop's own tool first, and the terminal's escape only when there
+/// is no desktop.** OSC 52 is the elegant answer — the terminal takes the
+/// text, so it works over ssh — and it is answered by *some* terminals: VTE,
+/// which is what ptyxis and GNOME Terminal are built on, does not implement
+/// clipboard writes at all. Writing the escape there succeeds and nothing
+/// reaches the clipboard, which is what happened: this said `copied
+/// (terminal)` and the clipboard still held whatever it had before.
+///
+/// So a tool is used when one is here, and the escape is the fallback for the
+/// case it was written for — a terminal on the other end of a connection.
 fn copy(text: &str) -> Result<&'static str, String> {
     use std::io::Write;
+    let desktop =
+        std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
+    if desktop {
+        for (tool, args) in [
+            ("wl-copy", &[][..]),
+            ("xclip", &["-selection", "clipboard"][..]),
+            ("xsel", &["--clipboard", "--input"][..]),
+        ] {
+            let mut child = match std::process::Command::new(tool)
+                .args(args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => continue,
+            };
+            let wrote = match child.stdin.take() {
+                // Taken and dropped here: the tool reads until the pipe
+                // closes, and one held open is a tool that never finishes.
+                Some(mut pipe) => pipe.write_all(text.as_bytes()).is_ok(),
+                None => false,
+            };
+            if wrote {
+                // `wl-copy` forks and holds the selection; the process that
+                // exits is not the one keeping it.
+                let _ = child.wait();
+                return Ok(tool);
+            }
+        }
+    }
     let coded = base64(text.as_bytes());
     let mut out = std::io::stdout();
     if write!(out, "\x1b]52;c;{coded}\x07").is_ok() && out.flush().is_ok() {
-        return Ok("terminal");
-    }
-    for tool in ["wl-copy", "xclip"] {
-        let mut child = match std::process::Command::new(tool)
-            .args(if tool == "xclip" {
-                &["-selection", "clipboard"][..]
-            } else {
-                &[][..]
-            })
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(_) => continue,
-        };
-        if let Some(mut pipe) = child.stdin.take()
-            && pipe.write_all(text.as_bytes()).is_ok()
-        {
-            return Ok(tool);
-        }
+        // **"Sent", not "copied".** Whether it arrived is the terminal's
+        // business and it does not answer.
+        return Ok("sent to the terminal");
     }
     Err("no clipboard".into())
 }
