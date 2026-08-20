@@ -302,19 +302,56 @@ fn run(
     act(state.typed(), link);
     terminal.draw(|f| draw::frame(f, state, theme, mark))?;
 
-    while let Ok(beat) = waiting.recv() {
+    // **A keystroke waits for the ones after it.** Every letter used to send a
+    // search, which is right while they cost a millisecond — and a term with a
+    // slash in it is a scan of every path in the index, 1.7 s measured. Typing
+    // `Projeler/Scour` would have queued fourteen of those.
+    let quiet = Duration::from_millis(120);
+    let mut pending: Option<(std::time::Instant, Want)> = None;
+    // Which query has already been sent, so that a page of the one on screen
+    // is not made to wait behind a keystroke's worth of quiet.
+    let mut asked = state.generation;
+    loop {
+        let beat = match &pending {
+            Some((due, _)) => {
+                let left = due.saturating_duration_since(std::time::Instant::now());
+                match waiting.recv_timeout(left) {
+                    Ok(beat) => beat,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if let Some((_, want)) = pending.take() {
+                            act(want, link);
+                        }
+                        continue;
+                    }
+                    Err(_) => break,
+                }
+            }
+            None => match waiting.recv() {
+                Ok(beat) => beat,
+                Err(_) => break,
+            },
+        };
         match beat {
             Beat::Shut => break,
             Beat::Key(Event::Key(k)) => {
                 let want = keys::press(state, k);
-                act(want, link);
+                // A page of the same query goes at once; a *new* query waits
+                // to see whether another letter is coming.
+                match want {
+                    Want::Page { .. } if state.generation != asked => {
+                        asked = state.generation;
+                        pending = Some((std::time::Instant::now() + quiet, want));
+                    }
+                    other => act(other, link),
+                }
             }
             Beat::Key(Event::Resize(_, h)) => {
                 act(state.resized(draw::room(h)), link);
             }
             Beat::Key(Event::Paste(text)) => {
                 let want = keys::pasted(state, &text);
-                act(want, link);
+                asked = state.generation;
+                pending = Some((std::time::Instant::now() + quiet, want));
             }
             Beat::Key(Event::Mouse(m)) => {
                 // The terminal's size, because where a press landed is the

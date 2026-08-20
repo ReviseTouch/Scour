@@ -247,13 +247,15 @@ fn every_documented_example_still_works() {
         alts("size:abc")[0].1,
         Match::NameContains("size:abc".into())
     );
+    // Text rather than a field, still — and about the path, because it has a
+    // separator in it. Which is what `C:/Users` is.
     assert_eq!(
         alts("C:/Users")[0].1,
-        Match::NameContains("c:/users".into())
+        Match::PathContains("c:/users".into())
     );
     assert_eq!(
         alts("http://example")[0].1,
-        Match::NameContains("http://example".into())
+        Match::PathContains("http://example".into())
     );
 }
 

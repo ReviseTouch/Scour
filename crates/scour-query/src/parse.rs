@@ -425,7 +425,13 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
     Some((
         negated,
         if quoted {
-            Match::NameContains(text)
+            // Quotes turn off wildcards; they do not change which field the
+            // term is about. `"Projeler/Scour"` is still a path.
+            if text.contains('/') {
+                Match::PathContains(text)
+            } else {
+                Match::NameContains(text)
+            }
         } else {
             name_match(&text)
         },
@@ -515,6 +521,20 @@ fn resolve_owner(field: scour_core::NumField, raw: &str) -> Option<Match> {
 }
 
 fn name_match(text: &str) -> Match {
+    // **A term with a separator in it is about the path.** No name holds a
+    // slash, so `Projeler/Scour` typed on its own matched nothing at all —
+    // which is the one thing somebody typing a fragment of a path is certain
+    // not to mean. Everything has the same rule and for the same reason.
+    //
+    // A path term costs what a scan of the path column costs — 1.7 s over 2.7
+    // million rows, measured — because nothing indexes paths. That is the
+    // price of asking about them, and it is paid only when a slash is typed.
+    // There is no path glob, so a wildcard in a path term is matched as text:
+    // `Projeler/*.rs` asks for paths holding that, which is not what a glob
+    // would say but is closer to it than nothing.
+    if text.contains('/') {
+        return Match::PathContains(text.to_owned());
+    }
     if text.contains('*') || text.contains('?') {
         Match::NameGlob(text.to_owned())
     } else {
@@ -763,10 +783,36 @@ mod tests {
             m("içerik:x"),
             vec![(false, Match::ContentContains("x".into()))]
         );
-        // The rule that made it worth having is untouched.
+        // The rule that made it worth having is untouched: `C:` is not read
+        // as a field. It is a path term rather than a name term because it
+        // has a separator in it — which is what a Windows path is.
         assert_eq!(
             m("C:/Users"),
-            vec![(false, Match::NameContains("c:/users".into()))]
+            vec![(false, Match::PathContains("c:/users".into()))]
+        );
+    }
+
+    /// **A term with a separator in it asks about the path.**
+    ///
+    /// No name holds a slash, so this used to be the one shape of query that
+    /// could not match anything: somebody typing a piece of a path they could
+    /// see on the screen got nothing back.
+    #[test]
+    fn a_term_with_a_slash_in_it_is_about_the_path() {
+        assert_eq!(
+            m("Projeler/Scour"),
+            vec![(false, Match::PathContains("projeler/scour".into()))]
+        );
+        // Without one it is a name, as before.
+        assert_eq!(
+            m("Scour"),
+            vec![(false, Match::NameContains("scour".into()))]
+        );
+        // Quoted, it is still a path term: the quotes turn off wildcards,
+        // not the meaning of a separator.
+        assert_eq!(
+            m("\"Projeler/Scour\""),
+            vec![(false, Match::PathContains("projeler/scour".into()))]
         );
     }
 
@@ -774,9 +820,12 @@ mod tests {
     fn a_field_that_cannot_be_read_becomes_plain_text() {
         // This is the rule that keeps a half-typed query usable, and keeps
         // Windows paths and URLs from being mistaken for fields.
+        // Still text rather than a field, and a path term because of the
+        // slashes. Neither reading finds anything — no path holds `//` — and
+        // what matters here is that it parses at all.
         assert_eq!(
             m("http://x"),
-            vec![(false, Match::NameContains("http://x".into()))]
+            vec![(false, Match::PathContains("http://x".into()))]
         );
         assert_eq!(
             m("kind:zurna"),
@@ -788,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             m("C:/Users"),
-            vec![(false, Match::NameContains("c:/users".into()))]
+            vec![(false, Match::PathContains("c:/users".into()))]
         );
     }
 

@@ -32,6 +32,11 @@ construction. `(a|b) (c|d)` works; `(a (b|c))` would need a tree.
 A bare word matches any part of the file name. A pattern containing `*` or `?`
 matches the name **end to end**: `*.rs` matches `main.rs` but not `main.rst`.
 
+**A word with a `/` in it is about the path**, not the name — no name holds a
+separator, so `Projeler/Scour` could otherwise match nothing at all. It is the
+same as writing `path:Projeler/Scour`, and it costs what that costs: nothing
+indexes paths, so a path term is a scan of them.
+
 ## Fields
 
 | Syntax | Meaning |
@@ -161,7 +166,8 @@ rejected: it is built on trigrams.
 * Field names are case-insensitive and folded like everything else, so `EXT:`,
   `Ext:` and `ext:` are one field, and `TÜR:` is `tür:`.
 * `C:/Users` and `http://example` are not fields: a field name is two or more
-  letters, of any alphabet, and nothing else.
+  letters, of any alphabet, and nothing else. Both are read as path terms,
+  having separators in them.
 * Result counts are capped by default. A response marked `capped` means "at
   least this many", not "exactly this many".
 
