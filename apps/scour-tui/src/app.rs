@@ -157,6 +157,15 @@ pub struct App {
     pub pages: Pages<Hit>,
     /// The row the cursor is on, in the whole result.
     pub cursor: usize,
+    /// Whether somebody has put the cursor somewhere.
+    ///
+    /// **An untouched cursor belongs to the list, not to a file.** Sorted by
+    /// date, the top row is "the newest thing on this machine" and that is a
+    /// place, not a row: a cursor that stuck to whatever happened to be there
+    /// when the window opened walked down the screen as files were saved —
+    /// three rows to ten in twelve seconds, measured — and dragged the view
+    /// with it. Once somebody chooses a row, it is that row they mean.
+    pub anchored: bool,
     /// What that row *is*.
     ///
     /// **A row number is not an identity.** Sorted by date, a file saved
@@ -240,6 +249,7 @@ impl Default for App {
             generation: 0,
             pages: Pages::default(),
             cursor: 0,
+            anchored: false,
             cursor_at: None,
             top: 0,
             room: 1,
@@ -421,6 +431,8 @@ impl App {
         self.cursor = 0;
         self.top = 0;
         self.anchor = 0;
+        self.anchored = false;
+        self.cursor_at = None;
         self.trouble.clear();
         // **A new question, a new selection.** What was picked belongs to the
         // rows that were on screen; carrying it into a different result means
@@ -454,10 +466,18 @@ impl App {
         // the first page of a new query is deliberately short.
         let total = self.pages.length(page, arrived, limit as usize);
         let total = total.max(reply.total as usize);
+        let first = reply
+            .hits
+            .first()
+            .map(|h| h.path.clone())
+            .unwrap_or_default();
         match self.pages.put(page, reply.hits, total) {
             Change::Nothing => {}
             _ => self.dirty = true,
         }
+        trace(&format!(
+            "landed page {page} ({arrived} rows, total {total}); its first is {first}"
+        ));
         self.refollow();
         self.follow()
     }
@@ -714,8 +734,10 @@ impl App {
             return Want::Nothing;
         }
         trace(&format!(
-            "index moved to {revision}; cursor {} on {:?}",
-            self.cursor, self.cursor_at
+            "awake {revision}: cursor {} top {} on {:?}",
+            self.cursor,
+            self.top,
+            self.cursor_at.as_deref().unwrap_or("—")
         ));
         self.revision = revision;
         self.pages.mark(revision);
@@ -809,6 +831,9 @@ impl App {
 
     /// Move the cursor by `by` rows, and the view with it.
     pub fn walk(&mut self, by: isize) -> Want {
+        // Somebody moved it, so from here it is about a file rather than a
+        // place in the list.
+        self.anchored = true;
         let total = self.pages.total();
         if total == 0 {
             return Want::Nothing;
@@ -842,6 +867,9 @@ impl App {
 
     /// Put the cursor at a row outright: `Home`, `End`, a mouse press.
     pub fn go(&mut self, row: usize) -> Want {
+        // Somebody moved it, so from here it is about a file rather than a
+        // place in the list.
+        self.anchored = true;
         let total = self.pages.total();
         if total == 0 {
             return Want::Nothing;
@@ -861,13 +889,22 @@ impl App {
     /// **The view moves with it**, so the row stays under the eye rather than
     /// the list appearing to jump by one every time a file is saved.
     fn refollow(&mut self) {
+        if !self.anchored {
+            // Nobody has chosen a row: the cursor stays where it is in the
+            // list, which is where the newest things arrive.
+            return;
+        }
+        let at_cursor = self.pages.at(self.cursor).map(|h| h.path.clone());
+        trace(&format!(
+            "refollow: cursor {} holds {:?}, wants {:?}",
+            self.cursor,
+            at_cursor.as_deref().unwrap_or("—"),
+            self.cursor_at.as_deref().unwrap_or("—")
+        ));
         let Some(want) = self.cursor_at.clone() else {
-            // **Nothing to follow yet, so adopt what is there.** The cursor
-            // starts on row zero before any row has arrived, and a cursor that
-            // waits to be moved before it learns what it is on never learns:
-            // the first file saved anywhere pushes its row down and it stays
-            // behind. Which is exactly what happened.
-            self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
+            // Chosen, but the row it was chosen on had not arrived yet — a
+            // click lands before its page sometimes. Take it now.
+            self.cursor_at = at_cursor;
             return;
         };
         if self.pages.at(self.cursor).is_some_and(|h| h.path == want) {
@@ -879,7 +916,11 @@ impl App {
                 let row = page * scour_page::SPAN + i;
                 if self.pages.at(row).is_some_and(|h| h.path == want) {
                     let moved = row as isize - self.cursor as isize;
-                    trace(&format!("row moved {moved} to {row}"));
+                    trace(&format!(
+                        "found it at {row}, {moved} away; top {} → {}",
+                        self.top,
+                        self.top.saturating_add_signed(moved)
+                    ));
                     self.cursor = row;
                     self.top = self.top.saturating_add_signed(moved);
                     self.settle();
@@ -887,6 +928,7 @@ impl App {
                 }
             }
         }
+        trace("not in any page held — the cursor stays where it is");
     }
 
     /// Keep the cursor on screen, moving the view the least it can.
@@ -895,8 +937,11 @@ impl App {
     /// move while the cursor stands still, which is much harder to read than
     /// the other way round.
     fn settle(&mut self) {
-        // Whatever moved the cursor, this is where it is noted what it is on.
-        self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
+        // What the cursor is on, noted whenever it moves — but only once
+        // somebody has put it somewhere. See [`App::anchored`].
+        if self.anchored {
+            self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
+        }
         if self.cursor < self.top {
             self.top = self.cursor;
         } else if self.cursor >= self.top + self.room {
@@ -1218,6 +1263,34 @@ mod tests {
         // every row down one under somebody's eye.
         assert_eq!(app.top, 1);
         assert_eq!(app.cursor - app.top, 3);
+    }
+
+    /// **An untouched cursor stays at the top of the list.**
+    ///
+    /// The other half of the rule, and the one that was wrong: a cursor
+    /// nobody had moved stuck to whatever row zero happened to be when the
+    /// window opened, so every file saved anywhere walked it down the screen
+    /// and dragged the view with it — three rows to ten in twelve seconds on
+    /// a machine doing nothing in particular.
+    #[test]
+    fn a_cursor_nobody_moved_belongs_to_the_list_rather_than_to_a_file() {
+        let mut app = App::default();
+        app.room = 10;
+        app.insert('a');
+        app.landed(1, 0, 200, reply(hits(0, 200), 1_000));
+        assert_eq!(app.cursor, 0);
+
+        let mut shifted = hits(0, 199);
+        shifted.insert(0, hits(999, 1)[0].clone());
+        app.landed(1, 0, 200, reply(shifted, 1_000));
+
+        assert_eq!(app.cursor, 0, "still the top");
+        assert_eq!(app.top, 0, "and the newest row is on it");
+        assert_eq!(
+            app.pages.at(0).map(|h| h.path.as_str()),
+            Some("/x/999"),
+            "which is the file that just arrived"
+        );
     }
 
     #[test]
