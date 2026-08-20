@@ -50,6 +50,8 @@ pub enum Ask {
     Facets { generation: u64, query: String },
     /// Where this desktop keeps things.
     Places,
+    /// Wait until the index moves — a long poll, on a lane of its own.
+    Await { since: u64 },
     /// What the walk skips, in three groups, and which of them are off.
     Rules,
     /// Switch a rule off or on: the whole list, replaced.
@@ -90,6 +92,8 @@ pub enum Got {
         builtin: Vec<(String, String)>,
         off: Vec<String>,
     },
+    /// The index moved, and what it moved to.
+    Awake(u64),
     /// A spreadsheet was written, and where.
     Wrote(String),
     /// Something that is not about a search went wrong.
@@ -106,6 +110,7 @@ pub enum Got {
 pub struct Link {
     asks: Sender<Ask>,
     slow: Sender<Ask>,
+    wait: Sender<Ask>,
 }
 
 impl Link {
@@ -114,14 +119,21 @@ impl Link {
     pub fn start(addr: String) -> (Link, Receiver<Got>) {
         let (asks, inbox) = channel::<Ask>();
         let (slow, waiting) = channel::<Ask>();
+        let (wait, dozing) = channel::<Ask>();
         let (gots, answers) = channel::<Got>();
         let fast_addr = addr.clone();
         let fast_out = gots.clone();
         thread::spawn(move || serve(&fast_addr, &inbox, &fast_out));
-        // Two connections, because `scour-ipc` is one call at a time and
-        // `scourd` is a thread per connection.
-        thread::spawn(move || serve(&addr, &waiting, &gots));
-        (Link { asks, slow }, answers)
+        // Three connections, because `scour-ipc` is one call at a time and
+        // `scourd` is a thread per connection. The third exists because the
+        // long poll *holds* its connection for thirty seconds: on either of
+        // the others it would be thirty seconds of a terminal that answers
+        // nothing.
+        let slow_addr = addr.clone();
+        let slow_out = gots.clone();
+        thread::spawn(move || serve(&slow_addr, &waiting, &slow_out));
+        thread::spawn(move || serve(&addr, &dozing, &gots));
+        (Link { asks, slow, wait }, answers)
     }
 
     /// What a keystroke needs.
@@ -134,6 +146,11 @@ impl Link {
     /// What a keystroke can wait for.
     pub fn later(&self, ask: Ask) {
         let _ = self.slow.send(ask);
+    }
+
+    /// The long poll, which holds a connection of its own.
+    pub fn doze(&self, ask: Ask) {
+        let _ = self.wait.send(ask);
     }
 }
 
@@ -226,6 +243,13 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     },
                 ],
             },
+            Ask::Await { since } => Request::Await {
+                since,
+                // Long enough that an idle terminal is nearly silent — two
+                // requests a minute — and short enough that a service
+                // restarted underneath is noticed.
+                timeout_ms: 30_000,
+            },
             Ask::Places => Request::Places {},
             Ask::Rules => Request::Rules {},
             Ask::OffRules(off) => Request::SetSettings {
@@ -314,6 +338,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             // Settings come back as the whole object; nothing here reads it,
             // and asking again is how anything checks what took.
             Ok(Response::Settings(_)) => {}
+            Ok(Response::Status(st)) => {
+                let _ = out.send(Got::Awake(st.revision));
+            }
             Ok(Response::Places(places)) => {
                 let _ = out.send(Got::Places(
                     places

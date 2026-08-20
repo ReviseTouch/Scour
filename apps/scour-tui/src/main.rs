@@ -97,6 +97,8 @@ fn main() -> Result<()> {
     // Where this desktop keeps things. Asked once: it is a file the desktop
     // wrote, not something that changes while somebody searches.
     link.later(Ask::Places);
+    // And from here on, whenever the index moves.
+    link.doze(Ask::Await { since: 0 });
 
     let mut state = App {
         query: args.query.clone(),
@@ -345,6 +347,18 @@ fn run(
                 state.note = why;
                 state.dirty = true;
             }
+            Beat::Reply(Got::Awake(revision)) => {
+                let want = state.awake(revision);
+                act(want, link);
+                // **And a beat before waiting again.** The service answers the
+                // instant its index moves, and during a scan that is several
+                // times a second — which would be a terminal that spends its
+                // life re-reading a page nobody has scrolled.
+                std::thread::sleep(Duration::from_millis(250));
+                link.doze(Ask::Await {
+                    since: state.revision,
+                });
+            }
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
@@ -386,6 +400,10 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }) => state.ruled(added, config, builtin, off),
             Beat::Reply(Got::Wrote(path)) => state.note = format!("written to {path}"),
             Beat::Reply(Got::Failed(why)) => state.note = why,
+            Beat::Reply(Got::Awake(revision)) => {
+                let want = state.awake(revision);
+                act(want, link);
+            }
             _ => {}
         }
     }

@@ -517,12 +517,22 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     // it is, and where it is is the cursor's row in the whole result.
     if let Some(bar) = bar {
         let mut state = ScrollbarState::new(total.saturating_sub(app.room)).position(app.top);
+        // The thumb answers the pointer like everything else: brighter under
+        // it, brightest while it is being dragged.
+        let held = matches!(app.pressed, Spot::Bar(_));
+        let over = matches!(app.hover, Spot::Bar(_));
         f.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None)
                 .style(Style::new().fg(theme.line()))
-                .thumb_style(Style::new().fg(theme.ink_3())),
+                .thumb_style(Style::new().fg(if held {
+                    theme.key()
+                } else if over {
+                    theme.ink()
+                } else {
+                    theme.ink_3()
+                })),
             bar,
             &mut state,
         );

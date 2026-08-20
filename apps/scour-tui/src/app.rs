@@ -41,6 +41,8 @@ pub enum Spot {
     Query,
     /// A column heading, by its place along the row.
     Head(usize),
+    /// The scrollbar, by which of its rows the pointer is on.
+    Bar(u16),
 }
 
 /// What is over the list, if anything.
@@ -149,6 +151,8 @@ pub struct App {
     /// What was said about the last thing done — a file written, a language
     /// changed. Cleared by the next keystroke.
     pub note: String,
+    /// What the index looked like when the pages in hand were read.
+    pub revision: u64,
     /// What the pointer is over, and what it is holding down.
     ///
     /// A terminal has no idea what is drawn where, so these are the whole of
@@ -203,6 +207,7 @@ impl Default for App {
             panel_at: 0,
             rules: Vec::new(),
             note: String::new(),
+            revision: 0,
             hover: Spot::default(),
             pressed: Spot::default(),
             helping: false,
@@ -538,6 +543,35 @@ impl App {
         self.typed()
     }
 
+    /// The index moved.
+    ///
+    /// **Marked, not thrown away.** Every page in hand is now a little out of
+    /// date and the one being looked at is re-read at once; the others are
+    /// left until somebody looks at them, or an index that changes every
+    /// second would have this fetching every page it has ever seen.
+    ///
+    /// Returns what to ask for, and the caller waits again either way — a
+    /// timeout that ran out looks the same as an index that did not move.
+    pub fn awake(&mut self, revision: u64) -> Want {
+        if revision == self.revision {
+            return Want::Nothing;
+        }
+        self.revision = revision;
+        self.pages.mark(revision);
+        self.dirty = true;
+        // Refreshing, not re-querying: the row under the cursor stays where it
+        // is and the count is asked again with it.
+        let first = self.top;
+        let last = (self.top + self.room).saturating_sub(1);
+        match self.pages.next_page(first, last, false, true) {
+            Some(page) => {
+                let offset = (page * scour_page::SPAN) as u32;
+                self.ask(offset, scour_page::SPAN as u32, TYPING_CAP)
+            }
+            None => Want::Nothing,
+        }
+    }
+
     /// The service said no.
     pub fn upset(&mut self, generation: u64, why: String) -> Want {
         if generation != self.generation {
@@ -591,6 +625,27 @@ impl App {
         let last = total - 1;
         self.cursor = self.cursor.saturating_add_signed(by).min(last);
         self.settle();
+        self.follow()
+    }
+
+    /// Take the list to where the scrollbar was dragged.
+    ///
+    /// `at` is which row of the bar's own track the pointer is on, out of
+    /// `high`. **The thumb follows the pointer rather than the pointer moving
+    /// the thumb by a step**, which is what makes a scrollbar a scrollbar: a
+    /// press halfway down a two-million-row result is the millionth row.
+    pub fn drag_bar(&mut self, at: u16, high: u16) -> Want {
+        let total = self.pages.total();
+        let last = total.saturating_sub(self.room);
+        if last == 0 || high == 0 {
+            return Want::Nothing;
+        }
+        self.top = (at as usize * last) / high.max(1) as usize;
+        self.top = self.top.min(last);
+        // The cursor comes along rather than being left off screen, where
+        // every arrow key afterwards would scroll back to it.
+        self.cursor = self.cursor.clamp(self.top, self.top + self.room - 1);
+        self.dirty = true;
         self.follow()
     }
 

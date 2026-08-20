@@ -251,6 +251,24 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
     }
     match m.kind {
         MouseEventKind::Moved => Want::Nothing,
+        // **Dragging the thumb is the one thing a press cannot be**: it goes
+        // on after the button is down and has to be followed all the way, not
+        // acted on when it is let go.
+        MouseEventKind::Drag(MouseButton::Left) => match app.pressed {
+            Spot::Bar(_) => {
+                let (_, height) = size;
+                let strip_high: u16 = if height >= 20 && !app.strip.is_empty() {
+                    3
+                } else {
+                    0
+                };
+                let list_to = height.saturating_sub(1 + strip_high);
+                let high = list_to.saturating_sub(crate::draw::LIST_TOP + 1);
+                let at = m.row.saturating_sub(crate::draw::LIST_TOP).min(high);
+                app.drag_bar(at, high)
+            }
+            _ => Want::Nothing,
+        },
         MouseEventKind::ScrollDown => match spot {
             Spot::Rail(_) => {
                 app.rail_walk(1);
@@ -310,6 +328,17 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     panel_press(app)
                 }
                 Spot::Head(column) => app.sort_by(column),
+                // A press on the track jumps there, the same as a drag to it.
+                Spot::Bar(at) => {
+                    let (_, height) = size;
+                    let strip_high: u16 = if height >= 20 && !app.strip.is_empty() {
+                        3
+                    } else {
+                        0
+                    };
+                    let list_to = height.saturating_sub(1 + strip_high);
+                    app.drag_bar(at, list_to.saturating_sub(crate::draw::LIST_TOP + 1))
+                }
                 Spot::Query => {
                     app.mode = Mode::Search;
                     Want::Nothing
@@ -389,6 +418,10 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     }
     if row < LIST_TOP || row >= list_to {
         return Spot::Nothing;
+    }
+    // The scrollbar has the last column of the list to itself.
+    if col + 1 >= width && app.pages.total() > app.room {
+        return Spot::Bar(row - LIST_TOP);
     }
     let at = app.top + (row - LIST_TOP) as usize;
     if at < app.pages.total() {
