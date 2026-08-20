@@ -144,6 +144,8 @@ pub enum Want {
     Report,
     /// Weigh this folder.
     Weigh(String),
+    /// Show what can be shown of this file.
+    Peek(String),
     /// Replace the list of switched-off rules.
     OffRules(Vec<String>),
     /// Remember a preference.
@@ -204,6 +206,13 @@ pub struct App {
     pub picked: std::collections::BTreeMap<String, i64>,
     /// Where a run of `Shift` presses started.
     pub anchor: usize,
+    /// The head of the file under the cursor, when somebody asked for it.
+    ///
+    /// **Asked for, not kept up with.** Reading the first kilobytes of every
+    /// row somebody arrows past is a disk kept busy for a panel nobody opened.
+    pub peek: Option<scour_preview::Look>,
+    /// True while the peek panel is open.
+    pub peeking: bool,
     /// True while the report is being read instead of the list.
     ///
     /// **A tab rather than a panel**, like the window and the page: the report
@@ -294,6 +303,8 @@ impl Default for App {
             trouble: String::new(),
             picked: std::collections::BTreeMap::new(),
             anchor: 0,
+            peek: None,
+            peeking: false,
             reporting: false,
             stats: None,
             weighing: String::new(),
@@ -555,6 +566,35 @@ impl App {
             self.weighing = std::env::var("HOME").unwrap_or_default();
         }
         Want::Report
+    }
+
+    /// Open or close the peek, and ask for what it shows.
+    pub fn peek(&mut self) -> Want {
+        self.peeking = !self.peeking;
+        self.peek = None;
+        self.dirty = true;
+        if !self.peeking {
+            return Want::Nothing;
+        }
+        match self.here() {
+            Some(hit) if !hit.is_dir => Want::Peek(hit.path.clone()),
+            _ => {
+                self.peeking = false;
+                Want::Nothing
+            }
+        }
+    }
+
+    /// The cursor moved while the peek is open: it follows.
+    pub fn repeek(&mut self) -> Want {
+        if !self.peeking {
+            return Want::Nothing;
+        }
+        self.peek = None;
+        match self.here() {
+            Some(hit) if !hit.is_dir => Want::Peek(hit.path.clone()),
+            _ => Want::Nothing,
+        }
     }
 
     /// Weigh a folder — a child of the one being weighed, or its parent.

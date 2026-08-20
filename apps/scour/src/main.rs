@@ -154,6 +154,16 @@ enum Command {
     Explain { query: Vec<String> },
     /// The query language reference.
     Syntax,
+    /// Open another face — the window, the terminal or the browser — and
+    /// remember that it is the one to open next time.
+    ///
+    /// **Through `scour-open`**, which owns the list of terminals and the
+    /// rule about which face opens by default. A second copy of either here
+    /// would be a second answer to the same question.
+    Faces {
+        /// `window`, `tui` or `browser`. Left out, it says which is current.
+        face: Option<String>,
+    },
     /// What Scour does, and which of its four faces does it.
     ///
     /// **The table is in the code, not in a plan.** Which face is behind on
@@ -244,6 +254,7 @@ fn main() -> Result<()> {
             print!("{}", scour_ui::faces::table());
             return Ok(());
         }
+        Some(Command::Faces { face }) => return render::faces(face.as_deref()),
         _ => {}
     }
 
@@ -475,7 +486,7 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
         },
-        Some(Command::McpConfig | Command::Where | Command::Features) => {
+        Some(Command::McpConfig | Command::Where | Command::Features | Command::Faces { .. }) => {
             unreachable!("handled before connecting")
         }
     })

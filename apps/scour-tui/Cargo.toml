@@ -26,6 +26,7 @@ scour-config   = { workspace = true }
 scour-i18n     = { workspace = true }
 scour-settings = { workspace = true }
 scour-places   = { workspace = true }
+scour-preview  = { workspace = true }
 scour-ui       = { workspace = true }
 scour-page     = { workspace = true }
 

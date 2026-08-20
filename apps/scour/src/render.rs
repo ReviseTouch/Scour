@@ -742,3 +742,40 @@ mod tests {
         assert!(missing.is_empty(), "untranslated: {missing:?}");
     }
 }
+
+/// Open another face, or say which one opens.
+///
+/// The launcher is the one thing that knows how to start each of them — which
+/// terminal, which flag — and it is also what the desktop entry runs. So this
+/// asks it rather than knowing any of that itself.
+pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
+    let dir = std::env::var("XDG_DATA_HOME")
+        .unwrap_or_else(|_| format!("{}/.local/share", std::env::var("HOME").unwrap_or_default()));
+    let settings = format!("{dir}/scour/state/settings.json");
+    let Some(face) = face else {
+        // Read rather than asked over the socket: this is a question about
+        // what would open, and the answer has to be available when nothing is
+        // running.
+        let said = std::fs::read_to_string(&settings)
+            .ok()
+            .and_then(|text| {
+                text.split(r#""face""#)
+                    .nth(1)?
+                    .split('"')
+                    .nth(1)
+                    .map(str::to_owned)
+            })
+            .filter(|f| !f.is_empty())
+            .unwrap_or_else(|| "window".into());
+        println!("{said}");
+        return Ok(());
+    };
+    if !matches!(face, "window" | "tui" | "browser") {
+        anyhow::bail!("no such face: {face} — try window, tui or browser");
+    }
+    let status = std::process::Command::new("scour-open").arg(face).status();
+    match status {
+        Ok(_) => Ok(()),
+        Err(e) => anyhow::bail!("scour-open: {e}"),
+    }
+}

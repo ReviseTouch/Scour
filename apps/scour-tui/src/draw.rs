@@ -100,12 +100,24 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
     } else {
         (heads, list, None)
     };
+    // The peek takes the bottom third of the list, under it rather than over
+    // it: what is being looked at has to stay on screen, or a person cannot
+    // tell which row the head belongs to.
+    let (list, peek) = if app.peeking && list.height >= 12 {
+        let [list, peek] = Layout::vertical([Constraint::Fill(2), Constraint::Fill(1)]).areas(list);
+        (list, Some(peek))
+    } else {
+        (list, None)
+    };
     if app.reporting {
         // The report takes the heading line as well: it has its own headings.
         report(f, heads.union(list), app, theme, mark);
     } else {
         heading(f, heads, app, theme);
         rows(f, list, app, theme, mark);
+    }
+    if let Some(area) = peek {
+        head_of(f, area, app, theme, mark);
     }
     if let Some(area) = rail {
         // A line between the rail and the list, because the age stripe down
@@ -785,6 +797,59 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         ]));
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// The head of the file under the cursor, when the peek is open.
+///
+/// **The same answer the page's panel draws**: the service decides what can be
+/// shown of a file and hands back the first of it when that is text. A
+/// terminal cannot draw the picture, so it says what the file is instead.
+fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
+    let [rule, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+    across(f, rule, theme);
+    let mut lines: Vec<Line> = Vec::new();
+    match &app.peek {
+        Some(look) => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!(" {}", look.kind),
+                    Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ·  {}", format::size(look.len, mark.1)),
+                    Style::new().fg(theme.ink_3()),
+                ),
+                Span::styled(
+                    format!("  ·  {}", look.shape),
+                    Style::new().fg(theme.ink_3()),
+                ),
+            ]));
+            if look.head.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    " nothing to show of this one",
+                    Style::new().fg(theme.ink_3()),
+                )));
+            }
+            for line in look
+                .head
+                .lines()
+                .take(body.height.saturating_sub(1) as usize)
+            {
+                // Tabs are drawn as the terminal would draw them and that is
+                // not where the columns are; two spaces keeps the shape.
+                let text = line.replace('\t', "  ");
+                lines.push(Line::from(Span::styled(
+                    format!(" {}", cut(&text, area.width.saturating_sub(2) as usize)),
+                    Style::new().fg(theme.ink_2()),
+                )));
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            " reading…",
+            Style::new().fg(theme.ink_3()),
+        ))),
+    }
+    f.render_widget(Paragraph::new(lines), body);
 }
 
 /// The rail: what the matching rows are made of, where they live, how big

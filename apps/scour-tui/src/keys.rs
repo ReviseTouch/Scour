@@ -37,6 +37,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
     ("F2 · Ctrl+R", "the report, and back"),
+    ("F3", "the head of the file, without opening it"),
     (
         "in the report",
         "↑↓ a folder · Enter into it · Backspace out",
@@ -125,6 +126,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         KeyCode::Insert => return app.pick(),
         // The report, on the key the window uses for it.
         KeyCode::F(2) => return app.report(),
+        // The head of a file, without opening it. `F3` is what a file manager
+        // has used for this since before any of us.
+        KeyCode::F(3) => return app.peek(),
         KeyCode::Char('r') if ctrl => return app.report(),
         KeyCode::F(1) => {
             app.helping = true;
@@ -190,8 +194,14 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.rail_walk(1);
             return Want::Nothing;
         }
-        KeyCode::Up => return app.walk(-1),
-        KeyCode::Down => return app.walk(1),
+        KeyCode::Up => {
+            let want = app.walk(-1);
+            return follow_peek(app, want);
+        }
+        KeyCode::Down => {
+            let want = app.walk(1);
+            return follow_peek(app, want);
+        }
         KeyCode::PageUp => return app.walk(-page),
         KeyCode::PageDown => return app.walk(page),
         KeyCode::Home => return app.go(0),
@@ -268,6 +278,18 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             }
             _ => Want::Nothing,
         },
+    }
+}
+
+/// A page still has to be asked for when the cursor moves; the peek follows
+/// it, and only one of the two can be returned.
+fn follow_peek(app: &mut App, want: Want) -> Want {
+    let peek = app.repeek();
+    match (&want, &peek) {
+        // The page matters more: without it there is nothing to peek at.
+        (Want::Page { .. }, _) => want,
+        (_, Want::Peek(_)) => peek,
+        _ => want,
     }
 }
 

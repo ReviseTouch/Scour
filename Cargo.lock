@@ -5238,6 +5238,7 @@ dependencies = [
  "scour-ipc",
  "scour-page",
  "scour-places",
+ "scour-preview",
  "scour-proto",
  "scour-settings",
  "scour-ui",

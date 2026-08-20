@@ -63,6 +63,8 @@ pub enum Ask {
     Dupes,
     /// What a folder weighs, and which of its children weigh the most.
     Usage { path: String },
+    /// What can be shown of a file, and the head of it when that is text.
+    Preview { path: String },
     /// The query read back: which run of it is what.
     ///
     /// **Beside every search**, because the colouring has to keep up with the
@@ -107,6 +109,8 @@ pub enum Got {
     Stats(Box<scour_core::IndexStats>),
     /// A weighed folder: what it holds, and its heaviest children.
     Usage(Box<scour_core::UsageResponse>),
+    /// The head of a file, and what shape it is.
+    Peek(Box<scour_preview::Look>),
     /// Duplicate groups, largest saving first, and what they come to.
     Dupes {
         groups: Vec<(u64, u64, String)>,
@@ -323,6 +327,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             },
             Ask::Places => Request::Places {},
             Ask::Stats => Request::Stats {},
+            Ask::Preview { path } => Request::Preview { path },
             Ask::Usage { path } => Request::Usage {
                 path,
                 top: 12,
@@ -432,6 +437,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             }
             Ok(Response::Status(st)) => {
                 let _ = out.send(Got::Awake(st.revision));
+            }
+            Ok(Response::Preview(look)) => {
+                let _ = out.send(Got::Peek(Box::new(look)));
             }
             Ok(Response::Usage(usage)) => {
                 let _ = out.send(Got::Usage(Box::new(usage)));

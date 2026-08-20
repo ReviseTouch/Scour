@@ -166,7 +166,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "faces",
         what: "switch to another face, and remember which one opens",
-        faces: [Has, Has, Has, Not("`scour-open` does it")],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "live",
@@ -201,7 +201,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "preview",
         what: "the head of a file, without opening it",
-        faces: [Has, Not("not yet"), Not("not yet"), Has],
+        faces: [Has, Not("not yet"), Has, Has],
     },
     Feature {
         id: "keyboard",
