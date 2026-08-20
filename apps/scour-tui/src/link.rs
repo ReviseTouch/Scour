@@ -57,6 +57,8 @@ pub enum Ask {
     },
     /// Where this desktop keeps things.
     Places,
+    /// Exactly how many match, once the typing has stopped.
+    Count { generation: u64, query: String },
     /// Wait until the index moves — a long poll, on a lane of its own.
     Await { since: u64 },
     /// What the walk skips, in three groups, and which of them are off.
@@ -99,6 +101,8 @@ pub enum Got {
         builtin: Vec<(String, String)>,
         off: Vec<String>,
     },
+    /// Exactly how many match.
+    Counted { generation: u64, total: u64 },
     /// The index moved, and what it moved to.
     Awake(u64),
     /// A spreadsheet was written, and where.
@@ -209,7 +213,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             client = Client::connect(addr).ok();
         }
         let generation = match &ask {
-            Ask::Search { generation, .. } | Ask::Facets { generation, .. } => *generation,
+            Ask::Search { generation, .. }
+            | Ask::Facets { generation, .. }
+            | Ask::Count { generation, .. } => *generation,
             _ => 0,
         };
         let Some(link) = client.as_mut() else {
@@ -248,6 +254,15 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 } else {
                     vec![FacetBy::Kind]
                 },
+            },
+            Ask::Count { query, .. } => Request::Count {
+                query,
+                // **The whole answer, whatever it costs.** This is the number
+                // that says a filter did something, and it goes out once the
+                // typing has stopped rather than on every keystroke — where
+                // an uncapped count was measured at eighteen milliseconds of a
+                // thirty-seven millisecond keystroke.
+                cap: u32::MAX,
             },
             Ask::Await { since } => Request::Await {
                 since,
@@ -344,6 +359,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             // Settings come back as the whole object; nothing here reads it,
             // and asking again is how anything checks what took.
             Ok(Response::Settings(_)) => {}
+            Ok(Response::Count { total, .. }) => {
+                let _ = out.send(Got::Counted { generation, total });
+            }
             Ok(Response::Status(st)) => {
                 let _ = out.send(Got::Awake(st.revision));
             }

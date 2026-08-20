@@ -88,6 +88,9 @@ pub enum Want {
     Page {
         generation: u64,
         query: String,
+        /// What the kinds are counted over — the query without its kind term.
+        /// See [`App::kinds_over`].
+        counting: String,
         /// What the strip is about, which is the query without its age term.
         /// See [`App::strip_over`].
         over: String,
@@ -546,6 +549,16 @@ impl App {
         self.typed()
     }
 
+    /// The exact count arrived: no more "at least".
+    pub fn counted_exactly(&mut self, generation: u64, total: u64) {
+        if generation != self.generation {
+            return;
+        }
+        self.capped = false;
+        self.pages.set_total(total as usize);
+        self.dirty = true;
+    }
+
     /// The index moved.
     ///
     /// **Marked, not thrown away.** Every page in hand is now a little out of
@@ -606,6 +619,19 @@ impl App {
         scour_ui::query::compose(&self.query, self.filter.as_deref())
     }
 
+    /// What the **kinds** are counted over.
+    ///
+    /// The rail has the same trap the strip had: pressing `archive` narrows
+    /// the result to archives, and the kind counts — taken from that result —
+    /// then say `archive 68.658` and nothing else. Every other kind vanishes
+    /// and there is no way to press one. So a section is counted over the
+    /// query *without the filter that belongs to that section*: press a kind
+    /// and the kinds stay, press a place and the kinds reflect it.
+    pub fn kinds_over(&self) -> String {
+        let filter = self.filter.as_deref().filter(|f| !f.starts_with("kind:"));
+        scour_ui::query::compose(&self.query, filter)
+    }
+
     /// What the **strip** is asked about, which is not the same rows.
     ///
     /// **A control cannot filter itself out of existence.** Pressing the band
@@ -626,6 +652,7 @@ impl App {
         Want::Page {
             generation: self.generation,
             query: self.asking(),
+            counting: self.kinds_over(),
             over: self.strip_over(),
             sort: self.sort,
             descending: self.descending,

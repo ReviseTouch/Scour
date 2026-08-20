@@ -347,6 +347,9 @@ fn run(
                 state.note = why;
                 state.dirty = true;
             }
+            Beat::Reply(Got::Counted { generation, total }) => {
+                state.counted_exactly(generation, total);
+            }
             Beat::Reply(Got::Awake(revision)) => {
                 let want = state.awake(revision);
                 act(want, link);
@@ -400,6 +403,9 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }) => state.ruled(added, config, builtin, off),
             Beat::Reply(Got::Wrote(path)) => state.note = format!("written to {path}"),
             Beat::Reply(Got::Failed(why)) => state.note = why,
+            Beat::Reply(Got::Counted { generation, total }) => {
+                state.counted_exactly(generation, total);
+            }
             Beat::Reply(Got::Awake(revision)) => {
                 let want = state.awake(revision);
                 act(want, link);
@@ -450,6 +456,7 @@ fn act(want: Want, link: &Link) {
         Want::Page {
             generation,
             query,
+            counting,
             over,
             sort,
             descending,
@@ -464,13 +471,21 @@ fn act(want: Want, link: &Link) {
             if offset == 0 {
                 link.later(Ask::Facets {
                     generation,
-                    query: query.clone(),
+                    query: counting,
                     age: false,
                 });
                 link.later(Ask::Facets {
                     generation,
                     query: over,
                     age: true,
+                });
+                // **And what it comes to exactly.** The interactive count
+                // stops at a thousand, so a filter that took a result from
+                // two million rows to eight thousand still read "at least
+                // 1.000" — which is a filter that looks like it did nothing.
+                link.later(Ask::Count {
+                    generation,
+                    query: query.clone(),
                 });
             }
             link.send(Ask::Search {
