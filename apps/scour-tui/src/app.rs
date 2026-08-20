@@ -221,6 +221,9 @@ pub struct App {
     pub pressed: Spot,
     /// True while the key list is over everything.
     pub helping: bool,
+    /// The query cut into runs, for drawing it in colour. Empty until the
+    /// service has read it back.
+    pub spans: Vec<scour_core::Span>,
     /// The rail: what the matching rows are made of, and where they live.
     pub kinds: Vec<(String, u64)>,
     pub places: Vec<(String, String)>,
@@ -271,6 +274,7 @@ impl Default for App {
             hover: Spot::default(),
             pressed: Spot::default(),
             helping: false,
+            spans: Vec::new(),
             kinds: Vec::new(),
             places: Vec::new(),
             strip: Vec::new(),
@@ -436,6 +440,9 @@ impl App {
         self.anchored = false;
         self.cursor_at = None;
         self.trouble.clear();
+        // The old colouring belongs to the old text; drawing it over the new
+        // one is worse than drawing none.
+        self.spans.clear();
         // **A new question, a new selection.** What was picked belongs to the
         // rows that were on screen; carrying it into a different result means
         // acting later on files somebody cannot see.
@@ -482,6 +489,16 @@ impl App {
         ));
         self.refollow();
         self.follow()
+    }
+
+    /// The query, read back by the parser.
+    pub fn explained(&mut self, generation: u64, spans: Vec<scour_core::Span>) {
+        if generation != self.generation {
+            return;
+        }
+        trace(&format!("query read back in {} runs", spans.len()));
+        self.spans = spans;
+        self.dirty = true;
     }
 
     /// The rail's counts arrived.

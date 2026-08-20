@@ -1177,6 +1177,27 @@ export component MainWindow inherits Window {
                             }
                             return accept;
                         }
+                        // **A screenful at a time, and the ends.** The arrows
+                        // were the only way down a two-million-row list from
+                        // the keyboard; the terminal has had these since it
+                        // was written and the window is the one that was
+                        // behind.
+                        if (e.text == Key.PageDown || e.text == Key.PageUp) {
+                            root.selected = clamp(
+                                root.selected + (e.text == Key.PageDown ? root.visible-rows : -root.visible-rows),
+                                0,
+                                root.rows.length - 1);
+                            list.viewport-y = min(0px,
+                                -(root.selected * Theme.row-height) + list.visible-height / 2);
+                            return accept;
+                        }
+                        if (e.text == Key.Home || e.text == Key.End) {
+                            root.selected = e.text == Key.Home ? 0 : root.rows.length - 1;
+                            list.viewport-y = e.text == Key.Home
+                                ? 0px
+                                : min(0px, list.visible-height - root.rows.length * Theme.row-height);
+                            return accept;
+                        }
                         if (e.text == Key.Return) {
                             root.activated(root.selected);
                             return accept;

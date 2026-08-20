@@ -81,7 +81,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "query-colours",
         what: "the query read back in colour, term by term",
-        faces: [Has, Has, Not("the terminal draws it plain"), Has],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "paging",
@@ -206,12 +206,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "keyboard",
         what: "everything reachable without a pointer",
-        faces: [
-            Part("no PageUp/PageDown"),
-            Part("no PageUp/PageDown"),
-            Has,
-            Has,
-        ],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "pointer",

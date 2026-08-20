@@ -259,15 +259,44 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
         )
     };
-    let mut parts = vec![
-        Span::styled(
-            " SCOUR ",
-            Style::new()
-                .fg(theme.key())
-                .add_modifier(Modifier::BOLD | Modifier::DIM),
-        ),
-        typed,
-    ];
+    // **The query in colour, when the service has read it back.** The same
+    // six colours the window and the page use, from the same roles — a field
+    // is a field in all three, and `sizE:>1mb` is drawn as the plain text it
+    // will be searched for.
+    let coloured: Vec<Span> = app
+        .spans
+        .iter()
+        .filter_map(|sp| {
+            let from = sp.start as usize;
+            let to = from + sp.len as usize;
+            let text = app.query.get(from..to)?;
+            let colour = match sp.role {
+                scour_core::Role::Field => theme.key(),
+                scour_core::Role::Value => theme.val(),
+                scour_core::Role::Glob => theme.glob(),
+                scour_core::Role::Not => theme.not(),
+                scour_core::Role::UnknownField | scour_core::Role::BadValue => theme.bad(),
+                _ => theme.ink(),
+            };
+            Some(Span::styled(
+                text.to_string(),
+                Style::new().fg(colour).add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
+    let mut parts = vec![Span::styled(
+        " SCOUR ",
+        Style::new()
+            .fg(theme.key())
+            .add_modifier(Modifier::BOLD | Modifier::DIM),
+    )];
+    // The coloured runs cover the whole query when they are here; the plain
+    // text stands in until they arrive, so nothing blinks between the two.
+    if coloured.is_empty() {
+        parts.push(typed);
+    } else {
+        parts.extend(coloured);
+    }
     // **What is pressed is shown beside what was typed.** A filter with a rail
     // row of its own is visible there, but a band of the time strip has none —
     // so a result narrowed by pressing the strip looked, until this, exactly

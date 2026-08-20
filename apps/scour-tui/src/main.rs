@@ -418,6 +418,9 @@ fn run(
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
+            Beat::Reply(Got::Explained { generation, spans }) => {
+                state.explained(generation, spans);
+            }
             Beat::Reply(Got::Awake(revision)) => {
                 let want = state.awake(revision);
                 act(want, link);
@@ -463,6 +466,9 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 state.counted(generation, *reply);
             }
             Beat::Reply(Got::Places(places)) => state.places = places,
+            Beat::Reply(Got::Explained { generation, spans }) => {
+                state.explained(generation, spans);
+            }
             Beat::Reply(Got::Rules {
                 added,
                 config,
@@ -555,6 +561,12 @@ fn act(want: Want, link: &Link) {
                 // two million rows to eight thousand still read "at least
                 // 1.000" — which is a filter that looks like it did nothing.
                 link.later(Ask::Count {
+                    generation,
+                    query: query.clone(),
+                });
+                // What the query *is*, for drawing it in colour. The parser
+                // answers this, not the index, so it costs nothing.
+                link.later(Ask::Explain {
                     generation,
                     query: query.clone(),
                 });

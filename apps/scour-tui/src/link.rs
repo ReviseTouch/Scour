@@ -57,6 +57,11 @@ pub enum Ask {
     },
     /// Where this desktop keeps things.
     Places,
+    /// The query read back: which run of it is what.
+    ///
+    /// **Beside every search**, because the colouring has to keep up with the
+    /// typing — and it is cheap: the parser, not the index.
+    Explain { generation: u64, query: String },
     /// Exactly how many match, once the typing has stopped.
     Count { generation: u64, query: String },
     /// Wait until the index moves — a long poll, on a lane of its own.
@@ -103,6 +108,11 @@ pub enum Got {
     },
     /// Exactly how many match.
     Counted { generation: u64, total: u64 },
+    /// The query cut into runs: where each starts, how long, and what it is.
+    Explained {
+        generation: u64,
+        spans: Vec<scour_core::Span>,
+    },
     /// The index moved, and what it moved to.
     Awake(u64),
     /// A spreadsheet is being written, and how much of it so far.
@@ -233,6 +243,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
         let generation = match &ask {
             Ask::Search { generation, .. }
             | Ask::Facets { generation, .. }
+            | Ask::Explain { generation, .. }
             | Ask::Count { generation, .. } => *generation,
             _ => 0,
         };
@@ -272,6 +283,12 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 } else {
                     vec![FacetBy::Kind]
                 },
+            },
+            Ask::Explain { query, .. } => Request::Explain {
+                query,
+                // No caret in a terminal's own idea of the query line — the
+                // completions this could return are not drawn yet.
+                cursor: None,
             },
             Ask::Count { query, .. } => Request::Count {
                 query,
@@ -377,6 +394,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             // Settings come back as the whole object; nothing here reads it,
             // and asking again is how anything checks what took.
             Ok(Response::Settings(_)) => {}
+            Ok(Response::Explain { spans, .. }) => {
+                let _ = out.send(Got::Explained { generation, spans });
+            }
             Ok(Response::Count { total, .. }) => {
                 let _ = out.send(Got::Counted { generation, total });
             }

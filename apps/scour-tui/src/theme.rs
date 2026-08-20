@@ -75,6 +75,17 @@ impl Theme {
     pub fn key(&self) -> Color {
         self.of(self.palette.q_key)
     }
+    /// The value after a field's colon, a wildcard, and a negated term — the
+    /// other three colours the query line is read back in.
+    pub fn val(&self) -> Color {
+        self.of(self.palette.q_val)
+    }
+    pub fn glob(&self) -> Color {
+        self.of(self.palette.q_glob)
+    }
+    pub fn not(&self) -> Color {
+        self.of(self.palette.q_not)
+    }
     pub fn bad(&self) -> Color {
         self.of(self.palette.q_bad)
     }

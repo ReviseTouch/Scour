@@ -5895,6 +5895,18 @@
   body.addEventListener("keydown", (e) => {
     const row = e.target.closest("tr");
     if (!row) return;
+    /* **A screenful at a time, and the ends.** The arrows were the only way
+       down a two-million-row list from the keyboard. The rows are virtual, so
+       these move the scroller and let the list draw what lands there — the
+       same thing dragging the bar does. */
+    if (e.key === "PageDown" || e.key === "PageUp" || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const screenful = scrollEl.clientHeight - ROW_H;
+      if (e.key === "Home") scrollEl.scrollTop = 0;
+      else if (e.key === "End") scrollEl.scrollTop = scrollEl.scrollHeight;
+      else scrollEl.scrollTop += e.key === "PageDown" ? screenful : -screenful;
+      return;
+    }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const rows = [...body.querySelectorAll("tr[data-path]")];
