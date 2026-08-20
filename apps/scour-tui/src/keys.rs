@@ -22,7 +22,8 @@ pub const MAP: &[(&str, &str)] = &[
     ("↑ ↓ · PgUp PgDn · Home End", "move"),
     ("Enter", "open"),
     ("Shift+Enter", "open the folder"),
-    ("Space", "pick · Shift+↑↓ for a run"),
+    ("Insert · Ctrl+Space", "pick · Shift+↑↓ for a run"),
+    ("click the ✓ column", "pick that row"),
     ("Ctrl+A", "pick nothing"),
     (
         "Ctrl+Y · Ctrl+O",
@@ -93,6 +94,12 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.unpick();
             return Want::Nothing;
         }
+        // **Picking has to work while typing**, which is where somebody
+        // always is: `Space` alone is a space in a query, so the two keys
+        // every list in the world also uses are here — and `Insert` is the one
+        // that needs no modifier at all.
+        KeyCode::Char(' ') if ctrl => return app.pick(),
+        KeyCode::Insert => return app.pick(),
         KeyCode::F(1) => {
             app.helping = true;
             app.dirty = true;
@@ -321,6 +328,12 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.in_rail = false;
                     app.go(row)
                 }
+                Spot::Tick(row) => {
+                    app.in_rail = false;
+                    let want = app.go(row);
+                    app.pick();
+                    want
+                }
                 Spot::Rail(at) => {
                     app.in_rail = true;
                     app.rail_at = at;
@@ -447,11 +460,17 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
         return Spot::Bar(row - LIST_TOP);
     }
     let at = app.top + (row - LIST_TOP) as usize;
-    if at < app.pages.total() {
-        Spot::Row(at)
-    } else {
-        Spot::Nothing
+    if at >= app.pages.total() {
+        return Spot::Nothing;
     }
+    // The two columns at the left of a row are its mark — the age stripe and
+    // the tick. Pressing there picks the row, the way pressing a checkbox
+    // does; pressing the name puts the cursor on it.
+    let from = if railed { RAIL_WIDE } else { 0 };
+    if col <= from + 1 {
+        return Spot::Tick(at);
+    }
+    Spot::Row(at)
 }
 
 /// Hand the row under the cursor to the desktop — or its folder.

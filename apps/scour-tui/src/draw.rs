@@ -495,8 +495,11 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         let ink = if here { theme.ink() } else { theme.ink_2() };
         let line = Style::new().fg(ink);
         let picked = app.picked.contains_key(&hit.path);
-        let under = app.hover == Spot::Row(row);
-        let pushed = app.pressed == Spot::Row(row);
+        let under = app.hover == Spot::Row(row) || app.hover == Spot::Tick(row);
+        let pushed = app.pressed == Spot::Row(row) || app.pressed == Spot::Tick(row);
+        // The mark answers the pointer on its own, so that the two columns
+        // that pick a row look like something that picks a row.
+        let ticking = app.hover == Spot::Tick(row);
         let cells = vec![
             Cell::from(Line::from(vec![
                 // The age stripe: one cell of colour, the same six bands the
@@ -505,12 +508,18 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                 Span::styled(
                     if picked {
                         "✓"
+                    } else if ticking {
+                        "·"
                     } else if here {
                         "▸"
                     } else {
                         " "
                     },
-                    Style::new().fg(theme.key()),
+                    Style::new().fg(if ticking && !picked {
+                        theme.ink()
+                    } else {
+                        theme.key()
+                    }),
                 ),
                 Span::styled(cut(name, name_w), line),
             ])),

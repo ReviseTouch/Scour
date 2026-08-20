@@ -434,6 +434,7 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
         "end" => KeyCode::End,
         "space" => KeyCode::Char(' '),
         "tab" => KeyCode::Tab,
+        "insert" => KeyCode::Insert,
         "enter" => KeyCode::Enter,
         "backspace" => KeyCode::Backspace,
         "esc" => KeyCode::Esc,

@@ -43,6 +43,8 @@ pub enum Spot {
     Chip,
     /// One of the three things that can be done with a selection.
     Deed(usize),
+    /// The mark at the left of a row: pressing it picks the row.
+    Tick(usize),
     /// A column heading, by its place along the row.
     Head(usize),
     /// The scrollbar, by which of its rows the pointer is on.
