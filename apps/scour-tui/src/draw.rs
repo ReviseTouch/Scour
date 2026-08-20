@@ -117,7 +117,7 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme, mark: (char, char)) {
         );
     }
     if strip_high > 0 {
-        when(f, strip, app, theme);
+        when(f, strip, app, theme, mark);
     }
 
     footer(f, foot, app, theme, mark);
@@ -682,7 +682,7 @@ fn across(f: &mut Frame, area: Rect, theme: &Theme) {
 /// one cell tall and the shape of the distribution is the whole point: a
 /// bar that is either there or not says nothing about how much of the result
 /// is a week old.
-fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char)) {
     // Eight heights in a cell, two cells of height: sixteen steps rather than
     // eight. A distribution drawn in eight is a staircase — which is what the
     // first one looked like, and it was the first thing anybody said about it.
@@ -722,7 +722,19 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             // a blank reads as "none that week".
             (((*count as f64 / most as f64) * 16.0).round() as usize).max(1)
         };
-        let colour = Style::new().fg(theme.band(scour_ui::band_of(*days as f64)));
+        // **The band under the pointer answers it**, like every other thing
+        // here: lit while it is hovered, in the query's own colour while it is
+        // held, and the one already pressed stays lit.
+        let on = app.filter.as_deref() == Some(scour_ui::query::of_age(*days).as_str());
+        let colour = if app.pressed == Spot::Strip(i) {
+            Style::new().fg(theme.back()).bg(theme.key())
+        } else if app.hover == Spot::Strip(i) {
+            Style::new().fg(theme.ink()).bg(theme.hover())
+        } else if on {
+            Style::new().fg(theme.key())
+        } else {
+            Style::new().fg(theme.band(scour_ui::band_of(*days as f64)))
+        };
         top.push(Span::styled(
             BLOCKS[step.saturating_sub(8).min(8)].repeat(wide),
             colour,
@@ -736,8 +748,33 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     f.render_widget(Paragraph::new(Line::from(top)), upper);
     f.render_widget(Paragraph::new(Line::from(bottom)), lower);
 
-    // The axis under the ends of the strip, not the ends of the terminal.
     let dim = Style::new().fg(theme.ink_3());
+    // **What the pointer is on, said in words.** A bar is a shape; how many
+    // files it stands for and how long ago that is are what somebody is
+    // squinting at it to find out, and the axis is free while they are.
+    if let Spot::Strip(at) = app.hover
+        && let Some((days, count)) = app.strip.get(at)
+    {
+        let said = if *days <= 1 {
+            "since yesterday".to_string()
+        } else if *days < 60 {
+            format!("last {days} days")
+        } else {
+            format!("last {} months", days / 30)
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!(" {said}"), Style::new().fg(theme.key())),
+                Span::styled(
+                    format!("  ·  {} files", format::grouped(*count, mark.0)),
+                    dim,
+                ),
+            ])),
+            axis,
+        );
+        return;
+    }
+    // The axis under the ends of the strip, not the ends of the terminal.
     let left = "two years ago";
     let right = "today";
     let gap = room.saturating_sub(left.chars().count() + right.chars().count());

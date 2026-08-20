@@ -450,16 +450,27 @@ fn act(want: Want, link: &Link) {
         Want::Page {
             generation,
             query,
+            over,
             sort,
             descending,
             offset,
             limit,
             cap,
         } => {
+            // **Two questions about two different sets of rows.** The kinds
+            // are about the result on screen; the strip is about the same
+            // query without its age term, or pressing a band would leave the
+            // strip with only that band on it.
             if offset == 0 {
                 link.later(Ask::Facets {
                     generation,
                     query: query.clone(),
+                    age: false,
+                });
+                link.later(Ask::Facets {
+                    generation,
+                    query: over,
+                    age: true,
                 });
             }
             link.send(Ask::Search {

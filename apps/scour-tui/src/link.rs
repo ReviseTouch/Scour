@@ -47,7 +47,14 @@ pub enum Ask {
     /// a keystroke must not queue behind one. The window learned this the same
     /// way: twenty milliseconds in front of every search is a search box that
     /// feels broken.
-    Facets { generation: u64, query: String },
+    Facets {
+        generation: u64,
+        query: String,
+        /// Which of the two questions this is. They are asked separately
+        /// because they are asked *about different rows* — see `App::asking`
+        /// and the note on the strip in `App::strip_over`.
+        age: bool,
+    },
     /// Where this desktop keeps things.
     Places,
     /// Wait until the index moves — a long poll, on a lane of its own.
@@ -76,7 +83,7 @@ pub enum Got {
         limit: u32,
         reply: Box<scour_core::SearchResponse>,
     },
-    /// The rail's counts.
+    /// The rail's counts, or the strip's.
     Facets {
         generation: u64,
         reply: Box<scour_core::FacetResponse>,
@@ -232,16 +239,15 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     ..Page::default()
                 },
             },
-            // The kinds and the twenty-four bars of the strip, from one walk of
-            // the matching set rather than two.
-            Ask::Facets { query, .. } => Request::Facets {
+            Ask::Facets { query, age, .. } => Request::Facets {
                 query,
-                by: vec![
-                    FacetBy::Kind,
-                    FacetBy::Age {
+                by: if age {
+                    vec![FacetBy::Age {
                         edges: scour_ui::bar_edges(),
-                    },
-                ],
+                    }]
+                } else {
+                    vec![FacetBy::Kind]
+                },
             },
             Ask::Await { since } => Request::Await {
                 since,

@@ -88,6 +88,9 @@ pub enum Want {
     Page {
         generation: u64,
         query: String,
+        /// What the strip is about, which is the query without its age term.
+        /// See [`App::strip_over`].
+        over: String,
         sort: SortKey,
         descending: bool,
         offset: u32,
@@ -603,11 +606,27 @@ impl App {
         scour_ui::query::compose(&self.query, self.filter.as_deref())
     }
 
+    /// What the **strip** is asked about, which is not the same rows.
+    ///
+    /// **A control cannot filter itself out of existence.** Pressing the band
+    /// for twenty-seven days narrows the result to files touched since then —
+    /// and the strip, drawn from that result, then has nothing in any older
+    /// band. Every bar to the left vanished and there was no way back to them
+    /// except clearing the filter, which is not something the strip said it
+    /// had done. So the bars are always the distribution of the query
+    /// *without* its age term: the shape stays, and pressing another band
+    /// moves the filter rather than shrinking the strip.
+    pub fn strip_over(&self) -> String {
+        let filter = self.filter.as_deref().filter(|f| !f.starts_with("dm:"));
+        scour_ui::query::compose(&self.query, filter)
+    }
+
     fn ask(&mut self, offset: u32, limit: u32, cap: u32) -> Want {
         self.pages.asking(Pages::<Hit>::page_of(offset as usize));
         Want::Page {
             generation: self.generation,
             query: self.asking(),
+            over: self.strip_over(),
             sort: self.sort,
             descending: self.descending,
             offset,
