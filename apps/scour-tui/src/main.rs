@@ -23,6 +23,7 @@
 
 mod app;
 mod draw;
+mod icons;
 mod keys;
 mod link;
 mod theme;
@@ -122,6 +123,9 @@ fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
+    // Asked of the terminal before anything is drawn: can it put one of these
+    // glyphs in one column? See `icons`.
+    icons::measure();
     // **`init` does not turn the mouse on.** Without this the terminal never
     // sends a press and the handling for one may as well not be written —
     // which is exactly how it was: a wheel that did nothing and a click that
@@ -168,6 +172,10 @@ fn snap(
 ) -> Result<()> {
     let (w, h) = size.split_once('x').unwrap_or(("120", "30"));
     let (w, h) = (w.parse().unwrap_or(120), h.parse().unwrap_or(30));
+    // The probe cannot run against a buffer, so this reads the environment and
+    // otherwise leaves them off: `SCOUR_TUI_ICONS=on` is how a picture of the
+    // icons is taken.
+    icons::measure();
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h))?;
     act(state.resized(draw::room(h)), link);
     act(state.typed(), link);
@@ -392,6 +400,13 @@ fn run(
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Writing(bytes)) => {
+                state.note = format!(
+                    "writing… {}",
+                    scour_ui::format::compact_bytes(bytes, mark.1)
+                );
+                state.dirty = true;
+            }
             Beat::Reply(Got::Wrote(path)) => {
                 state.note = format!("written to {path}");
                 state.dirty = true;
@@ -454,6 +469,7 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Writing(_)) => {}
             Beat::Reply(Got::Wrote(path)) => state.note = format!("written to {path}"),
             Beat::Reply(Got::Failed(why)) => state.note = why,
             Beat::Reply(Got::Counted { generation, total }) => {

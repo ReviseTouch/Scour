@@ -105,6 +105,13 @@ pub enum Got {
     Counted { generation: u64, total: u64 },
     /// The index moved, and what it moved to.
     Awake(u64),
+    /// A spreadsheet is being written, and how much of it so far.
+    ///
+    /// **Because a screen that does not move looks like one that has died.**
+    /// The whole index is four hundred thousand rows and a hundred megabytes;
+    /// during that the terminal had nothing new to draw and somebody
+    /// reasonably read it as a crash.
+    Writing(u64),
     /// A spreadsheet was written, and where.
     Wrote(String),
     /// Something that is not about a search went wrong.
@@ -170,11 +177,13 @@ impl Link {
 /// **Not through `call`.** This is the one request answered in more than one
 /// frame, and reading only the first would leave the rest in the buffer for
 /// the next question to be answered by.
-fn export(link: &mut Client, query: &str, to: &str) -> Result<(), String> {
+fn export(link: &mut Client, query: &str, to: &str, out: &Sender<Got>) -> Result<(), String> {
     use std::io::Write;
     let mut file =
         std::io::BufWriter::new(std::fs::File::create(to).map_err(|e| format!("{to}: {e}"))?);
     let mut trouble: Option<String> = None;
+    let mut bytes = 0u64;
+    let mut said = 0u64;
     link.stream(
         Request::Export {
             query: query.to_string(),
@@ -182,7 +191,16 @@ fn export(link: &mut Client, query: &str, to: &str) -> Result<(), String> {
         },
         |piece| match piece {
             Response::ExportChunk { csv } => match file.write_all(csv.as_bytes()) {
-                Ok(()) => true,
+                Ok(()) => {
+                    bytes += csv.len() as u64;
+                    // Every megabyte, which is often enough to look alive and
+                    // seldom enough to cost nothing.
+                    if bytes - said > 1_000_000 {
+                        said = bytes;
+                        let _ = out.send(Got::Writing(bytes));
+                    }
+                    true
+                }
                 Err(e) => {
                     trouble = Some(e.to_string());
                     false
@@ -283,7 +301,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             Ask::Export { query, to } => {
                 // The one request answered in pieces, so it cannot go through
                 // `call` — see `Client::stream`.
-                match export(link, &query, &to) {
+                match export(link, &query, &to, out) {
                     Ok(()) => {
                         let _ = out.send(Got::Wrote(to));
                     }

@@ -495,6 +495,8 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
     let columns = Layout::horizontal(widths_for(area.width))
         .spacing(1)
         .split(area);
+    // What the kind's glyph takes, when there is one.
+    let icon_wide = if crate::icons::drawing() { 2 } else { 0 };
     let (name_w, where_w) = (
         columns[0].width.saturating_sub(2) as usize,
         columns[1].width as usize,
@@ -539,7 +541,11 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                         theme.key()
                     }),
                 ),
-                Span::styled(cut(name, name_w), line),
+                Span::styled(
+                    format!("{}", crate::icons::of_kind(hit.kind.token())),
+                    Style::new().fg(theme.kind(hit.kind.token())),
+                ),
+                Span::styled(cut(name, name_w.saturating_sub(icon_wide)), line),
             ])),
             Cell::from(Span::styled(
                 tail(scour_ui::path::folder(&hit.path), where_w),
@@ -867,8 +873,14 @@ fn when(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
 pub fn tool_spans(app: &App, width: u16) -> Vec<(u16, u16, String)> {
     let mut out = Vec::new();
     let mut from = width.saturating_sub(1);
-    for (label, key) in app.tools().iter().rev() {
-        let said = format!("  {label} {key}");
+    let all = app.tools();
+    for (at, (label, key)) in all.iter().enumerate().rev() {
+        let glyph = crate::icons::of_tool(at);
+        let said = if glyph.is_empty() {
+            format!("  {label} {key}")
+        } else {
+            format!("  {glyph} {label} {key}")
+        };
         let wide = said.chars().count() as u16;
         from = from.saturating_sub(wide);
         out.push((from, from + wide, said));
