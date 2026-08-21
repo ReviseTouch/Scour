@@ -33,6 +33,13 @@ pub mod query;
 /// Alpha is carried because the palette needs it: the match wash and the
 /// selection tint are translucent on purpose, so that a row which is both
 /// matched *and* selected stays legible.
+///
+/// **The selection was 15% and could not be seen.** At that alpha it lands two
+/// or three values away from the row under the pointer, so "which row am I on"
+/// and "which row is selected" were the same faint blue — and on a list of
+/// hover, match and selection stacked, none of the three said which it was.
+/// 26% dark and 20% light is still translucent enough that a matched row shows
+/// its wash through, and is a colour rather than a suggestion of one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba {
     pub r: u8,
@@ -154,7 +161,7 @@ pub const DARK: Palette = Palette {
     ink_3: Rgba::hex(0x63707e),
     mark: Rgba::wash(0xffd24a, 17),
     mark_ink: Rgba::hex(0x1a1200),
-    pick: Rgba::wash(0x4a9eff, 15),
+    pick: Rgba::wash(0x4a9eff, 26),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0x171f29),
     t: [
@@ -191,7 +198,7 @@ pub const LIGHT: Palette = Palette {
     ink_3: Rgba::hex(0x8a9198),
     mark: Rgba::wash(0xe2a000, 18),
     mark_ink: Rgba::hex(0x2a1f00),
-    pick: Rgba::wash(0x0062cc, 13),
+    pick: Rgba::wash(0x0062cc, 20),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0xefece4),
     t: [
@@ -313,9 +320,9 @@ mod tests {
     #[test]
     fn a_wash_keeps_its_alpha() {
         assert_eq!(DARK.mark.css(), "rgba(255, 210, 74, .17)");
-        assert_eq!(DARK.pick.css(), "rgba(74, 158, 255, .15)");
+        assert_eq!(DARK.pick.css(), "rgba(74, 158, 255, .26)");
         assert_eq!(LIGHT.mark.css(), "rgba(226, 160, 0, .18)");
-        assert_eq!(LIGHT.pick.css(), "rgba(0, 98, 204, .13)");
+        assert_eq!(LIGHT.pick.css(), "rgba(0, 98, 204, .20)");
     }
 
     /// Opaque colours are written the short way, because that is what the page

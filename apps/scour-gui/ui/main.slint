@@ -2332,13 +2332,29 @@ export component MainWindow inherits Window {
                         // results, so painting the line for one of them lit up
                         // everything beside it — the selection has to be the
                         // tile, and it is, below.
+                        //
+                        // **And not animated.** This used to carry the arrival
+                        // wash as well, on one `animate` of 1.6 seconds — so
+                        // pressing a row faded the selection in over a second
+                        // and a half, and running down the list with the arrows
+                        // left a comet tail of half-lit rows behind the one
+                        // actually selected. Selecting is not an event that
+                        // happened *to* the list; it is where you are, and
+                        // where you are is not a thing to animate. The browser
+                        // page never did: its wash is a keyframe animation and
+                        // its selection is a plain background.
                         background: (here.picked || i == root.selected) ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
-                            : here.fresh ? Theme.t0.with-alpha(0.22)
                             : transparent;
-                        // Fades rather than staying. A permanent badge would
-                        // still be there tomorrow.
-                        animate background { duration: 1600ms; easing: ease-out; }
+
+                        // The wash, on its own layer and its own clock. It
+                        // fades rather than staying — a permanent badge would
+                        // still be there tomorrow — and it is translucent, so
+                        // a row that is both new and selected shows both.
+                        Rectangle {
+                            background: here.fresh ? Theme.t0.with-alpha(0.22) : transparent;
+                            animate background { duration: 1600ms; easing: ease-out; }
+                        }
 
                         rowtouch := TouchArea {
                             clicked => {
@@ -2599,12 +2615,20 @@ export component MainWindow inherits Window {
                                 // A line holds several results, so painting the
                                 // line for one of them lights up everything
                                 // beside it.
+                                // Instant, for the reason the table's rows are:
+                                // see the comment there.
                                 background: (cell.picked || (i * root.per-line + c) == root.selected)
                                     ? Theme.selection
                                     : tiletouch.has-hover ? Theme.hover
-                                    : cell.fresh ? Theme.t0.with-alpha(0.22)
                                     : transparent;
-                                animate background { duration: 1600ms; easing: ease-out; }
+
+                                // The arrival wash, on its own layer.
+                                Rectangle {
+                                    background: cell.fresh
+                                        ? Theme.t0.with-alpha(0.22)
+                                        : transparent;
+                                    animate background { duration: 1600ms; easing: ease-out; }
+                                }
 
                                 tiletouch := TouchArea {
                                     clicked => {
