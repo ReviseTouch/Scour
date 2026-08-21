@@ -3985,7 +3985,6 @@ fn show_peek(
     look: &scour_preview::Look,
 ) -> bool {
     w.set_peek_text(look.head.as_str().into());
-    let a_picture = look.shape == "image";
     /// The largest picture worth decoding on the drawing thread.
     ///
     /// Half a megabyte covers an icon, a screenshot of part of a screen, and
@@ -3994,11 +3993,19 @@ fn show_peek(
     /// this class and does not need to be: the desktop already has a thumbnail
     /// of it, which is the same picture at the size being looked at.
     const SMALL: u64 = 512 * 1024;
-    let file = (a_picture && look.len <= SMALL).then(|| std::path::PathBuf::from(path));
-    let made = a_picture
-        .then(|| scour_thumbs::cache::existing(path))
-        .flatten()
-        .or(file);
+    // **Whatever the desktop can draw, not only what a browser can.** `shape`
+    // is the *browser's* question — it says whether an `<img>` or a `<video>`
+    // would render the bytes — and the window has no browser in it. What it
+    // has is the thumbnail cache, and the machines this runs on declare
+    // thumbnailers for PDFs, video, EPUB and office documents as readily as
+    // for photographs. Gating on `shape == "image"` meant a PDF said it could
+    // not be previewed while `evince-thumbnailer` sat there able to draw its
+    // first page.
+    let made = scour_thumbs::cache::existing(path).or_else(|| {
+        // Only a picture is opened directly: a PDF is not something an image
+        // decoder can be pointed at, and a small one is not a small picture.
+        (look.shape == "image" && look.len <= SMALL).then(|| std::path::PathBuf::from(path))
+    });
     match made.and_then(|p| slint::Image::load_from_path(&p).ok()) {
         Some(image) => {
             w.set_peek_shot(image);
@@ -4011,8 +4018,11 @@ fn show_peek(
     }
     // A picture nobody has made yet is not a picture that cannot be made.
     // Asked for through the same door the grid uses, so the same four-at-a-time
-    // bound covers both, and drawn when it lands.
-    let coming = a_picture && !w.get_peek_has_shot() && scour_thumbs::may(path, "image");
+    // bound covers both, and drawn when it lands. `can_make` is the machine's
+    // own table — one extension lookup and one MIME lookup, no syscall — so
+    // this asks about a PDF exactly when something is installed that can draw
+    // one.
+    let coming = !w.get_peek_has_shot() && scour_thumbs::can_make(path);
     if coming {
         link.send(Ask::Thumbnails {
             files: vec![path.to_owned()],
