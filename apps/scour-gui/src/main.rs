@@ -1921,6 +1921,13 @@ fn pictures(
     rows: &Rc<rows::Rows>,
     lines: &Rc<rows::Lines>,
 ) {
+    // **Only where a picture is drawn.** The detail list shows the kind's
+    // glyph and nothing else — the owner's call, and it makes this whole pass
+    // work done for a thing nobody would see. A window in the detail view
+    // costs exactly what it cost before pictures existed.
+    if !w.get_grid() {
+        return;
+    }
     /// How many rows are looked at per tick. Ten ticks a second, so a
     /// screenful is filled inside a second even in the tile view.
     const LOOKED_AT: usize = 24;

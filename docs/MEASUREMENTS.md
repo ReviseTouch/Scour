@@ -5498,11 +5498,22 @@ draws it — a `shot: bool` beside it says whether there is a picture, which is
 also cheaper than asking an `image` for its width, itself worth 25 points of a
 core when fifteen conditions per row ask it.
 
-What remains is ~3,5 points over the old build for a field on every row, one
-more condition per glyph, and a ten-a-second pass over the visible rows — and
-that pass now returns on an integer test when there is nothing unlooked-at.
-The run-to-run drift on this machine, with a live index being scanned
-underneath, is of the same size; do not read the last row as exactly 3,5.
+**And then the detail list stopped drawing them at all** — the owner's call: a
+row is read as a name, a place and a date, and fifteen pixels of photograph
+beside them is a thing to look at where nobody is looking. The pass that looks
+for pictures returns immediately unless the grid is showing, so a window in the
+detail view costs what it cost before pictures existed:
+
+| idle, `kind:code`, detail view, four alternating rounds | |
+|---|---:|
+| before | 19,1 · 20,0 · 21,6 · 38,6 % |
+| after | 18,7 · 22,4 · 24,5 · 44,2 % |
+
+The two series overlap and the fourth pair moved together — the machine got
+busier, which is what alternating is for. What is left of the difference is a
+row struct carrying two more fields. The run-to-run drift here, with a live
+index being scanned underneath, is larger than that; read the table as "back to
+where it was", not as a number.
 
 **What the pictures cost when there are some**: the desktop's own thumbnailers,
 started by the service, four at a time, bounded to a batch of 32 — the window
