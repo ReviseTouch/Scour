@@ -25,6 +25,7 @@
 pub mod faces;
 pub mod format;
 pub mod path;
+pub mod preview;
 pub mod query;
 
 /// A colour, and the one representation both sides can be built from.

@@ -41,6 +41,9 @@ scour-settings = { workspace = true }
 # processes, and the service is the only thing allowed to; this window asks it,
 # exactly as the browser page does.
 scour-thumbs   = { workspace = true }
+# For the `Preview` reply's type alone: what a file *is* is the service's
+# decision — it needs the file's first eight kilobytes — and this only draws it.
+scour-preview  = { workspace = true }
 # For the `Places` reply's type alone; the answer comes over the socket.
 scour-places   = { workspace = true }
 anyhow       = { workspace = true }

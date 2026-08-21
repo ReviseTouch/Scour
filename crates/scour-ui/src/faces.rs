@@ -196,7 +196,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "preview",
         what: "the head of a file, without opening it",
-        faces: [Has, Not("not yet"), Has, Has],
+        faces: [Has, Has, Has, Has],
     },
     Feature {
         id: "keyboard",

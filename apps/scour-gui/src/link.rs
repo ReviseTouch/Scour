@@ -102,6 +102,24 @@ pub enum Ask {
     Remember {
         change: scour_settings::Change,
     },
+    /// What can be shown of this file.
+    ///
+    /// **The service decides what a file *is*** — a picture, some text,
+    /// neither — because deciding needs its first eight kilobytes and a table
+    /// of extensions, and a window guessing from the name calls `notes.bak`
+    /// unreadable and `model.safetensors` text.
+    Peek {
+        path: String,
+    },
+    /// Everything known about one file, for the preview panel's fact list.
+    ///
+    /// **Not off the row.** A row carries what the list draws; the panel shows
+    /// four things no column does — when it was created, when it was last
+    /// read, its mode and its owner — and those live in the index beside the
+    /// rest of its metadata.
+    PeekFacts {
+        path: String,
+    },
     /// Make thumbnails for these files, if the desktop declares something
     /// that can.
     ///
@@ -170,6 +188,12 @@ pub enum Got {
         reply: Box<Response>,
     },
     Dupes(Box<Response>),
+    /// What can be shown of one file. Carries the path so an answer about a
+    /// row nobody is looking at any more can be dropped.
+    Peek {
+        path: String,
+        reply: Box<Response>,
+    },
     Thumbnails(Box<Response>),
     Rules(Box<Response>),
     Status(Box<Response>),
@@ -261,6 +285,11 @@ impl Freshness {
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
             | Ask::Thumbnails { .. }
+            // Answered whatever has happened since, and dropped on arrival if
+            // the selection has moved — the reply carries its path, the way a
+            // report answer carries its folder.
+            | Ask::Peek { .. }
+            | Ask::PeekFacts { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
@@ -323,6 +352,9 @@ impl Link {
             // decoding video; a keystroke queued behind it would be the one
             // failure this whole arrangement exists to prevent.
             | Ask::Thumbnails { .. }
+            // And this one reads the head of a file off a disk.
+            | Ask::Peek { .. }
+            | Ask::PeekFacts { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -360,6 +392,8 @@ enum Lane {
     Dupes,
     /// Pictures the desktop has been asked to make.
     Thumbnails,
+    /// What can be shown of one file.
+    Peek,
     /// The exclusion rules.
     Rules,
     /// What the service is holding.
@@ -424,7 +458,11 @@ fn spawn_lane(
             // consumes the request: a slow answer for a folder nobody is
             // looking at any more is dropped rather than drawn.
             let weighed = match &ask {
-                Ask::Usage { path } | Ask::Kinds { path } | Ask::Biggest { path } => path.clone(),
+                Ask::Usage { path }
+                | Ask::Kinds { path }
+                | Ask::Biggest { path }
+                | Ask::Peek { path }
+                | Ask::PeekFacts { path } => path.clone(),
                 _ => String::new(),
             };
             let (revision, request, facets) = match ask {
@@ -570,6 +608,8 @@ fn spawn_lane(
                     Lane::Dupes,
                 ),
                 Ask::Thumbnails { files } => (0, Request::Thumbnails { files }, Lane::Thumbnails),
+                Ask::Peek { path } => (0, Request::Preview { path }, Lane::Peek),
+                Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Await { since } => (
@@ -639,6 +679,10 @@ fn spawn_lane(
                             reply,
                         },
                         Lane::Dupes => Got::Dupes(reply),
+                        Lane::Peek => Got::Peek {
+                            path: weighed.clone(),
+                            reply,
+                        },
                         Lane::Thumbnails => Got::Thumbnails(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Status => Got::Status(reply),
@@ -675,6 +719,7 @@ fn spawn_lane(
                             | Lane::Biggest
                             | Lane::Dupes
                             | Lane::Thumbnails
+                            | Lane::Peek
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

@@ -181,3 +181,31 @@ koştur, sabahı öğleden sonrayla karşılaştırma.
   başında anlatılmış.
 - **Neden böyle:** `docs/MEASUREMENTS.md`, `docs/TUI-PLAN.md`,
   `docs/SLINT-PLAN.md`.
+
+---
+
+## 8. Önizleme paneli — üçüncü sütun
+
+Listenin yanında, seçili satırı gösteren bir panel. **Bir kip, bir bakış
+değil**: açık kalır ve oklar nereye giderse oraya uyar — Everything'in preview
+pane'i budur. Pencere ile sayfa aynı paneli çiziyor:
+
+| | nereden |
+|---|---|
+| hangi olgular, hangi sırayla | `scour_ui::preview::FACTS` — etiketler sütun başlıklarının kendi msgid'leri |
+| genişlik ve sınırları | `scour_ui::preview::PANEL_WIDE/MIN/MAX` |
+| dosyanın *ne olduğu* | servis (`Request::Preview`) — karar dosyanın ilk sekiz kilobaytını ister |
+| olgular | servis (`Request::Stat`) — dört tanesi hiçbir sütunda yok |
+| açık mı | `Settings::preview` — bir yüzde iğnelenen panel ötekinde de açılır |
+
+Resim için **küçük resim öncelikli**: 380 piksellik bir panel için kırk
+megapiksellik bir çözme yapılmaz. Yoksa servisten istenir (ızgarayla aynı
+kapı, aynı dörtlü sınır); dosya 512 KB'den küçükse doğrudan çizilir — simgeler,
+ekran görüntüleri ve küçük resim önbelleğinin kendi dosyaları bu sınıfta.
+
+**Slint'te iki tuzak, ikisi de ölçülerek bulundu.** Bir çocuğun
+`preferred-height`'ini ebeveyninin `height`'ine bağlamak çemberdir ve Slint'in
+cevabı hiç çizmemektir. Ve beş sabit genişlikli sütunu olan liste, kendi
+asgarisi pencereden geniş olduğu için kardeşini elli piksele sıkıştırır:
+listeye `min-width: 0px` demek, "sağdan kesilebilir" demektir ve panelin
+genişliğini alabilmesinin tek yolu odur.

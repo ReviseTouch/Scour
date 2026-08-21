@@ -1007,6 +1007,50 @@ pub fn runs_when_opened(name: &str, mode: i64) -> bool {
     )
 }
 
+/// Which of the two id tables to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    User,
+    Group,
+}
+
+/// The name behind a numeric id, from this machine.
+///
+/// Read once and kept: an export of two million rows asks two million times,
+/// and `/etc/passwd` does not change between them. The number is the answer
+/// when there is no name for it — a file owned by a user who was deleted still
+/// has to say something, and `1000` is truer than a blank.
+///
+/// Absent files give an empty table and every id answers as itself, which is
+/// what happens on Windows and is the right answer there.
+///
+/// **Here rather than in each program.** The bridge and the exporter had a
+/// copy each, identical down to the comment, and the preview panel would have
+/// made a third.
+pub fn owner_name(which: Owner, id: i64) -> String {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static USERS: OnceLock<HashMap<i64, String>> = OnceLock::new();
+    static GROUPS: OnceLock<HashMap<i64, String>> = OnceLock::new();
+    let table = |file: &str| -> HashMap<i64, String> {
+        std::fs::read_to_string(file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                let mut f = line.split(':');
+                let name = f.next()?.to_owned();
+                let id = f.nth(1)?.parse::<i64>().ok()?;
+                Some((id, name))
+            })
+            .collect()
+    };
+    let map = match which {
+        Owner::User => USERS.get_or_init(|| table("/etc/passwd")),
+        Owner::Group => GROUPS.get_or_init(|| table("/etc/group")),
+    };
+    map.get(&id).cloned().unwrap_or_else(|| id.to_string())
+}
+
 /// Permission bits in `drwxr-xr-x` form. Empty when `mode` is zero.
 pub fn mode_string(mode: i64) -> String {
     if mode == 0 {

@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use scour_core::{Catalog, DirUsage, FacetBy, Page, SortKey};
+use scour_core::{Catalog, DirUsage, FacetBy, Owner, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
@@ -1649,40 +1649,12 @@ fn send_stream(
     Ok(true)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Owner {
-    User,
-    Group,
-}
-
 /// The name behind a numeric id, from this machine.
 ///
-/// Read once and kept: a page of two hundred rows asks two hundred times, and
-/// `/etc/passwd` does not change between them. The number is the answer when
-/// there is no name for it — a file owned by a user who was deleted still has
-/// to say something, and `1000` is truer than a blank.
+/// [`scour_core::owner_name`]'s answer. The copy that used to be here was
+/// identical to the exporter's, comment included.
 fn owner_name(which: Owner, id: i64) -> String {
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
-    static USERS: OnceLock<HashMap<i64, String>> = OnceLock::new();
-    static GROUPS: OnceLock<HashMap<i64, String>> = OnceLock::new();
-    let table = |file: &str| -> HashMap<i64, String> {
-        std::fs::read_to_string(file)
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| {
-                let mut f = line.split(':');
-                let name = f.next()?.to_owned();
-                let id = f.nth(1)?.parse::<i64>().ok()?;
-                Some((id, name))
-            })
-            .collect()
-    };
-    let map = match which {
-        Owner::User => USERS.get_or_init(|| table("/etc/passwd")),
-        Owner::Group => GROUPS.get_or_init(|| table("/etc/group")),
-    };
-    map.get(&id).cloned().unwrap_or_else(|| id.to_string())
+    scour_core::owner_name(which, id)
 }
 
 /// The order a column header asked for.

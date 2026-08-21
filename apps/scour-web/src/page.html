@@ -1630,6 +1630,14 @@
            a cycling button is a button whose next state you have to remember,
            and these say which one you are in. `data-view` is the word the
            service stores; see `scour_settings::Settings::layout`. -->
+      <!-- The preview panel. **Beside the view switch and not in the tools**:
+           the rule between the two groups separates what changes the program
+           from what changes what you are reading, and a panel is the second.
+           Space still opens it; this is what keeps it open. -->
+      <div class="views" id="peek-switch" role="group">
+        <button type="button" id="peek-toggle" aria-pressed="false"
+                data-t-title="Preview" data-t-aria="close the preview">◫</button>
+      </div>
       <div class="views" id="views" role="group" data-t-aria="how the results are shown">
         <button type="button" data-view="detail" aria-pressed="true"
                 data-t-title="detail list" data-t-aria="show the results as a detail list">≣</button>
@@ -5239,6 +5247,11 @@
     if (typeof s.descending === "boolean") sortDesc = s.descending;
     HISTORY = Array.isArray(s.history) ? s.history : [];
     DUPES_OPEN = !!s.dupes_open;
+    /* **A shared field, like the layout.** Somebody who pinned the panel open
+       in the window means it here too — it is a decision about how they work,
+       not about which program they happened to open. */
+    if (s.preview) setPeek(true, false);
+    peekToggle.setAttribute("aria-pressed", s.preview ? "true" : "false");
     VIEW = (s.view && s.view.web) || {};
     applyView();
     showPastAffordance();
@@ -6039,6 +6052,7 @@
   const peekBody = document.getElementById("peek-body");
   const peekName = document.getElementById("peek-name");
   const peekFacts = document.getElementById("peek-facts");
+  const peekToggle = document.getElementById("peek-toggle");
   const peekCut = document.getElementById("peek-cut");
   const peekNative = document.getElementById("peek-native");
   const viewSearch = document.getElementById("view-search");
@@ -6061,9 +6075,13 @@
     return el && el.closest ? el.closest("tr[data-path]") : null;
   };
 
-  function setPeek(on) {
+  /* `keeping` is false only when the settings are what asked for this: writing
+     back what was just read is a request the service does not need. */
+  function setPeek(on, keeping = true) {
     PEEK.on = on;
     peek.hidden = !on;
+    peekToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    if (keeping) keep({ preview: on });
     viewSearch.classList.toggle("peeking", on);
     if (!on) {
       /* **Emptied on the way out, not left to be garbage.** A `<video>` whose
@@ -6318,6 +6336,8 @@
       drawPeek(row.__row);
     }
   });
+  peekToggle.addEventListener("click", () => setPeek(!PEEK.on));
+
   /* Whatever takes the focus is what is previewed: one rule for the arrow
      keys, a click, and the focus the list restores after a repaint. */
   body.addEventListener("focusin", (e) => {

@@ -70,6 +70,18 @@ export struct Row {
     shot: bool,
 }
 
+/// One line of the preview panel's fact list: a label and a value.
+///
+/// Built in Rust, because every value in it is formatted — a size in binary
+/// units, a date in the reader's punctuation, a mode as `rwxr-xr-x` — and a
+/// `.slint` file that formatted any of them would be a second implementation
+/// of something `scour-ui` already has. Which facts, and in what order, is
+/// `scour_ui::preview::FACTS`; the browser page lists the same ones.
+export struct Fact {
+    label: string,
+    value: string,
+}
+
 // One facet of the rail: a kind, its count, and the token that filters by it.
 // One bar of the time ribbon: how many files fall in it, and which of the six
 // age bands it belongs to — the same band the rows' dates are painted with, so
@@ -753,6 +765,31 @@ export component MainWindow inherits Window {
     /// the view asks for the lines it is about to draw and nothing else.
     in property <[[Row]]> lines;
 
+    // ----------------------------------------------------------------
+    // The preview panel: a third column holding one row.
+    //
+    // **A mode, not a glance.** It stays open and follows whatever the
+    // selection lands on, which is Everything's preview pane; the browser
+    // page's is the same panel with the same facts in the same order. What
+    // is drawn in it depends on what the service says the file *is* — a
+    // picture, the head of some text, or a line saying neither.
+    // ----------------------------------------------------------------
+    in-out property <bool> peeking;
+    in property <string> peek-name;
+    in property <string> peek-path;
+    /// The picture, when the file is one and it could be read.
+    in property <image> peek-shot;
+    /// Whether `peek-shot` holds one — asked as a flag rather than of the
+    /// image, for the reason in `Row::shot`.
+    in property <bool> peek-has-shot;
+    /// The head of the file, when it is text.
+    in property <string> peek-text;
+    /// Said instead of either, when there is neither.
+    in property <string> peek-note;
+    in property <[Fact]> peek-facts;
+    in property <string> peek-close-title;
+    callback peek-toggled();
+
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
     // **What the scrollbar is about.** The model is a window of about forty
@@ -1381,6 +1418,18 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
+                        // **With the view switch, not with the tools.** The
+                        // rule beside these separates the controls that change
+                        // what the program is doing from the ones that change
+                        // what you are reading, and a preview panel is the
+                        // second kind.
+                        Tool {
+                            glyph: "◫";
+                            on: root.peeking;
+                            clicked => {
+                                root.peek-toggled();
+                            }
+                        }
                         Tool {
                             glyph: "≣";
                             on: root.view-mode == "detail";
@@ -2206,6 +2255,13 @@ export component MainWindow inherits Window {
             // --------------------------------------------------------------
             VerticalLayout {
                 spacing: 0px;
+                // **Allowed to be narrower than its columns.** The five column
+                // widths add up to more than a window, so this layout's own
+                // minimum is wider than the space it is in — and a sibling
+                // asking for three hundred and eighty pixels got fifty. The
+                // list has always been free to be cut off on the right; saying
+                // so is what lets the preview panel have its width.
+                min-width: 0px;
 
                 // Column headers, and each is a sort.
                 //
@@ -2683,6 +2739,176 @@ export component MainWindow inherits Window {
 
                         moved => {
                             root.scroll-thumb-to(self.from + self.mouse-y - self.pressed-y);
+                        }
+                    }
+                }
+            }
+
+            // --------------------------------------------------------------
+            // The preview panel.
+            //
+            // **Three hundred and eighty pixels, and shut by default.** Most
+            // of what a list like this is used for is finding a path and
+            // getting out of the way, and a panel that is always there costs
+            // the list a third of its width to say something about one row.
+            // The width and the bounds are `scour_ui::preview`'s, so the
+            // browser page's panel is this one.
+            // --------------------------------------------------------------
+            if root.peeking: Rectangle {
+                // **Min and max, not `width`.** The list beside it is five
+                // columns of fixed width, so its own minimum is wider than the
+                // window: a `width` here is a preference the layout is free to
+                // squeeze, and it squeezed this to fifty pixels. A minimum is
+                // not a preference.
+                min-width: 380px;
+                max-width: 380px;
+                horizontal-stretch: 0;
+                background: Theme.panel-2;
+
+                Rectangle {
+                    x: 0;
+                    width: 1px;
+                    height: parent.height;
+                    background: Theme.line;
+                }
+
+                VerticalLayout {
+                    padding-left: 1px;
+                    spacing: 0px;
+
+                    // The name, and the way out. The name **wraps rather than
+                    // truncating**: the end of a name is what tells
+                    // `rapor-v2.pdf` from `rapor-v3.pdf`, and a header has room
+                    // for two lines. The page learned this the same way.
+                    Rectangle {
+                        height: 46px;
+                        background: Theme.panel-2;
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 14px;
+                            padding-right: 8px;
+                            padding-top: 8px;
+                            padding-bottom: 8px;
+                            spacing: 6px;
+
+                            Text {
+                                text: root.peek-name;
+                                color: Theme.ink;
+                                font-size: 12.5px;
+                                font-weight: 600;
+                                wrap: word-wrap;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                Tool {
+                                    glyph: "×";
+                                    clicked => {
+                                        root.peek-toggled();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // What can be shown of the file. One box, three answers.
+                    Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 80px;
+
+                        if root.peek-has-shot: Image {
+                            width: parent.width - 24px;
+                            height: parent.height - 24px;
+                            x: 12px;
+                            y: 12px;
+                            source: root.peek-shot;
+                            // The whole picture: a preview is being looked at
+                            // to decide whether this is the right file, and a
+                            // crop can remove the part that answers it.
+                            image-fit: contain;
+                        }
+
+                        if !root.peek-has-shot && root.peek-text != "": Flickable {
+                            width: parent.width;
+                            height: parent.height;
+                            viewport-width: self.width;
+                            viewport-height: body.preferred-height;
+
+                            body := VerticalLayout {
+                                padding: 12px;
+                                alignment: start;
+                                Text {
+                                    text: root.peek-text;
+                                    color: Theme.ink-2;
+                                    font-family: Fonts.mono;
+                                    font-size: 11.5px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        if !root.peek-has-shot && root.peek-text == "": Text {
+                            text: root.peek-note;
+                            color: Theme.ink-3;
+                            font-size: 11.5px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // The facts. Below the picture rather than beside it,
+                    // because a fact is read after the thing it is about.
+                    // **Its own height, taken from what is in it.** A path
+                    // wraps to four lines as readily as one, and a box sized
+                    // by counting rows cut the last fact off. Asking the
+                    // layout inside for its height is the way — asking a named
+                    // child for `preferred-height` from its own parent is a
+                    // circle, and Slint's answer to a circle is a panel that
+                    // does not draw at all.
+                    Rectangle {
+                        vertical-stretch: 0;
+                        background: Theme.panel;
+
+                        Rectangle {
+                            y: 0;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 9px;
+                            padding-bottom: 9px;
+                            spacing: 3px;
+                            alignment: start;
+
+                            for fact in root.peek-facts: HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: fact.label;
+                                    color: Theme.ink-3;
+                                    font-size: 11px;
+                                    width: 74px;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: fact.value;
+                                    color: Theme.ink-2;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                }
+                            }
                         }
                     }
                 }

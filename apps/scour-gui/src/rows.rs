@@ -25,7 +25,7 @@ use crate::Row;
 /// itself: the clone shares the buffer, and that is what the comparison reads.
 /// Nothing draws it — [`crate::Row`]'s `shot` decides what is drawn — it only
 /// has to be a value that can be compared.
-fn blank() -> slint::Image {
+pub fn blank() -> slint::Image {
     thread_local! {
         static BLANK: slint::Image = {
             let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1);

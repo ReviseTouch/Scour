@@ -236,6 +236,21 @@ pub struct Settings {
     /// would be a person's preferences gone.
     #[serde(default)]
     pub face: String,
+
+    /// Whether the preview panel is open.
+    ///
+    /// **A mode, not a gesture.** It began as something Space opened and Escape
+    /// shut, which is Quick Look's shape and right for a glance at one file;
+    /// what a person doing this for an hour wants is the panel *there*, keeping
+    /// up with whatever the arrows land on — which is what Everything's preview
+    /// pane is and what this remembers. Both still work: the key opens it, the
+    /// button pins it.
+    ///
+    /// `false` is also what a face that has never heard of a preview panel
+    /// writes, and that is the right default for one: a panel takes a third of
+    /// the width to say something about a single row.
+    #[serde(default)]
+    pub preview: bool,
     /// Past queries, most recent first.
     ///
     /// **Only queries somebody meant.** A search box runs a query per
@@ -290,6 +305,8 @@ pub struct Change {
     pub layout: Option<String>,
     /// `window`, `browser`, `tui` — or `""` to go back to no opinion.
     pub face: Option<String>,
+    /// Whether the preview panel stays open. See [`Settings::preview`].
+    pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
     pub history: Option<Vec<String>>,
     /// Put one query at the front instead.
@@ -346,6 +363,9 @@ impl Change {
         }
         if let Some(v) = self.language {
             to.language = v;
+        }
+        if let Some(v) = self.preview {
+            to.preview = v;
         }
         if let Some(v) = self.face {
             to.face = v;

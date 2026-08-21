@@ -161,8 +161,8 @@ fn cell_of(id: &str, h: &Hit, out: &mut String) {
         "atime" => stamp(h.meta.atime, out),
         "kind" => out.push_str(h.kind.token()),
         "perm" => out.push_str(&scour_core::mode_string(h.meta.mode)),
-        "user" => out.push_str(&owner(Owner::User, h.meta.uid)),
-        "group" => out.push_str(&owner(Owner::Group, h.meta.gid)),
+        "user" => out.push_str(&owner(scour_core::Owner::User, h.meta.uid)),
+        "group" => out.push_str(&owner(scour_core::Owner::Group, h.meta.gid)),
         "items" => push_num(h.meta.items, out),
         // Not a column this version knows. An empty cell under the heading the
         // caller asked for — see `Sheet::new`.
@@ -216,43 +216,12 @@ fn civil(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Owner {
-    User,
-    Group,
-}
-
 /// The name behind a numeric id, from this machine.
 ///
-/// Read once and kept: an export of two million rows asks two million times,
-/// and `/etc/passwd` does not change between them. The number is the answer
-/// when there is no name for it — a file owned by a user who was deleted still
-/// has to say something, and `1000` is truer than a blank.
-///
-/// Absent files give an empty table and every id answers as itself, which is
-/// what happens on Windows and is the right answer there.
-fn owner(which: Owner, id: i64) -> String {
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
-    static USERS: OnceLock<HashMap<i64, String>> = OnceLock::new();
-    static GROUPS: OnceLock<HashMap<i64, String>> = OnceLock::new();
-    let table = |file: &str| -> HashMap<i64, String> {
-        std::fs::read_to_string(file)
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| {
-                let mut f = line.split(':');
-                let name = f.next()?.to_owned();
-                let id = f.nth(1)?.parse::<i64>().ok()?;
-                Some((id, name))
-            })
-            .collect()
-    };
-    let map = match which {
-        Owner::User => USERS.get_or_init(|| table("/etc/passwd")),
-        Owner::Group => GROUPS.get_or_init(|| table("/etc/group")),
-    };
-    map.get(&id).cloned().unwrap_or_else(|| id.to_string())
+/// [`scour_core::owner_name`]'s answer. The copy that used to be here was
+/// identical to the browser bridge's, comment included.
+fn owner(which: scour_core::Owner, id: i64) -> String {
+    scour_core::owner_name(which, id)
 }
 
 #[cfg(test)]

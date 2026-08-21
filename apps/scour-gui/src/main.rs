@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Dupe, Facet, Fonts, Kid, MainWindow, Row, Rule, Scheme, Span, Theme};
+pub use ui::{Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, Row, Rule, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -251,6 +251,13 @@ struct State {
     /// how a scroll turns into a queue of work for rows nobody is looking at
     /// any more. The page holds the same flag for the same reason.
     asking_pictures: bool,
+    /// The row the preview panel is about, as a full path.
+    ///
+    /// **What the panel is showing, not what is selected.** A reply that
+    /// arrives for a row the arrows have already left is dropped by comparing
+    /// against this; without it, running down a list leaves the panel showing
+    /// whichever answer happened to come back last.
+    peek_path: String,
     /// Files the service has already been asked about, oldest first.
     ///
     /// **This has to outlive the rows, which is why it is not on them.** The
@@ -620,6 +627,7 @@ fn main() -> Result<()> {
         asked_at: None,
         page_cost_us: 0,
         asking_pictures: false,
+        peek_path: String::new(),
         asked_pictures: std::collections::VecDeque::new(),
         rewind: true,
         typed_at: None,
@@ -695,6 +703,10 @@ fn main() -> Result<()> {
             _ => {}
         }
     }
+    // The panel somebody left open. Read here with the rest of the shape,
+    // before the first search, so it is open in the first frame rather than
+    // appearing a moment later.
+    window.set_peeking(kept.preview);
     let kept_layout = kept.layout;
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
@@ -871,6 +883,29 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     layout: Some(mode.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // The preview panel, and it is remembered: a panel somebody pinned open is
+    // a decision about how they work, not a gesture they repeat every morning.
+    // The browser page reads the same setting.
+    {
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        let weak = window.as_weak();
+        window.on_peek_toggled(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let on = !w.get_peeking();
+            w.set_peeking(on);
+            // So the next tick asks about whatever is selected rather than
+            // finding the path it already had and doing nothing.
+            state.borrow_mut().peek_path.clear();
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    preview: Some(on),
                     ..Default::default()
                 },
             });
@@ -1510,6 +1545,7 @@ fn main() -> Result<()> {
         let lines = Rc::clone(&lines);
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
+        let words = Rc::clone(&cat);
         let weak = window.as_weak();
         let t = Box::leak(Box::new(slint::Timer::default()));
         t.start(
@@ -1529,6 +1565,7 @@ fn main() -> Result<()> {
                 lines.sync();
                 follow(&w, &state, &link, &rows);
                 pictures(&w, &state, &link, &rows, &lines);
+                peek(&w, &state, &link, &rows, &words.borrow().clone());
             },
         );
     }
@@ -1695,6 +1732,20 @@ fn main() -> Result<()> {
         slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
             if let Some(w) = weak.upgrade() {
                 w.invoke_scroll_rail(px);
+            }
+        });
+    }
+
+    // The preview panel, for a picture of it. `SCOUR_GUI_PEEK=1` opens it
+    // whatever the settings say; the panel is a mode, so there is no other way
+    // to photograph it from outside.
+    if std::env::var_os("SCOUR_GUI_PEEK").is_some() {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(400), move || {
+            if let Some(w) = weak.upgrade()
+                && !w.get_peeking()
+            {
+                w.invoke_peek_toggled();
             }
         });
     }
@@ -1903,6 +1954,51 @@ fn main() -> Result<()> {
 /// the loaded page, useless the moment a page lands somewhere the eye is not,
 /// because then there is no missing row to draw and the view says nothing.
 /// That is the shape of "only the first page ever loads".
+/// Keep the preview panel on whatever is selected.
+///
+/// **Asked once per row, not once per tick.** What the panel is showing is
+/// remembered as a path, so arrowing down a list asks about each row it lands
+/// on and running back up over one already drawn asks nothing at all.
+///
+/// The name and the path go up immediately — they are on the row, which is
+/// already in hand — and the two answers fill the rest in when they arrive.
+/// The alternative is a panel that goes blank between rows, which is what a
+/// list feels like when it stutters.
+fn peek(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    rows: &Rc<rows::Rows>,
+    cat: &Catalogue,
+) {
+    if !w.get_peeking() {
+        if !state.borrow().peek_path.is_empty() {
+            state.borrow_mut().peek_path.clear();
+        }
+        return;
+    }
+    let path = path_of(rows, w.get_selected()).unwrap_or_default();
+    if path == state.borrow().peek_path {
+        return;
+    }
+    state.borrow_mut().peek_path = path.clone();
+    w.set_peek_shot(rows::blank());
+    w.set_peek_has_shot(false);
+    w.set_peek_text(slint::SharedString::new());
+    if path.is_empty() {
+        w.set_peek_name(slint::SharedString::new());
+        w.set_peek_path(slint::SharedString::new());
+        w.set_peek_note(slint::SharedString::new());
+        w.set_peek_facts(ModelRc::new(VecModel::from(Vec::<Fact>::new())));
+        return;
+    }
+    w.set_peek_name(scour_ui::path::leaf(&path).into());
+    w.set_peek_path(path.as_str().into());
+    w.set_peek_note(t(cat, "reading…"));
+    link.send(Ask::Peek { path: path.clone() });
+    link.send(Ask::PeekFacts { path });
+}
+
 /// Pictures for what is on screen: draw the ones the desktop has already made,
 /// and ask for the ones it could make.
 ///
@@ -2614,6 +2710,26 @@ fn apply(
                 made.ran
             ));
             rows.made_pictures(&made.ready);
+            // The preview panel may have been the one waiting for it.
+            let waiting = state.borrow().peek_path.clone();
+            if !waiting.is_empty() && made.ready.contains(&waiting) {
+                link.send(Ask::Peek { path: waiting });
+            }
+        }
+        // The preview panel's two answers, both tagged with the path they are
+        // about. Either may arrive for a row nobody is looking at any more —
+        // the arrows move faster than a disk read — and then it is dropped.
+        Got::Peek { path, reply } => {
+            if path != state.borrow().peek_path {
+                return;
+            }
+            match *reply {
+                Response::Preview(look) => {
+                    show_peek(w, cat, link, &path, &look);
+                }
+                Response::Stat(entry) => w.set_peek_facts(peek_facts(cat, &entry)),
+                _ => {}
+            }
         }
         Got::Dupes(reply) => {
             let Response::Duplicates {
@@ -3642,6 +3758,7 @@ mod tests {
             asked_at: None,
             page_cost_us: 0,
             asking_pictures: false,
+            peek_path: String::new(),
             asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
             typed_at: None,
@@ -3703,6 +3820,7 @@ mod tests {
             asked_at: None,
             page_cost_us: 0,
             asking_pictures: false,
+            peek_path: String::new(),
             asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
             typed_at: None,
@@ -3847,4 +3965,126 @@ mod tests {
             }
         }
     }
+}
+
+/// Draw what the service says can be shown of a file.
+///
+/// **A thumbnail rather than the file.** A preview of a forty-megapixel
+/// photograph is a forty-megapixel decode on the drawing thread, for a panel
+/// three hundred and eighty pixels wide; the desktop's thumbnail is the same
+/// picture at the size actually being looked at, is already made for anything
+/// that has ever been seen in a file manager, and is what the grid draws. When
+/// there is none the service is asked to make one — through the same door as
+/// the grid's, so the same four-at-a-time bound covers both — and this shows
+/// what it can in the meantime.
+fn show_peek(
+    w: &MainWindow,
+    cat: &Catalogue,
+    link: &Rc<Link>,
+    path: &str,
+    look: &scour_preview::Look,
+) -> bool {
+    w.set_peek_text(look.head.as_str().into());
+    let a_picture = look.shape == "image";
+    /// The largest picture worth decoding on the drawing thread.
+    ///
+    /// Half a megabyte covers an icon, a screenshot of part of a screen, and
+    /// every file in the thumbnail cache — which is a directory of pictures
+    /// like any other and turns up in a search for one. A photograph is not in
+    /// this class and does not need to be: the desktop already has a thumbnail
+    /// of it, which is the same picture at the size being looked at.
+    const SMALL: u64 = 512 * 1024;
+    let file = (a_picture && look.len <= SMALL).then(|| std::path::PathBuf::from(path));
+    let made = a_picture
+        .then(|| scour_thumbs::cache::existing(path))
+        .flatten()
+        .or(file);
+    match made.and_then(|p| slint::Image::load_from_path(&p).ok()) {
+        Some(image) => {
+            w.set_peek_shot(image);
+            w.set_peek_has_shot(true);
+        }
+        None => {
+            w.set_peek_shot(rows::blank());
+            w.set_peek_has_shot(false);
+        }
+    }
+    // A picture nobody has made yet is not a picture that cannot be made.
+    // Asked for through the same door the grid uses, so the same four-at-a-time
+    // bound covers both, and drawn when it lands.
+    let coming = a_picture && !w.get_peek_has_shot() && scour_thumbs::may(path, "image");
+    if coming {
+        link.send(Ask::Thumbnails {
+            files: vec![path.to_owned()],
+        });
+    }
+    // Said only when there is nothing else in the box, and nothing on its way.
+    // A file whose head is empty because the file is empty is not a failure
+    // either — but it has nothing to show, and a blank panel says less than a
+    // line does.
+    w.set_peek_note(if w.get_peek_has_shot() || !look.head.is_empty() {
+        slint::SharedString::new()
+    } else if coming {
+        t(cat, "reading…")
+    } else {
+        t(cat, "It could not be previewed.")
+    });
+    coming
+}
+
+/// The fact list, in the order [`scour_ui::preview::FACTS`] gives.
+///
+/// Every value is formatted here rather than in the interface: a size in
+/// binary units, a date in the reader's punctuation, a mode as `drwxr-xr-x`.
+/// A `.slint` file doing any of it would be a second implementation of
+/// something `scour-ui` and `scour-core` already have.
+fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
+    let m = &entry.meta;
+    let rows: Vec<Fact> = scour_ui::preview::FACTS
+        .iter()
+        .filter_map(|fact| {
+            let value = match fact.id {
+                "where" => scour_ui::path::folder(&entry.path).to_owned(),
+                "kind" => t(cat, entry.kind().msgid()).to_string(),
+                "size" if entry.is_dir => match m.items {
+                    n if n >= 0 => t(cat, "{n} items").replace("{n}", &grouped(n as u64)),
+                    _ => String::new(),
+                },
+                "size" => scour_ui::format::size(m.size.max(0) as u64, marks().1),
+                "modified" => stamp(m.mtime),
+                "created" => stamp(m.ctime),
+                "read" => stamp(m.atime),
+                "mode" => scour_core::mode_string(m.mode),
+                "owner" => [
+                    scour_core::owner_name(scour_core::Owner::User, m.uid),
+                    scour_core::owner_name(scour_core::Owner::Group, m.gid),
+                ]
+                .join(" · "),
+                _ => String::new(),
+            };
+            // A fact with nothing behind it is not a line: a volume that does
+            // not record read times would otherwise show an empty row headed
+            // `Erişim` for ever.
+            (!value.is_empty()).then(|| Fact {
+                label: t(
+                    cat,
+                    if fact.id == "size" {
+                        scour_ui::preview::size_msgid(entry.is_dir)
+                    } else {
+                        fact.msgid
+                    },
+                ),
+                value: value.into(),
+            })
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// A date a person can read, or nothing when there is no date.
+fn stamp(when: i64) -> String {
+    if when <= 0 {
+        return String::new();
+    }
+    scour_ui::format::stamp(when)
 }
