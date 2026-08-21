@@ -5520,3 +5520,55 @@ started by the service, four at a time, bounded to a batch of 32 — the window
 asks and never runs one itself. A screenful of images that have never been
 seen starts a few dozen processes and no more, which is the number `ran` in
 the trace is there to make checkable.
+
+## 2026-08-21 — a sweep that ate its own evidence
+
+The service was burning 6% of a core on an idle machine, in bursts of 30–50%
+every fifteen to seventy seconds. Watching `status` through one burst:
+`scanning=True src=2, scanned=366491, last=871 ms`, and the row count moving by
+**±39,7xx** — the same number, over and over.
+
+It was not only CPU. Counting each root of that source across the swing:
+
+| | full walk | the walk after it | on disk |
+|---|---:|---:|---:|
+| `/usr` | 316.602 | 316.602 | — |
+| `/var` | 33.619 | **5.074** | — |
+| `/opt` | 5.477 | **0** | 5.478 |
+| `/etc` | 2.309 | **34** | 2.332 |
+
+**Half the time, `/opt` was not in the index at all.** The first root never
+suffered, which is what made it look like a walk stopping early. It was not: the
+walk was measured on its own — `examples/manyroots.rs`, three runs — and reached
+all four roots every time, 374,429 entries, nothing cancelled.
+
+The sweep was the problem. A pass notes the rows it found exactly as they
+already were, so an untouched filesystem does not have to be rewritten to prove
+it is still there; those notes are one bit a row. `sweep` took them with
+`std::mem::take`, and the engine called `sweep` **once per root**. So the first
+root got the notes and every root after it was reconciled against an empty set —
+every row the walk had seen and not rewritten looked unstamped, and was deleted
+as missing. The next walk found them genuinely gone, wrote them again, and the
+walk after that deleted them again.
+
+`sweep` now takes every root of the pass in one call, which is what makes the
+notes last as long as the thing they are evidence for. Two tests: one at the
+index, one through the engine (a many-rooted source walked three times over an
+unchanged tree). Both fail on the old code — the engine one with `left: 50,
+right: 200`, exactly "only the first root survived".
+
+Measured on the live index, over ten minutes after the fix:
+
+| | before | after |
+|---|---:|---:|
+| row swing | 41.586 | **185** |
+| `/opt`, `/etc`, `/var` | vanishing every ~60 s | stable |
+| idle CPU | 6,2 % | 6,8 % |
+
+**The CPU is not what this fixed, and saying otherwise would be reading the
+table wrong.** What went was 41,000 deletions and 41,000 insertions per cycle;
+what remains is the walk itself — 366,491 entries every fifteen seconds,
+because the source is unwatched and `/var` never stops moving. That is a
+separate thing with its own answer: walk the root whose pulse moved rather than
+the whole source (`/var` is 38,638 rows of the 366,491), or watch it, which
+costs nothing once `scour-watch` has marked the filesystem.

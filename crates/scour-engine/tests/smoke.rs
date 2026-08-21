@@ -44,6 +44,12 @@ struct MemSource {
     retuned: Arc<RwLock<Vec<Vec<String>>>>,
     /// Whether this source answers `excluder` at all.
     has_rules: bool,
+    /// The roots this source claims and vouches for.
+    ///
+    /// **More than one, because a real source has more than one.** `scourd`'s
+    /// system source is rooted at `/usr /etc /opt /var`, and the defect that
+    /// made this configurable only showed up past the first root.
+    roots: Vec<String>,
 }
 
 impl MemSource {
@@ -59,6 +65,7 @@ impl MemSource {
             order: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
             has_rules: false,
+            roots: vec!["/home/u".into()],
         })
     }
 
@@ -66,6 +73,13 @@ impl MemSource {
     fn with_rules(entries: Vec<Entry>) -> Arc<MemSource> {
         let mut s = MemSource::new(entries);
         Arc::get_mut(&mut s).expect("sole owner").has_rules = true;
+        s
+    }
+
+    /// A source rooted in several places, like every real one.
+    fn many_roots(entries: Vec<Entry>, roots: Vec<String>) -> Arc<MemSource> {
+        let mut s = MemSource::unwatchable(entries);
+        Arc::get_mut(&mut s).expect("sole owner").roots = roots;
         s
     }
 
@@ -81,6 +95,7 @@ impl MemSource {
             order: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
             has_rules: false,
+            roots: vec!["/home/u".into()],
         })
     }
 
@@ -102,7 +117,7 @@ impl Source for MemSource {
             id: SourceId(0),
             name: "mem".into(),
             kind: SourceKind::Local,
-            roots: vec!["/home/u".into()],
+            roots: self.roots.clone(),
             caps: self.caps(),
         }
     }
@@ -206,7 +221,7 @@ impl Source for MemSource {
             entries: n,
             vouched: match &opts.subtree {
                 Some(s) => vec![s.clone()],
-                None => vec!["/home/u".into()],
+                None => self.roots.clone(),
             },
             ..Default::default()
         })
@@ -300,7 +315,7 @@ impl scour_core::Index for Fragile {
     fn sweep(
         &self,
         source: SourceId,
-        under: &str,
+        under: &[String],
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> scour_core::Result<u64> {
@@ -1310,7 +1325,7 @@ impl scour_core::Index for Slow {
     fn sweep(
         &self,
         source: SourceId,
-        under: &str,
+        under: &[String],
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> scour_core::Result<u64> {
@@ -1455,4 +1470,81 @@ fn an_expensive_ordering_is_not_rebuilt_on_a_clock() {
         "a 400 ms walk buys four seconds of quiet, so three seconds of deep \
          pages must not start a second one. Walks began at {walks:?} ms"
     );
+}
+
+/// A source with several roots keeps all of them across repeated walks.
+///
+/// **The whole of what a live index was getting wrong.** `scourd`'s system
+/// source is rooted at `/usr /etc /opt /var`, is not watched, and so is walked
+/// again whenever its pulse moves — which, with `/var` in it, is every fifteen
+/// seconds for ever. Every walk after the first found the rows unchanged and
+/// therefore did not rewrite them; the marks that say "seen and unmoved" were
+/// consumed by the sweep of the first root, so the other three were reconciled
+/// against nothing and emptied. The walk after that found them genuinely
+/// missing, wrote them again, and the one after that emptied them again:
+/// measured on the live index as `/opt` alternating between 5,477 rows and
+/// none, roughly once a minute.
+///
+/// So the property is not "a scan reconciles" — that was already tested — it is
+/// that **the second walk of an unchanged tree changes nothing**, in every
+/// root and not only the first.
+#[test]
+fn walking_a_many_rooted_source_twice_keeps_every_root() {
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let entries: Vec<Entry> = ["/usr", "/etc", "/opt", "/var"]
+        .iter()
+        .flat_map(|root| (0..50).map(move |i| row(&format!("{root}/thing{i}.txt"))))
+        .collect();
+    let source = MemSource::many_roots(
+        entries,
+        ["/usr", "/etc", "/opt", "/var"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+    );
+    let f = Fixture {
+        engine: Engine::new(
+            vec![source.clone()],
+            index,
+            EngineOptions {
+                commit_interval: Duration::from_millis(50),
+                ..Default::default()
+            },
+        ),
+        source,
+        _dir: dir,
+    };
+
+    f.engine.rescan(None).expect("first walk");
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries == 200
+    });
+    assert_eq!(f.engine.status().entries, 200, "four roots, fifty each");
+
+    // Nothing has changed on disk. Walk it again — twice, because the defect
+    // alternated and a single repeat could land on the good half of the cycle.
+    for walk in 2..=3 {
+        f.engine.rescan(None).expect("walk again");
+        settle(&f, |f| !f.engine.status().scanning);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            f.engine.status().entries,
+            200,
+            "walk {walk} of an unchanged tree lost rows"
+        );
+        for root in ["/usr", "/etc", "/opt", "/var"] {
+            let n = f
+                .engine
+                .search(
+                    &format!("under:{root}"),
+                    SortKey::Name,
+                    false,
+                    Page::new(0, 100),
+                )
+                .expect("search")
+                .total;
+            assert_eq!(n, 50, "walk {walk} emptied {root}");
+        }
+    }
 }

@@ -43,15 +43,27 @@ pub trait Index: Send + Sync + Debug {
     /// Remove everything **this source** has under `under` that is not stamped
     /// with `generation`.
     ///
-    /// Called once a scan of that subtree has finished. Returns how many
-    /// entries went.
+    /// Called once a scan has finished, with **every root that scan vouched
+    /// for** — not once per root. Returns how many entries went.
     ///
-    /// The source is not decoration. A sweep says "I walked this subtree and
-    /// did not find these rows", and that is a statement one source can only
-    /// make about its own: where two sources' roots overlap, sweeping by path
-    /// alone deletes the other's rows on the strength of a walk that never
-    /// looked at them. Reproduced before this argument existed — a rescan of
-    /// source 0 took source 1's row.
+    /// **One call, because one walk is one piece of evidence.** A pass notes
+    /// the rows it found exactly as they already were, so that an untouched
+    /// filesystem does not have to be rewritten to prove it is still there,
+    /// and those notes belong to the pass rather than to any one of its roots.
+    /// Called once per root, the first call consumed them and every root after
+    /// it was reconciled against nothing: on a live index, a source rooted at
+    /// `/usr /etc /opt /var` deleted the last three every other walk and put
+    /// them back on the one between — `/opt` alternating between 5,477 rows
+    /// and none, about once a minute. The signature is what makes that
+    /// impossible to write again.
+    ///
+    /// The source is not decoration either. A sweep says "I walked these
+    /// subtrees and did not find these rows", and that is a statement one
+    /// source can only make about its own: where two sources' roots overlap,
+    /// sweeping by path alone deletes the other's rows on the strength of a
+    /// walk that never looked at them. Reproduced before this argument existed
+    /// — a rescan of source 0 took source 1's row.
+    ///
     /// `spare` names subtrees the walk could not look inside. Rows under them
     /// are left alone: the walk has no evidence about them either way, and
     /// deleting on no evidence is how a directory that lost its read
@@ -59,7 +71,7 @@ pub trait Index: Send + Sync + Debug {
     fn sweep(
         &self,
         source: SourceId,
-        under: &str,
+        under: &[String],
         generation: u64,
         spare: &crate::types::PrefixSet,
     ) -> Result<u64>;

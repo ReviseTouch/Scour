@@ -1352,14 +1352,24 @@ fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
         std::fs::create_dir(&alive).expect("block bitmap replacement");
         assert!(
             index
-                .sweep(SourceId(0), "/w", generation, &PrefixSet::default())
+                .sweep(
+                    SourceId(0),
+                    &["/w".to_string()],
+                    generation,
+                    &PrefixSet::default()
+                )
                 .is_err()
         );
 
         std::fs::remove_dir(&alive).expect("remove blocker");
         std::fs::rename(&saved, &alive).expect("restore old bitmap");
         index
-            .sweep(SourceId(0), "/w", generation, &PrefixSet::default())
+            .sweep(
+                SourceId(0),
+                &["/w".to_string()],
+                generation,
+                &PrefixSet::default(),
+            )
             .expect("retry sweep");
     }
 
@@ -1400,7 +1410,12 @@ fn one_source_cannot_sweep_away_another_source_rows() {
     // Source 0 walks and finds nothing, so it sweeps its own row away.
     let g = index.begin_generation().expect("generation");
     let gone = index
-        .sweep(SourceId(0), "/ortak", g, &PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/ortak".to_string()],
+            g,
+            &PrefixSet::default(),
+        )
         .expect("sweep");
     index.commit().expect("commit");
     assert_eq!(gone, 1, "a source swept more than its own rows");
@@ -1614,7 +1629,7 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
         )
         .expect("apply");
     let gone = index
-        .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+        .sweep(SourceId(0), &["/w".to_string()], g, &PrefixSet::default())
         .expect("sweep");
     assert_eq!(gone, 1, "exactly the file the rescan did not see");
 
@@ -1673,7 +1688,12 @@ fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
     // A walk of `/w/proj` that finds nothing: the directory was removed.
     let g = index.begin_generation().expect("generation");
     let gone = index
-        .sweep(SourceId(0), "/w/proj", g, &PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/w/proj".to_string()],
+            g,
+            &PrefixSet::default(),
+        )
         .expect("sweep");
     assert_eq!(gone, 3, "the directory, its file and the one below it");
 
@@ -2000,7 +2020,7 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
 
     // And now the sweep, judging rows by marks the fold may have invalidated.
     f.index
-        .sweep(SourceId(0), "", g, &PrefixSet::default())
+        .sweep(SourceId(0), &["".to_string()], g, &PrefixSet::default())
         .expect("sweep");
 
     assert_eq!(
@@ -2287,7 +2307,12 @@ fn compaction_still_folds_when_every_segment_has_its_own_generation() {
         // Closes the generation without judging anything: the scope holds no
         // rows, so this is the bump and nothing else.
         index
-            .sweep(SourceId(0), "/baska-yer", g, &PrefixSet::default())
+            .sweep(
+                SourceId(0),
+                &["/baska-yer".to_string()],
+                g,
+                &PrefixSet::default(),
+            )
             .expect("sweep");
     }
 
@@ -2422,7 +2447,7 @@ fn a_generation_is_never_folded_into_another_one() {
     // The sweep still finds the older pass.
     assert_eq!(
         index
-            .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+            .sweep(SourceId(0), &["/w".to_string()], g, &PrefixSet::default())
             .expect("sweep"),
         4
     );
@@ -2491,7 +2516,7 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
         // What ends a scan, and what makes the next fold safe: after this,
         // nothing is waiting to judge these rows.
         index
-            .sweep(SourceId(0), root, g, &PrefixSet::default())
+            .sweep(SourceId(0), &[root.to_string()], g, &PrefixSet::default())
             .expect("sweep");
     }
     assert!(index.stats().expect("stats").segments > 2);
@@ -2529,7 +2554,12 @@ fn two_sources_fold_into_one_segment_once_both_have_settled() {
     index.commit().expect("commit");
     assert_eq!(
         index
-            .sweep(SourceId(0), "/mnt/depo", g, &PrefixSet::default())
+            .sweep(
+                SourceId(0),
+                &["/mnt/depo".to_string()],
+                g,
+                &PrefixSet::default()
+            )
             .expect("sweep"),
         3
     );
@@ -2823,7 +2853,7 @@ fn a_segment_a_sweep_emptied_stops_costing_anything() {
         .apply(&mut second.into_iter().map(Change::Upsert))
         .expect("apply");
     index
-        .sweep(SourceId(0), "/w", g, &PrefixSet::default())
+        .sweep(SourceId(0), &["/w".to_string()], g, &PrefixSet::default())
         .expect("sweep");
 
     let s = index.stats().expect("stats");
@@ -3720,7 +3750,7 @@ fn a_rescan_that_changed_nothing_adds_no_segment() {
     let report = f.index.apply(&mut again).expect("apply");
     f.index.commit().expect("commit");
     f.index
-        .sweep(SourceId(0), "", g, &PrefixSet::default())
+        .sweep(SourceId(0), &["".to_string()], g, &PrefixSet::default())
         .expect("sweep");
 
     let after = f.index.stats().expect("stats");
@@ -3783,7 +3813,12 @@ fn a_rescan_that_finds_nothing_changed_removes_nothing() {
     index.apply(&mut it).expect("apply");
     index.commit().expect("commit");
     index
-        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/w".to_string()],
+            g,
+            &scour_core::PrefixSet::default(),
+        )
         .expect("sweep");
     assert_eq!(index.stats().expect("stats").entries, 3, "the first pass");
 
@@ -3797,7 +3832,12 @@ fn a_rescan_that_finds_nothing_changed_removes_nothing() {
     index.apply(&mut it).expect("apply");
     index.commit().expect("commit");
     let gone = index
-        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/w".to_string()],
+            g,
+            &scour_core::PrefixSet::default(),
+        )
         .expect("sweep");
 
     assert_eq!(gone, 0, "a pass that saw everything must remove nothing");
@@ -3831,7 +3871,12 @@ fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
     index.apply(&mut it).expect("apply");
     index.commit().expect("commit");
     index
-        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/w".to_string()],
+            g,
+            &scour_core::PrefixSet::default(),
+        )
         .expect("sweep");
 
     let g = index.begin_generation().expect("generation");
@@ -3839,7 +3884,12 @@ fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
     index.apply(&mut it).expect("apply");
     index.commit().expect("commit");
     index
-        .sweep(SourceId(0), "/w", g, &scour_core::PrefixSet::default())
+        .sweep(
+            SourceId(0),
+            &["/w".to_string()],
+            g,
+            &scour_core::PrefixSet::default(),
+        )
         .expect("sweep");
 
     assert_eq!(
@@ -4675,4 +4725,86 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
             got.1
         );
     }
+}
+
+/// A walk of several roots keeps what it saw in every one of them.
+///
+/// **This is what a live index was doing.** `scourd`'s system source walks
+/// `/usr /etc /opt /var` as one source, and the engine swept each root in
+/// turn. The unchanged-row marks — one bit a row, the only thing saying "the
+/// walk saw this and it had not moved" — were consumed by the first sweep, so
+/// every root after it was reconciled against nothing and everything it held
+/// was deleted as missing. The next walk found those rows genuinely absent,
+/// rewrote them, and the walk after that deleted them again: measured on the
+/// live index as `/opt` alternating between 5,477 rows and none, `/etc`
+/// between 2,309 and 34, about once a minute for as long as the service was
+/// up. The first root never suffered, which is what made it look like a walk
+/// stopping early rather than a sweep eating its own evidence.
+///
+/// A sweep now takes every root of the pass at once, which is what makes the
+/// marks last as long as the thing they are evidence for.
+#[test]
+fn a_sweep_of_several_roots_keeps_what_the_walk_saw_in_each() {
+    fn all_paths(index: &NativeIndex) -> Vec<String> {
+        let mut out: Vec<String> = index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                page: Page::new(0, 10),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|hit| hit.path)
+            .collect();
+        out.sort();
+        out
+    }
+
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let first = entry("/usr/one.txt", NOW, 1);
+    let second = entry("/opt/two.txt", NOW, 2);
+    let third = entry("/var/three.txt", NOW, 3);
+    // And one the walk will not find, to prove the sweep still does its job.
+    let gone = entry("/opt/gone.txt", NOW, 4);
+    index
+        .apply(
+            &mut [
+                Change::Upsert(first.clone()),
+                Change::Upsert(second.clone()),
+                Change::Upsert(third.clone()),
+                Change::Upsert(gone),
+            ]
+            .into_iter(),
+        )
+        .expect("apply");
+    index.commit().expect("commit");
+
+    // A walk that finds three of the four rows exactly as they are: nothing is
+    // rewritten, and each is marked as seen instead.
+    let generation = index.begin_generation().expect("generation");
+    index
+        .apply(
+            &mut [
+                Change::Upsert(first),
+                Change::Upsert(second),
+                Change::Upsert(third),
+            ]
+            .into_iter(),
+        )
+        .expect("re-apply unchanged");
+    index.commit().expect("commit");
+
+    let roots = ["/usr".to_string(), "/opt".to_string(), "/var".to_string()];
+    let removed = index
+        .sweep(SourceId(0), &roots, generation, &PrefixSet::default())
+        .expect("sweep every root of the walk");
+
+    assert_eq!(removed, 1, "only the row the walk did not find");
+    assert_eq!(
+        all_paths(&index),
+        ["/opt/two.txt", "/usr/one.txt", "/var/three.txt"],
+        "a root swept after the first must keep the rows the walk saw"
+    );
 }

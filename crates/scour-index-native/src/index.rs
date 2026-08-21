@@ -2312,7 +2312,7 @@ impl Index for NativeIndex {
     fn sweep(
         &self,
         source: SourceId,
-        under_path: &str,
+        under: &[String],
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> Result<u64> {
@@ -2324,6 +2324,11 @@ impl Index for NativeIndex {
         self.flush(&mut inner)?;
         close_generation(&mut inner, generation);
         let mut gone = 0u64;
+        // **Taken once, for every root of the walk.** These are the marks
+        // saying "the pass saw this row and it had not moved", and they belong
+        // to the pass rather than to any one root — see the trait, and the
+        // live index that deleted three of its four roots on alternate walks
+        // when this was taken per root.
         let inner_seen = std::mem::take(&mut inner.seen);
         let mut touched = vec![false; inner.segments.len()];
         for (i, live) in inner.segments.iter_mut().enumerate() {
@@ -2332,22 +2337,29 @@ impl Index for NativeIndex {
             }
             let victims: Vec<usize> = {
                 let seg = live.view()?;
-                let whole = under_path.is_empty() || under_path == "/";
-                let scope = seg.dirs.subtree(under_path);
+                // One root that is the whole tree makes every other root
+                // redundant, which is what `whole` has always meant.
+                let whole = under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty();
+                let scopes: Vec<_> = under.iter().map(|p| seg.dirs.subtree(p)).collect();
                 // The swept directory's **own** row is not under itself: it
                 // lives in its parent and carries the parent's number, so the
                 // range check walks straight past it. Same trap as in
                 // `flush_prepare`, same answer — the parent's number and the
                 // last component, and the name is read only for the handful of
                 // rows that sit there.
-                let own: Option<(u32, &str)> = (!whole)
-                    .then(|| {
-                        let p = under_path.trim_end_matches('/');
-                        let (parent, name) = p.rsplit_once('/')?;
-                        let parent = if parent.is_empty() { "/" } else { parent };
-                        Some((seg.dirs.exact(parent)?, name))
-                    })
-                    .flatten();
+                let owns: Vec<(u32, &str)> = if whole {
+                    Vec::new()
+                } else {
+                    under
+                        .iter()
+                        .filter_map(|p| {
+                            let p = p.trim_end_matches('/');
+                            let (parent, name) = p.rsplit_once('/')?;
+                            let parent = if parent.is_empty() { "/" } else { parent };
+                            Some((seg.dirs.exact(parent)?, name))
+                        })
+                        .collect()
+                };
                 // **No path is built per row, and that is the whole cost of
                 // this loop.** It used to fall back to
                 // `under(&seg.path(row, …), under_path)` for every row the
@@ -2361,7 +2373,7 @@ impl Index for NativeIndex {
                 // its parent, so a descendant is in `scope.below` and a child is
                 // `scope.own`. An empty scope with no `own` means the segment
                 // holds nothing under the path at all.
-                if !whole && scope.is_empty() && own.is_none() {
+                if !whole && scopes.iter().all(|s| s.is_empty()) && owns.is_empty() {
                     Vec::new()
                 } else {
                     // Rows the walk found unchanged are stamped here rather
@@ -2404,10 +2416,10 @@ impl Index for NativeIndex {
                                 return true;
                             }
                             let d = seg.dir_id(row);
-                            scope.contains(d)
-                                || own.is_some_and(|(pd, name)| {
-                                    pd == d && seg.names.get(row) == Some(name)
-                                })
+                            scopes.iter().any(|s| s.contains(d))
+                                || owns
+                                    .iter()
+                                    .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
                         })
                         .collect()
                 }

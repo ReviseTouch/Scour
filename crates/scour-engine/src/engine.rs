@@ -2082,16 +2082,25 @@ fn scan(
     let could_look = !vouched.is_empty();
     let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
     if trustworthy {
-        let mut gone = 0;
-        for r in vouched {
-            match shared.index.sweep(src.id(), &r, generation, &spare) {
-                Ok(n) => gone += n,
-                // Half a reconciliation. Saying so is all that can be done
-                // here; the retry is the caller's, and the rows that should
-                // have gone are found again by the next full scan.
-                Err(e) => scour_core::note!("scourd: {r} could not be reconciled: {e}"),
+        // **One call for every root the walk vouched for.** A pass notes the
+        // rows it found unchanged so that an untouched filesystem does not
+        // have to be rewritten to prove it is still there, and those notes are
+        // the pass's rather than any one root's. Sweeping root by root, the
+        // first call consumed them and every root after it was reconciled
+        // against nothing: this source is rooted at `/usr /etc /opt /var`, and
+        // the last three were deleted on every other walk and put back on the
+        // one between — `/opt` alternating between 5,477 rows and none, about
+        // once a minute, for as long as the service was up.
+        let gone = match shared.index.sweep(src.id(), &vouched, generation, &spare) {
+            Ok(n) => n,
+            // Half a reconciliation. Saying so is all that can be done here;
+            // the retry is the caller's, and the rows that should have gone
+            // are found again by the next full scan.
+            Err(e) => {
+                scour_core::note!("scourd: {vouched:?} could not be reconciled: {e}");
+                0
             }
-        }
+        };
         // A sweep takes effect at once, like any other removal, so anyone
         // watching should hear about it now rather than at the next commit.
         // The walk's own upserts are staged and announce themselves then.
