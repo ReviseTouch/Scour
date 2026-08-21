@@ -1110,16 +1110,15 @@ export component MainWindow inherits Window {
             height: 63px;
             background: Theme.panel;
 
-            // **The line under the query says whether it has the keyboard.**
-            // Nothing did: the caret blinks in a field with no edge to it, and
-            // a window where a panel or the list has focus looked exactly like
-            // one where the query does. The page draws the same line and
-            // brightens it the same way.
+            // The line between the query and what is under it. **It used to
+            // brighten when the field had focus**, which was the only thing
+            // saying so while the field had no edge of its own. The field has
+            // one now, and two things saying "the keyboard is here" is one
+            // more than a person can read: this went back to being a rule.
             Rectangle {
-                y: parent.height - (input.has-focus ? 2px : 1px);
-                height: input.has-focus ? 2px : 1px;
-                background: input.has-focus ? Theme.q-key : Theme.line;
-                animate background { duration: 120ms; }
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
             }
 
             HorizontalLayout {
@@ -1144,8 +1143,26 @@ export component MainWindow inherits Window {
                 // has no placeholder of its own, so the hint is drawn under it
                 // and hidden the moment anything is typed — which is how the
                 // page does it too, and why the two look the same when empty.
-                Rectangle {
+                // **A box, because a line of text is not one.** The query was
+                // twenty-pixel type on the window's own background with a rule
+                // under the whole row: it read as a heading that happened to be
+                // editable. A ground a shade off the panel, a border, and a
+                // corner is the least that says "type here" — and the border
+                // is where focus is said, which is the other half of what was
+                // missing.
+                field := Rectangle {
                     horizontal-stretch: 1;
+                    background: Theme.panel-2;
+                    border-radius: 4px;
+                    border-width: 1px;
+                    border-color: input.has-focus ? Theme.focus : Theme.line;
+                    animate border-color { duration: 120ms; }
+                    // **One number, used by all three layers.** The coloured
+                    // text, the placeholder and the invisible input have to
+                    // line up character for character — that is what makes the
+                    // colouring work — so where they start is a property
+                    // rather than a figure written three times.
+                    property <length> pad: 9px;
 
                     // **The colours are a layer under a transparent box.**
                     // Slint has no range colouring for editable text — the
@@ -1156,6 +1173,8 @@ export component MainWindow inherits Window {
                     // the same monospace at the same size, so the two line up
                     // character for character.
                     HorizontalLayout {
+                        x: field.pad;
+                        width: parent.width - field.pad * 2;
                         alignment: start;
                         for sp[i] in root.spans: Text {
                             text: sp.text;
@@ -1178,8 +1197,8 @@ export component MainWindow inherits Window {
                     // "empty" while the coloured layer under it said `dm:17d`
                     // — and the placeholder sat on top of it.
                     if root.spans.length == 0: Text {
-                        x: 0;
-                        width: parent.width;
+                        x: field.pad;
+                        width: parent.width - field.pad * 2;
                         text: root.hint;
                         color: Theme.ink-3;
                         font-family: Fonts.mono;
@@ -1190,6 +1209,21 @@ export component MainWindow inherits Window {
                     }
 
                 input := TextInput {
+                    // **The whole box, not the width of what is typed.** A
+                    // child of a `Rectangle` gets its *preferred* size unless
+                    // it is given one, and a text input's preferred width is
+                    // its text — so this was a few characters wide, sitting at
+                    // the left of a field that looked like a field. Everything
+                    // that reads as broken about a text box followed from it:
+                    // no pointer over the empty part, therefore no I-beam;
+                    // nothing to click, therefore no way to put the caret
+                    // anywhere; and clicking what looked like the field did
+                    // nothing at all. Slint sets the I-beam itself when the
+                    // pointer is over a `TextInput` — it simply was not over
+                    // one.
+                    x: field.pad;
+                    width: parent.width - field.pad * 2;
+                    height: parent.height;
                     text <=> root.query;
                     // Invisible ink: what the reader sees is the coloured layer
                     // underneath. The caret is drawn by the input itself and is
@@ -1200,6 +1234,12 @@ export component MainWindow inherits Window {
                     font-family: Fonts.mono;
                     single-line: true;
                     vertical-alignment: center;
+                    // **Two pixels, and said here.** The default comes from a
+                    // style, and this window links none — a caret that is
+                    // sometimes a hairline and sometimes nothing is not a
+                    // thing to leave to a default. At twenty pixels of
+                    // monospace, one pixel is a caret you look for.
+                    text-cursor-width: 2px;
                     selection-background-color: Theme.selection;
                     selection-foreground-color: Theme.ink;
 
