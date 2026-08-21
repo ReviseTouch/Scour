@@ -173,7 +173,15 @@ impl Drop for Permit<'_> {
 }
 
 /// Is there a thumbnailer for this name at all? No I/O.
+///
+/// **A file that is itself a thumbnail is refused here**, where the fence is,
+/// rather than only in the frontends that ask. See [`crate::is_one`]: the
+/// cache is a directory of PNGs, so a search for pictures finds them, and
+/// making thumbnails of them writes more PNGs into the same directory.
 pub fn can_make(path: &str) -> bool {
+    if crate::is_one(path) {
+        return false;
+    }
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     crate::known::known().can(name)
 }

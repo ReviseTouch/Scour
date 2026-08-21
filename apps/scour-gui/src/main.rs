@@ -76,7 +76,7 @@ fn deliver(got: Got) {
 /// `SCOUR_TRACE=1 scour-gui` — because the interesting failures here are the
 /// ones where a keystroke goes in and nothing comes out, and the only way to
 /// tell which of the four steps dropped it is to watch all four.
-fn trace(what: &str) {
+pub fn trace(what: &str) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *ON.get_or_init(|| std::env::var("SCOUR_TRACE").is_ok()) {
         eprintln!("gui: {what}");
@@ -244,6 +244,26 @@ struct State {
     /// The index revision this window has already seen. The long poll waits
     /// for anything past it.
     revision: u64,
+    /// A batch of pictures is out and has not been answered.
+    ///
+    /// **One at a time, on the whole window.** A batch is several processes
+    /// decoding video; sending the next one before the last is answered is
+    /// how a scroll turns into a queue of work for rows nobody is looking at
+    /// any more. The page holds the same flag for the same reason.
+    asking_pictures: bool,
+    /// Files the service has already been asked about, oldest first.
+    ///
+    /// **This has to outlive the rows, which is why it is not on them.** The
+    /// list is live: while the index is being scanned a page is refetched
+    /// several times a second, and every refetch is a fresh row that has
+    /// never been looked at. Without this, a file nothing can draw is asked
+    /// about again on every refresh — measured at eleven thumbnailers started
+    /// a second time for the same three pictures.
+    ///
+    /// Bounded and oldest-out, because it is a window over a result that can
+    /// be millions of rows and an unbounded set of paths is a leak with a
+    /// respectable name.
+    asked_pictures: std::collections::VecDeque<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -599,6 +619,8 @@ fn main() -> Result<()> {
         page_sent: None,
         asked_at: None,
         page_cost_us: 0,
+        asking_pictures: false,
+        asked_pictures: std::collections::VecDeque::new(),
         rewind: true,
         typed_at: None,
         shown: 0,
@@ -1506,6 +1528,7 @@ fn main() -> Result<()> {
                 });
                 lines.sync();
                 follow(&w, &state, &link, &rows);
+                pictures(&w, &state, &link, &rows, &lines);
             },
         );
     }
@@ -1880,6 +1903,68 @@ fn main() -> Result<()> {
 /// the loaded page, useless the moment a page lands somewhere the eye is not,
 /// because then there is no missing row to draw and the view says nothing.
 /// That is the shape of "only the first page ever loads".
+/// Pictures for what is on screen: draw the ones the desktop has already made,
+/// and ask for the ones it could make.
+///
+/// **After the drawing, on the tick, and never on the path a keystroke takes.**
+/// Making a thumbnail is a separate process doing image decoding; nothing about
+/// it may be in front of a paint, a scroll or a keystroke. What runs here is a
+/// bounded number of `stat` calls and PNG decodes — see
+/// [`rows::Rows::look_for_pictures`], which is where every bound is.
+///
+/// A little past the bottom of the window as well as what is in it: scrolling
+/// a row at a time should not be a picture arriving a row at a time.
+fn pictures(
+    w: &MainWindow,
+    state: &Rc<RefCell<State>>,
+    link: &Rc<Link>,
+    rows: &Rc<rows::Rows>,
+    lines: &Rc<rows::Lines>,
+) {
+    /// How many rows are looked at per tick. Ten ticks a second, so a
+    /// screenful is filled inside a second even in the tile view.
+    const LOOKED_AT: usize = 24;
+    /// How far past the bottom of the window to look.
+    const AHEAD: usize = 12;
+    /// How many paths the "already asked" memory holds. The page's number,
+    /// and for the page's reason: a few screenfuls of scrolling either way.
+    const REMEMBERED: usize = 4096;
+    let visible = w.get_visible_rows().max(0) as usize;
+    let first = w.get_first_row().max(0) as usize;
+    let (drawn, ask) = rows.look_for_pictures(first, first + visible + AHEAD, LOOKED_AT);
+    if drawn > 0 {
+        trace(&format!("{drawn} picture(s) drawn"));
+        // The tiles hold the same rows, so the lines carrying them changed.
+        lines.touched(first, first + visible + AHEAD);
+    }
+    if ask.is_empty() {
+        return;
+    }
+    let mut s = state.borrow_mut();
+    if s.asking_pictures {
+        return;
+    }
+    let already: std::collections::HashSet<&str> =
+        s.asked_pictures.iter().map(String::as_str).collect();
+    let ask: Vec<String> = ask
+        .iter()
+        .filter(|p| !already.contains(p.as_str()))
+        .cloned()
+        .collect();
+    if ask.is_empty() {
+        return;
+    }
+    for path in &ask {
+        if s.asked_pictures.len() >= REMEMBERED {
+            s.asked_pictures.pop_front();
+        }
+        s.asked_pictures.push_back(path.clone());
+    }
+    s.asking_pictures = true;
+    drop(s);
+    link.send(Ask::Thumbnails { files: ask });
+}
+
 fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
     let visible = w.get_visible_rows().max(0) as usize;
     let first = w.get_first_row().max(0) as usize;
@@ -2506,6 +2591,23 @@ fn apply(
         // being the same file**, and the word for a group says which of the
         // two it is — `content` means read end to end and compared, and
         // nothing else licenses the word "duplicate".
+        // **The pictures the service managed to make**, marked so the tick
+        // that follows loads them. `ran` is the number this design has to be
+        // judged on — how many processes a screenful of unseen files actually
+        // starts — and it is traced rather than hidden, exactly as the page
+        // reports it.
+        Got::Thumbnails(reply) => {
+            state.borrow_mut().asking_pictures = false;
+            let Response::Thumbnails(made) = *reply else {
+                return;
+            };
+            trace(&format!(
+                "{} picture(s) ready, {} thumbnailer(s) run",
+                made.ready.len(),
+                made.ran
+            ));
+            rows.made_pictures(&made.ready);
+        }
         Got::Dupes(reply) => {
             let Response::Duplicates {
                 groups,
@@ -3532,6 +3634,8 @@ mod tests {
             page_sent: None,
             asked_at: None,
             page_cost_us: 0,
+            asking_pictures: false,
+            asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
             typed_at: None,
             shown: 0,
@@ -3591,6 +3695,8 @@ mod tests {
             page_sent: None,
             asked_at: None,
             page_cost_us: 0,
+            asking_pictures: false,
+            asked_pictures: std::collections::VecDeque::new(),
             rewind: false,
             typed_at: None,
             shown: 4,

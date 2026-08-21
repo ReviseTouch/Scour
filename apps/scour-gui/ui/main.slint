@@ -54,6 +54,20 @@ export struct Row {
     // In the selection. Several rows can be, and what is done with them is
     // done to all of them at once — see the bar under the list.
     picked: bool,
+    // The desktop's own thumbnail of this file, when one has been made.
+    //
+    // Filled in after the row lands, not with it: see `pictures` in `main.rs`.
+    // A page is two hundred rows and decoding two hundred PNGs to draw thirty
+    // of them is thirty milliseconds of somebody's scroll.
+    thumb: image,
+    // Whether `thumb` holds one, said as a flag.
+    //
+    // **Asking the image itself was measured and is not free.** The fifteen
+    // glyph conditions on every row each asked an `image` for its width, and
+    // an idle window with a list on screen went from 22% of a core to 49%. A
+    // flag beside it duplicates something only in the sense that costs
+    // nothing to keep and something to ask for.
+    shot: bool,
 }
 
 // One facet of the rail: a kind, its count, and the token that filters by it.
@@ -2334,85 +2348,98 @@ export component MainWindow inherits Window {
                             VerticalLayout {
                                 alignment: center;
                                 width: 15px;
-                            if here.ktoken == "folder": Image {
+                            // **The picture, when the desktop has made one.**
+                            // Fifteen pixels in a row of twenty-four: enough
+                            // to tell two photographs apart, which is the
+                            // whole of what an icon in a detail list is for.
+                            // `cover` rather than `contain` because a
+                            // thumbnail is not square and a letterboxed one
+                            // reads as a smaller icon rather than a picture.
+                            if here.shot: Image {
+                                width: 15px;
+                                height: 15px;
+                                source: here.thumb;
+                                image-fit: cover;
+                            }
+                            if here.shot == false && here.ktoken == "folder": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/folder.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "doc": Image {
+                            if here.shot == false && here.ktoken == "doc": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/doc.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "code": Image {
+                            if here.shot == false && here.ktoken == "code": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/code.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "image": Image {
+                            if here.shot == false && here.ktoken == "image": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/image.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "video": Image {
+                            if here.shot == false && here.ktoken == "video": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/video.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "media": Image {
+                            if here.shot == false && here.ktoken == "media": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/media.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "audio": Image {
+                            if here.shot == false && here.ktoken == "audio": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/audio.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "archive": Image {
+                            if here.shot == false && here.ktoken == "archive": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/archive.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "exec": Image {
+                            if here.shot == false && here.ktoken == "exec": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/exec.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "data": Image {
+                            if here.shot == false && here.ktoken == "data": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/data.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "config": Image {
+                            if here.shot == false && here.ktoken == "config": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/config.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "font": Image {
+                            if here.shot == false && here.ktoken == "font": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/font.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "build": Image {
+                            if here.shot == false && here.ktoken == "build": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/build.svg");
                                 colorize: here.tint;
                             }
-                            if here.ktoken == "file": Image {
+                            if here.shot == false && here.ktoken == "file": Image {
                                 width: 15px;
                                 height: 15px;
                                 source: @image-url("icons/file.svg");
@@ -2556,12 +2583,28 @@ export component MainWindow inherits Window {
                                     spacing: 4px;
                                     alignment: center;
 
-                                    // A wall of squares is read by hue before
-                                    // it is read by name, so the kind's colour
-                                    // is the tile and the name sits under it.
+                                    // **The picture where there is one, the
+                                    // kind's colour where there is not.** A
+                                    // wall of squares is read by hue before it
+                                    // is read by name; a wall of photographs
+                                    // is read by the photographs, which is the
+                                    // reason a tile view exists at all.
                                     Rectangle {
                                         height: root.pic;
-                                        Rectangle {
+                                        if cell.shot: Image {
+                                            width: root.pic;
+                                            height: root.pic;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            source: cell.thumb;
+                                            // The whole picture, not a crop:
+                                            // in a grid the shape of a
+                                            // photograph is part of what
+                                            // identifies it, and a cropped
+                                            // wall of squares gives that up.
+                                            image-fit: contain;
+                                        }
+                                        if cell.shot == false: Rectangle {
                                             width: root.pic * 0.55;
                                             height: root.pic * 0.55;
                                             x: (parent.width - self.width) / 2;

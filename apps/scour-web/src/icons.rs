@@ -47,10 +47,7 @@ pub fn thumbnail(path: &str) -> Option<Picture> {
 /// Asked once per row of a page, so that the page requests only the pictures
 /// that exist rather than two hundred that mostly do not.
 pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
-    if never(kind) {
-        return false;
-    }
-    scour_thumbs::cache::existing(path).is_some()
+    scour_thumbs::has(path, kind.token())
 }
 
 /// Nothing has made one — but could something be asked to?
@@ -65,24 +62,7 @@ pub fn has_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
 /// It says nothing about whether the attempt would *succeed*. That costs a
 /// process, and the answer to it is the failure directory the service keeps.
 pub fn may_thumbnail(path: &str, kind: scour_core::Kind) -> bool {
-    if never(kind) {
-        return false;
-    }
-    scour_thumbs::can_make(path)
-}
-
-/// The kinds no thumbnailer will ever be asked about.
-///
-/// **`kind` is asked first because the alternative is four `stat` calls.** A
-/// thumbnail is looked for in four size directories and a row that has none —
-/// which is nearly every row — pays for all four. On a machine where half the
-/// files are source and build output, most of those questions have a known
-/// answer: nothing thumbnails a `.rs` file, a directory or an ELF binary. The
-/// unknown kind is still asked, because a picture with an unhelpful name is
-/// exactly the case where the desktop knows better than the extension does.
-fn never(kind: scour_core::Kind) -> bool {
-    use scour_core::Kind::*;
-    matches!(kind, Dir | Code | Build | Exec | Archive)
+    scour_thumbs::may(path, kind.token())
 }
 
 fn read(p: &Path) -> Option<Picture> {

@@ -5468,3 +5468,44 @@ from the catalogue, so a translated string is not copied on its way to
 the screen, and the two places that measure a word's width — the tool
 row and the selection bar — measure the translated one, because they are
 the same function that draws it.
+
+## 2026-08-21 — an empty picture is not equal to itself
+
+The window learned to draw the desktop's thumbnails. The first version cost
+**twice the idle CPU** of the one before it, on a query where no row can ever
+have a picture:
+
+| idle, `kind:code` on screen, four alternating rounds | |
+|---|---:|
+| before | 19,9 · 21,0 · 21,9 · 23,2 % |
+| with pictures, first version | 48,1 · 48,6 · 49,2 % |
+| with the field but nothing drawn | 49,6 · 49,7 · 50,2 % |
+| with the picture pass removed | 47,4 · 48,2 % |
+| **after the fix** | **24,7 · 25,1 · 25,4 %** |
+
+The third and fourth rows are what found it: the cost was there with the
+drawing removed *and* with the work removed, so it was neither. What was left
+was the `image` field on the row struct.
+
+`i-slint-core`'s `PartialEq for ImageInner` has no arm for two empty images —
+`(None, None)` falls through to `_ => false`. A row whose picture was
+`Image::default()` therefore compared **unequal to itself**, every row looked
+like a row that had changed, and the list repainted every frame.
+
+The fix is one pixel of transparent nothing, made once and cloned into every
+row: a clone shares its buffer, and that is what the comparison reads. Nothing
+draws it — a `shot: bool` beside it says whether there is a picture, which is
+also cheaper than asking an `image` for its width, itself worth 25 points of a
+core when fifteen conditions per row ask it.
+
+What remains is ~3,5 points over the old build for a field on every row, one
+more condition per glyph, and a ten-a-second pass over the visible rows — and
+that pass now returns on an integer test when there is nothing unlooked-at.
+The run-to-run drift on this machine, with a live index being scanned
+underneath, is of the same size; do not read the last row as exactly 3,5.
+
+**What the pictures cost when there are some**: the desktop's own thumbnailers,
+started by the service, four at a time, bounded to a batch of 32 — the window
+asks and never runs one itself. A screenful of images that have never been
+seen starts a few dozen processes and no more, which is the number `ran` in
+the trace is there to make checkable.

@@ -36,6 +36,11 @@ scour-page     = { workspace = true }
 # For `Change` alone: what this window remembers goes to the service, so the
 # browser page opens in the same language and the same shape.
 scour-settings = { workspace = true }
+# The desktop's thumbnail cache: where a picture lives, and which kinds are
+# never worth looking for one. **Nothing here makes a thumbnail** — that starts
+# processes, and the service is the only thing allowed to; this window asks it,
+# exactly as the browser page does.
+scour-thumbs   = { workspace = true }
 # For the `Places` reply's type alone; the answer comes over the socket.
 scour-places   = { workspace = true }
 anyhow       = { workspace = true }

@@ -69,6 +69,7 @@ Bunlar bir kez yazılır:
 | `scour-settings` | sütun genişliği, dil, düzen, **hangi yüz açılır**, atlama kuralları | dört yüzün ortak hafızası; `config.toml` elle yazılan dosya olarak kalır |
 | `scour-i18n` | katalog, **dil sırası**: seçilen → `config.toml` → masaüstü → İngilizce | `.po` dosyaları; kodda İngilizce msgid. Sıra `choose()` içinde bir kez yazılıdır; pencere kendi kopyasını tutuyordu ve `SCOUR_LANG`'i görmüyordu |
 | `scour-places` | masaüstünün kendi klasörleri, hangi bölüm okuma zamanı tutar | bir makine sorusu, bir indeks sorusu değil |
+| `scour-thumbs` | küçük resim önbelleği nerede, hangi türe hiç bakılmaz, kim üretebilir | dört `stat`'ı hangi satırın hak ettiği tek kural; sayfa ve pencere aynı soruyu soruyor |
 
 Bir şey **iki yüzde birden** gerekiyorsa yeri buradadır. Üçüncü kopya yazılıyorsa
 bir şey yanlış gidiyordur.

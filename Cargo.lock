@@ -5084,6 +5084,7 @@ dependencies = [
  "scour-places",
  "scour-proto",
  "scour-settings",
+ "scour-thumbs",
  "scour-ui",
  "slint",
  "slint-build",

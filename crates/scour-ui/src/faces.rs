@@ -188,7 +188,7 @@ pub const FEATURES: &[Feature] = &[
         what: "pictures of pictures",
         faces: [
             Has,
-            Not("not yet"),
+            Has,
             Not("would need kitty or sixel"),
             Never("no pixels"),
         ],

@@ -102,6 +102,18 @@ pub enum Ask {
     Remember {
         change: scour_settings::Change,
     },
+    /// Make thumbnails for these files, if the desktop declares something
+    /// that can.
+    ///
+    /// **Asked of the service, which is where the bound and the fence are.**
+    /// This window could run the thumbnailers itself — it is on the same
+    /// desktop — and that is exactly the arrangement the design refuses: four
+    /// at once *on the machine*, not four per face, and one place deciding
+    /// which paths may be touched. The browser page takes the same route for
+    /// the same reason.
+    Thumbnails {
+        files: Vec<String>,
+    },
     /// This desktop's own folders, asked once at start-up.
     ///
     /// **Of the service, not of `scour-places` directly**, even though the
@@ -158,6 +170,7 @@ pub enum Got {
         reply: Box<Response>,
     },
     Dupes(Box<Response>),
+    Thumbnails(Box<Response>),
     Rules(Box<Response>),
     Status(Box<Response>),
     Awake(Box<Response>),
@@ -247,6 +260,7 @@ impl Freshness {
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
+            | Ask::Thumbnails { .. }
             | Ask::Dupes { .. } => true,
             Ask::Stop => true,
         }
@@ -305,6 +319,10 @@ impl Link {
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
             | Ask::Dupes { .. }
+            // **Never the fast lane.** One of these is several processes
+            // decoding video; a keystroke queued behind it would be the one
+            // failure this whole arrangement exists to prevent.
+            | Ask::Thumbnails { .. }
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
@@ -340,6 +358,8 @@ enum Lane {
     Biggest,
     /// The same file, several times over.
     Dupes,
+    /// Pictures the desktop has been asked to make.
+    Thumbnails,
     /// The exclusion rules.
     Rules,
     /// What the service is holding.
@@ -549,6 +569,7 @@ fn spawn_lane(
                     },
                     Lane::Dupes,
                 ),
+                Ask::Thumbnails { files } => (0, Request::Thumbnails { files }, Lane::Thumbnails),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Await { since } => (
@@ -618,6 +639,7 @@ fn spawn_lane(
                             reply,
                         },
                         Lane::Dupes => Got::Dupes(reply),
+                        Lane::Thumbnails => Got::Thumbnails(reply),
                         Lane::Rules => Got::Rules(reply),
                         Lane::Status => Got::Status(reply),
                         Lane::Await => Got::Awake(reply),
@@ -652,6 +674,7 @@ fn spawn_lane(
                             | Lane::Kinds
                             | Lane::Biggest
                             | Lane::Dupes
+                            | Lane::Thumbnails
                             | Lane::Explain => ReplyRevision::Query(revision),
                         };
                         sink(Got::Refused {

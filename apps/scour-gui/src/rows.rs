@@ -12,6 +12,30 @@ use scour_core::{Hit, Kind, text::Folder};
 
 use crate::Row;
 
+/// The picture a row has when it has none.
+///
+/// **Not `Image::default()`, and this was expensive.** Slint's `PartialEq` for
+/// an image has no arm for two empty ones — `ImageInner::None` against
+/// `ImageInner::None` falls through to `_ => false` — so a row whose picture
+/// was the default compared unequal *to itself*. Every row of every frame then
+/// looked like a row that had changed, and an idle window with a list on
+/// screen went from 25% of a core to 49%.
+///
+/// One pixel of nothing, made once and cloned into every row, is equal to
+/// itself: the clone shares the buffer, and that is what the comparison reads.
+/// Nothing draws it — [`crate::Row`]'s `shot` decides what is drawn — it only
+/// has to be a value that can be compared.
+fn blank() -> slint::Image {
+    thread_local! {
+        static BLANK: slint::Image = {
+            let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(1, 1);
+            buffer.make_mut_bytes().fill(0);
+            slint::Image::from_rgba8(buffer)
+        };
+    }
+    BLANK.with(slint::Image::clone)
+}
+
 /// Which of the six age bands a row falls in — the stripe down its left.
 /// [`scour_ui::format::band`] is the one that decides; this is the cast the
 /// generated Slint struct wants.
@@ -103,6 +127,11 @@ pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> R
         is_dir: h.is_dir,
         age: band(now, h.meta.mtime),
         picked: false,
+        // Empty, and filled in after the row is on screen — see
+        // [`Rows::look_for_pictures`]. A page is two hundred rows and the eye
+        // is on thirty of them.
+        thumb: blank(),
+        shot: false,
     }
 }
 
@@ -190,6 +219,30 @@ pub use scour_page::SPAN;
 pub struct Kept {
     pub row: Row,
     pub bytes: i64,
+    /// How far this row has got with its picture.
+    pub pic: Pic,
+}
+
+/// What is known about a row's thumbnail.
+///
+/// **The memory of "already looked" lives on the row, not in a set beside the
+/// list.** A window that stats the visible rows on every tick is four hundred
+/// syscalls a second asking a question whose answer does not change; a set of
+/// paths that remembers the answer has to be bounded, and then it is a cache
+/// with an eviction policy to get wrong. A page carries this and it dies with
+/// the page, which is exactly the lifetime the answer is good for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pic {
+    /// Nobody has looked yet.
+    Unknown,
+    /// Looked, and there is none — but the desktop declares something that
+    /// could make one, so it is worth asking the service.
+    Missing,
+    /// Looked, and there never will be one: no thumbnailer for this type, or
+    /// a kind that is never worth a `stat`.
+    Nothing,
+    /// Drawn.
+    Shown,
 }
 
 /// One row of a selection: what it is, where, and what it weighs.
@@ -258,6 +311,18 @@ pub struct Rows {
     /// Kept because it is the number the scrolling bug was made of: it should
     /// move when the result's length changes and at no other time.
     resets: Cell<u64>,
+    /// How many rows in hand nobody has looked for a picture for.
+    ///
+    /// **So that the ten-a-second sweep can decide not to run.** Once every
+    /// row on screen has been settled there is nothing for it to find, and
+    /// walking the visible range to learn that is work done forty times a
+    /// second for an answer that has not changed.
+    ///
+    /// It is allowed to be too high and never too low: a page dropped from the
+    /// window takes its unlooked-at rows with it and this does not hear about
+    /// it, which costs one sweep that finds nothing. Too low would lose a
+    /// picture.
+    unlooked: Cell<usize>,
     notify: slint::ModelNotify,
 }
 
@@ -268,6 +333,7 @@ impl Default for Rows {
             touched: Cell::new(usize::MAX),
             want: Cell::new(None),
             resets: Cell::new(0),
+            unlooked: Cell::new(0),
             notify: slint::ModelNotify::default(),
         }
     }
@@ -293,15 +359,27 @@ impl Rows {
         // whole list orange at every stop — two hundred files that had not
         // changed since 2019, announcing themselves as changes.
         let mut arrived = false;
+        // **What this page already knew about its rows, kept by path.** Two
+        // things survive a refetch: whether a row is an arrival, and the
+        // picture it was drawn with. The second is not a nicety — the list is
+        // live, so during a scan a page comes back several times a second, and
+        // a version that started every row from nothing re-`stat`ed and
+        // re-decoded the same pictures on every one of them.
+        let mut known: std::collections::HashMap<String, Pic> = std::collections::HashMap::new();
+        let mut drawn: std::collections::HashMap<String, slint::Image> =
+            std::collections::HashMap::new();
         {
             let pages = self.pages.borrow();
             if pages.holds(page) {
-                let had: std::collections::HashSet<String> = (0..SPAN)
-                    .filter_map(|i| pages.at(page * SPAN + i))
-                    .map(|k| k.row.path.to_string())
-                    .collect();
+                for kept in (0..SPAN).filter_map(|i| pages.at(page * SPAN + i)) {
+                    let path = kept.row.path.to_string();
+                    if kept.pic == Pic::Shown {
+                        drawn.insert(path.clone(), kept.row.thumb.clone());
+                    }
+                    known.insert(path, kept.pic);
+                }
                 for row in rows.iter_mut() {
-                    row.fresh = !row.path.is_empty() && !had.contains(row.path.as_str());
+                    row.fresh = !row.path.is_empty() && !known.contains_key(row.path.as_str());
                     arrived |= row.fresh;
                 }
             }
@@ -309,11 +387,30 @@ impl Rows {
         let kept: Vec<Kept> = rows
             .into_iter()
             .enumerate()
-            .map(|(i, row)| Kept {
-                row,
-                bytes: bytes.get(i).copied().unwrap_or(0),
+            .map(|(i, mut row)| {
+                let pic = known
+                    .get(row.path.as_str())
+                    .copied()
+                    .unwrap_or(Pic::Unknown);
+                if pic == Pic::Shown
+                    && let Some(image) = drawn.get(row.path.as_str())
+                {
+                    row.thumb = image.clone();
+                    row.shot = true;
+                }
+                Kept {
+                    bytes: bytes.get(i).copied().unwrap_or(0),
+                    // A row that had no picture and was never looked at is
+                    // still unlooked-at; one that was found to have none stays
+                    // found, until the page is dropped and the whole question
+                    // is asked again.
+                    pic,
+                    row,
+                }
             })
             .collect();
+        self.unlooked
+            .set(self.unlooked.get() + kept.iter().filter(|k| k.pic == Pic::Unknown).count());
         let change = self.pages.borrow_mut().put(page, kept, total);
         self.want.set(None);
         self.tell(change);
@@ -485,6 +582,116 @@ impl Rows {
         for row in changed {
             self.notify.row_changed(row);
         }
+    }
+
+    /// Look up the pictures for the rows in sight, and draw the ones that are
+    /// already on disk.
+    ///
+    /// Returns `(drawn, worth asking for)`: the rows whose picture was found
+    /// and set, and the paths the service could be asked to make one for.
+    ///
+    /// **Bounded three ways, because this runs on the drawing thread.** Only
+    /// rows in the range given, only rows nobody has looked at yet, and only
+    /// `batch` of them per call — a page is two hundred rows and a `stat`
+    /// storm on a tick is the thing this whole design is arranged to avoid.
+    /// What it costs per row is at most four `stat` calls and one PNG decode,
+    /// and the kind rules most rows out before either.
+    pub fn look_for_pictures(&self, from: usize, to: usize, batch: usize) -> (usize, Vec<String>) {
+        if self.unlooked.get() == 0 {
+            return (0, Vec::new());
+        }
+        let mut drawn = Vec::new();
+        let mut ask = Vec::new();
+        let mut looked = 0usize;
+        {
+            let mut pages = self.pages.borrow_mut();
+            let mut row = from;
+            while row < to && looked < batch {
+                let page = Self::page_of(row);
+                let Some(rows) = pages.rows_mut(page) else {
+                    // A page nobody has fetched yet: skip to the next one
+                    // rather than asking about every row it would hold.
+                    row = (page + 1) * SPAN;
+                    continue;
+                };
+                let Some(kept) = rows.get_mut(row % SPAN) else {
+                    row += 1;
+                    continue;
+                };
+                if kept.pic != Pic::Unknown || kept.row.path.is_empty() {
+                    row += 1;
+                    continue;
+                }
+                looked += 1;
+                self.unlooked.set(self.unlooked.get().saturating_sub(1));
+                let path = kept.row.path.to_string();
+                let token = kept.row.ktoken.to_string();
+                // **The kind first, and it is not a tidiness question.**
+                // `existing` is four `stat` calls when the answer is no, and
+                // the answer is no for nearly every row; `never_for` is a
+                // match on a word. Asked the other way round, this put four
+                // syscalls on every source file that scrolled past.
+                let found = if scour_thumbs::never_for(&token) {
+                    None
+                } else {
+                    scour_thumbs::cache::existing(&path)
+                };
+                match found {
+                    Some(picture) => match slint::Image::load_from_path(&picture) {
+                        Ok(image) => {
+                            kept.row.thumb = image;
+                            kept.row.shot = true;
+                            kept.pic = Pic::Shown;
+                            drawn.push(row);
+                        }
+                        // A file in the cache that will not decode is not
+                        // worth asking the service to remake: the desktop put
+                        // it there and something else is wrong with it.
+                        Err(e) => {
+                            crate::trace(&format!("{} would not decode: {e}", picture.display()));
+                            kept.pic = Pic::Nothing;
+                        }
+                    },
+                    None if scour_thumbs::may(&path, &token) => {
+                        kept.pic = Pic::Missing;
+                        ask.push(path);
+                    }
+                    None => kept.pic = Pic::Nothing,
+                }
+                row += 1;
+            }
+        }
+        for row in &drawn {
+            self.notify.row_changed(*row);
+        }
+        (drawn.len(), ask)
+    }
+
+    /// The service has made these; look at them again on the next tick.
+    ///
+    /// **Marked rather than loaded here.** Loading is a decode per row and it
+    /// belongs on the same bounded path everything else takes, so this only
+    /// undoes the "already looked" mark — the tick that follows finds them.
+    pub fn made_pictures(&self, ready: &[String]) {
+        if ready.is_empty() {
+            return;
+        }
+        let made: std::collections::HashSet<&str> = ready.iter().map(String::as_str).collect();
+        let mut again = 0usize;
+        let mut pages = self.pages.borrow_mut();
+        let held: Vec<usize> = pages.pages().collect();
+        for page in held {
+            let Some(rows) = pages.rows_mut(page) else {
+                continue;
+            };
+            for kept in rows.iter_mut() {
+                if kept.pic == Pic::Missing && made.contains(kept.row.path.as_str()) {
+                    kept.pic = Pic::Unknown;
+                    again += 1;
+                }
+            }
+        }
+        self.unlooked.set(self.unlooked.get() + again);
     }
 
     /// The path of a row, if its page is in hand.
