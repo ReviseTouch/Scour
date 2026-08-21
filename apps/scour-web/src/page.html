@@ -837,6 +837,19 @@
     overflow-wrap: anywhere; line-height: 1.5;
   }
 
+  /* This face has handed over to another one, so the server is going. A line
+     across the middle rather than a banner at the top: what is behind it is a
+     list nothing will refresh again, and it should read as finished rather
+     than as broken. */
+  .handover {
+    position: fixed; inset: auto 0 0 0; z-index: 40;
+    padding: calc(var(--u) * 3);
+    background: var(--panel-2);
+    border-top: 1px solid var(--line);
+    font: 500 12.5px/1.4 var(--sans); color: var(--ink-2);
+    text-align: center;
+  }
+
   /* ---------------- the preview ----------------
 
      A third column, shut by default: most of what this list is used for is
@@ -6619,15 +6632,18 @@
   });
 
   let waiting = false;
+  /* Set when this face has handed over to another one. Everything that would
+     otherwise keep asking a server that is on its way out reads it. */
+  let HANDED_OVER = false;
   async function watch() {
-    if (waiting) return;
+    if (waiting || HANDED_OVER) return;
     waiting = true;
     try {
       /* A hidden window stops waiting altogether. That is not only the
          browser's saving: while anyone is waiting the service commits on the
          burst clock instead of batching, and a minimised window has no
          business making a laptop write a segment a second. */
-      while (!document.hidden) {
+      while (!document.hidden && !HANDED_OVER) {
         let s;
         try {
           s = await SERVICE.wait(REV, 25000);
@@ -7288,10 +7304,17 @@
     const id = go.closest(".face").dataset.face;
     go.disabled = true;
     SERVICE.face(id === "window" ? "window" : "tui")
-      .then(() => {
+      .then((r) => {
         ARMED = "";
         facesPanel.hidden = true;
         facesBtn.setAttribute("aria-expanded", "false");
+        /* **This face is closing.** Switching is moving, not opening a second
+           one, so the server goes — the window and the terminal do the same
+           when they hand over. A tab cannot close itself unless a script
+           opened it, and this one was opened by pointing a browser at a URL,
+           so the honest half is to say so and stop asking a server that is on
+           its way out. */
+        if (r && r.closing) handedOver();
       })
       .catch((err) => {
         go.disabled = false;
@@ -7299,6 +7322,19 @@
         console.warn("face:", err);
       });
   });
+
+  /* The page after it has handed over: one line, and nothing still asking.
+     Without the second half the list would spend the next minute retrying a
+     server that has gone and end on "the service cannot be reached", which
+     names the wrong thing — `scourd` is fine; it is this bridge that left. */
+  function handedOver() {
+    HANDED_OVER = true;
+    if (PEEK.on) setPeek(false, false);
+    const note = document.createElement("div");
+    note.className = "handover";
+    note.textContent = T("Scour is open elsewhere. You can close this tab.");
+    document.body.append(note);
+  }
 
   facesBtn.addEventListener("click", () => {
     const open = facesPanel.hidden;

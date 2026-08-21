@@ -1233,3 +1233,8 @@ msgstr "yazmaya döner"
 
 msgid "leave"
 msgstr "çıkar"
+
+# A face that has handed over to another one. The server is going; the tab
+# cannot close itself, because a script did not open it.
+msgid "Scour is open elsewhere. You can close this tab."
+msgstr "Scour başka bir yerde açıldı. Bu sekmeyi kapatabilirsiniz."

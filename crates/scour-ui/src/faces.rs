@@ -210,6 +210,33 @@ pub const FEATURES: &[Feature] = &[
     },
 ];
 
+/// Start a face so that it outlives the one starting it.
+///
+/// **A face that opens another one is about to close**, and without this the
+/// one it opened closed with it: a child is in its parent's process group, and
+/// a desktop closing a window signals the group. Measured the way anybody
+/// would — switch to the terminal, close the window, watch the terminal go.
+///
+/// `process_group(0)` puts the child in a group of its own, so nothing aimed
+/// at the parent reaches it. The child's own children — the launcher execs a
+/// terminal emulator, which starts the terminal interface — inherit the new
+/// group and are covered by the same line.
+///
+/// The one thing this crate does rather than describes, and it is here because
+/// it is about faces: three of them start each other and all three had the
+/// same bug. It adds no dependency — `std::process` is all it uses.
+pub fn detach(command: &mut std::process::Command) {
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+}
+
 /// The state of one feature in one face.
 pub fn state(id: &str, face: Face) -> Option<State> {
     let at = Face::ALL.iter().position(|f| *f == face)?;

@@ -1277,17 +1277,16 @@ fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         );
         return;
     };
-    match std::process::Command::new(&binary)
-        .args(if which == "tui" {
-            &["tui"][..]
-        } else {
-            &[][..]
-        })
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    let mut command = std::process::Command::new(&binary);
+    command.args(if which == "tui" {
+        &["tui"][..]
+    } else {
+        &[][..]
+    });
+    // In a process group of its own, or whatever closes this server closes
+    // what it just opened. See `scour_ui::faces::detach`.
+    scour_ui::faces::detach(&mut command);
+    match command.spawn() {
         // Detached and not waited for: this server outlives the click and the
         // program outlives this server.
         Ok(_) => {
@@ -1301,7 +1300,30 @@ fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             if let Ok(change) = serde_json::from_value(serde_json::json!({ "face": which })) {
                 let _ = call(client, Request::SetSettings { change });
             }
-            http::respond(stream, "200 OK", "application/json", b"{\"started\":true}")
+            http::respond(
+                stream,
+                "200 OK",
+                "application/json",
+                b"{\"started\":true,\"closing\":true}",
+            );
+            // **And this face closes.** Switching is moving, not opening a
+            // second one — the window and the terminal both go when they start
+            // another, and a browser face that stayed would leave a port open
+            // and a list nobody is reading.
+            //
+            // A tab cannot close itself: `window.close()` is refused for a
+            // page the script did not open, and this one was opened by a
+            // browser being pointed at a URL. So the *server* goes and the page
+            // says the tab can be shut, which is the honest half of it.
+            //
+            // After the reply is on the wire and after a beat: the launcher
+            // has an `exec` to get through, and a process that exits while its
+            // child is still starting takes the child with it on some
+            // desktops.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                std::process::exit(0);
+            });
         }
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
     }

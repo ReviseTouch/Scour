@@ -3511,13 +3511,12 @@ fn open_face(window: &MainWindow, which_one: &str, cat: &Catalogue, link: &Link)
         );
         return;
     };
-    match std::process::Command::new(&binary)
-        .args(&args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    let mut command = std::process::Command::new(&binary);
+    command.args(&args);
+    // In a process group of its own, or the desktop closing this window closes
+    // what it just opened. See `scour_ui::faces::detach`.
+    scour_ui::faces::detach(&mut command);
+    match command.spawn() {
         Ok(_) => {
             // **Switching is also choosing.** The desktop entry and the hotkey
             // ask for Scour without saying which face; this is what makes
@@ -3529,6 +3528,18 @@ fn open_face(window: &MainWindow, which_one: &str, cat: &Catalogue, link: &Link)
                 },
             });
             said(window, t(cat, "starting…"));
+            // **And this one goes.** Switching is moving, not opening a
+            // second one: two windows onto the same index, both live, both
+            // answering the same keystrokes, is not what anybody meant by
+            // "switch to the terminal".
+            //
+            // After a beat, not now: the preference above is a message on a
+            // socket and the launcher has an `exec` to get through. Half a
+            // second costs nothing and is the difference between a face that
+            // starts and one that is killed while starting.
+            slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+                let _ = slint::quit_event_loop();
+            });
         }
         Err(e) => said(window, format!("{program}: {e}").into()),
     }

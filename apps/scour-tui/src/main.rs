@@ -159,7 +159,9 @@ fn main() -> Result<()> {
         );
     }
     ratatui::restore();
-    link.send(Ask::Done);
+    // Let the slow lane write what was queued on it — the face to open next,
+    // a spreadsheet — before this process goes. See `Link::finish`.
+    link.finish();
     outcome
 }
 

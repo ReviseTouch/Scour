@@ -158,6 +158,14 @@ pub struct Link {
     asks: Sender<Ask>,
     slow: Sender<Ask>,
     wait: Sender<Ask>,
+    /// The slow lane's thread, so that what was queued on it can be waited
+    /// for.
+    ///
+    /// **Only that one.** The fast lane answers before anybody could leave and
+    /// the long poll is asleep in a thirty-second call; this is the lane that
+    /// carries the two things somebody might quit immediately after asking
+    /// for — a preference, and a spreadsheet being written.
+    slow_thread: std::sync::Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Link {
@@ -178,9 +186,17 @@ impl Link {
         // nothing.
         let slow_addr = addr.clone();
         let slow_out = gots.clone();
-        thread::spawn(move || serve(&slow_addr, &waiting, &slow_out));
+        let slow_thread = thread::spawn(move || serve(&slow_addr, &waiting, &slow_out));
         thread::spawn(move || serve(&addr, &dozing, &gots));
-        (Link { asks, slow, wait }, answers)
+        (
+            Link {
+                asks,
+                slow,
+                wait,
+                slow_thread: std::sync::Mutex::new(Some(slow_thread)),
+            },
+            answers,
+        )
     }
 
     /// What a keystroke needs.
@@ -198,6 +214,31 @@ impl Link {
     /// The long poll, which holds a connection of its own.
     pub fn doze(&self, ask: Ask) {
         let _ = self.wait.send(ask);
+    }
+
+    /// Let the slow lane finish what it was given, then go.
+    ///
+    /// **A queued request is not a sent one.** Switching to another face
+    /// writes which face to open next and then quits; the write is a message
+    /// on a channel, and a process that exits the moment after leaves it
+    /// there. So do quitting after an export, and the file is a file that was
+    /// never written.
+    ///
+    /// Bounded, because a lane whose service has gone away must not keep a
+    /// terminal on screen: half a second is more than a socket write and less
+    /// than anybody notices.
+    pub fn finish(&self) {
+        let _ = self.slow.send(Ask::Done);
+        let _ = self.asks.send(Ask::Done);
+        let handle = self.slow_thread.lock().ok().and_then(|mut h| h.take());
+        let Some(handle) = handle else { return };
+        let waited = std::time::Instant::now();
+        while !handle.is_finished() && waited.elapsed() < std::time::Duration::from_millis(500) {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
     }
 }
 

@@ -1359,16 +1359,21 @@ impl App {
             self.dirty = true;
             return Want::Nothing;
         }
-        let started = std::process::Command::new("scour-open")
-            .arg(face)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        self.note = match started {
-            Ok(_) => self.say("starting…").into_owned(),
-            Err(e) => format!("scour-open: {e}"),
-        };
+        let mut command = std::process::Command::new("scour-open");
+        command.arg(face);
+        // In a process group of its own, or closing this terminal closes what
+        // it just opened. See `scour_ui::faces::detach`.
+        scour_ui::faces::detach(&mut command);
+        match command.spawn() {
+            Ok(_) => {
+                self.note = self.say("starting…").into_owned();
+                // **And this one goes.** Switching is moving, not opening a
+                // second one: two interfaces onto the same index, both live,
+                // is not what anybody meant by "switch to the window".
+                self.leaving = true;
+            }
+            Err(e) => self.note = format!("scour-open: {e}"),
+        }
         self.panel = Panel::None;
         self.dirty = true;
         Want::Remember(scour_settings::Change {
