@@ -96,6 +96,84 @@ pub const PANEL_MAX: u32 = 600;
 /// The list is what you came from; the panel is what you are reading.
 pub const NARROW: u32 = 900;
 
+/// One row's facts, as the pieces a panel needs to write them.
+///
+/// **Primitives, because this crate has no dependencies and should not get
+/// any.** Turning a `mode` into `drwxr-xr-x` and a `uid` into a name is
+/// `scour-core`'s, and both faces already call it; what is left — the order,
+/// the labels, the punctuation of a size and a date — is here, so that a
+/// window and a terminal writing the same eight lines cannot write them
+/// differently.
+#[derive(Debug, Clone, Copy)]
+pub struct Facts<'a> {
+    /// The folder holding it, which is what "where is this" means for a
+    /// search result.
+    pub folder: &'a str,
+    /// The kind, already in the reader's language.
+    pub kind: &'a str,
+    pub is_dir: bool,
+    pub size: u64,
+    /// What a folder holds, already in the reader's language — `3 öğe`. Empty
+    /// when nothing counted it, which is the ordinary case for a folder.
+    pub items: &'a str,
+    pub mtime: i64,
+    pub ctime: i64,
+    pub atime: i64,
+    /// `drwxr-xr-x`, from [`scour_core::mode_string`].
+    pub mode: &'a str,
+    /// `hasan · hasan`, from [`scour_core::owner_name`].
+    pub owner: &'a str,
+}
+
+impl Facts<'_> {
+    /// What this fact says, or nothing when there is nothing to say.
+    ///
+    /// An empty answer is not a line: a volume that does not record read times
+    /// would otherwise show a row headed `Accessed` with a blank beside it for
+    /// ever, and a date of zero is not a date.
+    pub fn value(&self, id: &str, decimal: char) -> String {
+        match id {
+            "where" => self.folder.to_owned(),
+            "kind" => self.kind.to_owned(),
+            "size" if self.is_dir => self.items.to_owned(),
+            "size" => crate::format::size(self.size, decimal),
+            "modified" => stamp(self.mtime),
+            "created" => stamp(self.ctime),
+            "read" => stamp(self.atime),
+            "mode" => self.mode.to_owned(),
+            "owner" => self.owner.to_owned(),
+            _ => String::new(),
+        }
+    }
+
+    /// Every fact that has something behind it, as (msgid, value).
+    ///
+    /// The msgid rather than the label: the caller has the catalogue, and
+    /// which of `Size` and `Contents` a row wants depends on what it is.
+    pub fn lines(&self, decimal: char) -> Vec<(&'static str, String)> {
+        FACTS
+            .iter()
+            .filter_map(|fact| {
+                let value = self.value(fact.id, decimal);
+                let msgid = if fact.id == "size" {
+                    size_msgid(self.is_dir)
+                } else {
+                    fact.msgid
+                };
+                (!value.is_empty()).then_some((msgid, value))
+            })
+            .collect()
+    }
+}
+
+/// A date a person can read, and nothing at all when there is no date.
+fn stamp(when: i64) -> String {
+    if when <= 0 {
+        return String::new();
+    }
+    crate::format::stamp(when)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +207,50 @@ mod tests {
     fn a_folder_is_asked_what_is_in_it_rather_than_how_big_it_is() {
         assert_eq!(size_msgid(true), "Contents");
         assert_eq!(size_msgid(false), "Size");
+    }
+
+    fn some() -> Facts<'static> {
+        Facts {
+            folder: "/home/hasan/Belgeler",
+            kind: "Belge",
+            is_dir: false,
+            size: 5261,
+            items: "",
+            mtime: 1_700_000_000,
+            ctime: 1_700_000_000,
+            atime: 0,
+            mode: "-rw-r--r--",
+            owner: "hasan · hasan",
+        }
+    }
+
+    /// A blank is not a line. A volume mounted `noatime` has no read time, and
+    /// a row headed `Accessed` with nothing beside it says less than no row.
+    #[test]
+    fn a_fact_with_nothing_behind_it_is_left_out() {
+        let lines = some().lines(',');
+        assert!(lines.iter().any(|(id, _)| *id == "Modified"));
+        assert!(
+            !lines.iter().any(|(id, _)| *id == "Accessed"),
+            "a zero timestamp is not a date"
+        );
+    }
+
+    /// The order is the order of the question: where, then what, then how big.
+    #[test]
+    fn the_lines_come_in_the_tables_order() {
+        let lines = some().lines(',');
+        let ids: Vec<&str> = lines.iter().map(|(id, _)| *id).collect();
+        assert_eq!(&ids[..3], &["Location", "Kind", "Size"]);
+    }
+
+    #[test]
+    fn a_folder_says_what_is_in_it_where_a_file_says_its_size() {
+        let mut f = some();
+        f.is_dir = true;
+        f.items = "3 öğe";
+        let lines = f.lines(',');
+        assert!(lines.contains(&("Contents", "3 öğe".to_owned())));
+        assert!(!lines.iter().any(|(id, _)| *id == "Size"));
     }
 }

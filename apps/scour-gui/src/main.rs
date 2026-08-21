@@ -4034,57 +4034,40 @@ fn show_peek(
 
 /// The fact list, in the order [`scour_ui::preview::FACTS`] gives.
 ///
-/// Every value is formatted here rather than in the interface: a size in
-/// binary units, a date in the reader's punctuation, a mode as `drwxr-xr-x`.
-/// A `.slint` file doing any of it would be a second implementation of
-/// something `scour-ui` and `scour-core` already have.
+/// The values are formatted by `scour-ui` and the two that are not — a mode as
+/// `drwxr-xr-x`, an id as a name — by `scour-core`. The terminal draws the same
+/// eight lines from the same call; what differs between the two is only where
+/// the row comes from.
 fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
     let m = &entry.meta;
-    let rows: Vec<Fact> = scour_ui::preview::FACTS
-        .iter()
-        .filter_map(|fact| {
-            let value = match fact.id {
-                "where" => scour_ui::path::folder(&entry.path).to_owned(),
-                "kind" => t(cat, entry.kind().msgid()).to_string(),
-                "size" if entry.is_dir => match m.items {
-                    n if n >= 0 => t(cat, "{n} items").replace("{n}", &grouped(n as u64)),
-                    _ => String::new(),
-                },
-                "size" => scour_ui::format::size(m.size.max(0) as u64, marks().1),
-                "modified" => stamp(m.mtime),
-                "created" => stamp(m.ctime),
-                "read" => stamp(m.atime),
-                "mode" => scour_core::mode_string(m.mode),
-                "owner" => [
-                    scour_core::owner_name(scour_core::Owner::User, m.uid),
-                    scour_core::owner_name(scour_core::Owner::Group, m.gid),
-                ]
-                .join(" · "),
-                _ => String::new(),
-            };
-            // A fact with nothing behind it is not a line: a volume that does
-            // not record read times would otherwise show an empty row headed
-            // `Erişim` for ever.
-            (!value.is_empty()).then(|| Fact {
-                label: t(
-                    cat,
-                    if fact.id == "size" {
-                        scour_ui::preview::size_msgid(entry.is_dir)
-                    } else {
-                        fact.msgid
-                    },
-                ),
-                value: value.into(),
-            })
+    let items = if entry.is_dir && m.items >= 0 {
+        t(cat, "{n} items").replace("{n}", &grouped(m.items as u64))
+    } else {
+        String::new()
+    };
+    let facts = scour_ui::preview::Facts {
+        folder: scour_ui::path::folder(&entry.path),
+        kind: &t(cat, entry.kind().msgid()),
+        is_dir: entry.is_dir,
+        size: m.size.max(0) as u64,
+        items: &items,
+        mtime: m.mtime,
+        ctime: m.ctime,
+        atime: m.atime,
+        mode: &scour_core::mode_string(m.mode),
+        owner: &[
+            scour_core::owner_name(scour_core::Owner::User, m.uid),
+            scour_core::owner_name(scour_core::Owner::Group, m.gid),
+        ]
+        .join(" · "),
+    };
+    let rows: Vec<Fact> = facts
+        .lines(marks().1)
+        .into_iter()
+        .map(|(msgid, value)| Fact {
+            label: t(cat, msgid),
+            value: value.into(),
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
-}
-
-/// A date a person can read, or nothing when there is no date.
-fn stamp(when: i64) -> String {
-    if when <= 0 {
-        return String::new();
-    }
-    scour_ui::format::stamp(when)
 }

@@ -104,11 +104,20 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme) {
     } else {
         (heads, list, None)
     };
-    // The peek takes the bottom third of the list, under it rather than over
-    // it: what is being looked at has to stay on screen, or a person cannot
-    // tell which row the head belongs to.
-    let (list, peek) = if app.peeking && list.height >= 12 {
-        let [list, peek] = Layout::vertical([Constraint::Fill(2), Constraint::Fill(1)]).areas(list);
+    // The peek takes the bottom of the list, under it rather than over it:
+    // what is being looked at has to stay on screen, or a person cannot tell
+    // which row the head belongs to.
+    //
+    // **Measured against what is in it, not as a fraction.** The panel holds a
+    // rule, a content type, eight facts and then the head of the file: a third
+    // of a short terminal is six lines, which cut off the half that says who
+    // owns it and when it was last read. Twelve is the ten it needs plus two
+    // of the file; past thirty lines of list, two fifths gives the head more
+    // room, and eighteen is where it stops taking it from the list.
+    let (list, peek) = if app.peeking && list.height >= 20 {
+        let want = (list.height * 2 / 5).clamp(12, 18);
+        let [list, peek] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(want)]).areas(list);
         (list, Some(peek))
     } else {
         (list, None)
@@ -865,31 +874,53 @@ fn head_of(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, cha
     let mut lines: Vec<Line> = Vec::new();
     match &app.peek {
         Some(look) => {
+            // **The content type, and not the size.** The size is in the
+            // facts below, off the row — and the two disagreed: a symlink's
+            // row is 124 bytes and the file it points at is 28.7 KiB, so the
+            // panel contradicted the column beside it. One number, and it is
+            // the column's.
             lines.push(Line::from(vec![
                 Span::styled(
                     format!(" {}", look.kind),
                     Style::new().fg(theme.key()).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  ·  {}", format::size(look.len, mark.1)),
-                    Style::new().fg(theme.ink_3()),
-                ),
-                Span::styled(
                     format!("  ·  {}", look.shape),
                     Style::new().fg(theme.ink_3()),
                 ),
             ]));
-            if look.head.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    format!(" {}", app.say("nothing to show of this one")),
-                    Style::new().fg(theme.ink_3()),
-                )));
+            // **What a terminal can always say about a file.** A picture has
+            // no head, so the panel used to be one line saying there was
+            // nothing to show — which is true of the *contents* and useless as
+            // an answer: where it is, how big it is and when it changed are
+            // exactly what somebody who cannot see the picture is asking. The
+            // eight lines, their order and their labels are
+            // `scour_ui::preview`'s, so this is the window's panel without the
+            // picture.
+            let room = body.height.saturating_sub(1) as usize;
+            let facts = facts_of(app, mark);
+            let widest = facts
+                .iter()
+                .map(|(label, _)| label.chars().count())
+                .max()
+                .unwrap_or(0);
+            for (label, value) in facts.iter().take(room) {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {label:<widest$}  "),
+                        Style::new().fg(theme.ink_3()),
+                    ),
+                    Span::styled(
+                        cut(value, area.width.saturating_sub(widest as u16 + 4) as usize),
+                        Style::new().fg(theme.ink_2()),
+                    ),
+                ]));
             }
-            for line in look
-                .head
-                .lines()
-                .take(body.height.saturating_sub(1) as usize)
-            {
+            // And the head of it, under a blank line, when there is one.
+            if !look.head.is_empty() {
+                lines.push(Line::from(""));
+            }
+            for line in look.head.lines().take(room.saturating_sub(lines.len())) {
                 // Tabs are drawn as the terminal would draw them and that is
                 // not where the columns are; two spaces keeps the shape.
                 let text = line.replace('\t', "  ");
@@ -1049,6 +1080,48 @@ fn side(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         );
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// The row under the cursor, as the facts a preview panel lists.
+///
+/// **Off the row, with nothing asked for.** A `Hit` already carries its
+/// `Meta` — size, the three dates, the mode, the owner — so the panel that the
+/// window fills with a `Stat` round trip is filled here by reading what is on
+/// screen. The formatting is shared: what a size looks like in binary units
+/// and how a date is punctuated are `scour-ui`'s, and a mode and an owner name
+/// are `scour-core`'s.
+fn facts_of(app: &App, mark: (char, char)) -> Vec<(String, String)> {
+    let Some(hit) = app.here() else {
+        return Vec::new();
+    };
+    let m = &hit.meta;
+    let items = if hit.is_dir && m.items >= 0 {
+        app.say("{n} items")
+            .replace("{n}", &format::grouped(m.items as u64, mark.0))
+    } else {
+        String::new()
+    };
+    let facts = scour_ui::preview::Facts {
+        folder: scour_ui::path::folder(&hit.path),
+        kind: &app.say(hit.kind.msgid()),
+        is_dir: hit.is_dir,
+        size: m.size.max(0) as u64,
+        items: &items,
+        mtime: m.mtime,
+        ctime: m.ctime,
+        atime: m.atime,
+        mode: &scour_core::mode_string(m.mode),
+        owner: &[
+            scour_core::owner_name(scour_core::Owner::User, m.uid),
+            scour_core::owner_name(scour_core::Owner::Group, m.gid),
+        ]
+        .join(" · "),
+    };
+    facts
+        .lines(mark.1)
+        .into_iter()
+        .map(|(msgid, value)| (app.say(msgid).into_owned(), value))
+        .collect()
 }
 
 /// The word for a kind, given the token the service counts in.
