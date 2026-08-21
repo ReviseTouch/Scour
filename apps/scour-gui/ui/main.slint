@@ -1163,6 +1163,36 @@ export component MainWindow inherits Window {
                     // colouring work — so where they start is a property
                     // rather than a figure written three times.
                     property <length> pad: 9px;
+                    // Where the caret is, and whether it is in its lit half.
+                    // See the caret below for why this window draws its own.
+                    property <length> caret-x: field.pad;
+                    property <bool> caret-lit: true;
+
+                    // **This window draws its own caret, and it has to.**
+                    // Slint draws one — in `TextInput::color`, which here is
+                    // `transparent`, because what a reader sees is the
+                    // coloured layer underneath. A transparent caret is not a
+                    // caret, and the comment on `color` used to claim the
+                    // opposite: "the caret is drawn by the input itself and is
+                    // not affected". It is affected; on Linux the two are the
+                    // same colour by construction — `items/text.rs`, where
+                    // `cursor_color` falls back to `text_color.color()` on
+                    // everything that is not Android or Apple.
+                    //
+                    // So: two pixels in the query's own key colour, where the
+                    // input says the caret is, blinking on a timer. Shown only
+                    // while the field has the keyboard, which is also what
+                    // makes it the second thing saying so.
+                    // A second and a bit off, the same on: the rate every
+                    // terminal and every text box on this desktop uses, near
+                    // enough that a person does not notice it as a difference.
+                    blink := Timer {
+                        interval: 530ms;
+                        running: input.has-focus;
+                        triggered => {
+                            field.caret-lit = !field.caret-lit;
+                        }
+                    }
 
                     // **The colours are a layer under a transparent box.**
                     // Slint has no range colouring for editable text — the
@@ -1225,6 +1255,16 @@ export component MainWindow inherits Window {
                     width: parent.width - field.pad * 2;
                     height: parent.height;
                     text <=> root.query;
+                    // **Where the caret is, so this window can draw one.**
+                    // Slint draws its own in `color`, and `color` here is
+                    // `transparent` — see below.
+                    cursor-position-changed(p) => {
+                        field.caret-x = field.pad + p.x;
+                        // Typing restarts the lit half: a caret that blinks
+                        // *while* letters arrive reads as a dropped keystroke.
+                        field.caret-lit = true;
+                        blink.restart();
+                    }
                     // Invisible ink: what the reader sees is the coloured layer
                     // underneath. The caret is drawn by the input itself and is
                     // not affected, which is the whole reason this works.
@@ -1246,6 +1286,7 @@ export component MainWindow inherits Window {
                     edited => {
                         root.query-changed(self.text);
                     }
+
 
                     // Down and up move through the results without leaving the
                     // field, which is the whole interaction: type, glance,
@@ -1317,6 +1358,18 @@ export component MainWindow inherits Window {
                         return reject;
                     }
                 }
+
+                    // Painted last, so it is over the text rather than under
+                    // it: a caret between two letters that a letter covers is
+                    // a caret that vanishes in the middle of a word.
+                    Rectangle {
+                        x: field.caret-x;
+                        y: (field.height - 24px) / 2;
+                        width: 2px;
+                        height: 24px;
+                        background: Theme.q-key;
+                        visible: input.has-focus && field.caret-lit;
+                    }
 
                 }
             }
