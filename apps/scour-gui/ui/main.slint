@@ -2356,6 +2356,22 @@ export component MainWindow inherits Window {
                             animate background { duration: 1600ms; easing: ease-out; }
                         }
 
+                        // **Where the keyboard is, which is not the same
+                        // question as what is selected.** Pick three rows and
+                        // all three fill blue; without this, the one the
+                        // arrows will move from looks exactly like the two
+                        // that will not. A ring rather than a fourth shade of
+                        // the same blue — a shade says "more selected", which
+                        // is not a thing, and this says "here".
+                        //
+                        // The focus colour, because that is what it is: the
+                        // query field underlines itself in the same one.
+                        if i == root.selected: Rectangle {
+                            background: transparent;
+                            border-width: 1px;
+                            border-color: Theme.focus;
+                        }
+
                         rowtouch := TouchArea {
                             clicked => {
                                 root.selected = i;
@@ -2628,6 +2644,14 @@ export component MainWindow inherits Window {
                                         ? Theme.t0.with-alpha(0.22)
                                         : transparent;
                                     animate background { duration: 1600ms; easing: ease-out; }
+                                }
+
+                                // And where the keyboard is — see the table's
+                                // rows for why a ring rather than a shade.
+                                if (i * root.per-line + c) == root.selected: Rectangle {
+                                    background: transparent;
+                                    border-width: 1px;
+                                    border-color: Theme.focus;
                                 }
 
                                 tiletouch := TouchArea {
