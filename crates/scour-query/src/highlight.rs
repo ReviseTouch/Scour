@@ -167,7 +167,7 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
 fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     // A lone operator is an operator; `hello!` is a word. The parser makes the
     // same distinction, and colouring it differently would teach the wrong rule.
-    if text == "|" {
+    if text == "|" || text == ";" {
         out.push(Span::new(start, 1, Role::Or));
         return false;
     }
@@ -179,19 +179,46 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     let mut at = start;
     let mut negated = false;
     let quoted = text.starts_with('"');
-    for (i, alt) in text.split('|').enumerate() {
-        if i > 0 && !quoted {
-            out.push(Span::new(at, 1, Role::Or));
-            at += 1;
-        } else if i > 0 {
+    // **`;` is `|` outside a field's value**, and the parser has said so since
+    // `OPUS ; SONNET` was reported as finding neither. This did not, so
+    // `HASAN;DENEME` was drawn as one word somebody was looking for while the
+    // engine read two alternatives — and `!ama ;deneme` drew four independent
+    // terms where there were three, one of them a disjunction with the
+    // exclusion inside it. A query line that hides an `or` hides the reason
+    // its answer is enormous.
+    let owns_list = quoted || field_of(text).is_some();
+    for (alt, sep) in alternatives(text, owns_list) {
+        if let Some(c) = sep {
             // A pipe inside quotes is an ordinary character.
-            out.push(Span::new(at, 1, Role::Phrase));
-            at += 1;
+            let role = if quoted { Role::Phrase } else { Role::Or };
+            out.push(Span::new(at, c.len_utf8(), role));
+            at += c.len_utf8();
         }
         negated |= alternative(out, at, alt, now);
         at += alt.len();
     }
     negated
+}
+
+/// The alternatives in a term, each with the character that separated it from
+/// the one before.
+///
+/// Mirrors `parse::ast`: a token that is a field term or a quoted run keeps
+/// its own semicolons — `ext:rs;toml` is one filter — and everything else
+/// splits on both marks.
+fn alternatives(text: &str, owns_list: bool) -> Vec<(&str, Option<char>)> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    let mut sep = None;
+    for (i, c) in text.char_indices() {
+        if c == '|' || (c == ';' && !owns_list) {
+            out.push((&text[from..i], sep));
+            sep = Some(c);
+            from = i + c.len_utf8();
+        }
+    }
+    out.push((&text[from..], sep));
+    out
 }
 
 /// One alternative: an optional `!`, then either a field term or plain text.
@@ -661,6 +688,76 @@ mod tests {
         );
         covers("!ext:rs; toml");
         covers("a|!b !kind:zurna");
+    }
+
+    /// `;` is `|` outside a field's value, and the line has to say so.
+    ///
+    /// This is the fault that made a query nobody could read: `HASAN;DENEME`
+    /// was drawn as one word being looked for, while the engine read two
+    /// alternatives — and `!ama ;deneme` looked like four independent terms
+    /// when the third was an `or` with the exclusion inside it.
+    #[test]
+    fn a_semicolon_between_words_is_an_operator() {
+        assert_eq!(
+            roles("HASAN;DENEME"),
+            vec![
+                (Role::Text, "HASAN"),
+                (Role::Or, ";"),
+                (Role::Text, "DENEME")
+            ]
+        );
+        covers("HASAN;DENEME");
+        // Leading, which is how it joins to the term before it.
+        assert_eq!(
+            roles("a ;b"),
+            vec![
+                (Role::Text, "a"),
+                (Role::Space, " "),
+                (Role::Or, ";"),
+                (Role::Text, "b")
+            ]
+        );
+        covers("a ;b");
+        // A lone one is an operator, like a lone pipe.
+        assert_eq!(roles("a ; b").iter().filter(|(r, _)| *r == Role::Or).count(), 1);
+        covers("a ; b");
+    }
+
+    /// And a field's own list keeps its semicolons.
+    #[test]
+    fn a_semicolon_inside_a_list_is_still_a_separator_not_an_operator() {
+        assert_eq!(
+            roles("ext:rs;toml"),
+            vec![
+                (Role::Field, "ext"),
+                (Role::Colon, ":"),
+                (Role::Value, "rs"),
+                (Role::Sep, ";"),
+                (Role::Value, "toml")
+            ]
+        );
+        // Negated, which is where the parser used to come apart too.
+        assert_eq!(
+            roles("!ext:rs;toml"),
+            vec![
+                (Role::Not, "!"),
+                (Role::Field, "ext"),
+                (Role::Colon, ":"),
+                (Role::Value, "rs"),
+                (Role::Sep, ";"),
+                (Role::Value, "toml")
+            ]
+        );
+        covers("!ext:rs;toml");
+        // A quoted run is literal all the way through.
+        assert_eq!(
+            roles("\"a;b\""),
+            vec![
+                (Role::Quote, "\""),
+                (Role::Phrase, "a;b"),
+                (Role::Quote, "\"")
+            ]
+        );
     }
 
     #[test]

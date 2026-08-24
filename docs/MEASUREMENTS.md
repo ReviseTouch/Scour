@@ -5677,3 +5677,41 @@ been deleted or hide one that has been typed.
 
 Four tests, one of them the exact case: `rapor pdf`'s spans laid over
 `rapor p` must spell `rapor p`.
+
+## 2026-08-24 — a `!` in front of a list stopped excluding
+
+Reported as a query that returned the whole disk:
+`HASAN;DENEME !ama ;deneme !dfd`. Two separate faults met in it.
+
+**The parser.** `split_field` was asked about the token with its `!` still
+attached, read the name as `!ext`, and answered "not a field" — so every
+question of the form "is this a list I have to keep whole?" said no as soon as
+the term was negated:
+
+| typed | read as |
+|---|---|
+| `ext:rs;toml` | extension is one of .rs, .toml |
+| `!ext:rs;toml` | **(not extension is .rs or name contains "toml")** |
+| `!kind:image;code` | **(not type is image or name contains "code")** |
+
+The second column is a disjunction with a negation in it, which matches very
+nearly every file there is — from a term that reads as a narrowing.
+
+**The highlighter.** `;` has been `|` outside a field's value since
+`OPUS ; SONNET` was reported as finding neither, and the colouring never said
+so: `HASAN;DENEME` was one plain word on screen and two alternatives in the
+engine. So the query above *looked* like four AND-ed terms and was three, one
+of them `(not ama) or deneme` — which excludes nothing.
+
+Both faces now draw the `;` as the operator it is, and the window reads the
+query back in words the way the page always has. That sentence is what says
+the `or` out loud:
+
+```
+(name contains "hasan" or name contains "deneme") and
+(not name contains "ama" or name contains "deneme") and not name contains "dfd"
+```
+
+**The precedence itself is unchanged and is Everything's**: `!` binds tighter
+than `|`, so `!a|b` is `(not a) or b`. What was wrong was that nothing on
+screen said an `or` was there.

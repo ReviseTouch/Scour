@@ -85,6 +85,38 @@ impl Role {
         matches!(self, Role::UnknownField | Role::BadValue)
     }
 
+    /// Does this run mean the query is worth reading back?
+    ///
+    /// A search box can say what it understood, in words — "extension is .rs
+    /// and not name contains cache" — and for `ext:rs !cache` that is worth a
+    /// line. For `hasan` it reads the word back and is furniture.
+    ///
+    /// So the rule is a property of the query rather than a preference: if
+    /// anything in it is more than a plain word, the reading appears, and its
+    /// being there is then a signal in itself. The case it exists for is
+    /// `HASAN;DENEME !ama ;deneme` — four things that look like four AND-ed
+    /// words and are three, one of them an `or` with the exclusion inside it,
+    /// which is why the answer was the whole disk.
+    ///
+    /// A [`Role::Value`] is not in the list and does not need to be: it never
+    /// occurs without the field and colon in front of it, both of which are.
+    /// Nor is [`Role::Sep`], for the same reason.
+    pub fn is_telling(self) -> bool {
+        matches!(
+            self,
+            Role::Field
+                | Role::Colon
+                | Role::Cmp
+                | Role::Quote
+                | Role::Phrase
+                | Role::Glob
+                | Role::Not
+                | Role::Or
+                | Role::UnknownField
+                | Role::BadValue
+        )
+    }
+
     /// Is this run punctuation rather than something the user typed to search
     /// for?
     ///

@@ -153,8 +153,9 @@ export struct Dupe {
 // that is left here is a role and a colour.
 export struct Span {
     text: string,
-    // 0 punctuation · 1 field · 2 value · 3 wildcard · 4 exclusion
-    // 5 read as text · 6 the word being looked for
+    // 0 nothing in particular · 1 field, comparison, `or` · 2 value or phrase
+    // 3 wildcard · 4 exclusion · 5 read as text · 6 the word being looked for
+    // 7 the syntax between terms, said quietly
     role: int,
     // Is this run part of a term that must NOT match? The role does not say:
     // `pdf` in `!ext:pdf` is a value exactly as it is in `ext:pdf`, and the
@@ -1081,6 +1082,12 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    // What the engine made of the query, as a sentence, and whether anything
+    // in it is a misreading. Empty when the query says nothing worth reading
+    // back — see the line itself for the rule.
+    in property <string> reading;
+    in property <bool> reading-warn;
+
     // Print what the two layers of the query field measure, on every caret
     // move. They have to agree character for character — that is the whole
     // trick — and the only way to know whether they do is to ask both.
@@ -1145,7 +1152,9 @@ export component MainWindow inherits Window {
             // box, 12px below, the box itself 26px of 20px monospace. The
             // query line is the largest text in either window on purpose —
             // it is the one thing a person is always looking at.
-            height: 63px;
+            //
+            // Taller when the query is read back to you — see `reading`.
+            height: root.reading == "" ? 63px : 82px;
             background: Theme.panel;
 
             // The line between the query and what is under it. **It used to
@@ -1159,11 +1168,17 @@ export component MainWindow inherits Window {
                 background: Theme.line;
             }
 
-            HorizontalLayout {
+            VerticalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
                 padding-top: 16px;
                 padding-bottom: 12px;
+                spacing: 5px;
+
+            HorizontalLayout {
+                // The box's own height, so that adding the reading under it
+                // moves nothing about the box itself.
+                height: 35px;
                 spacing: 12px;
 
                 // The mark. Letter-spaced small capitals, the same as the page:
@@ -1289,7 +1304,10 @@ export component MainWindow inherits Window {
                             text: sp.text;
                             font-family: Fonts.mono;
                             font-size: 20px;
-                            font-weight: 600;
+                            // The operators are heavier, as on the page: an
+                            // `!` or an `|` changes what the whole term means
+                            // and is one character wide.
+                            font-weight: sp.role == 1 || sp.role == 4 ? 700 : 600;
                             vertical-alignment: center;
                             // Blue for what is being looked for, red for what
                             // is being left out. See `scour_ui::Palette`.
@@ -1307,6 +1325,7 @@ export component MainWindow inherits Window {
                                  : sp.role == 3 ? Theme.q-glob
                                  : sp.role == 4 ? Theme.q-not
                                  : sp.role == 6 ? Theme.q-term
+                                 : sp.role == 7 ? Theme.ink-3
                                  : Theme.ink;
                     }
 
@@ -1512,6 +1531,27 @@ export component MainWindow inherits Window {
                         visible: input.has-focus && field.caret-lit;
                     }
 
+                }
+            }
+
+                // **What the engine read, in words.** The colours say *what*
+                // each piece is; this says *why* the answer is what it is —
+                // `HASAN;DENEME !ama ;deneme` looks like four AND-ed words
+                // and is three, one of them an `or` with the exclusion inside
+                // it, which is the difference between a narrow answer and the
+                // whole disk. The page has had this line from the start; this
+                // window read the query back nowhere.
+                //
+                // Shown only when the query has something in it worth saying
+                // — `Role::is_telling`, decided in Rust and shared with the
+                // page. Its being there is then a signal in itself.
+                if root.reading != "": Text {
+                    text: root.reading;
+                    color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
+                    font-size: 11.5px;
+                    font-weight: 500;
+                    letter-spacing: 0.12px;
+                    overflow: elide;
                 }
             }
         }

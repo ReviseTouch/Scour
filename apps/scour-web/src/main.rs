@@ -1812,6 +1812,50 @@ mod tests {
         }
     }
 
+    /// The page and the engine agree on what makes a query worth reading back.
+    ///
+    /// Both windows show the same sentence under the same rule, and the rule
+    /// lives in `Role::is_telling`. The page keeps its own set because it is
+    /// a set of strings in a script; this is what stops the two drifting.
+    #[test]
+    fn the_page_and_the_engine_agree_on_which_roles_are_telling() {
+        let at = PAGE
+            .find("const TELLING = new Set([")
+            .expect("page.html has no TELLING set");
+        let body = &PAGE[at..];
+        let body = &body[..body.find("]);").expect("TELLING does not end")];
+        for role in scour_core::Role::ALL {
+            let wire = serde_json::to_string(&role).expect("a role serialises");
+            let wire = wire.trim_matches('"');
+            assert_eq!(
+                body.contains(&format!("\"{wire}\"")),
+                role.is_telling(),
+                "the page and `Role::is_telling` disagree about {role:?}"
+            );
+        }
+    }
+
+    /// And on the words that look like operators and are not.
+    #[test]
+    fn the_page_and_the_shared_list_agree_on_the_mistaken_words() {
+        let at = PAGE
+            .find("const MISTAKEN = new Set([")
+            .expect("page.html has no MISTAKEN set");
+        let body = &PAGE[at..];
+        let body = &body[..body.find("]);").expect("MISTAKEN does not end")];
+        for word in scour_ui::MISTAKEN {
+            assert!(
+                body.contains(&format!("\"{word}\"")),
+                "page.html's MISTAKEN has no {word:?}"
+            );
+        }
+        assert_eq!(
+            body.matches('"').count() / 2,
+            scour_ui::MISTAKEN.len(),
+            "page.html's MISTAKEN has words `scour_ui::MISTAKEN` does not"
+        );
+    }
+
     /// The page's script parses.
     ///
     /// **A whole-page failure wearing the clothes of a typo.** The page is a

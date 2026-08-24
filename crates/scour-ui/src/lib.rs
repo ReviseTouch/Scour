@@ -273,6 +273,15 @@ pub const METRICS: Metrics = Metrics {
     size: 13.0,
 };
 
+/// Words people write as operators that this language does not read as ones.
+///
+/// Whitespace is AND, `|` is OR, `!` is NOT — so `a or b` looks for three
+/// words, one of which is "or", and nothing anywhere is marked wrong. It is
+/// the one case where a query means something else entirely and the colouring
+/// has nothing to say about it, so the reading is shown for it whether or not
+/// anything else in the query earns a line.
+pub const MISTAKEN: [&str; 6] = ["or", "and", "not", "ve", "veya", "değil"];
+
 /// The font stacks, as the browser wants them written.
 ///
 /// A native window cannot use a list like this — it asks the platform for one

@@ -44,7 +44,7 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
         // phrase and the semicolon in it is a character. The same guard every
         // other stage here uses, and forgetting it took the phrase apart.
         let owns_list = token.starts_with('"')
-            || split_field(&token).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
+            || token_field(&token).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
         let alts: Vec<(bool, Match)> = token
             .split(if owns_list { '|' } else { ';' })
             .flat_map(|part| part.split('|'))
@@ -252,7 +252,7 @@ fn join_lists(tokens: Vec<String>) -> Vec<String> {
         // Only a real field's value can be continued, on either side of the
         // separator. Without this condition on *both*, `rapor ; pdf` became
         // `rapor;` and `pdf` — a list invented where there was none.
-        let after_field = out.last().is_some_and(|p| split_field(p).is_some());
+        let after_field = out.last().is_some_and(|p| token_field(p).is_some());
         if after_field && (open || t.starts_with(';')) {
             let prev = out.last_mut().expect("checked by after_field");
             // The spaces go; the separator stays exactly once, however many
@@ -265,7 +265,7 @@ fn join_lists(tokens: Vec<String>) -> Vec<String> {
             out.push(t);
         }
         let last = out.last().map(String::as_str).unwrap_or("");
-        open = last.ends_with(';') && split_field(last).is_some();
+        open = last.ends_with(';') && token_field(last).is_some();
     }
     out
 }
@@ -280,7 +280,7 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
         // `;` joins the same way `|` does — see `parse_at`. A field's value
         // keeps its own, and `join_lists` has already glued those on, so what
         // reaches here standing on its own is an operator.
-        let owns_list = split_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
+        let owns_list = token_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
         if !quoted && (t == "|" || t == ";") {
             want_alt = true;
             continue;
@@ -553,6 +553,27 @@ fn name_match(text: &str) -> Match {
 /// The letters do not have to be ASCII. Requiring that was a quiet bug: it
 /// meant the Turkish aliases `tür:` and `içerik:` were listed as fields, looked
 /// like fields, and were silently searched for as literal text instead.
+/// The field a whole **token** names, with any leading `!` set aside.
+///
+/// **`!ext:rs` is a field term, and `split_field` says it is not.** It reads
+/// the name as `!ext` — which is not all letters, therefore not a field — so
+/// every question of the form "is this a list I have to keep whole?" answered
+/// no the moment the term was negated. `!ext:rs;toml` was then cut at the
+/// semicolon into an exclusion and a bare word, OR-ed together:
+///
+/// ```text
+/// !ext:rs;toml   →  (not extension is .rs or name contains "toml")
+/// ```
+///
+/// which is very nearly "everything", from a term that reads as a narrowing.
+/// The same for `!kind:image;code`, and for `!ext:rs; toml` across the space.
+///
+/// So: ask about the token, not about the string. `split_field` still answers
+/// about a value being parsed, where the `!` has already been taken off.
+fn token_field(s: &str) -> Option<(String, &str)> {
+    split_field(s.strip_prefix('!').unwrap_or(s))
+}
+
 fn split_field(s: &str) -> Option<(String, &str)> {
     let idx = s.find(':')?;
     let name = &s[..idx];
@@ -681,6 +702,40 @@ mod tests {
             .into_iter()
             .flat_map(|g| g.alts)
             .collect()
+    }
+
+    /// A `!` in front of a list does not take the list apart.
+    ///
+    /// **The failure was silent and it went the wrong way.** `!ext:rs;toml`
+    /// reads as a narrowing and became `(not extension is .rs) or (name
+    /// contains "toml")` — a disjunction with a negation in it, which matches
+    /// very nearly every file there is. The cause: `split_field` was asked
+    /// about the token with its `!` still on, said "not a field", and the
+    /// semicolon was therefore read as the alternative separator it is
+    /// outside a field's value.
+    #[test]
+    fn a_negated_list_stays_one_list() {
+        assert_eq!(
+            m("!ext:rs;toml"),
+            vec![(true, Match::Ext(vec!["rs".into(), "toml".into()]))]
+        );
+        // One group, not two OR-ed alternatives.
+        assert_eq!(parse_at("!ext:rs;toml", 0).groups.len(), 1);
+        assert_eq!(parse_at("!ext:rs;toml", 0).groups[0].alts.len(), 1);
+        // And across the space, which `join_lists` glues back together.
+        assert_eq!(
+            m("!ext:rs; toml"),
+            vec![(true, Match::Ext(vec!["rs".into(), "toml".into()]))]
+        );
+        // The same for every other list field.
+        assert_eq!(m("!kind:image;code").len(), 1, "!kind:image;code came apart");
+        // What it must not break: the un-negated form, and a `;` between
+        // words, which is an alternative separator and has to stay one.
+        assert_eq!(
+            m("ext:rs;toml"),
+            vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
+        );
+        assert_eq!(parse_at("a;b", 0).groups[0].alts.len(), 2);
     }
 
     #[test]

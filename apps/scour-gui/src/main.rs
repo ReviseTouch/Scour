@@ -2432,17 +2432,23 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
         }
         add(
             &query[start..end],
+            // **The page's table, role for role.** It was four arms short —
+            // a comparison, an `or` and a quoted phrase all fell through to
+            // the ordinary ink, and the punctuation between terms was drawn
+            // as bright as the words. `;` reading as loudly as a word it is
+            // not is how a disjunction went unnoticed.
             match sp.role {
-                scour_core::Role::Field => 1,
-                scour_core::Role::Value => 2,
+                scour_core::Role::Field | scour_core::Role::Cmp | scour_core::Role::Or => 1,
+                scour_core::Role::Value | scour_core::Role::Phrase => 2,
                 scour_core::Role::Glob => 3,
                 scour_core::Role::Not => 4,
                 scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
                 // **What is being looked for**, which is not the same as
-                // "everything else": the colons, quotes and spaces between
-                // terms stay quiet, and only the words a person typed to find
-                // something take the colour.
-                scour_core::Role::Text | scour_core::Role::Phrase => 6,
+                // "everything else": only the words a person typed to find
+                // something take this colour.
+                scour_core::Role::Text => 6,
+                // The syntax between terms, said quietly.
+                scour_core::Role::Colon | scour_core::Role::Sep | scour_core::Role::Quote => 7,
                 _ => 0,
             },
             sp.not,
@@ -2806,13 +2812,36 @@ fn apply(
             if query_revision != state.borrow().query_revision {
                 return;
             }
-            let Response::Explain { spans, .. } = *reply else {
+            let Response::Explain {
+                spans, description, ..
+            } = *reply
+            else {
                 return;
             };
             let query = full_query(&state.borrow());
             state.borrow_mut().spans = spans;
             let runs = painted(&query, &state.borrow().spans);
             w.set_spans(ModelRc::new(VecModel::from(runs)));
+            // **What it read, in words, when the query has something to say.**
+            // The colours answer "what is this piece"; this answers "so what
+            // does the whole thing ask", which is the only place an `or`
+            // hiding inside an exclusion is visible.
+            let spans = &state.borrow().spans;
+            let warn = spans.iter().any(|sp| sp.role.is_warning());
+            let telling = warn
+                || spans.iter().any(|sp| sp.role.is_telling())
+                || spans.iter().any(|sp| {
+                    sp.role == scour_core::Role::Text
+                        && scour_ui::MISTAKEN
+                            .iter()
+                            .any(|w| sp.of(&query).eq_ignore_ascii_case(w))
+                });
+            w.set_reading(if telling {
+                description.as_str().into()
+            } else {
+                slint::SharedString::new()
+            });
+            w.set_reading_warn(warn);
         }
         // The exclusion rules, in the three groups the service keeps them in:
         // what a window added, what `config.toml` says, what is built in. Only
