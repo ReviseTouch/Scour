@@ -1096,13 +1096,12 @@ export component MainWindow inherits Window {
     public function caret-to-end() {
         // **Byte offsets, and Slint does not say so in the name.**
         // `set-selection-offsets` clamps to the length of the text and snaps
-        // to a character boundary, so anything past the end is the end — and
-        // the character count is *short* of it: `değiştirme` is ten
+        // to a character boundary, so anything past the end *is* the end —
+        // and the character count is short of it: `değiştirme` is ten
         // characters and twelve bytes, so the caret landed two characters
-        // early on every query with a Turkish letter in it. Four is the most
-        // bytes a character can take.
-        input.set-selection-offsets(root.query.character-count * 4,
-                                    root.query.character-count * 4);
+        // early on every query with a Turkish letter in it. There is no
+        // count in this language that gives a byte length, so: past the end.
+        input.set-selection-offsets(1000000000, 1000000000);
     }
 
     forward-focus: input;
@@ -1232,6 +1231,10 @@ export component MainWindow inherits Window {
                     // forty of them, because measuring one rounds badly at a
                     // fractional width — the browser page does exactly this,
                     // and says so in `charWidth`.
+                    // The same limit the page's `charWidth` has: one width
+                    // for every character. A face that draws Han twice as
+                    // wide would slide, and neither window has an answer for
+                    // that yet.
                     property <length> advance: ruler.preferred-width / 40;
                     // Where the caret is, and whether it is in its lit half.
                     // See the caret below for why this window draws its own.
