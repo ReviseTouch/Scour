@@ -5610,3 +5610,46 @@ measures at 366.491 entries a pass. For `/home` that is nearly a million. So
 the ceiling is a net, not an answer: the answer is one `FAN_MARK_FILESYSTEM` a
 superblock, which costs no watches at all and covers every subvolume, and which
 `packaging/scour.service` exists to install.
+
+## 2026-08-24 — the query field was never monospace
+
+The coloured layer over the query box and the box itself are two runs of the
+same string, drawn one on top of the other, and they were not landing on top
+of each other. Both layers were instrumented to say what they measure
+(`SCOUR_TRACE=1`, `query field: …` on every caret move), and the drift turned
+out to be two faults stacked:
+
+**One.** `font-family: "monospace"` is not a generic in Slint. The string goes
+to parley as `FontFamilyName::named(…)` — a family literally called
+"monospace", which no system has — and the miss falls through to
+`FALLBACK_FAMILIES`, which is sans-serif. Twenty characters, caret position
+reported by the input itself:
+
+| twenty of | before | after |
+|---|---:|---:|
+| `M` | 377,2 px | 240,0 px |
+| `i` | 119,6 px | 240,0 px |
+| `W` | 386,8 px | 240,0 px |
+| `a` | 239,6 px | 240,0 px |
+
+Four different widths is a proportional face. The window had been drawing all
+32 of its `Fonts.mono` places in the interface sans. Resolved now the way the
+rest of the desktop resolves it, through `fc-match monospace` — here Noto Sans
+Mono, 12,0 px a character at 20 px.
+
+**Two.** Even fixed, the coloured runs are separate elements and a layout gives
+each of them a whole number of pixels. `ext:rs !tmp size:>1mb a b c` is
+seventeen runs:
+
+| | |
+|---|---:|
+| where the input says the caret is | 262,24 px |
+| the same string as one `Text` | 263 px |
+| the coloured runs, laid out | **270 px** |
+
+Seven and a half pixels, all in the same direction, on a 27-character query —
+about a character, and worse the longer the query. It reads as the colours
+sliding off the letters. The runs are placed by arithmetic now, character
+offset times a character's width measured over forty of them, which is what
+`charWidth` in `page.html` has always done. After: caret 396,0 px, ruler
+396,0 px, on a 33-character query with a Turkish word in it.

@@ -276,8 +276,11 @@ pub const METRICS: Metrics = Metrics {
 /// The font stacks, as the browser wants them written.
 ///
 /// A native window cannot use a list like this — it asks the platform for one
-/// family — so the window takes the first name it can resolve and the list is
-/// here so that both are choosing from the same set rather than from two.
+/// family, and the generic at the end of this stack is *not* one: a toolkit
+/// looks for a family literally called "monospace", finds none, and serves the
+/// interface sans instead. So the window resolves the generic the way the rest
+/// of the desktop does, through fontconfig, and lands on the same face this
+/// list ends at. See `scour-gui`'s `mono_family`.
 pub const MONO: &str =
     r#"ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace"#;
 pub const SANS: &str = r#"system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif"#;

@@ -83,6 +83,32 @@ pub fn trace(what: &str) {
     }
 }
 
+/// One key by name, for the synthetic keyboard.
+///
+/// Anything that is not a name is the text itself, so `a` is the letter and
+/// `Return` is the key — which is exactly how Slint's own key events are
+/// spelled: a named key is a character in the private use area.
+fn named_key(name: &str) -> slint::SharedString {
+    use slint::platform::Key;
+    match name.to_ascii_lowercase().as_str() {
+        "return" | "enter" => Key::Return.into(),
+        "escape" | "esc" => Key::Escape.into(),
+        "backspace" => Key::Backspace.into(),
+        "delete" | "del" => Key::Delete.into(),
+        "tab" => Key::Tab.into(),
+        "home" => Key::Home.into(),
+        "end" => Key::End.into(),
+        "left" => Key::LeftArrow.into(),
+        "right" => Key::RightArrow.into(),
+        "up" => Key::UpArrow.into(),
+        "down" => Key::DownArrow.into(),
+        "pageup" => Key::PageUp.into(),
+        "pagedown" => Key::PageDown.into(),
+        "space" => " ".into(),
+        other => other.into(),
+    }
+}
+
 /// A catalogue lookup, ready for the interface.
 ///
 /// `Catalog::get` answers with a `Cow` — borrowed when the language is English
@@ -1762,6 +1788,56 @@ fn main() -> Result<()> {
         });
     }
 
+    // Press keys, without a keyboard. `SCOUR_GUI_KEY=ctrl+a` — chords
+    // separated by commas, modifiers by `+`, and a bare word is one of
+    // Slint's named keys. The compositor here will not send a key to a window
+    // that a test started, and a shortcut is the one thing no other hook can
+    // reach: `Ctrl+A` in the query box goes through the text input's own
+    // handling, not through anything this program calls.
+    window.set_trace(std::env::var("SCOUR_TRACE").is_ok());
+
+    if let Ok(spec) = std::env::var("SCOUR_GUI_KEY") {
+        let chords: Vec<String> = spec.split(',').map(|c| c.trim().to_string()).collect();
+        let after = std::env::var("SCOUR_GUI_KEY_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(1000);
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(after), move || {
+            let Some(w) = weak.upgrade() else { return };
+            for chord in &chords {
+                let mut held: Vec<slint::SharedString> = Vec::new();
+                let mut key = slint::SharedString::new();
+                for part in chord.split('+') {
+                    match part.to_ascii_lowercase().as_str() {
+                        "ctrl" | "control" => held.push(slint::platform::Key::Control.into()),
+                        "shift" => held.push(slint::platform::Key::Shift.into()),
+                        "alt" => held.push(slint::platform::Key::Alt.into()),
+                        "meta" | "super" => held.push(slint::platform::Key::Meta.into()),
+                        _ => key = named_key(part),
+                    }
+                }
+                trace(&format!("synthetic key {chord}"));
+                for m in &held {
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                            text: m.clone(),
+                        });
+                }
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
+                for m in held.iter().rev() {
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                            text: m.clone(),
+                        });
+                }
+            }
+        });
+    }
+
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
         window.set_view_mode(mode.as_str().into());
     }
@@ -2613,6 +2689,16 @@ fn apply(
             let runs: Vec<Span> = spans
                 .iter()
                 .map(|sp| Span {
+                    // **Characters, not bytes.** The offsets on the wire are
+                    // byte offsets, and the window places each run by
+                    // counting characters — `değiştirme` is ten characters
+                    // and twelve bytes, so a run after it would be drawn two
+                    // characters too far right.
+                    at: query
+                        .get(..sp.start as usize)
+                        .unwrap_or_default()
+                        .chars()
+                        .count() as i32,
                     text: query
                         .get(sp.start as usize..(sp.start + sp.len) as usize)
                         .unwrap_or_default()
@@ -2630,6 +2716,7 @@ fn apply(
                         scour_core::Role::Text | scour_core::Role::Phrase => 6,
                         _ => 0,
                     },
+                    not: sp.not,
                 })
                 .collect();
             w.set_spans(ModelRc::new(VecModel::from(runs)));
@@ -3400,11 +3487,55 @@ fn dress(window: &MainWindow) {
 
     let fonts = window.global::<Fonts>();
     fonts.set_size(scour_ui::METRICS.size);
-    // The page names a stack and lets the browser pick; a native window asks
-    // the platform for one family. Taking the first name would ask for
-    // `ui-monospace`, which no font server knows — so the generic is what both
-    // ends up resolving to anyway, said plainly.
-    fonts.set_mono("monospace".into());
+    fonts.set_mono(mono_family().as_str().into());
+}
+
+/// A monospace face this machine actually has.
+///
+/// **"monospace" is not a family, and Slint does not treat it as one.** The
+/// query field asked for `font-family: "monospace"` and got the ordinary
+/// interface sans: Slint hands the string to parley as
+/// `FontFamilyName::named(...)` — a family *called* "monospace", which no
+/// system has — and when that misses it falls through to
+/// `FALLBACK_FAMILIES`, which is sans-serif. The generic a browser
+/// understands is not a generic here.
+///
+/// Measured, because a proportional face in this field is not a matter of
+/// taste: `M` came out 18.86 px wide and `i` 5.98 at the same size. The
+/// coloured layer and the box that takes the typing are two runs of the same
+/// string drawn one on top of the other, and the only thing that keeps them
+/// there is a face where a character's width does not depend on which
+/// character it is.
+///
+/// **The desktop's own answer, not a favourite of ours.** Every terminal on
+/// this machine already resolves `monospace` through fontconfig; picking
+/// something else would make this one field disagree with all of them.
+/// `SCOUR_GUI_MONO=<family>` names one by hand, which is how the widths above
+/// were measured.
+fn mono_family() -> String {
+    if let Ok(named) = std::env::var("SCOUR_GUI_MONO") {
+        return named;
+    }
+    #[cfg(target_os = "macos")]
+    return "Menlo".to_owned();
+    #[cfg(windows)]
+    return "Consolas".to_owned();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let asked = std::process::Command::new("fc-match")
+            .args(["-f", "%{family}", "monospace"])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            // fontconfig answers with every name the family goes by.
+            .and_then(|names| names.split(',').next().map(str::trim).map(str::to_owned))
+            .filter(|name| !name.is_empty());
+        trace(&format!("mono family: {asked:?}"));
+        // No fontconfig: the old string, which draws in the sans and is at
+        // least legible.
+        asked.unwrap_or_else(|| "monospace".to_owned())
+    }
 }
 
 /// The column headings and their widths, from `scour-ui`.

@@ -156,6 +156,15 @@ export struct Span {
     // 0 punctuation · 1 field · 2 value · 3 wildcard · 4 exclusion
     // 5 read as text · 6 the word being looked for
     role: int,
+    // Is this run part of a term that must NOT match? The role does not say:
+    // `pdf` in `!ext:pdf` is a value exactly as it is in `ext:pdf`, and the
+    // exclusion role covers the `!` alone. The engine works the extent out
+    // and sends it — see `scour_core::Span::not`.
+    not: bool,
+    // How many CHARACTERS of the query come before this run. The wire counts
+    // bytes; the arithmetic that places this run counts characters, and in
+    // Turkish the two part company at the first word.
+    at: int,
 }
 
 export struct Facet {
@@ -1072,6 +1081,12 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    // Print what the two layers of the query field measure, on every caret
+    // move. They have to agree character for character — that is the whole
+    // trick — and the only way to know whether they do is to ask both.
+    // `SCOUR_TRACE=1` turns it on.
+    in property <bool> trace: false;
+
     /// Put the caret at the end of what is typed.
     ///
     /// Used by `Enter` on a suggestion and by `SCOUR_GUI_END`, which is how a
@@ -1079,7 +1094,15 @@ export component MainWindow inherits Window {
     /// not: scrolled. Nothing outside this window can press a key, and a field
     /// whose text is set from Rust leaves the caret at nought.
     public function caret-to-end() {
-        input.set-selection-offsets(root.query.character-count, root.query.character-count);
+        // **Byte offsets, and Slint does not say so in the name.**
+        // `set-selection-offsets` clamps to the length of the text and snaps
+        // to a character boundary, so anything past the end is the end — and
+        // the character count is *short* of it: `değiştirme` is ten
+        // characters and twelve bytes, so the caret landed two characters
+        // early on every query with a Turkish letter in it. Four is the most
+        // bytes a character can take.
+        input.set-selection-offsets(root.query.character-count * 4,
+                                    root.query.character-count * 4);
     }
 
     forward-focus: input;
@@ -1196,6 +1219,20 @@ export component MainWindow inherits Window {
                     // scroll — and this one number moves all three.
                     property <length> room: field.width - field.pad * 2;
                     property <length> shift: 0px;
+                    // **One character's width, measured rather than assumed.**
+                    // The coloured runs are separate elements and a layout
+                    // gives each of them a whole number of pixels, so a face
+                    // whose character is 12.04 px wide is drawn 12 px wide —
+                    // once per run, all of it in the same direction. Sixteen
+                    // runs and the colours sit a character to the left of the
+                    // letters they belong to.
+                    //
+                    // So the runs are placed by arithmetic instead: character
+                    // offset times the width of a character. Measured over
+                    // forty of them, because measuring one rounds badly at a
+                    // fractional width — the browser page does exactly this,
+                    // and says so in `charWidth`.
+                    property <length> advance: ruler.preferred-width / 40;
                     // Where the caret is, and whether it is in its lit half.
                     // See the caret below for why this window draws its own.
                     property <length> caret-x: field.pad;
@@ -1235,11 +1272,17 @@ export component MainWindow inherits Window {
                     // let the caret and the selection show through. Both are
                     // the same monospace at the same size, so the two line up
                     // character for character.
-                    HorizontalLayout {
-                        x: field.pad + field.shift;
-                        width: max(parent.width - field.pad * 2, self.preferred-width);
-                        alignment: start;
-                        for sp[i] in root.spans: Text {
+                    ruler := Text {
+                        text: "0000000000000000000000000000000000000000";
+                        font-family: Fonts.mono;
+                        font-size: 20px;
+                        font-weight: 600;
+                        visible: false;
+                    }
+
+                    for sp[i] in root.spans: Text {
+                            x: field.pad + field.shift + field.advance * sp.at;
+                            height: parent.height;
                             text: sp.text;
                             font-family: Fonts.mono;
                             font-size: 20px;
@@ -1247,14 +1290,21 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             // Blue for what is being looked for, red for what
                             // is being left out. See `scour_ui::Palette`.
-                            color: sp.role == 1 ? Theme.q-key
+                            //
+                            // **A misreading is said before a polarity, and
+                            // an exclusion before a role.** `!kind:zurna` is
+                            // both excluded and unreadable, and the second is
+                            // what a person needs to know; `!ext:pdf` is a
+                            // field term all the way through and every piece
+                            // of it is left out.
+                            color: sp.role == 5 ? Theme.q-bad
+                                 : sp.not ? Theme.q-not
+                                 : sp.role == 1 ? Theme.q-key
                                  : sp.role == 2 ? Theme.q-val
                                  : sp.role == 3 ? Theme.q-glob
                                  : sp.role == 4 ? Theme.q-not
-                                 : sp.role == 5 ? Theme.q-bad
                                  : sp.role == 6 ? Theme.q-term
                                  : Theme.ink;
-                        }
                     }
 
                     // **Hidden when there is anything to read, not when the
@@ -1333,6 +1383,14 @@ export component MainWindow inherits Window {
                             field.shift = 0px;
                         }
                         field.caret-x = field.pad + field.shift + p.x;
+                        if (root.trace) {
+                            debug("query field: input caret x " + p.x / 1px
+                                + "  by the ruler " + field.advance * root.query.character-count / 1px
+                                + "  stand-in width " + self.preferred-width / 1px
+                                + "  chars " + root.query.character-count
+                                + "  selection " + self.anchor-position-byte-offset
+                                + ".." + self.cursor-position_byte-offset);
+                        }
                         // Typing restarts the lit half: a caret that blinks
                         // *while* letters arrive reads as a dropped keystroke.
                         field.caret-lit = true;
@@ -1354,7 +1412,14 @@ export component MainWindow inherits Window {
                     // monospace, one pixel is a caret you look for.
                     text-cursor-width: 2px;
                     selection-background-color: Theme.selection;
-                    selection-foreground-color: Theme.ink;
+                    // **Invisible ink for the selection too.** This was
+                    // `Theme.ink`, and the ink is the one thing about this
+                    // input that must never be visible: selecting the query
+                    // drew the real text, opaque, over the coloured layer —
+                    // so `Ctrl+A` looked like the colours had been thrown
+                    // away. The selection is said by its wash, which is
+                    // translucent and lets the colours through.
+                    selection-foreground-color: transparent;
 
                     edited => {
                         root.query-changed(self.text);
