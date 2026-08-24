@@ -1071,6 +1071,16 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    /// Put the caret at the end of what is typed.
+    ///
+    /// Used by `Enter` on a suggestion and by `SCOUR_GUI_END`, which is how a
+    /// screenshot reaches the one state a long query has that a short one does
+    /// not: scrolled. Nothing outside this window can press a key, and a field
+    /// whose text is set from Rust leaves the caret at nought.
+    public function caret-to-end() {
+        input.set-selection-offsets(root.query.character-count, root.query.character-count);
+    }
+
     forward-focus: input;
 
     // **The window is a card on a ground, not a full-bleed panel.** Measured
@@ -1157,6 +1167,8 @@ export component MainWindow inherits Window {
                 // missing.
                 field := Rectangle {
                     horizontal-stretch: 1;
+                    // Or the scrolled text paints across the window.
+                    clip: true;
                     background: Theme.panel-2;
                     border-radius: 4px;
                     border-width: 1px;
@@ -1168,6 +1180,21 @@ export component MainWindow inherits Window {
                     // colouring work — so where they start is a property
                     // rather than a figure written three times.
                     property <length> pad: 9px;
+                    // What is visible inside the padding, and how far the text
+                    // has been pushed left to keep the caret in it.
+                    //
+                    // **The three layers scroll together or not at all.** The
+                    // coloured text is a layer of its own and the box that
+                    // takes the typing is another; a `TextInput` narrower than
+                    // its text scrolls *itself*, and then the letters a person
+                    // sees and the caret they are typing at are two different
+                    // strings. Past a boxful the query was simply cut off on
+                    // the right while the caret went on moving.
+                    //
+                    // So the input is never narrower than its text — it cannot
+                    // scroll — and this one number moves all three.
+                    property <length> room: field.width - field.pad * 2;
+                    property <length> shift: 0px;
                     // Where the caret is, and whether it is in its lit half.
                     // See the caret below for why this window draws its own.
                     property <length> caret-x: field.pad;
@@ -1208,8 +1235,8 @@ export component MainWindow inherits Window {
                     // the same monospace at the same size, so the two line up
                     // character for character.
                     HorizontalLayout {
-                        x: field.pad;
-                        width: parent.width - field.pad * 2;
+                        x: field.pad + field.shift;
+                        width: max(parent.width - field.pad * 2, self.preferred-width);
                         alignment: start;
                         for sp[i] in root.spans: Text {
                             text: sp.text;
@@ -1231,8 +1258,28 @@ export component MainWindow inherits Window {
                     // filter slot rather than in the text, so the box stayed
                     // "empty" while the coloured layer under it said `dm:17d`
                     // — and the placeholder sat on top of it.
-                    if root.spans.length == 0: Text {
-                        x: field.pad;
+                    // **What stands in until the colours arrive.** The
+                    // coloured runs come from the service, so between a
+                    // keystroke and its answer there is a moment with nothing
+                    // to draw — and the box that holds the text is
+                    // transparent by construction. Without this, that moment
+                    // showed the *placeholder* over what was being typed: the
+                    // longer the answer took, the longer a person watched
+                    // their own query be invisible. The terminal has always
+                    // drawn the plain text in the gap and says why.
+                    if root.spans.length == 0 && root.query != "": Text {
+                        x: field.pad + field.shift;
+                        width: max(parent.width - field.pad * 2, self.preferred-width);
+                        text: root.query;
+                        color: Theme.ink;
+                        font-family: Fonts.mono;
+                        font-size: 20px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    if root.spans.length == 0 && root.query == "": Text {
+                        x: field.pad + field.shift;
                         width: parent.width - field.pad * 2;
                         text: root.hint;
                         color: Theme.ink-3;
@@ -1256,15 +1303,32 @@ export component MainWindow inherits Window {
                     // nothing at all. Slint sets the I-beam itself when the
                     // pointer is over a `TextInput` — it simply was not over
                     // one.
-                    x: field.pad;
-                    width: parent.width - field.pad * 2;
+                    x: field.pad + field.shift;
+                    // **Never narrower than what is in it**, so it never
+                    // scrolls itself — and never narrower than the box, so
+                    // there is something to click and something for the
+                    // pointer to be over across the whole field.
+                    width: max(field.room, self.preferred-width);
                     height: parent.height;
                     text <=> root.query;
                     // **Where the caret is, so this window can draw one.**
                     // Slint draws its own in `color`, and `color` here is
                     // `transparent` — see below.
                     cursor-position-changed(p) => {
-                        field.caret-x = field.pad + p.x;
+                        // Keep the caret inside the visible part, and no
+                        // further left than the start of the text. The second
+                        // half is what brings a scrolled field back when the
+                        // query is cleared.
+                        if (p.x + field.shift < 0px) {
+                            field.shift = -p.x;
+                        }
+                        if (p.x + field.shift > field.room - 2px) {
+                            field.shift = field.room - 2px - p.x;
+                        }
+                        if (field.shift > 0px) {
+                            field.shift = 0px;
+                        }
+                        field.caret-x = field.pad + field.shift + p.x;
                         // Typing restarts the lit half: a caret that blinks
                         // *while* letters arrive reads as a dropped keystroke.
                         field.caret-lit = true;

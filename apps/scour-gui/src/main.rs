@@ -1750,6 +1750,18 @@ fn main() -> Result<()> {
         });
     }
 
+    // The caret at the end of a long query, which is the only way a picture
+    // can be taken of a scrolled field: nothing outside this window presses a
+    // key, and text set from Rust leaves the caret at nought.
+    if std::env::var_os("SCOUR_GUI_END").is_some() {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(900), move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_caret_to_end();
+            }
+        });
+    }
+
     if let Ok(mode) = std::env::var("SCOUR_GUI_VIEW") {
         window.set_view_mode(mode.as_str().into());
     }
