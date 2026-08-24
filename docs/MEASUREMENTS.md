@@ -5715,3 +5715,34 @@ the `or` out loud:
 **The precedence itself is unchanged and is Everything's**: `!` binds tighter
 than `|`, so `!a|b` is `(not a) or b`. What was wrong was that nothing on
 screen said an `or` was there.
+
+## 2026-08-25 — the line and the parser, asked together
+
+Every fault the query line has had is the same fault: the colouring and the
+parser reading the same string differently. Each was found by a person looking
+at a line that did not match the answer, and none by a test — because every
+test here asked the highlighter what it thought and never asked the parser.
+
+So one test asks both, over 3.900 queries built from sixteen pieces: the same
+number of AND-ed terms, the same alternatives in each, the same ones excluded,
+and the spans still covering the query byte for byte. It found four faults in
+its first run, none of which anybody had guessed:
+
+| typed | read as | drawn as |
+|---|---|---|
+| `rapor "iki kelime"` | a word and a phrase | one run of plain text — the tokeniser opened a quoted run *inside the whitespace*, so ` "iki kelime"` came out as a single piece with no quote or phrase colour at all |
+| `"a|b"` | **a or b** | one phrase — and here the *parser* was wrong: the alternative split never saw the quotes |
+| `a\|ext:rs;toml` | **three** alternatives | two — `owns_list` was asked of the whole token, and `a\|ext` is not a field name, so the filter came apart at its own semicolon |
+| `ext:rs ; f!g` | two terms | one filter — `split_bangs` ran before `join_lists` and cut a value that was still open |
+
+And the thing that was asked for: **`!` no longer needs a space in front of
+it.** `rapor!tmp` is a term and an exclusion, `a!b!c` is one and two. Three
+places it stays a character, each a real query: at the end (`hello!`), just
+after `;` or `|` (`a|!b`, where it belongs to the alternative), and inside a
+field's value or a quoted run (`path:/home/a!b`, `"a!b"`).
+
+One shape the line still cannot draw, and it is written down in the test
+rather than skipped quietly: a lone `!` followed by a term that opens with `;`
+or `|`. `a ! ;c` is `a` or `not c` — the `!` is typed before the separator and
+belongs after it, so the line gets the terms and the alternatives right and
+cannot show which side of the `or` the exclusion is on.

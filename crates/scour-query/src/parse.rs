@@ -25,7 +25,7 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in join_parens(join_operators(join_lists(tokenize(input))))
+    for token in join_parens(join_operators(split_bangs(join_lists(tokenize(input)))))
         .into_iter()
         .flat_map(|t| expand(&t))
     {
@@ -43,11 +43,22 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
         // A quoted run is literal all the way through — `"a ; b"` is one
         // phrase and the semicolon in it is a character. The same guard every
         // other stage here uses, and forgetting it took the phrase apart.
-        let owns_list = token.starts_with('"')
-            || token_field(&token).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
-        let alts: Vec<(bool, Match)> = token
-            .split(if owns_list { '|' } else { ';' })
-            .flat_map(|part| part.split('|'))
+        // **Decided per alternative, not per token.** `a|ext:rs;toml` is a
+        // word or a two-extension filter — two things. Asking the whole token
+        // whether it owns a list gets "no" (`a|ext` is not a field name), and
+        // the filter then came apart at its own semicolon into a third
+        // alternative that was a bare word.
+        let alts: Vec<(bool, Match)> = split_outside_quotes(&token, '|')
+            .into_iter()
+            .flat_map(|part| {
+                let owns_list =
+                    token_field(part).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
+                if owns_list {
+                    vec![part]
+                } else {
+                    split_outside_quotes(part, ';')
+                }
+            })
             .filter(|a| !a.is_empty())
             .filter_map(|a| parse_alt(a, now))
             .collect();
@@ -217,6 +228,57 @@ fn tokenize(input: &str) -> Vec<String> {
     out
 }
 
+/// Cut a token where a `!` starts a new term inside it.
+///
+/// **After `join_lists`, so that a value continued across a space is already
+/// one token.** Before it, `ext:rs ; f!g` had its last token cut into `f` and
+/// `!g` while the list was still open, and the line — which glues first — read
+/// the same query as one filter. A `!` inside a field's value is a character,
+/// wherever the value happens to have been written.
+///
+/// **A separator that needs a space in front of it is a separator people get
+/// wrong.** `;` and `|` have never needed one — `a;b` is two alternatives —
+/// and `!` did: `rapor!tmp` was the literal string, so the exclusion silently
+/// did nothing. Nobody types a `!` in the middle of a word by accident.
+///
+///
+/// Three places a `!` is *not* a separator, and each is a real query:
+///
+/// * **At the end**, `hello!` — there is nothing to exclude, and files are
+///   called that. Long-standing, and unchanged.
+/// * **Just after `;` or `|`**, `a|!b` — the `!` belongs to the alternative
+///   that is starting, not to a new term. Cutting there would break the `or`.
+/// * **Inside a field's value or a quoted run**, `path:/home/a!b` and
+///   `"a!b"` — both are literal all the way through, and a path may contain
+///   anything.
+fn split_bangs(tokens: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(tokens.len());
+    for t in tokens {
+        if t.starts_with('"')
+            || token_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some())
+        {
+            out.push(t);
+            continue;
+        }
+        let mut from = 0;
+        for (i, c) in t.char_indices() {
+            if c != '!' || i == 0 || i + 1 == t.len() {
+                continue;
+            }
+            let before = t[..i].chars().next_back();
+            if before == Some('|') || before == Some(';') {
+                continue;
+            }
+            if i > from {
+                out.push(t[from..i].to_owned());
+            }
+            from = i;
+        }
+        out.push(t[from..].to_owned());
+    }
+    out
+}
+
 /// Reattach `|` and `!` to what they operate on.
 ///
 /// Whitespace splitting happens first, so `a | b` arrives as three tokens and
@@ -304,7 +366,11 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
             want_alt |= trailing_alt;
             continue;
         }
-        if std::mem::take(&mut pending_bang) {
+        // **Once, not twice.** `! !ext:rs;toml` prepended a second `!` and
+        // made `!!ext:rs`, which is not a field term to anything that looks
+        // — so the list came apart at the semicolon and the exclusion turned
+        // into an `or` again. A second `!` says nothing the first did not.
+        if std::mem::take(&mut pending_bang) && !t.starts_with('!') {
             t.insert(0, '!');
         }
         if std::mem::take(&mut want_alt)
@@ -553,6 +619,33 @@ fn name_match(text: &str) -> Match {
 /// The letters do not have to be ASCII. Requiring that was a quiet bug: it
 /// meant the Turkish aliases `tür:` and `içerik:` were listed as fields, looked
 /// like fields, and were silently searched for as literal text instead.
+/// Split on `mark`, ignoring any that falls inside a quoted run.
+///
+/// **A quoted run is literal all the way through**, and the alternative split
+/// never saw the quotes: `"a|b"` came out as two alternatives, so a phrase
+/// with a pipe in it searched for something else entirely. Guarding by "does
+/// the token start with a quote" is not enough either — `join_operators`
+/// appends an alternative to whatever came before, so `"x y" ;c` arrives here
+/// as `"x y"|c`, which starts with a quote and is two things.
+///
+/// Shared with the highlighter, so that the line cannot cut a term anywhere
+/// the parser does not.
+pub(crate) fn split_outside_quotes(s: &str, mark: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut quoted = false;
+    let mut from = 0;
+    for (i, c) in s.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if c == mark && !quoted {
+            out.push(&s[from..i]);
+            from = i + c.len_utf8();
+        }
+    }
+    out.push(&s[from..]);
+    out
+}
+
 /// The field a whole **token** names, with any leading `!` set aside.
 ///
 /// **`!ext:rs` is a field term, and `split_field` says it is not.** It reads
@@ -728,7 +821,11 @@ mod tests {
             vec![(true, Match::Ext(vec!["rs".into(), "toml".into()]))]
         );
         // The same for every other list field.
-        assert_eq!(m("!kind:image;code").len(), 1, "!kind:image;code came apart");
+        assert_eq!(
+            m("!kind:image;code").len(),
+            1,
+            "!kind:image;code came apart"
+        );
         // What it must not break: the un-negated form, and a `;` between
         // words, which is an alternative separator and has to stay one.
         assert_eq!(

@@ -2809,6 +2809,10 @@ fn apply(
             query_revision,
             reply,
         } => {
+            trace(&format!(
+                "explain {query_revision} (current {})",
+                state.borrow().query_revision
+            ));
             if query_revision != state.borrow().query_revision {
                 return;
             }

@@ -54,22 +54,60 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
     for (i, (start, token)) in toks.iter().enumerate() {
         let (start, token) = (*start, *token);
         if is_space(token) {
-            let joins = list.is_some()
+            // **A space beside an `or` is inside the group, not between two
+            // of them.** `a ;b` and `a; b` are one term with two alternatives
+            // — the parser joins across the space either way — and drawing an
+            // ordinary gap there showed two terms where there is one.
+            // Looking *through* a lone `!`, which belongs to the term after
+            // it rather than being one: `a ! ;c` is `a` or `not c`, one term.
+            // **While a list is open the `;` belongs to it**, which is the
+            // order the parser works in: `join_lists` runs before
+            // `join_operators`, so `ext:rs ; "x y"` is a filter and a phrase
+            // and not one term with two alternatives.
+            // **While a list is open the `;` belongs to it**, which is the
+            // order the parser works in: `join_lists` runs before
+            // `join_operators`, so `ext:rs ; "x y"` is a filter and a phrase
+            // and not one term with two alternatives. A `|` is an operator
+            // either way — no list has ever claimed one.
+            let alt = |t: &str, at_start: bool| {
+                let mark = if at_start {
+                    t.starts_with('|')
+                } else {
+                    t.ends_with('|')
+                };
+                let semi = if at_start {
+                    t.starts_with(';')
+                } else {
+                    t.ends_with(';')
+                };
+                mark || (semi && list.is_none())
+            };
+            let beside_alt = next_term_word(&toks, i).is_some_and(|t| alt(t, true))
+                || prev_word(&toks, i).is_some_and(|t| alt(t, false));
+            // A field's value continuing across the space is a different
+            // thing from two alternatives sitting either side of one, and
+            // only the first carries the term's exclusion with it.
+            let list_join = list.is_some()
+                && next_word(&toks, i).is_some_and(|t| !t.starts_with('"'))
                 && (expect_value || next_word(&toks, i).is_some_and(|t| t.starts_with(';')));
+            let joins = beside_alt || list_join;
             let role = if joins { Role::Sep } else { Role::Space };
             let span = Span::new(start, token.len(), role);
             // The gap between a lone `!` and its term is inside the exclusion:
             // one red run, not two with a hole in it.
-            let inside = (joins && list_not) || lone_bang;
+            let inside = (list_join && list_not) || lone_bang;
             out.push(if inside { span.excluded() } else { span });
-            if !joins {
+            if !list_join {
                 list = None;
                 expect_value = false;
                 list_not = false;
             }
             continue;
         }
+        // A quoted run is never a continuation: `join_lists` pushes it
+        // through untouched and closes the list behind it.
         if let Some(f) = list
+            && !token.starts_with('"')
             && (expect_value || token.starts_with(';'))
         {
             let mark = out.len();
@@ -83,29 +121,57 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 // separates has not been written yet.
                 expect_value = true;
             }
-            if !rest.is_empty() {
-                expect_value = rest.ends_with(';');
+            // **A `|` ends the value and starts an alternative.** The
+            // parser glues the token onto the list and *then* cuts it there,
+            // so `ext:rs ; i|j` is a two-extension filter or the word `j`;
+            // drawn as one value it was one thing.
+            let mut pieces = crate::parse::split_outside_quotes(rest, '|').into_iter();
+            let first = pieces.next().unwrap_or("");
+            if !first.is_empty() {
+                expect_value = first.ends_with(';');
             }
-            value_spans(&mut out, at, rest, f, now);
+            value_spans(&mut out, at, first, f, now);
             if list_not {
                 for span in &mut out[mark..] {
                     span.not = true;
                 }
             }
+            at += first.len();
+            for piece in pieces {
+                out.push(Span::new(at, 1, Role::Or));
+                at += 1;
+                one_term(&mut out, at, piece, now);
+                at += piece.len();
+                // Past the `|` the list is over.
+                list = None;
+                expect_value = false;
+                list_not = false;
+            }
             continue;
         }
         let mark = out.len();
         list_not = term(&mut out, start, token, now) | lone_bang;
+        // A token can be several terms now, and only the last of them can be
+        // continued across the space: `a!ext:rs; toml`.
+        let tail = *bang_pieces(token).last().unwrap_or(&token);
+        // **The first alternative only.** A `!` standing on its own binds to
+        // the term after it exactly as though it had been written against it
+        // — `! d;e` is `!d;e`, which is `(not d) or e` — so it reaches the
+        // first alternative and stops. Marking the whole term drew `e` as
+        // excluded when the engine was searching *for* it.
         if std::mem::take(&mut lone_bang) {
             for span in &mut out[mark..] {
+                if span.role == Role::Or {
+                    break;
+                }
                 span.not = true;
             }
         }
         // Nothing follows a `!` inside its own token, so this can only be the
         // operator standing alone.
         lone_bang = token == "!";
-        list = field_of(token);
-        expect_value = list.is_some() && token.ends_with(';');
+        list = field_of(tail);
+        expect_value = list.is_some() && tail.ends_with(';');
     }
     out
 }
@@ -128,6 +194,23 @@ fn next_word<'a>(toks: &[(usize, &'a str)], i: usize) -> Option<&'a str> {
         .map(|(_, t)| *t)
 }
 
+/// The next token that is not whitespace and not a lone `!`.
+fn next_term_word<'a>(toks: &[(usize, &'a str)], i: usize) -> Option<&'a str> {
+    toks[i + 1..]
+        .iter()
+        .find(|(_, t)| !is_space(t) && *t != "!")
+        .map(|(_, t)| *t)
+}
+
+/// The previous token that is not whitespace.
+fn prev_word<'a>(toks: &[(usize, &'a str)], i: usize) -> Option<&'a str> {
+    toks[..i]
+        .iter()
+        .rev()
+        .find(|(_, t)| !is_space(t))
+        .map(|(_, t)| *t)
+}
+
 fn is_space(t: &str) -> bool {
     t.chars().all(char::is_whitespace)
 }
@@ -144,10 +227,23 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
         let mut in_quotes = false;
         while i < input.len() {
             let c = bytes[i];
-            if c == b'"' {
-                in_quotes = !in_quotes;
-            } else if !in_quotes && c.is_ascii_whitespace() != space {
-                break;
+            // **A run of whitespace ends at the first character that is not
+            // whitespace, quote or no quote.** The quote was toggled here
+            // too, so a space followed by a phrase — `rapor "iki kelime"` —
+            // opened a quoted run *inside the whitespace token*, and the
+            // whole of ` "iki kelime"` came out as one piece of plain text:
+            // no quote colour, no phrase colour, and one term where the
+            // engine reads two. Found by asking the parser.
+            if space {
+                if !c.is_ascii_whitespace() {
+                    break;
+                }
+            } else {
+                if c == b'"' {
+                    in_quotes = !in_quotes;
+                } else if !in_quotes && c.is_ascii_whitespace() {
+                    break;
+                }
             }
             // Multi-byte characters are never whitespace or a quote, so
             // advancing by one byte here can only land inside a run that is
@@ -176,9 +272,22 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
         return true;
     }
 
+    // **A `!` inside a word starts a new term**, the same cut `split_bangs`
+    // makes. Without it the line drew `rapor!tmp` as one word being looked
+    // for, which is what the engine did too — and both were wrong.
     let mut at = start;
     let mut negated = false;
-    let quoted = text.starts_with('"');
+    for piece in bang_pieces(text) {
+        negated |= one_term(out, at, piece, now);
+        at += piece.len();
+    }
+    negated
+}
+
+/// One term: alternatives separated by `;` or `|`, each with an optional `!`.
+fn one_term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
+    let mut at = start;
+    let mut negated = false;
     // **`;` is `|` outside a field's value**, and the parser has said so since
     // `OPUS ; SONNET` was reported as finding neither. This did not, so
     // `HASAN;DENEME` was drawn as one word somebody was looking for while the
@@ -186,12 +295,9 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     // terms where there were three, one of them a disjunction with the
     // exclusion inside it. A query line that hides an `or` hides the reason
     // its answer is enormous.
-    let owns_list = quoted || field_of(text).is_some();
-    for (alt, sep) in alternatives(text, owns_list) {
+    for (alt, sep) in alternatives(text) {
         if let Some(c) = sep {
-            // A pipe inside quotes is an ordinary character.
-            let role = if quoted { Role::Phrase } else { Role::Or };
-            out.push(Span::new(at, c.len_utf8(), role));
+            out.push(Span::new(at, c.len_utf8(), Role::Or));
             at += c.len_utf8();
         }
         negated |= alternative(out, at, alt, now);
@@ -200,24 +306,58 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     negated
 }
 
+/// The terms inside one whitespace-separated token, cut at every `!` that
+/// starts a new one. Mirrors `parse::split_bangs`, including its three
+/// exceptions; the pieces are contiguous and cover the token.
+fn bang_pieces(text: &str) -> Vec<&str> {
+    if text.starts_with('"') || field_of(text).is_some() {
+        return vec![text];
+    }
+    let mut out = Vec::new();
+    let mut from = 0;
+    for (i, c) in text.char_indices() {
+        if c != '!' || i == 0 || i + 1 == text.len() {
+            continue;
+        }
+        let before = text[..i].chars().next_back();
+        if before == Some('|') || before == Some(';') {
+            continue;
+        }
+        if i > from {
+            out.push(&text[from..i]);
+        }
+        from = i;
+    }
+    out.push(&text[from..]);
+    out
+}
+
 /// The alternatives in a term, each with the character that separated it from
 /// the one before.
 ///
 /// Mirrors `parse::ast`: a token that is a field term or a quoted run keeps
 /// its own semicolons — `ext:rs;toml` is one filter — and everything else
 /// splits on both marks.
-fn alternatives(text: &str, owns_list: bool) -> Vec<(&str, Option<char>)> {
+fn alternatives(text: &str) -> Vec<(&str, Option<char>)> {
     let mut out = Vec::new();
-    let mut from = 0;
     let mut sep = None;
-    for (i, c) in text.char_indices() {
-        if c == '|' || (c == ';' && !owns_list) {
-            out.push((&text[from..i], sep));
-            sep = Some(c);
-            from = i + c.len_utf8();
+    // A quoted run is literal all the way through, and the split is the
+    // parser's own so the two cannot cut in different places.
+    for part in crate::parse::split_outside_quotes(text, '|') {
+        // A field's value keeps its own semicolons, and whether it is one is
+        // a question about *this alternative*: `a|ext:rs;toml` is a word or a
+        // filter, and asking the whole token gets the wrong answer.
+        if field_of(part).is_some() {
+            out.push((part, sep));
+        } else {
+            let mut inner = sep;
+            for piece in crate::parse::split_outside_quotes(part, ';') {
+                out.push((piece, inner));
+                inner = Some(';');
+            }
         }
+        sep = Some('|');
     }
-    out.push((&text[from..], sep));
     out
 }
 
@@ -708,18 +848,26 @@ mod tests {
         );
         covers("HASAN;DENEME");
         // Leading, which is how it joins to the term before it.
+        // The space is *inside* the group: the parser joins `;b` to `a`, so
+        // an ordinary gap here would draw two terms where there is one.
         assert_eq!(
             roles("a ;b"),
             vec![
                 (Role::Text, "a"),
-                (Role::Space, " "),
+                (Role::Sep, " "),
                 (Role::Or, ";"),
                 (Role::Text, "b")
             ]
         );
         covers("a ;b");
         // A lone one is an operator, like a lone pipe.
-        assert_eq!(roles("a ; b").iter().filter(|(r, _)| *r == Role::Or).count(), 1);
+        assert_eq!(
+            roles("a ; b")
+                .iter()
+                .filter(|(r, _)| *r == Role::Or)
+                .count(),
+            1
+        );
         covers("a ; b");
     }
 
@@ -758,6 +906,263 @@ mod tests {
                 (Role::Quote, "\"")
             ]
         );
+    }
+
+    /// The colouring and the parser read the same query.
+    ///
+    /// **Every fault this module has ever had is the two disagreeing**, and
+    /// each was found by a person staring at a line that did not match the
+    /// answer: `;` drawn as a letter when it is an `or`; a lone `!` drawn as
+    /// itself when it binds to the word after it; `rapor!tmp` drawn as one
+    /// word when it is a term and an exclusion. None of them were caught by a
+    /// test, because every test here asked the highlighter what it thought
+    /// and never asked the parser.
+    ///
+    /// So this one asks both. For each query: the same number of AND-ed
+    /// groups, the same number of alternatives in each, and the same
+    /// alternatives negated.
+    ///
+    /// The corpus is deliberately free of the rewritten spellings —
+    /// `size:1mb..2mb`, `empty:`, the Everything macros — because `expand`
+    /// turns one token into several groups on purpose, which is a difference
+    /// the line is not meant to show.
+    /// The colouring and the parser read the same query.
+    ///
+    /// **Every fault this module has ever had is the two disagreeing**, and
+    /// each was found by a person staring at a line that did not match the
+    /// answer: `;` drawn as a letter when it is an `or`; a lone `!` drawn as
+    /// itself when it binds to the word after it; `rapor!tmp` drawn as one
+    /// word when it is a term and an exclusion; a phrase after a space drawn
+    /// as neither. None were caught by a test, because every test here asked
+    /// the highlighter what it thought and never asked the parser.
+    ///
+    /// So this asks both: the same number of AND-ed terms, the same number of
+    /// alternatives in each, and the same ones excluded.
+    ///
+    /// The corpus has no rewritten spellings — `size:1mb..2mb`, `empty:`, the
+    /// Everything macros — because `expand` turns one token into several
+    /// terms on purpose, which is a difference the line is not meant to show.
+    #[test]
+    fn the_colouring_and_the_parser_read_the_same_query() {
+        const NOW: i64 = 1_800_000_000;
+        for q in [
+            "",
+            "rapor",
+            "rapor pdf",
+            "  leading and trailing   ",
+            "!tmp",
+            "! main",
+            "rapor !tmp",
+            "rapor!tmp",
+            "a!b!c",
+            "hello!",
+            "a!",
+            "a|b",
+            "a|!b",
+            "!a|b",
+            "a;b",
+            "HASAN;DENEME",
+            "a ;b",
+            "!ama ;deneme",
+            "HASAN;DENEME !ama ;deneme !dfd",
+            "ext:pdf",
+            "!ext:pdf",
+            "ext:rs;toml",
+            "!ext:rs;toml",
+            "ext:rs; toml",
+            "kind:image rapor",
+            "kind:zurna",
+            "!kind:zurna",
+            "sizE:>1mb",
+            "\"iki kelime\"",
+            "rapor \"iki kelime\"",
+            "\"a!b\"",
+            "\"a;b\"",
+            "*.rs !cache",
+            "değiştirme !öğe",
+            "path:/home/a!b",
+            "under:/home rapor !tmp",
+        ] {
+            agree(q, NOW);
+            covers(q);
+        }
+    }
+
+    /// The same agreement, over every query a handful of pieces can build.
+    ///
+    /// Thirty hand-written queries are thirty guesses about where the two
+    /// disagree, and every fault so far has been somewhere nobody guessed.
+    /// Four thousand is not a guess — the phrase-after-a-space fault above
+    /// was found by this and by nothing else.
+    #[test]
+    fn the_colouring_and_the_parser_agree_on_everything_these_pieces_can_spell() {
+        const NOW: i64 = 1_800_000_000;
+        const PIECES: &[&str] = &[
+            "a",
+            "!b",
+            ";c",
+            "d;e",
+            "f!g",
+            "h!",
+            "!",
+            ";",
+            "|",
+            "i|j",
+            "!k|l",
+            "ext:rs",
+            "!ext:rs;toml",
+            "\"x y\"",
+            "*.m",
+            "kind:zurna",
+        ];
+        let mut checked = 0;
+        for one in PIECES {
+            for two in PIECES {
+                for three in PIECES {
+                    let q = format!("{one} {two} {three}");
+                    // **One shape no colouring can draw truthfully.** A lone
+                    // `!` followed by a term that opens with `;` or `|` binds
+                    // *past* the separator — `a ! ;c` is `a` or `not c` — so
+                    // the `!` is written before the `;` and belongs after it.
+                    // The line gets the terms and the alternatives right; it
+                    // cannot get which side of the `or` the exclusion is on,
+                    // because that is not where it was typed.
+                    let toks: Vec<&str> = q.split_whitespace().collect();
+                    let looks_past = toks
+                        .windows(2)
+                        .any(|w| w[0] == "!" && w[1].starts_with([';', '|']));
+                    if looks_past {
+                        continue;
+                    }
+                    agree(&q, NOW);
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 3500, "the sweep did not run");
+    }
+
+    /// The line and the engine read `q` the same way, or say how they differ.
+    ///
+    /// The structure is read off the spans by the rules a person reads them
+    /// by: terms are separated by the spaces between them, an `or` joins two
+    /// alternatives inside one term, and a `!` begins a term unless it is
+    /// already at the start of one or is starting an alternative.
+    fn agree(q: &str, now: i64) {
+        let ast = crate::parse::parse_at(q, now);
+        let spans = spans_at(q, now);
+        let gap = |s: &Span| s.role == Role::Space && !s.not;
+        let mut groups: Vec<Vec<Span>> = Vec::new();
+        let mut cur: Vec<Span> = Vec::new();
+        let mut prev: Option<Role> = None;
+        for s in &spans {
+            let starts_term = s.role == Role::Not
+                && !cur.is_empty()
+                && prev != Some(Role::Or)
+                && prev != Some(Role::Sep)
+                && prev != Some(Role::Space);
+            if (gap(s) || starts_term) && !cur.is_empty() {
+                groups.push(std::mem::take(&mut cur));
+            }
+            if !gap(s) {
+                cur.push(*s);
+            }
+            prev = Some(s.role);
+        }
+        if !cur.is_empty() {
+            groups.push(cur);
+        }
+        // A `!` with nothing after it excludes nothing — the parser drops it,
+        // and the line draws it because somebody is halfway through typing
+        // the word it will exclude. Neither is wrong; it is not a term.
+        // A term made only of operators has nothing to search for: the
+        // parser drops it, and the line draws it because somebody is halfway
+        // through typing the word it will apply to.
+        groups.retain(|g| {
+            !g.iter()
+                .all(|s| matches!(s.role, Role::Not | Role::Or | Role::Space | Role::Sep))
+        });
+        // And a `!` at the *end* of a term excludes nothing either: `a ; !`
+        // is one alternative, not two with an empty second.
+        for g in &mut groups {
+            while g
+                .last()
+                .is_some_and(|s| matches!(s.role, Role::Not | Role::Space | Role::Sep))
+            {
+                g.pop();
+            }
+        }
+        assert_eq!(
+            groups.len(),
+            ast.groups.len(),
+            "{q:?}: the line shows {} terms and the engine reads {}",
+            groups.len(),
+            ast.groups.len()
+        );
+        for (i, (drawn, read)) in groups.iter().zip(&ast.groups).enumerate() {
+            // An `or` with nothing after it joins nothing yet, for the same
+            // reason a `!` with nothing after it excludes nothing — and an
+            // `or` straight after another one joins nothing either: `a ; ;c`
+            // reads as `a` or `c`, which is what the engine makes of it.
+            let mut alts = 1;
+            let mut last: Option<Role> = None;
+            for s in drawn {
+                if matches!(s.role, Role::Space | Role::Sep) {
+                    continue;
+                }
+                if s.role == Role::Or && last.is_some_and(|r| r != Role::Or) {
+                    alts += 1;
+                }
+                last = Some(s.role);
+            }
+            let dangling = last == Some(Role::Or);
+            alts -= usize::from(dangling);
+            assert_eq!(
+                alts,
+                read.alts.len(),
+                "{q:?}: term {i} is drawn with {alts} alternatives and read with {}",
+                read.alts.len()
+            );
+            // And the same ones are excluded: cut the drawn run at its `or`s
+            // and ask whether each piece carries the mark.
+            if dangling {
+                continue;
+            }
+            let mut drawn_neg = Vec::new();
+            let mut any = false;
+            let mut last: Option<Role> = None;
+            for s in drawn {
+                if matches!(s.role, Role::Space | Role::Sep) {
+                    any |= s.not;
+                    continue;
+                }
+                if s.role == Role::Or {
+                    // The same rule the count uses: only an `or` with
+                    // something in front of it starts a new alternative.
+                    if last.is_some_and(|r| r != Role::Or) {
+                        drawn_neg.push(any);
+                        any = false;
+                    }
+                } else {
+                    any |= s.not;
+                }
+                last = Some(s.role);
+            }
+            drawn_neg.push(any);
+            let read_neg: Vec<bool> = read.alts.iter().map(|(n, _)| *n).collect();
+            assert_eq!(
+                drawn_neg, read_neg,
+                "{q:?}: term {i} — the line marks {drawn_neg:?} excluded, \
+                 the engine excludes {read_neg:?}"
+            );
+        }
+        // Byte for byte, whatever else happened.
+        let mut at = 0;
+        for s in &spans {
+            assert_eq!(s.start as usize, at, "gap or overlap in {q:?}");
+            at += s.len as usize;
+        }
+        assert_eq!(at, q.len(), "spans stop short of the end of {q:?}");
     }
 
     #[test]
@@ -956,14 +1361,19 @@ mod list_tests {
                 (Role::Text, "toml"),
             ]
         );
-        // No list in front of it, so the parser leaves this alone too.
+        // **And a `;` standing alone is not a boundary at all.** The
+        // comment here used to say "no list in front of it, so the parser
+        // leaves this alone too", and the parser had never left it alone:
+        // `rapor ; pdf` is one term with two alternatives. Two ordinary gaps
+        // drew it as two terms AND-ed, which is a different query.
         assert_eq!(
             roles("rapor ; pdf")
                 .into_iter()
                 .filter(|(r, _)| *r == Role::Space)
                 .count(),
-            2
+            0
         );
+        assert_eq!(crate::parse::parse_at("rapor ; pdf", 0).groups.len(), 1);
     }
 
     #[test]
