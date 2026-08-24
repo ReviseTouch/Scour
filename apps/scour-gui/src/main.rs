@@ -183,6 +183,13 @@ struct State {
     generation: u64,
     /// Changes only when the matching set changes, not when its order does.
     query_revision: u64,
+    /// The coloured runs the engine last sent, as it sent them.
+    ///
+    /// **Kept, because a keystroke has to redraw the colours before the
+    /// answer to it arrives.** They are offsets rather than text, so they can
+    /// be laid over whatever is in the box now — which is the only way the
+    /// layer cannot show a character that has been deleted. See [`painted`].
+    spans: Vec<scour_core::Span>,
     /// The query revision whose sidebar and exact count were scheduled.
     background_query: Option<u64>,
     /// The query revision whose fallback count was scheduled.
@@ -644,6 +651,7 @@ fn main() -> Result<()> {
     let state = Rc::new(RefCell::new(State {
         generation: 0,
         query_revision: 0,
+        spans: Vec::new(),
         background_query: None,
         count_query: None,
         exact_count: None,
@@ -805,6 +813,16 @@ fn main() -> Result<()> {
                 s.typed_at = Some(std::time::Instant::now());
                 s.generation
             };
+            // **The colours move with the letters, not with the answer.**
+            // Laid over the text as it is now, from the spans in hand: what
+            // was deleted is gone this frame rather than a round trip later,
+            // and what was typed is drawn plainly until the service says what
+            // it is. See [`painted`].
+            if let Some(w) = weak.upgrade() {
+                let s = state.borrow();
+                let runs = painted(&full_query(&s), &s.spans);
+                w.set_spans(ModelRc::new(VecModel::from(runs)));
+            }
             // Counts from the previous matching set are worse than an empty
             // rail while the new, delayed facet walk is in flight.
             facets.set_vec(Vec::new());
@@ -1803,38 +1821,64 @@ fn main() -> Result<()> {
             .and_then(|ms| ms.parse().ok())
             .unwrap_or(1000);
         let weak = window.as_weak();
+        // **One chord a tick, not all of them in one callback.** Seven
+        // backspaces pressed inside a single callback are seven changes and
+        // one repaint — and a stale frame between two keystrokes is precisely
+        // what this hook has to be able to catch.
+        let every = std::env::var("SCOUR_GUI_KEY_EVERY")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(160);
         slint::Timer::single_shot(std::time::Duration::from_millis(after), move || {
             let Some(w) = weak.upgrade() else { return };
-            for chord in &chords {
-                let mut held: Vec<slint::SharedString> = Vec::new();
-                let mut key = slint::SharedString::new();
-                for part in chord.split('+') {
-                    match part.to_ascii_lowercase().as_str() {
-                        "ctrl" | "control" => held.push(slint::platform::Key::Control.into()),
-                        "shift" => held.push(slint::platform::Key::Shift.into()),
-                        "alt" => held.push(slint::platform::Key::Alt.into()),
-                        "meta" | "super" => held.push(slint::platform::Key::Meta.into()),
-                        _ => key = named_key(part),
+            let mut left = chords.clone().into_iter();
+            let weak = w.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            t.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(every),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let Some(chord) = left.next() else { return };
+                    let chords = [chord];
+                    for chord in &chords {
+                        let mut held: Vec<slint::SharedString> = Vec::new();
+                        let mut key = slint::SharedString::new();
+                        for part in chord.split('+') {
+                            match part.to_ascii_lowercase().as_str() {
+                                "ctrl" | "control" => {
+                                    held.push(slint::platform::Key::Control.into())
+                                }
+                                "shift" => held.push(slint::platform::Key::Shift.into()),
+                                "alt" => held.push(slint::platform::Key::Alt.into()),
+                                "meta" | "super" => held.push(slint::platform::Key::Meta.into()),
+                                _ => key = named_key(part),
+                            }
+                        }
+                        trace(&format!("synthetic key {chord}"));
+                        for m in &held {
+                            w.window()
+                                .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                                    text: m.clone(),
+                                });
+                        }
+                        w.window()
+                            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                                text: key.clone(),
+                            });
+                        w.window()
+                            .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                                text: key,
+                            });
+                        for m in held.iter().rev() {
+                            w.window()
+                                .dispatch_event(slint::platform::WindowEvent::KeyReleased {
+                                    text: m.clone(),
+                                });
+                        }
                     }
-                }
-                trace(&format!("synthetic key {chord}"));
-                for m in &held {
-                    w.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                            text: m.clone(),
-                        });
-                }
-                w.window()
-                    .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: key.clone() });
-                w.window()
-                    .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: key });
-                for m in held.iter().rev() {
-                    w.window()
-                        .dispatch_event(slint::platform::WindowEvent::KeyReleased {
-                            text: m.clone(),
-                        });
-                }
-            }
+                },
+            );
         });
     }
 
@@ -2344,6 +2388,86 @@ fn order_for(query: &str, sort: &str) -> String {
 /// on in front. It started as one — the rail only offered kinds — and the day
 /// the ribbon and the scopes started using the same slot it began producing
 /// `kind:dm:38d`, which parses as a search for that text and answers nothing.
+/// The coloured runs to draw, for the query that is **on screen now**.
+///
+/// **Sliced from the text in the box, not from the text the spans arrived
+/// with.** The spans come back from the service a round trip after the
+/// keystroke that caused them, and a reply for a query that has already been
+/// superseded is dropped — so between one keystroke and the next answer, the
+/// newest spans in hand describe a *different string* from the one being
+/// typed. Drawing their own text meant that deleting a character left it on
+/// screen until the answer came back, and typing fast left several.
+///
+/// So the spans are treated as what they are: offsets. Anything they do not
+/// reach is drawn as ordinary text, anything past the end of the query is
+/// dropped, and the layer therefore always spells exactly what the box holds.
+/// `paintSpans` in `page.html` is the same function, and is why the browser
+/// window has never had this.
+fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len() + 2);
+    // Characters, not bytes: the wire counts bytes and the window places each
+    // run by counting characters. `değiştirme` is ten characters and twelve
+    // bytes, so a run after it would sit two characters too far right.
+    let mut chars = 0i32;
+    let add = |slice: &str, role: i32, not: bool, out: &mut Vec<Span>, chars: &mut i32| {
+        if slice.is_empty() {
+            return;
+        }
+        out.push(Span {
+            at: *chars,
+            text: slice.into(),
+            role,
+            not,
+        });
+        *chars += slice.chars().count() as i32;
+    };
+    let mut at = 0usize;
+    for sp in spans {
+        // An offset the query no longer reaches is a span from a longer
+        // query. Clamping rather than skipping keeps the run before it whole.
+        let start = boundary(query, sp.start as usize).max(at);
+        let end = boundary(query, sp.start as usize + sp.len as usize).max(start);
+        if start > at {
+            add(&query[at..start], 6, false, &mut out, &mut chars);
+        }
+        add(
+            &query[start..end],
+            match sp.role {
+                scour_core::Role::Field => 1,
+                scour_core::Role::Value => 2,
+                scour_core::Role::Glob => 3,
+                scour_core::Role::Not => 4,
+                scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
+                // **What is being looked for**, which is not the same as
+                // "everything else": the colons, quotes and spaces between
+                // terms stay quiet, and only the words a person typed to find
+                // something take the colour.
+                scour_core::Role::Text | scour_core::Role::Phrase => 6,
+                _ => 0,
+            },
+            sp.not,
+            &mut out,
+            &mut chars,
+        );
+        at = end;
+    }
+    // What was typed since the spans were asked for.
+    if at < query.len() {
+        add(&query[at..], 6, false, &mut out, &mut chars);
+    }
+    out
+}
+
+/// A byte offset inside `text` that is a character boundary, at or before
+/// `want`, and never past the end.
+fn boundary(text: &str, want: usize) -> usize {
+    let mut at = want.min(text.len());
+    while at > 0 && !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+
 fn full_query(s: &State) -> String {
     scour_ui::query::compose(&s.query, s.facet.as_deref())
 }
@@ -2686,39 +2810,8 @@ fn apply(
                 return;
             };
             let query = full_query(&state.borrow());
-            let runs: Vec<Span> = spans
-                .iter()
-                .map(|sp| Span {
-                    // **Characters, not bytes.** The offsets on the wire are
-                    // byte offsets, and the window places each run by
-                    // counting characters — `değiştirme` is ten characters
-                    // and twelve bytes, so a run after it would be drawn two
-                    // characters too far right.
-                    at: query
-                        .get(..sp.start as usize)
-                        .unwrap_or_default()
-                        .chars()
-                        .count() as i32,
-                    text: query
-                        .get(sp.start as usize..(sp.start + sp.len) as usize)
-                        .unwrap_or_default()
-                        .into(),
-                    role: match sp.role {
-                        scour_core::Role::Field => 1,
-                        scour_core::Role::Value => 2,
-                        scour_core::Role::Glob => 3,
-                        scour_core::Role::Not => 4,
-                        scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
-                        // **What is being looked for**, which is not the same
-                        // as "everything else": the colons, quotes and spaces
-                        // between terms stay quiet, and only the words a
-                        // person typed to find something take the colour.
-                        scour_core::Role::Text | scour_core::Role::Phrase => 6,
-                        _ => 0,
-                    },
-                    not: sp.not,
-                })
-                .collect();
+            state.borrow_mut().spans = spans;
+            let runs = painted(&query, &state.borrow().spans);
             w.set_spans(ModelRc::new(VecModel::from(runs)));
         }
         // The exclusion rules, in the three groups the service keeps them in:
@@ -3910,11 +4003,70 @@ mod tests {
         assert!(terms_of("kind:image").is_empty());
     }
 
+    /// The coloured layer spells what is in the box, never what was.
+    ///
+    /// The spans arrive a round trip after the keystroke that caused them,
+    /// and a reply for a superseded query is dropped — so the newest spans in
+    /// hand routinely describe a longer string than the one being typed.
+    /// Drawing their own text left the deleted characters on screen.
+    #[test]
+    fn a_deleted_character_is_not_drawn_by_the_spans_that_still_hold_it() {
+        use scour_core::{Role, Span as Run};
+        // What `rapor pdf` came back as, now laid over `rapor p`.
+        let spans = [
+            Run::new(0, 5, Role::Text),
+            Run::new(5, 1, Role::Space),
+            Run::new(6, 3, Role::Text),
+        ];
+        let runs = painted("rapor p", &spans);
+        let whole: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(whole, "rapor p", "the layer spelled something else");
+        assert_eq!(runs.last().unwrap().at, 6, "the last run is misplaced");
+    }
+
+    /// And what was typed since is drawn rather than left out.
+    #[test]
+    fn a_character_typed_since_the_spans_were_asked_for_is_still_drawn() {
+        use scour_core::{Role, Span as Run};
+        let spans = [Run::new(0, 5, Role::Text)];
+        let runs = painted("rapors", &spans);
+        let whole: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(whole, "rapors");
+    }
+
+    /// Offsets are bytes on the wire and characters on the screen.
+    #[test]
+    fn a_run_after_a_turkish_word_is_placed_by_characters() {
+        use scour_core::{Role, Span as Run};
+        // `değiştirme` is ten characters and twelve bytes.
+        let q = "değiştirme rapor";
+        let spans = [
+            Run::new(0, 12, Role::Text),
+            Run::new(12, 1, Role::Space),
+            Run::new(13, 5, Role::Text),
+        ];
+        let runs = painted(q, &spans);
+        assert_eq!(runs[2].at, 11, "the run after it is placed by bytes");
+        let whole: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(whole, q);
+    }
+
+    /// A span the query no longer reaches at all.
+    #[test]
+    fn spans_past_the_end_are_dropped_rather_than_panicking() {
+        use scour_core::{Role, Span as Run};
+        let spans = [Run::new(0, 5, Role::Text), Run::new(40, 9, Role::Value)];
+        let runs = painted("rap", &spans);
+        let whole: String = runs.iter().map(|r| r.text.as_str()).collect();
+        assert_eq!(whole, "rap");
+    }
+
     #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             generation: 0,
             query_revision: 0,
+            spans: Vec::new(),
             background_query: None,
             count_query: None,
             exact_count: None,
@@ -3973,6 +4125,7 @@ mod tests {
             rules_shown: Default::default(),
             generation: 4,
             query_revision: 2,
+            spans: Vec::new(),
             background_query: None,
             count_query: None,
             exact_count: Some(ExactCount {

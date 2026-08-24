@@ -5653,3 +5653,27 @@ sliding off the letters. The runs are placed by arithmetic now, character
 offset times a character's width measured over forty of them, which is what
 `charWidth` in `page.html` has always done. After: caret 396,0 px, ruler
 396,0 px, on a 33-character query with a Turkish word in it.
+
+## 2026-08-24 — the coloured layer was drawing a query that was no longer there
+
+The spans come back from the service a round trip after the keystroke that
+asked for them, and a reply whose `query_revision` has been superseded is
+dropped on arrival. So while somebody types, the newest spans in hand describe
+a **different string** from the one in the box — and the window was drawing
+their text rather than the box's.
+
+Deleting a character therefore left it on screen until an answer came back;
+typing quickly left several, because most replies are dropped rather than
+drawn. On an empty test index the round trip is a few hundred microseconds and
+it is invisible; against the live service — 3.294.969 rows, `Explain` sharing
+the fast lane with the search — it is what a person sees.
+
+The browser page has never had this, and the reason is one line of
+`paintSpans`: it slices from the **live** text and pushes whatever the spans
+do not reach as ordinary characters. `painted` in `scour-gui` is now the same
+function, and it runs on the keystroke as well as on the answer. A stale span
+set can now only mis-*colour* a character; it can no longer show one that has
+been deleted or hide one that has been typed.
+
+Four tests, one of them the exact case: `rapor pdf`'s spans laid over
+`rapor p` must spell `rapor p`.
