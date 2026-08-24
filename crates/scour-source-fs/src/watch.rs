@@ -52,24 +52,53 @@ pub fn start(
         return started;
     }
 
-    // **Say so.** Falling back is ordinary, but its price is not: one watch a
-    // directory out of a budget shared with every other program the person is
-    // running. On this machine the two roots cost 524,044 of 524,288, and the
-    // first thing anyone noticed was four unrelated tests failing with a
-    // sentence that did not mention watches. The service is the only thing in
-    // a position to say what it just took.
+    // **And it is allowed to want inotify, not to take the machine.**
+    //
+    // One watch a directory, out of a budget shared with every other program
+    // the person is running — and a home directory does not fit in it. What
+    // that costs is not this program going slowly: the budget runs out for
+    // *everything*, and the next editor, file manager or terminal to start
+    // fails with an error that never mentions watches. It happened here. The
+    // symptom was that a development tool would not open.
+    //
+    // So there is a ceiling, and refusing is the answer above it. A source
+    // that is not watched is not unattended — the engine walks it when its
+    // pulse moves, which is exactly how the system source has always been
+    // handled — it is only slower to notice. Slower is a cost this program
+    // pays; a session that cannot open a window is a cost everything else
+    // pays.
+    //
+    // **The real answer is a mark, and it is one command.** `scour-watch`
+    // places one per filesystem, costs no watches at all, and covers what
+    // inotify cannot; see `docs/WATCHING.md`.
     #[cfg(target_os = "linux")]
     {
-        let dirs = count_dirs(source.roots());
         let budget = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
             .ok()
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(0);
-        scour_core::note!(
-            "scourd: no fanotify mark for {} — falling back to inotify, about {dirs} \
-             watches of a {budget} budget shared with the whole session",
-            scour_core::Source::describe(&source).name,
-        );
+        // A quarter, because the rest of the session needs the other three.
+        // An editor wants a few thousand, a browser more, a language server
+        // one per directory of every project it has opened.
+        let ceiling = (budget / 4).max(1);
+        let name = scour_core::Source::describe(&source).name;
+        match count_dirs(source.roots(), ceiling) {
+            Some(dirs) => scour_core::note!(
+                "scourd: no fanotify mark for {name} — falling back to inotify, about {dirs} \
+                 watches of a {budget} budget shared with the whole session",
+            ),
+            None => {
+                scour_core::note!(
+                    "scourd: {name} wants more than {ceiling} inotify watches, which is a \
+                     quarter of this session's {budget} — not taking them. It is reconciled \
+                     by walking instead, and the way to watch it properly is a fanotify \
+                     mark: `sudo scour-watch -- scourd`.",
+                );
+                return Err(Error::unsupported(
+                    "inotify would take too much of the session's budget",
+                ));
+            }
+        }
     }
 
     let roots: Vec<_> = source.roots().to_vec();
@@ -248,13 +277,12 @@ fn remember(skipped: &mut Vec<String>, path: String) {
 /// in it. Bounded so that a pathological tree cannot turn a log line into a
 /// minute of walking.
 #[cfg(target_os = "linux")]
-fn count_dirs(roots: &[std::path::PathBuf]) -> String {
-    const CEILING: u64 = 400_000;
+fn count_dirs(roots: &[std::path::PathBuf], ceiling: u64) -> Option<u64> {
     let mut n: u64 = 0;
     let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
     while let Some(dir) = stack.pop() {
-        if n >= CEILING {
-            return format!("{CEILING}+");
+        if n >= ceiling {
+            return None;
         }
         let Ok(children) = std::fs::read_dir(&dir) else {
             continue;
@@ -266,7 +294,7 @@ fn count_dirs(roots: &[std::path::PathBuf]) -> String {
             }
         }
     }
-    n.to_string()
+    Some(n)
 }
 
 /// What happened to one attempt at covering a directory.

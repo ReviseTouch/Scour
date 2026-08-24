@@ -21,11 +21,19 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now scour.service
 #
-# **Untested.** Written from reading `scour-watch`, not from running it under
-# systemd — placing a mark needs root and that is not mine to take. The parts
-# that were checked: the uid comes from `SUDO_UID` in the environment, which
-# systemd sets from `Environment=`, and everything else — HOME, USER,
-# XDG_RUNTIME_DIR — is derived from `getpwuid` rather than from sudo.
+# **Why it is worth doing rather than leaving.** Without the mark, `scourd`
+# falls back to inotify — one watch a directory, out of a budget shared with
+# every other program in the session. A home directory does not fit in it, and
+# what runs out is not Scour: it is the *session's* budget, so the next editor
+# or development tool to start fails with an error that never mentions watches.
+# That happened on this machine, and the symptom was that Claude Code would
+# not open.
+#
+# The fallback now refuses above a quarter of the budget rather than taking it
+# — see `crates/scour-source-fs/src/watch.rs` — so nothing breaks either way.
+# But a refused watch is a source reconciled by walking, which is slower to
+# notice a change and more expensive when it does. The mark is what makes it
+# both cheap and immediate.
 #
 # and turn the user unit off, or two writers race for the index lock:
 #
@@ -41,13 +49,16 @@ Wants=user@1000.service
 
 [Service]
 Type=simple
-# The user the service actually runs as. `scour-watch` reads it from SUDO_UID,
-# which systemd does not set, so it is passed here instead — and it must match
-# whose `~/.config/scour/config.toml` and index are meant.
-Environment=SUDO_UID=1000
-Environment=SUDO_GID=1000
-Environment=SUDO_USER=hasan
-ExecStart=/home/hasan/.local/bin/scour-watch -- /home/hasan/.local/bin/scourd
+# **`--as`, because there is no shell here.** `scour-watch` learns who to drop
+# to from `SUDO_UID` when a person runs it, and from this flag when a unit
+# does; it must name whoever owns the `~/.config/scour/config.toml` and the
+# index this is meant to serve. Three `Environment=SUDO_*` lines pretending to
+# be sudo said the same thing less honestly.
+#
+# The roots are named rather than left out: without them every real filesystem
+# is marked, including `/efi`, which holds nothing anybody searches for. These
+# two are what `config.toml` lists as sources.
+ExecStart=/home/hasan/.local/bin/scour-watch --as hasan /home /mnt/depo -- /home/hasan/.local/bin/scourd
 # Also the safety net for starting before the runtime directory exists.
 Restart=on-failure
 RestartSec=5

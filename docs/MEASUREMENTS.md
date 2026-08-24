@@ -5572,3 +5572,41 @@ because the source is unwatched and `/var` never stops moving. That is a
 separate thing with its own answer: walk the root whose pulse moved rather than
 the whole source (`/var` is 38,638 rows of the 366,491), or watch it, which
 costs nothing once `scour-watch` has marked the filesystem.
+
+## 2026-08-24 — the watch budget is the session's, not this program's
+
+`scourd` fell back to inotify whenever no fanotify mark had been placed, and
+inotify wants one watch a directory out of a per-user budget shared with
+everything else logged in. On this machine the two watched roots want more than
+the whole allowance:
+
+| | |
+|---|---:|
+| `fs.inotify.max_user_watches` | 524.288 |
+| directories under `/home/hasan` | ~300.000 |
+| directories under `/mnt/depo` | ~178.000 |
+
+**What ran out was not Scour.** The budget is the session's, so the next
+program to want a watch is the one that fails — and it fails with a message
+that never mentions watches. The symptom here was that a development tool
+would not start.
+
+The fallback now refuses above a quarter of the budget. Measured on the same
+machine, with the service started the ordinary way and no mark:
+
+```
+scourd: home wants more than 131072 inotify watches, which is a quarter of
+        this session's 524288 — not taking them. It is reconciled by walking
+        instead, and the way to watch it properly is a fanotify mark.
+scourd: watching 0 source(s)
+```
+
+and the session's inotify use afterwards: **0 watches**.
+
+**Refusing is not free, and this is the honest half.** A source that is not
+watched is reconciled by walking it when its pulse moves — which is the
+mechanism `/usr /etc /opt /var` has always used, and which the entry above
+measures at 366.491 entries a pass. For `/home` that is nearly a million. So
+the ceiling is a net, not an answer: the answer is one `FAN_MARK_FILESYSTEM` a
+superblock, which costs no watches at all and covers every subvolume, and which
+`packaging/scour.service` exists to install.

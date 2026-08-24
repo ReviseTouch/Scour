@@ -375,17 +375,31 @@ fn restore_environment(uid: u32, gid: u32) {
 /// them. The result is checked rather than assumed — a `setuid` that silently
 /// did nothing would leave `scourd` running as root, which is the one outcome
 /// this whole design exists to avoid.
-fn become_invoker() -> Result<(u32, u32), String> {
-    let uid: u32 = std::env::var("SUDO_UID")
-        .map_err(|_| "SUDO_UID yok — bu program sudo ile calistirilmali".to_string())?
-        .parse()
-        .map_err(|_| "SUDO_UID sayi degil".to_string())?;
-    let gid: u32 = std::env::var("SUDO_GID")
-        .ok()
-        .and_then(|g| g.parse().ok())
-        .unwrap_or(uid);
+/// **Or the user a service unit names.** `SUDO_UID` is how a person running
+/// this from a shell says who to become, and there is no shell in a unit file:
+/// `--as 1000` is the same sentence for `systemd`, which is what makes a
+/// permanent mark possible at all. Without one of the two this program has
+/// nobody to drop to and refuses rather than guessing — running the index as
+/// root is the single outcome the whole design exists to avoid.
+fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
+    let uid: u32 = match asked {
+        Some(uid) => uid,
+        None => std::env::var("SUDO_UID")
+            .map_err(|_| {
+                "kime dusulecegi belli degil — sudo ile calistir ya da --as <uid> ver".to_string()
+            })?
+            .parse()
+            .map_err(|_| "SUDO_UID sayi degil".to_string())?,
+    };
+    let gid: u32 = match asked {
+        Some(uid) => group_of(uid).unwrap_or(uid),
+        None => std::env::var("SUDO_GID")
+            .ok()
+            .and_then(|g| g.parse().ok())
+            .unwrap_or(uid),
+    };
     if uid == 0 {
-        return Err("SUDO_UID sifir — root'a dusurulecek bir ayricalik yok".into());
+        return Err("hedef kullanici root — dusurulecek ayricalik yok".into());
     }
     unsafe {
         if libc::setgroups(0, std::ptr::null()) != 0 {
@@ -409,8 +423,49 @@ fn usage() {
         "kullanim:\n  \
          sudo scour-watch -- <komut> [arg...]     butun gercek dosya sistemleri\n  \
          sudo scour-watch <yol>... -- <komut>     yalniz bu yollarin dosya sistemleri\n  \
-         sudo scour-watch --show                  ne isaretlenecegini yaz, hicbir sey yapma"
+         sudo scour-watch --show                  ne isaretlenecegini yaz, hicbir sey yapma\n  \
+         --as <kullanici|uid>                     kime dusulecek (sudo yoksa: servis birimi)"
     );
+}
+
+/// `--as <uid|name>`, if it is there: the id to drop to, and the word that
+/// followed the flag so the path list can leave it out.
+fn user_arg(paths: &[String]) -> Result<(Option<u32>, Option<String>), String> {
+    let Some(at) = paths.iter().position(|a| a == "--as") else {
+        return Ok((None, None));
+    };
+    let who = paths
+        .get(at + 1)
+        .ok_or_else(|| "--as bir kullanici ya da uid ister".to_string())?;
+    if let Ok(uid) = who.parse::<u32>() {
+        return Ok((Some(uid), Some(who.clone())));
+    }
+    let uid = uid_of(who).ok_or_else(|| format!("boyle bir kullanici yok: {who}"))?;
+    Ok((Some(uid), Some(who.clone())))
+}
+
+/// The numeric id behind a user name, from this machine's own table.
+fn uid_of(name: &str) -> Option<u32> {
+    std::fs::read_to_string("/etc/passwd")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut f = line.split(':');
+            (f.next()? == name).then(|| f.nth(1)?.parse().ok())?
+        })
+}
+
+/// The primary group of a user id, from the same table.
+fn group_of(uid: u32) -> Option<u32> {
+    std::fs::read_to_string("/etc/passwd")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut f = line.split(':');
+            let _name = f.next()?;
+            let _x = f.next()?;
+            (f.next()?.parse::<u32>().ok()? == uid).then(|| f.next()?.parse().ok())?
+        })
 }
 
 fn main() -> ExitCode {
@@ -426,7 +481,21 @@ fn main() -> ExitCode {
         None => (&args[..], &[][..]),
     };
     let show = paths.iter().any(|a| a == "--show");
-    let wanted: Vec<&String> = paths.iter().filter(|a| !a.starts_with("--")).collect();
+    // **Who to become, for a caller that is not a shell.** `--as 1000` or
+    // `--as hasan`; see `become_invoker`.
+    let asked = match user_arg(paths) {
+        Ok(u) => u,
+        Err(why) => {
+            eprintln!("scour-watch: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let wanted: Vec<&String> = paths
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .filter(|a| Some(a.as_str()) != asked.1.as_deref())
+        .collect();
+    let asked = asked.0;
 
     // The filesystems those paths sit on, or all of them.
     let mut sbs = superblocks();
@@ -494,7 +563,7 @@ fn main() -> ExitCode {
 
     // Read before the identity is dropped, because the variables that say who
     // invoked this are the first thing `restore_environment` clears.
-    let (uid, gid) = match become_invoker() {
+    let (uid, gid) = match become_invoker(asked) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("scour-watch: {e}");
