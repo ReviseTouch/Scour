@@ -444,7 +444,8 @@ fn run(
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
-            Beat::Reply(Got::Awake(revision)) => {
+            Beat::Reply(Got::Awake(revision, walked)) => {
+                state.scanning = walked;
                 let want = state.awake(revision);
                 act(want, link);
                 // **And a beat before waiting again.** The service answers the
@@ -513,7 +514,8 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
-            Beat::Reply(Got::Awake(revision)) => {
+            Beat::Reply(Got::Awake(revision, walked)) => {
+                state.scanning = walked;
                 let want = state.awake(revision);
                 act(want, link);
             }

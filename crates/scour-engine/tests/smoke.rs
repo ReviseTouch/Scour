@@ -1548,3 +1548,48 @@ fn walking_a_many_rooted_source_twice_keeps_every_root() {
         }
     }
 }
+
+/// How far a walk has got is readable *while it walks*.
+///
+/// **It used to be readable only afterwards.** `scanned` was written once, at
+/// the end of a pass, so for the whole minute a large walk takes it read zero —
+/// and every face that showed it showed a zero that never moved, which is
+/// indistinguishable from nothing happening.
+///
+/// That is not a cosmetic difference. Switching a skip rule off starts a walk
+/// of the whole index and changes nothing else on screen until it finishes; the
+/// question a person is asking in that minute is precisely "did that do
+/// anything", and this number is the only thing in a position to answer.
+#[test]
+fn a_walk_says_how_far_it_has_got_before_it_finishes() {
+    let f = fixture(20_000);
+    // Slow enough that there is a middle to look at.
+    f.source.slow_ms.store(300, Ordering::Relaxed);
+    f.engine.rescan(None).expect("rescan");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen_moving = 0u64;
+    while Instant::now() < deadline {
+        let st = f.engine.status();
+        if !st.scanning && st.entries > 0 {
+            break;
+        }
+        if st.scanning {
+            seen_moving = seen_moving.max(st.scanned);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries > 0
+    });
+    assert!(
+        seen_moving > 0,
+        "the walk never said how far it had got until it was over"
+    );
+    assert_eq!(
+        f.engine.status().entries,
+        f.source.entries.read().len() as u64,
+        "and it still finished"
+    );
+}

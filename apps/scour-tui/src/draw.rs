@@ -435,6 +435,18 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
     // **What it cost the index is not what a reader came for.** It is the
     // number this was tuned against and it belongs where the tuning happens.
+    // **What the index is doing, beside what the search found.** A walk takes
+    // a minute and nothing else on this line moves while it runs; switching a
+    // skip rule off starts one, and without this the answer to "did that do
+    // anything" is a list that has not changed yet.
+    if let Some(walked) = app.scanning {
+        parts.push(Span::styled("  ·  ", dim));
+        parts.push(Span::styled(
+            app.say(scour_ui::SCANNING)
+                .replace("{n}", &format::grouped(walked, mark.0)),
+            Style::new().fg(theme.key()),
+        ));
+    }
     if app.rows_visited > 0 && std::env::var("SCOUR_TRACE").is_ok() {
         parts.push(Span::styled("  ·  ", dim));
         parts.push(Span::styled(

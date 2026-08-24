@@ -276,6 +276,13 @@ pub struct App {
     pub in_rail: bool,
     /// Which line of the rail the cursor is on.
     pub rail_at: usize,
+    /// How far a walk of the index has got, when one is running.
+    ///
+    /// **Beside the counts, because that is where somebody looks for proof
+    /// that pressing something did anything.** Switching a skip rule off
+    /// starts a scan and nothing else visibly happens for a minute; a word
+    /// would not settle it, and this number climbs several times a second.
+    pub scanning: Option<u64>,
     /// Set when a redraw is owed. **Nothing is drawn without one** — a
     /// terminal that redraws on a timer burns a core doing nothing.
     pub dirty: bool,
@@ -336,6 +343,7 @@ impl Default for App {
             rail: true,
             in_rail: false,
             rail_at: 0,
+            scanning: None,
             dirty: true,
             leaving: false,
             words: scour_i18n::Catalogue::english(),

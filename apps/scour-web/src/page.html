@@ -516,6 +516,10 @@
      without a second rule for hover: a cell's background paints over its row's
      by the ordinary rules, so this sits above `tr:hover` and shows it
      through. */
+  /* The one thing on the meter line that is about to change, so it is the
+     one thing on it in the query's key colour. */
+  #scanning { color: var(--q-key); font-weight: 650; }
+
   tbody tr.sel td { background: var(--pick); }
   tbody td { padding: 0 calc(var(--u) * 3); height: var(--row); vertical-align: middle; }
 
@@ -1607,6 +1611,14 @@
       <span class="ms" id="ms">—</span>
       <span class="sep">·</span>
       <span id="rows"></span>
+      <!-- **Beside the counts, because that is where somebody looks for proof
+           that pressing something did anything.** Switching a skip rule off
+           starts a walk of the whole index and nothing else on this line moves
+           while it runs; the note at the end of the line said `· scanning`,
+           which is both easy to miss and impossible to tell from stuck. The
+           number climbs several times a second. -->
+      <span class="sep" id="scanning-sep" hidden>·</span>
+      <span id="scanning" class="scanning" hidden></span>
       <span class="sep">·</span>
       <span id="path-note" data-t="connecting…"></span>
       <!-- The glyph switch used to be here. It is in the heading of the column
@@ -6396,8 +6408,16 @@
         ? T("index {mb} MB · 1 source · {watching} watched", { mb, watching: s.watching })
         : T("index {mb} MB · {sources} sources · {watching} watched", {
             mb, sources: s.sources, watching: s.watching,
-          })) + (s.scanning ? T(" · scanning") : "");
+          }));
       if (text !== note.textContent) { note.textContent = text; moved = true; }
+      /* The same sentence the window and the terminal draw, from the same
+         msgid — and the same number, punctuated by the same `Intl`. */
+      const walking = document.getElementById("scanning");
+      const sep = document.getElementById("scanning-sep");
+      const said = s.scanning ? T("scanning {n}", { n: fmt(s.scanned || 0) }) : "";
+      walking.textContent = said;
+      walking.hidden = !said;
+      sep.hidden = !said;
     }
     /* `LIST`, not the search reply. The search answers under a cap so it can
        keep up with typing; the exact number arrives with the sidebar a moment

@@ -133,7 +133,11 @@ pub enum Got {
         spans: Vec<scour_core::Span>,
     },
     /// The index moved, and what it moved to.
-    Awake(u64),
+    /// The index moved: its revision, and how far a walk has got when one is
+    /// running. **Both, because a wait is answered with the whole status** —
+    /// the second is free and is the only thing a person watching a rule they
+    /// just switched off has to go on.
+    Awake(u64, Option<u64>),
     /// A spreadsheet is being written, and how much of it so far.
     ///
     /// **Because a screen that does not move looks like one that has died.**
@@ -481,7 +485,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 let _ = out.send(Got::Counted { generation, total });
             }
             Ok(Response::Status(st)) => {
-                let _ = out.send(Got::Awake(st.revision));
+                let _ = out.send(Got::Awake(st.revision, st.scanning.then_some(st.scanned)));
             }
             Ok(Response::Preview(look)) => {
                 let _ = out.send(Got::Peek(Box::new(look)));

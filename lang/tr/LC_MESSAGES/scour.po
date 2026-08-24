@@ -1238,3 +1238,9 @@ msgstr "çıkar"
 # cannot close itself, because a script did not open it.
 msgid "Scour is open elsewhere. You can close this tab."
 msgstr "Scour başka bir yerde açıldı. Bu sekmeyi kapatabilirsiniz."
+
+# The index is being walked, and how far it has got. **The number is the
+# point**: a word on its own does not say whether anything is happening, and
+# after switching a rule off the whole question is whether anything is.
+msgid "scanning {n}"
+msgstr "taranıyor {n}"

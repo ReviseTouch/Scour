@@ -2228,6 +2228,16 @@ impl EntrySink for ToIndex {
         self.buffer.push(Change::Upsert(entry));
         if self.buffer.len() >= BATCH {
             self.flush();
+            // **How far this walk has got, while it is still walking.** The
+            // count used to be written once, at the end — so `scanned` was
+            // zero for the whole minute a pass takes and every face that
+            // showed it showed a zero that never moved. A person who has just
+            // switched a skip rule off is watching for exactly this number,
+            // and a still one reads as nothing happening.
+            //
+            // Once a batch, not once a row: a write lock every four thousand
+            // entries against one every one.
+            self.stop.status.write().scanned = self.seen;
         }
         if self.stop.stop.load(Ordering::Relaxed) {
             Flow::Stop

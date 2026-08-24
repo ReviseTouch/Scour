@@ -2933,6 +2933,12 @@ fn apply(
         // everything in the burst.
         Got::Awake(reply) => {
             let Response::Status(st) = *reply else { return };
+            // **Free, and the reason this indicator is cheap.** A wait is
+            // answered with the whole status, so every wake carries how far a
+            // walk has got — and during one the index moves several times a
+            // second, which is exactly the rate a person needs to believe
+            // something is happening.
+            w.set_scanning(scanning_note(cat, &st));
             {
                 let mut s = state.borrow_mut();
                 if st.revision == s.revision {
@@ -4091,4 +4097,18 @@ fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
         })
         .collect();
     ModelRc::new(VecModel::from(rows))
+}
+
+/// `taranıyor 1.240.000` while the index is being walked, nothing otherwise.
+///
+/// The wording is `scour_ui::SCANNING`, so the terminal and the page say the
+/// same thing — and the number is punctuated the way every other number in
+/// this window is.
+fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedString {
+    if !st.scanning {
+        return slint::SharedString::new();
+    }
+    t(cat, scour_ui::SCANNING)
+        .replace("{n}", &grouped(st.scanned))
+        .into()
 }

@@ -26,6 +26,19 @@ pub mod faces;
 pub mod format;
 pub mod path;
 pub mod preview;
+
+/// What every face says while the index is being walked.
+///
+/// **A number, not a word.** A face that says `scanning` and nothing else
+/// cannot be told from one that is stuck, and the moment the question is
+/// asked — somebody switched a skip rule off and is watching the counts for
+/// proof — a still indicator is the same as no indicator. `scanned` climbs
+/// several times a second during a walk, so it is the proof.
+///
+/// The msgid rather than the sentence, because the number has to be
+/// punctuated in the reader's language and only the caller has the catalogue.
+/// Empty when nothing is being walked, which is what a face draws nothing for.
+pub const SCANNING: &str = "scanning {n}";
 pub mod query;
 
 /// A colour, and the one representation both sides can be built from.

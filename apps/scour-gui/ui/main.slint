@@ -720,6 +720,11 @@ export component MainWindow inherits Window {
     in property <string> meter-count;
     in property <string> meter-ms;
     in property <string> meter-rows;
+    /// `taranıyor 1.240.000`, while the index is being walked. **Beside the
+    /// counts, because that is where somebody looks for proof that pressing
+    /// something did anything** — a note in the corner is a note nobody reads
+    /// while waiting.
+    in property <string> scanning;
     in property <string> holding;
     /// Something the window did, said until the next keystroke.
     ///
@@ -1440,6 +1445,21 @@ export component MainWindow inherits Window {
                         color: Theme.ink-3;
                         font-size: 11.5px;
                         letter-spacing: 0.2px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.scanning == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    // In the query's own key colour and not the quiet ink: it
+                    // is the one thing on this line that is about to change.
+                    Text {
+                        text: root.scanning;
+                        color: Theme.q-key;
+                        font-size: 11.5px;
+                        font-weight: 650;
                         vertical-alignment: center;
                     }
                 }
