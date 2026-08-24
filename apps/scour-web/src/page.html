@@ -165,15 +165,32 @@
   .qshadow .r-phrase{ color: var(--q-val); }
   .qshadow .r-glob  { color: var(--q-glob); }
   .qshadow .r-not   { color: var(--q-not); font-weight: 700; }
-  .qshadow .r-or    { color: var(--q-not); font-weight: 700; }
+  /* `|` is structure, not exclusion: it says how terms *combine*. Painting
+     it in the exclusion colour said "this removes things", which is the
+     opposite of what it does — and the dead role table below this said so in
+     a comment while the sheet went on doing it. */
+  .qshadow .r-or    { color: var(--q-key); font-weight: 700; }
+
+  /* **The whole of an excluded term, not the `!` in front of it.** A role
+     does not say which side of the query a run is on — `pdf` in `!ext:pdf`
+     is a value exactly as it is in `ext:pdf` — so the engine works the
+     extent out and marks every run in it (`scour_core::Span::not`). Declared
+     after the roles so it wins over them, and before the warnings so it does
+     not. */
+  .qshadow .excluded { color: var(--q-not); }
 
   /* The two warning roles. The parser never fails — a term it cannot read is
      searched for as ITS OWN TEXT — and that is what keeps a half-typed query
      usable. It is also the one place the engine can quietly answer the wrong
      question: `kind:zurna` looks for files *named* "kind:zurna". The wavy
      underline says so while it is being typed, not in the results. */
-  .qshadow .r-bad,
-  .qshadow .r-unknown {
+  /* **Keyed on the engine's own names.** These two read `.r-bad` and
+     `.r-unknown` — a spelling from before the spans came over the wire —
+     while the page writes the role out as it arrives. So the one thing this
+     colouring exists for, `kind:zurna` drawn as the text search it really
+     is, has never been marked in this window. */
+  .qshadow .r-bad_value,
+  .qshadow .r-unknown_field {
     color: var(--q-bad);
     text-decoration: underline wavy var(--q-bad);
     text-underline-offset: 4px;
@@ -2819,18 +2836,13 @@
       });
   }
 
-  /* The engine's role names, as the palette spells them. Anything unknown is
-     drawn as text, which is what an older page should do with a newer role. */
-  const ROLE_CLASS = {
-    field: "key", colon: "key", cmp: "key", sep: "key",
-    value: "val", phrase: "val", quote: "val",
-    glob: "glob", regex: "glob",
-    // `|` is structure, not exclusion: it says how terms combine, which is
-    // what the key colour is for. Painting it in the exclusion colour would
-    // say "this removes things", and it does the opposite.
-    not: "not", or: "key",
-    unknown_field: "bad", bad_value: "bad",
-  };
+  /* Role → colour lives in the style sheet, keyed on the role exactly as the
+     engine spells it (`.r-bad_value`, not `.r-bad`). There was a table here
+     translating them into a shorter set of names; its result was computed
+     into a variable and never used, so it drifted freely — it had the `|`
+     rule right while the sheet had it wrong, and neither of the two warning
+     roles reached a rule at all. A role with no rule inherits the layer's
+     own colour, which is what an older page should do with a newer role. */
 
   /* The engine counts bytes; a string here is counted in UTF-16 code units.
    *
@@ -2868,18 +2880,18 @@
   }
 
   function paintSpans(text) {
-    if (!LAST_SPANS.length) return [["text", text]];
+    if (!LAST_SPANS.length) return [["text", text, false]];
     const js = jsIndexByByte(text);
     const out = [];
     let at = 0;
     for (const s of LAST_SPANS) {
       const start = js(s.start);
       const end = js(s.start + s.len);
-      if (start > at) out.push(["text", text.slice(at, start)]);
-      out.push([s.role, text.slice(start, end)]);
+      if (start > at) out.push(["text", text.slice(at, start), false]);
+      out.push([s.role, text.slice(start, end), !!s.not]);
       at = end;
     }
-    if (at < text.length) out.push(["text", text.slice(at)]);
+    if (at < text.length) out.push(["text", text.slice(at), false]);
     return out;
   }
 
@@ -2899,19 +2911,22 @@
     }
     let at = 0;
     let html = "";
-    for (const [role, t] of paintSpans(text)) {
-      const plain = role === "text" || role === "space";
-      const cls = ROLE_CLASS[role] || "";
+    for (const [role, t, not] of paintSpans(text)) {
+      // An excluded run always needs an element of its own, even the space
+      // inside `!ext:rs; toml` — without one it falls back to the layer's
+      // own colour, which is the colour of the thing being searched *for*.
+      const plain = (role === "text" || role === "space") && !not;
+      const cls = "r-" + role + (not ? " excluded" : "");
       const marked = SYNTAX.has(role) && [...t].some((_, k) => touch.has(at + k));
       if (marked) {
         // Only the touched character is marked, not the whole run: `<=` is one
         // span and backspace takes one of its two characters.
         html += [...t].map((ch, k) =>
           touch.has(at + k)
-            ? '<span class="r-' + role + ' caret-touch">' + escape_(ch) + "</span>"
-            : '<span class="r-' + role + '">' + escape_(ch) + "</span>").join("");
+            ? '<span class="' + cls + ' caret-touch">' + escape_(ch) + "</span>"
+            : '<span class="' + cls + '">' + escape_(ch) + "</span>").join("");
       } else {
-        html += plain ? escape_(t) : '<span class="r-' + role + '">' + escape_(t) + "</span>";
+        html += plain ? escape_(t) : '<span class="' + cls + '">' + escape_(t) + "</span>";
       }
       at += t.length;
     }

@@ -40,22 +40,39 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
     // either of them the other way would show a query the engine does not see.
     let mut list: Option<&'static fields::Field> = None;
     let mut expect_value = false;
+    // A `!` in front of a list field reaches every value in it, and the values
+    // of a list are the one thing that outlives its token: `!ext:rs; toml`
+    // excludes both.
+    let mut list_not = false;
+    // **A `!` on its own belongs to the term after it.** The parser binds it
+    // there — `expand`'s `pending_bang` — so `! main` and `!main` ask exactly
+    // the same question. The colouring did not: it drew one red character and
+    // then the excluded term in the colour of the thing being looked for,
+    // which is the disagreement between parser and highlighter this whole
+    // module exists to prevent.
+    let mut lone_bang = false;
     for (i, (start, token)) in toks.iter().enumerate() {
         let (start, token) = (*start, *token);
         if is_space(token) {
             let joins = list.is_some()
                 && (expect_value || next_word(&toks, i).is_some_and(|t| t.starts_with(';')));
             let role = if joins { Role::Sep } else { Role::Space };
-            out.push(Span::new(start, token.len(), role));
+            let span = Span::new(start, token.len(), role);
+            // The gap between a lone `!` and its term is inside the exclusion:
+            // one red run, not two with a hole in it.
+            let inside = (joins && list_not) || lone_bang;
+            out.push(if inside { span.excluded() } else { span });
             if !joins {
                 list = None;
                 expect_value = false;
+                list_not = false;
             }
             continue;
         }
         if let Some(f) = list
             && (expect_value || token.starts_with(';'))
         {
+            let mark = out.len();
             let mut at = start;
             let mut rest = token;
             if let Some(r) = rest.strip_prefix(';') {
@@ -70,9 +87,23 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 expect_value = rest.ends_with(';');
             }
             value_spans(&mut out, at, rest, f, now);
+            if list_not {
+                for span in &mut out[mark..] {
+                    span.not = true;
+                }
+            }
             continue;
         }
-        term(&mut out, start, token, now);
+        let mark = out.len();
+        list_not = term(&mut out, start, token, now) | lone_bang;
+        if std::mem::take(&mut lone_bang) {
+            for span in &mut out[mark..] {
+                span.not = true;
+            }
+        }
+        // Nothing follows a `!` inside its own token, so this can only be the
+        // operator standing alone.
+        lone_bang = token == "!";
         list = field_of(token);
         expect_value = list.is_some() && token.ends_with(';');
     }
@@ -129,19 +160,24 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
 }
 
 /// One whitespace-separated term, which may itself hold alternatives.
-fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
+///
+/// Answers whether the term is excluded, which for a list field has to travel
+/// past the end of the token: `!ext:rs; toml` is one filter and the `toml`
+/// after the space is inside it.
+fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     // A lone operator is an operator; `hello!` is a word. The parser makes the
     // same distinction, and colouring it differently would teach the wrong rule.
     if text == "|" {
         out.push(Span::new(start, 1, Role::Or));
-        return;
+        return false;
     }
     if text == "!" {
-        out.push(Span::new(start, 1, Role::Not));
-        return;
+        out.push(Span::new(start, 1, Role::Not).excluded());
+        return true;
     }
 
     let mut at = start;
+    let mut negated = false;
     let quoted = text.starts_with('"');
     for (i, alt) in text.split('|').enumerate() {
         if i > 0 && !quoted {
@@ -152,13 +188,37 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
             out.push(Span::new(at, 1, Role::Phrase));
             at += 1;
         }
-        alternative(out, at, alt, now);
+        negated |= alternative(out, at, alt, now);
         at += alt.len();
     }
+    negated
 }
 
 /// One alternative: an optional `!`, then either a field term or plain text.
-fn alternative(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
+///
+/// **The `!` marks the whole alternative, not the character it is.** A query
+/// line is read for two things — what is wanted and what is not — and no role
+/// says which: `pdf` in `!ext:pdf` is a `Value` exactly as it is in
+/// `ext:pdf`. Colouring [`Role::Not`] alone put one red character in front of
+/// a term drawn in the colour of the thing being looked for.
+///
+/// So the extent is decided here, where the `!` is read, and every run the
+/// alternative produces carries it. Answers whether it was negated, because
+/// a list field goes on across the spaces after it and the caller is the only
+/// one that can see that far.
+fn alternative(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
+    let mark = out.len();
+    let negated = text.starts_with('!');
+    alternative_spans(out, start, text, now);
+    if negated {
+        for span in &mut out[mark..] {
+            span.not = true;
+        }
+    }
+    negated
+}
+
+fn alternative_spans(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
     let mut at = start;
     let mut rest = text;
     if let Some(r) = rest.strip_prefix('!') {
@@ -545,6 +605,62 @@ mod tests {
             vec![(Role::Text, "a"), (Role::Or, "|"), (Role::Text, "b")]
         );
         covers("a | b");
+    }
+
+    /// The `!` is not the exclusion — the term after it is.
+    ///
+    /// Every one of these drew a single red character in front of a term in
+    /// the colour of the thing being *searched for*, which is the opposite of
+    /// what the query says.
+    #[test]
+    fn an_excluded_term_is_excluded_all_the_way_through() {
+        fn excluded(q: &str) -> Vec<&str> {
+            spans_at(q, 1_800_000_000)
+                .into_iter()
+                .filter(|s| s.not)
+                .map(|s| s.of(q))
+                .collect()
+        }
+        assert_eq!(excluded("!tmp"), vec!["!", "tmp"]);
+        assert_eq!(excluded("rapor !tmp"), vec!["!", "tmp"]);
+        // A field term: the name, the colon and the value are all inside it.
+        assert_eq!(excluded("!ext:pdf"), vec!["!", "ext", ":", "pdf"]);
+        // A list carries it past the token it started in.
+        assert_eq!(
+            excluded("!ext:rs; toml"),
+            vec!["!", "ext", ":", "rs", ";", " ", "toml"]
+        );
+        // One alternative of a group, not the group.
+        assert_eq!(excluded("a|!b"), vec!["!", "b"]);
+        // **A `!` on its own binds to the term after it**, exactly as
+        // `expand` does — `! main` and `!main` are the same query, so they
+        // are the same colour.
+        assert_eq!(excluded("! main"), vec!["!", " ", "main"]);
+        assert_eq!(
+            excluded("rapor ! ext:pdf"),
+            vec!["!", " ", "ext", ":", "pdf"]
+        );
+        // A `!` with nothing after it is still only itself.
+        assert_eq!(excluded("rapor !"), vec!["!"]);
+        // And nothing at all when nothing is excluded.
+        assert!(excluded("ext:rs rapor").is_empty());
+        assert!(excluded("hello!").is_empty());
+    }
+
+    /// Marking the extent must not move a byte of it.
+    #[test]
+    fn exclusion_does_not_disturb_the_roles_or_the_cover() {
+        assert_eq!(
+            roles("!ext:pdf"),
+            vec![
+                (Role::Not, "!"),
+                (Role::Field, "ext"),
+                (Role::Colon, ":"),
+                (Role::Value, "pdf")
+            ]
+        );
+        covers("!ext:rs; toml");
+        covers("a|!b !kind:zurna");
     }
 
     #[test]

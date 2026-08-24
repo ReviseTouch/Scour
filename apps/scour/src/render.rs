@@ -636,6 +636,12 @@ fn paint(query: &str, spans: &[scour_core::Span]) -> String {
     for s in spans {
         let text = s.of(query);
         let code = match s.role {
+            // The two that mean "this is not doing what it looks like". They
+            // come first because a term can be both excluded and misread, and
+            // the misreading is the thing worth saying.
+            Role::UnknownField | Role::BadValue => "4;31",
+            // The whole of an excluded term, not the `!` in front of it.
+            _ if s.not => "1;31",
             Role::Text => "0",
             Role::Glob => "35",
             Role::Phrase => "36",
@@ -647,8 +653,6 @@ fn paint(query: &str, spans: &[scour_core::Span]) -> String {
             Role::Not => "1;31",
             Role::Or => "1;33",
             Role::Space => "0",
-            // The two that mean "this is not doing what it looks like".
-            Role::UnknownField | Role::BadValue => "4;31",
         };
         out.push_str(&format!("\x1b[{code}m{text}\x1b[0m"));
     }

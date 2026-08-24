@@ -1197,33 +1197,20 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             completions,
             needs_content,
         }) => {
-            let spans: Vec<serde_json::Value> = spans
-                .iter()
-                .map(|s| {
-                    serde_json::json!({
-                        "start": s.start,
-                        "len": s.len,
-                        // Serde's name, not `Debug`'s. `Role::UnknownField`
-                        // debug-prints as `UnknownField`, which lowercases to
-                        // `unknownfield` — and the page, matching the
-                        // `snake_case` the protocol actually uses, quietly
-                        // matched none of them. The one role that must never
-                        // be missed is exactly the one this broke.
-                        "role": s.role,
-                    })
-                })
-                .collect();
-            let completions: Vec<serde_json::Value> = completions
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "insert": c.insert,
-                        "label": c.label,
-                        "about": c.about,
-                        "kind": c.kind,
-                    })
-                })
-                .collect();
+            // **Serialised whole, not field by field.** This listed the
+            // three fields it knew about, so `Span::not` — which says the
+            // difference between what is being searched for and what is being
+            // kept out — never reached the page at all: the whole of `!tmp`
+            // was drawn in the colour of a thing being looked for, with one
+            // red character in front of it. A field added to the engine now
+            // arrives here without this file being touched.
+            //
+            // The names are serde's, and that matters: `Role::UnknownField`
+            // debug-prints as `UnknownField`, which lowercases to
+            // `unknownfield` — and the page, matching the `snake_case` the
+            // protocol actually uses, quietly matched none of them.
+            let spans = serde_json::to_value(&spans).unwrap_or_default();
+            let completions = serde_json::to_value(&completions).unwrap_or_default();
             http::json(
                 stream,
                 &serde_json::json!({
@@ -1783,6 +1770,45 @@ mod tests {
             "dropShort()",
         ] {
             assert!(body.contains(needle), "`setTotal` does not have {needle}");
+        }
+    }
+
+    /// Every role the engine can send is a rule in the style sheet.
+    ///
+    /// **The one thing the colouring exists for had never worked.** The sheet
+    /// was keyed on `.r-bad` and `.r-unknown`; the page writes the role out
+    /// exactly as it arrives, which is `bad_value` and `unknown_field`. So
+    /// `kind:zurna` — a filter that is really a text search, the case the
+    /// whole feature is for — was drawn as ordinary text for as long as the
+    /// spans have come over the wire, and nothing said so: a class with no
+    /// rule is not an error in CSS, it is a run in the layer's own colour.
+    ///
+    /// Two roles have no rule on purpose. `text` **is** the layer's colour —
+    /// the thing being looked for — and `space` has nothing to draw.
+    #[test]
+    fn every_role_the_engine_can_send_has_a_colour() {
+        for role in scour_core::Role::ALL {
+            // The name as it goes on the wire, from serde rather than from a
+            // list here: a second spelling of the same fourteen words is how
+            // the two came apart in the first place.
+            let wire = serde_json::to_string(&role).expect("a role serialises");
+            let wire = wire.trim_matches('"');
+            if matches!(role, scour_core::Role::Text | scour_core::Role::Space) {
+                continue;
+            }
+            // A whole selector, not a prefix of one: `.r-not` must not be
+            // answered by `.r-not_a_role`.
+            let named = PAGE.match_indices(&format!(".r-{wire}")).any(|(at, m)| {
+                PAGE[at + m.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-')
+            });
+            assert!(
+                named,
+                "page.html has no `.qshadow .r-{wire}` rule, so {role:?} is \
+                 drawn in whatever colour the layer happens to be"
+            );
         }
     }
 

@@ -322,11 +322,18 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             let to = from + sp.len as usize;
             let text = app.query.get(from..to)?;
             let colour = match sp.role {
+                // **A mistake outranks a polarity.** `!kind:zurna` is
+                // excluded, but what matters about it is that the engine
+                // cannot read `zurna` and will search for the text instead.
+                scour_core::Role::UnknownField | scour_core::Role::BadValue => theme.bad(),
+                // **Excluded is excluded, all of it.** The `!` used to be the
+                // only red character and the term behind it wore the colour
+                // of the thing being looked for.
+                _ if sp.not => theme.not(),
                 scour_core::Role::Field => theme.key(),
                 scour_core::Role::Value => theme.val(),
                 scour_core::Role::Glob => theme.glob(),
                 scour_core::Role::Not => theme.not(),
-                scour_core::Role::UnknownField | scour_core::Role::BadValue => theme.bad(),
                 // Blue for what is wanted; the punctuation between terms stays
                 // quiet.
                 scour_core::Role::Text | scour_core::Role::Phrase => theme.term(),

@@ -52,6 +52,30 @@ pub enum Role {
 }
 
 impl Role {
+    /// Every role, so that a frontend's tests can walk them.
+    ///
+    /// A colour scheme is a table with one row per role, and the way it goes
+    /// wrong is a role that has no row: nothing fails, the run is drawn in
+    /// whatever the layer's own colour is, and the day it matters is the day
+    /// somebody types `kind:zurna`. See the test below for what keeps this
+    /// list complete.
+    pub const ALL: [Role; 14] = [
+        Role::Text,
+        Role::Glob,
+        Role::Phrase,
+        Role::Quote,
+        Role::Field,
+        Role::UnknownField,
+        Role::Colon,
+        Role::Value,
+        Role::BadValue,
+        Role::Cmp,
+        Role::Not,
+        Role::Or,
+        Role::Sep,
+        Role::Space,
+    ];
+
     /// Is this run something the engine could not use as written?
     ///
     /// The two warning roles are worth naming together, because a frontend
@@ -88,6 +112,21 @@ pub struct Span {
     pub start: u32,
     pub len: u32,
     pub role: Role,
+    /// Is this run part of a term that must **not** match?
+    ///
+    /// A query line answers two questions — what is being looked for, and what
+    /// is being kept out — and [`Role`] answers neither: `pdf` in `!ext:pdf`
+    /// is a `Value` exactly as it is in `ext:pdf`. [`Role::Not`] covers the
+    /// `!` alone, one character wide, so a frontend colouring roles put the
+    /// whole excluded term in the colour of the thing being *sought*.
+    ///
+    /// Working the extent out from the spans is a frontend's second parser —
+    /// the thing the rest of this file exists to prevent — and it is not a
+    /// one-liner either: `!` may prefix a bare word, a field term, or one
+    /// alternative of a `|` group, and a list carries it across the spaces
+    /// inside `!ext:rs; toml`. So the parser says it, once.
+    #[serde(default)]
+    pub not: bool,
 }
 
 impl Span {
@@ -96,7 +135,14 @@ impl Span {
             start: start as u32,
             len: len as u32,
             role,
+            not: false,
         }
+    }
+
+    /// The same run, marked as part of an excluded term.
+    pub fn excluded(mut self) -> Self {
+        self.not = true;
+        self
     }
 
     /// The text this span covers, given the query it came from.
@@ -158,6 +204,36 @@ pub enum CompletionKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`Role::ALL`] is all of them.
+    ///
+    /// The match is exhaustive, so a role added to the enum stops this
+    /// compiling — and the arm that has to be written is right next to the
+    /// list that also has to be added to.
+    #[test]
+    fn every_role_is_in_the_list() {
+        fn place(role: Role) -> usize {
+            match role {
+                Role::Text => 0,
+                Role::Glob => 1,
+                Role::Phrase => 2,
+                Role::Quote => 3,
+                Role::Field => 4,
+                Role::UnknownField => 5,
+                Role::Colon => 6,
+                Role::Value => 7,
+                Role::BadValue => 8,
+                Role::Cmp => 9,
+                Role::Not => 10,
+                Role::Or => 11,
+                Role::Sep => 12,
+                Role::Space => 13,
+            }
+        }
+        for (i, role) in Role::ALL.into_iter().enumerate() {
+            assert_eq!(place(role), i, "{role:?} is in the wrong place in ALL");
+        }
+    }
 
     fn span(query: &str, needle: &str) -> Span {
         let at = query.find(needle).expect("needle not in query");
