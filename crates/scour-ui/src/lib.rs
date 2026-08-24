@@ -150,15 +150,34 @@ pub struct Palette {
     /// a band here would give "changed yesterday" and "field value" the same
     /// colour.
     ///
+    /// **What is being looked for.** A bare word — the thing the query is
+    /// actually about.
+    ///
+    /// It used to be the ordinary ink, on the reasoning that the plain part of
+    /// a query is plain. But a query line is read to answer two questions —
+    /// what am I looking for, and what am I leaving out — and the answer to
+    /// the first was the same colour as the punctuation around it. Blue for
+    /// what is wanted, red for what is not, is the pair somebody can read
+    /// without being taught.
+    pub q_term: Rgba,
     /// Field name and comparison — structure.
     pub q_key: Rgba,
     /// Value, and text inside quotes — content.
     pub q_val: Rgba,
     /// Wildcard — a pattern rather than a word.
     pub q_glob: Rgba,
-    /// Exclusion — deliberate, not a mistake.
+    /// **Exclusion.** Red, and the opposite of `q_term` on purpose.
+    ///
+    /// This was orange, on the reasoning that an exclusion is deliberate and
+    /// red is for mistakes. True, and it lost the argument to the thing a
+    /// person actually does with this line: `!` means *not this*, and the
+    /// colour of not-this is red in every interface anybody has used.
     pub q_not: Rgba,
     /// Looks like a field, was searched for as text.
+    ///
+    /// Amber now that red belongs to exclusion — which is the better fit
+    /// anyway: this is not an error, it is a warning that the query does not
+    /// mean what it looks like it means.
     pub q_bad: Rgba,
 }
 
@@ -185,11 +204,12 @@ pub const DARK: Palette = Palette {
         Rgba::hex(0x4a7fb5),
         Rgba::hex(0x3b4a58),
     ],
+    q_term: Rgba::hex(0x59a6ff),
     q_key: Rgba::hex(0x7fa9e0),
     q_val: Rgba::hex(0x6fc2a0),
     q_glob: Rgba::hex(0xb48ce0),
-    q_not: Rgba::hex(0xe8825a),
-    q_bad: Rgba::hex(0xff5f56),
+    q_not: Rgba::hex(0xff6b6b),
+    q_bad: Rgba::hex(0xe8a33d),
 };
 
 /// The light scheme.
@@ -222,11 +242,12 @@ pub const LIGHT: Palette = Palette {
         Rgba::hex(0x2f6ba3),
         Rgba::hex(0x97a1ac),
     ],
+    q_term: Rgba::hex(0x1c5fa8),
     q_key: Rgba::hex(0x2f6ba3),
     q_val: Rgba::hex(0x1a7a58),
     q_glob: Rgba::hex(0x6b3fa0),
-    q_not: Rgba::hex(0xb8531f),
-    q_bad: Rgba::hex(0xc0392b),
+    q_not: Rgba::hex(0xc0392b),
+    q_bad: Rgba::hex(0x9a6a10),
 };
 
 /// The numbers that are not colours.
@@ -291,6 +312,7 @@ pub fn css_vars(p: &Palette) -> String {
     for (i, c) in p.t.iter().enumerate() {
         put(&format!("t{i}"), c);
     }
+    put("q-term", &p.q_term);
     put("q-key", &p.q_key);
     put("q-val", &p.q_val);
     put("q-glob", &p.q_glob);

@@ -153,7 +153,8 @@ export struct Dupe {
 // that is left here is a role and a colour.
 export struct Span {
     text: string,
-    // 0 plain · 1 field · 2 value · 3 wildcard · 4 exclusion · 5 read as text
+    // 0 punctuation · 1 field · 2 value · 3 wildcard · 4 exclusion
+    // 5 read as text · 6 the word being looked for
     role: int,
 }
 
@@ -1244,11 +1245,14 @@ export component MainWindow inherits Window {
                             font-size: 20px;
                             font-weight: 600;
                             vertical-alignment: center;
+                            // Blue for what is being looked for, red for what
+                            // is being left out. See `scour_ui::Palette`.
                             color: sp.role == 1 ? Theme.q-key
                                  : sp.role == 2 ? Theme.q-val
                                  : sp.role == 3 ? Theme.q-glob
                                  : sp.role == 4 ? Theme.q-not
                                  : sp.role == 5 ? Theme.q-bad
+                                 : sp.role == 6 ? Theme.q-term
                                  : Theme.ink;
                         }
                     }

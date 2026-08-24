@@ -327,6 +327,9 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 scour_core::Role::Glob => theme.glob(),
                 scour_core::Role::Not => theme.not(),
                 scour_core::Role::UnknownField | scour_core::Role::BadValue => theme.bad(),
+                // Blue for what is wanted; the punctuation between terms stays
+                // quiet.
+                scour_core::Role::Text | scour_core::Role::Phrase => theme.term(),
                 _ => theme.ink(),
             };
             Some(Span::styled(

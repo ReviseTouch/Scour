@@ -2623,6 +2623,11 @@ fn apply(
                         scour_core::Role::Glob => 3,
                         scour_core::Role::Not => 4,
                         scour_core::Role::UnknownField | scour_core::Role::BadValue => 5,
+                        // **What is being looked for**, which is not the same
+                        // as "everything else": the colons, quotes and spaces
+                        // between terms stay quiet, and only the words a
+                        // person typed to find something take the colour.
+                        scour_core::Role::Text | scour_core::Role::Phrase => 6,
                         _ => 0,
                     },
                 })
@@ -3460,6 +3465,7 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
         t3: c(&p.t[3]),
         t4: c(&p.t[4]),
         t5: c(&p.t[5]),
+        q_term: c(&p.q_term),
         q_key: c(&p.q_key),
         q_val: c(&p.q_val),
         q_glob: c(&p.q_glob),

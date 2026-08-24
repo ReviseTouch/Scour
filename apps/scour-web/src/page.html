@@ -145,7 +145,11 @@
     white-space: pre;
     overflow: hidden;
     pointer-events: none;
-    color: var(--ink);
+    /* **What is being looked for.** A bare word was the ordinary ink, the
+       same colour as the punctuation around it; a query line is read to
+       answer two questions and this is the first one's answer. Blue for
+       wanted, red for `!`. See `scour_ui::Palette`. */
+    color: var(--q-term);
     z-index: 1;
   }
   /* Role → colour. That mapping is the frontend's ONLY job here: the engine
