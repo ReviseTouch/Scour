@@ -5746,3 +5746,28 @@ rather than skipped quietly: a lone `!` followed by a term that opens with `;`
 or `|`. `a ! ;c` is `a` or `not c` — the `!` is typed before the separator and
 belongs after it, so the line gets the terms and the alternatives right and
 cannot show which side of the `or` the exclusion is on.
+
+## 2026-08-25 — the reading was for a query that had been typed past
+
+Reported as `hasan;genel` read back as `(name contains "hasan" or name
+contains "ge")` — the sentence under the box describing a query three
+keystrokes old, while the results were for the real one.
+
+`Freshness::note` moved the query counter only for `Ask::Search`, and
+`send_search` sends the `Explain` **first**. So a lane that happened to be
+idle dequeued the colouring, compared its revision against the one before it,
+and dropped it. Typing `hasan;genel` a letter at a time:
+
+```
+explain queued 0 → explain 0     explain queued 6  → explain 6
+explain queued 1 → dropped       explain queued 7  → dropped
+explain queued 2 → explain 2     explain queued 8  → dropped
+explain queued 3 → dropped       explain queued 9  → dropped
+explain queued 4 → explain 4     explain queued 10 → dropped
+explain queued 5 → dropped       explain queued 11 → dropped
+```
+
+**The last one was lost every time**, and the last one is the only one anybody
+reads. Every ask that carries a revision now moves the counter, not only the
+search. Same eleven keystrokes afterwards: `explain 7, 8, 9, 10, 11` — every
+one of them landing, and the sentence saying `genel`.

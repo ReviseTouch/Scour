@@ -255,14 +255,29 @@ struct Freshness {
 
 impl Freshness {
     fn note(&self, ask: &Ask) {
-        if let Ask::Search {
-            generation,
-            query_revision,
-            ..
-        } = ask
-        {
-            self.search.fetch_max(*generation, Ordering::Release);
-            self.query.fetch_max(*query_revision, Ordering::Release);
+        match ask {
+            Ask::Search {
+                generation,
+                query_revision,
+                ..
+            } => {
+                self.search.fetch_max(*generation, Ordering::Release);
+                self.query.fetch_max(*query_revision, Ordering::Release);
+            }
+            // **Everything that carries a revision, not only the search.**
+            // This counter meant "the newest revision any *search* has asked
+            // for", and the colouring goes out a moment *before* its search
+            // does — so a lane that happened to be idle dequeued the
+            // `Explain`, compared it against the revision before it and threw
+            // it away. Typing quickly, the reading for the last keystroke was
+            // the one lost every time, which is the only one anybody reads:
+            // `hasan;genel` was read back as `hasan;ge`.
+            Ask::Explain { query_revision, .. }
+            | Ask::Facets { query_revision, .. }
+            | Ask::Count { query_revision, .. } => {
+                self.query.fetch_max(*query_revision, Ordering::Release);
+            }
+            _ => {}
         }
     }
 
@@ -831,6 +846,31 @@ mod tests {
         }));
     }
 
+    /// The reading is not thrown away for being newer than the search.
+    ///
+    /// `send_search` sends the `Explain` and *then* the `Search`. If the
+    /// counter only moves for a search, an idle lane can dequeue the
+    /// colouring in between, find a revision one ahead of the counter, and
+    /// drop it — which is what happened to the last keystroke of every query
+    /// somebody typed at speed.
+    #[test]
+    fn a_reading_sent_before_its_search_is_still_fresh() {
+        let freshness = Freshness::default();
+        let reading = Ask::Explain {
+            query_revision: 7,
+            query: "hasan;genel".into(),
+        };
+        freshness.note(&reading);
+        assert!(freshness.accepts(&reading));
+        // And it goes stale the moment a later one is asked for.
+        freshness.note(&Ask::Explain {
+            query_revision: 8,
+            query: "hasan;genell".into(),
+        });
+        assert!(!freshness.accepts(&reading));
+    }
+
+    #[test]
     #[test]
     fn rejected_requests_keep_their_freshness_domain() {
         assert_ne!(ReplyRevision::Search(7), ReplyRevision::Query(7));
