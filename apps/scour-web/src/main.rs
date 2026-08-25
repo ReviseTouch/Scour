@@ -1318,16 +1318,16 @@ fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// The first `name` beside this program, then on the `PATH`.
 fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
-    if let Ok(here) = std::env::current_exe() {
-        if let Some(dir) = here.parent() {
-            let beside = dir.join(name);
-            if beside.is_file() {
-                return Some(beside);
-            }
-            let script = dir.join("../../scripts").join(name);
-            if script.is_file() {
-                return Some(script);
-            }
+    if let Ok(here) = std::env::current_exe()
+        && let Some(dir) = here.parent()
+    {
+        let beside = dir.join(name);
+        if beside.is_file() {
+            return Some(beside);
+        }
+        let script = dir.join("../../scripts").join(name);
+        if script.is_file() {
+            return Some(script);
         }
     }
     let path = std::env::var_os("PATH")?;

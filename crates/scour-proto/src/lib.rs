@@ -79,6 +79,10 @@ impl Reply {
     }
 }
 
+/// **Not boxed.** One of these exists per request, and the large variant is
+/// the answer itself — the allocation boxing would add is one more than the
+/// reply already made, to save copying it once.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -86,6 +90,7 @@ pub enum Outcome {
     Error(Error),
 }
 
+#[allow(clippy::large_enum_variant)] // see `Outcome`: one per request
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {

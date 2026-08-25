@@ -2094,35 +2094,35 @@ fn main() -> Result<()> {
 
     // Walk a pointer down the window without a hand, printing which row each
     // stop lands on: `SCOUR_GUI_HOVER=900:120,160,200`.
-    if let Ok(spec) = std::env::var("SCOUR_GUI_HOVER") {
-        if let Some((x, ys)) = spec.split_once(':') {
-            let x: f32 = x.trim().parse().unwrap_or(0.0);
-            let stops: Vec<f32> = ys
-                .split(',')
-                .filter_map(|n| n.trim().parse().ok())
-                .collect();
-            let weak = window.as_weak();
-            let t = Box::leak(Box::new(slint::Timer::default()));
-            let mut left = stops.into_iter();
-            let mut first = true;
-            t.start(
-                slint::TimerMode::Repeated,
-                std::time::Duration::from_millis(400),
-                move || {
-                    if first {
-                        first = false;
-                        return;
-                    }
-                    let Some(w) = weak.upgrade() else { return };
-                    let Some(y) = left.next() else { return };
-                    trace(&format!("pointer to {x},{y}"));
-                    w.window()
-                        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
-                            position: slint::LogicalPosition::new(x, y),
-                        });
-                },
-            );
-        }
+    if let Ok(spec) = std::env::var("SCOUR_GUI_HOVER")
+        && let Some((x, ys)) = spec.split_once(':')
+    {
+        let x: f32 = x.trim().parse().unwrap_or(0.0);
+        let stops: Vec<f32> = ys
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect();
+        let weak = window.as_weak();
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        let mut left = stops.into_iter();
+        let mut first = true;
+        t.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(400),
+            move || {
+                if first {
+                    first = false;
+                    return;
+                }
+                let Some(w) = weak.upgrade() else { return };
+                let Some(y) = left.next() else { return };
+                trace(&format!("pointer to {x},{y}"));
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                        position: slint::LogicalPosition::new(x, y),
+                    });
+            },
+        );
     }
 
     if let Ok(path) = std::env::var("SCOUR_GUI_SNAP") {
@@ -2376,7 +2376,7 @@ fn send_page(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: u3
         (
             s.generation,
             s.query_revision,
-            full_query(&s),
+            full_query(s),
             s.sort.clone(),
             s.descending,
         )
@@ -2580,7 +2580,10 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
                 | scour_core::Role::Sep
                 | scour_core::Role::Quote
                 | scour_core::Role::Space => 7,
-                _ => 0,
+                // **No catch-all**, deliberately. Every role is named, so a
+                // role added to `scour_core` stops compiling here instead of
+                // silently taking colour zero — which is the ordinary ink, and
+                // therefore the one mistake nobody would notice.
             },
             sp.not,
             &mut out,
@@ -3880,18 +3883,18 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
 /// directory, and a switch that quietly starts the installed copy is a switch
 /// that tests the wrong thing.
 fn which(name: &str) -> Option<std::path::PathBuf> {
-    if let Ok(here) = std::env::current_exe() {
-        if let Some(dir) = here.parent() {
-            let beside = dir.join(name);
-            if beside.is_file() {
-                return Some(beside);
-            }
-            // A build being run out of `target/release` has the scripts two
-            // directories up, which is where the launcher lives.
-            let script = dir.join("../../scripts").join(name);
-            if script.is_file() {
-                return Some(script);
-            }
+    if let Ok(here) = std::env::current_exe()
+        && let Some(dir) = here.parent()
+    {
+        let beside = dir.join(name);
+        if beside.is_file() {
+            return Some(beside);
+        }
+        // A build being run out of `target/release` has the scripts two
+        // directories up, which is where the launcher lives.
+        let script = dir.join("../../scripts").join(name);
+        if script.is_file() {
+            return Some(script);
         }
     }
     let path = std::env::var_os("PATH")?;
@@ -4115,6 +4118,135 @@ fn grouped(n: u64) -> String {
 /// gone at the next start, with the desktop's answer back in its place.
 fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> String {
     scour_i18n::choose(&kept.language, &cfg.ui.language)
+}
+
+/// Draw what the service says can be shown of a file.
+///
+/// **A thumbnail rather than the file.** A preview of a forty-megapixel
+/// photograph is a forty-megapixel decode on the drawing thread, for a panel
+/// three hundred and eighty pixels wide; the desktop's thumbnail is the same
+/// picture at the size actually being looked at, is already made for anything
+/// that has ever been seen in a file manager, and is what the grid draws. When
+/// there is none the service is asked to make one — through the same door as
+/// the grid's, so the same four-at-a-time bound covers both — and this shows
+/// what it can in the meantime.
+fn show_peek(
+    w: &MainWindow,
+    cat: &Catalogue,
+    link: &Rc<Link>,
+    path: &str,
+    look: &scour_preview::Look,
+) -> bool {
+    w.set_peek_text(look.head.as_str().into());
+    /// The largest picture worth decoding on the drawing thread.
+    ///
+    /// Half a megabyte covers an icon, a screenshot of part of a screen, and
+    /// every file in the thumbnail cache — which is a directory of pictures
+    /// like any other and turns up in a search for one. A photograph is not in
+    /// this class and does not need to be: the desktop already has a thumbnail
+    /// of it, which is the same picture at the size being looked at.
+    const SMALL: u64 = 512 * 1024;
+    // **Whatever the desktop can draw, not only what a browser can.** `shape`
+    // is the *browser's* question — it says whether an `<img>` or a `<video>`
+    // would render the bytes — and the window has no browser in it. What it
+    // has is the thumbnail cache, and the machines this runs on declare
+    // thumbnailers for PDFs, video, EPUB and office documents as readily as
+    // for photographs. Gating on `shape == "image"` meant a PDF said it could
+    // not be previewed while `evince-thumbnailer` sat there able to draw its
+    // first page.
+    let made = scour_thumbs::cache::existing(path).or_else(|| {
+        // Only a picture is opened directly: a PDF is not something an image
+        // decoder can be pointed at, and a small one is not a small picture.
+        (look.shape == "image" && look.len <= SMALL).then(|| std::path::PathBuf::from(path))
+    });
+    match made.and_then(|p| slint::Image::load_from_path(&p).ok()) {
+        Some(image) => {
+            w.set_peek_shot(image);
+            w.set_peek_has_shot(true);
+        }
+        None => {
+            w.set_peek_shot(rows::blank());
+            w.set_peek_has_shot(false);
+        }
+    }
+    // A picture nobody has made yet is not a picture that cannot be made.
+    // Asked for through the same door the grid uses, so the same four-at-a-time
+    // bound covers both, and drawn when it lands. `can_make` is the machine's
+    // own table — one extension lookup and one MIME lookup, no syscall — so
+    // this asks about a PDF exactly when something is installed that can draw
+    // one.
+    let coming = !w.get_peek_has_shot() && scour_thumbs::can_make(path);
+    if coming {
+        link.send(Ask::Thumbnails {
+            files: vec![path.to_owned()],
+        });
+    }
+    // Said only when there is nothing else in the box, and nothing on its way.
+    // A file whose head is empty because the file is empty is not a failure
+    // either — but it has nothing to show, and a blank panel says less than a
+    // line does.
+    w.set_peek_note(if w.get_peek_has_shot() || !look.head.is_empty() {
+        slint::SharedString::new()
+    } else if coming {
+        t(cat, "reading…")
+    } else {
+        t(cat, "It could not be previewed.")
+    });
+    coming
+}
+
+/// The fact list, in the order [`scour_ui::preview::FACTS`] gives.
+///
+/// The values are formatted by `scour-ui` and the two that are not — a mode as
+/// `drwxr-xr-x`, an id as a name — by `scour-core`. The terminal draws the same
+/// eight lines from the same call; what differs between the two is only where
+/// the row comes from.
+fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
+    let m = &entry.meta;
+    let items = if entry.is_dir && m.items >= 0 {
+        t(cat, "{n} items").replace("{n}", &grouped(m.items as u64))
+    } else {
+        String::new()
+    };
+    let facts = scour_ui::preview::Facts {
+        folder: scour_ui::path::folder(&entry.path),
+        kind: &t(cat, entry.kind().msgid()),
+        is_dir: entry.is_dir,
+        size: m.size.max(0) as u64,
+        items: &items,
+        mtime: m.mtime,
+        ctime: m.ctime,
+        atime: m.atime,
+        mode: &scour_core::mode_string(m.mode),
+        owner: &[
+            scour_core::owner_name(scour_core::Owner::User, m.uid),
+            scour_core::owner_name(scour_core::Owner::Group, m.gid),
+        ]
+        .join(" · "),
+    };
+    let rows: Vec<Fact> = facts
+        .lines(marks().1)
+        .into_iter()
+        .map(|(msgid, value)| Fact {
+            label: t(cat, msgid),
+            value: value.into(),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// `taranıyor 1.240.000` while the index is being walked, nothing otherwise.
+///
+/// The wording is `scour_ui::SCANNING`, so the terminal and the page say the
+/// same thing — and the number is punctuated the way every other number in
+/// this window is.
+fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedString {
+    if !st.scanning {
+        return slint::SharedString::new();
+    }
+    t(cat, scour_ui::SCANNING)
+        .replace("{n}", &grouped(st.scanned))
+        .into()
 }
 
 #[cfg(test)]
@@ -4450,133 +4582,4 @@ mod tests {
             }
         }
     }
-}
-
-/// Draw what the service says can be shown of a file.
-///
-/// **A thumbnail rather than the file.** A preview of a forty-megapixel
-/// photograph is a forty-megapixel decode on the drawing thread, for a panel
-/// three hundred and eighty pixels wide; the desktop's thumbnail is the same
-/// picture at the size actually being looked at, is already made for anything
-/// that has ever been seen in a file manager, and is what the grid draws. When
-/// there is none the service is asked to make one — through the same door as
-/// the grid's, so the same four-at-a-time bound covers both — and this shows
-/// what it can in the meantime.
-fn show_peek(
-    w: &MainWindow,
-    cat: &Catalogue,
-    link: &Rc<Link>,
-    path: &str,
-    look: &scour_preview::Look,
-) -> bool {
-    w.set_peek_text(look.head.as_str().into());
-    /// The largest picture worth decoding on the drawing thread.
-    ///
-    /// Half a megabyte covers an icon, a screenshot of part of a screen, and
-    /// every file in the thumbnail cache — which is a directory of pictures
-    /// like any other and turns up in a search for one. A photograph is not in
-    /// this class and does not need to be: the desktop already has a thumbnail
-    /// of it, which is the same picture at the size being looked at.
-    const SMALL: u64 = 512 * 1024;
-    // **Whatever the desktop can draw, not only what a browser can.** `shape`
-    // is the *browser's* question — it says whether an `<img>` or a `<video>`
-    // would render the bytes — and the window has no browser in it. What it
-    // has is the thumbnail cache, and the machines this runs on declare
-    // thumbnailers for PDFs, video, EPUB and office documents as readily as
-    // for photographs. Gating on `shape == "image"` meant a PDF said it could
-    // not be previewed while `evince-thumbnailer` sat there able to draw its
-    // first page.
-    let made = scour_thumbs::cache::existing(path).or_else(|| {
-        // Only a picture is opened directly: a PDF is not something an image
-        // decoder can be pointed at, and a small one is not a small picture.
-        (look.shape == "image" && look.len <= SMALL).then(|| std::path::PathBuf::from(path))
-    });
-    match made.and_then(|p| slint::Image::load_from_path(&p).ok()) {
-        Some(image) => {
-            w.set_peek_shot(image);
-            w.set_peek_has_shot(true);
-        }
-        None => {
-            w.set_peek_shot(rows::blank());
-            w.set_peek_has_shot(false);
-        }
-    }
-    // A picture nobody has made yet is not a picture that cannot be made.
-    // Asked for through the same door the grid uses, so the same four-at-a-time
-    // bound covers both, and drawn when it lands. `can_make` is the machine's
-    // own table — one extension lookup and one MIME lookup, no syscall — so
-    // this asks about a PDF exactly when something is installed that can draw
-    // one.
-    let coming = !w.get_peek_has_shot() && scour_thumbs::can_make(path);
-    if coming {
-        link.send(Ask::Thumbnails {
-            files: vec![path.to_owned()],
-        });
-    }
-    // Said only when there is nothing else in the box, and nothing on its way.
-    // A file whose head is empty because the file is empty is not a failure
-    // either — but it has nothing to show, and a blank panel says less than a
-    // line does.
-    w.set_peek_note(if w.get_peek_has_shot() || !look.head.is_empty() {
-        slint::SharedString::new()
-    } else if coming {
-        t(cat, "reading…")
-    } else {
-        t(cat, "It could not be previewed.")
-    });
-    coming
-}
-
-/// The fact list, in the order [`scour_ui::preview::FACTS`] gives.
-///
-/// The values are formatted by `scour-ui` and the two that are not — a mode as
-/// `drwxr-xr-x`, an id as a name — by `scour-core`. The terminal draws the same
-/// eight lines from the same call; what differs between the two is only where
-/// the row comes from.
-fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
-    let m = &entry.meta;
-    let items = if entry.is_dir && m.items >= 0 {
-        t(cat, "{n} items").replace("{n}", &grouped(m.items as u64))
-    } else {
-        String::new()
-    };
-    let facts = scour_ui::preview::Facts {
-        folder: scour_ui::path::folder(&entry.path),
-        kind: &t(cat, entry.kind().msgid()),
-        is_dir: entry.is_dir,
-        size: m.size.max(0) as u64,
-        items: &items,
-        mtime: m.mtime,
-        ctime: m.ctime,
-        atime: m.atime,
-        mode: &scour_core::mode_string(m.mode),
-        owner: &[
-            scour_core::owner_name(scour_core::Owner::User, m.uid),
-            scour_core::owner_name(scour_core::Owner::Group, m.gid),
-        ]
-        .join(" · "),
-    };
-    let rows: Vec<Fact> = facts
-        .lines(marks().1)
-        .into_iter()
-        .map(|(msgid, value)| Fact {
-            label: t(cat, msgid),
-            value: value.into(),
-        })
-        .collect();
-    ModelRc::new(VecModel::from(rows))
-}
-
-/// `taranıyor 1.240.000` while the index is being walked, nothing otherwise.
-///
-/// The wording is `scour_ui::SCANNING`, so the terminal and the page say the
-/// same thing — and the number is punctuated the way every other number in
-/// this window is.
-fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedString {
-    if !st.scanning {
-        return slint::SharedString::new();
-    }
-    t(cat, scour_ui::SCANNING)
-        .replace("{n}", &grouped(st.scanned))
-        .into()
 }

@@ -4589,7 +4589,7 @@ fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
             .map(|i| {
                 entry(
                     &format!("/corpus/{era}/file{i:06}.txt"),
-                    NOW - era * 31_536_000 - i as i64,
+                    NOW - era * 31_536_000 - i,
                     (era * 100_000 + i) as u64 + 1,
                 )
             })

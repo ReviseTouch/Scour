@@ -639,8 +639,11 @@ impl Engine {
         let mut doomed: Vec<String> = Vec::new();
         self.shared.index.scan(
             &scour_core::ScanRequest {
+                // No `..Default::default()`: `ScanRequest` has one field
+                // today, and a second one appearing should stop this line
+                // compiling rather than silently take a default. What a sweep
+                // walks is not somewhere to inherit a value nobody chose.
                 query: scour_query::parse(""),
-                ..Default::default()
             },
             &mut |hit: &Hit| {
                 // The index does not carry which source a row came from in a

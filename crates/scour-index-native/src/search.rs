@@ -292,6 +292,11 @@ impl<'a> Segment<'a> {
     }
 }
 
+/// **Not boxed, and clippy is told so.** A `Test` is evaluated per row of a
+/// walk that reaches two million; the largest variant is a few words wide
+/// and moving it costs a memcpy, while boxing it would cost an allocation
+/// when the plan is built and a pointer chase on every row after.
+#[allow(clippy::large_enum_variant)]
 /// One condition, compiled against this segment.
 #[derive(Debug)]
 enum Test {

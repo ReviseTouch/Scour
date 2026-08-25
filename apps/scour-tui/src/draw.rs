@@ -671,7 +671,7 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
                     }),
                 ),
                 Span::styled(
-                    format!("{}", crate::icons::of_kind(hit.kind.token())),
+                    crate::icons::of_kind(hit.kind.token()).to_string(),
                     Style::new().fg(theme.kind(hit.kind.token())),
                 ),
                 Span::styled(cut(name, name_w.saturating_sub(icon_wide)), line),

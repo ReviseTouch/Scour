@@ -113,6 +113,8 @@ pub enum Mode {
     Move,
 }
 
+/// **Not boxed**: one per key press, returned up one frame.
+#[allow(clippy::large_enum_variant)]
 /// What a step wants done about the service.
 ///
 /// Returned rather than done, for the reason [`scour_page::Change`] is: the
@@ -1423,6 +1425,18 @@ impl App {
 mod tests {
     use super::*;
 
+    /// An app with a screen to put rows on.
+    ///
+    /// `App::default()` has no room — a view that is zero rows tall answers
+    /// every question about scrolling with the same number, so every test that
+    /// is about *where the view sits* has to say how tall it is first.
+    fn app(room: usize) -> App {
+        App {
+            room,
+            ..Default::default()
+        }
+    }
+
     fn hits(from: usize, n: usize) -> Vec<Hit> {
         (from..from + n)
             .map(|i| {
@@ -1475,8 +1489,7 @@ mod tests {
 
     #[test]
     fn the_cursor_pushes_the_view_the_least_it_can() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.insert('a');
         app.landed(1, 0, 200, reply(hits(0, 200), 1_000));
         app.go(0);
@@ -1491,8 +1504,7 @@ mod tests {
 
     #[test]
     fn the_view_never_shows_past_the_end() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.insert('a');
         app.landed(1, 0, 200, reply(hits(0, 40), 40));
         app.go(usize::MAX);
@@ -1502,8 +1514,7 @@ mod tests {
 
     #[test]
     fn a_short_page_is_the_end_of_the_result() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.insert('a');
         // Asked for 200, given 40: there is no more.
         app.landed(1, 0, 200, reply(hits(0, 40), 1_000));
@@ -1518,8 +1529,7 @@ mod tests {
     /// one and the cursor has to shift with it.
     #[test]
     fn the_cursor_stays_on_the_file_when_the_list_moves_under_it() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.insert('a');
         app.landed(1, 0, 200, reply(hits(0, 200), 1_000));
         app.go(3);
@@ -1553,8 +1563,7 @@ mod tests {
     /// a machine doing nothing in particular.
     #[test]
     fn a_cursor_nobody_moved_belongs_to_the_list_rather_than_to_a_file() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.insert('a');
         app.landed(1, 0, 200, reply(hits(0, 200), 1_000));
         assert_eq!(app.cursor, 0);

@@ -26,6 +26,8 @@ use scour_proto::{Request, Response};
 /// least this many". The exact figure follows when the typing settles.
 pub const TYPING_CAP: u32 = 1_000;
 
+/// **Not boxed**: one per user action, crossing a channel once.
+#[allow(clippy::large_enum_variant)]
 /// What the terminal asks for.
 pub enum Ask {
     Search {
@@ -339,7 +341,6 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     offset,
                     limit,
                     count_cap: cap,
-                    ..Page::default()
                 },
             },
             Ask::Facets { query, age, .. } => Request::Facets {

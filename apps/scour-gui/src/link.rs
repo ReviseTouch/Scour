@@ -27,6 +27,8 @@ use scour_proto::{Request, Response};
 /// "at least this many". The exact figure follows once the query settles.
 pub const TYPING_CAP: u32 = 1_000;
 
+/// **Not boxed**: one per user action, crossing a channel once.
+#[allow(clippy::large_enum_variant)]
 /// What the window asks for.
 pub enum Ask {
     /// A search, tagged with the interaction that caused it.
@@ -870,7 +872,6 @@ mod tests {
         assert!(!freshness.accepts(&reading));
     }
 
-    #[test]
     #[test]
     fn rejected_requests_keep_their_freshness_domain() {
         assert_ne!(ReplyRevision::Search(7), ReplyRevision::Query(7));

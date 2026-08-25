@@ -617,6 +617,18 @@ fn open(app: &mut App, folder: bool) -> Want {
 mod tests {
     use super::*;
 
+    /// An app with a screen to put rows on.
+    ///
+    /// `App::default()` has no room — a view that is zero rows tall answers
+    /// every question about scrolling with the same number, so every test that
+    /// is about *where the view sits* has to say how tall it is first.
+    fn app(room: usize) -> App {
+        App {
+            room,
+            ..Default::default()
+        }
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
@@ -646,8 +658,7 @@ mod tests {
 
     #[test]
     fn the_arrows_move_in_both_modes() {
-        let mut app = App::default();
-        app.room = 10;
+        let mut app = app(10);
         app.pages.set_total(100);
         press(&mut app, key(KeyCode::Down));
         assert_eq!(app.cursor, 1);
@@ -658,8 +669,7 @@ mod tests {
 
     #[test]
     fn space_picks_in_move_mode_and_types_in_search() {
-        let mut app = App::default();
-        app.room = 4;
+        let mut app = app(4);
         app.pages.set_total(10);
         press(&mut app, key(KeyCode::Char(' ')));
         assert_eq!(app.query, " ", "a space is a space while typing");
@@ -675,8 +685,7 @@ mod tests {
 
     #[test]
     fn sorting_is_ctrl_and_never_the_bare_arrows() {
-        let mut app = App::default();
-        app.room = 4;
+        let mut app = app(4);
         app.pages.set_total(10);
         let was = app.sort;
         press(&mut app, key(KeyCode::Right));
@@ -703,8 +712,7 @@ mod tests {
 
     #[test]
     fn tab_moves_the_arrows_into_the_rail_and_back() {
-        let mut app = App::default();
-        app.room = 4;
+        let mut app = app(4);
         app.pages.set_total(100);
         app.kinds = vec![("doc".into(), 9), ("code".into(), 4)];
         press(&mut app, key(KeyCode::Tab));
@@ -720,8 +728,7 @@ mod tests {
 
     #[test]
     fn pressing_a_filter_narrows_the_query_and_pressing_it_again_does_not() {
-        let mut app = App::default();
-        app.room = 4;
+        let mut app = app(4);
         app.kinds = vec![("doc".into(), 9)];
         app.in_rail = true;
         press(&mut app, key(KeyCode::Enter));
@@ -737,8 +744,7 @@ mod tests {
 
     #[test]
     fn a_panel_takes_the_arrows_and_gives_them_back() {
-        let mut app = App::default();
-        app.room = 4;
+        let mut app = app(4);
         app.pages.set_total(100);
         app.rules = vec![
             ("dir:target".into(), "target".into(), false, true),
@@ -763,14 +769,16 @@ mod tests {
         // The window's data loss, which this must not repeat: a list built
         // from what has been pressed rather than from the answer switches
         // every other rule back on.
-        let mut app = App::default();
-        app.rules = vec![
-            ("dir:target".into(), "target".into(), false, true),
-            ("path:/proc".into(), "/proc".into(), true, false),
-            ("path:/sys".into(), "/sys".into(), true, false),
-        ];
-        app.panel = Panel::Rules;
-        app.panel_at = 0;
+        let mut app = App {
+            rules: vec![
+                ("dir:target".into(), "target".into(), false, true),
+                ("path:/proc".into(), "/proc".into(), true, false),
+                ("path:/sys".into(), "/sys".into(), true, false),
+            ],
+            panel: Panel::Rules,
+            panel_at: 0,
+            ..Default::default()
+        };
         let want = panel_press(&mut app);
         match want {
             Want::OffRules(off) => assert_eq!(

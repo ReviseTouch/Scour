@@ -58,7 +58,7 @@ fn main() {
         let began = Instant::now();
         for row in 0..rows {
             let name = seg.names.get(row).unwrap_or_default();
-            let path = seg.path(row, &name);
+            let path = seg.path(row, name);
             if path.to_lowercase().contains(&needle) {
                 hits_whole += 1;
             }
@@ -71,11 +71,11 @@ fn main() {
         let dirs = seg.dirs.len();
         dirs_all += dirs;
         let mut wanted = vec![false; dirs];
-        for id in 0..dirs {
+        for (id, want) in wanted.iter_mut().enumerate().take(dirs) {
             if let Some(path) = seg.dirs.get(id as u32)
                 && path.to_lowercase().contains(&needle)
             {
-                wanted[id] = true;
+                *want = true;
             }
         }
         table_us += began.elapsed().as_micros();
