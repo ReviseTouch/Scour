@@ -889,6 +889,29 @@ fn main() -> Result<()> {
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
+            // **A query has a length, and the reason is the renderer.**
+            //
+            // Slint's software renderer places every glyph at an `i16`
+            // coordinate, so a line of text wider than 32 767 physical pixels
+            // is not a line that scrolls — it is a panic with no error path.
+            // The field is 20 px mono, about twelve pixels a character, so
+            // six hundred characters is some seven thousand pixels: still
+            // inside the ceiling at four times scale, which is past any
+            // display setting a person is likely to have.
+            //
+            // Nobody types six hundred characters into a search box. This is
+            // here for the paste — a page of paths dropped into the field is
+            // the one way it happens, and before this it closed the window.
+            let text = if text.chars().count() > 600 {
+                let cut: slint::SharedString =
+                    text.chars().take(600).collect::<String>().into();
+                if let Some(w) = weak.upgrade() {
+                    w.set_query(cut.clone());
+                }
+                cut
+            } else {
+                text
+            };
             trace(&format!("query-changed {text:?}"));
             if let Some(w) = weak.upgrade() {
                 w.set_note(slint::SharedString::new());
@@ -4293,24 +4316,31 @@ fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> Stri
 ///
 /// The cap is in characters rather than lines because how many lines the text
 /// becomes depends on the panel's width, which is the reader's to change and
-/// not knowable here. Twenty thousand characters cannot exceed the ceiling
-/// even in the narrowest panel the layout allows; the line cap is the one
-/// that usually bites first, and both are far past what anybody reads to
-/// decide whether a file is the right file.
-fn peek_head(text: &str) -> String {
-    const CHARS: usize = 20_000;
-    const LINES: usize = 400;
+/// not knowable here. The line cap is the one that usually bites first, and
+/// both are far past what anybody reads to decide whether a file is the right
+/// file.
+///
+/// **Divided by the scale factor, and that is not a detail.** The ceiling is
+/// counted in *physical* pixels; the cap is counted in characters, which are
+/// logical. A cap that clears the ceiling on a 1× screen clears two thirds of
+/// it on a 1.5× one and none of it at 3× — which is a stock display setting,
+/// not an exotic one — so a fixed cap is a fix that quietly stops working on
+/// somebody else's monitor.
+fn peek_head(text: &str, scale: f32) -> String {
+    let scale = (scale.max(1.0) as usize).max(1);
+    let chars = 20_000 / scale;
+    let lines = 400 / scale;
     let mut end = text.len();
-    let mut lines = 0;
+    let mut seen = 0;
     let mut taken = 0;
     for (at, c) in text.char_indices() {
-        if taken >= CHARS || lines >= LINES {
+        if taken >= chars || seen >= lines {
             end = at;
             break;
         }
         taken += 1;
         if c == '\n' {
-            lines += 1;
+            seen += 1;
         }
     }
     if end == text.len() {
@@ -4328,7 +4358,7 @@ fn show_peek(
     path: &str,
     look: &scour_preview::Look,
 ) -> bool {
-    w.set_peek_text(peek_head(&look.head).into());
+    w.set_peek_text(peek_head(&look.head, w.window().scale_factor()).into());
     /// The largest picture worth decoding on the drawing thread.
     ///
     /// Half a megabyte covers an icon, a screenshot of part of a screen, and
@@ -4452,13 +4482,13 @@ mod tests {
     #[test]
     fn a_preview_is_bounded_however_large_the_file_is() {
         let short = "fn main() {}\n";
-        assert_eq!(super::peek_head(short), short, "a small file is untouched");
+        assert_eq!(super::peek_head(short, 1.0), short, "a small file is untouched");
 
         // A quarter megabyte, which is what the service actually sends.
         let big: String = std::iter::repeat("lorem ipsum dolor sit amet\n")
             .take(10_000)
             .collect();
-        let cut = super::peek_head(&big);
+        let cut = super::peek_head(&big, 1.0);
         assert!(cut.len() < big.len() / 4, "{} of {}", cut.len(), big.len());
         assert!(cut.ends_with('…'), "the reader is told it was cut");
         assert!(cut.lines().count() <= 402);
@@ -4466,14 +4496,17 @@ mod tests {
         // One enormous line, no newline in it at all — the line cap cannot
         // help here and the character cap has to.
         let one: String = std::iter::repeat('x').take(300_000).collect();
-        assert!(super::peek_head(&one).chars().count() <= 20_002);
+        assert!(super::peek_head(&one, 1.0).chars().count() <= 20_002);
+        // Three times the scale, a third of the text: the ceiling is
+        // counted in physical pixels and the cap has to follow it there.
+        assert!(super::peek_head(&one, 3.0).chars().count() <= 6_669);
     }
 
     /// A cut that lands inside a multi-byte character must not panic.
     #[test]
     fn the_cut_falls_on_a_character_boundary() {
         let turkish: String = std::iter::repeat("çğıöşü ").take(9_000).collect();
-        let cut = super::peek_head(&turkish);
+        let cut = super::peek_head(&turkish, 1.0);
         assert!(cut.chars().count() <= 20_002);
         assert!(!cut.is_empty());
     }

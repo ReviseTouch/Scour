@@ -1042,6 +1042,20 @@ export component MainWindow inherits Window {
     in property <string> rules-config-note;
     in property <string> rules-builtin-title;
     in property <string> rules-builtin-note;
+    /// The last rule text short enough to draw.
+    ///
+    /// **A cap, kept as a property because Slint cannot cut a string.** The
+    /// software renderer places glyphs at `i16` coordinates, so a single line
+    /// past 32 767 physical pixels is a panic rather than a line that
+    /// scrolls — and this field is a paste target like any other. There is no
+    /// `max-length` in Slint and no way to take the first n characters of a
+    /// string, so the field refuses the edit instead of trimming it: anything
+    /// over the cap puts back the last text that was under it.
+    ///
+    /// Four hundred characters is about two thousand eight hundred pixels of
+    /// this font, inside the ceiling at four times scale, and longer than any
+    /// path this rule could name.
+    private property <string> rule-kept: "";
     in property <string> rules-hint;
     in property <string> rules-add;
     in property <string> rules-off-word;
@@ -3807,9 +3821,17 @@ export component MainWindow inherits Window {
                                     vertical-alignment: center;
                                     selection-background-color: Theme.selection;
                                     selection-foreground-color: Theme.ink;
+                                    edited => {
+                                        if (self.text.character-count > 400) {
+                                            self.text = root.rule-kept;
+                                        } else {
+                                            root.rule-kept = self.text;
+                                        }
+                                    }
                                     accepted => {
                                         root.rule-added(self.text);
                                         self.text = "";
+                                        root.rule-kept = "";
                                     }
                                 }
                             }
