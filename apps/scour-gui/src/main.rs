@@ -610,6 +610,57 @@ fn path_of(rows: &Rc<rows::Rows>, i: i32) -> Option<String> {
     rows.path_at(usize::try_from(i).ok()?)
 }
 
+/// Write the next panic to a file, as well as to standard error.
+///
+/// Costs nothing until something panics. `force_capture` is deliberate:
+/// backtraces are off unless `RUST_BACKTRACE` is set, and the person who hits
+/// this crash has no reason to have set it.
+fn crash_log(state: &std::path::Path) {
+    let file = state.join("gui-crash.log");
+    let _ = std::fs::create_dir_all(state);
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let where_ = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "?".into());
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "?".into());
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".into());
+        let note = format!(
+            "\n=== scour-gui {} · unix {when}\n\
+             at        {where_}\n\
+             message   {what}\n\
+             renderer  SLINT_BACKEND={} \n\
+             display   WAYLAND_DISPLAY={} DISPLAY={}\n\
+             backtrace\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            env("SLINT_BACKEND"),
+            env("WAYLAND_DISPLAY"),
+            env("DISPLAY"),
+            std::backtrace::Backtrace::force_capture(),
+        );
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file)
+        {
+            let _ = f.write_all(note.as_bytes());
+        }
+        eprint!("{note}");
+        previous(info);
+    }));
+}
+
 fn main() -> Result<()> {
     // From the process starting to the first row on screen. The one number a
     // person sees before they have typed anything, and the only one the
@@ -622,6 +673,22 @@ fn main() -> Result<()> {
     // inside a face. **Read before the catalogue** because the language is one
     // of them: it used to be loaded three hundred lines further down, after
     // the words had already been chosen without it.
+    // **What a crash leaves behind.**
+    //
+    // A panic prints to standard error, and a window opened from a desktop
+    // entry has nowhere for standard error to go: the process disappears and
+    // the person watching gets a window that closes itself. That is the whole
+    // of what was known about the one crash this window has — a report with
+    // no evidence attached, and no way to ask for any without asking somebody
+    // to launch it from a terminal and wait for it to happen again.
+    //
+    // So it writes the panic down. Message, location, backtrace, and the two
+    // pieces of outside state that change which drawing code runs at all: the
+    // renderer and the display server. Appended rather than replaced, because
+    // the interesting case is a crash that happens now and then and the
+    // question is what the times have in common.
+    crash_log(&config.state_dir());
+
     let kept = scour_settings::Settings::load(&config.state_dir());
     // **The words, and they can be changed while the window is open.** Held
     // behind a cell so that picking a language rebuilds the catalogue and
@@ -1605,6 +1672,34 @@ fn main() -> Result<()> {
                 w.set_hint(t(&cat, "path printed to the terminal"));
             }
         });
+    }
+
+    // Proof that the paragraph above works.
+    //
+    // A crash logger nobody has ever seen fire is a crash logger that does
+    // not fire: the hook could be installed after the panic it was meant to
+    // catch, the directory could be unwritable, the format string could be
+    // wrong. `SCOUR_GUI_PANIC=1 scour-gui` stands on it deliberately, and the
+    // file it leaves is the same file a real crash leaves.
+    if std::env::var("SCOUR_GUI_PANIC").is_ok() {
+        panic!("deliberate — proving the crash log writes");
+    }
+
+    // The field, filled in one go rather than typed.
+    //
+    // `SCOUR_SELFTEST` types on a 150 ms clock, which is the right shape for
+    // measuring a keystroke and the wrong one for asking what a *long* line
+    // does: four thousand characters would take ten minutes to arrive. This
+    // sets the text once, and it exists because the software renderer casts
+    // every glyph position to `i16` — a line wide enough to leave that range
+    // is a crash, and this is how to stand on it deliberately.
+    if let Some(n) = std::env::var("SCOUR_GUI_LONGQUERY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let q: String = std::iter::repeat('m').take(n).collect();
+        window.set_query(q.clone().into());
+        window.invoke_query_changed(q.into());
     }
 
     // A way to exercise the whole pipeline without a keyboard.
@@ -4180,6 +4275,52 @@ fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> Stri
 /// there is none the service is asked to make one — through the same door as
 /// the grid's, so the same four-at-a-time bound covers both — and this shows
 /// what it can in the meantime.
+/// As much of a file as a preview should show — and as much as can be drawn.
+///
+/// **This is a crash fix, and the crash is worth writing down.** The service
+/// hands back a quarter of a megabyte of text, the panel put all of it into
+/// one wrapping `Text`, and Slint's software renderer casts every glyph's
+/// position to `i16`. A quarter megabyte of monospace wrapped into a column
+/// three hundred pixels wide is about six thousand lines — near ninety
+/// thousand pixels tall — so the cast failed and the window died, silently,
+/// on the desktop. It took a long time to find because it depends on *which*
+/// file is selected: anything over roughly a hundred kilobytes of text was a
+/// crash, everything smaller was fine, and so it looked random.
+///
+/// The GPU renderer has no such ceiling, and is what runs now. This stays
+/// because the software renderer is still the fallback on a machine with no
+/// GL, and a fallback that crashes is not one.
+///
+/// The cap is in characters rather than lines because how many lines the text
+/// becomes depends on the panel's width, which is the reader's to change and
+/// not knowable here. Twenty thousand characters cannot exceed the ceiling
+/// even in the narrowest panel the layout allows; the line cap is the one
+/// that usually bites first, and both are far past what anybody reads to
+/// decide whether a file is the right file.
+fn peek_head(text: &str) -> String {
+    const CHARS: usize = 20_000;
+    const LINES: usize = 400;
+    let mut end = text.len();
+    let mut lines = 0;
+    let mut taken = 0;
+    for (at, c) in text.char_indices() {
+        if taken >= CHARS || lines >= LINES {
+            end = at;
+            break;
+        }
+        taken += 1;
+        if c == '\n' {
+            lines += 1;
+        }
+    }
+    if end == text.len() {
+        return text.to_owned();
+    }
+    let mut cut = text[..end].to_owned();
+    cut.push_str("\n…");
+    cut
+}
+
 fn show_peek(
     w: &MainWindow,
     cat: &Catalogue,
@@ -4187,7 +4328,7 @@ fn show_peek(
     path: &str,
     look: &scour_preview::Look,
 ) -> bool {
-    w.set_peek_text(look.head.as_str().into());
+    w.set_peek_text(peek_head(&look.head).into());
     /// The largest picture worth decoding on the drawing thread.
     ///
     /// Half a megabyte covers an icon, a screenshot of part of a screen, and
@@ -4301,6 +4442,42 @@ fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedStrin
 
 #[cfg(test)]
 mod tests {
+    /// The ceiling the software renderer draws under, and what it costs.
+    ///
+    /// The number that matters is not 20,000 — it is that whatever comes back
+    /// from the service, what reaches the panel is bounded. A cap written as
+    /// "take the first N bytes" would also pass a test like this and would
+    /// still be wrong: it can split a character in half. So the long case
+    /// checks the cut is a real string and that the reader is told it was cut.
+    #[test]
+    fn a_preview_is_bounded_however_large_the_file_is() {
+        let short = "fn main() {}\n";
+        assert_eq!(super::peek_head(short), short, "a small file is untouched");
+
+        // A quarter megabyte, which is what the service actually sends.
+        let big: String = std::iter::repeat("lorem ipsum dolor sit amet\n")
+            .take(10_000)
+            .collect();
+        let cut = super::peek_head(&big);
+        assert!(cut.len() < big.len() / 4, "{} of {}", cut.len(), big.len());
+        assert!(cut.ends_with('…'), "the reader is told it was cut");
+        assert!(cut.lines().count() <= 402);
+
+        // One enormous line, no newline in it at all — the line cap cannot
+        // help here and the character cap has to.
+        let one: String = std::iter::repeat('x').take(300_000).collect();
+        assert!(super::peek_head(&one).chars().count() <= 20_002);
+    }
+
+    /// A cut that lands inside a multi-byte character must not panic.
+    #[test]
+    fn the_cut_falls_on_a_character_boundary() {
+        let turkish: String = std::iter::repeat("çğıöşü ").take(9_000).collect();
+        let cut = super::peek_head(&turkish);
+        assert!(cut.chars().count() <= 20_002);
+        assert!(!cut.is_empty());
+    }
+
     use super::*;
 
     /// The window's palette is the one the browser page is written from.

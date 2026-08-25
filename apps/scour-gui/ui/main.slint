@@ -1250,8 +1250,13 @@ export component MainWindow inherits Window {
                     // The chevron sits inside the box, so the text stops
                     // short of it — an arrow with a letter under it is an
                     // arrow nobody can read.
-                    property <length> room: field.width - field.pad * 2
-                        - (root.has-past ? 24px : 0px);
+                    // **Never negative.** Before the field has been given
+                    // a width this is `0 - 18px`, and negative room is not a
+                    // smaller box — `cursor-position-changed` derives `shift`
+                    // from it, so it places the text to the left of where it
+                    // belongs for as long as that lasts.
+                    property <length> room: max(0px, field.width - field.pad * 2
+                        - (root.has-past ? 24px : 0px));
                     property <length> shift: 0px;
                     // **One character's width, measured rather than assumed.**
                     // The coloured runs are separate elements and a layout

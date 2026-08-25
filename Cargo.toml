@@ -132,7 +132,20 @@ type_complexity    = "allow"
 opt-level     = 3
 lto           = "thin"
 codegen-units = 1
-strip         = "symbols"
+# **Line tables, and the binary keeps them.**
+#
+# `strip = "symbols"` was here, and it cost more than it saved: the window
+# panicked inside the renderer on somebody else's machine and the crash it
+# wrote down said `0: <unknown>` eleven times. A stripped backtrace names
+# nothing, so a crash that happens once an hour stays unexplained for as long
+# as nobody can make it happen on demand.
+#
+# `line-tables-only` is the cheap half of debug info — file and line for each
+# frame, no variables, no types. It changes no code and costs nothing at run
+# time; it is bytes on disk, and a crash report that names a line is worth
+# more than those bytes.
+debug         = "line-tables-only"
+strip         = "none"
 
 [profile.dev]
 opt-level = 1   # a debug-speed walker makes the scan tests unbearable
