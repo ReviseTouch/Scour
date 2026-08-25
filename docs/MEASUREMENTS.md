@@ -5798,3 +5798,117 @@ changed, each of them a corner nobody would have written down: a lone `!`
 reaching past a redundant separator (`! ;c`), a separator-only token using up
 a pending `!` (`! ; a`), a doubled separator (`a;;b`) drawn twice and once,
 and the `|`-adjacency above from either side.
+
+## 2026-08-25 — a survey of what costs, on the live service
+
+Three sources, 3,306,664 entries, 305 MiB of index, the Slint window open and
+untouched. Every number is from the running service, not a copy.
+
+### Per-endpoint, service time and wall time
+
+| endpoint | service | wall |
+|---|---:|---:|
+| `count` (empty) | — | 1.9 ms |
+| `facets kind` | 8.5 ms | 9.8 ms |
+| `facets ext` | 30.3 ms | 31.8 ms |
+| `tree /home/hasan` | — | **101.7 ms** |
+| `du` (whole index) | **416.2 ms** | 425.0 ms |
+| `du -q rapor` | 273.1 ms | 281.2 ms |
+| `stat`, `places`, `rules`, `status`, `stats`, `explain` | — | 1.1–1.7 ms |
+
+`tree` and `count` report no `took_us` at all, so their cost is invisible to
+every dashboard that reads it — which is how a hundred milliseconds went
+unnoticed.
+
+### `tree` is a query per child, not a query
+
+    depth=1 limit=50     112.1 ms
+    depth=1 limit=500    176.2 ms
+    depth=2 limit=50     577.3 ms
+    depth=2 limit=500    855.9 ms
+
+for a 13 KB answer. At the depth limit `fill` calls `count_children` for every
+child, and each of those is a search of its own: one `parent:` count measures
+1.06 ms at `count_cap: 1`, 1.47 ms at a million. **The cost is the number of
+queries, not what each one counts** — fifty children is fifty round trips
+through the index.
+
+`FacetBy::Dir` looks like the batched form of the same question and is not:
+its counts are the whole subtree (`.cache` → 22,194) where `count_children`
+wants the directory itself (`.cache` → 52). And `Entry::items` is `-1` by
+design, so the row cannot answer either.
+
+### `du` scales with the scope, not with `top`
+
+| scope | top | |
+|---|---:|---:|
+| whole index | 5 | 466.8 ms |
+| whole index | 20 | 462.3 ms |
+| whole index | 100 | 435.2 ms |
+| `/home/hasan` | 20 | 248.8 ms |
+| `/home/hasan/Projeler` | 20 | 76.1 ms |
+
+`usage.rs` computes its own two passes and stores nothing — deliberately. The
+folder-size column, meanwhile, has stored prefix sums. Two mechanisms answer
+nearly the same question and only one of them keeps its work.
+
+### The unsorted tail, and the flag nobody acts on
+
+A week of running left **911,973 unsorted entries**. Ordering, before and after
+one `scour maintain rebuild`:
+
+| | before | after |
+|---|---:|---:|
+| path | 21.5 ms | **1.9 ms** |
+| name | 2.4 | 1.4 |
+| size | 7.1 | 5.1 |
+| modified | 1.5 | 1.2 |
+
+unsorted 911,973 → 413, index 354 → 305 MiB.
+
+`rebuild_threshold` sets `rebuild_advised` and nothing else — it is a flag, not
+an action. And the flag is rendered in `apps/scour/src/render.rs` and nowhere
+else: not the page, not Slint, not the TUI, not MCP. The one signal that says
+searching is eleven times slower than it should be reaches only somebody who
+runs `scour stats` in a terminal.
+
+### CPU, idle, window open
+
+    scourd      3.200% of a core
+    scour-gui   0.167%
+
+and in a second sample one `scour-conn` thread alone measured 7.5%. The window
+is not asking for it: its 100 ms timer runs `follow`, `pictures` and `peek`,
+and all three return early when nothing changed.
+
+    revisions   +36.0/min
+    entries     +4.0/min
+
+Thirty-six commits a minute for four net rows. `config.toml` records the shape
+of that cost — a commit is about ten fsyncs, 22.5 ms for one row and 23.7 ms
+for a hundred and twenty-eight — so the price is per commit and the rows are
+free. Thirty-six of them is about **1.4% of a core** before anything else.
+
+### Memory is flat
+
+| | at 14 min | at 25 min |
+|---|---:|---:|
+| `RssAnon + VmSwap` | 203 MB | 205 MB |
+
+`VmHWM` 790 MB, set during the start-up scan. Anonymous memory sits in a few
+large regions — the watcher, which holds 395,271 directories — and the 210 MB
+of mapped segment files are `RssFile`, which the kernel drops under pressure.
+
+The unit reports peaks of 4.4 G, 4.7 G and 6 G across boots, and that is
+`memory.peak` from the cgroup, which counts page cache. Sampled during a scan:
+the process held 93–133 MB throughout while the cgroup swung 4,880 → 322 MB on
+its own, almost all of it `file`. Not a leak — but the unit sets no
+`MemoryHigh`, so a scan pulling five gigabytes of cache is pressure on
+everything else's.
+
+### Stability
+
+Bare `lock().unwrap()` outside tests: **two, both in test helpers**. The
+poison-resistant `unwrap_or_else(|p| p.into_inner())` is used consistently.
+The job channel is unbounded and says so; whole-source walks are collapsed,
+subtree walks deliberately are not.
