@@ -181,6 +181,13 @@ const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
     generation: u64,
+    /// How many entries the index holds, as of the last status.
+    ///
+    /// **The right-hand number in the meter.** It is the same sentence the
+    /// page draws — how many things this query found, out of how many there
+    /// are — and it was `held / matches` here, which is a different question
+    /// wearing the same clothes: two hundred is the page size, not an answer.
+    indexed: u64,
     /// Changes only when the matching set changes, not when its order does.
     query_revision: u64,
     /// What was searched before, newest first.
@@ -501,6 +508,7 @@ fn show_usage(w: &MainWindow, cat: &Catalogue, path: &str, u: &scour_core::Usage
 /// meter row in `main.slint`. Passing them as one string is what made the
 /// window's line grey where the page's is coloured.
 fn meter(w: &MainWindow, count: String, ms: String, rows: String) {
+    trace(&format!("meter {count} · {ms} · {rows}"));
     w.set_meter_count(count.into());
     w.set_meter_ms(ms.into());
     w.set_meter_rows(rows.into());
@@ -659,6 +667,7 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
+        indexed: 0,
         generation: 0,
         query_revision: 0,
         past: kept.history.clone(),
@@ -2858,17 +2867,24 @@ fn apply(
             let (total, capped) = exact_count
                 .map(|c| (c.total, c.capped))
                 .unwrap_or((r.total, r.capped));
-            // **The page's sentence, in the page's order.** Shown out of
-            // total, then what it cost, then how much of the index was walked
-            // to get it. Grouped with the locale's own separator, because a
-            // seven-digit number without one is a number nobody reads.
+            // **The page's sentence, in the page's order.** Found out of how
+            // many there are, then what it cost, then how much of the index
+            // was walked to get it. Grouped with the locale's own separator,
+            // because a seven-digit number without one is a number nobody
+            // reads.
+            //
+            // The left number was `n` — the rows in this page, which is the
+            // page size and reads as an answer: two hundred, for a query
+            // matching half a million. The comment above it already said
+            // "shown out of total" and meant this; the variable did not.
+            let indexed = state.borrow().indexed;
             meter(
                 w,
                 format!(
-                    "{} / {}{}",
-                    grouped(n as u64),
+                    "{}{} / {}",
                     grouped(total),
                     if capped { "+" } else { "" },
+                    grouped(indexed),
                 ),
                 format!("{:.2} ms", r.took_us as f64 / 1000.0),
                 format!("{} {}", grouped(r.rows_visited), cat.get("rows read")),
@@ -2902,6 +2918,7 @@ fn apply(
                 misread: _,
             } = *reply
             {
+                let indexed = state.borrow().indexed;
                 state.borrow_mut().exact_count = Some(ExactCount {
                     query_revision,
                     total,
@@ -2917,12 +2934,25 @@ fn apply(
                 // only the second number moves. Keeping the sentence's shape
                 // is the point: a meter that reflows when a background answer
                 // lands reads as the window having changed its mind.
+                // **How many this query found, out of how many there are.**
+                // The left side used to be `rows.held()` — the rows this
+                // window happens to be holding, which is the page size and
+                // reads as an answer. Two hundred, for a query matching half
+                // a million. The page has always drawn the other sentence and
+                // there is no reason for two faces to mean different things
+                // by the same mark.
+                trace(&format!(
+                    "meter/search {}{} / {}",
+                    grouped(total),
+                    if capped { "+" } else { "" },
+                    grouped(indexed)
+                ));
                 w.set_meter_count(
                     format!(
-                        "{} / {}{}",
-                        grouped(rows.held() as u64),
+                        "{}{} / {}",
                         grouped(total),
                         if capped { "+" } else { "" },
+                        grouped(indexed),
                     )
                     .into(),
                 );
@@ -3342,6 +3372,7 @@ fn apply(
             // after this is the service telling the window when to look again.
             {
                 let mut s = state.borrow_mut();
+                s.indexed = st.entries;
                 if s.revision == 0 {
                     s.revision = st.revision;
                     link.send(Ask::Await { since: st.revision });
@@ -3482,6 +3513,7 @@ fn apply(
             }
             w.set_bar_peak(peak);
             w.set_bars(ModelRc::new(VecModel::from(bars)));
+            let indexed = state.borrow().indexed;
             let count_query = {
                 let mut s = state.borrow_mut();
                 if f.capped {
@@ -3500,12 +3532,19 @@ fn apply(
             if !f.capped {
                 rows.set_total(f.total.min(i32::MAX as u64) as usize);
             }
+            // The same sentence the search reply draws — see there.
+            trace(&format!(
+                "meter/facets {}{} / {}",
+                grouped(f.total),
+                if f.capped { "+" } else { "" },
+                grouped(indexed)
+            ));
             w.set_meter_count(
                 format!(
-                    "{} / {}{}",
-                    grouped(rows.held() as u64),
+                    "{}{} / {}",
                     grouped(f.total),
                     if f.capped { "+" } else { "" },
+                    grouped(indexed),
                 )
                 .into(),
             );
@@ -4371,6 +4410,7 @@ mod tests {
     #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
+            indexed: 0,
             generation: 0,
             query_revision: 0,
             past: Vec::new(),
@@ -4431,6 +4471,7 @@ mod tests {
         let mut s = State {
             sent_off: None,
             rules_shown: Default::default(),
+            indexed: 0,
             generation: 4,
             query_revision: 2,
             past: Vec::new(),
