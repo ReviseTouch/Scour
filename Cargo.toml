@@ -144,7 +144,7 @@ codegen-units = 1
 # frame, no variables, no types. It changes no code and costs nothing at run
 # time; it is bytes on disk, and a crash report that names a line is worth
 # more than those bytes.
-debug         = "line-tables-only"
+debug         = 0
 strip         = "none"
 
 [profile.dev]

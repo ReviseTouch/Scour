@@ -51,13 +51,35 @@ humansize    = { workspace = true }
 # Pinned exactly, and not out of caution. 1.17's winit backend divides by a
 # refresh rate it reads as zero (`frame_throttle.rs:58`), which crashes on
 # every start under Wine — and a caret is enough for Cargo to pick it.
-# **CPU drawing, and no OpenGL.** The owner's call, and the numbers do not
-# argue: this window is a list of text on flat rectangles, the idle cost is
-# 0.00% of a core, and femtovg drags in a GL stack for a scene that has no
-# gradients, no transforms and no images bigger than an icon. Software
-# rendering also works where a GL context is not there to be had — a virtual
-# machine, a remote session, a broken driver — which for a file search tool is
-# the difference between running and not.
+# **CPU drawing, and no OpenGL.** The owner's call, made twice: once on the
+# argument, and once again after the GPU renderer was compiled in and measured
+# against this one. Alternating runs, window left to settle, this machine:
+#
+#     idle CPU   software 0.5-1.3%   femtovg 0.6-0.95%   — a tie
+#     memory     software 10-14 MB   femtovg 34-36 MB    — 24 MB
+#     first rows software ~100 ms    femtovg 170-340 ms  — the GL context
+#
+# The scene is a list of text on flat rectangles: no gradients, no transforms,
+# no image larger than an icon. A GPU has nothing to do here and charges for
+# turning up. Software rendering also works where a GL context is not there to
+# be had — a virtual machine, a remote session, a broken driver — which for a
+# file search tool is the difference between running and not.
+#
+# **And the fallback everyone assumes is there is not there.** Compiling both
+# renderers in does not buy a safety net: femtovg is preferred, its
+# `new_suspended` cannot fail, and the GL context is created much later at
+# `resume()`. Slint's fallback array only runs when the *factory* errors, so it
+# never runs. Verified by taking EGL away: `Error: the event loop failed`, exit
+# 1, no window. Choosing femtovg means writing the fallback by hand.
+#
+# The price of this choice is real and worth writing down: the software
+# renderer places every glyph at an `i16` coordinate, so a single text laid out
+# past 32 767 physical pixels panics with no error path. That is Slint's own
+# bug — slint-ui/slint#12985, filed 2026-08-23, fixed on master in #12994, in
+# no release — and it closed this window for days. Five places where a string
+# could reach it are capped and tested: the preview, the query field, and the
+# rules field. **A new `Text` bound to something unbounded reopens it**, so
+# anything of that shape needs a cap or `overflow: elide`.
 slint        = { version = "=1.16.1", default-features = false, features = [
     "compat-1-2", "backend-winit", "renderer-software", "std",
 ] }
