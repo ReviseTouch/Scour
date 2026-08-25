@@ -183,6 +183,13 @@ struct State {
     generation: u64,
     /// Changes only when the matching set changes, not when its order does.
     query_revision: u64,
+    /// What was searched before, newest first.
+    ///
+    /// Kept here as well as in the settings file because the list is narrowed
+    /// by what is typed on every keystroke, and reading a file to answer a
+    /// keystroke is not a thing to do.
+    past: Vec<String>,
+
     /// The coloured runs the engine last sent, as it sent them.
     ///
     /// **Kept, because a keystroke has to redraw the colours before the
@@ -621,6 +628,9 @@ fn main() -> Result<()> {
     // Nothing is marked to begin with: the first list is by relevance, which
     // is not a column and has no heading to point at.
     window.set_sorted_by("relevance".into());
+    // The chevron appears only when there is something behind it.
+    window.set_has_past(!kept.history.is_empty());
+    trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {
         // What the window believes the display does to it, asked once it is on
@@ -651,6 +661,7 @@ fn main() -> Result<()> {
     let state = Rc::new(RefCell::new(State {
         generation: 0,
         query_revision: 0,
+        past: kept.history.clone(),
         spans: Vec::new(),
         background_query: None,
         count_query: None,
@@ -822,6 +833,15 @@ fn main() -> Result<()> {
                 let s = state.borrow();
                 let runs = painted(&full_query(&s), &s.spans);
                 w.set_spans(ModelRc::new(VecModel::from(runs)));
+                // The list narrows as the query does, while it is open — the
+                // chevron is worth pressing in the middle of typing, not only
+                // on an empty box.
+                if w.get_past_open() {
+                    let lines = past_matching(&s.past, &s.query);
+                    w.set_past_open(!lines.is_empty());
+                    w.set_past_picked(0);
+                    w.set_past(ModelRc::new(VecModel::from(lines)));
+                }
             }
             // Counts from the previous matching set are worse than an empty
             // rail while the new, delayed facet walk is in flight.
@@ -1483,10 +1503,66 @@ fn main() -> Result<()> {
     // to be fourth in it. There is no second list to keep in step now.
     {
         let rows = Rc::clone(&rows);
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
         window.on_activated(move |i| {
+            // **Opening a result is committing to the query too.** A person
+            // who typed, looked and pressed the row meant that search as
+            // much as one who pressed Enter — and the browser page has
+            // counted both from the start.
+            let query = full_query(&state.borrow());
+            remember(&state, &link, &query);
+            if let Some(w) = weak.upgrade() {
+                w.set_has_past(!state.borrow().past.is_empty());
+            }
             if let Some(path) = path_of(&rows, i) {
                 open(&path);
             }
+        });
+    }
+
+    // --- what was searched before -----------------------------------------
+    {
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_query_committed(move || {
+            let query = full_query(&state.borrow());
+            remember(&state, &link, &query);
+            if let Some(w) = weak.upgrade() {
+                w.set_has_past(!state.borrow().past.is_empty());
+            }
+        });
+    }
+    {
+        let state = Rc::clone(&state);
+        let weak = window.as_weak();
+        window.on_past_toggled(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if w.get_past_open() {
+                w.set_past_open(false);
+                return;
+            }
+            let lines = past_matching(&state.borrow().past, &state.borrow().query);
+            w.set_past_picked(0);
+            w.set_past(ModelRc::new(VecModel::from(lines.clone())));
+            w.set_past_open(!lines.is_empty());
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.on_past_taken(move |line| {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_past_open(false);
+            // Put it in the box and search it, the way typing it would.
+            // **Set, then tell.** The text is two-way bound, and writing it
+            // from here does *not* fire `edited` — that is for a person's
+            // keystrokes — so without the second line the box changed and
+            // nothing was searched.
+            w.set_query(line.clone());
+            w.invoke_query_changed(line);
+            w.invoke_caret_to_end();
         });
     }
     {
@@ -2388,6 +2464,58 @@ fn order_for(query: &str, sort: &str) -> String {
 /// on in front. It started as one — the rail only offered kinds — and the day
 /// the ribbon and the scopes started using the same slot it began producing
 /// `kind:dm:38d`, which parses as a search for that text and answers nothing.
+/// What was searched before, narrowed by what is typed now.
+///
+/// **A hundred past queries is not a list anybody reads.** An empty box
+/// offers everything, newest first; anything typed keeps the lines that
+/// contain it, which is what makes the chevron useful mid-query rather than
+/// only on an empty box. The browser page has done this from the start and
+/// the rule is its own.
+fn past_matching(past: &[String], typed: &str) -> Vec<slint::SharedString> {
+    let typed = typed.trim().to_lowercase();
+    past.iter()
+        .filter(|line| typed.is_empty() || line.to_lowercase().contains(&typed))
+        // **A dozen, and the cap is here rather than on the box.** The list
+        // is drawn by a layout, and a layout gives its parent a minimum
+        // height — a box told to be shorter than its rows is simply
+        // overflowed by them, out of the card and over the results.
+        .take(PAST_SHOWN)
+        .map(|line| line.as_str().into())
+        .collect()
+}
+
+/// How many past searches the box offers at once.
+///
+/// The service keeps a hundred (`scour_settings::HISTORY`); this is what fits
+/// under the box without covering the answer it is meant to help you find.
+/// Typing narrows the list, which is what reaches the older ones.
+const PAST_SHOWN: usize = 12;
+
+/// Put one query at the front of the history.
+///
+/// **What was committed to, not what was searched.** The box searches per
+/// keystroke, so what went out is `r`, `ra`, `rap`; what belongs here is the
+/// query somebody pressed Enter on. The cap is the service's — see
+/// `scour_settings::HISTORY` — and this copy is the window keeping in step.
+fn remember(state: &Rc<RefCell<State>>, link: &Rc<Link>, query: &str) {
+    let query = query.trim().to_owned();
+    if query.is_empty() || state.borrow().past.first() == Some(&query) {
+        return;
+    }
+    {
+        let mut s = state.borrow_mut();
+        s.past.retain(|line| line != &query);
+        s.past.insert(0, query.clone());
+        s.past.truncate(scour_settings::HISTORY);
+    }
+    link.send(Ask::Remember {
+        change: scour_settings::Change {
+            remember: Some(query),
+            ..Default::default()
+        },
+    });
+}
+
 /// The coloured runs to draw, for the query that is **on screen now**.
 ///
 /// **Sliced from the text in the box, not from the text the spans arrived
@@ -4102,6 +4230,7 @@ mod tests {
         let mut s = State {
             generation: 0,
             query_revision: 0,
+            past: Vec::new(),
             spans: Vec::new(),
             background_query: None,
             count_query: None,
@@ -4161,6 +4290,7 @@ mod tests {
             rules_shown: Default::default(),
             generation: 4,
             query_revision: 2,
+            past: Vec::new(),
             spans: Vec::new(),
             background_query: None,
             count_query: None,

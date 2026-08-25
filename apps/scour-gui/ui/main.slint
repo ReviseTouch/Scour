@@ -1082,6 +1082,22 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    // **What was searched before.** The list the chevron opens, already
+    // filtered by what is typed — a hundred past queries is not a list
+    // anybody reads, so the box narrows it the way the browser one does.
+    in property <[string]> past;
+    in-out property <bool> past-open;
+    in-out property <int> past-picked;
+    // Whether there is a past at all. An arrow that opens an empty list is a
+    // promise of something that is not there.
+    in property <bool> has-past;
+    callback past-toggled();
+    callback past-taken(string);
+    // A query somebody *meant*, rather than one they were halfway through
+    // typing. The box searches per keystroke, so what was searched is `r`,
+    // `ra`, `rap`; what goes in the history is what was committed to.
+    callback query-committed();
+
     // What the engine made of the query, as a sentence, and whether anything
     // in it is a misreading. Empty when the query says nothing worth reading
     // back — see the line itself for the rule.
@@ -1183,7 +1199,7 @@ export component MainWindow inherits Window {
 
                 // The mark. Letter-spaced small capitals, the same as the page:
                 // a name that sits still while everything beside it moves.
-                Text {
+                mark := Text {
                     text: "SCOUR";
                     color: Theme.ink-3;
                     font-size: 12px;
@@ -1231,7 +1247,11 @@ export component MainWindow inherits Window {
                     //
                     // So the input is never narrower than its text — it cannot
                     // scroll — and this one number moves all three.
-                    property <length> room: field.width - field.pad * 2;
+                    // The chevron sits inside the box, so the text stops
+                    // short of it — an arrow with a letter under it is an
+                    // arrow nobody can read.
+                    property <length> room: field.width - field.pad * 2
+                        - (root.has-past ? 24px : 0px);
                     property <length> shift: 0px;
                     // **One character's width, measured rather than assumed.**
                     // The coloured runs are separate elements and a layout
@@ -1453,6 +1473,33 @@ export component MainWindow inherits Window {
                     // press Enter. Taking focus away to a list and back is what
                     // makes a launcher feel slow.
                     key-pressed(e) => {
+                        // **`Alt+↓` opens what was searched before** — the
+                        // combo box gesture, and the one the chevron beside
+                        // it stands for. Plain `↓` still walks into the
+                        // results, which is the more common move and should
+                        // not be taken from it.
+                        if (e.text == Key.DownArrow && e.modifiers.alt) {
+                            root.past-toggled();
+                            return accept;
+                        }
+                        // While the list is open the arrows belong to it, and
+                        // Enter takes what is under them.
+                        if (root.past-open && e.text == Key.DownArrow) {
+                            root.past-picked = min(root.past-picked + 1, root.past.length - 1);
+                            return accept;
+                        }
+                        if (root.past-open && e.text == Key.UpArrow) {
+                            root.past-picked = max(root.past-picked - 1, 0);
+                            return accept;
+                        }
+                        if (root.past-open && e.text == Key.Return) {
+                            root.past-taken(root.past[root.past-picked]);
+                            return accept;
+                        }
+                        if (root.past-open && e.text == Key.Escape) {
+                            root.past-open = false;
+                            return accept;
+                        }
                         if (e.text == Key.DownArrow) {
                             root.selected = min(root.selected + 1, root.rows.length - 1);
                             if ((root.selected + 1) * Theme.row-height + list.viewport-y
@@ -1491,6 +1538,10 @@ export component MainWindow inherits Window {
                             return accept;
                         }
                         if (e.text == Key.Return) {
+                            // What was committed to, which is what belongs in
+                            // the history — not the `r`, `ra`, `rap` the box
+                            // searched for on the way here.
+                            root.query-committed();
                             root.activated(root.selected);
                             return accept;
                         }
@@ -1518,6 +1569,41 @@ export component MainWindow inherits Window {
                         return reject;
                     }
                 }
+
+                    // **A shortcut nobody can see is a feature nobody has.**
+                    // `Alt+↓` is the combo box gesture, and this is what says
+                    // so — the same chevron an address bar has had for thirty
+                    // years. Shown only when there is a past: an arrow that
+                    // opens nothing is worse than no arrow.
+                    //
+                    // Inside the field at its trailing edge, over the text
+                    // rather than beside it, because the box stretches and a
+                    // button outside it would move with every resize.
+                    if root.has-past: Rectangle {
+                        x: field.width - 26px;
+                        width: 22px;
+                        height: 22px;
+                        y: (field.height - 22px) / 2;
+                        border-radius: 3px;
+                        background: chevron.has-hover || root.past-open ? Theme.hover : Theme.panel-2;
+                        Text {
+                            text: "▾";
+                            color: root.past-open ? Theme.ink : Theme.ink-3;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                        chevron := TouchArea {
+                            // The pointer, not the click: by the time a click
+                            // lands the field has lost the keyboard and a
+                            // list that closes on blur has already gone.
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down) {
+                                    root.past-toggled();
+                                }
+                            }
+                        }
+                    }
 
                     // Painted last, so it is over the text rather than under
                     // it: a caret between two letters that a letter covers is
@@ -3483,6 +3569,71 @@ export component MainWindow inherits Window {
 
 
     }
+
+        // ------------------------------------------------------------------
+        // **What was searched before**, under the box it was typed in.
+        //
+        // Drawn here rather than inside the query row: a list has to hang
+        // *over* what is under it, and that row is one cell of a layout with
+        // a height of its own. Placed at the field's own left edge — the mark
+        // beside it has no fixed width, so the figure is taken from the thing
+        // rather than written down twice.
+        // ------------------------------------------------------------------
+        // Pressing anywhere else puts it away. A list that will not go away
+        // is worse than one that never opened; behind the list itself, so a
+        // press on a line still reaches the line.
+        if root.past-open: TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.past-open = false;
+                }
+            }
+        }
+
+        if root.past-open && root.past.length > 0: Rectangle {
+            x: 20px + mark.width + 12px;
+            y: 55px;
+            width: min(520px, parent.width - self.x - 20px);
+            // Sized to what is in it. The cap is on the *list* rather than
+            // on the box — a layout gives its parent a minimum height, so a
+            // shorter box would simply be overflowed by its own rows.
+            height: root.past.length * 26px + 8px;
+            background: Theme.panel-2;
+            border-width: 1px;
+            border-color: Theme.line;
+            border-radius: 4px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000055;
+            drop-shadow-offset-y: 4px;
+
+            VerticalLayout {
+                padding: 4px;
+                spacing: 0px;
+                for line[i] in root.past: Rectangle {
+                    height: 26px;
+                    background: i == root.past-picked ? Theme.selection
+                              : row-touch.has-hover ? Theme.hover : transparent;
+                    border-radius: 3px;
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: line;
+                        color: Theme.ink;
+                        font-family: Fonts.mono;
+                        font-size: 12.5px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    row-touch := TouchArea {
+                        pointer-event(e) => {
+                            if (e.kind == PointerEventKind.down) {
+                                root.past-taken(line);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         }
 
