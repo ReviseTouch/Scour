@@ -229,11 +229,23 @@ fn run(
                     // Queued and returned from immediately — the walk runs on
                     // the worker, and a save that blocked for the length of one
                     // would look like a frozen window.
-                    if let Err(e) = engine.rescan(subtree.clone()) {
-                        scour_core::note!(
+                    match engine.rescan(subtree.clone()) {
+                        Ok(()) => {}
+                        // **Outside every root is not a failure.** The built-in
+                        // set excludes `/proc`, `/tmp` and `/var/cache`, none of
+                        // which any source here holds — so switching one off
+                        // opens nothing, because there was nothing of it in the
+                        // index to begin with. This read as an error for as long
+                        // as the rules could be switched off, and it was the
+                        // ordinary case.
+                        Err(scour_core::Error::NotFound { .. }) => scour_core::note!(
+                            "scourd: {} is outside every source; nothing to walk",
+                            subtree.as_deref().unwrap_or("everything")
+                        ),
+                        Err(e) => scour_core::note!(
                             "scourd: the rules opened {} but it could not be walked: {e}",
                             subtree.as_deref().unwrap_or("everything")
-                        );
+                        ),
                     }
                 }
             }
@@ -405,7 +417,23 @@ fn opened_up(before: &scour_core::ScanOptions, after: &scour_core::ScanOptions) 
         return Opened::Everything;
     }
     let mut subtrees = gone(&before.exclude_paths, &after.exclude_paths);
-    subtrees.extend(gone(&after.allow, &before.allow));
+
+    // **An `allow` is only a place when it looks like one.**
+    //
+    // `Rules` reads an allow that carries no leading slash as a *sequence*
+    // matched wherever it appears — `target/release` is one line for every
+    // project on the disk, which is the whole reason it is written that way.
+    // Handing that to `rescan` asks the engine to walk a directory called
+    // `target/release`, and there is no such directory: the service said
+    // `Not found: target/release` and walked nothing, every time somebody
+    // switched the rule on. A sequence can be anywhere, so it costs what a
+    // re-admitted name costs.
+    let admitted = gone(&after.allow, &before.allow);
+    if admitted.iter().any(|v| !v.starts_with('/')) {
+        return Opened::Everything;
+    }
+    subtrees.extend(admitted);
+
     if subtrees.is_empty() {
         Opened::Nothing
     } else {
@@ -469,6 +497,32 @@ mod tests {
         assert_eq!(
             opened_up(&opts(&[], &[], &[]), &opts(&[], &[], &["/c"])),
             Opened::Subtrees(vec!["/c".into()])
+        );
+    }
+
+    /// An `allow` without a leading slash is a sequence, not a place.
+    ///
+    /// **This is what the service was getting wrong**, and it said so in the
+    /// log every time: `rules opened target/release; walking those` followed
+    /// by `Not found: target/release`. There is no directory of that name —
+    /// the rule matches `target/release` wherever it appears, which is one
+    /// line for every project on the disk and exactly why it is written
+    /// without a root. So it costs what a re-admitted name costs, and the
+    /// walk that used to be skipped now happens.
+    #[test]
+    fn an_allow_that_names_a_sequence_opens_everything() {
+        assert_eq!(
+            opened_up(&opts(&[], &[], &[]), &opts(&[], &[], &["target/release"])),
+            Opened::Everything
+        );
+        // One of each: the sequence decides, because the cheaper answer would
+        // leave every `target/release` on the disk unwalked.
+        assert_eq!(
+            opened_up(
+                &opts(&[], &[], &[]),
+                &opts(&[], &[], &["/c", "target/debug"])
+            ),
+            Opened::Everything
         );
     }
 
