@@ -950,10 +950,11 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         Ok(Response::Count {
             total,
             capped,
+            took_us,
             misread: _,
         }) => http::json(
             stream,
-            &serde_json::json!({ "total": total, "capped": capped }),
+            &serde_json::json!({ "total": total, "capped": capped, "took_us": took_us }),
         ),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),

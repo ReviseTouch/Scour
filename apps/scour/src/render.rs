@@ -130,6 +130,9 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             total,
             capped,
             misread,
+            // A count prints one number and a person reading it is not asking
+            // what it cost. `--json` carries it for anyone who is.
+            took_us: _,
         } => {
             println!("{total}{}", if *capped { "+" } else { "" });
             complain(misread, echo);
@@ -337,7 +340,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             // with `du -l` for a reason nobody stated reads as a bug.
             println!("{}", t("a hard-linked file is counted once, like du"));
         }
-        Response::Tree { root } => print_tree(root, ""),
+        Response::Tree { root, took_us: _ } => print_tree(root, ""),
         Response::Stat(e) => {
             println!("{}{}", label("path"), e.path);
             println!("{}{}", label("name"), e.name());

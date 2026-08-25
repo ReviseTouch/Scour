@@ -2898,6 +2898,7 @@ fn apply(
             if let Response::Count {
                 total,
                 capped,
+                took_us: _,
                 misread: _,
             } = *reply
             {

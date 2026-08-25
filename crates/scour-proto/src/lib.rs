@@ -443,6 +443,14 @@ pub enum Response {
         /// afford to drop the warning on its way out.
         #[serde(default)]
         misread: Vec<scour_core::Span>,
+        /// What the count cost, in microseconds.
+        ///
+        /// **Every other answer carries this and these two did not**, which is
+        /// how a hundred milliseconds hid in `tree`: nothing that reads
+        /// `took_us` could see it, so nothing reported it, so nobody looked.
+        /// Defaulted, so an older client reading a newer reply is unaffected.
+        #[serde(default)]
+        took_us: u64,
     },
     Duplicates {
         groups: Vec<DupGroup>,
@@ -493,6 +501,12 @@ pub enum Response {
     Facets(FacetResponse),
     Tree {
         root: TreeNode,
+        /// What listing it cost, in microseconds. See [`Response::Count`] —
+        /// this is the one where it mattered most: a depth-one listing of
+        /// fifty children measured 112 ms, because the count under each child
+        /// is a query of its own, and no dashboard could see any of it.
+        #[serde(default)]
+        took_us: u64,
     },
     Stat(Entry),
     Usage(UsageResponse),
@@ -834,6 +848,7 @@ mod tests {
                 total: 5,
                 capped: true,
                 misread: vec![scour_core::Span::new(0, 3, scour_core::Role::BadValue)],
+                took_us: 0,
             },
             Response::Facets(FacetResponse::default()),
             Response::Tree {
@@ -848,6 +863,7 @@ mod tests {
                     nodes: Vec::new(),
                     truncated: false,
                 },
+                took_us: 0,
             },
             Response::Explain {
                 description: "everything".into(),

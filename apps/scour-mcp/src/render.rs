@@ -53,6 +53,7 @@ pub fn human(r: &Response) -> String {
         Response::Count {
             total,
             capped,
+            took_us: _,
             // Warnings are appended by `warning` for every reply alike, so that
             // no arm here can forget one.
             misread: _,
@@ -243,7 +244,7 @@ pub fn human(r: &Response) -> String {
             out.push_str("(a hard-linked file is counted once, as du counts it)\n");
             out
         }
-        Response::Tree { root } => {
+        Response::Tree { root, took_us: _ } => {
             let mut out = String::new();
             tree(root, 0, &mut out);
             out
@@ -494,7 +495,10 @@ mod tests {
             nodes: Vec::new(),
             truncated: true,
         };
-        let out = human(&Response::Tree { root: node });
+        let out = human(&Response::Tree {
+            root: node,
+            took_us: 0,
+        });
         assert!(out.contains("1000 more not shown"), "{out}");
     }
 
@@ -504,7 +508,8 @@ mod tests {
             human(&Response::Count {
                 total: 10_000,
                 capped: true,
-                misread: Vec::new()
+                misread: Vec::new(),
+                took_us: 0,
             })
             .starts_with("At least")
         );
@@ -512,7 +517,8 @@ mod tests {
             human(&Response::Count {
                 total: 7,
                 capped: false,
-                misread: Vec::new()
+                misread: Vec::new(),
+                took_us: 0,
             }),
             "7 matches."
         );

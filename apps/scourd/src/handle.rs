@@ -106,13 +106,21 @@ fn run(
             Response::Count {
                 total: r.total,
                 capped: r.capped,
+                took_us: r.took_us,
                 misread: r.misread,
             }
         }
         Request::Facets { query, by } => Response::Facets(engine.facets(&query, by)?),
-        Request::Tree { path, depth, limit } => Response::Tree {
-            root: engine.tree(&path, depth, limit)?,
-        },
+        Request::Tree { path, depth, limit } => {
+            // Timed here rather than inside `tree`, so the number covers what
+            // the caller waited for and not one layer of it.
+            let began = std::time::Instant::now();
+            let root = engine.tree(&path, depth, limit)?;
+            Response::Tree {
+                root,
+                took_us: began.elapsed().as_micros() as u64,
+            }
+        }
         Request::Stat { path } => Response::Stat(engine.stat(&path)?),
         Request::Usage { path, top, query } => Response::Usage(engine.usage(&path, top, &query)?),
         Request::Duplicates {
