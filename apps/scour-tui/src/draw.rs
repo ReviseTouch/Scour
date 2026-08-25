@@ -337,6 +337,12 @@ fn query(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 // Blue for what is wanted; the punctuation between terms stays
                 // quiet.
                 scour_core::Role::Text | scour_core::Role::Phrase => theme.term(),
+                // The syntax between terms, said quietly — including a `;`
+                // typed instead of a space.
+                scour_core::Role::Space
+                | scour_core::Role::Sep
+                | scour_core::Role::Colon
+                | scour_core::Role::Quote => theme.ink_3(),
                 _ => theme.ink(),
             };
             Some(Span::styled(

@@ -25,9 +25,11 @@ pub fn parse(input: &str) -> Ast {
 /// stated moment rather than at whatever moment it happens to be replayed.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
-    for token in join_parens(join_operators(split_bangs(join_lists(tokenize(input)))))
-        .into_iter()
-        .flat_map(|t| expand(&t))
+    for token in join_parens(join_operators(split_bangs(split_semicolons(join_lists(
+        tokenize(input),
+    )))))
+    .into_iter()
+    .flat_map(|t| expand(&t))
     {
         // Alternatives split on `|`. Quoted runs are already protected, so a
         // pipe inside quotes is a literal character.
@@ -43,22 +45,11 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
         // A quoted run is literal all the way through — `"a ; b"` is one
         // phrase and the semicolon in it is a character. The same guard every
         // other stage here uses, and forgetting it took the phrase apart.
-        // **Decided per alternative, not per token.** `a|ext:rs;toml` is a
-        // word or a two-extension filter — two things. Asking the whole token
-        // whether it owns a list gets "no" (`a|ext` is not a field name), and
-        // the filter then came apart at its own semicolon into a third
-        // alternative that was a bare word.
+        // Only `|` makes alternatives. A `;` between words is a separator —
+        // `split_semicolons` has already cut the token there — and the only
+        // semicolons left are a field's own list and the ones inside quotes.
         let alts: Vec<(bool, Match)> = split_outside_quotes(&token, '|')
             .into_iter()
-            .flat_map(|part| {
-                let owns_list =
-                    token_field(part).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
-                if owns_list {
-                    vec![part]
-                } else {
-                    split_outside_quotes(part, ';')
-                }
-            })
             .filter(|a| !a.is_empty())
             .filter_map(|a| parse_alt(a, now))
             .collect();
@@ -228,6 +219,39 @@ fn tokenize(input: &str) -> Vec<String> {
     out
 }
 
+/// Cut a token at every `;` that separates two terms.
+///
+/// **`;` is a space somebody typed without pressing space.** It used to be
+/// `|` — "either of these" — and that is what made `hasan;genel` answer with
+/// every file called `hasan`: one of the two words was enough. Between terms
+/// it now means what a space means, which is *both*.
+///
+/// Inside a field's value it goes on meaning "any of these", and that is not
+/// the same mark used two ways: `ext:rs;toml` is one filter with a list in
+/// it, and a list of extensions can only ever be an "any". Two terms are a
+/// different thing from two values.
+///
+/// After `join_lists`, so a value written across a space — `ext:rs ; toml` —
+/// is already one token by the time this looks; and before `split_bangs`, so
+/// that `a;!b` reaches it as `a` and `!b`.
+fn split_semicolons(tokens: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(tokens.len());
+    for t in tokens {
+        if t.starts_with('"')
+            || token_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some())
+        {
+            out.push(t);
+            continue;
+        }
+        for piece in split_outside_quotes(&t, ';') {
+            if !piece.is_empty() {
+                out.push(piece.to_owned());
+            }
+        }
+    }
+    out
+}
+
 /// Cut a token where a `!` starts a new term inside it.
 ///
 /// **After `join_lists`, so that a value continued across a space is already
@@ -339,22 +363,20 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
     for t in tokens {
         // A quoted run is literal all the way through.
         let quoted = t.starts_with('"');
-        // `;` joins the same way `|` does — see `parse_at`. A field's value
-        // keeps its own, and `join_lists` has already glued those on, so what
-        // reaches here standing on its own is an operator.
-        let owns_list = token_field(&t).is_some_and(|(f, _)| crate::fields::lookup(&f).is_some());
-        if !quoted && (t == "|" || t == ";") {
+        // **Only `|` joins.** `;` used to as well, and that is what made
+        // `hasan;genel` find everything called `hasan`: one of the two words
+        // was enough. It is a separator now — the same thing a space is —
+        // and `split_semicolons` has already cut the token there.
+        if !quoted && t == "|" {
             want_alt = true;
             continue;
         }
         let mut t = t;
-        if !quoted && (t.starts_with('|') || (t.starts_with(';') && !owns_list)) && !out.is_empty()
-        {
+        if !quoted && t.starts_with('|') && !out.is_empty() {
             want_alt = true;
             t.remove(0);
         }
-        let trailing_alt =
-            !quoted && t.len() > 1 && (t.ends_with('|') || (t.ends_with(';') && !owns_list));
+        let trailing_alt = !quoted && t.len() > 1 && t.ends_with('|');
         if trailing_alt {
             t.pop();
         }
@@ -827,12 +849,12 @@ mod tests {
             "!kind:image;code came apart"
         );
         // What it must not break: the un-negated form, and a `;` between
-        // words, which is an alternative separator and has to stay one.
+        // words, which separates two terms and has to go on doing that.
         assert_eq!(
             m("ext:rs;toml"),
             vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
         );
-        assert_eq!(parse_at("a;b", 0).groups[0].alts.len(), 2);
+        assert_eq!(parse_at("a;b", 0).groups.len(), 2);
     }
 
     #[test]
@@ -1071,20 +1093,24 @@ mod list_separator_tests {
     }
 
     #[test]
-    fn a_semicolon_between_words_is_or() {
-        // **The rule this test used to assert was the wrong one**, and a user
-        // found it: `OPUS ; SONNET` found neither, because it was three terms
-        // AND-ed together and one of them was a literal semicolon.
+    fn a_semicolon_between_words_is_and() {
+        // **This has been all three things, and each time a user found the
+        // one before.** First a literal character: `OPUS ; SONNET` found
+        // neither, because it was three terms AND-ed and one of them was a
+        // semicolon. Then `|`, for consistency with `ext:rs;toml` — and that
+        // made `hasan;genel` answer with every file called `hasan`, because
+        // one of the two words was enough.
         //
-        // `ext:rs;toml` already means "extension is rs *or* toml". A mark that
-        // means "any of these" inside a value and something else between words
-        // is the inconsistency; one rule everywhere is the fix. Written or
-        // not written with spaces, and the same as `|`.
-        let want = vec![vec![
-            (false, Match::NameContains("rapor".into())),
-            (false, Match::NameContains("pdf".into())),
-        ]];
-        for q in ["rapor ; pdf", "rapor;pdf", "rapor|pdf"] {
+        // It is a separator: the thing a space is, typed without pressing
+        // space. Between terms that means **both**. Inside a field's value it
+        // goes on meaning "any of these", and that is not the same mark used
+        // two ways — a list of extensions can only ever be an "any", and two
+        // terms are a different thing from two values.
+        let want = vec![
+            vec![(false, Match::NameContains("rapor".into()))],
+            vec![(false, Match::NameContains("pdf".into()))],
+        ];
+        for q in ["rapor ; pdf", "rapor;pdf", "rapor pdf"] {
             assert_eq!(
                 parse_at(q, 0)
                     .groups
@@ -1095,6 +1121,37 @@ mod list_separator_tests {
                 "{q:?}"
             );
         }
+    }
+
+    /// The two marks say different things, and that is the point.
+    ///
+    /// `|` is "either of these"; `;` is "and also". Reported as
+    /// `hasan;genel` answering with every file called `hasan` — one word out
+    /// of two being enough — where what was wanted was both.
+    #[test]
+    fn a_pipe_is_either_and_a_semicolon_is_both() {
+        let either = |q: &str| {
+            let ast = parse_at(q, 0);
+            (ast.groups.len(), ast.groups[0].alts.len())
+        };
+        assert_eq!(either("hasan|genel"), (1, 2), "`|` is either of them");
+        assert_eq!(either("hasan;genel"), (2, 1), "`;` is both of them");
+        assert_eq!(either("hasan genel"), (2, 1), "and a space is the same");
+        // Written with spaces around it, or without, or several at once.
+        for q in ["a;b;c", "a ; b ; c", "a b c"] {
+            assert_eq!(parse_at(q, 0).groups.len(), 3, "{q:?}");
+        }
+        // A field's own list is untouched: a list of extensions can only be
+        // an "any", and two values are not two terms.
+        assert_eq!(
+            one("ext:rs;toml"),
+            vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
+        );
+        assert_eq!(parse_at("ext:rs;toml", 0).groups.len(), 1);
+        // And beside a `|` it says nothing the `|` has not: the operator
+        // decides how the terms combine, the separator only where one ends.
+        assert_eq!(either("a|;c"), (1, 2));
+        assert_eq!(either("a | ;c"), (1, 2));
     }
 
     #[test]

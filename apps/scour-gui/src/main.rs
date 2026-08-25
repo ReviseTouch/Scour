@@ -2448,7 +2448,10 @@ fn painted(query: &str, spans: &[scour_core::Span]) -> Vec<Span> {
                 // something take this colour.
                 scour_core::Role::Text => 6,
                 // The syntax between terms, said quietly.
-                scour_core::Role::Colon | scour_core::Role::Sep | scour_core::Role::Quote => 7,
+                scour_core::Role::Colon
+                | scour_core::Role::Sep
+                | scour_core::Role::Quote
+                | scour_core::Role::Space => 7,
                 _ => 0,
             },
             sp.not,

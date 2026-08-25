@@ -652,7 +652,8 @@ fn paint(query: &str, spans: &[scour_core::Span]) -> String {
             Role::Cmp => "33",
             Role::Not => "1;31",
             Role::Or => "1;33",
-            Role::Space => "0",
+            // A `;` typed instead of a space is drawn like one: quiet.
+            Role::Space => "2",
         };
         out.push_str(&format!("\x1b[{code}m{text}\x1b[0m"));
     }

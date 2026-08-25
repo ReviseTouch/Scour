@@ -5771,3 +5771,30 @@ explain queued 5 → dropped       explain queued 11 → dropped
 reads. Every ask that carries a revision now moves the counter, not only the
 search. Same eleven keystrokes afterwards: `explain 7, 8, 9, 10, 11` — every
 one of them landing, and the sentence saying `genel`.
+
+## 2026-08-25 — `|` is either, `;` is both
+
+`;` between words has now been all three things it could be, and each rule was
+replaced because somebody typed a query and got the wrong answer back:
+
+| as | `OPUS ; SONNET` | `hasan;genel` |
+|---|---|---|
+| a literal character | found **neither** — three terms, one of them a semicolon | the string `hasan;genel` |
+| `\|` | both words found | **every file called `hasan`** — one word out of two was enough |
+| a separator (now) | both words found | both words required |
+
+It is what a space is, typed without pressing space. Inside a field's value it
+goes on meaning "any of these", and that is not one mark used two ways: a list
+of extensions can only ever be an "any", and two terms are a different thing
+from two values.
+
+Drawn accordingly — quiet, like the gap it stands for, where `|` stays an
+operator in the key colour. And a `;` written beside a `|` is absorbed by it:
+the operator decides how terms combine, the separator only says where one
+ends, so `a|;c` is `a` or `c` in both the engine and the line.
+
+The 3.900-query sweep found five places the two disagreed while this was being
+changed, each of them a corner nobody would have written down: a lone `!`
+reaching past a redundant separator (`! ;c`), a separator-only token using up
+a pending `!` (`! ; a`), a doubled separator (`a;;b`) drawn twice and once,
+and the `|`-adjacency above from either side.

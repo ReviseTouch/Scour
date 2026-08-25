@@ -69,21 +69,8 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
             // `join_operators`, so `ext:rs ; "x y"` is a filter and a phrase
             // and not one term with two alternatives. A `|` is an operator
             // either way — no list has ever claimed one.
-            let alt = |t: &str, at_start: bool| {
-                let mark = if at_start {
-                    t.starts_with('|')
-                } else {
-                    t.ends_with('|')
-                };
-                let semi = if at_start {
-                    t.starts_with(';')
-                } else {
-                    t.ends_with(';')
-                };
-                mark || (semi && list.is_none())
-            };
-            let beside_alt = next_term_word(&toks, i).is_some_and(|t| alt(t, true))
-                || prev_word(&toks, i).is_some_and(|t| alt(t, false));
+            let beside_alt = next_term_word(&toks, i).is_some_and(|t| t.starts_with('|'))
+                || prev_word(&toks, i).is_some_and(|t| t.ends_with('|'));
             // A field's value continuing across the space is a different
             // thing from two alternatives sitting either side of one, and
             // only the first carries the term's exclusion with it.
@@ -154,26 +141,64 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
         // A token can be several terms now, and only the last of them can be
         // continued across the space: `a!ext:rs; toml`.
         let tail = *bang_pieces(token).last().unwrap_or(&token);
-        // **The first alternative only.** A `!` standing on its own binds to
-        // the term after it exactly as though it had been written against it
-        // — `! d;e` is `!d;e`, which is `(not d) or e` — so it reaches the
-        // first alternative and stops. Marking the whole term drew `e` as
+        // **The first alternative of the first term, and no further.** A `!`
+        // standing on its own binds to what comes after it exactly as though
+        // it had been written against it — `! d;e` is `!d e`, two terms, one
+        // of them excluded. Marking everything the token produced drew `e` as
         // excluded when the engine was searching *for* it.
-        if std::mem::take(&mut lone_bang) {
+        let had_bang = std::mem::take(&mut lone_bang);
+        if had_bang {
+            // Past a separator that has nothing in front of it — `! ;c` is
+            // `!c`, the `;` saying only "a term ends here" where one already
+            // had — and stopping at the next one.
+            let mut reached = false;
             for span in &mut out[mark..] {
                 if span.role == Role::Or {
                     break;
+                }
+                if matches!(span.role, Role::Space | Role::Sep) {
+                    if reached {
+                        break;
+                    }
+                } else {
+                    reached = true;
                 }
                 span.not = true;
             }
         }
         // Nothing follows a `!` inside its own token, so this can only be the
-        // operator standing alone.
-        lone_bang = token == "!";
+        // operator standing alone — and a token of nothing but separators
+        // does not use it up: `! ; a` excludes `a`, the `;` saying only that
+        // a term ends where one already had.
+        lone_bang = token == "!" || (had_bang && token.chars().all(|c| c == ';'));
         list = field_of(tail);
         expect_value = list.is_some() && tail.ends_with(';');
     }
+    absorb_separators(&mut out, input);
     out
+}
+
+/// A `;` beside a `|` says nothing the `|` has not already said.
+///
+/// `|` decides how two terms combine; `;` only says where one ends. Written
+/// next to each other — `a|;c`, `a | ;c`, `a ; |c` — the parser keeps the
+/// operator and drops the separator, so a line that drew the `;` as a
+/// boundary showed two AND-ed terms where the engine has one `or`.
+///
+/// Done as a pass over the finished spans because "beside" reaches across
+/// tokens, and the tokeniser hands them over one at a time.
+fn absorb_separators(spans: &mut [Span], query: &str) {
+    let speaks = |s: &Span| !matches!(s.role, Role::Space | Role::Sep) || s.of(query) == ";";
+    for i in 0..spans.len() {
+        if spans[i].role != Role::Space || spans[i].of(query) != ";" {
+            continue;
+        }
+        let before = spans[..i].iter().rev().find(|s| speaks(s)).map(|s| s.role);
+        let after = spans[i + 1..].iter().find(|s| speaks(s)).map(|s| s.role);
+        if before == Some(Role::Or) || after == Some(Role::Or) {
+            spans[i].role = Role::Sep;
+        }
+    }
 }
 
 /// The field a token filters on, if it is a field term at all.
@@ -263,8 +288,15 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
 fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     // A lone operator is an operator; `hello!` is a word. The parser makes the
     // same distinction, and colouring it differently would teach the wrong rule.
-    if text == "|" || text == ";" {
+    if text == "|" {
         out.push(Span::new(start, 1, Role::Or));
+        return false;
+    }
+    // **A `;` between terms is a separator, not an operator.** It is the
+    // thing a space is, so it wears the same role: `hasan;genel` wants both
+    // words, exactly as `hasan genel` does.
+    if text == ";" {
+        out.push(Span::new(start, 1, Role::Space));
         return false;
     }
     if text == "!" {
@@ -272,12 +304,17 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
         return true;
     }
 
-    // **A `!` inside a word starts a new term**, the same cut `split_bangs`
-    // makes. Without it the line drew `rapor!tmp` as one word being looked
-    // for, which is what the engine did too — and both were wrong.
+    // **A `;` or a `!` inside a word starts a new term**, the same cuts
+    // `split_semicolons` and `split_bangs` make. Without them the line drew
+    // `rapor!tmp` as one word being looked for, which is what the engine did
+    // too — and both were wrong.
     let mut at = start;
     let mut negated = false;
-    for piece in bang_pieces(text) {
+    for (piece, cut) in term_pieces(text) {
+        if cut {
+            out.push(Span::new(at, 1, Role::Space));
+            at += 1;
+        }
         negated |= one_term(out, at, piece, now);
         at += piece.len();
     }
@@ -306,11 +343,35 @@ fn one_term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     negated
 }
 
-/// The terms inside one whitespace-separated token, cut at every `!` that
-/// starts a new one. Mirrors `parse::split_bangs`, including its three
-/// exceptions; the pieces are contiguous and cover the token.
-fn bang_pieces(text: &str) -> Vec<&str> {
+/// The terms inside one whitespace-separated token, and whether each was cut
+/// off the one before by a `;`.
+///
+/// Mirrors `parse::split_semicolons` and `parse::split_bangs`, including
+/// their exceptions. The `;` is *consumed* — it separates rather than belongs
+/// to either side — while a `!` stays at the head of the piece it negates;
+/// with the separators put back, the pieces cover the token.
+fn term_pieces(text: &str) -> Vec<(&str, bool)> {
     if text.starts_with('"') || field_of(text).is_some() {
+        return vec![(text, false)];
+    }
+    let mut out = Vec::new();
+    for (n, part) in crate::parse::split_outside_quotes(text, ';')
+        .into_iter()
+        .enumerate()
+    {
+        let mut first = true;
+        for piece in bang_pieces(part) {
+            out.push((piece, first && n > 0));
+            first = false;
+        }
+    }
+    out
+}
+
+/// One term cut at every `!` that starts a new one inside it. The pieces are
+/// contiguous and cover the text; the `!` stays at the head of its piece.
+fn bang_pieces(text: &str) -> Vec<&str> {
+    if text.is_empty() || text.starts_with('"') || field_of(text).is_some() {
         return vec![text];
     }
     let mut out = Vec::new();
@@ -320,7 +381,7 @@ fn bang_pieces(text: &str) -> Vec<&str> {
             continue;
         }
         let before = text[..i].chars().next_back();
-        if before == Some('|') || before == Some(';') {
+        if before == Some('|') {
             continue;
         }
         if i > from {
@@ -342,20 +403,10 @@ fn alternatives(text: &str) -> Vec<(&str, Option<char>)> {
     let mut out = Vec::new();
     let mut sep = None;
     // A quoted run is literal all the way through, and the split is the
-    // parser's own so the two cannot cut in different places.
+    // parser's own so the two cannot cut in different places. Only `|` makes
+    // alternatives; a `;` has already separated terms by the time this runs.
     for part in crate::parse::split_outside_quotes(text, '|') {
-        // A field's value keeps its own semicolons, and whether it is one is
-        // a question about *this alternative*: `a|ext:rs;toml` is a word or a
-        // filter, and asking the whole token gets the wrong answer.
-        if field_of(part).is_some() {
-            out.push((part, sep));
-        } else {
-            let mut inner = sep;
-            for piece in crate::parse::split_outside_quotes(part, ';') {
-                out.push((piece, inner));
-                inner = Some(';');
-            }
-        }
+        out.push((part, sep));
         sep = Some('|');
     }
     out
@@ -830,45 +881,39 @@ mod tests {
         covers("a|!b !kind:zurna");
     }
 
-    /// `;` is `|` outside a field's value, and the line has to say so.
+    /// `;` between words separates two terms, and the line has to say so.
     ///
-    /// This is the fault that made a query nobody could read: `HASAN;DENEME`
-    /// was drawn as one word being looked for, while the engine read two
-    /// alternatives — and `!ama ;deneme` looked like four independent terms
-    /// when the third was an `or` with the exclusion inside it.
+    /// It is drawn the way a space is, because that is what it is: quiet, and
+    /// a boundary. It was drawn as an `or` for a while, which is what it also
+    /// *meant* for a while — `hasan;genel` then answered with every file
+    /// called `hasan`, one word out of two being enough.
     #[test]
-    fn a_semicolon_between_words_is_an_operator() {
+    fn a_semicolon_between_words_is_a_separator() {
         assert_eq!(
             roles("HASAN;DENEME"),
             vec![
                 (Role::Text, "HASAN"),
-                (Role::Or, ";"),
+                (Role::Space, ";"),
                 (Role::Text, "DENEME")
             ]
         );
         covers("HASAN;DENEME");
-        // Leading, which is how it joins to the term before it.
-        // The space is *inside* the group: the parser joins `;b` to `a`, so
-        // an ordinary gap here would draw two terms where there is one.
         assert_eq!(
             roles("a ;b"),
             vec![
                 (Role::Text, "a"),
-                (Role::Sep, " "),
-                (Role::Or, ";"),
+                (Role::Space, " "),
+                (Role::Space, ";"),
                 (Role::Text, "b")
             ]
         );
         covers("a ;b");
-        // A lone one is an operator, like a lone pipe.
-        assert_eq!(
-            roles("a ; b")
-                .iter()
-                .filter(|(r, _)| *r == Role::Or)
-                .count(),
-            1
-        );
         covers("a ; b");
+        // And `|` is still the operator it always was.
+        assert_eq!(
+            roles("a|b"),
+            vec![(Role::Text, "a"), (Role::Or, "|"), (Role::Text, "b")]
+        );
     }
 
     /// And a field's own list keeps its semicolons.
@@ -962,7 +1007,17 @@ mod tests {
             "!a|b",
             "a;b",
             "HASAN;DENEME",
+            "hasan;genel",
             "a ;b",
+            "a; b",
+            "a ; b",
+            "a;b;c",
+            "a;!b",
+            "a|b;c",
+            "a;b|c",
+            "a|;c",
+            "; a",
+            "! ; a",
             "!ama ;deneme",
             "HASAN;DENEME !ama ;deneme !dfd",
             "ext:pdf",
@@ -1021,16 +1076,16 @@ mod tests {
                 for three in PIECES {
                     let q = format!("{one} {two} {three}");
                     // **One shape no colouring can draw truthfully.** A lone
-                    // `!` followed by a term that opens with `;` or `|` binds
-                    // *past* the separator — `a ! ;c` is `a` or `not c` — so
-                    // the `!` is written before the `;` and belongs after it.
-                    // The line gets the terms and the alternatives right; it
+                    // `!` followed by a term that opens with `|` binds *past*
+                    // the operator — `a ! |c` is `a` or `not c` — so the `!`
+                    // is written before the `|` and belongs after it. The
+                    // line gets the terms and the alternatives right; it
                     // cannot get which side of the `or` the exclusion is on,
                     // because that is not where it was typed.
                     let toks: Vec<&str> = q.split_whitespace().collect();
                     let looks_past = toks
                         .windows(2)
-                        .any(|w| w[0] == "!" && w[1].starts_with([';', '|']));
+                        .any(|w| w[0] == "!" && w[1].starts_with('|'));
                     if looks_past {
                         continue;
                     }
@@ -1371,9 +1426,9 @@ mod list_tests {
                 .into_iter()
                 .filter(|(r, _)| *r == Role::Space)
                 .count(),
-            0
+            3
         );
-        assert_eq!(crate::parse::parse_at("rapor ; pdf", 0).groups.len(), 1);
+        assert_eq!(crate::parse::parse_at("rapor ; pdf", 0).groups.len(), 2);
     }
 
     #[test]

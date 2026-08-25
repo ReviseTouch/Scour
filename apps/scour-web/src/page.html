@@ -161,6 +161,9 @@
   .qshadow .r-cmp   { color: var(--q-key); }
   .qshadow .r-colon,
   .qshadow .r-sep,
+  /* A `;` typed instead of a space carries this role, and is drawn like the
+     space it stands for rather than like a word. */
+  .qshadow .r-space,
   .qshadow .r-quote { color: var(--ink-3); }
   .qshadow .r-phrase{ color: var(--q-val); }
   .qshadow .r-glob  { color: var(--q-glob); }
@@ -2915,7 +2918,9 @@
       // An excluded run always needs an element of its own, even the space
       // inside `!ext:rs; toml` — without one it falls back to the layer's
       // own colour, which is the colour of the thing being searched *for*.
-      const plain = (role === "text" || role === "space") && !not;
+      // `space` is no longer plain: it can be a `;`, which has to be drawn
+      // quietly rather than in the colour of a word being looked for.
+      const plain = role === "text" && !not;
       const cls = "r-" + role + (not ? " excluded" : "");
       const marked = SYNTAX.has(role) && [...t].some((_, k) => touch.has(at + k));
       if (marked) {

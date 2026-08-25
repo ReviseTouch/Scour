@@ -47,7 +47,17 @@ pub enum Role {
     Or,
     /// The separator inside a multi-valued field: `ext:rs;toml`.
     Sep,
-    /// Whitespace between terms.
+    /// What separates two terms: whitespace, or a `;` written instead of it.
+    ///
+    /// **`;` is a space somebody typed without pressing space.** It has been
+    /// a literal character and it has been `|`, and each rule was replaced
+    /// because a query came back wrong: as a character `OPUS ; SONNET` found
+    /// neither word, and as `|` `hasan;genel` found every file called
+    /// `hasan`. Between terms it now means what a space means, which is
+    /// *both*. Inside a field's value it goes on meaning "any of these" —
+    /// [`Role::Sep`] — and that is not one mark used two ways: a list of
+    /// extensions can only ever be an "any", and two terms are a different
+    /// thing from two values.
     Space,
 }
 
