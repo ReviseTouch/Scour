@@ -3346,18 +3346,28 @@ fn apply(
                     link.send(Ask::Await { since: st.revision });
                 }
             }
-            w.set_holding(
-                format!(
-                    "{} {}  ·  {} {}  ·  {} {}",
-                    t(cat, "index"),
-                    compact_bytes(st.index_bytes),
-                    st.sources,
-                    t(cat, "sources"),
-                    st.watching,
-                    t(cat, "watching"),
-                )
-                .into(),
+            // **And whether searching is still as fast as it was built to
+            // be.** Every query reads the unsorted tail, so a week of ordinary
+            // use took ordering by path from 1.9 ms to 21.5 and one rebuild
+            // put it back. The engine has always known when that is due; the
+            // answer reached the command line and nowhere else, which is the
+            // face this window's owner uses least. Appended rather than given
+            // a place of its own: it is true of the index, like everything
+            // else on this line, and it is absent almost all of the time.
+            let mut holding = format!(
+                "{} {}  ·  {} {}  ·  {} {}",
+                t(cat, "index"),
+                compact_bytes(st.index_bytes),
+                st.sources,
+                t(cat, "sources"),
+                st.watching,
+                t(cat, "watching"),
             );
+            if st.rebuild_advised {
+                holding.push_str("  ·  ");
+                holding.push_str(&t(cat, scour_ui::REBUILD_ADVISED));
+            }
+            w.set_holding(holding.into());
         }
         Got::Places(reply) => {
             let Response::Places(p) = *reply else {

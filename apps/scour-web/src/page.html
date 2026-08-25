@@ -396,6 +396,9 @@
   .body[hidden], .report[hidden] { display: none; }
   #view-search, #view-report { grid-row: 4; }
   .rail { overflow-y: auto; min-height: 0; }
+  /* Advice, not an alarm: the window works, it is merely slower than it
+     was built to be. Warm enough to notice on a glance down the bar. */
+  .stale { color: var(--t1); }
   /* Counts that belong to the query before this one: still readable, plainly
      not final. Slow enough in to not flicker on a fast answer. */
   .rail.settling { opacity: .55; transition: opacity .18s ease-in .12s; }
@@ -1643,6 +1646,13 @@
            number climbs several times a second. -->
       <span class="sep" id="scanning-sep" hidden>·</span>
       <span id="scanning" class="scanning" hidden></span>
+      <!-- **The one number that says searching has got slower.** Every query
+           reads the unsorted tail, so a week of ordinary use took ordering by
+           path from 1.9 ms to 21.5 and one rebuild put it back. The engine has
+           always worked out when that is due; the answer reached the command
+           line and nowhere else, which is the frontend its owner uses least. -->
+      <span class="sep" id="stale-sep" hidden>·</span>
+      <span id="stale" class="stale" hidden></span>
       <span class="sep">·</span>
       <span id="path-note" data-t="connecting…"></span>
       <!-- The glyph switch used to be here. It is in the heading of the column
@@ -6442,6 +6452,18 @@
       walking.textContent = said;
       walking.hidden = !said;
       sep.hidden = !said;
+
+      /* Said only when it is due, and it says what to do about it. A number
+         nobody can act on is a number nobody reads. */
+      const stale = document.getElementById("stale");
+      const staleSep = document.getElementById("stale-sep");
+      const advice = s.rebuild_advised
+        ? fmt(s.unsorted || 0) + " " + T("unsorted") + " — " +
+          T("`scour maintain rebuild` would speed searches up")
+        : "";
+      if (stale.textContent !== advice) { stale.textContent = advice; moved = true; }
+      stale.hidden = !advice;
+      staleSep.hidden = !advice;
     }
     /* `LIST`, not the search reply. The search answers under a cap so it can
        keep up with typing; the exact number arrives with the sidebar a moment

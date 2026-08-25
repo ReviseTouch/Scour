@@ -1144,6 +1144,15 @@ fn status_json(s: &scour_core::Status) -> serde_json::Value {
         "pending": s.pending,
         "index_bytes": s.index_bytes,
         "revision": s.revision,
+        // **What decides whether searching is as fast as it was built to be.**
+        //
+        // Every query reads the unsorted tail, so a week of ordinary use makes
+        // ordering by path eleven times slower — measured, 1.9 ms against 21.5
+        // — and one rebuild puts it back. The engine already works out when
+        // that is due; it was reaching the command line and nowhere else, so
+        // the one person who could act on it was the one least likely to look.
+        "unsorted": s.unsorted,
+        "rebuild_advised": s.rebuild_advised,
     })
 }
 

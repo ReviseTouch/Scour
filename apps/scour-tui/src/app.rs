@@ -285,6 +285,12 @@ pub struct App {
     /// starts a scan and nothing else visibly happens for a minute; a word
     /// would not settle it, and this number climbs several times a second.
     pub scanning: Option<u64>,
+    /// Whether the index has grown an unsorted tail worth rebuilding.
+    ///
+    /// Every query reads that tail, so this is the difference between the
+    /// speed this was built for and the speed it drifts to. It reached the
+    /// command line and nowhere else until now.
+    pub rebuild_advised: bool,
     /// Set when a redraw is owed. **Nothing is drawn without one** — a
     /// terminal that redraws on a timer burns a core doing nothing.
     pub dirty: bool,
@@ -305,6 +311,7 @@ impl Default for App {
             query: String::new(),
             caret: 0,
             mode: Mode::Search,
+            rebuild_advised: false,
             generation: 0,
             pages: Pages::default(),
             cursor: 0,

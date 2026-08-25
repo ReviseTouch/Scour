@@ -139,7 +139,12 @@ pub enum Got {
     /// running. **Both, because a wait is answered with the whole status** —
     /// the second is free and is the only thing a person watching a rule they
     /// just switched off has to go on.
-    Awake(u64, Option<u64>),
+    ///
+    /// The third is whether the index has grown an unsorted tail worth
+    /// rebuilding. Also free, and it had been reaching the command line and
+    /// nowhere else — a week of ordinary use takes ordering by path from
+    /// 1.9 ms to 21.5, and nothing in a terminal said so.
+    Awake(u64, Option<u64>, bool),
     /// A spreadsheet is being written, and how much of it so far.
     ///
     /// **Because a screen that does not move looks like one that has died.**
@@ -486,7 +491,11 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 let _ = out.send(Got::Counted { generation, total });
             }
             Ok(Response::Status(st)) => {
-                let _ = out.send(Got::Awake(st.revision, st.scanning.then_some(st.scanned)));
+                let _ = out.send(Got::Awake(
+                    st.revision,
+                    st.scanning.then_some(st.scanned),
+                    st.rebuild_advised,
+                ));
             }
             Ok(Response::Preview(look)) => {
                 let _ = out.send(Got::Peek(Box::new(look)));

@@ -1244,3 +1244,6 @@ msgstr "Scour başka bir yerde açıldı. Bu sekmeyi kapatabilirsiniz."
 # after switching a rule off the whole question is whether anything is.
 msgid "scanning {n}"
 msgstr "taranıyor {n}"
+
+msgid "`scour maintain rebuild` would speed searches up"
+msgstr "`scour maintain rebuild` aramaları hızlandırır"

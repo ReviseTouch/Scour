@@ -463,6 +463,18 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
             Style::new().fg(theme.key()),
         ));
     }
+    // **And whether searching is still as fast as it was built to be.** Every
+    // query reads the unsorted tail; a week of ordinary use took ordering by
+    // path from 1.9 ms to 21.5, and one rebuild put it back. It says what to do
+    // rather than only that something is wrong — a number nobody can act on is
+    // a number nobody reads.
+    if app.rebuild_advised {
+        parts.push(Span::styled("  ·  ", dim));
+        parts.push(Span::styled(
+            app.say(scour_ui::REBUILD_ADVISED),
+            Style::new().fg(theme.not()),
+        ));
+    }
     if app.rows_visited > 0 && std::env::var("SCOUR_TRACE").is_ok() {
         parts.push(Span::styled("  ·  ", dim));
         parts.push(Span::styled(

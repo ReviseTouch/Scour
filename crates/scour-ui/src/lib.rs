@@ -39,6 +39,19 @@ pub mod preview;
 /// punctuated in the reader's language and only the caller has the catalogue.
 /// Empty when nothing is being walked, which is what a face draws nothing for.
 pub const SCANNING: &str = "scanning {n}";
+
+/// The index has grown an unsorted tail, and searching has slowed for it.
+///
+/// **Every face says this, from here, because it is a fact about the index
+/// rather than about a window.** Every query reads that tail: a week of
+/// ordinary use took ordering by path from 1.9 ms to 21.5 on the machine this
+/// was written for, and one rebuild put it back. The engine has always worked
+/// out when it was due — [`scour_core::Status::rebuild_advised`] — and the
+/// answer reached the command line and nowhere else.
+///
+/// It names the command rather than only the condition. A reader who cannot
+/// act on a number stops reading numbers.
+pub const REBUILD_ADVISED: &str = "`scour maintain rebuild` would speed searches up";
 pub mod query;
 
 /// A colour, and the one representation both sides can be built from.
