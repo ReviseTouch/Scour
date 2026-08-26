@@ -9,7 +9,7 @@ is what makes it usable from an assistant's context window.
 
 Written in Rust, and nothing here is a wrapper around anything else.
 
-Developed and used daily on Linux, against 2.2 million entries across an ext4
+Developed and used daily on Linux, against 4.6 million entries across an ext4
 home and an NTFS volume. It is written for Windows and macOS too and compiles
 for both, but it has not been run on either — and compiling is not running:
 every fault found in a day of measuring this on Linux was one a compiler
@@ -42,7 +42,33 @@ Memory is the other half. The index is memory-mapped, so it lives in the page
 cache and the kernel can reclaim it under pressure. Searching costs tens of
 megabytes of resident memory rather than holding the whole index in RAM.
 
-## Getting started
+## Install
+
+### From a release
+
+Download the tarball from [Releases](https://github.com/hasantr/Scour/releases),
+then:
+
+```bash
+tar xzf scour-0.1.0-linux-x86_64.tar.gz
+cd scour-0.1.0-linux-x86_64
+./install.sh
+```
+
+Nothing in that script asks for a password. It puts seven binaries in
+`~/.local/bin`, a menu entry and an icon in `~/.local/share`, and prints what
+to do next. To undo it, delete those files.
+
+**Where the binaries run.** They are built against glibc 2.39 — Ubuntu 24.04 or
+newer, Debian 13+, Fedora 40+, and any rolling distribution. Ubuntu 22.04 and
+Debian 12 carry an older glibc and want the source route below.
+
+**Tested on a clean Ubuntu 24.04.4 guest**, not merely compiled for it: the
+installer ran, all seven binaries reported their version, the service indexed
+the home directory and watched it with inotify, `scour bash` answered in
+0.13 ms, and the browser face served its page.
+
+### From source
 
 ```bash
 cargo build --release
@@ -51,9 +77,37 @@ cargo build --release
 ./target/release/scour where     # where the settings and index live
 ```
 
-Settings are TOML, at `~/.config/scour/config.toml` (or the platform's
-equivalent). The exclusion lists are the part worth editing — they are the
-first place to look when something you expected is missing.
+A C compiler is used if one is present, for a single thing: pinning two libm
+symbols to an older version so the window can be copied to a machine with an
+older glibc than the one it was built on. Without a compiler the build still
+succeeds and the result needs the glibc it was made on.
+
+### Watching, and the one privilege
+
+`scourd` watches with inotify by default — one watch per directory, from a
+budget shared with everything else in your session. A large home does not fit
+in it, and rather than take the whole budget and break the next program that
+wants a watch, `scourd` says so and reconciles by walking instead. Nothing is
+missed; changes take longer to appear.
+
+For a filesystem-wide mark instead — one `fanotify` mark per volume, immediate
+and nearly free — install the system unit, which is the only part that needs
+root:
+
+```bash
+sudo install -m644 packaging/scour.service /etc/systemd/system/scour.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now scour.service
+```
+
+Read that file before running it: it explains what the privilege is for and
+where `scour-watch` drops it.
+
+### Settings
+
+TOML, at `~/.config/scour/config.toml` (or the platform's equivalent). The
+exclusion lists are the part worth editing — they are the first place to look
+when something you expected is missing.
 
 ## Query language
 
