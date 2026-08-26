@@ -1,0 +1,33 @@
+# The application menu's entry, and the reason it is a file rather than a line
+# in a README: a program that does not appear in the menu is a program that
+# has to be started from a terminal, which is not how anybody opens a file
+# search.
+#
+# Install (once, per user):
+#
+#   install -Dm644 packaging/scour.desktop ~/.local/share/applications/scour.desktop
+#   install -Dm644 assets/scour.svg ~/.local/share/icons/hicolor/scalable/apps/scour.svg
+#   update-desktop-database ~/.local/share/applications 2>/dev/null || true
+#
+# **`Exec` names the launcher, not a face.** A menu entry asks for *Scour*;
+# which of the four faces that means is a preference somebody set from inside
+# one of them, and `scour-open` is the one place that knows how to read it.
+# Naming `scour-gui` here would quietly override a choice made elsewhere.
+#
+# `StartupWMClass` has to match what the window calls itself, or the desktop
+# draws a second, iconless entry in the task bar beside the running one.
+[Desktop Entry]
+Type=Application
+Name=Scour
+GenericName=File Search
+GenericName[tr]=Dosya Arama
+Comment=Find any file on this machine, instantly
+Comment[tr]=Bu makinedeki her dosyayı anında bul
+Exec=scour-open
+Icon=scour
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=search;find;file;everything;
+Keywords[tr]=ara;bul;dosya;arama;
+StartupNotify=true
+StartupWMClass=Scour

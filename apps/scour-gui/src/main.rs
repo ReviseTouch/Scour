@@ -661,7 +661,38 @@ fn crash_log(state: &std::path::Path) {
     }));
 }
 
+// What the window takes on the command line.
+//
+// **Ordinary comments, not doc comments.** Clap reads a doc comment as the
+// text it shows the reader, so the reasoning below would have been printed by
+// `--help` — which is exactly the kind of thing that must not leak out of the
+// source.
+//
+// It took no arguments at all, which is worse than it sounds: `scour-gui
+// --version` opened a window. That is the first thing anybody types after
+// unpacking a program, and answering it with a search window is the wrong
+// first impression twice over — on a machine with no display it printed a
+// failure to create a window, which reads as a broken program rather than a
+// misread flag.
+//
+// The two options are the terminal face's, spelled the same way, because a
+// person who has learned one face's flags has learned the others'.
+#[derive(clap::Parser)]
+#[command(name = "scour-gui", about = "Scour in a window", version)]
+struct Args {
+    /// Talk to a service listening here
+    #[arg(long)]
+    socket: Option<String>,
+    /// Start with this query
+    #[arg(short, long, default_value = "")]
+    query: String,
+}
+
 fn main() -> Result<()> {
+    // **Before anything else opens.** `--version` and `--help` have to answer
+    // and leave; clap does that itself, and it has to happen before a socket
+    // is dialled or a window is asked for.
+    let args = <Args as clap::Parser>::parse();
     // From the process starting to the first row on screen. The one number a
     // person sees before they have typed anything, and the only one the
     // window's own start-up appears in.
@@ -832,7 +863,10 @@ fn main() -> Result<()> {
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
     }
-    let addr = config.socket();
+    let addr = match &args.socket {
+        Some(given) => given.clone().into(),
+        None => config.socket(),
+    };
 
     // The bridge from the worker threads to the UI thread.
     //
@@ -1716,6 +1750,13 @@ fn main() -> Result<()> {
     // sets the text once, and it exists because the software renderer casts
     // every glyph position to `i16` — a line wide enough to leave that range
     // is a crash, and this is how to stand on it deliberately.
+    // The query a person asked for on the command line, before anything is
+    // typed. The same flag the terminal face takes.
+    if !args.query.is_empty() {
+        window.set_query(args.query.clone().into());
+        window.invoke_query_changed(args.query.clone().into());
+    }
+
     if let Some(n) = std::env::var("SCOUR_GUI_LONGQUERY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())

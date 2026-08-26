@@ -47,6 +47,9 @@ scour-preview  = { workspace = true }
 # For the `Places` reply's type alone; the answer comes over the socket.
 scour-places   = { workspace = true }
 anyhow       = { workspace = true }
+# The same two flags the terminal face has, spelled the same way — and an
+# answer to `--version` that is not a window.
+clap         = { workspace = true }
 humansize    = { workspace = true }
 # Pinned exactly, and not out of caution. 1.17's winit backend divides by a
 # refresh rate it reads as zero (`frame_throttle.rs:58`), which crashes on
