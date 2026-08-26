@@ -42,6 +42,11 @@ cat <<'TXT'
       scour-tui           # the terminal face
       scour-web           # opens in a browser
 
+  Start it with your session (optional):
+
+      install -Dm644 packaging/scourd.service ~/.config/systemd/user/scourd.service
+      systemctl --user enable --now scourd.service
+
   Watching, and why it is worth a password once:
 
       Without a filesystem mark, scourd watches with inotify — one watch per

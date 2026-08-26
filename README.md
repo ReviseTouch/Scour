@@ -9,6 +9,11 @@ is what makes it usable from an assistant's context window.
 
 Written in Rust, and nothing here is a wrapper around anything else.
 
+**[revisetouch.com/scour](https://revisetouch.com/scour)** — what it looks like,
+in all four faces, with the numbers beside them.
+**[Documentation](https://revisetouch.com/en/docs/scour/introduction)** ·
+**[Releases](https://github.com/hasantr/Scour/releases)**
+
 Developed and used daily on Linux, against 4.6 million entries across an ext4
 home and an NTFS volume. It is written for Windows and macOS too and compiles
 for both, but it has not been run on either — and compiling is not running:

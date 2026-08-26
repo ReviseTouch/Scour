@@ -1,0 +1,43 @@
+[Unit]
+# Scour, started with the session and watching with what it can get.
+#
+# **The unprivileged half.** This is the unit to install when nobody wants to
+# type a password: it runs `scourd` as you, with no capabilities, and the
+# service watches with inotify. On a home directory small enough to fit in the
+# session's watch budget that is all anybody needs.
+#
+# On a large one it is not enough, and `scourd` will say so rather than take
+# the whole budget and break the next program that wants a watch. It then
+# reconciles by walking instead — nothing is missed, changes take longer to
+# appear. The fix for that is `packaging/scour.service`, which is a *system*
+# unit and asks for root once. **Install one or the other, never both**: two
+# writers race for the index lock and the loser exits in a restart loop.
+#
+# Install (once):
+#
+#   install -Dm644 packaging/scourd.service ~/.config/systemd/user/scourd.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now scourd.service
+#
+Description=Scour file index
+Documentation=https://github.com/hasantr/Scour
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/scourd
+Restart=on-failure
+RestartSec=5
+# The index is derived from the filesystem, so nothing here is worth
+# protecting from a kill -9; what matters is that only one writer exists,
+# which scourd enforces with a lock on its own directory.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# Below everything a person is waiting on. Indexing is background work by
+# definition: it is right eventually, and eventually is soon enough.
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=default.target
