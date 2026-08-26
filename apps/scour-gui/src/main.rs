@@ -2904,6 +2904,15 @@ fn apply(
                 r.took_us as f64 / 1000.0,
                 r.rows_visited,
             ));
+            // **What was drawn, not how much of it.** A count says the list
+            // agreed with the meter; it does not say the rows are the rows
+            // the query asked for, and those are different failures with the
+            // same symptom — a number that looks right over a list that is
+            // not. The first row is enough to tell them apart.
+            trace(&format!(
+                "first row {:?}",
+                r.hits.first().map(|h| h.path.as_str()).unwrap_or("")
+            ));
             trace(&format!(
                 "drew {n} rows {:.1} ms after the key",
                 state
