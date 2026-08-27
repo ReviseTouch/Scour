@@ -53,6 +53,8 @@ scour-trash    = { workspace = true }
 scour-clip     = { workspace = true }
 # What a file may be called — the same rules in all three faces.
 scour-name     = { workspace = true }
+# Which programs claim a kind of file, for `Open with…`.
+scour-openers  = { workspace = true }
 anyhow       = { workspace = true }
 # The same two flags the terminal face has, spelled the same way — and an
 # answer to `--version` that is not a window.

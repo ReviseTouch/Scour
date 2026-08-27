@@ -5087,6 +5087,7 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-name",
+ "scour-openers",
  "scour-page",
  "scour-places",
  "scour-preview",
@@ -5166,6 +5167,10 @@ dependencies = [
 
 [[package]]
 name = "scour-name"
+version = "0.1.0"
+
+[[package]]
+name = "scour-openers"
 version = "0.1.0"
 
 [[package]]
@@ -5259,11 +5264,13 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-name",
+ "scour-openers",
  "scour-page",
  "scour-places",
  "scour-preview",
  "scour-proto",
  "scour-settings",
+ "scour-thumbs",
  "scour-trash",
  "scour-ui",
 ]
@@ -5290,6 +5297,7 @@ dependencies = [
  "scour-i18n",
  "scour-ipc",
  "scour-name",
+ "scour-openers",
  "scour-preview",
  "scour-proto",
  "scour-thumbs",

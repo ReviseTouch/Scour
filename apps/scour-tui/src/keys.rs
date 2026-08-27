@@ -351,6 +351,7 @@ fn panel_press(app: &mut App) -> Want {
         Panel::Language => app.speak(app.panel_at),
         Panel::Faces => app.run_face(app.panel_at),
         Panel::Menu => app.menu_pick(),
+        Panel::Openers => app.open_with(),
         // Enter on the line being typed into means yes, the same as it does
         // in every box that takes a name.
         Panel::Ask if app.panel_at == 0 => app.ask_answer(2),

@@ -281,6 +281,13 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 })
                 .collect(),
         ),
+        Panel::Openers => (
+            app.say("OPEN WITH"),
+            app.openers
+                .iter()
+                .map(|(_, name)| (name.clone(), false).into())
+                .collect(),
+        ),
         // Two lines and no third. The cursor opens on the first, which is why
         // the first is the one that changes nothing.
         Panel::Ask => (

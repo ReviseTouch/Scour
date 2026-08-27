@@ -32,6 +32,10 @@ scour-ui       = { workspace = true }
 scour-trash  = { workspace = true }
 scour-clip   = { workspace = true }
 scour-name   = { workspace = true }
+# Which programs claim a kind of file, for `Open with…`.
+scour-openers = { workspace = true }
+# And what kind of file it is, which that crate deliberately does not answer.
+scour-thumbs = { workspace = true }
 scour-page     = { workspace = true }
 
 ratatui = { workspace = true }

@@ -330,6 +330,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     let acting = req.path == "/api/open"
         || req.path == "/api/trash"
         || req.path == "/api/rename"
+        || req.path == "/api/open-with"
         || req.path == "/api/face"
         || req.path == "/api/thumb"
         || (req.path == "/api/settings" && req.param("set").is_some());
@@ -400,6 +401,9 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/trash" => api_trash(&mut stream, client, &req),
         "/api/rename" => api_rename(&mut stream, client, &req),
+        "/api/openers" => api_openers(&mut stream, client, &req),
+        "/api/open-with" if doing.launch => api_open_with(&mut stream, client, &req),
+        "/api/open-with" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }
@@ -1379,6 +1383,66 @@ fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+/// Which programs on this machine will take this file.
+///
+/// A read, so a `GET`: it starts nothing and changes nothing. The list is what
+/// `Open with…` shows, and the chosen one — whatever the desktop's own
+/// association says — is marked rather than moved, so a person who is looking
+/// for the second entry finds it where it was last time.
+fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no path");
+        return;
+    };
+    if !matches!(
+        call(client, Request::Stat { path: path.to_string() }),
+        Ok(Response::Stat(_))
+    ) {
+        http::fail(stream, "404 Not Found", "not in the index");
+        return;
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let mime = scour_thumbs::known::known().mime_of(name).unwrap_or("");
+    let list: Vec<serde_json::Value> = scour_openers::openers(mime)
+        .into_iter()
+        .map(|o| serde_json::json!({ "id": o.id, "name": o.name, "preferred": o.preferred }))
+        .collect();
+    http::json(stream, &serde_json::json!({ "openers": list }));
+}
+
+/// Start one of them.
+///
+/// **Behind `--no-launch` with everything else that runs a program.** The list
+/// above is a read and stays available; this is the half that starts a process
+/// and belongs on the same switch as `/api/open`.
+fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let (Some(path), Some(id)) = (
+        req.param("path").filter(|p| !p.is_empty()),
+        req.param("id").filter(|p| !p.is_empty()),
+    ) else {
+        http::fail(stream, "400 Bad Request", "no path or no id");
+        return;
+    };
+    if !matches!(
+        call(client, Request::Stat { path: path.to_string() }),
+        Ok(Response::Stat(_))
+    ) {
+        http::fail(stream, "404 Not Found", "not in the index");
+        return;
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let mime = scour_thumbs::known::known().mime_of(name).unwrap_or("");
+    match scour_openers::openers(mime).into_iter().find(|o| o.id == id) {
+        Some(chosen) => match scour_openers::launch(&chosen, std::path::Path::new(path)) {
+            Ok(()) => http::json(stream, &serde_json::json!({ "started": chosen.name })),
+            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
+        },
+        // The list the page was shown is a moment old, and a program can be
+        // uninstalled in that moment.
+        None => http::fail(stream, "404 Not Found", "no such program any more"),
+    }
 }
 
 /// Give a file a different name, and tell the index straight away.

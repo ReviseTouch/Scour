@@ -1,0 +1,12 @@
+[package]
+name = "scour-openers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# **Nothing.** Which programs claim a type is written in files the desktop
+# already ships, in a format that has not changed since 2007. What *type* a
+# file is stays with `scour-thumbs`, which already reads that table — two
+# readers of one table is the drift this workspace keeps writing down.
+[dependencies]

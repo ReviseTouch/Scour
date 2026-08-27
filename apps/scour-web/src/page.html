@@ -2110,6 +2110,17 @@
       if (j.error) throw new Error(j.error);
       return j;
     },
+    /* Which programs will take this file, and starting one. The list is a
+       read and stays available with `--no-launch`; starting is not. */
+    openers: (path) => SERVICE.get("openers", { path }),
+    openWith: async (path, id) => {
+      const r = await fetch(`/api/open-with?${new URLSearchParams({ path, id, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`open-with: ${r.status}`);
+      return r.json();
+    },
     thumbs: async (paths) => {
       const r = await fetch(`/api/thumb?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
@@ -6233,6 +6244,24 @@
         return;
       }
 
+      case "open-with": {
+        /* **The menu becomes the list rather than growing a submenu.** A
+           submenu is a second thing to learn how to leave, and this closes
+           exactly the way the menu it replaced does. The ids carry a prefix so
+           the press comes back somewhere that knows what it is looking at. */
+        try {
+          const r = await SERVICE.openers(p);
+          if (!r.openers.length) return flash(T("nothing on this machine claims it"));
+          menu.innerHTML = r.openers.map((o) =>
+            `<button type="button" data-act="open-with:${escape_(o.id)}">` +
+            `${o.preferred ? "★ " : ""}${escape_(o.name)}</button>`).join("");
+          menu.hidden = false;
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
+
       case "rename": {
         /* `prompt` rather than a sheet of this page's own. It is the one
            dialog a browser draws that takes a line of text, it is modal in the
@@ -6255,6 +6284,14 @@
       }
 
       default:
+        if (act.startsWith("open-with:")) {
+          try {
+            await SERVICE.openWith(p, act.slice("open-with:".length));
+          } catch (err) {
+            flash(String(err.message || err));
+          }
+          return;
+        }
         /* An id the page has no answer for. It cannot be silent: the table is
            shared, and an item added for the window that nobody wired here
            would otherwise look like a press that did nothing. */

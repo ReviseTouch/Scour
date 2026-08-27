@@ -102,6 +102,13 @@ pub enum Panel {
     /// it, and this face renders it as a panel because a terminal has no right
     /// button to press. `m` opens it, the arrows walk it, `Enter` picks.
     Menu,
+    /// Which of the programs that claim this kind of file to start.
+    ///
+    /// **The menu becomes this list rather than growing a submenu.** A
+    /// terminal has no room for a menu beside a menu, and a submenu is one
+    /// more thing to learn how to leave; `Esc` closes this the same way it
+    /// closes the menu it replaced.
+    Openers,
     /// The question that comes before something that changes files.
     ///
     /// Two lines, and the cursor starts on the safe one. A terminal cannot dim
@@ -305,6 +312,9 @@ pub struct App {
     pub ask_typing: bool,
     /// What has been typed into it.
     pub ask_text: String,
+    /// The programs that will take the row under the cursor: what to show,
+    /// and which desktop entry to start.
+    pub openers: Vec<(String, String)>,
     /// The word on the button that says yes. A rename does not *move*
     /// anything, and a button that says so is a button that lies.
     pub ask_yes: String,
@@ -412,6 +422,7 @@ impl Default for App {
             ask_typing: false,
             ask_text: String::new(),
             ask_yes: String::new(),
+            openers: Vec::new(),
             rules: Vec::new(),
             note: String::new(),
             revision: 0,
@@ -1531,6 +1542,32 @@ impl App {
             "details" => Want::Peek(first.clone()),
             "csv" => self.write_sheet(),
 
+            "open-with" => {
+                let name = leaf(&first);
+                let mime = scour_thumbs::known::known().mime_of(&name).unwrap_or("");
+                self.openers = scour_openers::openers(mime)
+                    .into_iter()
+                    .map(|o| {
+                        (
+                            o.id,
+                            if o.preferred {
+                                format!("★ {}", o.name)
+                            } else {
+                                o.name
+                            },
+                        )
+                    })
+                    .collect();
+                if self.openers.is_empty() {
+                    self.note = self.say("nothing on this machine claims it").into_owned();
+                    return Want::Nothing;
+                }
+                self.panel = Panel::Openers;
+                self.panel_at = 0;
+                self.dirty = true;
+                Want::Nothing
+            }
+
             "rename" => {
                 self.ask_title = self.say("Rename…").into_owned();
                 self.ask_text = leaf(&first);
@@ -1573,6 +1610,26 @@ impl App {
                 Want::Nothing
             }
         }
+    }
+
+    /// Start the program the openers list is on.
+    pub fn open_with(&mut self) -> Want {
+        let Some((id, _)) = self.openers.get(self.panel_at).cloned() else {
+            return Want::Nothing;
+        };
+        self.panel = Panel::None;
+        self.dirty = true;
+        let Some(path) = self.here().map(|h| h.path.clone()) else {
+            return Want::Nothing;
+        };
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        let mime = scour_thumbs::known::known().mime_of(&name).unwrap_or("");
+        if let Some(chosen) = scour_openers::openers(mime).into_iter().find(|o| o.id == id)
+            && let Err(e) = scour_openers::launch(&chosen, std::path::Path::new(&path))
+        {
+            self.note = e.to_string();
+        }
+        Want::Nothing
     }
 
     /// Answer the question that is up. `0` is no, `1` is yes.
@@ -1636,6 +1693,7 @@ impl App {
             Panel::Language => 2,
             Panel::Faces => 3,
             Panel::Menu => self.menu.len(),
+            Panel::Openers => self.openers.len(),
             Panel::Ask => 3,
             Panel::None => 0,
         }

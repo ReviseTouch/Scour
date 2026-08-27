@@ -1373,3 +1373,10 @@ msgstr "zaten bu adı taşıyor"
 # it opens a question; the button does not, because it does the thing.
 msgid "Rename"
 msgstr "Adlandır"
+
+# The list that replaces the menu when "Open with…" is picked.
+msgid "OPEN WITH"
+msgstr "BİRLİKTE AÇ"
+
+msgid "nothing on this machine claims it"
+msgstr "bu makinede bu türü açan bir program yok"

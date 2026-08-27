@@ -1880,6 +1880,38 @@ fn main() -> Result<()> {
                 "details" => w.set_peeking(!w.get_peeking()),
                 "csv" => w.invoke_tool_clicked("csv".into()),
 
+                "open-with" => {
+                    // **The menu becomes the list rather than growing a
+                    // submenu.** A submenu is a second thing to learn how to
+                    // leave, and this one closes exactly the way the menu it
+                    // replaced does. The ids carry a prefix so the press comes
+                    // back somewhere that knows what it is looking at.
+                    let name = leaf(&path);
+                    let mime = scour_thumbs::known::known().mime_of(&name).unwrap_or("");
+                    let found = scour_openers::openers(mime);
+                    if found.is_empty() {
+                        say(&w, t(&cat_now, "nothing on this machine claims it"));
+                        return;
+                    }
+                    let model: Vec<MenuItem> = found
+                        .iter()
+                        .map(|o| MenuItem {
+                            id: format!("open-with:{}", o.id).into(),
+                            label: if o.preferred {
+                                format!("★ {}", o.name).into()
+                            } else {
+                                o.name.as_str().into()
+                            },
+                            key: "".into(),
+                            rule: false,
+                            careful: false,
+                            heavy: false,
+                        })
+                        .collect();
+                    w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+                    w.set_menu_open(true);
+                }
+
                 "rename" => {
                     let was = leaf(&path);
                     w.set_ask_title(t(&cat_now, "Rename…"));
@@ -1917,6 +1949,24 @@ fn main() -> Result<()> {
                     w.set_ask_open(true);
                 }
 
+                other if other.starts_with("open-with:") => {
+                    let wanted = &other["open-with:".len()..];
+                    let name = leaf(&path);
+                    let mime = scour_thumbs::known::known().mime_of(&name).unwrap_or("");
+                    match scour_openers::openers(mime)
+                        .into_iter()
+                        .find(|o| o.id == wanted)
+                    {
+                        Some(chosen) => {
+                            if let Err(e) =
+                                scour_openers::launch(&chosen, std::path::Path::new(&path))
+                            {
+                                say(&w, format!("{e}").into());
+                            }
+                        }
+                        None => say(&w, t(&cat_now, "nothing on this machine claims it")),
+                    }
+                }
                 _ => say(&w, t(&cat_now, "not in this face yet")),
             }
             let _ = (&state, &link, &addr);
