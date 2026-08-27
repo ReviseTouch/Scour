@@ -30,6 +30,8 @@ pub const TYPING_CAP: u32 = 1_000;
 #[allow(clippy::large_enum_variant)]
 /// What the terminal asks for.
 pub enum Ask {
+    /// Look at these paths again, now — this program moved them.
+    Recheck(Vec<String>),
     Search {
         /// Which keystroke this belongs to. An answer to an older one is
         /// dropped rather than drawn: a slow reply to `re` landing after a
@@ -398,6 +400,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 top: 12,
             },
             Ask::Rules => Request::Rules {},
+            Ask::Recheck(paths) => Request::Recheck { paths },
             Ask::OffRules(off) => Request::SetSettings {
                 change: scour_settings::Change {
                     exclude_off: Some(off),

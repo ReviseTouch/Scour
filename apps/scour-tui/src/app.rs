@@ -96,6 +96,18 @@ pub enum Panel {
     Language,
     /// Window, terminal, browser.
     Faces,
+    /// What can be done with the row the cursor is on.
+    ///
+    /// **The same list the window and the page draw** — `scour-ui::menu` holds
+    /// it, and this face renders it as a panel because a terminal has no right
+    /// button to press. `m` opens it, the arrows walk it, `Enter` picks.
+    Menu,
+    /// The question that comes before something that changes files.
+    ///
+    /// Two lines, and the cursor starts on the safe one. A terminal cannot dim
+    /// what is behind a dialog, so the thing that has to be unmistakable is
+    /// where the cursor is when the panel opens.
+    Ask,
 }
 
 /// Which of the two the bare letters go to.
@@ -140,6 +152,9 @@ pub enum Want {
         limit: u32,
         cap: u32,
     },
+    /// Look at these paths again, now — something outside the index moved
+    /// them, and the thing that moved them was this program.
+    Recheck(Vec<String>),
     /// Ask what the walk skips.
     Rules,
     /// Ask for everything the report shows.
@@ -159,6 +174,40 @@ pub enum Want {
 }
 
 /// The whole state of the terminal.
+/// Hand a path to the desktop, and forget about it.
+///
+/// The same three lines `keys::open` runs, put where more than one caller can
+/// reach them — a menu opens files and folders too, and a second copy of a
+/// spawn is a second place for the redirections to be forgotten.
+fn launch(path: &str) {
+    let _ = std::process::Command::new("xdg-open")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// One drawn line of the menu.
+///
+/// **A flattened `scour_ui::menu::Item`, not a reference to one.** The panel
+/// drawing takes strings, the labels are already translated and already carry
+/// their count, and holding a borrow of a static table across the frame that
+/// might rebuild it is a lifetime for no gain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuLine {
+    /// Sent back when it is picked. Never translated.
+    pub id: String,
+    pub label: String,
+    pub key: String,
+    /// A rule is drawn above this one: it starts a new group.
+    pub rule: bool,
+    /// Reversible, but it changes something — drawn in the danger colour.
+    pub careful: bool,
+    /// Asks before it acts — drawn dim.
+    pub heavy: bool,
+}
+
 pub struct App {
     /// What has been typed, and where the caret is in it (in bytes).
     pub query: String,
@@ -240,6 +289,18 @@ pub struct App {
     pub panel: Panel,
     /// Where the cursor is inside the open panel.
     pub panel_at: usize,
+    /// The menu as it stands, built when it is opened.
+    ///
+    /// Held rather than recomputed per frame because the row under the cursor
+    /// can move while the menu is open — a watcher is running — and a menu
+    /// that changed its own items between opening and pressing would be a menu
+    /// that did something else.
+    pub menu: Vec<MenuLine>,
+    /// What a pending question is about: the item id, and the paths it was
+    /// asked about. Taken when the question is answered, whichever way.
+    pub pending: Option<(String, Vec<String>)>,
+    /// The question's own words, while it is up.
+    pub ask_title: String,
     /// The skip rules, as the service last reported them: three groups and
     /// what is switched off. **Kept from the answer**, because deleting one
     /// means sending the list without it, and a window that has not been told
@@ -338,6 +399,9 @@ impl Default for App {
             waste: 0,
             panel: Panel::None,
             panel_at: 0,
+            menu: Vec::new(),
+            pending: None,
+            ask_title: String::new(),
             rules: Vec::new(),
             note: String::new(),
             revision: 0,
@@ -863,12 +927,15 @@ impl App {
     /// The labels are msgids; [`crate::draw::tool_spans`] looks them up, and
     /// it does so because it is the same function that says where a press
     /// lands — a translated word is a different width.
-    pub fn tools(&self) -> [(&'static str, &'static str); 5] {
+    pub fn tools(&self) -> [(&'static str, &'static str); 6] {
         [
             ("faces", "^U"),
             ("lang", "^L"),
             ("skips", "^K"),
             ("csv", "^E"),
+            // Next to the peek key it belongs beside: both are about the row
+            // the cursor is on.
+            ("menu", "F4"),
             ("keys", "F1"),
         ]
     }
@@ -889,6 +956,10 @@ impl App {
                 Want::Rules
             }
             3 => self.write_sheet(),
+            4 => {
+                self.open_menu();
+                Want::Nothing
+            }
             _ => {
                 self.helping = !self.helping;
                 self.dirty = true;
@@ -1314,12 +1385,211 @@ impl App {
         self.dirty = true;
     }
 
+    /// Build the menu for the row the cursor is on, and open it.
+    ///
+    /// **A terminal has no right button**, so the gesture is a key. What is in
+    /// the menu is not this face's decision: `scour-ui::menu` holds the list
+    /// for all of them, and the only thing decided here is that a terminal can
+    /// put a file on the clipboard, which is why `Face::Terminal` is what the
+    /// table is asked about.
+    pub fn open_menu(&mut self) {
+        let Some(hit) = self.here().cloned() else {
+            return;
+        };
+        let picked = self.picked.len();
+        let count = scour_ui::format::grouped(picked.max(1) as u64, self.mark().0);
+        self.menu.clear();
+        let mut last: Option<u8> = None;
+        for item in scour_ui::menu::items_for(picked, hit.is_dir, scour_ui::faces::Face::Terminal) {
+            self.menu.push(MenuLine {
+                id: item.id.to_string(),
+                label: self.say(item.msgid).replace("{n}", &count),
+                key: item.key.to_string(),
+                rule: last.is_some_and(|l| l != item.group),
+                careful: item.weight == scour_ui::menu::Weight::Careful,
+                heavy: item.weight == scour_ui::menu::Weight::Heavy,
+            });
+            last = Some(item.group);
+        }
+        self.panel = Panel::Menu;
+        self.panel_at = 0;
+        self.note.clear();
+        self.dirty = true;
+    }
+
+    /// Which rows the menu is about: the selection, or the row under it.
+    fn menu_rows(&self) -> Vec<String> {
+        if self.picked.len() > 1 {
+            self.picked.keys().cloned().collect()
+        } else {
+            self.here().map(|h| vec![h.path.clone()]).unwrap_or_default()
+        }
+    }
+
+    /// Do whatever the menu's cursor is on.
+    pub fn menu_pick(&mut self) -> Want {
+        let Some(line) = self.menu.get(self.panel_at).cloned() else {
+            return Want::Nothing;
+        };
+        let rows = self.menu_rows();
+        let Some(first) = rows.first().cloned() else {
+            return Want::Nothing;
+        };
+        let is_dir = self.here().map(|h| h.is_dir).unwrap_or(false);
+        let leaf = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+        let folder = |p: &str| scour_ui::path::folder(p).to_string();
+
+        // Everything but the two that ask closes the menu on the press.
+        if line.id != "trash" && line.id != "open-all" {
+            self.panel = Panel::None;
+            self.dirty = true;
+        }
+
+        match line.id.as_str() {
+            "open" => {
+                launch(&first);
+                Want::Nothing
+            }
+            "folder" => {
+                launch(&folder(&first));
+                Want::Nothing
+            }
+            "folders" => {
+                let mut seen: Vec<String> = rows.iter().map(|p| folder(p)).collect();
+                seen.sort();
+                seen.dedup();
+                for dir in seen {
+                    launch(&dir);
+                }
+                Want::Nothing
+            }
+            "clear" => {
+                self.picked.clear();
+                Want::Nothing
+            }
+
+            // The three that exist because there is an index.
+            "search-here" => {
+                let scope = if is_dir { first.clone() } else { folder(&first) };
+                self.query = format!("under:{scope}");
+                self.caret = self.query.len();
+                self.typed()
+            }
+            "search-kind" => {
+                let name = leaf(&first);
+                match name.rfind('.').filter(|at| *at > 0) {
+                    Some(at) => {
+                        let ext = name[at + 1..].to_lowercase();
+                        self.query = format!("ext:{ext}");
+                        self.caret = self.query.len();
+                        self.typed()
+                    }
+                    None => {
+                        self.note = self.say("no extension to search for").into_owned();
+                        Want::Nothing
+                    }
+                }
+            }
+            "duplicates" => Want::Report,
+            "usage" => Want::Weigh(first.clone()),
+            "skip" => {
+                self.note = leaf(&first);
+                self.show(Panel::Rules);
+                Want::Nothing
+            }
+
+            "copy-path" | "copy-name" => {
+                let text = if line.id == "copy-name" {
+                    rows.iter().map(|p| leaf(p)).collect::<Vec<_>>().join("\n")
+                } else {
+                    rows.join("\n")
+                };
+                self.note = match scour_clip::text(&text) {
+                    Ok(()) => self.say("path copied").into_owned(),
+                    Err(e) => e.to_string(),
+                };
+                Want::Nothing
+            }
+            "copy-file" => {
+                let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+                self.note = match scour_clip::files(&paths) {
+                    Ok(()) => self.say("path copied").into_owned(),
+                    Err(e) => e.to_string(),
+                };
+                Want::Nothing
+            }
+            "details" => Want::Peek(first.clone()),
+            "csv" => self.write_sheet(),
+
+            "trash" | "open-all" => {
+                // Eight names and then how many are left. A list that runs off
+                // the panel is a list nobody read before pressing yes.
+                let mut names: Vec<String> = rows.iter().take(8).map(|p| leaf(p)).collect();
+                if rows.len() > 8 {
+                    names.push(format!("… +{}", rows.len() - 8));
+                }
+                self.ask_title = format!("{}  —  {}", line.label, names.join(", "));
+                self.pending = Some((line.id.clone(), rows));
+                self.panel = Panel::Ask;
+                // **The cursor starts on "no".** A terminal cannot dim what is
+                // behind a question, so where the cursor sits when it opens is
+                // the only thing saying which answer is the safe one.
+                self.panel_at = 0;
+                self.dirty = true;
+                Want::Nothing
+            }
+
+            _ => {
+                self.note = self.say("not in this face yet").into_owned();
+                Want::Nothing
+            }
+        }
+    }
+
+    /// Answer the question that is up. `0` is no, `1` is yes.
+    pub fn ask_answer(&mut self, which: usize) -> Want {
+        self.panel = Panel::None;
+        self.dirty = true;
+        let Some((what, paths)) = self.pending.take() else {
+            return Want::Nothing;
+        };
+        if which == 0 {
+            return Want::Nothing;
+        }
+        if what == "open-all" {
+            for p in &paths {
+                launch(p);
+            }
+            return Want::Nothing;
+        }
+        // The move is this process's. The service is only told to look again.
+        let mut gone = 0usize;
+        let mut refused: Option<String> = None;
+        for p in &paths {
+            match scour_trash::trash(std::path::Path::new(p)) {
+                Ok(_) => gone += 1,
+                Err(e) => {
+                    refused.get_or_insert_with(|| e.to_string());
+                }
+            }
+        }
+        self.note = match refused {
+            Some(why) => why,
+            None => self
+                .say("{n} moved to the wastebasket")
+                .replace("{n}", &gone.to_string()),
+        };
+        Want::Recheck(paths)
+    }
+
     /// How many lines the open panel offers.
     pub fn panel_lines(&self) -> usize {
         match self.panel {
             Panel::Rules => self.rules.len(),
             Panel::Language => 2,
             Panel::Faces => 3,
+            Panel::Menu => self.menu.len(),
+            Panel::Ask => 2,
             Panel::None => 0,
         }
     }

@@ -166,6 +166,32 @@ pub fn frame(f: &mut Frame, app: &App, theme: &Theme) {
 /// **One function, two callers**: this and the mouse. A panel drawn in one
 /// place and hit-tested in another is the fault the window spent two days on,
 /// and the only defence a terminal has is that the arithmetic is written once.
+/// One line of a panel.
+///
+/// **A struct rather than a tuple**, because the menu made it four fields and
+/// a four-tuple at four call sites is four chances to put `careful` where
+/// `rule` goes and find out from a screenshot.
+pub struct PanelLine {
+    pub text: String,
+    /// Printed at the right edge. Empty where there is none.
+    pub key: String,
+    pub dimmed: bool,
+    pub careful: bool,
+    pub rule: bool,
+}
+
+impl From<(String, bool)> for PanelLine {
+    fn from((text, dimmed): (String, bool)) -> Self {
+        PanelLine {
+            text,
+            key: String::new(),
+            dimmed,
+            careful: false,
+            rule: false,
+        }
+    }
+}
+
 pub fn panel_rect(area: Rect, lines: usize) -> Rect {
     let wide = 66u16.min(area.width.saturating_sub(4));
     let tall = (lines as u16 + 3).min(area.height.saturating_sub(2));
@@ -182,7 +208,11 @@ pub fn panel_rect(area: Rect, lines: usize) -> Rect {
 /// One drawing for the three of them, because they are the same shape: a
 /// title, a list, and a cursor on one line of it. What differs is the lines.
 fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let (title, lines): (std::borrow::Cow<str>, Vec<(String, bool)>) = match app.panel {
+    // A panel line carries four things because the menu needs four: what it
+    // says, whether it is quiet, whether it changes something, and whether a
+    // rule belongs above it. The other three panels pass the last two as false
+    // and read exactly as they did.
+    let (title, lines): (std::borrow::Cow<str>, Vec<PanelLine>) = match app.panel {
         Panel::Rules => (
             app.say("WHAT IS SKIPPED"),
             app.rules
@@ -201,6 +231,7 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                         ),
                         false,
                     )
+                        .into()
                 })
                 .collect(),
         ),
@@ -212,17 +243,18 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             app.say("LANGUAGE"),
             scour_i18n::LANGUAGES
                 .iter()
-                .map(|(_, endonym)| ((*endonym).to_string(), false))
+                .map(|(_, endonym)| ((*endonym).to_string(), false).into())
                 .collect(),
         ),
         Panel::Faces => (
             app.say("HOW TO RUN IT"),
             vec![
-                (app.say("Window").into_owned(), false),
+                (app.say("Window").into_owned(), false).into(),
                 (
                     format!("{}  ·  {}", app.say("Terminal"), app.say("running now")),
                     true,
-                ),
+                )
+                    .into(),
                 (
                     format!(
                         "{}  ·  {}",
@@ -230,23 +262,60 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                         app.say("opens a port on 127.0.0.1")
                     ),
                     false,
-                ),
+                )
+                    .into(),
+            ],
+        ),
+        // The menu, exactly as the shared table holds it — see
+        // `scour-ui::menu`. The window and the page draw the same list.
+        Panel::Menu => (
+            app.say("WHAT CAN BE DONE"),
+            app.menu
+                .iter()
+                .map(|m| PanelLine {
+                    text: m.label.clone(),
+                    key: m.key.clone(),
+                    dimmed: m.heavy,
+                    careful: m.careful,
+                    rule: m.rule,
+                })
+                .collect(),
+        ),
+        // Two lines and no third. The cursor opens on the first, which is why
+        // the first is the one that changes nothing.
+        Panel::Ask => (
+            std::borrow::Cow::Owned(app.ask_title.clone()),
+            vec![
+                (app.say("Cancel").into_owned(), false).into(),
+                PanelLine {
+                    text: app.say("Move").into_owned(),
+                    key: String::new(),
+                    dimmed: false,
+                    careful: true,
+                    rule: false,
+                },
             ],
         ),
         Panel::None => return,
     };
 
-    let box_area = panel_rect(area, lines.len());
+    // **The rules take rows too.** Sized by the item count alone the box came
+    // up four rows short and the last three items of the menu — one of them
+    // the wastebasket — fell off the bottom of a panel that gave no sign there
+    // was more.
+    let rules = lines.iter().filter(|l| l.rule).count();
+    let box_area = panel_rect(area, lines.len() + rules);
     f.render_widget(Clear, box_area);
     // Only what fits, scrolled to keep the cursor on it: the skip list is
     // forty rules long and the panel is not.
-    let room = box_area.height.saturating_sub(3) as usize;
+    let room = (box_area.height.saturating_sub(3) as usize).saturating_sub(rules);
     let from = app.panel_at.saturating_sub(room.saturating_sub(1));
     let mut drawn = vec![Line::from(Span::styled(
         format!(" {title}"),
         Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
     ))];
-    for (at, (text, dimmed)) in lines.iter().enumerate().skip(from).take(room) {
+    for (at, line) in lines.iter().enumerate().skip(from).take(room) {
+        let dimmed = &line.dimmed;
         let on = at == app.panel_at;
         let lit = if app.pressed == Spot::Panel(at) {
             Style::new().bg(theme.key()).fg(theme.back())
@@ -255,11 +324,32 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         } else {
             Style::new()
         };
+        // A rule where the group changes. Drawn as a row of its own and not
+        // counted as a line: the cursor walks items, and a separator somebody
+        // can land on is a press that does nothing.
+        if line.rule {
+            drawn.push(Line::from(Span::styled(
+                format!("   {}", "─".repeat(box_area.width.saturating_sub(8) as usize)),
+                Style::new().fg(theme.line()),
+            )));
+        }
+        // The shortcut, pushed to the right edge of the box and quieter than
+        // the label: it is there to be learned, not read.
+        let room_for_text = box_area.width.saturating_sub(6) as usize;
+        let body = if line.key.is_empty() {
+            line.text.clone()
+        } else {
+            let pad = room_for_text
+                .saturating_sub(line.text.chars().count() + line.key.chars().count());
+            format!("{}{}{}", line.text, " ".repeat(pad), line.key)
+        };
         drawn.push(
             Line::from(Span::styled(
-                format!("{}{text}", if on { " ▸ " } else { "   " }),
+                format!("{}{body}", if on { " ▸ " } else { "   " }),
                 Style::new().fg(if on {
                     theme.key()
+                } else if line.careful {
+                    theme.danger()
                 } else if *dimmed {
                     theme.ink_3()
                 } else {

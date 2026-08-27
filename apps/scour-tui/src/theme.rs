@@ -69,6 +69,10 @@ impl Theme {
     pub fn panel(&self) -> Color {
         self.of(self.palette.panel)
     }
+    /// The one item in a menu that changes something. Not an error colour.
+    pub fn danger(&self) -> Color {
+        self.of(self.palette.danger)
+    }
     pub fn line(&self) -> Color {
         self.of(self.palette.line)
     }

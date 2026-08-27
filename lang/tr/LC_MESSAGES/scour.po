@@ -1333,3 +1333,11 @@ msgstr "Taşı"
 
 msgid "Cancel"
 msgstr "Vazgeç"
+
+# The terminal's title for the same menu the window opens with a right button.
+
+msgid "WHAT CAN BE DONE"
+msgstr "NE YAPILABİLİR"
+
+msgid "menu"
+msgstr "menü"

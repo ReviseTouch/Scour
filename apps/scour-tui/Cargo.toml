@@ -28,6 +28,9 @@ scour-settings = { workspace = true }
 scour-places   = { workspace = true }
 scour-preview  = { workspace = true }
 scour-ui       = { workspace = true }
+# The wastebasket and the clipboard, the same two the window uses.
+scour-trash  = { workspace = true }
+scour-clip   = { workspace = true }
 scour-page     = { workspace = true }
 
 ratatui = { workspace = true }

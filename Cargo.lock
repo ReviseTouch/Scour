@@ -5248,6 +5248,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ratatui",
+ "scour-clip",
  "scour-config",
  "scour-core",
  "scour-i18n",
@@ -5257,6 +5258,7 @@ dependencies = [
  "scour-preview",
  "scour-proto",
  "scour-settings",
+ "scour-trash",
  "scour-ui",
 ]
 

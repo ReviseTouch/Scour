@@ -130,6 +130,18 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         // has used for this since before any of us.
         KeyCode::F(3) => return app.peek(),
         KeyCode::Char('r') if ctrl => return app.report(),
+        // The same menu without leaving the query line.
+        //
+        // **`F4` and not `Ctrl+M`**, which was the obvious pick and is the
+        // wrong one: `Ctrl+M` *is* carriage return, so a terminal hands it over
+        // as `Enter` and the binding would never fire — or, in the few
+        // terminals that separate them, would fire on a key somebody pressed
+        // meaning "open this file". `F3` already peeks at the row under the
+        // cursor, so the menu about that row sits next to it.
+        KeyCode::F(4) => {
+            app.open_menu();
+            return Want::Nothing;
+        }
         KeyCode::F(1) => {
             app.helping = true;
             app.dirty = true;
@@ -254,6 +266,14 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             _ => Want::Nothing,
         },
         Mode::Move => match key.code {
+            // **`m`, because a terminal has no right button.** The window and
+            // the page open this menu with one; here it is a key, and it is in
+            // the moving mode rather than always-on because a bare letter in
+            // the search mode belongs to the query.
+            KeyCode::Char('m') => {
+                app.open_menu();
+                Want::Nothing
+            }
             KeyCode::Char(' ') => app.pick(),
             KeyCode::Char('j') => app.walk(1),
             KeyCode::Char('k') => app.walk(-1),
@@ -302,6 +322,8 @@ fn panel_press(app: &mut App) -> Want {
         },
         Panel::Language => app.speak(app.panel_at),
         Panel::Faces => app.run_face(app.panel_at),
+        Panel::Menu => app.menu_pick(),
+        Panel::Ask => app.ask_answer(app.panel_at),
         Panel::None => Want::Nothing,
     }
 }

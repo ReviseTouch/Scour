@@ -625,6 +625,9 @@ fn act(want: Want, link: &Link) {
             });
         }
         Want::Rules => link.later(Ask::Rules),
+        // On the slow lane: nobody is waiting on it, and a keystroke must not
+        // queue behind a stat of twelve paths.
+        Want::Recheck(paths) => link.later(Ask::Recheck(paths)),
         Want::Report => {
             link.later(Ask::Stats);
             link.later(Ask::Dupes);
