@@ -68,6 +68,34 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         return Want::Nothing;
     }
 
+    // **The one panel that listens to letters.** Everywhere else a panel is
+    // open the query keeps typing — which is what lets somebody search while
+    // the skip list is up — but a question asking for a name has to take the
+    // name. `Space` is a letter here too, and it is a letter people put in
+    // file names, so this branch comes before the one that treats it as a
+    // press.
+    if app.panel == Panel::Ask && app.ask_typing {
+        match key.code {
+            KeyCode::Esc => {
+                app.ask_typing = false;
+                app.pending = None;
+                app.show(Panel::Ask);
+                return Want::Nothing;
+            }
+            KeyCode::Backspace => {
+                app.ask_text.pop();
+                app.dirty = true;
+                return Want::Nothing;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                app.ask_text.push(c);
+                app.dirty = true;
+                return Want::Nothing;
+            }
+            _ => {}
+        }
+    }
+
     // A panel takes the arrows and `Enter` while it is open, and nothing else
     // about the keyboard changes: the query still types, `Ctrl+C` still leaves.
     if app.panel != Panel::None {
@@ -323,6 +351,9 @@ fn panel_press(app: &mut App) -> Want {
         Panel::Language => app.speak(app.panel_at),
         Panel::Faces => app.run_face(app.panel_at),
         Panel::Menu => app.menu_pick(),
+        // Enter on the line being typed into means yes, the same as it does
+        // in every box that takes a name.
+        Panel::Ask if app.panel_at == 0 => app.ask_answer(2),
         Panel::Ask => app.ask_answer(app.panel_at),
         Panel::None => Want::Nothing,
     }

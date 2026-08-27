@@ -1006,6 +1006,13 @@ export component MainWindow inherits Window {
     in property <string> ask-body;
     in property <string> ask-yes;
     in property <string> ask-no;
+    /// The question takes a line of text rather than only a yes.
+    ///
+    /// One property rather than a second overlay: a rename asks exactly what a
+    /// deletion asks — *this thing, yes or no* — with a name in the middle of
+    /// the sentence. Two sheets would be two sets of the same three buttons.
+    in-out property <bool> ask-typing: false;
+    in-out property <string> ask-text;
     /// True for yes. Sent once, whichever way it goes.
     callback ask-answer(bool);
     callback copy-path(int);
@@ -4026,6 +4033,33 @@ export component MainWindow inherits Window {
                     font-family: Fonts.mono;
                     font-size: 11px;
                     wrap: word-wrap;
+                }
+                if root.ask-typing: Rectangle {
+                    height: 30px;
+                    border-radius: 3px;
+                    border-width: 1px;
+                    border-color: Theme.focus;
+                    background: Theme.panel-2;
+                    HorizontalLayout {
+                        padding-left: 9px;
+                        padding-right: 9px;
+                        renaming := TextInput {
+                            text <=> root.ask-text;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 12.5px;
+                            single-line: true;
+                            vertical-alignment: center;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                            // Enter is yes, which is what a text box in a
+                            // question means everywhere else.
+                            accepted => {
+                                root.ask-open = false;
+                                root.ask-answer(true);
+                            }
+                        }
+                    }
                 }
                 Rectangle { height: 4px; }
                 HorizontalLayout {

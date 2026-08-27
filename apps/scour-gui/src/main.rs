@@ -1880,6 +1880,18 @@ fn main() -> Result<()> {
                 "details" => w.set_peeking(!w.get_peeking()),
                 "csv" => w.invoke_tool_clicked("csv".into()),
 
+                "rename" => {
+                    let was = leaf(&path);
+                    w.set_ask_title(t(&cat_now, "Rename…"));
+                    w.set_ask_body(path.as_str().into());
+                    w.set_ask_text(was.as_str().into());
+                    w.set_ask_typing(true);
+                    w.set_ask_yes(t(&cat_now, "Rename"));
+                    w.set_ask_no(t(&cat_now, "Cancel"));
+                    *pending.borrow_mut() = Some(("rename".into(), vec![path.clone()]));
+                    w.set_ask_open(true);
+                }
+
                 // The two that ask first. Everything above happens on the
                 // press; these two put the question up and wait.
                 "trash" | "open-all" => {
@@ -1900,6 +1912,7 @@ fn main() -> Result<()> {
                     w.set_ask_body(body.join("\n").into());
                     w.set_ask_yes(t(&cat_now, if id == "trash" { "Move" } else { "Open" }).into());
                     w.set_ask_no(t(&cat_now, "Cancel").into());
+                    w.set_ask_typing(false);
                     *pending.borrow_mut() = Some((id.to_string(), chosen));
                     w.set_ask_open(true);
                 }
@@ -1927,6 +1940,24 @@ fn main() -> Result<()> {
             }
             let Some(w) = weak.upgrade() else { return };
             let cat_now = cat.borrow().clone();
+            if what == "rename" {
+                let Some(from) = paths.first() else { return };
+                let asked = w.get_ask_text().to_string();
+                match scour_name::rename(std::path::Path::new(from), &asked) {
+                    Ok(now) => {
+                        // Both ends: the old path is gone and the new one has
+                        // appeared, and the index has heard of neither.
+                        recheck(
+                            &addr,
+                            vec![from.clone(), now.to_string_lossy().into_owned()],
+                        );
+                        let query = state.borrow().query.clone();
+                        w.invoke_query_changed(query.into());
+                    }
+                    Err(why) => w.set_hint(t(&cat_now, why.msgid())),
+                }
+                return;
+            }
             if what == "open-all" {
                 for p in &paths {
                     open(p);

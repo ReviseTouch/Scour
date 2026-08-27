@@ -301,6 +301,13 @@ pub struct App {
     pub pending: Option<(String, Vec<String>)>,
     /// The question's own words, while it is up.
     pub ask_title: String,
+    /// The question takes a line of text rather than only a yes.
+    pub ask_typing: bool,
+    /// What has been typed into it.
+    pub ask_text: String,
+    /// The word on the button that says yes. A rename does not *move*
+    /// anything, and a button that says so is a button that lies.
+    pub ask_yes: String,
     /// The skip rules, as the service last reported them: three groups and
     /// what is switched off. **Kept from the answer**, because deleting one
     /// means sending the list without it, and a window that has not been told
@@ -402,6 +409,9 @@ impl Default for App {
             menu: Vec::new(),
             pending: None,
             ask_title: String::new(),
+            ask_typing: false,
+            ask_text: String::new(),
+            ask_yes: String::new(),
             rules: Vec::new(),
             note: String::new(),
             revision: 0,
@@ -1521,6 +1531,21 @@ impl App {
             "details" => Want::Peek(first.clone()),
             "csv" => self.write_sheet(),
 
+            "rename" => {
+                self.ask_title = self.say("Rename…").into_owned();
+                self.ask_text = leaf(&first);
+                self.ask_yes = self.say("Rename").into_owned();
+                self.ask_typing = true;
+                self.pending = Some(("rename".into(), vec![first.clone()]));
+                self.panel = Panel::Ask;
+                // The cursor sits on *Cancel*, and the letters go into the line
+                // above it — a terminal has one keyboard and the question has
+                // to say which of the two is listening.
+                self.panel_at = 1;
+                self.dirty = true;
+                Want::Nothing
+            }
+
             "trash" | "open-all" => {
                 // Eight names and then how many are left. A list that runs off
                 // the panel is a list nobody read before pressing yes.
@@ -1529,12 +1554,16 @@ impl App {
                     names.push(format!("… +{}", rows.len() - 8));
                 }
                 self.ask_title = format!("{}  —  {}", line.label, names.join(", "));
+                self.ask_yes = self
+                    .say(if line.id == "trash" { "Move" } else { "Open" })
+                    .into_owned();
+                self.ask_typing = false;
                 self.pending = Some((line.id.clone(), rows));
                 self.panel = Panel::Ask;
                 // **The cursor starts on "no".** A terminal cannot dim what is
                 // behind a question, so where the cursor sits when it opens is
                 // the only thing saying which answer is the safe one.
-                self.panel_at = 0;
+                self.panel_at = 1;
                 self.dirty = true;
                 Want::Nothing
             }
@@ -1553,8 +1582,26 @@ impl App {
         let Some((what, paths)) = self.pending.take() else {
             return Want::Nothing;
         };
-        if which == 0 {
+        // 0 is the line being typed into and 1 is *Cancel*; only 2 is yes.
+        if which < 2 {
             return Want::Nothing;
+        }
+        let typing = std::mem::take(&mut self.ask_text);
+        self.ask_typing = false;
+        if what == "rename" {
+            let Some(from) = paths.first() else {
+                return Want::Nothing;
+            };
+            return match scour_name::rename(std::path::Path::new(from), &typing) {
+                Ok(now) => Want::Recheck(vec![
+                    from.clone(),
+                    now.to_string_lossy().into_owned(),
+                ]),
+                Err(why) => {
+                    self.note = self.say(why.msgid()).into_owned();
+                    Want::Nothing
+                }
+            };
         }
         if what == "open-all" {
             for p in &paths {
@@ -1589,7 +1636,7 @@ impl App {
             Panel::Language => 2,
             Panel::Faces => 3,
             Panel::Menu => self.menu.len(),
-            Panel::Ask => 2,
+            Panel::Ask => 3,
             Panel::None => 0,
         }
     }

@@ -2097,6 +2097,19 @@
       if (j.error) throw new Error(j.error);
       return j;
     },
+    /* A different name for one file. The bridge does the renaming and the
+       service is told to look at both ends — the old path is gone and the new
+       one has appeared, and the index has heard of neither until it is told. */
+    rename: async (path, name) => {
+      const r = await fetch(`/api/rename?${new URLSearchParams({ path, name, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`rename: ${r.status}`);
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    },
     thumbs: async (paths) => {
       const r = await fetch(`/api/thumb?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
@@ -6214,6 +6227,27 @@
           flash(r.refused && r.refused.length
             ? T("{n} could not be moved", { n: fmt(r.refused.length) })
             : T("{n} moved to the wastebasket", { n: fmt(r.gone) }));
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
+
+      case "rename": {
+        /* `prompt` rather than a sheet of this page's own. It is the one
+           dialog a browser draws that takes a line of text, it is modal in the
+           way a rename has to be, and a rename box that is not modal is a box
+           somebody scrolls away from with the file half-renamed. The selection
+           is the extension-less part, which is what a rename is usually
+           about — but a browser will not let a page choose that, so the whole
+           name comes up chosen and the reader types over it. */
+        const was = leaf(p);
+        const name = prompt(T("Rename…"), was);
+        if (name === null || name === was) return;
+        try {
+          const r = await SERVICE.rename(p, name);
+          if (r.refused) return flash(T(r.refused));
+          q.dispatchEvent(new Event("input", { bubbles: true }));
         } catch (err) {
           flash(String(err.message || err));
         }

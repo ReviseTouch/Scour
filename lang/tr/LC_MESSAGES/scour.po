@@ -1341,3 +1341,35 @@ msgstr "NE YAPILABİLİR"
 
 msgid "menu"
 msgstr "menü"
+
+# Why a new name was refused. `scour-name::Refusal::msgid` — the same sentences
+# in all three faces, because the rules are the same in all three.
+
+msgid "a name cannot be empty"
+msgstr "ad boş olamaz"
+
+msgid "a name cannot contain a slash"
+msgstr "adın içinde eğik çizgi olamaz"
+
+msgid "that names a folder, not a file in one"
+msgstr "bu bir klasörün adı, içindeki dosyanın değil"
+
+msgid "that is not a name a filesystem will take"
+msgstr "dosya sisteminin kabul edeceği bir ad değil"
+
+msgid "a name should not end in a space or a dot"
+msgstr "ad boşlukla ya da noktayla bitmemeli"
+
+msgid "that name is too long"
+msgstr "bu ad çok uzun"
+
+msgid "something is already called that"
+msgstr "bu adda bir şey zaten var"
+
+msgid "that is the name it already has"
+msgstr "zaten bu adı taşıyor"
+
+# The button on the rename question. The menu item ends in an ellipsis because
+# it opens a question; the button does not, because it does the thing.
+msgid "Rename"
+msgstr "Adlandır"

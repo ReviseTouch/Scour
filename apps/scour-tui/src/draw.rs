@@ -286,9 +286,24 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         Panel::Ask => (
             std::borrow::Cow::Owned(app.ask_title.clone()),
             vec![
+                // The line being typed, where there is one. Drawn as a panel
+                // line rather than a widget of its own: a terminal has one
+                // keyboard, and what it is talking to has to be visible in the
+                // same list the cursor is walking.
+                PanelLine {
+                    text: if app.ask_typing {
+                        format!("› {}█", app.ask_text)
+                    } else {
+                        String::new()
+                    },
+                    key: String::new(),
+                    dimmed: false,
+                    careful: false,
+                    rule: false,
+                },
                 (app.say("Cancel").into_owned(), false).into(),
                 PanelLine {
-                    text: app.say("Move").into_owned(),
+                    text: app.ask_yes.clone(),
                     key: String::new(),
                     dimmed: false,
                     careful: true,

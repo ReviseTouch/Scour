@@ -329,6 +329,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     // exactly the shape this split exists to stop.
     let acting = req.path == "/api/open"
         || req.path == "/api/trash"
+        || req.path == "/api/rename"
         || req.path == "/api/face"
         || req.path == "/api/thumb"
         || (req.path == "/api/settings" && req.param("set").is_some());
@@ -398,6 +399,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/trash" => api_trash(&mut stream, client, &req),
+        "/api/rename" => api_rename(&mut stream, client, &req),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }
@@ -1377,6 +1379,45 @@ fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+/// Give a file a different name, and tell the index straight away.
+///
+/// Behind the same fence as opening and trashing: a path is renameable only if
+/// the index knows it. What a name may be is `scour-name`'s to decide, so that
+/// the three faces refuse the same names for the same stated reasons.
+fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let (Some(path), Some(name)) = (
+        req.param("path").filter(|p| !p.is_empty()),
+        req.param("name"),
+    ) else {
+        http::fail(stream, "400 Bad Request", "no path or no name");
+        return;
+    };
+    if !matches!(
+        call(client, Request::Stat { path: path.to_owned() }),
+        Ok(Response::Stat(_))
+    ) {
+        http::fail(stream, "404 Not Found", "not in the index");
+        return;
+    }
+    match scour_name::rename(std::path::Path::new(&path), &name) {
+        Ok(now) => {
+            let now = now.to_string_lossy().into_owned();
+            // Both ends: the old path is gone and the new one has appeared, and
+            // the index has heard of neither until it is told.
+            let _ = call(
+                client,
+                Request::Recheck {
+                    paths: vec![path.to_owned(), now.clone()],
+                },
+            );
+            http::json(stream, &serde_json::json!({ "path": now }));
+        }
+        // The refusal is a sentence rather than a code, and it is a catalogue
+        // key: the page looks it up in the reader's language.
+        Err(why) => http::json(stream, &serde_json::json!({ "refused": why.msgid() })),
+    }
 }
 
 /// Send rows to the wastebasket, and tell the index straight away.
