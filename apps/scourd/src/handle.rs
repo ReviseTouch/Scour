@@ -366,6 +366,14 @@ fn run(
             engine.rescan(path)?;
             Response::Accepted
         }
+        // **Not a deletion, however it is being used.** The caller moved the
+        // file; this reads what is there now. The service has never been able
+        // to remove anything from a disk and this does not change that — see
+        // `Request::Recheck`, where the reasoning is written down.
+        Request::Recheck { paths } => {
+            engine.recheck(&paths)?;
+            Response::Accepted
+        }
         // Flush happens here and has a result worth reporting. The heavy
         // levels are queued for the worker, and reporting their empty
         // placeholder printed `Rebuild: 0 B → 0 B in 0 ms` after a rebuild

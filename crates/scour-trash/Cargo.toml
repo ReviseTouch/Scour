@@ -1,0 +1,15 @@
+[package]
+name = "scour-trash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# **Nothing but the platform.** This crate knows the freedesktop trash
+# specification and the filesystem, and it has never heard of Scour — it takes
+# a path and says where the path went. `libc` is here for two calls the
+# standard library does not offer at all: the user id that names a top-level
+# trash directory, and the local time the specification asks to be written
+# down. Neither is a library so much as the operating system's own vocabulary.
+[dependencies]
+libc = { workspace = true }

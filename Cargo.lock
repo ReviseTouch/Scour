@@ -5229,6 +5229,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-trash"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "scour-tui"
 version = "0.1.0"
 dependencies = [

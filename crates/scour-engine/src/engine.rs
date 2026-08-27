@@ -540,6 +540,44 @@ impl Engine {
         }
     }
 
+    /// Look at these paths again, now, rather than when a watcher gets to them.
+    ///
+    /// **What this exists for.** A person who deletes a file from inside Scour
+    /// watches the row it was on. The watcher will notice — in three to eight
+    /// seconds on this machine, most of that the index's own write interval —
+    /// and for a change nobody is waiting on that is the right price. For this
+    /// one it is not: a row that sits there for six seconds after being sent to
+    /// the trash reads as a deletion that did not work, and the second press is
+    /// on a file that is already gone.
+    ///
+    /// It is deliberately **not** a way to change anything. Whoever moved the
+    /// file did the moving, with their own permissions; this only re-reads. The
+    /// service never gained the ability to delete, which for something that
+    /// runs in the background and has at one point been handed `CAP_SYS_ADMIN`
+    /// is worth keeping true.
+    ///
+    /// Paths outside every source are skipped rather than refused: a selection
+    /// can span a source boundary, and one path that is nobody's is not a
+    /// reason to leave the other eleven stale.
+    ///
+    /// Returns how many were looked at.
+    pub fn recheck(&self, paths: &[String]) -> Result<usize> {
+        let sink = Forward(self.changes.clone());
+        let mut done = 0;
+        // Grouped by owner, because `recheck` is a source's method and a
+        // selection of twelve rows is usually one source's twelve rows.
+        let mut by_source: std::collections::BTreeMap<usize, Vec<String>> = Default::default();
+        for path in paths {
+            if let Some(idx) = self.owner_of(path) {
+                by_source.entry(idx).or_default().push(path.clone());
+            }
+        }
+        for (idx, group) in by_source {
+            done += self.shared.sources[idx].recheck(&group, &sink);
+        }
+        Ok(done)
+    }
+
     /// Which source owns this path?
     fn owner_of(&self, path: &str) -> Option<usize> {
         owner_of(&self.shared, path)

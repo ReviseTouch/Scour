@@ -648,6 +648,19 @@ impl Source for FsSource {
         crate::watch::start(self.clone(), opts, sink)
     }
 
+    /// One `stat` a path, straight into the sink — see [`Source::recheck`].
+    ///
+    /// `fresh` is true for the same reason the watcher sets it: a path that
+    /// has become a directory since the index last saw it is a subtree, and a
+    /// row where a tree belongs is a rename that half-landed.
+    fn recheck(&self, paths: &[String], sink: &dyn scour_core::ChangeSink) -> usize {
+        for path in paths {
+            crate::watch::look(self.id, self.traits.real_modes, path, true, sink);
+        }
+        paths.len()
+    }
+
+
     fn open(&self, _id: &EntryId) -> Result<Box<dyn Read + Send>> {
         // An id is not a path. Content extraction goes through `stat` to
         // resolve a path first; when a durable path->id map exists this can

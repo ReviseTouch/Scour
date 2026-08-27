@@ -358,6 +358,22 @@ pub enum Request {
         #[serde(default)]
         path: Option<String>,
     },
+    /// Look at these paths again, now — one `stat` each, no tree walked.
+    ///
+    /// **The answer to "the row is still there".** Something outside the index
+    /// changed these files a moment ago, and the caller is the one that changed
+    /// them: a face that has just sent a file to the trash, renamed one, or
+    /// moved one. A watcher finds that out on its own schedule, which is right
+    /// for a change nobody is waiting on and wrong for this one.
+    ///
+    /// It changes nothing on disk. Whoever moved the file did the moving, with
+    /// their own permissions; the service only re-reads. That distinction is
+    /// the reason this is a separate request rather than a `Delete`: a
+    /// background service that indexes a filesystem should not also be able to
+    /// empty one, and it still cannot.
+    Recheck {
+        paths: Vec<String>,
+    },
     Maintain {
         #[serde(default)]
         level: Maintenance,
@@ -594,6 +610,7 @@ impl Request {
     pub fn is_mutating(&self) -> bool {
         match self {
             Request::Rescan { .. }
+            | Request::Recheck { .. }
             | Request::Maintain { .. }
             | Request::SetSettings { .. }
             // **It starts programs and writes files.** Nothing about the index
@@ -639,7 +656,8 @@ impl Request {
     pub fn streams(&self) -> bool {
         match self {
             Request::Export { .. } => true,
-            Request::Rules {}
+            Request::Recheck { .. }
+            | Request::Rules {}
             | Request::Search { .. }
             | Request::Count { .. }
             | Request::Facets { .. }
@@ -687,6 +705,7 @@ impl Request {
             Request::Stats {} => "stats",
             Request::Await { .. } => "await",
             Request::Rescan { .. } => "rescan",
+            Request::Recheck { .. } => "recheck",
             Request::Maintain { .. } => "maintain",
             Request::Syntax {} => "syntax",
             Request::Shutdown {} => "shutdown",

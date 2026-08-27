@@ -12,6 +12,7 @@ members = [
     "crates/scour-i18n",
     "crates/scour-preview",
     "crates/scour-dupes",
+    "crates/scour-trash",
     "crates/scour-export",
     "crates/scour-settings",
     "crates/scour-places",
@@ -55,6 +56,7 @@ scour-config        = { path = "crates/scour-config" }
 scour-i18n          = { path = "crates/scour-i18n" }
 scour-preview       = { path = "crates/scour-preview" }
 scour-dupes         = { path = "crates/scour-dupes" }
+scour-trash         = { path = "crates/scour-trash" }
 scour-export        = { path = "crates/scour-export" }
 scour-settings      = { path = "crates/scour-settings" }
 scour-places        = { path = "crates/scour-places" }

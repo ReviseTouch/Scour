@@ -177,6 +177,28 @@ pub trait Source: Send + Sync + Debug {
     /// [`Change::Rescan`]: crate::types::Change::Rescan
     fn watch(&self, opts: &ScanOptions, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>>;
 
+    /// Look at these paths again, now, and report what they are.
+    ///
+    /// **For the moment something outside the index changes a file.** A watcher
+    /// finds that out on its own schedule — on this machine three to eight
+    /// seconds later, most of it the index's own write interval — and that is
+    /// the right price for a change nobody is waiting on. It is the wrong price
+    /// for a change somebody just made from inside this program: a row that
+    /// stays on screen for six seconds after being sent to the trash reads as a
+    /// deletion that failed.
+    ///
+    /// So this is the narrow version of a walk: one `stat` a path, no directory
+    /// listed, no tree descended — the same look the watcher takes when it is
+    /// told about a single file. Gone means gone, present means updated.
+    ///
+    /// Returns how many paths were looked at. **The default is zero**, which is
+    /// the honest answer for a source with no cheap way to check one path: it
+    /// tells the caller to fall back to a walk rather than believing the index
+    /// has been reconciled when nothing happened.
+    fn recheck(&self, _paths: &[String], _sink: &dyn ChangeSink) -> usize {
+        0
+    }
+
     /// Read an entry's bytes, for content extraction.
     ///
     /// Sources without [`Caps::CONTENT`] return [`Error::Unsupported`].
