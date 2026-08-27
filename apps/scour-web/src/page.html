@@ -1381,6 +1381,25 @@
     padding: calc(var(--u) * 1.5) calc(var(--u) * 2.5);
     border-radius: 2px; cursor: pointer;
   }
+  /* The row menu proper — the column picker and the language list borrow the
+     same box, but only this one has weights and rules in it. */
+  .rowmenu button { display: flex; align-items: center; gap: calc(var(--u) * 3); }
+  /* The shortcut, pushed right and quieter than the label: it is there to be
+     learned, not read. */
+  .mkey {
+    margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+    color: var(--ink-3); letter-spacing: .02em;
+  }
+  /* A rule between groups. The one above the wastebasket is the point of
+     having them: a hand travelling down the list stops at a boundary rather
+     than arriving at the delete by momentum. */
+  .mline { height: 1px; background: var(--line); margin: 3px calc(var(--u) * 1.5); }
+  /* Reversible, but it changes something. */
+  .rowmenu button.w-careful { color: var(--danger); }
+  .rowmenu button.w-careful:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  /* It will start more programs, or take long enough to notice — and it asks
+     first, which is what the trailing ellipsis in the label promises. */
+  .rowmenu button.w-heavy { color: var(--ink-3); }
   .rowmenu.cols { max-height: 60vh; overflow-y: auto; }
   .rowmenu.cols .tick {
     display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
@@ -1988,6 +2007,17 @@
    * ------------------------------------------------------------------ */
   const TOKEN = new URLSearchParams(location.search).get("t") || "";
 
+  /* The right-click menu, as `scour-ui` holds it.
+   *
+   * **Injected rather than written here.** The window and the terminal draw
+   * the same list, and three copies of it agree on the day they are written
+   * and drift on every day after — an item added to one, a shortcut printed
+   * in another, a word translated twice into two different words. The
+   * palette goes this way for the same reason; so did the columns, and
+   * neither has drifted since. Deleting the marker below does not fail
+   * quietly: a test asks the served page for it. */
+  const MENU = /* @MENU@ */ [];
+
   const SERVICE = {
     async get(route, params, signal) {
       const q = new URLSearchParams({ ...params, t: TOKEN });
@@ -2053,6 +2083,20 @@
        than the query because a screenful of them is several kilobytes and a
        request line is bounded at sixteen; over that it is cut rather than
        refused. */
+    /* Rows to the wastebasket. `POST`, like everything that does rather than
+       reads, and the bridge does the moving with this user's permissions — the
+       service is never asked to delete anything. It is told to look again,
+       which is a different sentence. */
+    trash: async (paths) => {
+      const r = await fetch(`/api/trash?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`trash: ${r.status}`);
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    },
     thumbs: async (paths) => {
       const r = await fetch(`/api/thumb?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
@@ -6037,23 +6081,29 @@
       drawSelBar();
     }
     const many = SEL.size > 1;
-    menu.innerHTML = (many
-      ? [
-          [T("Copy {n} paths", { n: fmt(SEL.size) }), "copy"],
-          // Not "open them": opening a selection means as many programs as
-          // there are rows, and the bar's button is where that lives, behind
-          // a question. What a menu offers should be safe to press.
-          [T("Open their folders"), "folders"],
-          [T("Drop the selection"), "clear"],
-        ]
-      : [
-          [T("Open"), "file"],
-          [T("Open its folder"), "folder"],
-          [T("Copy the path"), "copy"],
-        ]
-    ).map(([label, act]) =>
-      `<button type="button" data-act="${act}">${escape_(label)}</button>`).join("");
+    const dir = !!(tr.__row && tr.__row.is_dir);
+    /* Built from the shared table, not from a list written here — see `MENU`.
+       The count goes in through the same `{n}` the catalogue uses, so a
+       language that puts the number somewhere else still gets it there. */
+    const shape = (w) => (w === "many" ? many
+                        : w === "one" ? !many
+                        : w === "file" ? (!many && !dir)
+                        : (!many && dir));
+    let html = "", last = null;
+    for (const it of MENU) {
+      if (!shape(it.when)) continue;
+      if (last !== null && it.group !== last) html += '<div class="mline"></div>';
+      last = it.group;
+      const label = escape_(T(it.msgid, { n: fmt(SEL.size || 1) }));
+      const key = it.key ? `<span class="mkey">${escape_(it.key)}</span>` : "";
+      html += `<button type="button" data-act="${it.id}" class="w-${it.weight}">${label}${key}</button>`;
+    }
+    menu.innerHTML = html;
     menu.dataset.path = p;
+    /* The row itself, not only its path: three items ask it what kind it is,
+       how big it is, or what it is called, and asking the service again for
+       what is already on screen would be a round trip to learn nothing. */
+    menu.__row = tr.__row || null;
     menu.hidden = false;
     /* Kept on screen: near the pointer, but never past the edge. */
     const r = menu.getBoundingClientRect();
@@ -6062,26 +6112,119 @@
     menu.querySelector("button").focus();
   });
 
-  menu.addEventListener("click", (e) => {
-    const act = e.target.dataset && e.target.dataset.act;
+  menu.addEventListener("click", async (e) => {
+    const b = e.target.closest("button");
+    const act = b && b.dataset && b.dataset.act;
     if (!act) return;
     const p = menu.dataset.path;
+    const row = menu.__row;
+    const many = SEL.size > 1;
+    const picked = many ? [...SEL.keys()] : [p];
     menu.hidden = true;
-    if (act === "clear") {
-      clearSel();
-    } else if (act === "folders") {
-      openFolders();
-    } else if (act === "copy") {
-      // One row or the whole selection, and the same key order the bar copies
-      // in — insertion order, which is the order they were picked.
-      const text = SEL.size > 1 ? [...SEL.keys()].join("\n") : p;
-      const said = SEL.size > 1
-        ? T("{n} paths copied", { n: fmt(SEL.size) })
-        : T("path copied");
+
+    /* Text on the clipboard, said once. Both copy items land here because the
+       only difference between them is which part of the path is taken. */
+    const put = (text, said) =>
       navigator.clipboard.writeText(text).then(() => flash(said),
                                                () => flash(T("could not copy")));
-    } else {
-      launch(p, act);
+    const leaf = (x) => x.slice(x.lastIndexOf("/") + 1);
+    const up = (x) => x.slice(0, x.lastIndexOf("/")) || "/";
+
+    switch (act) {
+      case "clear":   return clearSel();
+      case "folders": return openFolders();
+      case "open":    return launch(p, "file");
+      case "folder":  return launch(p, "folder");
+
+      case "open-all": {
+        /* The one item that starts more programs than there are hands. It asks
+           first — the trailing ellipsis in its label is a promise. */
+        if (!confirm(T("Open all {n}…", { n: fmt(picked.length) }))) return;
+        for (const x of picked) launch(x, "file");
+        return;
+      }
+
+      case "copy-path":
+        return put(picked.join("\n"), many
+          ? T("{n} paths copied", { n: fmt(picked.length) })
+          : T("path copied"));
+      case "copy-name":
+        return put(picked.map(leaf).join("\n"), many
+          ? T("{n} names copied", { n: fmt(picked.length) })
+          : T("name copied"));
+
+      /* The three that are only possible because there is an index. Each one
+         is the row asking the service a different question about itself. */
+      case "search-here":
+        return toggleTerm("under:" + (row && row.is_dir ? p : up(p)));
+      case "search-kind": {
+        const dot = leaf(p).lastIndexOf(".");
+        if (dot <= 0) return flash(T("no extension to search for"));
+        return toggleTerm("ext:" + leaf(p).slice(dot + 1).toLowerCase());
+      }
+      case "duplicates": {
+        /* Duplicates are found by content, and the cheapest way to ask about
+           *this* file's is to narrow to files of its exact size — every copy
+           of it is in that set by definition, and almost nothing else is. */
+        if (row && row.size !== undefined && row.size !== null) toggleTerm("size:=" + row.size);
+        document.getElementById("tab-report").click();
+        return;
+      }
+      case "usage":
+        toggleTerm("under:" + p);
+        document.getElementById("tab-report").click();
+        return;
+      case "skip": {
+        rulesBtn.click();
+        /* The name rather than the path, because that is the rule people mean:
+           a `node_modules` anywhere is the same `node_modules`. The field is
+           left focused and unsent — the panel's own button commits it, so a
+           menu press never adds a rule by itself. */
+        const field = rulesPanel.querySelector('input[type="text"]');
+        if (field) { field.value = leaf(p); field.focus(); field.select(); }
+        return;
+      }
+
+      case "csv": {
+        const b = document.getElementById("csv");
+        if (b) b.click();
+        return;
+      }
+      case "details": {
+        const t = document.getElementById("peek-toggle");
+        if (t && t.getAttribute("aria-pressed") !== "true") t.click();
+        return;
+      }
+
+      case "trash": {
+        const said = many
+          ? T("Move {n} to the wastebasket", { n: fmt(picked.length) })
+          : T("Move to the wastebasket");
+        if (!confirm(said + "\n\n" + picked.slice(0, 8).join("\n") +
+                     (picked.length > 8 ? "\n…" : ""))) return;
+        try {
+          const r = await SERVICE.trash(picked);
+          /* The rows go now rather than when a watcher gets round to them —
+             the service has already been told to look again, and this is the
+             half of that the eye sees. */
+          for (const x of picked) SEL.delete(x);
+          /* Ask the current query again through the path a keystroke takes,
+             rather than a second way of doing the same thing. */
+          q.dispatchEvent(new Event("input", { bubbles: true }));
+          flash(r.refused && r.refused.length
+            ? T("{n} could not be moved", { n: fmt(r.refused.length) })
+            : T("{n} moved to the wastebasket", { n: fmt(r.gone) }));
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
+
+      default:
+        /* An id the page has no answer for. It cannot be silent: the table is
+           shared, and an item added for the window that nobody wired here
+           would otherwise look like a press that did nothing. */
+        flash(T("not in this face yet"));
     }
   });
   const hideMenu = () => { menu.hidden = true; };

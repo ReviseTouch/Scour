@@ -75,6 +75,18 @@ impl From<std::io::Error> for Error {
 /// The path may be a file, a directory or a symlink; a directory goes whole,
 /// because a rename moves a tree in one step and this never copies.
 pub fn trash(path: &Path) -> Result<PathBuf, Error> {
+    into(path, home_trash())
+}
+
+/// [`trash`], with the home wastebasket named rather than looked up.
+///
+/// **Exists so the tests never touch the desktop's.** The obvious way to
+/// redirect them is `XDG_DATA_HOME`, and that is a process-wide variable in a
+/// test runner that runs threads in parallel: three tests set it, whichever
+/// set it last wins, and two of them then trash into a third's directory. That
+/// is not a hypothetical — it passed alone and failed in the workspace run,
+/// which is the worst shape a test failure comes in.
+fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     let path = absolute(path);
     let name = path
         .file_name()
@@ -86,7 +98,6 @@ pub fn trash(path: &Path) -> Result<PathBuf, Error> {
     let meta = std::fs::symlink_metadata(&path).map_err(|_| Error::Missing(path.clone()))?;
     let _ = meta;
 
-    let home = home_trash();
     let dir = match &home {
         Some(h) if same_device(h, &path) => h.clone(),
         _ => volume_trash(&path).ok_or_else(|| Error::NoTrash(path.clone()))?,
@@ -346,14 +357,10 @@ mod tests {
         let box_ = sandbox();
         let data = box_.join("data");
         std::fs::create_dir_all(&data).unwrap();
-        // SAFETY: single-threaded test process; the variable is read on the
-        // next line and nothing else in this crate spawns threads.
-        unsafe { std::env::set_var("XDG_DATA_HOME", &data) };
-
         let file = box_.join("notes.txt");
         std::fs::write(&file, b"hello").unwrap();
 
-        let landed = trash(&file).expect("trashed");
+        let landed = into(&file, Some(data.join("Trash"))).expect("trashed");
         assert!(!file.exists(), "the original is gone");
         assert_eq!(std::fs::read(&landed).unwrap(), b"hello", "bytes intact");
 
@@ -374,15 +381,13 @@ mod tests {
         let box_ = sandbox();
         let data = box_.join("data");
         std::fs::create_dir_all(&data).unwrap();
-        unsafe { std::env::set_var("XDG_DATA_HOME", &data) };
-
         let mut landed = Vec::new();
         for (i, sub) in ["a", "b", "c"].iter().enumerate() {
             let dir = box_.join(sub);
             std::fs::create_dir_all(&dir).unwrap();
             let file = dir.join("notes.tar.gz");
             std::fs::write(&file, format!("{i}")).unwrap();
-            landed.push(trash(&file).expect("trashed"));
+            landed.push(into(&file, Some(data.join("Trash"))).expect("trashed"));
         }
 
         let names: Vec<String> = landed
@@ -406,13 +411,11 @@ mod tests {
         let box_ = sandbox();
         let data = box_.join("data");
         std::fs::create_dir_all(&data).unwrap();
-        unsafe { std::env::set_var("XDG_DATA_HOME", &data) };
-
         let tree = box_.join("project");
         std::fs::create_dir_all(tree.join("src")).unwrap();
         std::fs::write(tree.join("src/main.rs"), b"fn main() {}").unwrap();
 
-        let landed = trash(&tree).expect("trashed");
+        let landed = into(&tree, Some(data.join("Trash"))).expect("trashed");
         assert!(!tree.exists());
         assert_eq!(
             std::fs::read_to_string(landed.join("src/main.rs")).unwrap(),
@@ -426,8 +429,8 @@ mod tests {
     fn what_is_not_there_is_not_trashed_and_says_so() {
         let box_ = sandbox();
         let missing = box_.join("never-existed");
-        assert!(matches!(trash(&missing), Err(Error::Missing(_))));
-        assert!(matches!(trash(Path::new("/")), Err(Error::Unnamed(_))));
+        assert!(matches!(into(&missing, None), Err(Error::Missing(_))));
+        assert!(matches!(into(Path::new("/"), None), Err(Error::Unnamed(_))));
         std::fs::remove_dir_all(&box_).ok();
     }
 

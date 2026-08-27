@@ -52,6 +52,7 @@ pub const SCANNING: &str = "scanning {n}";
 /// It names the command rather than only the condition. A reader who cannot
 /// act on a number stops reading numbers.
 pub const REBUILD_ADVISED: &str = "`scour maintain rebuild` would speed searches up";
+pub mod menu;
 pub mod query;
 
 /// A colour, and the one representation both sides can be built from.
@@ -154,6 +155,14 @@ pub struct Palette {
     pub focus: Rgba,
     /// The row under the pointer.
     pub hover: Rgba,
+    /// What a menu draws on the one item that changes something.
+    ///
+    /// **Not an error colour.** Nothing has gone wrong when this is on screen;
+    /// it is on the item that moves a file to the wastebasket, and the reader
+    /// is being told which one that is before their hand gets there. Red
+    /// rather than orange because the reader already knows what red on a menu
+    /// item means and this is not the place to teach them something new.
+    pub danger: Rgba,
     /// The time spectrum, newest to oldest. Six bands, and the engine already
     /// stores rows in date order, so an unbroken spectrum runs the length of
     /// the list.
@@ -209,6 +218,9 @@ pub const DARK: Palette = Palette {
     pick: Rgba::wash(0x4a9eff, 26),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0x171f29),
+    // Legible on the dark panel without shouting: the same red the
+    // browser face uses for a refused rule, one step brighter.
+    danger: Rgba::hex(0xd07070),
     t: [
         Rgba::hex(0xffb020),
         Rgba::hex(0xff7a45),
@@ -247,6 +259,9 @@ pub const LIGHT: Palette = Palette {
     pick: Rgba::wash(0x0062cc, 20),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0xefece4),
+    // Darker on paper, so it carries the same weight against a light
+    // ground that the one above does against a dark one.
+    danger: Rgba::hex(0xa8342c),
     t: [
         Rgba::hex(0xd98600),
         Rgba::hex(0xd4532a),
@@ -334,6 +349,7 @@ pub fn css_vars(p: &Palette) -> String {
     put("pick", &p.pick);
     put("focus", &p.focus);
     put("hover", &p.hover);
+    put("danger", &p.danger);
     for (i, c) in p.t.iter().enumerate() {
         put(&format!("t{i}"), c);
     }

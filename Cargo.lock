@@ -5278,6 +5278,7 @@ dependencies = [
  "scour-preview",
  "scour-proto",
  "scour-thumbs",
+ "scour-trash",
  "scour-ui",
  "serde_json",
 ]

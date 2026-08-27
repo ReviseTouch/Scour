@@ -37,6 +37,9 @@ scour-ui     = { workspace = true }
 # — not even `scour-core` — because "what can be shown of this file" is a
 # question about a file and a decoder, not about an index.
 scour-preview = { workspace = true }
+# The wastebasket, by the freedesktop specification. Deleting is this
+# process's job rather than the service's — see `api_trash`.
+scour-trash   = { workspace = true }
 # The reader and the writer of the desktop's thumbnail cache have to be the
 # same lines; see `icons`. Dependency-free for the same reason `scour-preview`
 # is — where a picture lives is a question about a desktop, not about an index.

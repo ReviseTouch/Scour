@@ -84,11 +84,42 @@ fn page() -> &'static str {
         let theme = format!(
             ":root {{\n{dark}{metrics}  }}\n\n               @media (prefers-color-scheme: light) {{\n    :root {{\n{light}    }}\n  }}\n               :root[data-theme=\"light\"] {{\n{light}  }}\n               :root[data-theme=\"dark\"] {{\n{dark}  }}\n"
         );
+        // The menu, from the one table every face reads. `id` and `key` are
+        // not translated; `msgid` is the catalogue key the page looks up.
+        let menu = serde_json::Value::Array(
+            scour_ui::menu::ITEMS
+                .iter()
+                // What this face cannot do is left out here rather than drawn
+                // and disabled: a browser will never put a file on the
+                // clipboard, and an item greyed for ever is a promise.
+                .filter(|i| !i.except.contains(&scour_ui::faces::Face::Page))
+                .map(|i| {
+                    serde_json::json!({
+                        "id": i.id,
+                        "msgid": i.msgid,
+                        "key": i.key,
+                        "group": i.group,
+                        "weight": match i.weight {
+                            scour_ui::menu::Weight::Plain => "plain",
+                            scour_ui::menu::Weight::Careful => "careful",
+                            scour_ui::menu::Weight::Heavy => "heavy",
+                        },
+                        "when": match i.when {
+                            scour_ui::menu::When::File => "file",
+                            scour_ui::menu::When::Folder => "folder",
+                            scour_ui::menu::When::One => "one",
+                            scour_ui::menu::When::Many => "many",
+                        },
+                    })
+                })
+                .collect(),
+        );
         PAGE.replacen(
             "/* @THEME@ — see `scour-ui`; the bridge writes this block when it serves\n     the page, so that the window and this page cannot drift apart. */",
             &theme,
             1,
         )
+        .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
     })
 }
 
@@ -297,6 +328,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     // `<img src>` that quietly makes a machine decode a video — which is
     // exactly the shape this split exists to stop.
     let acting = req.path == "/api/open"
+        || req.path == "/api/trash"
         || req.path == "/api/face"
         || req.path == "/api/thumb"
         || (req.path == "/api/settings" && req.param("set").is_some());
@@ -365,6 +397,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/face" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
+        "/api/trash" => api_trash(&mut stream, client, &req),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }
@@ -1346,6 +1379,56 @@ fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// Send rows to the wastebasket, and tell the index straight away.
+///
+/// **Behind the same fence as opening.** A path is trashable only if the index
+/// knows it, which is the check `api_open` makes and for the same reason: the
+/// page may ask for anything, and what it may ask *about* is what has already
+/// been indexed under a configured root. A page that could name
+/// `/etc/shadow` here would be a page that could move it.
+///
+/// The move itself is this process's, with this user's permissions — the
+/// service never gains the ability to delete. What goes to the service
+/// afterwards is [`Request::Recheck`], which only re-reads: without it the row
+/// sits on screen until a watcher gets round to it, and a deletion that leaves
+/// its row behind reads as one that failed.
+fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no paths");
+        return;
+    };
+    let asked: Vec<String> = raw.split('\n').filter(|p| !p.is_empty()).map(str::to_owned).collect();
+
+    let mut gone = Vec::new();
+    let mut refused = Vec::new();
+    for path in &asked {
+        // In the index, or not ours.
+        if !matches!(
+            call(client, Request::Stat { path: path.clone() }),
+            Ok(Response::Stat(_))
+        ) {
+            refused.push(format!("{path}: not in the index"));
+            continue;
+        }
+        match scour_trash::trash(std::path::Path::new(path)) {
+            Ok(_) => gone.push(path.clone()),
+            Err(e) => refused.push(format!("{path}: {e}")),
+        }
+    }
+
+    // Even a partial success is worth telling the index about, and a failed
+    // one is worth rechecking too: the reason it could not be trashed is
+    // sometimes that somebody else already removed it.
+    if !asked.is_empty() {
+        let _ = call(client, Request::Recheck { paths: asked });
+    }
+
+    http::json(
+        stream,
+        &serde_json::json!({ "gone": gone.len(), "refused": refused }),
+    );
+}
+
 fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1864,6 +1947,42 @@ mod tests {
             scour_ui::MISTAKEN.len(),
             "page.html's MISTAKEN has words `scour_ui::MISTAKEN` does not"
         );
+    }
+
+    /// The menu the page draws is the one `scour-ui` holds.
+    ///
+    /// **Two ways this breaks, and neither shows up on screen as itself.** The
+    /// marker can be renamed in the page, in which case the injection silently
+    /// does nothing and every right-click draws an empty box. Or an item can be
+    /// added to the table and the page can go on drawing the same list, because
+    /// the table it read was compiled into a binary that was not rebuilt. The
+    /// first is what this test is really for; the second is what having one
+    /// table at all is for.
+    #[test]
+    fn the_page_is_served_with_the_menu_the_shared_crate_holds() {
+        let served = page();
+        assert!(
+            !served.contains("/* @MENU@ */"),
+            "the marker is still in the served page, so nothing replaced it"
+        );
+        for item in scour_ui::menu::ITEMS {
+            if item.except.contains(&scour_ui::faces::Face::Page) {
+                assert!(
+                    !served.contains(&format!("\"id\":\"{}\"", item.id))
+                        || scour_ui::menu::ITEMS
+                            .iter()
+                            .any(|o| o.id == item.id && !o.except.contains(&scour_ui::faces::Face::Page)),
+                    "{} cannot be done in a browser and was served anyway",
+                    item.id
+                );
+                continue;
+            }
+            assert!(
+                served.contains(&format!("\"msgid\":\"{}\"", item.msgid.replace('"', "\\\""))),
+                "the page was served without {:?}",
+                item.msgid
+            );
+        }
     }
 
     /// The page's script parses.

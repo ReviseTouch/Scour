@@ -1247,3 +1247,80 @@ msgstr "taranıyor {n}"
 
 msgid "`scour maintain rebuild` would speed searches up"
 msgstr "`scour maintain rebuild` aramaları hızlandırır"
+
+# --- the right-click menu. One table in `scour-ui::menu`, three faces. ---
+#
+# "Çöp kutusu" rather than "sil": the item does not delete, it moves, and the
+# word is what tells a reader the mistake is recoverable before they make it.
+
+msgid "Open with…"
+msgstr "Birlikte aç…"
+
+msgid "Open the folder above"
+msgstr "Üst klasörünü aç"
+
+msgid "Search this folder"
+msgstr "Bu klasörde ara"
+
+msgid "Search inside it"
+msgstr "İçinde ara"
+
+msgid "Search the same kind"
+msgstr "Aynı türden ara"
+
+msgid "Find its duplicates"
+msgstr "Kopyalarını bul"
+
+msgid "What it weighs"
+msgstr "Boyutunu hesapla"
+
+msgid "Skip it in searches…"
+msgstr "Aramalarda atla…"
+
+msgid "Copy the name"
+msgstr "Adı kopyala"
+
+msgid "Copy the file"
+msgstr "Dosyayı kopyala"
+
+msgid "Rename…"
+msgstr "Yeniden adlandır…"
+
+msgid "Move to the wastebasket"
+msgstr "Çöp kutusuna taşı"
+
+msgid "Details"
+msgstr "Ayrıntılar"
+
+msgid "Open all {n}…"
+msgstr "Hepsini aç ({n})…"
+
+msgid "Copy {n} names"
+msgstr "{n} adı kopyala"
+
+msgid "Copy {n} files"
+msgstr "{n} dosyayı kopyala"
+
+msgid "Export as CSV…"
+msgstr "CSV olarak ver…"
+
+msgid "Move {n} to the wastebasket"
+msgstr "{n} satırı çöp kutusuna taşı"
+
+msgid "name copied"
+msgstr "ad kopyalandı"
+
+msgid "{n} names copied"
+msgstr "{n} ad kopyalandı"
+
+msgid "no extension to search for"
+msgstr "aranacak bir uzantı yok"
+
+msgid "{n} moved to the wastebasket"
+msgstr "{n} öğe çöp kutusuna taşındı"
+
+msgid "{n} could not be moved"
+msgstr "{n} öğe taşınamadı"
+
+msgid "not in this face yet"
+msgstr "bu arayüzde henüz yok"
