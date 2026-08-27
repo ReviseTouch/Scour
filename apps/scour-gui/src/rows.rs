@@ -695,6 +695,19 @@ impl Rows {
     }
 
     /// The path of a row, if its page is in hand.
+    /// The path and whether it is a directory, in one look.
+    ///
+    /// **Two questions, one borrow.** The menu needs both — which items a row
+    /// gets depends on the second — and asking twice means taking the page
+    /// lock twice for a row that could have been replaced in between.
+    pub fn what_at(&self, row: usize) -> Option<(String, bool, i64)> {
+        let pages = self.pages.borrow();
+        pages
+            .at(row)
+            .map(|k| (k.row.path.to_string(), k.row.is_dir, k.bytes))
+            .filter(|(p, _, _)| !p.is_empty())
+    }
+
     pub fn path_at(&self, row: usize) -> Option<String> {
         let pages = self.pages.borrow();
         pages

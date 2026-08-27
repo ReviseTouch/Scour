@@ -32,6 +32,7 @@ export struct Scheme {
     pick: brush,
     focus: brush,
     hover: brush,
+    danger: brush,
     t0: brush,
     t1: brush,
     t2: brush,
@@ -72,6 +73,9 @@ export global Theme {
     out property <brush> mark-ink: c.mark-ink;
     out property <brush> focus: c.focus;
     out property <brush> hover: c.hover;
+    // The one item in a menu that changes something. Not an error colour:
+    // nothing has gone wrong, the reader is being told which item it is.
+    out property <brush> danger: c.danger;
     // What a selected row is tinted with. **`pick`, and translucent**, which is
     // the browser's answer: a row can be selected *and* hold a match at once,
     // and an opaque fill would bury the match wash under it.

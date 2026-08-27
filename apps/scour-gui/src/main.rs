@@ -45,7 +45,7 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, Row, Rule, Scheme, Span, Theme};
+pub use ui::{Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, MenuItem, Row, Rule, Scheme, Span, Theme};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -1731,6 +1731,234 @@ fn main() -> Result<()> {
         });
     }
 
+    // --- the right-click menu ---------------------------------------------
+    //
+    // Two callbacks and no vocabulary: what the menu says and which items a row
+    // gets is `scour_ui::menu`'s, and the window only draws and reports back.
+    {
+        let rows = Rc::clone(&rows);
+        let picks = Rc::clone(&picks);
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        window.on_menu_at(move |i, x, y| {
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            let picked = picks.borrow().len();
+            let is_dir = rows
+                .what_at(usize::try_from(i).unwrap_or(0))
+                .map(|(_, d, _)| d)
+                .unwrap_or(false);
+            let mut model: Vec<MenuItem> = Vec::new();
+            let mut last: Option<u8> = None;
+            for item in scour_ui::menu::items_for(picked, is_dir, scour_ui::faces::Face::Window) {
+                model.push(MenuItem {
+                    id: item.id.into(),
+                    // The count goes in through the same `{n}` the catalogue
+                    // uses, so a language that puts the number somewhere else
+                    // still gets it there.
+                    label: t(&cat, item.msgid)
+                        .replace("{n}", &grouped(picked.max(1) as u64))
+                        .into(),
+                    key: item.key.into(),
+                    rule: last.is_some_and(|l| l != item.group),
+                    careful: item.weight == scour_ui::menu::Weight::Careful,
+                    heavy: item.weight == scour_ui::menu::Weight::Heavy,
+                });
+                last = Some(item.group);
+            }
+            w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+            w.set_menu_x(x);
+            w.set_menu_y(y);
+            w.set_menu_open(true);
+        });
+    }
+
+    // What a pending question is about, while it is being asked.
+    //
+    // **The paths are taken when the menu is pressed, not when the answer
+    // comes back.** In between, an index that is being watched can move a row
+    // out from under the selection — and a question about twelve rows that
+    // deletes whichever twelve are there when it is answered is a different
+    // program from the one the reader agreed to.
+    let pending: Rc<RefCell<Option<(String, Vec<String>)>>> = Rc::new(RefCell::new(None));
+
+    {
+        let rows = Rc::clone(&rows);
+        let picks = Rc::clone(&picks);
+        let state = Rc::clone(&state);
+        let link = Rc::clone(&link);
+        let model = Rc::clone(&rows);
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        let pending = Rc::clone(&pending);
+        let addr = addr.clone();
+        window.on_menu_pick(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            let cat_now = cat.borrow().clone();
+            let here = w.get_selected();
+            let (path, is_dir, _bytes) = match rows.what_at(usize::try_from(here).unwrap_or(0)) {
+                Some(x) => x,
+                None => return,
+            };
+            // One row or the whole selection, in the order they were picked.
+            let chosen: Vec<String> = if picks.borrow().len() > 1 {
+                picks.borrow().values().map(|p| p.path.clone()).collect()
+            } else {
+                vec![path.clone()]
+            };
+            let say = |w: &MainWindow, msg: slint::SharedString| w.set_hint(msg);
+            let folder = |p: &str| match p.rfind('/') {
+                Some(0) => "/".to_string(),
+                Some(at) => p[..at].to_string(),
+                None => ".".to_string(),
+            };
+            let leaf = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+
+            match id.as_str() {
+                "open" => open(&path),
+                "folder" => open(&folder(&path)),
+                "folders" => {
+                    for dir in folders_of(&picks.borrow()) {
+                        open(&dir);
+                    }
+                }
+                "clear" => {
+                    picks.borrow_mut().clear();
+                    show_picks(&w, &cat_now, &model, &picks.borrow(), false);
+                }
+
+                // The three that are only possible because there is an index.
+                "search-here" => {
+                    let scope = if is_dir { path.clone() } else { folder(&path) };
+                    w.invoke_query_changed(format!("under:{scope}").into());
+                }
+                "search-kind" => {
+                    let name = leaf(&path);
+                    match name.rfind('.').filter(|at| *at > 0) {
+                        Some(at) => w.invoke_query_changed(
+                            format!("ext:{}", name[at + 1..].to_lowercase()).into(),
+                        ),
+                        None => say(&w, t(&cat_now, "no extension to search for")),
+                    }
+                }
+                "duplicates" | "usage" => {
+                    if id == "usage" {
+                        w.invoke_query_changed(format!("under:{path}").into());
+                    }
+                    w.set_tab("report".into());
+                }
+                "skip" => {
+                    w.set_panel("rules".into());
+                    say(&w, leaf(&path).into());
+                }
+
+                "copy-path" | "copy-name" => {
+                    let text = if id == "copy-name" {
+                        chosen.iter().map(|p| leaf(p)).collect::<Vec<_>>().join("\n")
+                    } else {
+                        chosen.join("\n")
+                    };
+                    match scour_clip::text(&text) {
+                        Ok(()) => say(&w, t(&cat_now, "path copied")),
+                        // No helper on this machine: the path still goes
+                        // somewhere a shell can take it, which is what this
+                        // window did before it had a clipboard at all.
+                        Err(e) => {
+                            println!("{text}");
+                            say(&w, format!("{e}").into());
+                        }
+                    }
+                }
+                "copy-file" => {
+                    let paths: Vec<&std::path::Path> =
+                        chosen.iter().map(std::path::Path::new).collect();
+                    match scour_clip::files(&paths) {
+                        Ok(()) => say(&w, t(&cat_now, "path copied")),
+                        Err(e) => say(&w, format!("{e}").into()),
+                    }
+                }
+                "details" => w.set_peeking(!w.get_peeking()),
+                "csv" => w.invoke_tool_clicked("csv".into()),
+
+                // The two that ask first. Everything above happens on the
+                // press; these two put the question up and wait.
+                "trash" | "open-all" => {
+                    let title = t(&cat_now, if id == "trash" {
+                        "Move to the wastebasket"
+                    } else {
+                        "Open all {n}…"
+                    })
+                    .replace("{n}", &grouped(chosen.len() as u64));
+                    // Eight names and then a line saying how many are left.
+                    // A list that runs off the bottom of the sheet is a list
+                    // nobody read before pressing yes.
+                    let mut body: Vec<String> = chosen.iter().take(8).map(|p| leaf(p)).collect();
+                    if chosen.len() > 8 {
+                        body.push(format!("… +{}", grouped((chosen.len() - 8) as u64)));
+                    }
+                    w.set_ask_title(title.into());
+                    w.set_ask_body(body.join("\n").into());
+                    w.set_ask_yes(t(&cat_now, if id == "trash" { "Move" } else { "Open" }).into());
+                    w.set_ask_no(t(&cat_now, "Cancel").into());
+                    *pending.borrow_mut() = Some((id.to_string(), chosen));
+                    w.set_ask_open(true);
+                }
+
+                _ => say(&w, t(&cat_now, "not in this face yet")),
+            }
+            let _ = (&state, &link, &addr);
+        });
+    }
+
+    {
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        let model = Rc::clone(&rows);
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        let pending = Rc::clone(&pending);
+        let addr = addr.clone();
+        window.on_ask_answer(move |yes| {
+            let Some((what, paths)) = pending.borrow_mut().take() else {
+                return;
+            };
+            if !yes {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            let cat_now = cat.borrow().clone();
+            if what == "open-all" {
+                for p in &paths {
+                    open(p);
+                }
+                return;
+            }
+            // The move is this process's, with this user's permissions. The
+            // service is only told to look again — see `Request::Recheck`.
+            let mut gone = 0usize;
+            let mut refused: Option<String> = None;
+            for p in &paths {
+                match scour_trash::trash(std::path::Path::new(p)) {
+                    Ok(_) => gone += 1,
+                    Err(e) => {
+                        refused.get_or_insert_with(|| e.to_string());
+                    }
+                }
+            }
+            recheck(&addr, paths);
+            w.set_hint(match refused {
+                Some(why) => why.into(),
+                None => t(&cat_now, "{n} moved to the wastebasket")
+                    .replace("{n}", &grouped(gone as u64))
+                    .into(),
+            });
+            // Ask the current query again, so the rows go now.
+            let query = state.borrow().query.clone();
+            w.invoke_query_changed(query.into());
+            let _ = (&link, &model);
+        });
+    }
+
     // Proof that the paragraph above works.
     //
     // A crash logger nobody has ever seen fire is a crash logger that does
@@ -2123,6 +2351,25 @@ fn main() -> Result<()> {
                     }
                 },
             );
+        });
+    }
+
+    // The right-click menu, opened without a right hand.
+    //
+    // `SCOUR_GUI_MENU=3 scour-gui` puts it on the fourth row. A menu is drawn
+    // by a pointer event and there is no way to synthesise one into a Slint
+    // window from outside it, so without this the only way to look at the menu
+    // is to open a window on somebody's screen and use their mouse.
+    if let Some(row) = std::env::var("SCOUR_GUI_MENU")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::from_millis(1400), move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_selected(row);
+                w.invoke_menu_at(row, 360.0 * 1.0, 300.0 * 1.0);
+            }
         });
     }
 
@@ -3789,6 +4036,25 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Tell the service to look at these paths again, now.
+///
+/// **A connection of its own, and that is deliberate.** The window's `Link`
+/// has three lanes and a coalescing rule built for a search box; a request
+/// that happens once a press, after something on disk has already changed,
+/// does not belong in any of them. The export path opens its own socket for
+/// the same reason.
+///
+/// Failure is silent because there is nothing useful to say: the file is
+/// already in the wastebasket, and the row will go when a watcher gets to it.
+fn recheck(addr: &str, paths: Vec<String>) {
+    let addr = addr.to_owned();
+    std::thread::spawn(move || {
+        if let Ok(mut client) = scour_ipc::Client::connect(&addr) {
+            let _ = client.call(scour_proto::Request::Recheck { paths });
+        }
+    });
+}
+
 /// Hand a path to the desktop.
 ///
 /// `xdg-open` on Linux and its two equivalents elsewhere — spawned and
@@ -4068,6 +4334,7 @@ fn scheme(p: &scour_ui::Palette) -> Scheme {
         pick: c(&p.pick),
         focus: c(&p.focus),
         hover: c(&p.hover),
+        danger: c(&p.danger),
         t0: c(&p.t[0]),
         t1: c(&p.t[1]),
         t2: c(&p.t[2]),

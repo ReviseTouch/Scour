@@ -5024,6 +5024,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-clip"
+version = "0.1.0"
+
+[[package]]
 name = "scour-config"
 version = "0.1.0"
 dependencies = [
@@ -5077,6 +5081,7 @@ dependencies = [
  "clap",
  "humansize",
  "rfd",
+ "scour-clip",
  "scour-config",
  "scour-core",
  "scour-i18n",
@@ -5087,6 +5092,7 @@ dependencies = [
  "scour-proto",
  "scour-settings",
  "scour-thumbs",
+ "scour-trash",
  "scour-ui",
  "slint",
  "slint-build",

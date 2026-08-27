@@ -1,0 +1,12 @@
+[package]
+name = "scour-clip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# **Nothing.** The clipboard belongs to the display server, and the display
+# server already ships a program that talks to it. Linking a clipboard crate
+# would mean linking a Wayland or an X11 binding into two faces that have no
+# other reason to know which one they are running under.
+[dependencies]

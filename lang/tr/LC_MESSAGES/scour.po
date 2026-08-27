@@ -1324,3 +1324,12 @@ msgstr "{n} öğe taşınamadı"
 
 msgid "not in this face yet"
 msgstr "bu arayüzde henüz yok"
+
+# The two buttons on the question the window asks before it changes files.
+# "Taşı" rather than "Sil", for the same reason the menu item says it.
+
+msgid "Move"
+msgstr "Taşı"
+
+msgid "Cancel"
+msgstr "Vazgeç"

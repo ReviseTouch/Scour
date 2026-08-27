@@ -46,6 +46,11 @@ scour-thumbs   = { workspace = true }
 scour-preview  = { workspace = true }
 # For the `Places` reply's type alone; the answer comes over the socket.
 scour-places   = { workspace = true }
+# The wastebasket and the clipboard, both by way of what the desktop already
+# has. Neither knows anything about Scour; see their own headers for why
+# each is a subprocess rather than a binding.
+scour-trash    = { workspace = true }
+scour-clip     = { workspace = true }
 anyhow       = { workspace = true }
 # The same two flags the terminal face has, spelled the same way — and an
 # answer to `--version` that is not a window.

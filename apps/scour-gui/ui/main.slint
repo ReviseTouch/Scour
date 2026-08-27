@@ -103,6 +103,27 @@ export struct Bar {
 // window cannot edit — the program's own set and a hand-written `config.toml`
 // — still be switched off. The note is kept beside the index; neither the file
 // nor the binary is touched.
+// One line of the right-click menu, as `scour-ui::menu` holds it.
+//
+// **The window does not know what any of these mean.** It draws a label, a
+// shortcut and a rule above the first item of each group, and sends `id` back
+// when one is pressed. The list, its order and its wording come from the
+// shared table — the browser page reads the same one, and the terminal will.
+export struct MenuItem {
+    // Sent back on press. Never translated.
+    id: string,
+    // Already translated, and already carrying the count where there is one.
+    label: string,
+    // Printed at the right, quietly. Empty where there is none.
+    key: string,
+    // Draw a rule above this one: it starts a new group.
+    rule: bool,
+    // Reversible, but it changes something — drawn in the danger colour.
+    careful: bool,
+    // Starts more programs than there are hands, and asks first — drawn dim.
+    heavy: bool,
+}
+
 export struct Rule {
     id: string,
     value: string,
@@ -958,6 +979,35 @@ export component MainWindow inherits Window {
     callback query-changed(string);
     callback activated(int);
     callback reveal(int);
+    // --- the right-click menu -------------------------------------------
+    //
+    // **Three properties and two callbacks, and the window owns none of the
+    // meaning.** Rust fills `menu` from the shared table when a row is
+    // right-clicked, and answers `menu-pick` with the id that comes back. What
+    // the items say, which of them a folder gets, and where the rules fall is
+    // decided in one place for all the faces — see `scour-ui::menu`.
+    in property <[MenuItem]> menu;
+    in-out property <bool> menu-open: false;
+    in-out property <length> menu-x;
+    in-out property <length> menu-y;
+    /// A row was right-clicked, at this point on the window.
+    callback menu-at(int, length, length);
+    /// One of the items was pressed.
+    callback menu-pick(string);
+
+    // --- asking before something that changes files ----------------------
+    //
+    // **A window with no dialog cannot offer a delete.** The menu's rule is
+    // that what it offers is safe to press, and moving to the wastebasket is
+    // safe because it can be undone — but "safe to undo" is not "meant", and
+    // twelve rows going at once is worth a sentence and a pause.
+    in-out property <bool> ask-open: false;
+    in property <string> ask-title;
+    in property <string> ask-body;
+    in property <string> ask-yes;
+    in property <string> ask-no;
+    /// True for yes. Sent once, whichever way it goes.
+    callback ask-answer(bool);
     callback copy-path(int);
     callback facet-clicked(string);
     callback sort-by(string);
@@ -2789,7 +2839,12 @@ export component MainWindow inherits Window {
                                 if (e.button == PointerEventButton.right
                                     && e.kind == PointerEventKind.down) {
                                     root.selected = i;
-                                    root.copy-path(i);
+                                    // **Right-clicking outside the selection selects what was
+                                    // right-clicked.** The page does the same, and for the same
+                                    // reason: a menu about rows the pointer is not on is how
+                                    // somebody copies eleven paths while looking at a twelfth.
+                                    root.menu-at(i, self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
                                 }
                             }
                         }
@@ -3063,7 +3118,9 @@ export component MainWindow inherits Window {
                                         }
                                         root.selected = i * root.per-line + c;
                                         if (e.button == PointerEventButton.right) {
-                                            root.copy-path(root.selected);
+                                            root.menu-at(root.selected,
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
                                         } else if (e.button == PointerEventButton.left) {
                                             root.pick(root.selected,
                                                 e.modifiers.control || e.modifiers.meta,
@@ -3912,4 +3969,225 @@ export component MainWindow inherits Window {
                 }
             }
         }
+
+    // --- the question that comes before a change --------------------------
+    //
+    // Same shape as the menu overlay above and for the same reasons: last
+    // child so it is on top, a sheet under it so the click that answers does
+    // not also land on the list. Unlike the menu, this one dims what is behind
+    // it — the reader is being asked to stop, and a page that carries on
+    // looking normal underneath does not say so.
+    if root.ask-open: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: #00000066;
+
+        TouchArea {
+            // Clicking away is "no". The safe answer is the one a stray press
+            // lands on, which is the whole reason to have a default at all.
+            clicked => {
+                root.ask-open = false;
+                root.ask-answer(false);
+            }
+        }
+
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: 420px;
+            height: ask-sheet.preferred-height;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.line;
+            border-radius: 3px;
+            drop-shadow-blur: 26px;
+            drop-shadow-color: #00000080;
+
+            // Swallows the click so it does not reach the sheet behind and
+            // answer "no" while somebody is reading.
+            TouchArea { }
+
+            ask-sheet := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                Text {
+                    text: root.ask-title;
+                    color: Theme.ink;
+                    font-size: 14px;
+                    font-weight: 650;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.ask-body;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 4px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Rectangle {
+                        width: no-text.preferred-width + 26px;
+                        height: 28px;
+                        border-radius: 3px;
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        background: no-hit.has-hover ? Theme.hover : transparent;
+                        no-text := Text {
+                            text: root.ask-no;
+                            color: Theme.ink-2;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        no-hit := TouchArea {
+                            clicked => {
+                                root.ask-open = false;
+                                root.ask-answer(false);
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: yes-text.preferred-width + 26px;
+                        height: 28px;
+                        border-radius: 3px;
+                        background: yes-hit.has-hover
+                            ? Theme.danger.transparentize(0.78)
+                            : Theme.danger.transparentize(0.88);
+                        border-width: 1px;
+                        border-color: Theme.danger.transparentize(0.6);
+                        yes-text := Text {
+                            text: root.ask-yes;
+                            color: Theme.danger;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        yes-hit := TouchArea {
+                            clicked => {
+                                root.ask-open = false;
+                                root.ask-answer(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- the right-click menu --------------------------------------------
+    //
+    // **Last child of the window, because that is what puts it on top.** Slint
+    // draws siblings in the order they are declared and there is no z-index to
+    // reach for; a menu declared beside the list is a menu behind it.
+    //
+    // The sheet under it is not decoration either. Without something that
+    // takes the whole window, the click that dismisses the menu also lands on
+    // whatever is beneath — a row gets selected, a heading re-sorts, and the
+    // menu closes as though the press had done two things.
+    if root.menu-open: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: transparent;
+
+        TouchArea {
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.menu-open = false;
+                }
+            }
+        }
+
+        Rectangle {
+            // Kept on screen: near the pointer, never past the edge.
+            x: min(root.menu-x, root.width - self.width - 8px);
+            y: min(root.menu-y, root.height - self.height - 8px);
+            width: 258px;
+            height: items.preferred-height;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.line;
+            border-radius: 3px;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: #00000070;
+            drop-shadow-offset-y: 6px;
+
+            items := VerticalLayout {
+                padding: 5px;
+
+                for it[i] in root.menu: VerticalLayout {
+                    // A rule where the group changes. Seven pixels of space
+                    // with a hairline through the middle of it — the gap is
+                    // what a hand travelling down the list stops at, and the
+                    // one above the wastebasket is why the rules are here.
+                    if it.rule: Rectangle {
+                        height: 7px;
+                        Rectangle {
+                            y: 3px;
+                            x: 6px;
+                            width: parent.width - 12px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+                    }
+
+                    Rectangle {
+                        height: 26px;
+                        border-radius: 2px;
+                        background: hit.has-hover
+                            ? (it.careful ? Theme.danger.transparentize(0.88) : Theme.hover)
+                            : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 12px;
+
+                            Text {
+                                text: it.label;
+                                color: it.careful ? Theme.danger
+                                     : it.heavy ? Theme.ink-3
+                                     : Theme.ink-2;
+                                font-size: 12.5px;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            // The shortcut, pushed right and quieter than the
+                            // label: it is there to be learned, not read.
+                            Text {
+                                text: it.key;
+                                color: Theme.ink-3;
+                                font-family: Fonts.mono;
+                                font-size: 10.5px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // **Declared after the text, so it is above it.** A
+                        // `Text` does not take pointer events, but the order is
+                        // the thing that decides here and leaving it to luck is
+                        // how the rules panel lost its clicks once already.
+                        hit := TouchArea {
+                            clicked => {
+                                root.menu-open = false;
+                                root.menu-pick(it.id);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 }
