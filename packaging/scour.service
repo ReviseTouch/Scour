@@ -9,17 +9,17 @@
 # handover was measured rather than assumed — the served process comes back
 # `CapEff=0` and both escalation attempts return EPERM.
 #
-# What this replaces is authenticating by hand on every start. The alternative
-# people reach for — a NOPASSWD sudo rule — is worse than it looks here: every
-# binary in the chain lives under the user's home, so a passwordless rule
-# pointing at one of them is passwordless root for anything that can write that
-# directory, which is the user's own account.
+# The installer keeps the privileged helper under root-owned /usr/local/libexec.
+# Only scourd, executed after the identity drop, remains in the user's home.
+# Its polkit rule lets hasan start/stop/restart this fixed unit without a prompt;
+# editing units, running arbitrary programs as root and other services are not
+# covered. Never change the privileged ExecStart back to a user-writable path.
 #
 # Install (once):
 #
-#   sudo install -m644 packaging/scour.service /etc/systemd/system/scour.service
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable --now scour.service
+#   cargo build --release -p scour-watch
+#   sudo bash packaging/install-service.sh
+#   systemctl start scour.service
 #
 # **Why it is worth doing rather than leaving.** Without the mark, `scourd`
 # falls back to inotify — one watch a directory, out of a budget shared with
@@ -58,7 +58,7 @@ Type=simple
 # The roots are named rather than left out: without them every real filesystem
 # is marked, including `/efi`, which holds nothing anybody searches for. These
 # two are what `config.toml` lists as sources.
-ExecStart=/home/hasan/.local/bin/scour-watch --as hasan /home /mnt/depo -- /home/hasan/.local/bin/scourd
+ExecStart=/usr/local/libexec/scour/scour-watch --as hasan /home /mnt/depo -- /home/hasan/.local/bin/scourd
 # Also the safety net for starting before the runtime directory exists.
 Restart=on-failure
 RestartSec=5

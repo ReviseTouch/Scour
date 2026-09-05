@@ -53,8 +53,21 @@ pub enum Change {
     Nothing,
     /// These rows are new or different: a half-open range.
     Rows { from: usize, to: usize },
-    /// The result is a different length than it was.
-    Length { was: usize, now: usize },
+    /// The result is a different length than it was — and, when a page
+    /// arrived in the same call, which rows that page replaced.
+    ///
+    /// **`rows` is the half of this that was missing, and it was a bug you
+    /// could watch.** A page that arrived while the total was moving reported
+    /// only the length: the rows it had just replaced were never announced, so
+    /// a view redrew nothing and went on showing the values it had. Dates and
+    /// sizes stopped updating for as long as anything was being scanned or
+    /// watched — which is exactly when they are most likely to be wrong. It is
+    /// `None` only when the length moved on its own, with no page behind it.
+    Length {
+        was: usize,
+        now: usize,
+        rows: Option<(usize, usize)>,
+    },
 }
 
 /// The pages of one result, and the rules about which ones to have.
@@ -188,14 +201,17 @@ impl<T> Pages<T> {
         self.touch(page);
         self.evict();
         let was = self.total;
+        let from = Self::start_of(page);
+        let to = from + count;
         if total != was {
             self.total = total;
-            return Change::Length { was, now: total };
+            return Change::Length {
+                was,
+                now: total,
+                rows: Some((from, to)),
+            };
         }
-        Change::Rows {
-            from: Self::start_of(page),
-            to: Self::start_of(page) + count,
-        }
+        Change::Rows { from, to }
     }
 
     /// Say how long the result is without having a page to go with it.
@@ -210,7 +226,11 @@ impl<T> Pages<T> {
             return Change::Nothing;
         }
         self.total = total;
-        Change::Length { was, now: total }
+        Change::Length {
+            was,
+            now: total,
+            rows: None,
+        }
     }
 
     /// Which page to ask for, if any.
@@ -314,6 +334,52 @@ impl<T> Pages<T> {
 
 #[cfg(test)]
 mod tests {
+
+    /// **The bug this was written for.** A page that arrives while the result
+    /// is also changing length has to announce both, or a view redraws the
+    /// length and keeps the rows it had.
+    ///
+    /// It was reported as dates that stopped updating: the window showed a
+    /// file's old timestamp and went on showing it. The index was right and
+    /// the page was refetched correctly — `put` simply returned early with the
+    /// length and never said which rows it had just replaced, and that only
+    /// happens while something is being scanned or watched, which is exactly
+    /// when a row is most likely to have moved.
+    #[test]
+    fn a_page_that_lands_while_the_length_moves_still_says_which_rows_it_replaced() {
+        let mut pages: Pages<u32> = Pages::default();
+        pages.set_total(100);
+
+        // The ordinary case: the length held still, so the rows are reported.
+        pages.asking(0);
+        match pages.put(0, vec![7; SPAN], 100) {
+            Change::Rows { from, to } => assert_eq!((from, to), (0, SPAN)),
+            other => panic!("expected the rows, got {other:?}"),
+        }
+
+        // And the case that was silent: the same page again, with the total
+        // moved by one because something appeared while it was in flight.
+        pages.asking(0);
+        match pages.put(0, vec![9; SPAN], 101) {
+            Change::Length { was, now, rows } => {
+                assert_eq!((was, now), (100, 101));
+                assert_eq!(
+                    rows,
+                    Some((0, SPAN)),
+                    "the page's rows were replaced and nothing said so"
+                );
+            }
+            other => panic!("expected a length change carrying its rows, got {other:?}"),
+        }
+
+        // A length that moves on its own has no page behind it, and must not
+        // claim one — a view told to redraw rows that did not arrive would
+        // read them out of a page it does not hold.
+        match pages.set_total(140) {
+            Change::Length { rows, .. } => assert_eq!(rows, None),
+            other => panic!("expected a bare length change, got {other:?}"),
+        }
+    }
     use super::*;
 
     fn page_of(n: usize, from: usize) -> Vec<usize> {
@@ -338,7 +404,8 @@ mod tests {
             p.put(4, page_of(SPAN, 4 * SPAN), 10_000),
             Change::Length {
                 was: 0,
-                now: 10_000
+                now: 10_000,
+                rows: Some((4 * SPAN, 5 * SPAN)),
             }
         );
         assert_eq!(p.at(4 * SPAN), Some(&(4 * SPAN)));
@@ -453,12 +520,20 @@ mod tests {
     #[test]
     fn a_counting_cap_is_not_a_length() {
         let mut p: Pages<usize> = Pages::default();
-        assert_eq!(p.set_total(1_000), Change::Length { was: 0, now: 1_000 });
+        assert_eq!(
+            p.set_total(1_000),
+            Change::Length {
+                was: 0,
+                now: 1_000,
+                rows: None
+            }
+        );
         assert_eq!(
             p.set_total(2_696_724),
             Change::Length {
                 was: 1_000,
-                now: 2_696_724
+                now: 2_696_724,
+                rows: None,
             },
             "the exact count arrives later and is longer"
         );

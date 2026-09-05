@@ -290,6 +290,8 @@ struct Fragile {
     /// Applies to refuse. Counted down; zero refuses for ever after.
     left: AtomicU64,
     refused: AtomicU64,
+    sweep_failures: AtomicU64,
+    abandoned: AtomicU64,
 }
 
 impl scour_core::Index for Fragile {
@@ -319,9 +321,19 @@ impl scour_core::Index for Fragile {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> scour_core::Result<u64> {
+        if self
+            .sweep_failures
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Err(Error::Io {
+                detail: "injected sweep failure".into(),
+            });
+        }
         self.inner.sweep(source, under, generation, spare)
     }
     fn abandon_generation(&self, g: u64) -> scour_core::Result<()> {
+        self.abandoned.fetch_add(1, Ordering::Relaxed);
         self.inner.abandon_generation(g)
     }
     fn commit(&self) -> scour_core::Result<()> {
@@ -920,6 +932,8 @@ fn a_batch_the_index_refused_stops_the_sweep() {
         inner: Arc::clone(&real),
         left: AtomicU64::new(u64::MAX),
         refused: AtomicU64::new(0),
+        sweep_failures: AtomicU64::new(0),
+        abandoned: AtomicU64::new(0),
     });
     let engine = Engine::new(
         vec![source.clone()],
@@ -1299,14 +1313,15 @@ fn a_term_the_parser_could_not_read_is_reported_with_the_answer() {
 /// An index whose *ordering* walk is expensive, and a note of when each one
 /// began.
 ///
-/// Only the walk is slowed. Ordinary pages go straight through, which is what
-/// makes the test below about the speculation and nothing else: the engine
+/// Page and preparation costs are controlled separately, which makes
+/// the test below about speculation: the engine
 /// asks for twenty thousand hits when it is building an ordering and for a
 /// screenful when it is answering a question.
 #[derive(Debug)]
 struct Slow {
     inner: Arc<NativeIndex>,
     walk: Duration,
+    page: Duration,
     began: Instant,
     /// Milliseconds after `began` at which each ordering walk started.
     walks: RwLock<Vec<u64>>,
@@ -1354,6 +1369,8 @@ impl scour_core::Index for Slow {
                 .write()
                 .push(self.began.elapsed().as_millis() as u64);
             std::thread::sleep(self.walk);
+        } else {
+            std::thread::sleep(self.page);
         }
         self.inner.search(req)
     }
@@ -1366,6 +1383,57 @@ impl scour_core::Index for Slow {
     fn stats(&self) -> scour_core::Result<scour_core::IndexStats> {
         self.inner.stats()
     }
+}
+
+#[test]
+fn cheap_pages_do_not_trigger_a_larger_preparation() {
+    let dir = tempfile::tempdir().expect("temp");
+    let slow = Arc::new(Slow {
+        inner: Arc::new(NativeIndex::open_or_create(dir.path()).expect("index")),
+        walk: Duration::ZERO,
+        page: Duration::ZERO,
+        began: Instant::now(),
+        walks: RwLock::new(Vec::new()),
+    });
+    let engine = Engine::new(Vec::new(), slow.clone(), EngineOptions::default());
+    for offset in [200, 400, 2_000, 10_000] {
+        engine
+            .search("", SortKey::Modified, true, Page::new(offset, 200))
+            .expect("page");
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        slow.walks.read().is_empty(),
+        "cheap paging must not warm 20,000 unused hits"
+    );
+}
+
+#[test]
+fn pages_outside_the_prepared_window_do_not_start_a_useless_walk() {
+    let dir = tempfile::tempdir().expect("temp");
+    let slow = Arc::new(Slow {
+        inner: Arc::new(NativeIndex::open_or_create(dir.path()).expect("index")),
+        walk: Duration::ZERO,
+        page: Duration::from_millis(30),
+        began: Instant::now(),
+        walks: RwLock::new(Vec::new()),
+    });
+    let engine = Engine::new(
+        Vec::new(),
+        Arc::clone(&slow) as Arc<dyn scour_core::Index>,
+        EngineOptions::default(),
+    );
+    for (offset, limit) in [(20_000, 200), (19_999, 200), (u32::MAX, 200), (10, 0)] {
+        engine
+            .search("", SortKey::Modified, true, Page::new(offset, limit))
+            .expect("page");
+    }
+    // Let a wrongly queued preparation reach the recording index.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        slow.walks.read().is_empty(),
+        "none of these pages can use a prepared window"
+    );
 }
 
 /// **A dear ordering is rebuilt at a share of the machine, not on a clock.**
@@ -1394,6 +1462,7 @@ fn an_expensive_ordering_is_not_rebuilt_on_a_clock() {
     let slow = Arc::new(Slow {
         inner: Arc::clone(&real),
         walk: Duration::from_millis(400),
+        page: Duration::from_millis(30),
         began: Instant::now(),
         walks: RwLock::new(Vec::new()),
     });
@@ -1591,5 +1660,179 @@ fn a_walk_says_how_far_it_has_got_before_it_finishes() {
         f.engine.status().entries,
         f.source.entries.read().len() as u64,
         "and it still finished"
+    );
+}
+
+#[test]
+fn dropping_an_idle_engine_releases_its_index_and_source() {
+    let dir = tempfile::tempdir().expect("index directory");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let source = MemSource::new(Vec::new());
+    let index_weak = Arc::downgrade(&index);
+    let source_weak = Arc::downgrade(&source);
+    let engine = Engine::new(vec![source], index, EngineOptions::default());
+    drop(engine);
+    assert!(
+        index_weak.upgrade().is_none(),
+        "an idle preparer retains the index"
+    );
+    assert!(
+        source_weak.upgrade().is_none(),
+        "a stopped engine retains its source"
+    );
+    NativeIndex::open_or_create(dir.path()).expect("the index lock must be released");
+}
+
+#[test]
+fn an_unwatched_source_without_a_pulse_converges_after_silent_changes() {
+    let dir = tempfile::tempdir().expect("index directory");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let source = MemSource::unwatchable(vec![row("/home/u/old.txt")]);
+    let engine = Engine::new(
+        vec![source.clone()],
+        index,
+        EngineOptions {
+            poll_interval: Duration::from_millis(100),
+            commit_interval: Duration::from_millis(50),
+            commit_idle: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    engine.rescan(None).expect("initial scan");
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    settle(&f, |f| count(f, "old.txt") == 1);
+    assert_eq!(count(&f, "old.txt"), 1);
+    *f.source.entries.write() = vec![row("/home/u/new.txt")];
+    settle(&f, |f| count(f, "new.txt") == 1 && count(f, "old.txt") == 0);
+    assert_eq!(count(&f, "new.txt"), 1, "a silent create must be found");
+    assert_eq!(
+        count(&f, "old.txt"),
+        0,
+        "a silent delete must be reconciled"
+    );
+}
+
+#[test]
+fn shutdown_wakes_a_client_waiting_on_an_unchanged_index() {
+    let f = fixture(0);
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| f.engine.await_change(0, Duration::from_secs(3)));
+        std::thread::sleep(Duration::from_millis(50));
+        let began = Instant::now();
+        f.engine.shutdown();
+        waiter.join().expect("waiter");
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "shutdown must wake idle clients"
+        );
+    });
+}
+
+#[test]
+fn an_explicit_flush_announces_the_new_revision() {
+    let f = fixture(0);
+    let before = f.engine.status().revision;
+    f.engine.maintain(Maintenance::Flush).expect("flush");
+    assert!(f.engine.status().revision > before);
+}
+
+#[test]
+fn a_failed_sweep_is_abandoned_and_retried_without_another_event() {
+    use scour_core::Index;
+    let dir = tempfile::tempdir().expect("index directory");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    index
+        .apply(&mut [Change::Upsert(row("/home/u/old.txt"))].into_iter())
+        .expect("seed");
+    index.commit().expect("seed commit");
+    let fragile = Arc::new(Fragile {
+        inner: index,
+        left: AtomicU64::new(u64::MAX),
+        refused: AtomicU64::new(0),
+        sweep_failures: AtomicU64::new(1),
+        abandoned: AtomicU64::new(0),
+    });
+    let source = MemSource::unwatchable(vec![row("/home/u/new.txt")]);
+    let engine = Engine::new(
+        vec![source.clone()],
+        fragile.clone(),
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            commit_idle: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    engine.rescan(None).expect("scan");
+    let f = Fixture {
+        engine,
+        source,
+        _dir: dir,
+    };
+    settle(&f, |f| {
+        f.source.scans.load(Ordering::Relaxed) >= 2 && count(f, "old.txt") == 0
+    });
+    assert!(
+        fragile.abandoned.load(Ordering::Relaxed) >= 1,
+        "a failed sweep must close its generation"
+    );
+    assert!(
+        f.source.scans.load(Ordering::Relaxed) >= 2,
+        "failed reconciliation must retry"
+    );
+    assert_eq!(count(&f, "old.txt"), 0);
+    assert_eq!(count(&f, "new.txt"), 1);
+}
+
+#[test]
+fn a_prepared_relative_time_query_expires_without_a_file_event() {
+    use scour_core::Index;
+    let dir = tempfile::tempdir().expect("index directory");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs() as i64;
+    let entries = (0..3).map(|i| {
+        let mut e = row(&format!("/home/u/recent-{i}.txt"));
+        e.meta.mtime = now - 3600 + 2;
+        Change::Upsert(e)
+    });
+    index.apply(&mut entries.into_iter()).expect("seed");
+    index.commit().expect("commit");
+    let slow = Arc::new(Slow {
+        inner: index,
+        walk: Duration::ZERO,
+        page: Duration::from_millis(30),
+        began: Instant::now(),
+        walks: RwLock::new(Vec::new()),
+    });
+    let engine = Engine::new(Vec::new(), slow, EngineOptions::default());
+    let ask = || {
+        engine
+            .search("dm:1h", SortKey::Modified, true, Page::new(1, 1))
+            .expect("search")
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut cached = false;
+    while Instant::now() < deadline {
+        let page = ask();
+        if page.rows_built == 0 && page.hits.len() == 1 {
+            cached = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        cached,
+        "the relative query must reach the prepared path first"
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(
+        ask().hits.is_empty(),
+        "the cached cutoff must move with the clock"
     );
 }

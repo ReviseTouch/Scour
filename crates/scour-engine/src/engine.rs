@@ -5,8 +5,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::reconcile::{Nudge, Pulses};
 use crossbeam_channel::{Receiver, Sender, select, unbounded};
 use parking_lot::{Condvar, Mutex, RwLock};
+
 use scour_core::{
     Change, Completion, Entry, EntrySink, Error, FacetRequest, FacetResponse, Flow, Hit, Index,
     IndexStats, MaintReport, Maintenance, Page, Result, ScanOptions, SearchRequest, SearchResponse,
@@ -56,9 +58,9 @@ pub struct EngineOptions {
     pub commit_batch: u64,
     /// How long a handful of changes may wait before being written anyway.
     ///
-    /// The bound on staleness. A file created now is findable within this at
-    /// worst, and within [`EngineOptions::commit_interval`] when anything else
-    /// is happening at the same time.
+    /// The batching bound once a change has reached the worker. Detection,
+    /// queued scans and failed writes can add delay; recovery intervals cover
+    /// changes that a source did not report.
     pub commit_idle: Duration,
     /// The same bound, while somebody is waiting to be told about changes.
     ///
@@ -89,6 +91,10 @@ pub struct EngineOptions {
     /// How long the index may sit untouched before it is asked to give back
     /// whatever it was holding for writes.
     pub idle_after: Duration,
+    /// Full reconciliation when neither a watch nor a pulse is available.
+    pub poll_interval: Duration,
+    /// Safety pass even when a source appears quiet. Pulses are only hints.
+    pub reconcile_interval: Duration,
 }
 
 impl Default for EngineOptions {
@@ -108,6 +114,8 @@ impl Default for EngineOptions {
             compact_segments: 8,
             compact_urgent: 64,
             idle_after: Duration::from_secs(20),
+            poll_interval: Duration::from_secs(60),
+            reconcile_interval: Duration::from_secs(1_800),
         }
     }
 }
@@ -215,6 +223,7 @@ struct Prepare {
 /// the page is.
 struct Prepared {
     query: String,
+    parsed: scour_core::Ast,
     sort: SortKey,
     descending: bool,
     count_cap: u32,
@@ -254,6 +263,10 @@ const PREPARE: u32 = 20_000;
 ///
 /// See [`PREPARE_COST`] for what is charged instead.
 const PREPARE_EVERY: Duration = Duration::from_secs(2);
+
+/// Cheap pages already meet the interactive budget. Building a much larger
+/// window for them spends memory and competes with the next keystroke.
+const PREPARE_MIN_COST: Duration = Duration::from_millis(20);
 
 /// What a walk buys the next one: it waits at least this many times what the
 /// last one took.
@@ -347,6 +360,8 @@ pub struct Engine {
     jobs: Sender<Job>,
     changes: Sender<Change>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    prepare_stop: Sender<()>,
+    preparer: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for Engine {
@@ -366,6 +381,7 @@ impl Engine {
     ) -> Engine {
         // One slot: a request that has been overtaken is work nobody wants.
         let (prepare_tx, prepare_rx) = crossbeam_channel::bounded::<Prepare>(1);
+        let (prepare_stop, prepare_stopped) = crossbeam_channel::bounded(1);
         // Moved out of `opts` rather than copied from it, so there is one
         // answer to "what does the walk skip" and not two that can drift.
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
@@ -398,27 +414,28 @@ impl Engine {
         let (changes_tx, changes_rx) = crossbeam_channel::bounded::<Change>(65_536);
         let worker = {
             let shared = Arc::clone(&shared);
-            let changes_tx = changes_tx.clone();
             std::thread::Builder::new()
                 .name("scour-worker".into())
-                .spawn(move || run(shared, jobs_rx, changes_rx, changes_tx))
+                .spawn(move || run(shared, jobs_rx, changes_rx))
                 .ok()
         };
         // Its own thread rather than the worker's: the worker is where scans
         // and commits happen, and a page has to be ready while one is running,
         // not after it.
-        {
+        let preparer = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("scour-prepare".into())
-                .spawn(move || prepare_loop(shared, prepare_rx))
-                .ok();
-        }
+                .spawn(move || prepare_loop(shared, prepare_rx, prepare_stopped))
+                .ok()
+        };
         Engine {
             shared,
             jobs: jobs_tx,
             changes: changes_tx,
             worker: Mutex::new(worker),
+            prepare_stop,
+            preparer: Mutex::new(preparer),
         }
     }
 
@@ -587,7 +604,9 @@ impl Engine {
         // Flush is quick and callers want its result; the heavy levels go to
         // the worker so a request never blocks for minutes.
         if level == Maintenance::Flush {
-            return self.shared.index.maintain(level);
+            let report = self.shared.index.maintain(level)?;
+            self.shared.touched();
+            return Ok(report);
         }
         self.send(Job::Maintain(level))?;
         Ok(MaintReport {
@@ -739,6 +758,7 @@ impl Engine {
         descending: bool,
         page: Page,
     ) -> Result<SearchResponse> {
+        let started = Instant::now();
         let mut res = self.page_of(query, sort, descending, page)?;
         // Every answer, on every path, including the cached one — a warning
         // that appears on a cache miss and vanishes on a hit is worse than no
@@ -746,6 +766,7 @@ impl Engine {
         // something.
         res.misread = misread(query);
         self.weigh_folders(&mut res);
+        res.took_us = started.elapsed().as_micros() as u64;
         Ok(res)
     }
 
@@ -822,8 +843,11 @@ impl Engine {
         // — so an ordering that is cheap to build stays as live as it was, and
         // one that is dear is built at a bounded share of the machine instead
         // of a fixed interval that knows nothing about the price.
+        // A page beyond the preparation's bound cannot redeem it either.
         let floor = Duration::from_micros(self.shared.prepare_floor.load(Ordering::Relaxed));
         if page.offset == 0
+            || page.limit == 0
+            || page.offset.saturating_add(page.limit) > PREPARE
             || self.shared.scanning.load(Ordering::Acquire)
             || self.shared.prepared_at.lock().elapsed() < floor
         {
@@ -834,19 +858,28 @@ impl Engine {
                 page,
             });
         }
-        *self.shared.prepared_at.lock() = Instant::now();
+        let res = self.shared.index.search(&SearchRequest {
+            query: scour_query::parse(query),
+            sort,
+            descending,
+            page,
+        })?;
+        if started.elapsed() < PREPARE_MIN_COST {
+            return Ok(res);
+        }
+        let mut prepared_at = self.shared.prepared_at.lock();
+        // A simultaneous expensive page may already have requested it.
+        if prepared_at.elapsed() < floor || self.shared.scanning.load(Ordering::Acquire) {
+            return Ok(res);
+        }
+        *prepared_at = Instant::now();
         let _ = self.shared.prepare.try_send(Prepare {
             query: query.to_string(),
             sort,
             descending,
             count_cap: page.count_cap,
         });
-        self.shared.index.search(&SearchRequest {
-            query: scour_query::parse(query),
-            sort,
-            descending,
-            page,
-        })
+        Ok(res)
     }
 
     /// The page, if the order it belongs to is already known.
@@ -870,6 +903,8 @@ impl Engine {
             || ready.descending != descending
             || ready.count_cap != page.count_cap
             || ready.revision != self.shared.revision.load(Ordering::Acquire)
+            // Relative time windows change even while the index is quiet.
+            || ready.parsed != scour_query::parse(query)
         {
             return None;
         }
@@ -1135,7 +1170,9 @@ impl Engine {
         self.shared.watchers.fetch_add(1, Ordering::Relaxed);
         {
             let mut held = self.shared.waiters.0.lock();
-            while self.shared.revision.load(Ordering::Acquire) == since {
+            while self.shared.revision.load(Ordering::Acquire) == since
+                && !self.shared.stop.load(Ordering::Acquire)
+            {
                 let left = deadline.saturating_duration_since(Instant::now());
                 if left.is_zero() || self.shared.waiters.1.wait_for(&mut held, left).timed_out() {
                     break;
@@ -1163,12 +1200,23 @@ impl Engine {
 
     /// Stop watching, finish what is queued, and commit.
     pub fn shutdown(&self) {
-        for (_, h) in self.shared.watches.lock().drain(..) {
+        // Cancel an active walk before joining producers. Never hold the watch
+        // lock across a join: the consumer also takes it while draining events.
+        {
+            let _held = self.shared.waiters.0.lock();
+            self.shared.stop.store(true, Ordering::Release);
+        }
+        self.shared.waiters.1.notify_all();
+        let handles = std::mem::take(&mut *self.shared.watches.lock());
+        for (_, h) in handles {
             h.stop();
         }
-        self.shared.stop.store(true, Ordering::Relaxed);
         let _ = self.jobs.send(Job::Stop);
+        let _ = self.prepare_stop.try_send(());
         if let Some(h) = self.worker.lock().take() {
+            let _ = h.join();
+        }
+        if let Some(h) = self.preparer.lock().take() {
             let _ = h.join();
         }
         let _ = self.shared.index.commit();
@@ -1203,15 +1251,25 @@ impl scour_core::ChangeSink for Forward {
 /// while it was being built, because an order taken from an index that has
 /// changed is an order that is wrong, and being wrong here means rows that do
 /// not exist under a scrollbar that says they do.
-fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
-    while let Ok(job) = jobs.recv() {
+fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>) {
+    loop {
+        // Shared owns the sender too, so waiting for disconnection would keep
+        // the entire engine and its index lock alive after Engine::drop.
+        let job = crossbeam_channel::select_biased! {
+            recv(stop) -> _ => return,
+            recv(jobs) -> job => match job {
+                Ok(job) => job,
+                Err(_) => return,
+            },
+        };
         if shared.stop.load(Ordering::Acquire) {
             return;
         }
         let at = shared.revision.load(Ordering::Acquire);
         let began = Instant::now();
+        let parsed = scour_query::parse(&job.query);
         let found = shared.index.search(&SearchRequest {
-            query: scour_query::parse(&job.query),
+            query: parsed.clone(),
             sort: job.sort,
             descending: job.descending,
             page: Page {
@@ -1235,6 +1293,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
         }
         *shared.prepared.write() = Some(Prepared {
             query: job.query,
+            parsed,
             sort: job.sort,
             descending: job.descending,
             count_cap: job.count_cap,
@@ -1246,218 +1305,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>) {
     }
 }
 
-/// What the tick decided a source needs.
-#[derive(Debug)]
-enum Nudge {
-    /// Nobody is watching it and it moved.
-    Reconcile,
-    /// Somebody is watching it, it keeps moving, and nothing is arriving.
-    Blind,
-}
-
-/// One pulse reading per source, and the rules that turn it into work.
-///
-/// **Why the pulse is not simply believed.** It says the *filesystem* moved,
-/// not that anything this source indexes did — `/home` shares its partition
-/// with `/var/log`, so its block counter ticks while journald writes. So a
-/// moving pulse never means "rescan now"; it means "you may look, if you have
-/// not looked recently". The floors below are what keep that honest.
-struct Pulses {
-    last: Vec<Option<u64>>,
-    /// The pulse moved and nothing has been done about it yet.
-    ///
-    /// **Remembered rather than dropped.** The floor below says how often a
-    /// source may be walked, not which movements count: a pulse that moves
-    /// inside the floor is still a change, and the first version threw it away
-    /// — so a burst of writes ten seconds after the last walk was noticed,
-    /// declined, and never mentioned again. The disk stayed quiet after that,
-    /// which meant nothing ever asked again.
-    pending: Vec<bool>,
-    /// When each source was last walked because of a pulse.
-    walked: Vec<Instant>,
-    /// When a change last arrived for each source, so a watcher that has gone
-    /// quiet can be told from a disk that is quiet.
-    moved_since_event: Vec<u32>,
-    checked: Instant,
-}
-
-impl Pulses {
-    /// How often the pulses are read. They cost microseconds; this is about
-    /// not calling `scan` in a tight loop, not about the reading.
-    const EVERY: Duration = Duration::from_secs(2);
-    /// The least time between two walks of the same unwatched source.
-    const FLOOR: Duration = Duration::from_secs(15);
-    /// How many consecutive readings may move with nothing arriving before a
-    /// watched source is called blind. At `EVERY` seconds apart, this is five
-    /// minutes of a disk changing while its watcher says nothing — long enough
-    /// that a quiet period cannot be mistaken for a fault.
-    const PATIENCE: u32 = 150;
-
-    fn new(n: usize) -> Pulses {
-        Pulses {
-            last: vec![None; n],
-            pending: vec![false; n],
-            // Back-dated, so the first movement is acted on rather than
-            // waiting out a floor that has protected nothing yet.
-            walked: vec![Instant::now() - Self::FLOOR; n],
-            moved_since_event: vec![0; n],
-            checked: Instant::now(),
-        }
-    }
-
-    /// When the pulses will next be worth reading.
-    ///
-    /// On an idle machine this is the only deadline left, so it is what
-    /// decides how often a service with nothing to do wakes at all.
-    fn next_due(&self) -> Instant {
-        self.checked + Self::EVERY
-    }
-
-    fn due(&mut self, shared: &Arc<Shared>) -> Vec<(usize, Nudge)> {
-        #[cfg(feature = "memory-trace")]
-        if std::env::var_os("SCOUR_MEMORY_NO_PULSES").is_some() {
-            return Vec::new();
-        }
-        if self.checked.elapsed() < Self::EVERY {
-            return Vec::new();
-        }
-        self.checked = Instant::now();
-        let watched: Vec<usize> = shared.watches.lock().iter().map(|(i, _)| *i).collect();
-        let readings: Vec<Option<u64>> = shared.sources.iter().map(|s| s.pulse()).collect();
-        self.decide(&readings, &watched)
-    }
-
-    /// The rules, with the reading already taken.
-    ///
-    /// Split out because everything interesting here is bookkeeping — a
-    /// movement remembered across a floor, a counter cleared by an event — and
-    /// none of it needs a filesystem to be wrong.
-    fn decide(&mut self, readings: &[Option<u64>], watched: &[usize]) -> Vec<(usize, Nudge)> {
-        let trace = std::env::var_os("SCOUR_PULSE_TRACE").is_some();
-        let mut out = Vec::new();
-        for (i, reading) in readings.iter().enumerate() {
-            let Some(now) = *reading else {
-                if trace {
-                    scour_core::note!("scourd: source {i} has no pulse to read");
-                }
-                continue;
-            };
-            let moved = self.last[i].is_some_and(|was| was != now);
-            if trace {
-                scour_core::note!(
-                    "scourd: source {i} pulse {now} (was {:?}), moved={moved}, watched={}, since walk {:?}",
-                    self.last[i],
-                    watched.contains(&i),
-                    self.walked[i].elapsed(),
-                );
-            }
-            self.last[i] = Some(now);
-            if moved {
-                self.pending[i] = true;
-            }
-            if watched.contains(&i) {
-                if moved {
-                    self.moved_since_event[i] += 1;
-                }
-                if self.moved_since_event[i] >= Self::PATIENCE {
-                    self.moved_since_event[i] = 0;
-                    self.pending[i] = false;
-                    self.walked[i] = Instant::now();
-                    out.push((i, Nudge::Blind));
-                }
-            } else if self.pending[i] && self.walked[i].elapsed() >= Self::FLOOR {
-                self.pending[i] = false;
-                self.walked[i] = Instant::now();
-                out.push((i, Nudge::Reconcile));
-            }
-        }
-        out
-    }
-
-    /// A change arrived, so whatever the pulse has been saying, the watcher is
-    /// awake.
-    fn saw_event(&mut self, source: usize) {
-        if let Some(n) = self.moved_since_event.get_mut(source) {
-            *n = 0;
-        }
-    }
-}
-
-#[cfg(test)]
-mod pulse_tests {
-    use super::*;
-
-    fn quiet(n: usize) -> Pulses {
-        let mut p = Pulses::new(n);
-        // The first reading only establishes a baseline; start from there.
-        p.decide(&[Some(1)], &[]);
-        p
-    }
-
-    #[test]
-    fn a_movement_inside_the_floor_is_remembered_not_dropped() {
-        let mut p = quiet(1);
-        // Just walked, so the floor is closed.
-        p.walked[0] = Instant::now();
-        assert!(
-            p.decide(&[Some(2)], &[]).is_empty(),
-            "the floor holds it back"
-        );
-        assert!(p.pending[0], "but the movement is remembered");
-        // The floor opens, and nothing has moved since.
-        p.walked[0] = Instant::now() - Pulses::FLOOR;
-        let out = p.decide(&[Some(2)], &[]);
-        assert!(
-            matches!(out.as_slice(), [(0, Nudge::Reconcile)]),
-            "a movement that arrived early is still acted on: {out:?}"
-        );
-        assert!(!p.pending[0], "and only once");
-    }
-
-    #[test]
-    fn a_still_pulse_asks_for_nothing() {
-        let mut p = quiet(1);
-        p.walked[0] = Instant::now() - Pulses::FLOOR;
-        assert!(p.decide(&[Some(1)], &[]).is_empty());
-        assert!(p.decide(&[Some(1)], &[]).is_empty());
-    }
-
-    #[test]
-    fn a_watched_source_is_called_blind_only_after_patience() {
-        let mut p = quiet(1);
-        for step in 0..Pulses::PATIENCE - 1 {
-            let out = p.decide(&[Some(step as u64 + 2)], &[0]);
-            assert!(out.is_empty(), "not yet at step {step}");
-        }
-        let out = p.decide(&[Some(9_999)], &[0]);
-        assert!(matches!(out.as_slice(), [(0, Nudge::Blind)]), "{out:?}");
-    }
-
-    #[test]
-    fn an_event_clears_the_suspicion() {
-        let mut p = quiet(1);
-        for step in 0..Pulses::PATIENCE - 1 {
-            p.decide(&[Some(step as u64 + 2)], &[0]);
-        }
-        p.saw_event(0);
-        let out = p.decide(&[Some(9_999)], &[0]);
-        assert!(out.is_empty(), "a watcher that spoke is not blind: {out:?}");
-    }
-
-    #[test]
-    fn a_source_with_no_pulse_is_left_alone() {
-        let mut p = Pulses::new(1);
-        assert!(p.decide(&[None], &[]).is_empty());
-        assert!(p.decide(&[None], &[]).is_empty());
-    }
-}
-
-fn run(
-    shared: Arc<Shared>,
-    jobs: Receiver<Job>,
-    changes: Receiver<Change>,
-    changes_tx: Sender<Change>,
-) {
+fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     let mut dirty = false;
     // Set when a walk finishes with changes already queued behind it.
     let mut overdue = false;
@@ -1480,7 +1328,11 @@ fn run(
     // again, so the volume stays as stale as it was until a person types
     // `scour rescan`.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
-    let mut pulses = Pulses::new(shared.sources.len());
+    let mut pulses = Pulses::new(
+        shared.sources.len(),
+        shared.opts.poll_interval,
+        shared.opts.reconcile_interval,
+    );
 
     loop {
         // **Wait for the next thing that has to happen, not for a tick.**
@@ -1619,8 +1471,10 @@ fn run(
                         // this walk may already have passed.
                         flag.store(false, Ordering::Release);
                     }
-                    if !scan(&shared, &changes_tx, source, subtree) && whole {
-                        schedule_retry(&mut retries, source);
+                    if !scan(&shared, &mut pulses, source, subtree) {
+                        schedule_retry(&mut retries, &pulses, source);
+                    } else if whole {
+                        retries.retain(|(s, _, _)| *s != source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -1650,8 +1504,17 @@ fn run(
                     overdue = !changes.is_empty();
                 }
                 Ok(Job::Maintain(level)) => {
-                    let _ = shared.index.maintain(level);
-                    dirty = false;
+                    match shared.index.maintain(level) {
+                        Ok(_) => {
+                            shared.touched();
+                            shared.pending.store(0, Ordering::Relaxed);
+                            dirty = false;
+                        }
+                        Err(e) => {
+                            scour_core::note!("scourd: maintenance failed: {e}");
+                            dirty = true;
+                        }
+                    }
                     last_commit = Instant::now();
                 }
             },
@@ -1701,10 +1564,17 @@ fn run(
                         // every open window to show it exactly what it already
                         // had, once per batch, on a desktop that produces
                         // thirty to fifty changes a second.
-                        if let Ok(r) = report
-                            && r.removed + r.subtrees_removed > 0
-                        {
-                            shared.touched();
+                        match report {
+                            Ok(r) if r.removed + r.subtrees_removed > 0 => shared.touched(),
+                            Ok(_) => {},
+                            Err(e) => {
+                                scour_core::note!("scourd: changes could not be indexed: {e}");
+                                // Applying can consume only part of an iterator.
+                                // Reconcile instead of losing the unconsumed tail.
+                                for i in 0..shared.sources.len() {
+                                    schedule_retry(&mut retries, &pulses, i);
+                                }
+                            }
                         }
                         dirty = true;
                         idle_done = false;
@@ -1728,8 +1598,8 @@ fn run(
                         // continued silently until someone rescanned by hand.
                         if path.is_empty() {
                             for i in 0..shared.sources.len() {
-                                if !scan(&shared, &changes_tx, i, None) {
-                                    schedule_retry(&mut retries, i);
+                                if !scan(&shared, &mut pulses, i, None) {
+                                    schedule_retry(&mut retries, &pulses, i);
                                 }
                             }
                         } else if let Some(i) = owner_of(&shared, &path) {
@@ -1759,7 +1629,9 @@ fn run(
                                     h.cover(&path);
                                 }
                             }
-                            scan(&shared, &changes_tx, i, Some(path.clone()));
+                            if !scan(&shared, &mut pulses, i, Some(path.clone())) {
+                                schedule_retry(&mut retries, &pulses, i);
+                            }
                         }
                         dirty = true;
                         idle_done = false;
@@ -1777,12 +1649,29 @@ fn run(
         // starve them — and an unwatched volume is exactly what pulses exist
         // to notice. `due` carries its own two-second floor, so asking on
         // every turn of the loop costs a comparison.
-        for (source, job) in pulses.due(&shared) {
+        let nudges = if pulses.is_due() {
+            let watched: Vec<usize> = shared
+                .watches
+                .lock()
+                .iter()
+                .filter(|(_, handle)| handle.unwatched().is_empty())
+                .map(|(i, _)| *i)
+                .collect();
+            let readings: Vec<Option<u64>> = shared.sources.iter().map(|s| s.pulse()).collect();
+            pulses.decide(&readings, &watched)
+        } else {
+            Vec::new()
+        };
+        for (source, job) in nudges {
+            // Failed passes have their own widening retry clock.
+            if retries.iter().any(|(s, _, _)| *s == source) {
+                continue;
+            }
             match job {
                 Nudge::Reconcile => {
                     // A source nobody is watching, whose pulse moved.
-                    if !scan(&shared, &changes_tx, source, None) {
-                        schedule_retry(&mut retries, source);
+                    if !scan(&shared, &mut pulses, source, None) {
+                        schedule_retry(&mut retries, &pulses, source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -1797,8 +1686,8 @@ fn run(
                         "scourd: source {source} has changed repeatedly with no events \
                          arriving — the watch is not covering it; rescanning"
                     );
-                    if !scan(&shared, &changes_tx, source, None) {
-                        schedule_retry(&mut retries, source);
+                    if !scan(&shared, &mut pulses, source, None) {
+                        schedule_retry(&mut retries, &pulses, source);
                     }
                     dirty = true;
                     idle_done = false;
@@ -1906,7 +1795,7 @@ fn run(
                 .collect();
             retries.retain(|(_, at, _)| *at > now);
             for (source, attempt) in due {
-                if scan(&shared, &changes_tx, source, None) {
+                if scan(&shared, &mut pulses, source, None) {
                     scour_core::note!(
                         "scourd: {} is readable again",
                         shared.sources[source].describe().name
@@ -1915,7 +1804,11 @@ fn run(
                     last_busy = Instant::now();
                     idle_done = false;
                 } else {
-                    retries.push((source, now + retry_delay(attempt + 1), attempt + 1));
+                    retries.push((
+                        source,
+                        pulses.retry_at(source, retry_delay(attempt + 1)),
+                        attempt + 1,
+                    ));
                 }
             }
         }
@@ -2046,15 +1939,11 @@ fn coalesce(paths: Vec<String>) -> Vec<String> {
 /// `false` means the roots were not there to be read — a volume that has not
 /// been mounted yet, a drive pulled out, a share that dropped. The caller is
 /// expected to come back later rather than to treat it as an answer.
-fn scan(
-    shared: &Arc<Shared>,
-    changes: &Sender<Change>,
-    source: usize,
-    subtree: Option<String>,
-) -> bool {
+fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Option<String>) -> bool {
     let Some(src) = shared.sources.get(source).cloned() else {
         return true;
     };
+    let began = Instant::now();
     // A generation the index could not open is a scan that cannot reconcile:
     // its rows would be stamped with the previous one and the sweep would then
     // judge them by it. Reported and retried rather than run blind.
@@ -2090,6 +1979,9 @@ fn scan(
         ..(*shared.scan()).clone()
     };
     let report = src.scan(&opts, &mut sink);
+    if let Err(e) = &report {
+        scour_core::note!("scourd: a scan of {} failed: {e}", src.describe().name);
+    }
     sink.flush();
     let seen = sink.seen;
 
@@ -2122,6 +2014,7 @@ fn scan(
         scour_core::PrefixSet::new(report.as_ref().map(|r| r.blind.clone()).unwrap_or_default());
     let could_look = !vouched.is_empty();
     let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
+    let mut ended = true;
     if trustworthy {
         // **One call for every root the walk vouched for.** A pass notes the
         // rows it found unchanged so that an untouched filesystem does not
@@ -2139,6 +2032,10 @@ fn scan(
             // are found again by the next full scan.
             Err(e) => {
                 scour_core::note!("scourd: {vouched:?} could not be reconciled: {e}");
+                ended = false;
+                if let Err(e) = shared.index.abandon_generation(generation) {
+                    scour_core::note!("scourd: an incomplete pass could not be ended: {e}");
+                }
                 0
             }
         };
@@ -2149,6 +2046,7 @@ fn scan(
             shared.touched();
         }
     } else if let Err(e) = shared.index.abandon_generation(generation) {
+        ended = false;
         // **A pass that will not be swept still has to end.** Not sweeping is
         // the right answer here — the walk could not look, and deleting on no
         // evidence is how a directory that lost its read permission loses its
@@ -2166,17 +2064,24 @@ fn scan(
             src.describe().name
         );
     }
-    let _ = changes;
+    if subtree.is_none() {
+        pulses.scanned(source, began.elapsed());
+    }
+
+    let finished = report
+        .as_ref()
+        .is_ok_and(|r| !r.cancelled && r.unreadable == 0 && r.blind.is_empty());
+    let covered = scour_core::PrefixSet::new(vouched);
+    let all_roots = src.describe().roots.iter().all(|root| covered.covers(root));
 
     shared.scanning.store(false, Ordering::Relaxed);
     let mut st = shared.status.write();
     st.scanning_source = None;
     st.scanned = seen;
     st.last_scan_ms = report.map(|r| r.took_ms).unwrap_or(0);
-    // Only a whole-source walk is worth coming back for. A subtree that is not
-    // there is a subtree that was deleted, and something has already said so.
-    // A failed write is worth coming back for whatever was walked.
-    !sink.failed && (could_look || subtree.is_some())
+    // A missing subtree alone is not a missing source. Any incomplete pass or
+    // failed write needs a retry of the source to recover what it could not see.
+    !sink.failed && ended && finished && (subtree.is_some() || (could_look && all_roots))
 }
 
 /// How long to wait before looking again at a source whose roots were not there.
@@ -2199,9 +2104,9 @@ fn retry_delay(attempt: usize) -> Duration {
 }
 
 /// Note that a source has to be looked at again, without queueing a second one.
-fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, source: usize) {
+fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, pulses: &Pulses, source: usize) {
     if !retries.iter().any(|(s, _, _)| *s == source) {
-        retries.push((source, Instant::now() + retry_delay(0), 0));
+        retries.push((source, pulses.retry_at(source, retry_delay(0)), 0));
     }
 }
 

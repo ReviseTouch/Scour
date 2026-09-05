@@ -22,6 +22,7 @@
 //!   is the one place that has to care.
 
 mod engine;
+mod reconcile;
 mod tree;
 
 pub use engine::{Engine, EngineOptions, Explained};

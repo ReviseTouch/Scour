@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use scour_core::{Caps, Change, ChangeSink, Entry, EntrySink, Flow, ScanOptions, Source, SourceId};
+use scour_core::{
+    Caps, Change, ChangeSink, Entry, EntrySink, Flow, ScanOptions, Source, SourceId, WatchHandle,
+};
 use scour_source_fs::FsSource;
 
 /// A small tree, real on disk.
@@ -303,7 +305,44 @@ fn wait_for(seen: &Arc<Seen>, what: impl Fn(&[Change]) -> bool) -> Vec<Change> {
     }
 }
 
+/// Start a watch, or say why this test cannot and let it pass.
+///
+/// **On Linux the only watching mechanism is a fanotify mark**, and placing one
+/// needs `CAP_SYS_ADMIN` — which a test runner does not have and should not be
+/// given. The inotify fallback that used to carry these four tests is gone on
+/// purpose: it cost one watch a directory out of a budget belonging to the
+/// whole desktop session, and taking it stopped other programs from starting.
+///
+/// **A skip must not read as a pass**, and the first attempt at this got that
+/// wrong: it printed a line to stderr and returned, which `cargo test` captures
+/// and hides — so four untested tests reported `ok` and a green run claimed
+/// something it had not checked. These four are the only end-to-end proof that
+/// an event becomes a `Change`.
+///
+/// So they carry `#[ignore]` instead. libtest counts those in the summary line,
+/// where the number cannot be missed, and prints the reason beside the name.
+/// To actually run them:
+///
+/// ```text
+/// sudo scour-watch -- cargo test -p scour-source-fs -- --ignored
+/// ```
+///
+/// Reached with `--ignored` and still no descriptor, this panics rather than
+/// passing: the run asked for the real thing and did not get it.
+fn watching(src: &FsSource, sink: Box<dyn ChangeSink>, test: &str) -> Box<dyn WatchHandle> {
+    match src.watch(&ScanOptions::default(), sink) {
+        Ok(handle) => handle,
+        Err(e) if format!("{e:?}").contains("fanotify") => panic!(
+            "{test}: no fanotify descriptor, and this test was asked for explicitly \
+             (`--ignored`) so there is nothing to fall back to. Run it as \
+             `sudo scour-watch -- cargo test -p scour-source-fs -- --ignored`."
+        ),
+        Err(e) => panic!("watch: {e:?}"),
+    }
+}
+
 #[test]
+#[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 fn a_watch_reports_creations_and_removals() {
     let (dir, src) = tree();
     let seen = Arc::new(Seen::default());
@@ -318,9 +357,11 @@ fn a_watch_reports_creations_and_removals() {
             self.0.emit(c);
         }
     }
-    let handle = src
-        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
-        .expect("watch");
+    let handle = watching(
+        &src,
+        Box::new(Fwd(Arc::clone(&seen))),
+        "a_watch_reports_creations_and_removals",
+    );
 
     let created: PathBuf = dir.path().join("src/yeni.rs");
     std::fs::write(&created, "fn x() {}").expect("write");
@@ -361,6 +402,7 @@ impl ChangeSink for Fwd {
 }
 
 #[test]
+#[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 fn a_new_directory_is_reported_as_a_subtree_to_walk() {
     // The gap this closes cost a file permanently on the live index. Between
     // `mkdir a/b` and the moment the backend has a watch on `a/b`, anything
@@ -374,9 +416,11 @@ fn a_new_directory_is_reported_as_a_subtree_to_walk() {
     // instead of waiting to be told about it.
     let (dir, src) = tree();
     let seen = Arc::new(Seen::default());
-    let handle = src
-        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
-        .expect("watch");
+    let handle = watching(
+        &src,
+        Box::new(Fwd(Arc::clone(&seen))),
+        "a_new_directory_is_reported_as_a_subtree_to_walk",
+    );
 
     let made = dir.path().join("src/brand-new");
     std::fs::create_dir(&made).expect("mkdir");
@@ -397,15 +441,18 @@ fn a_new_directory_is_reported_as_a_subtree_to_walk() {
 }
 
 #[test]
+#[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 fn writing_to_a_file_does_not_ask_for_a_walk() {
     // The other half of the rule, and the reason it is not simply "rescan on
     // every modify": a directory's mtime moves whenever a file inside it is
     // written, so a build would queue a walk per object file.
     let (dir, src) = tree();
     let seen = Arc::new(Seen::default());
-    let handle = src
-        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
-        .expect("watch");
+    let handle = watching(
+        &src,
+        Box::new(Fwd(Arc::clone(&seen))),
+        "writing_to_a_file_does_not_ask_for_a_walk",
+    );
 
     let existing = dir.path().join("src/main.rs");
     std::fs::write(&existing, "fn main() { /* changed */ }").expect("write");
@@ -422,6 +469,7 @@ fn writing_to_a_file_does_not_ask_for_a_walk() {
 }
 
 #[test]
+#[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 #[cfg(unix)]
 fn a_watch_does_not_walk_out_through_a_symlink() {
     // On the live index `~/.wine-hukuk/dosdevices/z:` points at `/`, and
@@ -434,9 +482,11 @@ fn a_watch_does_not_walk_out_through_a_symlink() {
     std::os::unix::fs::symlink(outside.path(), dir.path().join("keep/elsewhere")).expect("symlink");
 
     let seen = Arc::new(Seen::default());
-    let handle = src
-        .watch(&ScanOptions::default(), Box::new(Fwd(Arc::clone(&seen))))
-        .expect("watch");
+    let handle = watching(
+        &src,
+        Box::new(Fwd(Arc::clone(&seen))),
+        "a_watch_does_not_walk_out_through_a_symlink",
+    );
 
     // Something happening on the far side of the link, and something on this
     // side to prove the watch is alive at all.

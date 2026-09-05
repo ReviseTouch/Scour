@@ -325,12 +325,15 @@ pub fn items_for(
     face: crate::faces::Face,
 ) -> impl Iterator<Item = &'static Item> {
     let many = selected > 1;
-    ITEMS.iter().filter(move |i| !i.except.contains(&face)).filter(move |i| match i.when {
-        When::Many => many,
-        When::One => !many,
-        When::File => !many && !is_dir,
-        When::Folder => !many && is_dir,
-    })
+    ITEMS
+        .iter()
+        .filter(move |i| !i.except.contains(&face))
+        .filter(move |i| match i.when {
+            When::Many => many,
+            When::One => !many,
+            When::File => !many && !is_dir,
+            When::Folder => !many && is_dir,
+        })
 }
 
 /// Where a rule goes: true when this item starts a new group.

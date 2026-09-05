@@ -426,16 +426,39 @@ impl Rows {
                     self.notify.row_changed(row);
                 }
             }
-            // **Added and removed, not reset.** A reset makes the view throw
+            // Preserve the viewport on subsequent growth. A reset throws
             // its layout state away with its elements, and what it rebuilds
             // from is the top — so a list that grew while somebody was reading
             // row nine thousand put them back at row one.
-            scour_page::Change::Length { was, now } => {
+            scour_page::Change::Length { was, now, rows } => {
                 self.resets.set(self.resets.get() + 1);
-                if now > was {
+                if was == 0 {
+                    // Slint 1.16's repeater inserts `count` placeholder slots
+                    // for row_added(0, count), even in a ListView. An empty
+                    // model has no viewport to preserve: reset lets layout
+                    // instantiate only the visible rows of a million hits.
+                    self.notify.reset();
+                } else if now > was {
                     self.notify.row_added(was, now - was);
                 } else {
                     self.notify.row_removed(now, was - now);
+                }
+                // **And the rows the page brought with it.**
+                //
+                // Without this the list stopped updating whenever the result
+                // was also growing or shrinking — which is whenever anything
+                // is being scanned or watched. The page arrived, its rows were
+                // replaced in hand, and the view was told only that the list
+                // was a different length: nothing said the rows it was already
+                // drawing now held different values, so it went on drawing the
+                // old ones. Dates that had moved kept their old date on screen.
+                //
+                // Clamped to the new length, because a row past the end of the
+                // model is a row the view has just been told does not exist.
+                if let Some((from, to)) = rows {
+                    for row in from..to.min(now) {
+                        self.notify.row_changed(row);
+                    }
                 }
             }
         }
@@ -865,6 +888,10 @@ impl Lines {
         let was = self.shown.get();
         let now = self.lines();
         self.shown.set(now);
+        if was == 0 && now > 0 {
+            self.notify.reset();
+            return;
+        }
         match now.cmp(&was) {
             std::cmp::Ordering::Greater => self.notify.row_added(was, now - was),
             std::cmp::Ordering::Less => self.notify.row_removed(now, was - now),
@@ -922,6 +949,53 @@ mod model_tests {
         let rows = Rows::default();
         rows.put(0, page(SPAN), Vec::new(), 2_500_000);
         assert_eq!(rows.row_count(), 2_500_000);
+        assert_eq!(rows.held(), SPAN);
+    }
+
+    // Observe the actual notifications delivered to Slint's model peer. This
+    // is tied to the pinned Slint version, whose repeater eagerly allocates
+    // `count` placeholder slots for row_added(0, count) on an empty list.
+    #[derive(Default)]
+    struct Notifications(RefCell<Vec<(char, usize, usize)>>);
+
+    impl slint::private_unstable_api::re_exports::ModelChangeListener for Notifications {
+        fn row_changed(self: std::pin::Pin<&Self>, _: usize) {}
+        fn row_added(self: std::pin::Pin<&Self>, at: usize, n: usize) {
+            self.0.borrow_mut().push(('+', at, n));
+        }
+        fn row_removed(self: std::pin::Pin<&Self>, at: usize, n: usize) {
+            self.0.borrow_mut().push(('-', at, n));
+        }
+        fn reset(self: std::pin::Pin<&Self>) {
+            self.0.borrow_mut().push(('r', 0, 0));
+        }
+    }
+
+    #[test]
+    fn first_population_is_lazy_but_later_growth_preserves_the_viewport() {
+        use slint::private_unstable_api::re_exports::ModelChangeListenerContainer;
+        let rows = std::rc::Rc::new(Rows::default());
+        let lines = Lines::new(std::rc::Rc::clone(&rows));
+        lines.per_line(4);
+        let table = Box::pin(ModelChangeListenerContainer::<Notifications>::default());
+        let grid = Box::pin(ModelChangeListenerContainer::<Notifications>::default());
+        rows.model_tracker()
+            .attach_peer(table.as_ref().model_peer());
+        lines
+            .model_tracker()
+            .attach_peer(grid.as_ref().model_peer());
+        rows.put(0, page(SPAN), Vec::new(), 5_000_000);
+        lines.sync();
+        assert_eq!(*table.as_ref().get().0.borrow(), [('r', 0, 0)]);
+        assert_eq!(*grid.as_ref().get().0.borrow(), [('r', 0, 0)]);
+        rows.set_total(5_000_004);
+        lines.sync();
+        assert_eq!(table.as_ref().get().0.borrow()[1], ('+', 5_000_000, 4));
+        assert_eq!(grid.as_ref().get().0.borrow()[1], ('+', 1_250_000, 1));
+        rows.set_total(5_000_000);
+        lines.sync();
+        assert_eq!(table.as_ref().get().0.borrow()[2], ('-', 5_000_000, 4));
+        assert_eq!(grid.as_ref().get().0.borrow()[2], ('-', 1_250_000, 1));
         assert_eq!(rows.held(), SPAN);
     }
 

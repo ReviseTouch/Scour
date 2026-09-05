@@ -615,8 +615,12 @@ component Head inherits Rectangle {
     // below already uses.
     in property <string> which;
     callback dragged(string, length);
+    /// Double-clicked: that column goes back to deciding for itself.
+    callback reset(string);
     // `right` alone collides with the alignment enum of the same name.
     in property <bool> align-right;
+    /// The rightmost heading, which has no line after it.
+    in property <bool> last;
     callback clicked(string);
 
     // A width, not a stretch: the numbers are worked out once by the window
@@ -638,13 +642,30 @@ component Head inherits Rectangle {
                 root.dragged(root.which, self.mouse-x - self.pressed-x);
             }
         }
+        double-clicked => { root.reset(root.which); }
     }
 
-    if grip.has-hover || grip.pressed: Rectangle {
-        x: parent.width - 1px;
-        width: 1px;
-        height: parent.height;
-        background: Theme.focus;
+    // **The line between two headings, and it is always drawn.**
+    //
+    // It used to appear only under the pointer, which left a table of five
+    // columns with nothing to say where one ended and the next began: the
+    // headings floated in a band, columns of text ran into each other on a
+    // narrow window, and the grip was a target you found by feel. Drawn in
+    // the gap rather than inside the heading, so it stands midway between two
+    // words instead of crowding the one on its left.
+    //
+    // Not after the last column. There is nothing on the other side of it but
+    // the scrollbar's lane, and a line there reads as the edge of a column
+    // that is not on screen — which is the thing this window was just fixed
+    // for pretending.
+    if !root.last: Rectangle {
+        x: parent.width + 3px;
+        // Under the hand it thickens and runs the full height, so that what
+        // is about to move is unmistakable before the button goes down.
+        y: grip.has-hover || grip.pressed ? 0px : 5px;
+        width: grip.has-hover || grip.pressed ? 2px : 1px;
+        height: parent.height - 2 * self.y;
+        background: grip.has-hover || grip.pressed ? Theme.focus : Theme.line;
     }
 
     TouchArea {
@@ -777,11 +798,6 @@ export component MainWindow inherits Window {
     in property <string> head-path;
     in property <string> head-mtime;
     in property <string> head-size;
-    in property <length> w-name;
-    in property <length> w-kind;
-    in property <length> w-path;
-    in property <length> w-mtime;
-    in property <length> w-size;
     // **The grid counts lines, not rows.** A tile view puts several results on
     // one scrolled line, so everything the virtual list rests on — how many
     // fit, which one is on top, how far a page moves — is counted in lines and
@@ -858,10 +874,40 @@ export component MainWindow inherits Window {
     // says `scrollbar-gutter: stable` for the same reason; here it is 14px
     // taken off the width the columns divide up, and the header loses it too
     // so the two stay in line.
+    // **Worked out from the window's own width, not the list's.** Asking the
+    // list how wide it is makes the rows' widths depend on a layout that
+    // depends on the rows' widths, and Slint refuses that at build time. The
+    // pieces between the window edge and the list are all fixed and known: the
+    // card's 20px margins, its 1px border, the 186px rail with its divider,
+    // and the list's own 12px padding on each side.
+    //
+    // **And the scrollbar's own lane.** It is drawn over the list rather than
+    // beside it, so without a gutter it sits on top of the last column — the
+    // size column, whose digits are the ones that must not be cut. The page
+    // says `scrollbar-gutter: stable` for the same reason; here it is 14px
+    // taken off the width the columns divide up, and the header loses it too
+    // so the two stay in line.
     property <length> chrome: 40px + 2px + 186px + 1px + 24px + 14px;
     property <length> gaps: 8px * 4;
-    property <length> flex: max(240px,
-        root.width - root.chrome - root.gaps - root.w-kind - root.w-mtime - root.w-size);
+    // **The preview panel is part of the furniture too**, and leaving it out
+    // was most of why the date and the size went off the right-hand edge. It
+    // takes 380 pixels off the list and the columns were still being sized
+    // against the whole window, so opening it pushed the last two columns
+    // past the edge — drawn, fetched, and nowhere a person could see them.
+    property <length> peek-w: root.peeking ? 380px : 0px;
+
+    /// What there is for the columns to divide up.
+    out property <length> lane: max(0px,
+        root.width - root.chrome - root.gaps - root.peek-w);
+    /// Divide it up again — in `scour_ui::lay_out`, which the page uses too.
+    ///
+    /// **Rust rather than a binding here.** Sharing out what is left over and
+    /// then taking back what does not fit is two passes with a per-column
+    /// floor and ceiling, and neither is something a declarative expression
+    /// says without saying it five times, once per column, subtly differently.
+    callback relayout(length);
+    changed lane => { root.relayout(root.lane); }
+
     // **What a person dragged wins over what was computed.** Zero means "not
     // chosen", which is how the settings file says it too — a width of zero is
     // not a column somebody wanted, it is a column nobody has touched.
@@ -870,11 +916,15 @@ export component MainWindow inherits Window {
     in-out property <length> uw-path;
     in-out property <length> uw-mtime;
     in-out property <length> uw-size;
-    out property <length> cw-name: root.uw-name > 0 ? root.uw-name : root.flex * 0.44;
-    out property <length> cw-path: root.uw-path > 0 ? root.uw-path : root.flex * 0.56;
-    out property <length> cw-kind: root.uw-kind > 0 ? root.uw-kind : root.w-kind;
-    out property <length> cw-mtime: root.uw-mtime > 0 ? root.uw-mtime : root.w-mtime;
-    out property <length> cw-size: root.uw-size > 0 ? root.uw-size : root.w-size;
+    // The widths every row and the header are handed, worked out together so
+    // that they add up to `lane` exactly. The defaults are `scour-ui`'s own,
+    // so a window that somehow drew a frame before the first `relayout` shows
+    // a sane table rather than five columns of nothing.
+    in-out property <length> cw-name: 240px;
+    in-out property <length> cw-kind: 110px;
+    in-out property <length> cw-path: 320px;
+    in-out property <length> cw-mtime: 120px;
+    in-out property <length> cw-size: 90px;
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
@@ -1145,6 +1195,8 @@ export component MainWindow inherits Window {
     callback pick-dropped();
     callback bar-clicked(int);
     callback column-dragged(string, length);
+    /// Double-clicked an edge: that column stretches with the window again.
+    callback column-reset(string);
     // **No page callbacks.** The list is a model whose length is the whole
     // result, so there is no window for the view to slide and no anchor for it
     // to keep: it scrolls, and the window fetches what scrolled into sight.
@@ -2738,15 +2790,15 @@ export component MainWindow inherits Window {
                         padding-right: 12px;
                         spacing: 8px;
 
-                        Head { which: "name"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-name; sort: "name"; w: root.cw-name;
+                        Head { which: "name"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-name; sort: "name"; w: root.cw-name;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "kind"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-kind; sort: "kind"; w: root.cw-kind;
+                        Head { which: "kind"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-kind; sort: "kind"; w: root.cw-kind;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "path"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-path; sort: "path"; w: root.cw-path;
+                        Head { which: "path"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-path; sort: "path"; w: root.cw-path;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "mtime"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-mtime; sort: "modified"; w: root.cw-mtime;
+                        Head { which: "mtime"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-mtime; sort: "modified"; w: root.cw-mtime;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "size"; dragged(c, d) => { root.column-dragged(c, d); } text: root.head-size; sort: "size"; w: root.cw-size; align-right: true;
+                        Head { which: "size"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-size; sort: "size"; w: root.cw-size; align-right: true; last: true;
                                sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
                     }
                 }

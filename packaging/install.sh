@@ -56,9 +56,9 @@ cat <<'TXT'
 
       To have it watched properly, install the system unit:
 
-          sudo install -m644 packaging/scour.service /etc/systemd/system/scour.service
-          sudo systemctl daemon-reload
-          sudo systemctl enable --now scour.service
+          cargo build --release -p scour-watch
+          sudo bash packaging/install-service.sh
+          systemctl start scour.service
 
       Read that file first — it explains what the privilege is for and where it
       is dropped.

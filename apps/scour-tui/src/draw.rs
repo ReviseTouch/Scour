@@ -351,7 +351,10 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         // can land on is a press that does nothing.
         if line.rule {
             drawn.push(Line::from(Span::styled(
-                format!("   {}", "─".repeat(box_area.width.saturating_sub(8) as usize)),
+                format!(
+                    "   {}",
+                    "─".repeat(box_area.width.saturating_sub(8) as usize)
+                ),
                 Style::new().fg(theme.line()),
             )));
         }
@@ -361,8 +364,8 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         let body = if line.key.is_empty() {
             line.text.clone()
         } else {
-            let pad = room_for_text
-                .saturating_sub(line.text.chars().count() + line.key.chars().count());
+            let pad =
+                room_for_text.saturating_sub(line.text.chars().count() + line.key.chars().count());
             format!("{}{}{}", line.text, " ".repeat(pad), line.key)
         };
         drawn.push(

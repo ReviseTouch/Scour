@@ -444,9 +444,54 @@ pub struct Column {
     /// What `sort:` this column asks the service for. Empty means the column
     /// cannot be sorted by.
     pub sort: &'static str,
-    /// Starting width in pixels. A person dragging the edge overrides it, and
-    /// what they chose is kept per column id — see `scour_settings::widths`.
+    /// What it asks for in pixels, before anything is shared out or taken
+    /// back. A person dragging the edge overrides it, and what they chose is
+    /// kept per column id — see `scour_settings::widths`.
     pub width: u32,
+    /// Never squeezed narrower than this, whatever else has to give.
+    ///
+    /// **This is the number that keeps the right-hand columns on screen.**
+    /// Without a floor per column, a narrow window and a wide name took the
+    /// date and the size off the edge entirely: they were still in the table,
+    /// still being fetched and drawn, and nowhere a person could see them.
+    /// A column that has reached its floor stops paying, and the two that
+    /// hold text carry the rest — which is right, because a path that elides
+    /// is still a path and a date cut in half is nothing.
+    pub min: u32,
+    /// Its share of the stretching room in a **narrow** window, as a
+    /// percentage. Zero is a column that never stretches and keeps [`width`].
+    ///
+    /// [`width`]: Column::width
+    ///
+    /// **The shares slide with the window, and that is the point.** A fixed
+    /// ratio between the name and the location is right at exactly one width.
+    /// In a narrow window the name is what a person needs — it is how a file
+    /// is recognised, and there is nowhere else to read it; the location is
+    /// context, and the preview panel and the tooltip both have it. In a wide
+    /// one the name has long since run out of characters to show and the
+    /// location has not, so the room should go there.
+    ///
+    /// So a stretching column asks for a percentage of the room rather than a
+    /// number of pixels, and the percentage it asks for depends on how much
+    /// room there is. Between [`NARROW`] and [`WIDE`] the two are mixed in
+    /// proportion, which makes the change continuous: a window being dragged
+    /// wider never shows a column jumping.
+    ///
+    /// Only columns nobody has dragged stretch at all: a width somebody chose
+    /// is an answer, not a hole to pour space into.
+    pub near: u8,
+    /// Its share in a **wide** window, as a percentage. See [`near`].
+    ///
+    /// [`near`]: Column::near
+    pub far: u8,
+    /// As wide as growth may take it; zero is no ceiling.
+    ///
+    /// **Only the name has one.** Its share already falls as the window grows,
+    /// but on a very wide screen thirty per cent of the room is still more
+    /// pixels than a file name has characters. Past its ceiling the name stops
+    /// taking and what it declined goes round again to the location, which can
+    /// always use it.
+    pub max: u32,
     pub align: Align,
 }
 
@@ -460,6 +505,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Name",
         sort: "name",
         width: 240,
+        min: 110,
+        near: 52,
+        far: 30,
+        max: 520,
         align: Align::Start,
     },
     Column {
@@ -467,6 +516,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Kind",
         sort: "kind",
         width: 110,
+        min: 68,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -474,6 +527,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Location",
         sort: "path",
         width: 320,
+        min: 120,
+        near: 48,
+        far: 70,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -481,6 +538,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Modified",
         sort: "modified",
         width: 120,
+        min: 100,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -488,6 +549,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Size",
         sort: "size",
         width: 90,
+        min: 68,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::End,
     },
     Column {
@@ -495,6 +560,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Extension",
         sort: "ext",
         width: 80,
+        min: 56,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -502,6 +571,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Created",
         sort: "created",
         width: 120,
+        min: 100,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -509,6 +582,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Accessed",
         sort: "accessed",
         width: 120,
+        min: 100,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -516,6 +593,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Mode",
         sort: "mode",
         width: 108,
+        min: 92,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -523,6 +604,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Owner",
         sort: "uid",
         width: 100,
+        min: 72,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -530,6 +615,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "Group",
         sort: "gid",
         width: 100,
+        min: 72,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::Start,
     },
     Column {
@@ -537,6 +626,10 @@ pub const COLUMNS: &[Column] = &[
         msgid: "On disk",
         sort: "disk",
         width: 90,
+        min: 68,
+        near: 0,
+        far: 0,
+        max: 0,
         align: Align::End,
     },
 ];
@@ -553,6 +646,256 @@ pub fn column(id: &str) -> Option<&'static Column> {
     COLUMNS.iter().find(|c| c.id == id)
 }
 
+/// The window width at which a stretching column asks for its [`Column::near`]
+/// share, and below which it asks for nothing more.
+///
+/// Picked from what the columns are for rather than from a screen size: below
+/// about seven hundred pixels of room there is no arrangement of five columns
+/// that reads well, and every share is academic — the floors are already doing
+/// the deciding.
+pub const NARROW: u32 = 700;
+/// And where it asks for its [`Column::far`] share, and stops changing.
+///
+/// A laptop panel at its usual scaling leaves somewhere near a thousand
+/// pixels for the columns, so the sliding happens across the widths people
+/// actually work at rather than at one end of them.
+pub const WIDE: u32 = 1900;
+
+/// How wide each of the columns on screen is, given the room there is.
+///
+/// **The arithmetic, in one place, because both windows got it wrong in the
+/// same way.** Each of them worked out a width per column against the room it
+/// had and then drew them; neither checked that the answers added up to the
+/// room. On a wide screen that gave the name half the table for a word twenty
+/// characters long; on a narrow one, or after somebody dragged the name wider,
+/// the total ran past the right edge and the last two columns — the date and
+/// the size — were simply not on screen. Nothing said so: they were still
+/// listed, still fetched, still drawn, off the end.
+///
+/// So the answer here always fits, and it is reached in three moves:
+///
+/// 1. **What each column asks for.** A width somebody dragged, if there is
+///    one. Otherwise a column that does not stretch asks for its own width,
+///    and a column that does asks for a **percentage of what is left after
+///    those** — a percentage that slides with the window, from
+///    [`Column::near`] to [`Column::far`] between [`NARROW`] and [`WIDE`].
+///    Nothing goes below its floor: a remembered width from a narrower window
+///    is not a width to keep.
+///
+///    This is what makes the name and the location responsive to each other
+///    rather than to a ratio decided once. Narrow, they are about even and the
+///    name is readable; wide, the location has most of the row and the name
+///    has stopped needing more.
+/// 2. **Share out anything still left**, among the stretching columns nobody
+///    has dragged. A column that reaches its [`Column::max`] drops out and
+///    what it declined goes round again — which is how the name stops at a
+///    readable width and the location takes the rest of a wide screen.
+/// 3. **Take back what does not fit**, in proportion to how much each column
+///    has above its floor. The two that hold text have most of the room above
+///    theirs, so they give up nearly all of it and the date and the size — a
+///    few pixels above their floors — keep their digits.
+///
+/// `chosen` answers with the width a person dragged that column to, or `None`.
+/// Zero counts as `None`, which is how the settings file says it too: a width
+/// of zero is not a column somebody wanted, it is one nobody has touched.
+///
+/// 4. **And if even the floors do not fit, the floors give way too**, all of
+///    them together and in proportion. A window narrow enough for that is a
+///    window with the preview panel open on a small screen, and there the
+///    choice is between five cramped columns and two of them drawn past the
+///    right-hand edge where nobody can see them. Cramped is the better half
+///    of that: a column too narrow to read still says it is there, and a
+///    column off the edge says nothing at all. [`floor_width`] is the width
+///    below which this happens.
+///
+/// The widths add up to `avail` exactly, at every size — which is the property
+/// the whole thing exists for and the one the tests check across every width
+/// from cramped to a very wide screen. The only exception is a room narrower
+/// than the number of columns, which is not a window.
+pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -> Vec<u32> {
+    let cols: Vec<&Column> = ids.iter().filter_map(|id| column(id)).collect();
+    if cols.is_empty() {
+        return Vec::new();
+    }
+    let set: Vec<Option<u32>> = cols
+        .iter()
+        .map(|c| chosen(c.id).filter(|w| *w > 0))
+        .collect();
+
+    // What the stretching columns have to divide between them: the room, less
+    // every column that is not stretching — the fixed ones at their own width
+    // and the dragged ones at whatever they were dragged to.
+    let taken: u32 = cols
+        .iter()
+        .zip(&set)
+        .filter(|(c, s)| s.is_some() || c.near == 0)
+        .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
+        .sum();
+    let budget = avail.saturating_sub(taken);
+    let stretchy: Vec<usize> = (0..cols.len())
+        .filter(|&i| set[i].is_none() && cols[i].near > 0)
+        .collect();
+
+    let mut w: Vec<u32> = cols
+        .iter()
+        .zip(&set)
+        .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
+        .collect();
+    let mut handed = 0;
+    for (n, &i) in stretchy.iter().enumerate() {
+        // The last stretching column takes what the others left, so the
+        // shares add up to the budget exactly however they rounded.
+        let want = if n + 1 == stretchy.len() {
+            budget.saturating_sub(handed)
+        } else {
+            budget * share_at(cols[i], avail) / 1000
+        };
+        handed += want;
+        w[i] = want.max(cols[i].min);
+        if cols[i].max > 0 {
+            w[i] = w[i].min(cols[i].max).max(cols[i].min);
+        }
+    }
+
+    let sum: u32 = w.iter().sum();
+    if sum < avail {
+        share_out(&cols, &set, &mut w, avail - sum);
+    } else if sum > avail {
+        take_back(&cols, &mut w, sum - avail);
+        squash(&mut w, avail);
+    }
+    w
+}
+
+/// What share of the stretching room this column asks for at this width, in
+/// parts per thousand.
+///
+/// **Straight-line, and integer the whole way**, because the browser page has
+/// to reach the same number: a `f64` here and a `Number` there agree until
+/// they do not, and the disagreement is a column a pixel out at some widths
+/// and not others. See the test that runs both.
+fn share_at(c: &Column, avail: u32) -> u32 {
+    let t = if avail <= NARROW {
+        0
+    } else if avail >= WIDE {
+        1000
+    } else {
+        (avail - NARROW) * 1000 / (WIDE - NARROW)
+    };
+    (u32::from(c.near) * 10 * (1000 - t) + u32::from(c.far) * 10 * t) / 1000
+}
+
+/// The narrowest these columns can be drawn with every floor still honoured.
+///
+/// For a window deciding its own minimum, or for a panel deciding whether it
+/// has room to open: below this, [`lay_out`] still fits the columns in, but by
+/// taking them under the widths they say they need.
+pub fn floor_width(ids: &[&str]) -> u32 {
+    ids.iter().filter_map(|id| column(id)).map(|c| c.min).sum()
+}
+
+/// Move 2: hand out what is still spare, and let a column that fills up pass.
+fn share_out(cols: &[&Column], set: &[Option<u32>], w: &mut [u32], spare: u32) {
+    let mut left = spare;
+    loop {
+        // Recomputed each round, because a column that reached its ceiling is
+        // no longer open and its share has to go somewhere.
+        let open: Vec<usize> = (0..cols.len())
+            .filter(|&i| {
+                set[i].is_none() && cols[i].near > 0 && (cols[i].max == 0 || w[i] < cols[i].max)
+            })
+            .collect();
+        let weight: u32 = open.iter().map(|&i| u32::from(cols[i].far).max(1)).sum();
+        if left == 0 || weight == 0 {
+            return;
+        }
+        let mut spent = 0;
+        for (n, &i) in open.iter().enumerate() {
+            // The last one takes the rounding as well as its share, so the
+            // widths add up to the room exactly rather than to a pixel or two
+            // less — which shows as a hairline of panel past the last column,
+            // and it moves as the window is dragged.
+            let share = if n + 1 == open.len() {
+                left - spent
+            } else {
+                left * u32::from(cols[i].far).max(1) / weight
+            };
+            let before = w[i];
+            let want = before + share;
+            w[i] = if cols[i].max > 0 {
+                want.min(cols[i].max)
+            } else {
+                want
+            };
+            spent += w[i] - before;
+        }
+        // Every open column filled up and none could take the remainder;
+        // another round would find the same thing.
+        if spent == 0 {
+            return;
+        }
+        left -= spent;
+    }
+}
+
+/// Move 4, and only when move 3 ran out of room: everything in proportion.
+///
+/// **The floors are a promise about which column gives way first, not about
+/// the window being wide enough to keep them.** With the preview panel open on
+/// a small screen there are four hundred pixels for five columns whose floors
+/// add up to four hundred and sixty-six, and no ordering of who-gives-way
+/// fixes that. So they all give way at once and evenly, which at least leaves
+/// every column where a person can see it and take hold of its edge.
+fn squash(w: &mut [u32], avail: u32) {
+    let sum: u32 = w.iter().sum();
+    // Not a window: below a pixel a column there is nothing to say.
+    if sum <= avail || sum == 0 || avail < w.len() as u32 {
+        return;
+    }
+    // The widest takes the rounding, because a pixel matters least to it.
+    let widest = (0..w.len()).max_by_key(|&i| w[i]).unwrap_or(0);
+    let mut spent = 0;
+    for (i, x) in w.iter_mut().enumerate() {
+        if i == widest {
+            continue;
+        }
+        *x = (u64::from(*x) * u64::from(avail) / u64::from(sum)).max(1) as u32;
+        spent += *x;
+    }
+    w[widest] = avail.saturating_sub(spent).max(1);
+}
+
+/// Move 3: take `over` back, in proportion to what each column has to spare.
+fn take_back(cols: &[&Column], w: &mut [u32], over: u32) {
+    let mut left = over;
+    loop {
+        let open: Vec<usize> = (0..cols.len()).filter(|&i| w[i] > cols[i].min).collect();
+        let room: u32 = open.iter().map(|&i| w[i] - cols[i].min).sum();
+        // Every column is on its floor and the window is still too narrow.
+        // Nothing here can fix that; the floors go back and the drawing
+        // clips. See `floor_width`.
+        if left == 0 || room == 0 {
+            return;
+        }
+        let take = left.min(room);
+        let mut taken = 0;
+        for (n, &i) in open.iter().enumerate() {
+            let want = if n + 1 == open.len() {
+                take - taken
+            } else {
+                take * (w[i] - cols[i].min) / room
+            };
+            let share = want.min(w[i] - cols[i].min);
+            w[i] -= share;
+            taken += share;
+        }
+        if taken == 0 {
+            return;
+        }
+        left -= taken;
+    }
+}
+
 #[cfg(test)]
 mod column_tests {
     use super::*;
@@ -564,6 +907,184 @@ mod column_tests {
     fn the_defaults_all_name_real_columns() {
         for id in DEFAULT_COLUMNS {
             assert!(column(id).is_some(), "`{id}` is not a column");
+        }
+    }
+
+    /// Every column can be drawn: a floor above the width it asks for would
+    /// mean a column that starts out already squeezed.
+    #[test]
+    fn no_floor_is_above_the_width_it_guards() {
+        for c in COLUMNS {
+            assert!(
+                c.min > 0,
+                "`{}` has no floor and can be squeezed away",
+                c.id
+            );
+            assert!(
+                c.min <= c.width,
+                "`{}`: floor {} over width {}",
+                c.id,
+                c.min,
+                c.width
+            );
+            if c.max > 0 {
+                assert!(c.max >= c.width, "`{}`: ceiling below its own width", c.id);
+                assert!(c.near > 0, "`{}` has a ceiling it can never reach", c.id);
+            }
+            // A stretching column asks for a share at both ends or at
+            // neither; one of the two left at zero is a column that collapses
+            // to its floor at that end of the range and nowhere says why.
+            assert_eq!(
+                c.near == 0,
+                c.far == 0,
+                "`{}` stretches at one end of the range only",
+                c.id
+            );
+        }
+        // The shares are percentages of one row and have to read as such at
+        // both ends, or the columns ask for more room than there is at one
+        // width and less at another.
+        for word in ["near", "far"] {
+            let total: u32 = DEFAULT_COLUMNS
+                .iter()
+                .filter_map(|id| column(id))
+                .map(|c| u32::from(if word == "near" { c.near } else { c.far }))
+                .sum();
+            assert_eq!(total, 100, "the {word} shares add up to {total}%, not 100");
+        }
+        // Something has to be able to absorb, or no window ever fits exactly.
+        assert!(
+            COLUMNS.iter().any(|c| c.near > 0 && c.max == 0),
+            "nothing can take up the slack"
+        );
+    }
+
+    /// **The invariant the whole thing exists for.** Whatever the window is
+    /// doing, the columns add up to the room — so there is never one drawn
+    /// past the right edge.
+    #[test]
+    fn the_widths_add_up_to_the_room_at_every_size() {
+        for avail in (200..3600).step_by(7) {
+            let w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            assert_eq!(
+                w.iter().sum::<u32>(),
+                avail,
+                "{avail}px: {w:?} does not add up"
+            );
+        }
+    }
+
+    /// The complaint this was written for: a name dragged wide used to push
+    /// the date and the size off the right-hand edge, where they were drawn
+    /// and could not be seen.
+    #[test]
+    fn a_name_dragged_far_too_wide_does_not_push_the_date_and_size_off() {
+        let avail = 900;
+        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(4000), avail);
+        assert_eq!(w.iter().sum::<u32>(), avail);
+        for (c, got) in COLUMNS
+            .iter()
+            .filter(|c| DEFAULT_COLUMNS.contains(&c.id))
+            .zip(&w)
+        {
+            assert!(*got >= c.min, "`{}` fell to {got}, under its floor", c.id);
+        }
+        // And the two on the right are still readable rather than a sliver.
+        let mtime = w[DEFAULT_COLUMNS.iter().position(|i| *i == "mtime").unwrap()];
+        let size = w[DEFAULT_COLUMNS.iter().position(|i| *i == "size").unwrap()];
+        assert!(mtime >= column("mtime").unwrap().min);
+        assert!(size >= column("size").unwrap().min);
+    }
+
+    /// A wide screen is the location's, not the name's.
+    #[test]
+    fn the_name_stops_at_its_ceiling_and_the_location_takes_the_rest() {
+        let w = lay_out(DEFAULT_COLUMNS, |_| None, 2400);
+        let at = |id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        assert_eq!(at("name"), column("name").unwrap().max, "the name ran on");
+        assert!(
+            at("path") > at("name"),
+            "a path elides worse than a name and got less room: {} vs {}",
+            at("path"),
+            at("name")
+        );
+        // The columns that never grow are exactly the width they asked for.
+        for id in ["kind", "mtime", "size"] {
+            assert_eq!(at(id), column(id).unwrap().width, "`{id}` grew");
+        }
+    }
+
+    /// **The thing the sliding shares are for**: the two text columns trade
+    /// places as the window grows, and they do it without a step.
+    ///
+    /// Narrow, the name is the one a person needs and gets about half the
+    /// room. Wide, it has run out of characters to show and the location —
+    /// which never does — has most of it.
+    #[test]
+    fn the_name_leads_in_a_narrow_window_and_the_location_in_a_wide_one() {
+        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+
+        let tight = lay_out(DEFAULT_COLUMNS, |_| None, NARROW);
+        assert!(
+            at(&tight, "name") >= at(&tight, "path"),
+            "narrow: name {} is not leading the location {}",
+            at(&tight, "name"),
+            at(&tight, "path")
+        );
+        let roomy = lay_out(DEFAULT_COLUMNS, |_| None, 2400);
+        assert!(
+            at(&roomy, "path") > at(&roomy, "name") * 2,
+            "wide: the location {} has not overtaken the name {}",
+            at(&roomy, "path"),
+            at(&roomy, "name")
+        );
+
+        // **And no step anywhere between.** A ratio that switched over at a
+        // threshold would show as a column jumping under the hand while the
+        // window edge is being dragged, and it would jump by tens of pixels.
+        // The shares slide instead, so one pixel of window is a pixel or two
+        // of column — the four here is integer arithmetic, not a threshold: a
+        // share is carried in parts per thousand and crossing one of those
+        // moves a wide column by about its budget over a thousand.
+        let mut last = lay_out(DEFAULT_COLUMNS, |_| None, 500);
+        for avail in 501..3000 {
+            let now = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            for (i, id) in DEFAULT_COLUMNS.iter().enumerate() {
+                let step = now[i].abs_diff(last[i]);
+                assert!(step <= 4, "`{id}` jumped {step}px at {avail}px");
+            }
+            last = now;
+        }
+    }
+
+    /// What a person dragged is kept, and never quietly grown back.
+    #[test]
+    fn a_dragged_width_is_not_a_hole_to_pour_space_into() {
+        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(160), 2400);
+        assert_eq!(w[0], 160, "the name was grown past what was chosen");
+        assert_eq!(w.iter().sum::<u32>(), 2400);
+        // A remembered width from a narrower window is pulled up to the floor
+        // rather than kept: nobody chose to make a column unreadable.
+        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "size").then_some(3), 1400);
+        let size = w[DEFAULT_COLUMNS.iter().position(|i| *i == "size").unwrap()];
+        assert_eq!(size, column("size").unwrap().min);
+    }
+
+    /// Below every floor at once, they all give way together — because the
+    /// other answer is two columns drawn off the right-hand edge.
+    #[test]
+    fn too_narrow_for_the_floors_cramps_them_rather_than_losing_any() {
+        let floor = floor_width(DEFAULT_COLUMNS);
+        for avail in 10..floor {
+            let w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
+            assert!(w.iter().all(|x| *x > 0), "a column vanished at {avail}px");
+            // Still in the same proportions: the location is the widest.
+            assert_eq!(
+                w.iter().position(|x| *x == *w.iter().max().unwrap()),
+                Some(2),
+                "at {avail}px the location stopped being the widest: {w:?}"
+            );
         }
     }
 

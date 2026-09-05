@@ -5912,3 +5912,557 @@ Bare `lock().unwrap()` outside tests: **two, both in test helpers**. The
 poison-resistant `unwrap_or_else(|p| p.into_inner())` is used consistently.
 The job channel is unbounded and says so; whole-source walks are collapsed,
 subtree walks deliberately are not.
+
+## September 2026 reliability and browser cache audit
+
+Measured on 2026-09-05, Linux 7.2.2-1-cachyos, rustc 1.97.1 and Node 26.8.1.
+These runs use synthetic/private fixtures. They do not replace the historical
+measurements of the owner's live filesystem above. The implementation and
+remaining reliability limits are described in
+[the audit](RELIABILITY-PERFORMANCE.md).
+
+### Browser work and retained rows: before and after
+
+```bash
+git show 4f60947:apps/scour-web/src/page.html > /tmp/scour-page-baseline.html
+node scripts/page-cost.cjs /tmp/scour-page-baseline.html
+node scripts/page-cost.cjs
+node --test apps/scour-web/tests/page.test.cjs
+```
+
+`page-cost.cjs` executes the shipped page's actual row-storage and read-ahead
+functions in a Node VM with a deterministic 20,000-row result, a 60-row visible
+range and 200-row windows. It exhausts stationary read-ahead, then moves through
+all 100 windows. The pre-existing uncommitted page saved at the start of this
+audit produced the same baseline counts as commit `4f60947`.
+
+| Work / retained data | Before | After |
+|---|---:|---:|
+| Windows fetched without scrolling | 100 | 3 |
+| Rows fetched without scrolling | 20,000 | 600 |
+| Windows retained after scrolling through the result | 100 | 32 |
+| Rows retained after that scroll | 20,000 | 6,400 |
+| Path reference entries retained | 20,000 | 6,400 |
+| Refresh starts while the first request is unresolved, after ten more triggers | 11 | 1 |
+
+This is 97% fewer stationary window requests/rows and 68% fewer retained result
+rows in this fixture. It is **not** a measured 68% reduction in browser RSS or
+JavaScript heap. Images, row strings, selections, DOM and browser caches have
+additional costs. Visible and pending pages are protected from LRU eviction;
+an unusually tall viewport can exceed the ordinary 32-window target.
+
+The overlap regression can be reproduced independently:
+
+```bash
+SCOUR_PAGE=/tmp/scour-page-baseline.html node --test \
+  --test-name-pattern='expensive refreshes' apps/scour-web/tests/page.test.cjs
+node --test --test-name-pattern='expensive refreshes' apps/scour-web/tests/page.test.cjs
+```
+
+The first command is expected to fail with eleven calls where one was required.
+The fixed test also proves the final pending update runs and that no timer loop
+continues after the final request.
+
+### Silent filesystem changes: private daemon
+
+```bash
+cargo build --release -p scourd
+python3 scripts/reliability-probe.py 2000
+```
+
+Two runs, watch disabled, two scan threads, 50 ms commit clocks, one-second
+fallback and two-second safety interval. The worker checks deadlines every two
+seconds. The script never sends a rescan after mutating files and compares all
+returned paths, types and file sizes, not only a count.
+
+| Stage | First run | Final release build |
+|---|---:|---:|
+| Initial 2,000 files in 20 directories | 88.1 ms | 101.0 ms |
+| 100 creates, 30 size changes, populated directory rename, subtree deletion | 4,123.8 ms | 4,116.6 ms |
+| Atomic replacement and hard link | 3,848.2 ms | 3,858.8 ms |
+
+Final inventory: 2,022 entries, no missing or ghost paths, correct file sizes.
+Both runs reported `watching=0`, `pending=0`, `unwritten=0` and revision 4.
+Index bytes were 162,275 / 162,545 and last scans 5 / 4 ms. Scan/commit timing
+and temporary path names can change the resulting segment layout.
+These recovery times depend on the
+deliberately short probe configuration; defaults are 60 and 1,800 seconds.
+They do not measure privileged watcher latency or establish a worst-case bound.
+
+### Million-file native query baseline
+
+```bash
+cargo build --release -p scour-index-native --example bench
+python3 - <<'PY'
+import json, resource, subprocess, time
+started = time.perf_counter()
+subprocess.run(['target/release/examples/bench', '1000000', '1000'], check=True)
+usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+print(json.dumps(dict(wall_s=time.perf_counter()-started,
+                     user_s=usage.ru_utime, system_s=usage.ru_stime,
+                     peak_rss_kib=usage.ru_maxrss), indent=2))
+PY
+```
+
+The deterministic generator makes 1,000,000 files plus directories:
+**1,076,156 entries**. Serialized segment size is **85.3 MiB**, **83.1 bytes per
+entry**. Generation plus build took 6.5 seconds. Each case asks for 40 hits with
+a count cap of 1,000, reporting the best of five warm executions of a compiled
+plan. This is the in-memory segment benchmark, excluding socket, engine,
+frontend, cold page faults and multi-segment merging. No query-speed improvement
+is claimed for this patch; these numbers identify where work remains.
+
+| Query | Order | Rows visited | Time |
+|---|---|---:|---:|
+| empty | modified descending | 1,000 | 0.21 ms |
+| `rapor` | modified descending | 41,153 | 1.62 ms |
+| `main` | modified descending | 41,033 | 1.58 ms |
+| `ext:rs` | modified descending | 28,834 | 5.41 ms |
+| `kind:image` | modified descending | 9,560 | 0.65 ms |
+| `kind:code dm:30d` | modified descending | 5,776 | 0.64 ms |
+| `under:/home/u/Projeler ext:rs` | modified descending | 92,974 | 8.23 ms |
+| `*.pdf` | modified descending | 27,524 | 4.89 ms |
+| `size:>1mb` | modified descending | 8,001 | 0.81 ms |
+| `ab` | modified descending | 93,133 | 3.40 ms |
+| empty | name ascending | 1,000 | 0.27 ms |
+| empty | name descending | 1,000 | 0.18 ms |
+| `ext:rs` | size descending | 32,768 | 8.96 ms |
+| `ext:rs` | name ascending | 1,076,156 | 203.21 ms |
+
+Process totals for generation, build and all benchmark cases: **7.910 s wall**,
+**7.684 s user CPU**, **0.173 s system CPU**, **548,672 KiB peak RSS**
+(535.8 MiB). The peak includes the synthetic entries and temporary construction
+buffers; it is not the resident memory of a daemon serving a mapped index.
+
+### Small daemon at rest, browser attached
+
+A separate private fixture contained 2,000 text files plus its root, with
+watching disabled and the default safety interval. A browser was attached to
+the isolated bridge. A ten-second `/proc` sample, after startup and without
+interaction, reported:
+
+| Counter | Value |
+|---|---:|
+| VmRSS | 19,620 KiB |
+| RssAnon | 13,540 KiB |
+| RssFile | 5,924 KiB |
+| VmSwap | 0 KiB |
+| Threads | 11 |
+| Additional user + system CPU ticks | 0 at 100 ticks/second |
+
+The independently sampled RSS categories need not sum exactly to VmRSS.
+Zero observed ticks in ten seconds means work below this sample's resolution;
+it does not mean zero CPU forever. The sample is too short to include the
+default safety scan or make a large-filesystem idle claim. Browser-process RAM
+and CPU were not included, and there is no before/after daemon-memory claim.
+To repeat the same counter method, pass the PID of an isolated probe daemon:
+
+```bash
+python3 - "$SCOUR_PROBE_PID" <<'PY'
+import json, os, pathlib, sys, time
+proc = pathlib.Path('/proc') / sys.argv[1]
+def ticks():
+    fields = (proc / 'stat').read_text().rsplit(')', 1)[1].split()
+    return int(fields[11]) + int(fields[12])
+start = ticks()
+time.sleep(10)
+status = dict(line.split(':', 1) for line in (proc / 'status').read_text().splitlines())
+print(json.dumps({key: status[key].strip() for key in
+                 ['VmRSS', 'RssAnon', 'RssFile', 'VmSwap', 'Threads']}, indent=2))
+print('CPU ticks:', ticks()-start, 'ticks/second:', os.sysconf('SC_CLK_TCK'))
+PY
+```
+
+### Verification boundaries
+
+`bash scripts/check --quick` passed 751 Rust tests/doc tests, with zero failures
+and eight explicitly ignored tests, plus strict lint, format and JavaScript
+parsing. Its browser runner passed all six Node behavior tests. Existing native
+index comparisons against the brute-force oracle ran as part of the workspace
+tests. Engine/config compile checks passed on Windows, macOS and Android;
+broader Windows compilation failed at existing Unix-only `scour-trash` APIs.
+Four privileged fanotify tests and four manual performance probes were not run.
+The browser interaction smoke passed, but no Chrome DevTools performance trace
+or LCP/INP/CLS measurement was available.
+
+## Native scroll follow-up — 2026-09-05
+
+The installed release at 04:39 is the baseline for this follow-up, copied before
+editing to `/tmp/scour-native-before/{scour-gui,scourd}`. Both native scroll
+measurements below use the same running baseline daemon, a live index of about
+5.08 million entries, the default modified-descending order, an empty query,
+and the software renderer. This isolates the window changes from deployment
+of the engine changes, but the changing index and OS cache still prevent a
+causal latency comparison. No kernel cache was purged. The window is
+1833 x 1133 physical pixels on this desktop.
+
+Commands (each opens a window and exits automatically):
+
+```sh
+DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland \
+  python3 scripts/gui-scroll-probe.py /tmp/scour-native-before/scour-gui /tmp/scour-native-final-before
+DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 XDG_SESSION_TYPE=wayland \
+  python3 scripts/gui-scroll-probe.py target/release/scour-gui /tmp/scour-native-final-gui-after
+```
+
+The built-in application hook visits 100 page positions twice, 50 ms per stop,
+with an initial pause and time to settle. Linux `/proc/PID/status` and
+`/proc/PID/stat` are sampled every 20 ms. The report excludes the final
+snapshot's temporary pixel buffers. Trace logs include paths and remain local.
+
+| Window observation | Before | After |
+|---|---:|---:|
+| Sample duration | 12.485 s | 12.486 s |
+| Maximum retained rows reported by the model | 6,400 | 6,400 |
+| Peak process RSS before snapshot | 56,532 KiB | 60,108 KiB |
+| Final anonymous RSS before snapshot | 15,052 KiB | 15,048 KiB |
+| GUI process CPU time | 0.50 s | 0.49 s |
+| GUI CPU / one core during the sample | 4.00% | 3.92% |
+| Page responses observed | 194 | 203 |
+| Median page round trip | 2.2 ms | 2.1 ms |
+| p95 page round trip | 22.7 ms | 5.0 ms |
+
+**No total-RAM reduction or general scroll-speed improvement is claimed from
+this pair.** Anonymous memory is effectively unchanged; RSS includes mapped
+code/data and is higher in the after sample. The LRU was already bounded. The
+latency distribution is exploratory: the live daemon was unchanged, filesystem
+activity and preparation/cache state varied, and the request counts differ.
+This measures application-directed scrolling and page delivery, not wheel
+input-to-paint latency, frame pacing or GPU performance. Both final snapshots
+were inspected and show populated detail rows at the destination.
+
+An earlier 30-page diagnostic run against the baseline logged 44 page replies,
+3.3 ms median and 229.6 ms p95. Individual 229.6 and 244.1 ms round trips
+included 227.77 and 242.81 ms reported by the engine respectively. That places
+those particular stalls before rendering. It does not identify preparation as
+the sole cause or establish performance for every query and order.
+
+Two deterministic regressions were reproduced before their fixes:
+
+```sh
+cargo test -p scour-engine --test smoke pages_outside_the_prepared_window -- --nocapture
+cargo test -p scour-gui first_population_is_lazy -- --nocapture
+```
+
+The first failed because a page outside the first 20,000 hits queued an unused
+preparation. After the fix no preparation is queued for such pages or for
+zero-length pages. The second observed `row_added(0, 5_000_000)` on an attached
+Slint model peer; after the fix first population sends `reset`, and subsequent
+growth/shrink sends incremental notifications. This tests the problematic
+notification path; the capped-page-first startup used in an ordinary run can
+avoid that large allocation even before the fix.
+
+Additional tests cover cheap pages avoiding preparation, expensive preparation
+retaining its cost backoff, relative-time cache expiry, failed full-pass retry
+cost surviving a due safety deadline, post-completion native refresh rest, and
+a stale layout miss not redirecting a scrollbar jump. Native index algorithms
+were unchanged; engine tests continue using the real native index.
+
+Validation:
+
+```sh
+cargo test -p scour-gui -p scour-engine
+cargo test -p scour-page
+cargo test -j 2 -p scour-index-native
+cargo clippy -j 2 -p scour-engine -p scour-gui --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo build --release -j 2 -p scour-gui -p scourd
+python3 scripts/reliability-probe.py 2000
+```
+
+98 engine/GUI tests and 11 page tests passed; clippy and formatting passed.
+The native index suite also passed, including all 76 public smoke tests and
+the comparisons with the brute-force oracle.
+The private daemon probe converged in 109.0 ms initially, 3999.8 ms after the
+create/modify/rename/delete batch, and 3975.5 ms after atomic replacement and a
+hard link. All 2022 final entries and file sizes matched; no explicit post-change
+rescan or watcher was used.
+
+A separate ten-second idle observation of the live daemon used 0.30% of one
+core. At a previous post-start point its cgroup held about 4.7 GiB, including
+about 3.3 GiB of reclaimable slab and 1.0 GiB of file cache; process anonymous
+RSS was about 97 MiB and total RSS about 524 MiB. These are distinct, overlapping
+accounting views, not additive quantities. The recorded cgroup peak was about
+7.16 GiB and is not a userspace heap measurement. Read them with:
+
+```sh
+systemctl show scour.service -p MainPID -p MemoryCurrent -p MemoryPeak -p CPUUsageNSec
+cat /sys/fs/cgroup/system.slice/scour.service/memory.stat
+cat /proc/$(systemctl show scour.service -p MainPID --value)/smaps_rollup
+```
+
+The first-scan total memory peak remains open. Release binaries were installed
+with backups, but this follow-up's `systemctl restart scour.service` request
+timed out during authorization. The engine changes passed the private daemon
+probe and were not active in the live service at the end of this measurement.
+
+## Resource costs without reducing coverage — 2026-09-05
+
+The directory table builder held every distinct directory as two owned strings:
+its insertion-order vector and its lookup map. They now share one `Arc<str>`;
+the map is dropped before encoding begins, while the original insertion order
+and provisional IDs are retained. `Arc` preserves the builder's Send/Sync
+properties. Moving owned strings out of an unordered map was evaluated and
+rejected: it reduced memory but discarded the input order that made some sorts
+cheap. The shipped version keeps that order.
+
+The segment builder also folded each filename twice, once for the persisted
+name arena and once for trigrams. Its private path now feeds the exact folded
+arena slice to the trigram writer. The public trigram writer still folds raw
+input itself. The provisional directory remap is released after its last use.
+The index format, searches, sort orders, filesystem coverage, cache limits,
+worker counts and commit/reconciliation intervals are unchanged.
+
+### Isolated before/after builds
+
+`examples/build_cost.rs` uses public APIs, generates input without filesystem
+I/O, and prints build wall time, process CPU time (`getrusage`), process peak
+RSS and a deterministic fingerprint of every output buffer. Each mode runs in
+a separate process. `dirs` inserts reverse-ordered long paths and checks each
+one twice, exercising both new and existing lookups. `segment` streams two
+identical passes over Unicode filenames with ten files per directory, avoiding
+a retained corpus of `Entry` values that would obscure builder memory.
+
+```sh
+# Before changing the implementation, build and preserve the example:
+cargo build --release -j 2 -p scour-index-native --example build_cost
+cp target/release/examples/build_cost /tmp/scour-build-cost-before
+# Build the same example after the implementation change:
+cargo build --release -j 2 -p scour-index-native --example build_cost
+cp target/release/examples/build_cost /tmp/scour-build-cost-after
+# Run each binary for each case, five times, alternating AB/BA by round:
+/tmp/scour-build-cost-before dirs 10000
+/tmp/scour-build-cost-after dirs 10000
+/tmp/scour-build-cost-before dirs 300000
+/tmp/scour-build-cost-after dirs 300000
+/tmp/scour-build-cost-before segment 100000
+/tmp/scour-build-cost-after segment 100000
+/tmp/scour-build-cost-before segment 1000000
+/tmp/scour-build-cost-after segment 1000000
+```
+
+Five runs per version per case; no concurrent compilation during the measured
+pairs. Medians on the current Linux desktop:
+
+| Workload | Wall ms before → after | CPU ms before → after | Peak RSS KiB before → after |
+|---|---:|---:|---:|
+| 10,000 distinct directories | 7.994 → 8.139 | 7.942 → 8.101 | 13,272 → 13,272 |
+| 300,000 distinct directories | 275.460 → 180.798 | 273.913 → 179.916 | 160,376 → 107,728 |
+| 100,000-row segment | 131.824 → 117.794 | 131.371 → 117.332 | 20,348 → 20,128 |
+| 1,000,000-row segment | 1326.423 → 1163.526 | 1320.615 → 1157.436 | 175,244 → 164,696 |
+
+For the 300,000-directory workload, CPU time fell 34.3% and peak RSS 32.8%.
+For the million-row segment, CPU time fell 12.4% and peak RSS 6.0% (10.3 MiB).
+The small directory case has no established speedup: its CPU ranges overlap
+(before 6.692–10.124 ms, after 5.340–8.999 ms), and the median is slightly higher.
+Its RSS is below the useful resolution of the whole-process measurement floor.
+The million-row CPU ranges do not overlap: 1314.306–1355.724 ms before versus
+1141.462–1202.346 ms after. These are synthetic workloads, not claims about the
+percentage improvement of a complete desktop scan.
+
+Every pair produced the same output size and fingerprint. For the million-row
+segment that is 129,885,841 bytes, fingerprint `0682eef00ee6d110`; for the large
+directory table it is 23,803,658 bytes, fingerprint `dd2604f54a2a82c7` including
+the provisional-ID remap. New public regressions verify provisional IDs through
+sorting/encoding and exact trigram dictionary/posting equality with the public
+raw-input writer across Unicode names and partial blocks. The native index's
+brute-force comparisons remain the search correctness guard.
+
+The measurements show less work and a smaller builder working set. They do
+**not** show a lower instantaneous CPU-percent peak: each single-threaded build
+can still occupy one core while it runs. No CPU quota or cache limit was added.
+The live service's total cgroup memory is also a different quantity. At the
+start of this follow-up it held 1,573,376,000 bytes with a recorded peak of
+1,983,340,544 bytes; its breakdown included 125,489,152 anonymous bytes,
+200,757,248 file bytes and 1,241,267,192 reclaimable slab bytes. Those observations
+precede these changes and are not a matched before/after startup benchmark.
+Reducing builder allocations does not remove filesystem dentries and inodes
+created by a complete scan. A strict memory/CPU cap could cause reclaim or
+throttling and needs separate latency/freshness validation.
+[Linux cgroup memory controls](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+
+Validation of the final shared-path version:
+
+```sh
+CARGO_BUILD_JOBS=2 bash scripts/check --quick
+cargo build --release -j 2 -p scourd
+python3 scripts/reliability-probe.py 2000
+```
+
+The complete quick check passed: 760 Rust/doc tests, 8 intentionally ignored,
+plus the browser's 6 Node tests; formatting, workspace clippy and JavaScript
+syntax passed. The native index suite includes the brute-force oracle. The
+release build also passed. This validation is separate from the benchmark
+runs; no test build was running during the measured pairs.
+
+The private 2,000-file convergence probe was repeated with both release
+binaries after an initially slower after run. All six comparison runs ended
+with the same 2,022 paths and correct metadata. Timings varied in both versions:
+
+| Version/run | Initial ms | Mutation batch ms | Replacement ms |
+|---|---:|---:|---:|
+| Before 1 | 118.6 | 3986.5 | 3966.5 |
+| After 1 | 191.6 | 5965.8 | 5923.9 |
+| After 2 | 187.0 | 6033.4 | 3847.7 |
+| Before 2 | 194.2 | 6027.4 | 3860.1 |
+| After 3 | 188.3 | 5904.6 | 3973.3 |
+| Before 3 | 191.5 | 6029.0 | 3858.9 |
+
+For these comparisons the probe module's `BINARY` constant was pointed at
+`/tmp/scourd-before-resource-pass` or the after release binary, invoking the
+same `main()` with the default 2,000 files. The final pair used both binaries
+under `/tmp` to check executable placement. The source-reported walk in that
+pair was 3–4 ms; convergence also includes index writes, the scheduler's
+cost-based rest, two-second checks and client polling. The initially suspected
+extra recovery interval also occurred in the before version. No new missing,
+stale-size or ghost entry was found. This sample does not establish an exact
+latency equivalence for every filesystem or load.
+
+The after release was installed with a backup at
+`~/.local/state/scour/before-build-resource-fix-20260905-081959/`. The restart
+request timed out; the running system daemon remained PID 3401468 with the
+before release. The installed file is the tested after release, awaiting a
+successful service restart. No index rebuild or format migration is needed.
+
+## Native window opening: folder cache and service permission (2026-09-05)
+
+The opening probe samples the GUI and service separately. RSS includes mapped
+index files; anonymous memory is the allocation relevant to the folder cache.
+Neither a historical `memory.peak` nor reclaimable file cache is a live heap
+measurement. No cache flushing, CPU throttling or reduced result coverage was
+used in this change.
+
+Live observation, old service PID 3401468, no build during sampling:
+
+```sh
+python3 /tmp/scour-open-probe.py /tmp/scour-open-before
+```
+
+Five seconds without a GUI, twenty seconds open, fifteen seconds after closing;
+100 ms samples in `/tmp/scour-open-before/samples.json`. Service RSS was 542524
+KiB before, peaked at 645236 KiB while open and ended at 566656 KiB after close.
+Anonymous memory was 125048 -> 132480 KiB. GUI peak RSS was 54668 KiB. The
+service cgroup ended at 744181760 bytes versus 736608256 before: file-backed RSS
+can rise without allocating the same number of new physical pages. This live
+run includes real concurrent file changes and is diagnostic, not a paired
+performance comparison.
+
+The folder-size cache used an unbounded map of decoded parent paths, allocated
+a growing directory-row vector, and built replacements while retaining old
+prefix tables. It now retains at most 512 parent decode slots, reuses String
+storage, reserves the known directory-row count, refreshes existing tables in
+place and retires obsolete segment caches before constructing replacements.
+`Cache::bytes` now uses actual vector capacities and the padded tuple size.
+
+### Five alternating pairs on one private index copy
+
+Snapshot: 5085994 entries, 17 segments, 658910103 bytes, 447209 unsorted entries.
+The native-index files were reflinked within the same filesystem, under ignored
+`target/scour-probes/window-index`; no benchmark opens the live writer's index.
+
+```sh
+cp -a --reflink=always ~/.local/share/scour/index/native target/scour-probes/window-index
+cargo build --release -p scour-index-native --example folder_memory
+# Save the executable at each revision, before measuring either:
+cp target/release/examples/folder_memory /tmp/scour-folders-before
+# After applying the folder-cache change and rebuilding:
+cp target/release/examples/folder_memory /tmp/scour-folders-after
+# Run five pairs, alternating before/after and after/before. No compilation:
+/tmp/scour-folders-before target/scour-probes/window-index
+/tmp/scour-folders-after target/scour-probes/window-index
+```
+
+Raw ten runs: `/tmp/scour-folder-pairs.json`; orchestration:
+`python3 /tmp/scour-folder-pairs.py`. `folder_memory` samples anonymous memory
+every 2 ms and measures CPU on the calling thread with CLOCK_THREAD_CPUTIME_ID.
+Medians:
+
+| Cold folder totals | Before | After |
+|---|---:|---:|
+| Wall time | 2371.4 ms | 2005.6 ms |
+| Calling-thread CPU | 2309.9 ms | 1996.2 ms |
+| Anonymous peak | 57.1 MiB | 19.5 MiB |
+| Anonymous memory after calculation | 48.9 MiB | 19.6 MiB |
+
+Peak reduction 65.8%, retained anonymous reduction 59.9%, CPU reduction 13.6%.
+The sampling can miss the very last allocation, explaining the 0.1 MiB between
+sampled peak and post-call value. All runs returned the same `/home` total
+(757746664767 bytes, 2651457 files) and `/mnt/depo` total (439814564345 bytes,
+1406649 files). This measures the folder-cache operation, not all service RAM
+or instantaneous CPU percentage. In-place refresh and early retirement target
+subsequent updates; the cold test does not independently measure their savings.
+
+### Real Slint window, isolated service, same snapshot
+
+```sh
+python3 /tmp/scour-private-window.py before after
+python3 /tmp/scour-private-folders.py before after
+```
+
+Temporary configurations retain the three source IDs, use empty roots, disable
+startup scanning and give reconciliation a one-day interval only for these
+18-second isolated measurements. Live configuration is unchanged. The first
+probe uses the empty query, the second the existing `SCOUR_GUI_QUERY=kind:folder`
+hook. Each starts a fresh service, opens the installed release GUI for 12 seconds
+and closes it for four; samples are every 20 ms. No snapshots allocate extra
+frame buffers. Both services reported 5085994 entries, revision 0 and no scanning.
+
+The empty-query snapshot's first twenty rows contain no folders, so opening it
+does not build folder totals: both versions retained 11724 KiB service anonymous
+memory. This is an essential limit: opening a window does not always trigger
+the expensive cache. No general GUI-only RAM reduction is claimed.
+
+The folder query exercises the actual allocation through the frontend:
+
+| GUI with folder results | Before | After |
+|---|---:|---:|
+| Service anonymous memory peak | 70380 KiB | 30580 KiB |
+| Service anonymous memory after GUI closes | 62304 KiB | 30580 KiB |
+| Combined GUI + service RSS peak | 312788 KiB | 282768 KiB |
+| Service CPU during open interval | 2.37 s | 2.04 s |
+| GUI CPU during open interval | 0.14 s | 0.14 s |
+
+Thus this complete opening scenario saves about 29.3 MiB combined RSS peak and
+31.0 MiB of retained service anonymous memory. File-backed service memory still
+remains resident (194592 / 198100 KiB in these runs); it is not forcibly evicted,
+because the next request would otherwise have to fault it back in. These are
+one pair of full-window runs; the five-pair result above supports the isolated
+calculation claim. Raw samples/logs remain under `/tmp/scour-private-window-*`
+and `/tmp/scour-private-folders-*`. Their traces can contain indexed paths.
+
+Validation adds 1100 distinct Unicode parent paths, directory-row cache
+collisions, two successive death/refresh cycles and compaction, alongside the
+native index's existing brute-force oracle, folder/report and size-sort tests.
+The service permission tests check permitted lifecycle verbs and rejection of
+other users, units, property changes and administrative actions. A private
+mountpoint test checks uniqueness, ownership and 0700 permissions.
+
+Final check: `CARGO_BUILD_JOBS=2 bash scripts/check --quick` passed 762 Rust/doc
+tests (8 ignored), clippy, formatting, page syntax and two policy-scope tests.
+Log: `/tmp/scour-window-check.log`. Final release build for scourd/scour-watch:
+`/tmp/scour-window-final-build.log`. `python3 scripts/reliability-probe.py 2000`
+verified all 2022 paths/metadata after create/delete/modify/directory rename,
+atomic replacement and a hard link, with watching disabled and no manual
+rescan. Initial convergence 131.5 ms, churn 3966.4 ms, replacement 4083.8 ms;
+`/tmp/scour-window-reliability.json`. These times are observations, not a claim
+that the folder-cache optimization accelerates reconciliation.
+
+Installed user release daemon SHA256:
+`13fb1d6473374e6c91bfc723171945aa7e018893df0dc013b61c379cffdd4d4c`.
+Both user binaries were backed up under
+`~/.local/state/scour/before-window-memory-20260905-091142` before replacement.
+
+Deployment completed on 2026-09-05 at 09:14:38 local time. The one-time sudo
+installer created backup `/var/backups/scour-service/20260905-061437`; the
+following `systemctl --no-ask-password restart scour.service` succeeded. Live
+PID 3520945 matches the release SHA256 above. The helper and every ancestor
+under `/usr/local` are root-owned 0755; the system unit is root-owned 0644 and
+ExecStart uses `/usr/local/libexec/scour/scour-watch`. The daemon runs with all
+UID/GID fields 1000 and CapPrm/CapEff zero. Status reports two watched sources
+out of three configured sources. A subsequent noninteractive `systemctl start`
+on the already active service succeeded without causing another startup scan.
+The setup terminal's `~` and truncated lines came from systemctl's `less` pager;
+the setup wrapper now uses `--no-pager` for that display.
+
+The two private index copies under `target/scour-probes` were removed after
+measurement; raw results remain in the `/tmp` paths above.

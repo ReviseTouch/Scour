@@ -20,11 +20,23 @@
 //! it. A volume that answers `watched` and then `no events` is one that has to
 //! be rescanned on a timer instead.
 
+//! **On Linux this asks a question the program no longer has.** The inotify
+//! fallback is gone — one watch a directory out of a budget shared with the
+//! whole session was what stopped other programs from starting, twice — so
+//! there is one mechanism here now and it is a fanotify mark. Whether *that*
+//! works is answered by `scour features` and by `scour-watch` itself, not by
+//! installing a recursive watch and timing it. The measurement below is kept
+//! for the platforms that still reach the kernel through `notify`.
+
+#[cfg(not(target_os = "linux"))]
 use std::sync::mpsc;
+#[cfg(not(target_os = "linux"))]
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "linux"))]
 use notify::{RecursiveMode, Watcher};
 
+#[cfg(not(target_os = "linux"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let paths = if args.is_empty() {
@@ -75,6 +87,7 @@ fn main() {
 ///
 /// The file is created inside a directory of its own and both are removed
 /// afterwards, so a volume being probed is left as it was found.
+#[cfg(not(target_os = "linux"))]
 fn proof(rx: &mpsc::Receiver<notify::Result<notify::Event>>, root: &std::path::Path) -> String {
     let dir = root.join(".scour-watch-probe");
     let file = dir.join("probe.txt");
@@ -104,4 +117,20 @@ fn proof(rx: &mpsc::Receiver<notify::Result<notify::Event>>, root: &std::path::P
              this volume has to be rescanned on a timer"
             .into(),
     }
+}
+
+/// On Linux the answer is not measured here; see the note at the top.
+#[cfg(target_os = "linux")]
+fn main() {
+    eprintln!(
+        "canwatch: not the question on Linux — the only watching mechanism here is a\n\
+         fanotify mark, and installing per-directory inotify watches to time them is\n\
+         exactly what was removed. Ask instead:\n\
+         \n\
+         \x20   sudo scour-watch -- scourd\n\
+         \n\
+         Whether a descriptor actually arrived is said by scourd's own start-up\n\
+         line on stderr, and by nothing else — no command reports it.\n"
+    );
+    std::process::exit(2);
 }

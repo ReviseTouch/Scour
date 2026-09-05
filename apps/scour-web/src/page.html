@@ -506,12 +506,21 @@
     position: absolute; top: 0; right: -4px; bottom: 0;
     width: 9px; cursor: col-resize; z-index: 4;
   }
+  /* **The line runs nearly the whole height, and it is always there.** At a
+     quarter in from each end it read as a tick beside a word rather than the
+     edge of a column, and on a busy table the headings ran together. Five
+     pixels of inset keeps it from touching the row's own bottom rule; under
+     the hand it thickens and goes the full height, so what is about to move
+     is unmistakable before the button is down. The window draws the same
+     line, the same way. */
   thead th .grip::after {
-    content: ""; position: absolute; top: 25%; bottom: 25%; left: 4px;
+    content: ""; position: absolute; top: 5px; bottom: 5px; left: 4px;
     width: 1px; background: var(--line);
   }
   thead th .grip:hover::after,
-  thead th .grip.dragging::after { background: var(--q-key); top: 0; bottom: 0; }
+  thead th .grip.dragging::after {
+    background: var(--q-key); top: 0; bottom: 0; width: 2px;
+  }
   /* Carrying a column somewhere else. The heading fades so the line is what
      the eye follows — the line says where it lands, and the heading is only
      what it came from. */
@@ -3505,21 +3514,8 @@
   const LIST = {
     query: null, sort: null, desc: null,
     total: 0,                /* what the scrollbar is sized by */
-    /* **Index to row, for every window that has been fetched and not thrown
-     * away** — which is up to `REACH` of them, not "only the rows on screen".
-     *
-     * A comment here used to say the opposite: "only the rows that are on
-     * screen; everything cached outside the viewport is dropped". Nothing ever
-     * dropped anything, and it must not: the reading-ahead below deliberately
-     * fetches the whole reachable list on a cheap ordering, and a cache that
-     * evicted what it had just read ahead into would ask for it again for as
-     * long as the window stayed open.
-     *
-     * So the bound is `REACH` rows — twenty thousand, a few megabytes — and it
-     * is cleared when the query changes. The one thing that *is* deleted is
-     * the tail past the end of the list once the exact count says where the
-     * end is; see `dropBeyond`. */
-    rows: new Map(),         /* index -> row, for every window fetched */
+    /* Recently used windows only; keepWindow bounds both rows and stamps. */
+    rows: new Map(),
     /* **Every path the cache holds, and how many rows hold it.**
      *
      * One question is asked of the cache whenever a window is refreshed — "is
@@ -3642,7 +3638,6 @@
      back counts as an arrival. */
   function dropBeyond() {
     const end = reach();
-    if (LIST.rows.size <= end) return;
     for (const i of [...LIST.rows.keys()]) if (i >= end) dropRows(i, 1);
     for (const s of [...LIST.at.keys()]) if (s >= end) LIST.at.delete(s);
   }
@@ -3688,6 +3683,23 @@
       if (start >= end) continue;              /* dropBeyond's half */
       const last = start + Math.min(WINDOW, end - start) - 1;
       if (!LIST.rows.has(last)) LIST.at.delete(start);
+    }
+  }
+
+  const KEEP_WINDOWS = 32;     /* 6,400 rows, independent of scroll distance */
+  const AHEAD_WINDOWS = 2;     /* at most two windows beyond either edge */
+
+  function keepWindow(start, revision) {
+    LIST.at.delete(start);
+    LIST.at.set(start, revision);
+    if (LIST.at.size <= KEEP_WINDOWS) return;
+    const [from, to] = visibleRange();
+    for (const old of [...LIST.at.keys()]) {
+      if (LIST.at.size <= KEEP_WINDOWS) break;
+      if (old < to && old + WINDOW > from) continue;
+      if (LIST.pending.has(old)) continue;
+      dropRows(old, WINDOW);
+      LIST.at.delete(old);
     }
   }
 
@@ -4161,39 +4173,22 @@
      enough that a pause is indistinguishable from having stopped. */
   const SETTLED = 400;
 
-  /* What a window may cost before reading ahead stops being worth it, in
-     milliseconds of the service's own measure.
-     A hundred windows is the whole reachable list, so this is the price of
-     filling it in: two and a half seconds at 25 ms, four minutes at 2,464.
-     The number is a budget for the *whole* read-ahead rather than a judgement
-     about one request. */
+  /* What a window may cost before even nearby speculation is too expensive,
+     in milliseconds of the service's measure, including folder enrichment.
+     The distance bound below and this cost bound protect different resources. */
   const READ_AHEAD_MAX = 25;
 
-  /* **The rest of the list, quietly, while nothing nearer is waiting.**
-   *
-   * Asking only for what is on the screen leaves it blank whenever the hand
-   * outruns the answer, and it can: a fast drag covers sixty to a hundred and
-   * sixty rows a *frame*, so even four hundred rows of headroom is three frames
-   * of it. No reaching distance survives a hand that means it.
-   *
-   * What survives is the rows already being here. The list reaches twenty
-   * thousand, a thousand of them are 378 KB on the wire, and a window is 5.5 ms
-   * now that the engine keeps the ordering — so the whole of what can be
-   * scrolled to is about a hundred requests and well under a second of a
-   * machine that is otherwise idle. One at a time, only when nothing nearer the
-   * screen is outstanding, nearest the viewport first, abandoned the moment the
-   * query changes. */
-
-  /* The missing window nearest the screen, out of the whole reachable list.
-     Outward from the viewport rather than from row zero, so a list being read
-     from the middle fills around where it is being read. */
+  /* Read a little beyond either visible edge. Filling the entire reachable
+     result spends CPU and memory on rows nobody may ever visit. A bounded
+     neighbourhood also prevents an LRU cache from fetching its own evictions. */
   function nextMissing(from, to) {
-    const end = reach();
+    const end = Math.min(reach(), Math.ceil(to / WINDOW) * WINDOW + AHEAD_WINDOWS * WINDOW);
+    const begin = Math.max(0, Math.floor(from / WINDOW) * WINDOW - AHEAD_WINDOWS * WINDOW);
     const here = Math.floor((from + to) / 2 / WINDOW) * WINDOW;
-    for (let step = 0; step * WINDOW <= end; step++) {
+    for (let step = 0; step * WINDOW <= end - begin; step++) {
       const tries = step === 0 ? [here] : [here + step * WINDOW, here - step * WINDOW];
       for (const start of tries) {
-        if (start < 0 || start >= end) continue;
+        if (start < begin || start >= end) continue;
         /* `at` rather than `rows`: a window that came back empty is fetched,
            and asking `rows` about it answered "missing" for ever. On a list
            whose reachable length is a guess until the exact count lands —
@@ -4206,7 +4201,7 @@
   }
 
   function fillWindow() {
-    if (LIST.query === null) return Promise.resolve();  /* no search has landed */
+    if (document.hidden || HANDED_OVER || LIST.query === null) return Promise.resolve();
     const [from, to] = visibleRange();
 
     const first = Math.floor(from / WINDOW) * WINDOW;
@@ -4214,7 +4209,10 @@
     for (let start = first; start < to; start += WINDOW) {
       if (LIST.pending.has(start)) continue;
       // On screen, out of date is as good as missing. Off screen it is not.
-      if (LIST.at.get(start) === SHOWING) continue;
+      if (LIST.at.get(start) === SHOWING) {
+        keepWindow(start, SHOWING);
+        continue;
+      }
       wanted.push(start);
     }
     /* **A list with nothing in it still has to be asked about.** `reach()` is
@@ -4349,7 +4347,7 @@
              turned up. See `putRows` for why a first fetch is not marked. */
           const refreshing = LIST.at.has(start);
           putRows(start, rows, refreshing);
-          LIST.at.set(start, request.rev);
+          keepWindow(start, request.rev);
           /* **The exact total, off any window that carries one.**
            *
            * This came here with the live refresh that used to be a second
@@ -4684,7 +4682,7 @@
         SHOWING = REV;
         const rows = res.rows.map(fromService);
         putRows(0, rows, false);
-        LIST.at.set(0, SHOWING);
+        keepWindow(0, SHOWING);
         scrollEl.scrollTop = 0;
         FILES = rows;
         lastMeter = res;
@@ -5148,12 +5146,12 @@
      and `key` is what the engine sorts by; neither is a word and neither
      moves. */
   const COLUMNS = [
-    { id: "name",  msgid: "Name",      key: "name",  w: 240,
+    { id: "name",  msgid: "Name",      key: "name",  w: 240, min: 110, near: 52, far: 30, max: 520,
       write: (td, f, p) => {
         if (td.className !== "name") td.className = "name";
         writeName(td, f, p.text);
       } },
-    { id: "path",  msgid: "Location",  key: "path",  w: 320,
+    { id: "path",  msgid: "Location",  key: "path",  w: 320, min: 120, near: 48, far: 70, max: 0,
       write: (td, f) => {
         if (td.className !== "") td.className = "";
         let div = td.firstElementChild;
@@ -5180,7 +5178,7 @@
      * those are without a walk it is not going to do. Over-marking is the
      * direction to be wrong in. What is excluded is in the settings, which is
      * what the title says. */
-    { id: "size",  msgid: "Size",      key: "size",  w: 90,  num: true,
+    { id: "size",  msgid: "Size",      key: "size",  w: 90, min: 68, near: 0, far: 0, max: 0,  num: true,
       write: (td, f) => {
         cell("n", (x) => (x.is_dir
           ? (x.under ? "~" + bytes(x.under.disk) : "")
@@ -5192,18 +5190,18 @@
           : "";
         if (td.title !== t) td.title = t;
       } },
-    { id: "mtime", msgid: "Modified",  key: "modified", w: 120,
+    { id: "mtime", msgid: "Modified",  key: "modified", w: 120, min: 100, near: 0, far: 0, max: 0,
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);
         td.style.color = `var(${bandOf(f.mtime)})`;
         const t = exact(f.mtime);
         if (td.title !== t) td.title = t;
       } },
-    { id: "kind",  msgid: "Kind",      key: "kind",  w: 110,
+    { id: "kind",  msgid: "Kind",      key: "kind",  w: 110, min: 68, near: 0, far: 0, max: 0,
       write: cell("kind", (f) => f.kind || "") },
-    { id: "ext",   msgid: "Extension", key: "ext",   w: 80,
+    { id: "ext",   msgid: "Extension", key: "ext",   w: 80, min: 56, near: 0, far: 0, max: 0,
       write: cell("kind", (f) => f.ext || "") },
-    { id: "ctime", msgid: "Created",   key: "created", w: 120,
+    { id: "ctime", msgid: "Created",   key: "created", w: 120, min: 100, near: 0, far: 0, max: 0,
       write: (td, f) => {
         cell("n left", (x) => (x.ctime ? ago(x.ctime) : ""))(td, f);
         const t = exact(f.ctime);
@@ -5216,7 +5214,7 @@
      * its are frozen at creation. The same column, two volumes, two different
      * meanings — so the one that means nothing says nothing, and the title
      * says why rather than leaving somebody to work it out from the numbers. */
-    { id: "atime", msgid: "Accessed",  key: "accessed", w: 120,
+    { id: "atime", msgid: "Accessed",  key: "accessed", w: 120, min: 100, near: 0, far: 0, max: 0,
       write: (td, f) => {
         const dead = frozenAtime(f);
         cell("n left", (x) => (dead ? "—" : x.atime ? ago(x.atime) : ""))(td, f);
@@ -5232,13 +5230,13 @@
         if (td.title !== t) td.title = t;
         td.style.color = dead ? "var(--ink-3)" : "";
       } },
-    { id: "perm",  msgid: "Mode",      key: "mode",  w: 108,
+    { id: "perm",  msgid: "Mode",      key: "mode",  w: 108, min: 92, near: 0, far: 0, max: 0,
       write: cell("mono", (f) => f.perm || "") },
-    { id: "user",  msgid: "Owner",     key: "uid",   w: 100,
+    { id: "user",  msgid: "Owner",     key: "uid",   w: 100, min: 72, near: 0, far: 0, max: 0,
       write: cell("mono", (f) => f.user || "") },
-    { id: "group", msgid: "Group",     key: "gid",   w: 100,
+    { id: "group", msgid: "Group",     key: "gid",   w: 100, min: 72, near: 0, far: 0, max: 0,
       write: cell("mono", (f) => f.group || "") },
-    { id: "disk",  msgid: "On disk",   key: "disk",  w: 90, num: true,
+    { id: "disk",  msgid: "On disk",   key: "disk",  w: 90, min: 68, near: 0, far: 0, max: 0, num: true,
       write: cell("n", (f) => (f.disk > 0 ? bytes(f.disk) : "")) },
   ];
   const COL_DEFAULT = ["name", "path", "size", "mtime", "kind"];
@@ -5259,7 +5257,6 @@
   let SHOWN = COL_DEFAULT.slice();
   const shownColumns = () => SHOWN.map((id) => COLUMNS.find((c) => c.id === id)).filter(Boolean);
 
-  const MIN_COL = 56;
   /* **Keyed by column id**, the same names `SHOWN` uses — not by the sort key,
      which is what this did. The two agree for seven columns and differ for
      five (`ctime`/`created`, `atime`/`accessed`, `perm`/`mode`, `user`/`uid`,
@@ -5290,6 +5287,144 @@
    * heading's own padding — so this sum has been twenty-seven pixels short of
    * the table it describes for as long as it has existed. The declaration says
    * thirty now and so does this, and they agree with the ruler. */
+  /* **The three moves, and they are `scour_ui::lay_out`'s.**
+   *
+   * Written twice on purpose and kept honest by a test: the numbers each
+   * column carries — its floor, its share of what is left over, its ceiling —
+   * are checked against the Rust table, so the two cannot drift into two
+   * different tables that agree on the day they were written.
+   *
+   * Integer division at every step, `Math.floor` included, because the Rust
+   * side has no other kind and a half-pixel difference between two frontends
+   * is a column that is one pixel wider in one of them for no reason anybody
+   * can see. */
+  /* The two widths the shares slide between — `scour_ui::NARROW` and `WIDE`,
+     and the test below fails if they stop agreeing. */
+  const NARROW = 700, WIDE = 1900;
+
+  /* What share of the stretching room a column asks for at this width, in
+     parts per thousand. Integer the whole way, because Rust reaches the same
+     number and a rounding that differs is a column a pixel out at some widths
+     and not others. */
+  function shareAt(c, avail) {
+    const t = avail <= NARROW ? 0
+      : avail >= WIDE ? 1000
+      : Math.floor(((avail - NARROW) * 1000) / (WIDE - NARROW));
+    return Math.floor((c.near * 10 * (1000 - t) + c.far * 10 * t) / 1000);
+  }
+
+  function layOut(cols, room) {
+    /* A width somebody dragged is an answer, not a hole to pour space into. */
+    const chosen = cols.map((c) => !!WIDTHS[c.id]);
+    const base = cols.map((c, i) =>
+      Math.max(c.min, (chosen[i] ? WIDTHS[c.id] : 0) || c.w || 120));
+    /* What the stretching columns divide between them: the room, less every
+       column that is not stretching — the fixed ones at their own width, the
+       dragged ones at whatever they were dragged to. */
+    let taken = 0;
+    cols.forEach((c, i) => { if (chosen[i] || !c.near) taken += base[i]; });
+    const budget = Math.max(0, room - taken);
+
+    const w = base.slice();
+    const stretchy = [];
+    cols.forEach((c, i) => { if (!chosen[i] && c.near > 0) stretchy.push(i); });
+    let handed = 0;
+    stretchy.forEach((i, n) => {
+      /* The last takes what the others left, so the shares add up to the
+         budget exactly however they rounded. */
+      const want = n + 1 === stretchy.length
+        ? Math.max(0, budget - handed)
+        : Math.floor((budget * shareAt(cols[i], room)) / 1000);
+      handed += want;
+      w[i] = Math.max(want, cols[i].min);
+      if (cols[i].max) w[i] = Math.max(Math.min(w[i], cols[i].max), cols[i].min);
+    });
+
+    const sum = w.reduce((a, b) => a + b, 0);
+    if (sum < room) shareOut(cols, chosen, w, room - sum);
+    else if (sum > room) { takeBack(cols, w, sum - room); squash(w, room); }
+    return w;
+  }
+
+  /* Move 4, and only when move 3 ran out of room: everything in proportion.
+     The floors say which column gives way first; they cannot make the window
+     wide enough to keep them. With the preview panel open on a small screen
+     the five floors do not fit at all, and every ordering of who-gives-way
+     ends the same. So they all give way at once and evenly, which leaves each
+     column somewhere a person can see it and take hold of its edge — where
+     the alternative is two of them drawn past the right and nowhere. */
+  function squash(w, room) {
+    const sum = w.reduce((a, b) => a + b, 0);
+    if (sum <= room || !sum || room < w.length) return;
+    /* The widest takes the rounding: a pixel matters least to it. */
+    let widest = 0;
+    for (let i = 1; i < w.length; i++) if (w[i] > w[widest]) widest = i;
+    let spent = 0;
+    for (let i = 0; i < w.length; i++) {
+      if (i === widest) continue;
+      w[i] = Math.max(1, Math.floor((w[i] * room) / sum));
+      spent += w[i];
+    }
+    w[widest] = Math.max(1, room - spent);
+  }
+
+  /* Move 2: hand out what is left over by `grow`, and let a column that
+     reaches its ceiling drop out so its share goes round again — which is how
+     the name stops at a readable width and the location takes the rest. */
+  function shareOut(cols, chosen, w, spare) {
+    let left = spare;
+    for (;;) {
+      const open = [];
+      for (let i = 0; i < cols.length; i++) {
+        if (!chosen[i] && cols[i].near > 0 && (!cols[i].max || w[i] < cols[i].max)) open.push(i);
+      }
+      const weight = open.reduce((a, i) => a + Math.max(1, cols[i].far), 0);
+      if (!left || !weight) return;
+      let spent = 0;
+      open.forEach((i, n) => {
+        /* The last takes the rounding too, so the columns add up to the room
+           exactly rather than leaving a hairline that moves as the window is
+           dragged. */
+        const share = n + 1 === open.length
+          ? left - spent
+          : Math.floor((left * Math.max(1, cols[i].far)) / weight);
+        const before = w[i];
+        const want = before + share;
+        w[i] = cols[i].max ? Math.min(want, cols[i].max) : want;
+        spent += w[i] - before;
+      });
+      if (!spent) return;
+      left -= spent;
+    }
+  }
+
+  /* Move 3: take back what does not fit, in proportion to what each column
+     has above its floor. The two that hold text have nearly all of it, so the
+     date and the size keep their digits instead of going off the edge. */
+  function takeBack(cols, w, over) {
+    let left = over;
+    for (;;) {
+      const open = [];
+      for (let i = 0; i < cols.length; i++) if (w[i] > cols[i].min) open.push(i);
+      const room = open.reduce((a, i) => a + (w[i] - cols[i].min), 0);
+      /* Everything is on its floor and the window is still too narrow. There
+         is nothing left to take; `.scroll` scrolls sideways from here. */
+      if (!left || !room) return;
+      const take = Math.min(left, room);
+      let taken = 0;
+      open.forEach((i, n) => {
+        const want = n + 1 === open.length
+          ? take - taken
+          : Math.floor((take * (w[i] - cols[i].min)) / room);
+        const share = Math.min(want, w[i] - cols[i].min);
+        w[i] -= share;
+        taken += share;
+      });
+      if (!taken) return;
+      left -= taken;
+    }
+  }
+
   function applyWidths() {
     const table = document.querySelector(".results table");
     /* **A grid has no columns to be wide.** The headings stay — they are the
@@ -5307,14 +5442,55 @@
       if (table) table.style.minWidth = "";
       return;
     }
-    let sum = 30 + 30;
-    for (const th of document.querySelectorAll("thead th[data-col]")) {
-      const col = COLUMNS.find((c) => c.id === th.dataset.col);
-      const w = WIDTHS[th.dataset.col] || (col && col.w) || 120;
-      th.style.width = w + "px";
-      sum += w;
-    }
+    const heads = [...document.querySelectorAll("thead th[data-col]")];
+    if (!heads.length) return;
+    /* The two fixed cells are counted out of the room the columns divide up:
+       the mark column and the picker. Without them the last column loses
+       their width off the right-hand edge.
+
+       **Thirty rather than three for the first of them, which is what it
+       always measured.** It was declared `width: 3px` and rendered at thirty —
+       a heading's own padding — so this sum was twenty-seven pixels short of
+       the table it describes for as long as it existed. */
+    const FURNITURE = 30 + 30;
+    /* `clientWidth` and not `offsetWidth`: the vertical scrollbar's lane is
+       already out of the first and still in the second, and the difference is
+       the last column's digits. */
+    const room = Math.max(0, (scrollEl ? scrollEl.clientWidth : 0) - FURNITURE);
+    const cols = heads.map((th) => COLUMNS.find((c) => c.id === th.dataset.col));
+    if (cols.some((c) => !c)) return;
+    const w = layOut(cols, room);
+    let sum = FURNITURE;
+    heads.forEach((th, i) => {
+      th.style.width = w[i] + "px";
+      sum += w[i];
+    });
+    /* Only when the floors themselves do not fit does the table declare more
+       than the room and `.scroll` scroll sideways. Above that the sum is the
+       room, so it declares exactly what is there. */
     if (table) table.style.minWidth = sum + "px";
+  }
+
+
+  /* **The columns are shared out again whenever the room changes**, and a
+     window resize is only one of the things that does it: the preview panel
+     opening takes three hundred and eighty pixels, the rail folding away
+     gives some back, a web font landing late moves the whole layout. One
+     observer on the box the table sits in catches all of them — and it
+     watches that box rather than the window, because the box is what the
+     columns actually divide up.
+
+     Guarded on the number having changed, because `applyWidths` writes widths
+     back inside that box and an observer that fires on its own writes is a
+     loop the browser has to stop. */
+  let lastRoom = -1;
+  if (scrollEl && typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      const room = scrollEl.clientWidth;
+      if (room === lastRoom) return;
+      lastRoom = room;
+      applyWidths();
+    }).observe(scrollEl);
   }
 
   /* Everything this window remembers, sent to the service.
@@ -5517,7 +5693,13 @@
     grip.setPointerCapture(e.pointerId);
 
     const move = (ev) => {
-      const w = Math.max(MIN_COL, Math.round(startW + ev.clientX - startX));
+      /* **The floor is this column's own.** It was fifty-six pixels for all
+         of them, which is under what a date needs and under several of the
+         headings' own words: a column dragged to it was a column whose
+         contents had gone. Each one says how narrow it may be, and `layOut`
+         will not take it under that either. */
+      const floor = (COLUMNS.find((c) => c.id === th.dataset.col) || {}).min || 56;
+      const w = Math.max(floor, Math.round(startW + ev.clientX - startX));
       WIDTHS[th.dataset.col] = w;
       // Through `applyWidths` rather than straight onto the cell, so that the
       // table's declared minimum grows with the drag. Setting the style here
@@ -6787,23 +6969,34 @@
   }
 
   function atMostEvery(fn, ms) {
-    let last = 0, timer = null, floor = ms;
-    const done = (spent) => { floor = Math.max(ms, spent * COST); };
-    const call = () => {
-      last = Date.now();
-      const began = last;
-      const out = fn();
-      // A promise says when it finished; anything else is charged as free.
-      if (out && typeof out.then === "function") {
-        out.then(() => done(Date.now() - began), () => done(Date.now() - began));
-      }
-    };
-    return () => {
-      if (timer) return;
+    let last = -Infinity, timer = null, floor = ms, running = false, pending = false;
+    const schedule = () => {
+      if (running || timer !== null || !pending) return;
       const wait = Math.max(0, floor - (Date.now() - last));
       if (!wait) { call(); return; }
       timer = setTimeout(() => { timer = null; call(); }, wait);
     };
+    const call = () => {
+      pending = false;
+      running = true;
+      last = Date.now();
+      const done = () => {
+        floor = Math.max(ms, (Date.now() - last) * COST);
+        running = false;
+        schedule();
+      };
+      // The previous cost is unknown until completion. Keep one trailing call
+      // while it runs instead of stacking overlapping expensive refreshes.
+      try {
+        const out = fn();
+        if (out && typeof out.then === "function") out.then(done, done);
+        else done();
+      } catch (error) {
+        done();
+        console.error("scour: a refresh failed:", error);
+      }
+    };
+    return () => { pending = true; schedule(); };
   }
 
   /* The highlight marks the arrival, not the row, so it is taken off on its
@@ -6851,6 +7044,7 @@
    * `fillWindow` with it. What is left here is the leash and the two lines
    * that arm it. */
   function refreshRows() {
+    if (document.hidden) { missedWhileAway = true; return; }
     if (LIST.query === null) return;           /* the first search has not landed */
     SHOWING = REV;
     // Returned so the throttle above can charge for what this cost.
@@ -6887,6 +7081,7 @@
   const SIDEBAR_LIVE_UNDER_MS = 40;
 
   function reviseCounts() {
+    if (document.hidden) { missedWhileAway = true; return; }
     if (LIST.query === null) return;
     if (sidebarCost > SIDEBAR_LIVE_UNDER_MS) return;
     // Returned so the throttle above can charge for what it cost.

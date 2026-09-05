@@ -15,10 +15,10 @@ in all four faces, with the numbers beside them.
 **[Releases](https://github.com/hasantr/Scour/releases)**
 
 Developed and used daily on Linux, against 4.6 million entries across an ext4
-home and an NTFS volume. It is written for Windows and macOS too and compiles
-for both, but it has not been run on either — and compiling is not running:
-every fault found in a day of measuring this on Linux was one a compiler
-cannot see.
+home and an NTFS volume. Windows and macOS ports remain incomplete. The engine
+and configuration compile checks pass on both, but the full Windows build is
+currently blocked by Unix-specific trash integration. Neither port has been
+runtime-verified in this audit; see the [validation details](docs/RELIABILITY-PERFORMANCE.md#validation).
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
@@ -42,6 +42,14 @@ index, and watches for changes. The difference is not a constant factor:
 
 Whole round trips — socket, parse, search, sort, count, and forty complete rows.
 More, and the method, in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
+
+The [September reliability and performance audit](docs/RELIABILITY-PERFORMANCE.md)
+records the change-tracking recovery rules, bounded browser cache, regression
+tests, measured costs and remaining limits. Event feeds are backed by full
+reconciliation: by default every 30 minutes, or every minute when a source has
+neither a complete watch nor a filesystem pulse. Expensive passes rest longer.
+These are configurable under `[service]` as `reconcile_interval_secs` and
+`poll_interval_secs`; the audit explains why they are not strict latency bounds.
 
 Memory is the other half. The index is memory-mapped, so it lives in the page
 cache and the kernel can reclaim it under pressure. Searching costs tens of
@@ -70,8 +78,8 @@ Debian 12 carry an older glibc and want the source route below.
 
 **Tested on a clean Ubuntu 24.04.4 guest**, not merely compiled for it: the
 installer ran, all seven binaries reported their version, the service indexed
-the home directory and watched it with inotify, `scour bash` answered in
-0.13 ms, and the browser face served its page.
+the home directory, `scour bash` answered in 0.13 ms, and the browser face
+served its page.
 
 ### From source
 
@@ -89,24 +97,44 @@ succeeds and the result needs the glibc it was made on.
 
 ### Watching, and the one privilege
 
-`scourd` watches with inotify by default — one watch per directory, from a
-budget shared with everything else in your session. A large home does not fit
-in it, and rather than take the whole budget and break the next program that
-wants a watch, `scourd` says so and reconciles by walking instead. Nothing is
-missed; changes take longer to appear.
+On Linux there is one watching mechanism and it is a `fanotify` mark: one per
+volume, immediate, and costing nothing per directory. It needs `CAP_SYS_ADMIN`
+to place, which `scourd` deliberately does not have — so a small helper places
+the marks, hands the descriptor over, drops the privilege and execs `scourd`.
 
-For a filesystem-wide mark instead — one `fanotify` mark per volume, immediate
-and nearly free — install the system unit, which is the only part that needs
-root:
+**There is no inotify fallback, on purpose.** inotify costs one watch per
+directory out of a budget that belongs to your *session*, not to Scour. A large
+home does not fit in it, and what runs out is not Scour: it is the budget the
+next editor, file manager or language server needs, and they fail with an error
+that never contains the word "watch". This machine lost the ability to open a
+development tool that way, twice. Raising the limit does not fix it either —
+the unprivileged alternative is narrower still: `fs.fanotify.max_user_marks` is
+295,420 here against an inotify budget of 524,288, for ~609,000 directories.
+
+Without the descriptor, `scourd` says so and reconciles by walking when a
+source's pulse moves — a cheap counter read from the root's block device.
+Nothing is missed; changes take longer to appear, and on a volume that is
+written to constantly the repeated walks cost more IO than watching would have.
+
+A root with no block device behind it — NFS, CIFS, sshfs, any FUSE mount,
+tmpfs — has no pulse to read, so it is walked once and then not reconciled at
+all. Those need the mark.
+
+To have the mark placed at boot, install the system unit — the only part that
+needs root:
 
 ```bash
-sudo install -m644 packaging/scour.service /etc/systemd/system/scour.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now scour.service
+cargo build --release -p scour-watch
+sudo bash packaging/install-service.sh
+systemctl start scour.service
 ```
 
-Read that file before running it: it explains what the privilege is for and
-where `scour-watch` drops it.
+The shipped unit targets `hasan` (UID 1000); adapt the unit, rule and installer
+checks together for another account. Read them before installing. The installer
+keeps `scour-watch` root-owned and grants only this service's start/stop/restart
+to that account. Other administration still requires authentication. Its scope
+uses [systemd's unit and verb details](https://github.com/systemd/systemd/blob/main/src/core/dbus-util.c)
+and [polkit rules](https://polkit.pages.freedesktop.org/polkit/polkit.8.html).
 
 ### Settings
 

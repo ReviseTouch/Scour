@@ -67,6 +67,8 @@ pub fn build(config: &Config) -> Result<Engine> {
                     .max(config.service.commit_interval_ms),
             ),
             rebuild_threshold: config.index.rebuild_threshold,
+            poll_interval: Duration::from_secs(config.service.poll_interval_secs.max(1)),
+            reconcile_interval: Duration::from_secs(config.service.reconcile_interval_secs.max(1)),
             // Raised to a window's fetch run and no further. Both windows ask
             // for fixed runs of [`scour_core::PAGE_ROWS`] and record the whole
             // run as loaded, so a ceiling under it leaves rows that never

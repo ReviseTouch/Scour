@@ -47,9 +47,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 # the window comes up blank with nothing reported anywhere. That happened, and
 # it cost an hour of looking at a perfectly healthy service.
 step "the page"
+bash -n packaging/install-service.sh
 if command -v node >/dev/null; then
     python3 scripts/page-script.py > "$tmp"
     node --check "$tmp"
+    node --test packaging/tests/service-policy.test.cjs
     echo "  page.html: the script parses"
 else
     echo "  node is missing, so the page's script was not parsed" >&2

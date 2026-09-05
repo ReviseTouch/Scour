@@ -89,8 +89,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     pass(&mut |e: &Entry| {
         dir_of.push(dirs.intern(e.parent()));
         let name = e.name();
-        names.push(name);
-        tri.push(name.as_bytes());
+        tri.push_folded(names.push_and_fold(name));
     });
     let (dir_bytes, remap) = dirs.finish();
     // Provisional until here — the table is sorted when it is written, so the
@@ -100,6 +99,7 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     for id in &mut dir_of {
         *id = remap[*id as usize];
     }
+    drop(remap);
 
     // **The path order, built here and nowhere else.** This is the one moment
     // the sorted directory table and every spelled name are both in hand and

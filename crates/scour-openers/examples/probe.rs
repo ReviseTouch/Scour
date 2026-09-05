@@ -11,7 +11,12 @@
 fn main() {
     let asked: Vec<String> = std::env::args().skip(1).collect();
     let types: Vec<&str> = if asked.is_empty() {
-        vec!["text/plain", "text/markdown", "application/pdf", "image/png"]
+        vec![
+            "text/plain",
+            "text/markdown",
+            "application/pdf",
+            "image/png",
+        ]
     } else {
         asked.iter().map(String::as_str).collect()
     };
@@ -19,7 +24,12 @@ fn main() {
         let list = scour_openers::openers(mime);
         println!("{mime} → {}", list.len());
         for o in &list {
-            println!("   {} {}  ({})", if o.preferred { "★" } else { " " }, o.name, o.id);
+            println!(
+                "   {} {}  ({})",
+                if o.preferred { "★" } else { " " },
+                o.name,
+                o.id
+            );
         }
     }
 }

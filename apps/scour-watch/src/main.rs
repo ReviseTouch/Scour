@@ -34,9 +34,7 @@ use std::ffi::{CString, OsStr};
 use std::os::unix::ffi::OsStrExt;
 use std::process::ExitCode;
 
-/// Where the mark is placed through, for a filesystem that needs a path that is
-/// not otherwise mounted. Removed before this program execs.
-const TEMP_MOUNT: &str = "/tmp/.scour-watch-sb";
+mod mountpoint;
 
 /// The environment variable `scour-source-fs` reads the descriptor from.
 const FD_ENV: &str = "SCOUR_FANOTIFY_FD";
@@ -207,11 +205,13 @@ fn expose_root(sb: &Sb) -> Option<String> {
     if sb.fstype != "btrfs" {
         return None;
     }
-    let _ = std::fs::create_dir_all(TEMP_MOUNT);
     let src = CString::new(sb.source.as_bytes()).ok()?;
-    let dst = CString::new(TEMP_MOUNT).ok()?;
     let fs = CString::new("btrfs").ok()?;
     let opt = CString::new("subvolid=5").ok()?;
+    // A fresh 0700 directory beneath root-owned /run cannot be replaced by
+    // the desktop user before a privileged mount follows it.
+    let path = mountpoint::create(std::path::Path::new("/run")).ok()?;
+    let dst = CString::new(path.as_os_str().as_bytes()).ok()?;
     // Read-only: nothing is written through this and it exists for a few
     // microseconds. `MS_PRIVATE` afterwards so the mount does not propagate to
     // peers — without it the unmount leaves a copy behind in another namespace
@@ -231,7 +231,7 @@ fn expose_root(sb: &Sb) -> Option<String> {
             sb.source,
             err()
         );
-        let _ = std::fs::remove_dir(TEMP_MOUNT);
+        let _ = std::fs::remove_dir(&path);
         return None;
     }
     unsafe {
@@ -243,7 +243,7 @@ fn expose_root(sb: &Sb) -> Option<String> {
             std::ptr::null(),
         );
     }
-    Some(TEMP_MOUNT.to_owned())
+    Some(path.to_string_lossy().into_owned())
 }
 
 fn unexpose(path: &str) {

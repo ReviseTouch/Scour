@@ -102,6 +102,15 @@ carries the `id` of the call it answers. Requests:
 Queries cross as **text**, not as a parsed tree: the service parses, so the
 language means one thing rather than three.
 
+Search `took_us` includes the engine's parsing, cache lookup and folder-size
+enrichment as well as the index call. It excludes transport and frontend
+rendering. Prepared pages are valid only for the current revision **and** the
+current parsed query: a relative date cutoff changes while the disk is quiet.
+Preparation is speculative: only nonempty pages inside its first 20,000 hits
+can request it, and only after a page takes at least 20 ms to answer.
+Successful explicit flushes publish a revision; shutdown wakes blocked
+`await` callers before joining the engine workers.
+
 `Response` is internally tagged, which constrains what a variant may hold — a
 struct or its own named fields, never a bare string or a sequence. serde reports
 the violation when the message is *sent*, and the client sees it as a connection
@@ -202,10 +211,25 @@ form would have looked completely harmless, which is exactly why it is a `POST`.
 `--no-thumbnails` removes it; reading pictures that already exist is not behind
 that flag, because reading them starts nothing.
 
+The result cache keeps at most 32 windows of 200 rows in ordinary viewports,
+evicting offscreen windows and their path references together. Speculation
+reaches at most two windows beyond the viewport; it does not traverse the
+20,000-row reach while the user is stationary. Visible and pending windows
+are protected from eviction. Hidden or handed-over pages start no window
+fetches. Each periodic refresh lane has at most one running operation and one
+coalesced follow-up, regardless of how slowly the service answers.
+
 ### Window — `scour-gui`
 
 A frontend, exactly like `apps/scour`: no index, no filesystem walk, does not
 link the engine. Three rules hold it up.
+
+Both result layouts use Slint's `ListView` with a paged model. Initial
+population resets an empty model so Slint 1.16.1 does not allocate a placeholder
+for every result through `row_added(0, count)`; subsequent length changes use
+incremental notifications to preserve the viewport. Optional live refresh
+rests after completion for at least 500 ms and ten times the last page cost.
+Missing viewport pages and explicit new queries bypass that refresh rest.
 
 * **The window never waits.** Every call is on a worker thread and comes back
   as an event. Two lanes — interactive and background — because `scour-ipc` is
@@ -230,3 +254,23 @@ a `NativeIndex` or an `FsSource`. If a second one ever does, something above
 has stopped being written against its trait. `scour-engine`'s tests are the
 deliberate exception: they wire a real index to a source the engine cannot
 tell from a filesystem, which is the half of the rule worth testing.
+
+Change feeds and source pulses are hints; neither is proof that a quiet source
+is unchanged. `[service] poll_interval_secs` defaults to 60 for sources with
+neither complete watch coverage nor a pulse. `reconcile_interval_secs` defaults
+to 1800 for a full safety pass on every source. Wiring clamps both to at least
+one second. Deadlines are checked every two seconds and run on the worker;
+they are scheduling intervals, not an end-to-end freshness guarantee. Normal
+periodic recovery rests at least twenty times the preceding full scan's wall
+duration, in addition to its configured floor. Partial subtree activity cannot
+postpone a full safety pass. Failed or incomplete reconciliation is retried
+with backoff measured after completion and at least twenty times the full
+scan cost, preserving rows under unreadable paths. The engine joins both
+its mutation worker and its prepared-query worker on shutdown.
+
+The optional Linux service installer keeps the privileged `scour-watch` helper
+under root-owned `/usr/local/libexec/scour`. The shipped host-specific unit and
+polkit rule permit only `hasan` to start, stop and restart `scour.service` without
+authentication. The helper uses a fresh private directory under `/run` for its
+short-lived mount and drops its identity before executing the user-owned daemon.
+The rule must never be installed with a user-writable privileged executable.

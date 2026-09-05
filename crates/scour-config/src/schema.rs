@@ -194,6 +194,11 @@ pub struct ServiceCfg {
     /// configuration for the same reason: only the person searching knows what
     /// their answer is worth.
     pub commit_idle_ms: u64,
+    /// Recheck a source without a change feed or a readable pulse.
+    pub poll_interval_secs: u64,
+    /// Reconcile even a quiet, watched source to recover silent event loss.
+    /// Expensive walks rest for at least twenty times their previous duration.
+    pub reconcile_interval_secs: u64,
 }
 
 impl Default for ServiceCfg {
@@ -202,6 +207,8 @@ impl Default for ServiceCfg {
             socket: String::new(),
             commit_interval_ms: 1_000,
             commit_idle_ms: 15_000,
+            poll_interval_secs: 60,
+            reconcile_interval_secs: 1_800,
         }
     }
 }

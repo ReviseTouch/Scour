@@ -14,8 +14,16 @@ workspace = true
 [dependencies]
 scour-core        = { workspace = true }
 ignore            = { workspace = true }
-notify            = { workspace = true }
 crossbeam-channel = { workspace = true }
+
+# **Not on Linux.** There the only watching mechanism is fanotify, placed by a
+# privileged helper — see `watch::start`. `notify` uses inotify here, and
+# inotify's per-directory watches come out of a budget shared with the whole
+# desktop session; taking them stopped other programs from starting. Off the
+# platform this program is actually used on, `notify` is still the only sane
+# way to reach ReadDirectoryChangesW and FSEvents.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+notify            = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

@@ -60,6 +60,11 @@ impl NameWriter {
     }
 
     pub fn push(&mut self, name: &str) {
+        self.push_and_fold(name);
+    }
+
+    /// Let the segment's trigram writer reuse the exact fold stored here.
+    pub(crate) fn push_and_fold(&mut self, name: &str) -> &[u8] {
         if self.rows.is_multiple_of(BLOCK) {
             self.blocks.push(self.bytes.len() as u32);
             self.folded_blocks.push(self.folded.len() as u32);
@@ -71,10 +76,12 @@ impl NameWriter {
         // And the same name folded, once, here, rather than once per row per
         // query for the life of the index.
         let mut fold = Folded::new();
+        let start = self.folded.len();
         self.folded
             .extend_from_slice(fold.fold_bytes(name.as_bytes()));
         self.folded.push(0);
         self.rows += 1;
+        &self.folded[start..self.folded.len() - 1]
     }
 
     pub fn len(&self) -> usize {

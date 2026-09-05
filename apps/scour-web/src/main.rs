@@ -1397,7 +1397,12 @@ fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         return;
     };
     if !matches!(
-        call(client, Request::Stat { path: path.to_string() }),
+        call(
+            client,
+            Request::Stat {
+                path: path.to_string()
+            }
+        ),
         Ok(Response::Stat(_))
     ) {
         http::fail(stream, "404 Not Found", "not in the index");
@@ -1426,7 +1431,12 @@ fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) 
         return;
     };
     if !matches!(
-        call(client, Request::Stat { path: path.to_string() }),
+        call(
+            client,
+            Request::Stat {
+                path: path.to_string()
+            }
+        ),
         Ok(Response::Stat(_))
     ) {
         http::fail(stream, "404 Not Found", "not in the index");
@@ -1434,7 +1444,10 @@ fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) 
     }
     let name = path.rsplit('/').next().unwrap_or(path);
     let mime = scour_thumbs::known::known().mime_of(name).unwrap_or("");
-    match scour_openers::openers(mime).into_iter().find(|o| o.id == id) {
+    match scour_openers::openers(mime)
+        .into_iter()
+        .find(|o| o.id == id)
+    {
         Some(chosen) => match scour_openers::launch(&chosen, std::path::Path::new(path)) {
             Ok(()) => http::json(stream, &serde_json::json!({ "started": chosen.name })),
             Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
@@ -1459,13 +1472,18 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         return;
     };
     if !matches!(
-        call(client, Request::Stat { path: path.to_owned() }),
+        call(
+            client,
+            Request::Stat {
+                path: path.to_owned()
+            }
+        ),
         Ok(Response::Stat(_))
     ) {
         http::fail(stream, "404 Not Found", "not in the index");
         return;
     }
-    match scour_name::rename(std::path::Path::new(&path), &name) {
+    match scour_name::rename(std::path::Path::new(&path), name) {
         Ok(now) => {
             let now = now.to_string_lossy().into_owned();
             // Both ends: the old path is gone and the new one has appeared, and
@@ -1502,7 +1520,11 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         http::fail(stream, "400 Bad Request", "no paths");
         return;
     };
-    let asked: Vec<String> = raw.split('\n').filter(|p| !p.is_empty()).map(str::to_owned).collect();
+    let asked: Vec<String> = raw
+        .split('\n')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect();
 
     let mut gone = Vec::new();
     let mut refused = Vec::new();
@@ -2076,14 +2098,18 @@ mod tests {
                     !served.contains(&format!("\"id\":\"{}\"", item.id))
                         || scour_ui::menu::ITEMS
                             .iter()
-                            .any(|o| o.id == item.id && !o.except.contains(&scour_ui::faces::Face::Page)),
+                            .any(|o| o.id == item.id
+                                && !o.except.contains(&scour_ui::faces::Face::Page)),
                     "{} cannot be done in a browser and was served anyway",
                     item.id
                 );
                 continue;
             }
             assert!(
-                served.contains(&format!("\"msgid\":\"{}\"", item.msgid.replace('"', "\\\""))),
+                served.contains(&format!(
+                    "\"msgid\":\"{}\"",
+                    item.msgid.replace('"', "\\\"")
+                )),
                 "the page was served without {:?}",
                 item.msgid
             );
@@ -2226,11 +2252,113 @@ mod tests {
                 c.id
             );
             assert!(
-                line.contains(&format!("w: {}", c.width)),
+                line.contains(&format!("w: {},", c.width)),
                 "`{}` starts at a different width here: {line}",
                 c.id
             );
+            // And the three numbers the layout is worked out from. A floor
+            // that differs by a pixel is a column that survives a narrow
+            // window in one frontend and vanishes from the other.
+            for (word, want) in [
+                ("min", c.min),
+                ("near", u32::from(c.near)),
+                ("far", u32::from(c.far)),
+                ("max", c.max),
+            ] {
+                assert!(
+                    line.contains(&format!("{word}: {want},")),
+                    "`{}`: {word} is not {want} here: {line}",
+                    c.id
+                );
+            }
         }
+    }
+
+    /// **The page's own arithmetic, run and compared against the Rust it was
+    /// copied from.**
+    ///
+    /// The numbers being equal is checked above; this checks that the two
+    /// *do the same thing with them*, which is the half that a table cannot
+    /// state. Sharing out what is left over and taking back what does not fit
+    /// are two passes with a floor and a ceiling each, and a `Math.floor`
+    /// forgotten on one side is a column a pixel out at some widths and not
+    /// others — the kind of difference nobody finds by looking.
+    ///
+    /// The three functions are lifted out of the page and run under `node`
+    /// against every width from the floor to well past a wide screen. No node,
+    /// no check — the same as `the_page_script_parses`, and for the same
+    /// reason: this is a guard, not a dependency.
+    #[test]
+    fn the_page_shares_the_row_out_exactly_as_the_shared_crate_does() {
+        let from = PAGE
+            .find("  const NARROW = 700, WIDE = 1900;")
+            .expect("the page has no NARROW/WIDE");
+        // The two anchors are written out in both places, so check they say
+        // the same thing before trusting anything computed from them.
+        assert_eq!(
+            (scour_ui::NARROW, scour_ui::WIDE),
+            (700, 1900),
+            "the anchors moved in the crate and not in the page"
+        );
+        let to = PAGE
+            .find("  function applyWidths() {")
+            .expect("no applyWidths");
+        assert!(to > from, "layOut is not above applyWidths any more");
+
+        let cols: Vec<String> = scour_ui::DEFAULT_COLUMNS
+            .iter()
+            .filter_map(|id| scour_ui::column(id))
+            .map(|c| {
+                format!(
+                    r#"{{"id":"{}","w":{},"min":{},"near":{},"far":{},"max":{}}}"#,
+                    c.id, c.width, c.min, c.near, c.far, c.max
+                )
+            })
+            .collect();
+        let harness = format!(
+            "const WIDTHS = {{}};\n{}\nconst cols = [{}];\nconst out = [];\n             for (let r = 200; r <= 3600; r += 7) out.push(layOut(cols, r));\n             console.log(JSON.stringify(out));\n",
+            &PAGE[from..to],
+            cols.join(",")
+        );
+        let path = std::env::temp_dir().join("scour-layout-check.js");
+        std::fs::write(&path, &harness).expect("writing the harness out");
+        let out = match std::process::Command::new("node").arg(&path).output() {
+            Ok(out) => out,
+            Err(e) => {
+                eprintln!("the_page_shares_the_row_out…: skipped, no node here ({e})");
+                let _ = std::fs::remove_file(&path);
+                return;
+            }
+        };
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            out.status.success(),
+            "the page's layOut did not run:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        // Parsed by hand rather than with serde: the shape is a list of lists
+        // of integers and a dependency to read it would outlive the reason.
+        let rows: Vec<Vec<u32>> = text
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split("],[")
+            .map(|row| {
+                row.trim_matches(|c| c == '[' || c == ']')
+                    .split(',')
+                    .map(|n| n.trim().parse().expect("a width"))
+                    .collect()
+            })
+            .collect();
+
+        let mut n = 0;
+        for (i, room) in (200..=3600).step_by(7).enumerate() {
+            let want = scour_ui::lay_out(scour_ui::DEFAULT_COLUMNS, |_| None, room);
+            assert_eq!(rows[i], want, "at {room}px the page and the crate differ");
+            n += 1;
+        }
+        assert!(n > 400, "only {n} widths were compared");
     }
 
     /// **Nor on the catalogue**, which is the same property one layer out.

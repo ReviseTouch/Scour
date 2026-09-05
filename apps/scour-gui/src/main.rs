@@ -45,7 +45,9 @@ mod ui {
     slint::include_modules!();
 }
 
-pub use ui::{Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, MenuItem, Row, Rule, Scheme, Span, Theme};
+pub use ui::{
+    Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, MenuItem, Row, Rule, Scheme, Span, Theme,
+};
 
 thread_local! {
     /// When the process started, until the first rows are drawn.
@@ -219,14 +221,14 @@ struct State {
     page_offset: u32,
     /// When the page now in flight was asked for, for the trace.
     page_sent: Option<std::time::Instant>,
-    /// When a page was last asked for.
+    /// When a page last finished arriving.
     ///
     /// Read to decide whether there is time to re-read a page the index has
     /// moved under. During a scan it moves several times a second, and a list
     /// that re-read the page under the pointer every time would spend a drag
     /// fetching the same rows.
-    asked_at: Option<std::time::Instant>,
-    /// What the last page cost the service, in microseconds.
+    page_landed_at: Option<std::time::Instant>,
+    /// What the last page cost including the round trip, in microseconds.
     ///
     /// Read to decide whether guessing at the next one is worth it: a page is
     /// a walk of everything above it, so at the bottom of a long result a
@@ -776,7 +778,7 @@ fn main() -> Result<()> {
         row_limit: 20,
         page_offset: 0,
         page_sent: None,
-        asked_at: None,
+        page_landed_at: None,
         page_cost_us: 0,
         asking_pictures: false,
         peek_path: String::new(),
@@ -844,6 +846,15 @@ fn main() -> Result<()> {
     // The widths somebody dragged, in either window: they are keyed by column
     // id and kept beside the index, so a column widened in the browser opens
     // that wide here.
+    //
+    // **Kept whole, not just the five this window draws.** `Change::widths`
+    // replaces the map rather than merging into it — a change is the new
+    // answer, which is the only way a width can ever be *removed*. So a save
+    // has to send every width there is, and this window can see five of the
+    // twelve columns: sending only those would delete a width the browser page
+    // had set on `ext` or `perm`, silently, the first time anybody dragged
+    // anything here.
+    let widths = Rc::new(RefCell::new(kept.widths.clone()));
     for (id, px) in &kept.widths {
         let v = *px as f32;
         match id.as_str() {
@@ -855,6 +866,9 @@ fn main() -> Result<()> {
             _ => {}
         }
     }
+    // And share the row out once with them, so the first frame is already the
+    // right shape rather than the defaults for the instant before a resize.
+    relayout(&window);
     // The panel somebody left open. Read here with the rest of the shape,
     // before the first search, so it is open in the first frame rather than
     // appearing a moment later.
@@ -864,7 +878,7 @@ fn main() -> Result<()> {
         window.set_view_mode(kept_layout.as_str().into());
     }
     let addr = match &args.socket {
-        Some(given) => given.clone().into(),
+        Some(given) => given.clone(),
         None => config.socket(),
     };
 
@@ -937,8 +951,7 @@ fn main() -> Result<()> {
             // here for the paste — a page of paths dropped into the field is
             // the one way it happens, and before this it closed the window.
             let text = if text.chars().count() > 600 {
-                let cut: slint::SharedString =
-                    text.chars().take(600).collect::<String>().into();
+                let cut: slint::SharedString = text.chars().take(600).collect::<String>().into();
                 if let Some(w) = weak.upgrade() {
                     w.set_query(cut.clone());
                 }
@@ -1115,47 +1128,92 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
+        let widths = Rc::clone(&widths);
         window.on_column_dragged(move |which, delta| {
             let Some(w) = weak.upgrade() else { return };
-            // A floor, because a column dragged to nothing cannot be dragged
-            // back: there is no edge left to take hold of.
-            let clamp = |v: f32| v.max(48.0);
+            // **The floor is the column's own, not one number for all five.**
+            // It was 48 pixels flat, which is under every heading's own word
+            // and well under what a date needs: a column dragged to it was a
+            // column whose contents were gone. `scour-ui` says how narrow each
+            // one may be, and `lay_out` will not go under it either.
+            let floor = scour_ui::column(&which).map_or(48.0, |c| c.min as f32);
             let now = match which.as_str() {
-                "name" => {
-                    let v = clamp(w.get_cw_name() + delta);
-                    w.set_uw_name(v);
-                    v
-                }
-                "kind" => {
-                    let v = clamp(w.get_cw_kind() + delta);
-                    w.set_uw_kind(v);
-                    v
-                }
-                "path" => {
-                    let v = clamp(w.get_cw_path() + delta);
-                    w.set_uw_path(v);
-                    v
-                }
-                "mtime" => {
-                    let v = clamp(w.get_cw_mtime() + delta);
-                    w.set_uw_mtime(v);
-                    v
-                }
-                "size" => {
-                    let v = clamp(w.get_cw_size() + delta);
-                    w.set_uw_size(v);
-                    v
-                }
+                "name" => (w.get_cw_name() + delta).max(floor),
+                "kind" => (w.get_cw_kind() + delta).max(floor),
+                "path" => (w.get_cw_path() + delta).max(floor),
+                "mtime" => (w.get_cw_mtime() + delta).max(floor),
+                "size" => (w.get_cw_size() + delta).max(floor),
                 _ => return,
             };
-            let mut widths = std::collections::BTreeMap::new();
-            widths.insert(which.to_string(), now as u32);
+            match which.as_str() {
+                "name" => w.set_uw_name(now),
+                "kind" => w.set_uw_kind(now),
+                "path" => w.set_uw_path(now),
+                "mtime" => w.set_uw_mtime(now),
+                "size" => w.set_uw_size(now),
+                _ => return,
+            }
+            // **And then the whole row again, not just this column.** Widening
+            // one column narrows the others, and before this the others were
+            // simply not told: the total ran past the edge and whatever was
+            // out there stopped being on screen.
+            relayout(&w);
+            // **What is kept is what was asked for, not what it came out as.**
+            // A drag that lands during a squeeze renders narrower than the
+            // pointer went; saving the rendered width would walk the column in
+            // a little every time the preview panel was opened and it was
+            // dragged again.
+            widths.borrow_mut().insert(which.to_string(), now as u32);
             link.send(Ask::Remember {
                 change: scour_settings::Change {
-                    widths: Some(widths),
+                    widths: Some(widths.borrow().clone()),
                     ..Default::default()
                 },
             });
+        });
+    }
+
+    // **Double-click an edge and that column decides for itself again.**
+    //
+    // Without this there was no way back: a width dragged here was kept for
+    // good, and a column pinned at what a narrower window wanted stayed
+    // pinned — it stopped stretching with the window, and nothing on screen
+    // said why or offered to undo it. The browser page has had this gesture
+    // all along; the window had the same grip and only half of what it does.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let widths = Rc::clone(&widths);
+        window.on_column_reset(move |which| {
+            let Some(w) = weak.upgrade() else { return };
+            // Zero is "nobody has touched it", here and in the settings file.
+            match which.as_str() {
+                "name" => w.set_uw_name(0.0),
+                "kind" => w.set_uw_kind(0.0),
+                "path" => w.set_uw_path(0.0),
+                "mtime" => w.set_uw_mtime(0.0),
+                "size" => w.set_uw_size(0.0),
+                _ => return,
+            }
+            relayout(&w);
+            widths.borrow_mut().remove(which.as_str());
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    widths: Some(widths.borrow().clone()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // The room changed — the window was resized, or the preview panel came
+    // and went. Slint reports it; the widths are worked out in Rust.
+    {
+        let weak = window.as_weak();
+        window.on_relayout(move |_| {
+            if let Some(w) = weak.upgrade() {
+                relayout(&w);
+            }
         });
     }
 
@@ -1854,7 +1912,11 @@ fn main() -> Result<()> {
 
                 "copy-path" | "copy-name" => {
                     let text = if id == "copy-name" {
-                        chosen.iter().map(|p| leaf(p)).collect::<Vec<_>>().join("\n")
+                        chosen
+                            .iter()
+                            .map(|p| leaf(p))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     } else {
                         chosen.join("\n")
                     };
@@ -1927,11 +1989,14 @@ fn main() -> Result<()> {
                 // The two that ask first. Everything above happens on the
                 // press; these two put the question up and wait.
                 "trash" | "open-all" => {
-                    let title = t(&cat_now, if id == "trash" {
-                        "Move to the wastebasket"
-                    } else {
-                        "Open all {n}…"
-                    })
+                    let title = t(
+                        &cat_now,
+                        if id == "trash" {
+                            "Move to the wastebasket"
+                        } else {
+                            "Open all {n}…"
+                        },
+                    )
                     .replace("{n}", &grouped(chosen.len() as u64));
                     // Eight names and then a line saying how many are left.
                     // A list that runs off the bottom of the sheet is a list
@@ -1942,8 +2007,8 @@ fn main() -> Result<()> {
                     }
                     w.set_ask_title(title.into());
                     w.set_ask_body(body.join("\n").into());
-                    w.set_ask_yes(t(&cat_now, if id == "trash" { "Move" } else { "Open" }).into());
-                    w.set_ask_no(t(&cat_now, "Cancel").into());
+                    w.set_ask_yes(t(&cat_now, if id == "trash" { "Move" } else { "Open" }));
+                    w.set_ask_no(t(&cat_now, "Cancel"));
                     w.set_ask_typing(false);
                     *pending.borrow_mut() = Some((id.to_string(), chosen));
                     w.set_ask_open(true);
@@ -2070,7 +2135,7 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
     {
-        let q: String = std::iter::repeat('m').take(n).collect();
+        let q: String = "m".repeat(n);
         window.set_query(q.clone().into());
         window.invoke_query_changed(q.into());
     }
@@ -2772,18 +2837,31 @@ fn pictures(
     link.send(Ask::Thumbnails { files: ask });
 }
 
+fn fetch_from(first: usize, visible: usize, wanted: Option<usize>) -> usize {
+    wanted
+        .filter(|row| (first..=first.saturating_add(visible)).contains(row))
+        .unwrap_or(first)
+}
+
+/// Refresh is optional work. Its rest starts after the reply, so a slow
+/// response cannot spend the entire delay in flight and immediately repeat.
+/// Missing pages and explicit new queries do not wait for this clock.
+fn refresh_ready(elapsed: Option<std::time::Duration>, cost_us: u64) -> bool {
+    let rest = SETTLED.max(std::time::Duration::from_micros(cost_us).saturating_mul(10));
+    elapsed.is_none_or(|spent| spent >= rest)
+}
+
 fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
     let visible = w.get_visible_rows().max(0) as usize;
     let first = w.get_first_row().max(0) as usize;
-    // A row the view drew and could not fill wins over the viewport: it is the
-    // same place, one frame earlier.
-    let first = rows.wanted().unwrap_or(first);
+    // A layout miss may belong to the previous viewport during a fast jump.
+    let first = fetch_from(first, visible, rows.wanted());
     let (revision, cost, quiet) = {
         let s = state.borrow();
         (
             s.revision,
             s.page_cost_us,
-            s.asked_at.is_none_or(|at| at.elapsed() >= SETTLED),
+            refresh_ready(s.page_landed_at.map(|at| at.elapsed()), s.page_cost_us),
         )
     };
     let Some(page) = rows.next_page(first, first + visible, cost < CHEAP_PAGE_US, quiet) else {
@@ -2794,7 +2872,6 @@ fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc
         rows.held()
     ));
     rows.asking(page, revision);
-    state.borrow_mut().asked_at = Some(std::time::Instant::now());
     send_page(state, link, (page * rows::SPAN) as u32, PAGE_MAX);
 }
 
@@ -3262,7 +3339,15 @@ fn apply(
                     t.elapsed()
                 ));
             }
-            state.borrow_mut().page_cost_us = r.took_us;
+            {
+                let mut s = state.borrow_mut();
+                s.page_cost_us = r.took_us.max(
+                    s.page_sent
+                        .map(|t| t.elapsed().as_micros().min(u64::MAX as u128) as u64)
+                        .unwrap_or(0),
+                );
+                s.page_landed_at = Some(std::time::Instant::now());
+            }
             trace(&format!(
                 "page {offset} landed in {:.1} ms round trip, {:.2} ms in the engine, {} rows visited",
                 state
@@ -4373,11 +4458,6 @@ fn mono_family() -> String {
 /// would be a heading with no word, so the lookup is checked there by a test
 /// rather than unwrapped here.
 fn columns(window: &MainWindow, cat: &Catalogue) {
-    let w = |id: &str| {
-        scour_ui::column(id)
-            .map(|c| c.width as f32)
-            .unwrap_or(100.0)
-    };
     let head = |id: &str| {
         scour_ui::column(id)
             .map(|c| t(cat, c.msgid))
@@ -4388,11 +4468,45 @@ fn columns(window: &MainWindow, cat: &Catalogue) {
     window.set_head_path(head("path"));
     window.set_head_mtime(head("mtime"));
     window.set_head_size(head("size"));
-    window.set_w_name(w("name"));
-    window.set_w_kind(w("kind"));
-    window.set_w_path(w("path"));
-    window.set_w_mtime(w("mtime"));
-    window.set_w_size(w("size"));
+}
+
+/// The five columns this window shows, in the order it shows them.
+const COLUMN_IDS: [&str; 5] = ["name", "kind", "path", "mtime", "size"];
+
+/// Divide the row up among the columns again and hand each one its width.
+///
+/// **Called whenever the room changes, which is more things than it sounds
+/// like**: the window resized, the preview panel opened or closed, an edge
+/// dragged. The arithmetic is `scour_ui::lay_out` — shared with the browser
+/// page, so a table that fits in one fits in the other — and its promise is
+/// that the widths add up to the room, which is what keeps the date and the
+/// size on screen instead of drawn past the right-hand edge.
+fn relayout(window: &MainWindow) {
+    let widths = scour_ui::lay_out(
+        &COLUMN_IDS,
+        |id| {
+            // What somebody dragged this column to, or nothing. Zero is
+            // "nobody has touched it", the same as in the settings file.
+            let v = match id {
+                "name" => window.get_uw_name(),
+                "kind" => window.get_uw_kind(),
+                "path" => window.get_uw_path(),
+                "mtime" => window.get_uw_mtime(),
+                "size" => window.get_uw_size(),
+                _ => 0.0,
+            };
+            (v > 0.0).then_some(v as u32)
+        },
+        window.get_lane().max(0.0) as u32,
+    );
+    if widths.len() != COLUMN_IDS.len() {
+        return;
+    }
+    window.set_cw_name(widths[0] as f32);
+    window.set_cw_kind(widths[1] as f32);
+    window.set_cw_path(widths[2] as f32);
+    window.set_cw_mtime(widths[3] as f32);
+    window.set_cw_size(widths[4] as f32);
 }
 
 /// One `scour-ui` palette, in the shape the window's generated struct wants.
@@ -4730,13 +4844,11 @@ fn peek_head(text: &str, scale: f32) -> String {
     let lines = 400 / scale;
     let mut end = text.len();
     let mut seen = 0;
-    let mut taken = 0;
-    for (at, c) in text.char_indices() {
+    for (taken, (at, c)) in text.char_indices().enumerate() {
         if taken >= chars || seen >= lines {
             end = at;
             break;
         }
-        taken += 1;
         if c == '\n' {
             seen += 1;
         }
@@ -4880,12 +4992,14 @@ mod tests {
     #[test]
     fn a_preview_is_bounded_however_large_the_file_is() {
         let short = "fn main() {}\n";
-        assert_eq!(super::peek_head(short, 1.0), short, "a small file is untouched");
+        assert_eq!(
+            super::peek_head(short, 1.0),
+            short,
+            "a small file is untouched"
+        );
 
         // A quarter megabyte, which is what the service actually sends.
-        let big: String = std::iter::repeat("lorem ipsum dolor sit amet\n")
-            .take(10_000)
-            .collect();
+        let big: String = "lorem ipsum dolor sit amet\n".repeat(10_000);
         let cut = super::peek_head(&big, 1.0);
         assert!(cut.len() < big.len() / 4, "{} of {}", cut.len(), big.len());
         assert!(cut.ends_with('…'), "the reader is told it was cut");
@@ -4893,7 +5007,7 @@ mod tests {
 
         // One enormous line, no newline in it at all — the line cap cannot
         // help here and the character cap has to.
-        let one: String = std::iter::repeat('x').take(300_000).collect();
+        let one: String = "x".repeat(300_000);
         assert!(super::peek_head(&one, 1.0).chars().count() <= 20_002);
         // Three times the scale, a third of the text: the ceiling is
         // counted in physical pixels and the cap has to follow it there.
@@ -4903,7 +5017,7 @@ mod tests {
     /// A cut that lands inside a multi-byte character must not panic.
     #[test]
     fn the_cut_falls_on_a_character_boundary() {
-        let turkish: String = std::iter::repeat("çğıöşü ").take(9_000).collect();
+        let turkish: String = "çğıöşü ".repeat(9_000);
         let cut = super::peek_head(&turkish, 1.0);
         assert!(cut.chars().count() <= 20_002);
         assert!(!cut.is_empty());
@@ -5016,6 +5130,30 @@ mod tests {
     }
 
     #[test]
+    fn expensive_refresh_waits_but_a_new_scroll_page_does_not() {
+        use std::time::Duration;
+        let rows = rows::Rows::default();
+        rows.put(0, vec![Row::default(); rows::SPAN], Vec::new(), 10_000);
+        rows.mark(1);
+        let early = refresh_ready(Some(Duration::from_secs(5)), 1_000_000);
+        assert!(!early);
+        assert_eq!(rows.next_page(0, 40, false, early), None);
+        assert_eq!(rows.next_page(400, 440, false, early), Some(2));
+        let rested = refresh_ready(Some(Duration::from_secs(10)), 1_000_000);
+        assert_eq!(rows.next_page(0, 40, false, rested), Some(0));
+        assert!(!refresh_ready(Some(Duration::from_millis(499)), 1_000));
+        assert!(refresh_ready(Some(Duration::from_millis(500)), 1_000));
+    }
+
+    #[test]
+    fn a_layout_miss_from_the_previous_viewport_cannot_redirect_a_scroll() {
+        assert_eq!(fetch_from(10_000, 40, Some(400)), 10_000);
+        assert_eq!(fetch_from(10_000, 40, Some(10_005)), 10_005);
+        assert_eq!(fetch_from(0, 40, Some(10_005)), 0);
+        assert_eq!(fetch_from(10_000, 40, None), 10_000);
+    }
+
+    #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             indexed: 0,
@@ -5029,7 +5167,7 @@ mod tests {
             row_limit: 20,
             page_offset: 0,
             page_sent: None,
-            asked_at: None,
+            page_landed_at: None,
             page_cost_us: 0,
             asking_pictures: false,
             peek_path: String::new(),
@@ -5094,7 +5232,7 @@ mod tests {
             row_limit: 40,
             page_offset: 0,
             page_sent: None,
-            asked_at: None,
+            page_landed_at: None,
             page_cost_us: 0,
             asking_pictures: false,
             peek_path: String::new(),

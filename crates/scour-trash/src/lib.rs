@@ -364,12 +364,16 @@ mod tests {
         assert!(!file.exists(), "the original is gone");
         assert_eq!(std::fs::read(&landed).unwrap(), b"hello", "bytes intact");
 
-        let info = data
-            .join("Trash/info")
-            .join(format!("{}.trashinfo", landed.file_name().unwrap().to_string_lossy()));
+        let info = data.join("Trash/info").join(format!(
+            "{}.trashinfo",
+            landed.file_name().unwrap().to_string_lossy()
+        ));
         let note = std::fs::read_to_string(&info).unwrap();
         assert!(note.starts_with("[Trash Info]\n"), "{note}");
-        assert!(note.contains(&format!("Path={}", encode(&file.to_string_lossy()))), "{note}");
+        assert!(
+            note.contains(&format!("Path={}", encode(&file.to_string_lossy()))),
+            "{note}"
+        );
         assert!(note.contains("DeletionDate=20"), "{note}");
 
         std::fs::remove_dir_all(&box_).ok();
@@ -438,13 +442,19 @@ mod tests {
     fn the_path_in_the_note_survives_a_round_trip() {
         // Spaces, an accent and a percent sign — the three things a naive
         // writer gets wrong, and all three appear in real file names.
-        assert_eq!(encode("/home/a b/çay%1.txt"), "/home/a%20b/%C3%A7ay%251.txt");
+        assert_eq!(
+            encode("/home/a b/çay%1.txt"),
+            "/home/a%20b/%C3%A7ay%251.txt"
+        );
         assert_eq!(encode("/plain/path.txt"), "/plain/path.txt");
     }
 
     #[test]
     fn an_extension_is_the_last_dot_and_a_hidden_file_has_none() {
-        assert_eq!(split_extension("notes.tar.gz"), ("notes.tar".into(), "gz".into()));
+        assert_eq!(
+            split_extension("notes.tar.gz"),
+            ("notes.tar".into(), "gz".into())
+        );
         assert_eq!(split_extension("notes"), ("notes".into(), "".into()));
         assert_eq!(split_extension(".bashrc"), (".bashrc".into(), "".into()));
     }

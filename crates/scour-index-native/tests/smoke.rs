@@ -20,6 +20,69 @@ use scour_query::parse_at;
 /// Fixed, so relative date terms are assertable.
 const NOW: i64 = 1_785_000_000;
 
+#[test]
+fn directory_interning_keeps_ids_when_owned_paths_are_sorted_and_packed() {
+    use scour_index_native::DirWriter;
+    let paths: Vec<String> = (0..129)
+        .map(|i| format!("/İstanbul/çalışma/{i:04}/Σημείωση"))
+        .collect();
+    let mut writer = DirWriter::new();
+    let mut ids = vec![0; paths.len()];
+    assert!(writer.is_empty());
+    for i in 0..paths.len() {
+        let at = (i * 73) % paths.len();
+        ids[at] = writer.intern(&paths[at]);
+        assert_eq!(writer.intern(&paths[at]), ids[at]);
+    }
+    assert_eq!(writer.len(), paths.len());
+    let (bytes, remap) = writer.finish();
+    let table = DirTable::open(&bytes).expect("table");
+    for (i, path) in paths.iter().enumerate() {
+        assert_eq!(
+            table.get(remap[ids[i] as usize]).as_deref(),
+            Some(path.as_str())
+        );
+    }
+}
+
+#[test]
+fn segment_trigrams_match_the_public_writer_across_unicode_and_block_tails() {
+    use scour_index_native::TrigramWriter;
+    let names = [
+        "İSTANBUL.rs",
+        "ışıK.txt",
+        "ẞtraße.Σ",
+        "İ",
+        "AaB",
+        "REPORT.PDF",
+        "q",
+    ];
+    let mut entries = generate(&MockOptions {
+        files: 513,
+        now: NOW,
+        ..Default::default()
+    })
+    .entries;
+    for (i, entry) in entries.iter_mut().enumerate() {
+        entry.path = format!("/corpus/{i:06}-{}", names[i % names.len()]);
+        entry.meta.mtime = NOW - (i % 7) as i64;
+    }
+    let mut ordered: Vec<&Entry> = entries.iter().collect();
+    ordered.sort_unstable_by(|a, b| b.meta.mtime.cmp(&a.meta.mtime).then(a.path.cmp(&b.path)));
+    let mut expected = TrigramWriter::new();
+    for entry in ordered {
+        expected.push(entry.name().as_bytes());
+    }
+    let bytes = build(&entries);
+    let (dict, post) = expected.finish();
+    assert_eq!(bytes.tri_dict, dict);
+    assert_eq!(bytes.tri_post, post);
+    let fixture = Fixture { bytes, entries };
+    for q in ["istanbul", "ışık", "report", "aab", "Σ", "ext:rs"] {
+        fixture.check(q, SortKey::Modified, true);
+    }
+}
+
 struct Fixture {
     bytes: SegmentBytes,
     entries: Vec<Entry>,
@@ -886,4 +949,65 @@ fn a_query_with_no_name_test_still_sorts_by_name_correctly() {
         "built {} rows for a page of forty",
         found.rows_built
     );
+}
+
+#[test]
+fn folder_totals_survive_parent_cache_collisions_and_repeated_deaths() {
+    use scour_core::{Change, Index, Maintenance};
+    use scour_index_native::NativeIndex;
+    let tmp = tempfile::tempdir().unwrap();
+    let index = NativeIndex::open_or_create(tmp.path()).unwrap();
+    let paths: Vec<String> = (0..1100)
+        .map(|i| format!("/İstanbul/{i:04}/çalışma"))
+        .collect();
+    let mut entries = Vec::new();
+    for (i, path) in paths.iter().enumerate() {
+        for is_dir in [true, false] {
+            entries.push(Entry {
+                id: EntryId::inode(SourceId(0), 1, (i * 2 + usize::from(is_dir)) as u64),
+                path: if is_dir {
+                    path.clone()
+                } else {
+                    format!("{path}/ışık.txt")
+                },
+                is_dir,
+                meta: Meta {
+                    mtime: NOW - ((i * 73) % paths.len()) as i64,
+                    size: 8192,
+                    disk: 8192,
+                    links: 2,
+                    ..Meta::UNKNOWN
+                },
+            });
+        }
+    }
+    index
+        .apply(&mut entries.into_iter().map(Change::Upsert))
+        .unwrap();
+    index.commit().unwrap();
+    assert_eq!(
+        index.subtree_sizes(&paths).unwrap(),
+        vec![Some((4096, 1)); paths.len()]
+    );
+    // Recompute the same segment in place twice: nothing from the old totals
+    // may survive, even when distant parents replace one another's cache slot.
+    let mut expected = vec![Some((4096, 1)); paths.len()];
+    for parity in [0, 1] {
+        let removed: Vec<_> = paths
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i % 2 == parity)
+            .map(|(i, p)| {
+                expected[i] = Some((0, 0));
+                Change::RemoveSubtree {
+                    path: format!("{p}/ışık.txt"),
+                }
+            })
+            .collect();
+        index.apply(&mut removed.into_iter()).unwrap();
+        index.commit().unwrap();
+        assert_eq!(index.subtree_sizes(&paths).unwrap(), expected);
+    }
+    index.maintain(Maintenance::Rebuild).unwrap();
+    assert_eq!(index.subtree_sizes(&paths).unwrap(), expected);
 }

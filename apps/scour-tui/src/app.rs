@@ -1443,7 +1443,9 @@ impl App {
         if self.picked.len() > 1 {
             self.picked.keys().cloned().collect()
         } else {
-            self.here().map(|h| vec![h.path.clone()]).unwrap_or_default()
+            self.here()
+                .map(|h| vec![h.path.clone()])
+                .unwrap_or_default()
         }
     }
 
@@ -1491,7 +1493,11 @@ impl App {
 
             // The three that exist because there is an index.
             "search-here" => {
-                let scope = if is_dir { first.clone() } else { folder(&first) };
+                let scope = if is_dir {
+                    first.clone()
+                } else {
+                    folder(&first)
+                };
                 self.query = format!("under:{scope}");
                 self.caret = self.query.len();
                 self.typed()
@@ -1624,7 +1630,9 @@ impl App {
         };
         let name = path.rsplit('/').next().unwrap_or(&path).to_string();
         let mime = scour_thumbs::known::known().mime_of(&name).unwrap_or("");
-        if let Some(chosen) = scour_openers::openers(mime).into_iter().find(|o| o.id == id)
+        if let Some(chosen) = scour_openers::openers(mime)
+            .into_iter()
+            .find(|o| o.id == id)
             && let Err(e) = scour_openers::launch(&chosen, std::path::Path::new(&path))
         {
             self.note = e.to_string();
@@ -1650,10 +1658,7 @@ impl App {
                 return Want::Nothing;
             };
             return match scour_name::rename(std::path::Path::new(from), &typing) {
-                Ok(now) => Want::Recheck(vec![
-                    from.clone(),
-                    now.to_string_lossy().into_owned(),
-                ]),
+                Ok(now) => Want::Recheck(vec![from.clone(), now.to_string_lossy().into_owned()]),
                 Err(why) => {
                     self.note = self.say(why.msgid()).into_owned();
                     Want::Nothing

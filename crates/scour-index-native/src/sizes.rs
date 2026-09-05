@@ -59,7 +59,7 @@ use crate::segment::Live;
 /// `disk[i]` is everything in directories `0..i`, so the total of the run
 /// `a..b` is `disk[b] - disk[a]`. One extra slot at the end, which is what
 /// makes that true for the last directory as well.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Prefix {
     disk: Vec<u64>,
     files: Vec<u64>,
@@ -73,7 +73,7 @@ pub struct Prefix {
     /// is the kind of wrongness that reads as a broken sort.
     ///
     /// Sorted by row already, because the pass that fills it goes in row
-    /// order, so a lookup is a binary search over twelve bytes an entry rather
+    /// order, so a lookup is a binary search over a compact entry rather
     /// than a hash of a path.
     by_row: Vec<(u32, i64)>,
     /// What the segment's death count was when this was built. Anything else
@@ -83,15 +83,31 @@ pub struct Prefix {
 
 impl Prefix {
     fn of(seg: &Segment<'_>, deaths: u64) -> Prefix {
+        let mut prefix = Prefix::default();
+        prefix.rebuild(seg, deaths);
+        prefix
+    }
+
+    fn rebuild(&mut self, seg: &Segment<'_>, deaths: u64) {
         let n = seg.dirs.len();
-        let mut disk = vec![0u64; n + 1];
-        let mut files = vec![0u64; n + 1];
+        // Readers hold the cache lock, so refresh in the existing buffers.
+        // Building a replacement first kept two complete tables at the peak.
+        self.disk.resize(n + 1, 0);
+        self.files.resize(n + 1, 0);
+        self.disk.fill(0);
+        self.files.fill(0);
+        let (disk, files) = (&mut self.disk, &mut self.files);
+        let mut directory_rows = 0;
         for row in 0..seg.rows() {
             // Directories are skipped, not because their own size is large but
             // because it is meaningless: a directory's `st_size` is the size of
             // its *entry table*, and adding it to a subtree total would report
             // a few kilobytes of bookkeeping as content.
-            if !seg.is_alive(row) || seg.num_of(Field::IsDir, row) != 0 {
+            if !seg.is_alive(row) {
+                continue;
+            }
+            if seg.num_of(Field::IsDir, row) != 0 {
+                directory_rows += 1;
                 continue;
             }
             let d = seg.dir_id(row) as usize;
@@ -104,7 +120,7 @@ impl Prefix {
         }
         // In place, and shifted by one: after this, `v[i]` is everything
         // *before* `i`.
-        for v in [&mut disk, &mut files] {
+        for v in [&mut *disk, &mut *files] {
             let mut run = 0u64;
             for slot in v.iter_mut() {
                 let own = *slot;
@@ -114,12 +130,12 @@ impl Prefix {
         }
         // The rows that *are* directories, and what is under each.
         //
-        // Their own number is not `dir_id(row)` — that is the parent — so it
-        // has to be looked up by path, which is a binary search. Parent paths
-        // are decoded once each rather than once per row: there are two orders
-        // of magnitude more rows than directories.
-        let mut by_row: Vec<(u32, i64)> = Vec::new();
-        let mut parents: HashMap<u32, String> = HashMap::new();
+        // dir_id is the parent. A bounded direct-mapped cache reuses decoded
+        // parents without retaining a String for every directory in the index.
+        self.by_row.clear();
+        self.by_row.reserve_exact(directory_rows);
+        let mut parents = ParentPaths::default();
+        let mut path = String::new();
         for row in 0..seg.rows() {
             if !seg.is_alive(row) || seg.num_of(Field::IsDir, row) == 0 {
                 continue;
@@ -127,14 +143,13 @@ impl Prefix {
             let Some(name) = seg.names.get(row) else {
                 continue;
             };
-            let parent = parents
-                .entry(seg.dir_id(row))
-                .or_insert_with(|| seg.dirs.get(seg.dir_id(row)).unwrap_or_default());
-            let path = match parent.as_str() {
-                "" => name.to_string(),
-                "/" => format!("/{name}"),
-                p => format!("{p}/{name}"),
-            };
+            let parent = parents.get(&seg.dirs, seg.dir_id(row));
+            path.clear();
+            path.push_str(parent);
+            if !parent.is_empty() && parent != "/" {
+                path.push('/');
+            }
+            path.push_str(name);
             let scope = seg.dirs.subtree(&path);
             let mut total = 0i64;
             if let Some(own) = scope.own {
@@ -145,15 +160,10 @@ impl Prefix {
             if let (Some(from), Some(to)) = (disk.get(a), disk.get(b)) {
                 total += to.saturating_sub(*from) as i64;
             }
-            by_row.push((row as u32, total));
+            self.by_row.push((row as u32, total));
         }
 
-        Prefix {
-            disk,
-            files,
-            by_row,
-            deaths,
-        }
+        self.deaths = deaths;
     }
 
     /// This segment's share of one subtree: bytes on disk, and files.
@@ -196,6 +206,10 @@ impl Cache {
     /// Both in one call, because the expensive half is bringing the cache up
     /// to date and a page asks about thirty folders at once.
     pub fn subtrees(&mut self, segments: &[Live], paths: &[String]) -> Vec<(u64, u64)> {
+        // Retire folded-away segments before allocating their replacements.
+        // The segment list is small; no temporary set or duplicate caches.
+        self.per_segment
+            .retain(|number, _| segments.iter().any(|live| live.number == *number));
         let mut out = vec![(0u64, 0u64); paths.len()];
         for live in segments {
             let Ok(seg) = live.view() else { continue };
@@ -204,7 +218,7 @@ impl Cache {
             let prefix = match entry {
                 std::collections::hash_map::Entry::Occupied(mut o) => {
                     if o.get().deaths != deaths {
-                        o.insert(Prefix::of(&seg, deaths));
+                        o.get_mut().rebuild(&seg, deaths);
                     }
                     o.into_mut()
                 }
@@ -215,14 +229,6 @@ impl Cache {
                 out[i].0 += disk;
                 out[i].1 += files;
             }
-        }
-        // Segments that have been folded away. Dropped here rather than at
-        // compaction time so that nothing outside this file has to remember
-        // the cache exists — the cost is one pass over a map of at most a few
-        // dozen entries, against a leak that grows for the life of a process.
-        if self.per_segment.len() > segments.len() {
-            let alive: std::collections::HashSet<u64> = segments.iter().map(|l| l.number).collect();
-            self.per_segment.retain(|n, _| alive.contains(n));
         }
         out
     }
@@ -241,7 +247,38 @@ impl Cache {
     pub fn bytes(&self) -> u64 {
         self.per_segment
             .values()
-            .map(|p| ((p.disk.len() + p.files.len()) * 8 + p.by_row.len() * 12) as u64)
+            .map(|p| {
+                ((p.disk.capacity() + p.files.capacity()) * std::mem::size_of::<u64>()
+                    + p.by_row.capacity() * std::mem::size_of::<(u32, i64)>())
+                    as u64
+            })
             .sum()
+    }
+}
+
+/// Small decode working set; collisions replace a slot without changing lookup.
+struct ParentPaths {
+    slots: Vec<(u32, String)>,
+}
+
+impl Default for ParentPaths {
+    fn default() -> Self {
+        Self {
+            slots: vec![(u32::MAX, String::new()); 512],
+        }
+    }
+}
+
+impl ParentPaths {
+    fn get(&mut self, dirs: &crate::dirs::DirTable<'_>, id: u32) -> &str {
+        let at = id as usize % self.slots.len();
+        let (held, path) = &mut self.slots[at];
+        if *held != id {
+            if dirs.get_into(id, path).is_none() {
+                path.clear();
+            }
+            *held = id;
+        }
+        path
     }
 }

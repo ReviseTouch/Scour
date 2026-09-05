@@ -660,7 +660,6 @@ impl Source for FsSource {
         paths.len()
     }
 
-
     fn open(&self, _id: &EntryId) -> Result<Box<dyn Read + Send>> {
         // An id is not a path. Content extraction goes through `stat` to
         // resolve a path first; when a durable path->id map exists this can

@@ -14,13 +14,19 @@
 //! engine walks the subtree again. That single variant is what lets the layer
 //! above stay free of platform knowledge.
 
+use std::sync::Arc;
+#[cfg(not(target_os = "linux"))]
+use std::sync::RwLock;
+#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
 
+#[cfg(not(target_os = "linux"))]
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use scour_core::{Change, ChangeSink, Error, Result, ScanOptions, WatchHandle};
 
+#[cfg(not(target_os = "linux"))]
 use crate::path;
+#[cfg(not(target_os = "linux"))]
 use crate::rules::Rules;
 use crate::scan::FsSource;
 
@@ -30,76 +36,88 @@ use crate::scan::FsSource;
 /// [`WatchHandle::retune`] replace the set, and the inner `Arc` is what lets an
 /// event take a copy and let go of the lock immediately rather than filtering
 /// with it held.
+#[cfg(not(target_os = "linux"))]
 type SharedRules = Arc<RwLock<Arc<Rules>>>;
 
+/// Watch a source for changes.
+///
+/// **On Linux this is a fanotify mark or it is nothing, and that is a decision
+/// rather than an accident.**
+///
+/// There used to be an inotify fallback here, and the fallback was the damage.
+/// inotify costs one watch a directory out of a budget belonging to the
+/// *session*, not to this program: 524,288 on this machine against the ~609,000
+/// directories these roots hold. Taking them did not make Scour slow — it made
+/// the next editor, file manager or language server fail to start, with an
+/// error that never contains the word "watch". It happened twice, and the
+/// second time the machine could not open a development tool at all.
+///
+/// A ceiling was tried: refuse any source wanting more than a quarter of the
+/// budget. That kept the desktop alive and left the index quietly stale, with
+/// nothing on screen saying which of the two had happened. And it could not be
+/// raised into a fix, because the numbers do not permit one. The unprivileged
+/// alternative is worse still: `fs.fanotify.max_user_marks` is 295,420 here,
+/// *narrower* than the inotify budget, so a mark per inode is not a lateral
+/// move but a downgrade.
+///
+/// So there is one mechanism. One mark a filesystem, no per-directory cost,
+/// and it sees what inotify cannot. It needs `CAP_SYS_ADMIN`, this process must
+/// not have it, and the two are reconciled outside: a helper places the marks
+/// and hands the descriptor over.
+///
+/// **No descriptor, no watching — and saying so is the point.** A source that
+/// is not watched is usually not unattended: the engine walks it when its pulse
+/// moves, exactly as the system source has always been handled, so it is slower
+/// to notice rather than blind. What the fallback cost was the ability to tell.
+///
+/// **"Usually" is doing real work in that sentence.** A pulse is read from the
+/// root's block device, and a root that has none — NFS, CIFS, sshfs, any FUSE
+/// mount, tmpfs — gets `Probe::None`, which `Pulses::decide` skips outright.
+/// Such a source is then neither watched nor reconciled: it is walked once and
+/// goes stale for good. inotify used to cover it whenever it fitted the budget,
+/// so removing the fallback widened that hole rather than making it. It is
+/// still a hole, it wants a timed walk in the engine, and until there is one
+/// this is not promised to those mounts.
+///
+/// See the README's "Watching, and the one privilege", and
+/// `packaging/scour.service`.
+#[cfg(target_os = "linux")]
 pub fn start(
     source: FsSource,
     opts: &ScanOptions,
     sink: Box<dyn ChangeSink>,
 ) -> Result<Box<dyn WatchHandle>> {
     let sink: Arc<dyn ChangeSink> = Arc::from(sink);
-
-    // **One mark a filesystem, when something has left us one.** This is not a
-    // faster inotify, it is the only way two of the disks here get watched at
-    // all: inotify wants 296,711 watches for the home directory against a limit
-    // of 268,593, and 152,529 for the NTFS volume, which is why that volume was
-    // not being watched. The marks need `CAP_SYS_ADMIN`, this process must not
-    // have it, and the two are reconciled outside: a helper sets them and hands
-    // the descriptor over. No helper, no descriptor, and inotify below is the
-    // answer — which is the ordinary case and not a failure.
-    #[cfg(target_os = "linux")]
     if let Some(started) = crate::fanotify::try_start(&source, opts, Arc::clone(&sink)) {
         return started;
     }
+    let name = scour_core::Source::describe(&source).name;
+    scour_core::note!(
+        "scourd: no fanotify mark for {name} — it will not be watched live. On a root with \
+         a block device behind it, changes are still found by walking when the source's \
+         pulse moves, which is slower to notice; on a network or FUSE mount there is no \
+         pulse to read and it will not be reconciled at all. \
+         To watch it properly: `sudo scour-watch -- scourd`.",
+    );
+    Err(Error::unsupported(
+        "no fanotify descriptor — run `sudo scour-watch -- scourd`",
+    ))
+}
 
-    // **And it is allowed to want inotify, not to take the machine.**
-    //
-    // One watch a directory, out of a budget shared with every other program
-    // the person is running — and a home directory does not fit in it. What
-    // that costs is not this program going slowly: the budget runs out for
-    // *everything*, and the next editor, file manager or terminal to start
-    // fails with an error that never mentions watches. It happened here. The
-    // symptom was that a development tool would not open.
-    //
-    // So there is a ceiling, and refusing is the answer above it. A source
-    // that is not watched is not unattended — the engine walks it when its
-    // pulse moves, which is exactly how the system source has always been
-    // handled — it is only slower to notice. Slower is a cost this program
-    // pays; a session that cannot open a window is a cost everything else
-    // pays.
-    //
-    // **The real answer is a mark, and it is one command.** `scour-watch`
-    // places one per filesystem, costs no watches at all, and covers what
-    // inotify cannot; see `docs/WATCHING.md`.
-    #[cfg(target_os = "linux")]
-    {
-        let budget = std::fs::read_to_string("/proc/sys/fs/inotify/max_user_watches")
-            .ok()
-            .and_then(|s| s.trim().parse::<u64>().ok())
-            .unwrap_or(0);
-        // A quarter, because the rest of the session needs the other three.
-        // An editor wants a few thousand, a browser more, a language server
-        // one per directory of every project it has opened.
-        let ceiling = (budget / 4).max(1);
-        let name = scour_core::Source::describe(&source).name;
-        match count_dirs(source.roots(), ceiling) {
-            Some(dirs) => scour_core::note!(
-                "scourd: no fanotify mark for {name} — falling back to inotify, about {dirs} \
-                 watches of a {budget} budget shared with the whole session",
-            ),
-            None => {
-                scour_core::note!(
-                    "scourd: {name} wants more than {ceiling} inotify watches, which is a \
-                     quarter of this session's {budget} — not taking them. It is reconciled \
-                     by walking instead, and the way to watch it properly is a fanotify \
-                     mark: `sudo scour-watch -- scourd`.",
-                );
-                return Err(Error::unsupported(
-                    "inotify would take too much of the session's budget",
-                ));
-            }
-        }
-    }
+/// Watch a source for changes, through whatever the platform offers.
+///
+/// **Not Linux — there the only mechanism is fanotify; see the other
+/// `start`.** Windows keeps a fixed kernel buffer per handle and drops events
+/// when it overflows; macOS coalesces and hides events for files the process
+/// does not own. `notify` papers over the API differences but not over those,
+/// which is why the contract at the top of this module is as weak as it is.
+#[cfg(not(target_os = "linux"))]
+pub fn start(
+    source: FsSource,
+    opts: &ScanOptions,
+    sink: Box<dyn ChangeSink>,
+) -> Result<Box<dyn WatchHandle>> {
+    let sink: Arc<dyn ChangeSink> = Arc::from(sink);
 
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
@@ -225,6 +243,7 @@ pub fn start(
 /// still work, so this bounds the repair rather than the tree. Six is deeper
 /// than any real accident — `~/.local/share/waydroid/data/vendor`, the one that
 /// prompted all of this, is five.
+#[cfg(not(target_os = "linux"))]
 const SPLIT_DEPTH: u32 = 6;
 
 /// How many uncovered subtrees are named before the list starts counting.
@@ -244,9 +263,11 @@ const SPLIT_DEPTH: u32 = 6;
 /// can act on — 191 Waydroid directories became `~/.local/share/waydroid/data`.
 /// A thousand examples answer that question exactly as well as a million, and
 /// cost about 100 KB instead of being unbounded.
+#[cfg(not(target_os = "linux"))]
 const MAX_SKIPPED: usize = 1_024;
 
 /// Remember an uncovered subtree, up to [`MAX_SKIPPED`] of them.
+#[cfg(not(target_os = "linux"))]
 fn remember(skipped: &mut Vec<String>, path: String) {
     if skipped.len() < MAX_SKIPPED {
         skipped.push(path);
@@ -271,42 +292,18 @@ fn remember(skipped: &mut Vec<String>, path: String) {
 /// siblings anything.
 /// Roughly how many watches a set of roots will cost.
 ///
-/// One a directory, which is inotify's rule. Counted rather than estimated
-/// because the number is the point of the warning, and walking a tree to say
-/// so once at start-up is cheap beside installing a watch on every directory
-/// in it. Bounded so that a pathological tree cannot turn a log line into a
-/// minute of walking.
-#[cfg(target_os = "linux")]
-fn count_dirs(roots: &[std::path::PathBuf], ceiling: u64) -> Option<u64> {
-    let mut n: u64 = 0;
-    let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
-    while let Some(dir) = stack.pop() {
-        if n >= ceiling {
-            return None;
-        }
-        let Ok(children) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for c in children.flatten() {
-            if c.file_type().is_ok_and(|t| t.is_dir()) {
-                n += 1;
-                stack.push(c.path());
-            }
-        }
-    }
-    Some(n)
-}
-
 /// What happened to one attempt at covering a directory.
 ///
 /// The `String` is the watcher's own words for the refusal — `OS file watch
 /// limit reached`, most often — kept because it is the difference between a
 /// message somebody can act on and one they cannot.
+#[cfg(not(target_os = "linux"))]
 enum Covered {
     Yes,
     No(Option<String>),
 }
 
+#[cfg(not(target_os = "linux"))]
 fn cover(
     watcher: &mut notify::RecommendedWatcher,
     dir: &std::path::Path,
@@ -469,6 +466,7 @@ pub(crate) fn look(
     None
 }
 
+#[cfg(not(target_os = "linux"))]
 fn translate(
     id: scour_core::SourceId,
     real_modes: bool,
@@ -579,6 +577,7 @@ fn translate(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 struct FsWatch {
     /// Behind a lock because the cover can be extended after the fact — see
     /// [`WatchHandle::cover`]. Uncontended in practice: the engine's one worker
@@ -605,6 +604,7 @@ struct FsWatch {
     rules: SharedRules,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl std::fmt::Debug for FsWatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FsWatch")
@@ -614,6 +614,7 @@ impl std::fmt::Debug for FsWatch {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 impl WatchHandle for FsWatch {
     fn unwatched(&self) -> Vec<String> {
         self.skipped.lock().map(|s| s.clone()).unwrap_or_default()
@@ -683,9 +684,11 @@ impl WatchHandle for FsWatch {
 ///
 /// Extending the cover happens *because* a walk just ran; asking for another
 /// one from inside it is how a walk becomes a loop.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 struct Discard;
 
+#[cfg(not(target_os = "linux"))]
 impl ChangeSink for Discard {
     fn emit(&self, _change: Change) {}
 }
@@ -705,6 +708,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn translated(event: Event) -> Vec<Change> {
         let collector = Arc::new(Collect::default());
         let sink: Arc<dyn ChangeSink> = Arc::clone(&collector) as Arc<dyn ChangeSink>;
@@ -718,6 +722,7 @@ mod tests {
         collector.0.lock().expect("the collector").clone()
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn losing_track_asks_for_a_walk_even_when_it_cannot_say_where() {
         // **The message that used to be dropped.** inotify's queue overflowing
@@ -751,6 +756,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn the_uncovered_list_stops_growing_instead_of_growing_forever() {
         // **The list had no end.** `cover` is called once per directory the
@@ -781,6 +787,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn a_refused_subtree_is_still_named_when_there_are_few_of_them() {
         // The cap must not cost the ordinary case anything: 191 Waydroid
@@ -799,6 +806,10 @@ mod tests {
         assert_eq!(skipped.len(), MAX_SKIPPED);
     }
 
+    /// **Asked of `look` rather than of a `notify` event**, because `look` is
+    /// what both mechanisms end at and it is the only one Linux still has. It
+    /// used to go through `translate`, which no longer exists here — and this
+    /// distinction is one worth keeping on the platform the program is used on.
     #[test]
     fn a_path_that_cannot_be_read_is_not_a_path_that_is_gone() {
         // A stat that fails with anything other than "it is not there" means
@@ -817,31 +828,30 @@ mod tests {
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o600);
         std::fs::set_permissions(&dir, mode.clone()).expect("chmod");
 
-        let inside = dir.join("dosya.txt");
-        let got = translated(
-            Event::new(EventKind::Modify(notify::event::ModifyKind::Any)).add_path(inside.clone()),
-        );
+        let inside = crate::path::from_path(&dir.join("dosya.txt"));
+        let sink = Collect(PlMutex::new(Vec::new()));
+        look(scour_core::SourceId(1), false, &inside, false, &sink);
 
+        // Put the bit back before asserting, so a failure does not leave an
+        // unreadable directory behind for the next run of the suite.
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, was);
         std::fs::set_permissions(&dir, mode).expect("chmod back");
 
-        let path = crate::path::from_path(&inside);
         assert_eq!(
-            got,
-            vec![Change::Rescan { path: path.clone() }],
+            sink.0.into_inner().unwrap(),
+            vec![Change::Rescan {
+                path: inside.clone()
+            }],
             "an unreadable path was reported as deleted"
         );
 
         // Gone is still gone.
-        let missing = tmp.path().join("yok.txt");
+        let missing = crate::path::from_path(&tmp.path().join("yok.txt"));
+        let sink = Collect(PlMutex::new(Vec::new()));
+        look(scour_core::SourceId(1), false, &missing, false, &sink);
         assert_eq!(
-            translated(
-                Event::new(EventKind::Remove(notify::event::RemoveKind::Any))
-                    .add_path(missing.clone())
-            ),
-            vec![Change::RemoveSubtree {
-                path: crate::path::from_path(&missing)
-            }]
+            sink.0.into_inner().unwrap(),
+            vec![Change::RemoveSubtree { path: missing }]
         );
     }
 }

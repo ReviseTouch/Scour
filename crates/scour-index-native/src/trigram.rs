@@ -126,15 +126,22 @@ impl TrigramWriter {
 
     /// Add one row's name, as the filesystem spells it.
     pub fn push(&mut self, name: &[u8]) {
-        let bits = &mut self.seen_bits;
-        let list = &mut self.seen_list;
-        for_each(self.fold.fold_bytes(name), |key| {
-            let (word, bit) = ((key >> 6) as usize, 1u64 << (key & 63));
-            if bits[word] & bit == 0 {
-                bits[word] |= bit;
-                list.push(key);
-            }
-        });
+        record_keys(
+            self.fold.fold_bytes(name),
+            &mut self.seen_bits,
+            &mut self.seen_list,
+        );
+        self.finish_row();
+    }
+
+    /// The segment builder already folded this name into its name arena.
+    /// Public callers still use `push`, which folds its input itself.
+    pub(crate) fn push_folded(&mut self, name: &[u8]) {
+        record_keys(name, &mut self.seen_bits, &mut self.seen_list);
+        self.finish_row();
+    }
+
+    fn finish_row(&mut self) {
         self.rows += 1;
         if self.rows.is_multiple_of(BLOCK) {
             self.seal();
@@ -186,6 +193,16 @@ impl TrigramWriter {
         }
         (dict, post)
     }
+}
+
+fn record_keys(folded: &[u8], bits: &mut [u64], list: &mut Vec<u32>) {
+    for_each(folded, |key| {
+        let (word, bit) = ((key >> 6) as usize, 1u64 << (key & 63));
+        if bits[word] & bit == 0 {
+            bits[word] |= bit;
+            list.push(key);
+        }
+    });
 }
 
 /// What the dictionary says about one trigram.

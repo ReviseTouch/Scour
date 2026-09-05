@@ -17,6 +17,7 @@
 //! the same operation was a delete and re-add of every descendant.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::varint;
 
@@ -109,8 +110,8 @@ pub fn dir_part(path: &str) -> &str {
 /// Builds the table. Paths are added in any order and sorted at the end.
 #[derive(Debug, Default)]
 pub struct DirWriter {
-    paths: Vec<String>,
-    seen: HashMap<String, u32>,
+    paths: Vec<Arc<str>>,
+    seen: HashMap<Arc<str>, u32>,
 }
 
 impl DirWriter {
@@ -127,8 +128,9 @@ impl DirWriter {
             return id;
         }
         let id = self.paths.len() as u32;
-        self.paths.push(path.to_owned());
-        self.seen.insert(path.to_owned(), id);
+        let path: Arc<str> = Arc::from(path);
+        self.paths.push(Arc::clone(&path));
+        self.seen.insert(path, id);
         id
     }
 
@@ -147,6 +149,9 @@ impl DirWriter {
     /// a prefix, and it is what lets a subtree be found by binary search
     /// instead of a scan.
     pub fn finish(self) -> (Vec<u8>, Vec<u32>) {
+        // Lookups are over. The ordered references keep each path alive, so
+        // free the hash table before allocating the encoded output.
+        drop(self.seen);
         let mut order: Vec<u32> = (0..self.paths.len() as u32).collect();
         order.sort_unstable_by(|&a, &b| self.paths[a as usize].cmp(&self.paths[b as usize]));
 
@@ -163,7 +168,7 @@ impl DirWriter {
         let mut pens: Vec<u8> = Vec::with_capacity(order.len());
         let mut previous = "";
         for (i, &provisional) in order.iter().enumerate() {
-            let path = self.paths[provisional as usize].as_str();
+            let path = self.paths[provisional as usize].as_ref();
             pens.push(steps_of(path));
             let shared = if i % RESTART == 0 {
                 restarts.push(rows.len() as u32);
@@ -250,13 +255,20 @@ impl<'a> DirTable<'a> {
     ///
     /// Decodes from the nearest restart, so at most `RESTART - 1` steps.
     pub fn get(&self, id: u32) -> Option<String> {
+        let mut path = String::new();
+        self.get_into(id, &mut path)?;
+        Some(path)
+    }
+
+    /// Decode into reusable storage; private caches need no allocation on a hit.
+    pub(crate) fn get_into(&self, id: u32, path: &mut String) -> Option<()> {
+        path.clear();
         let id = id as usize;
         if id >= self.count {
             return None;
         }
         let block = id / RESTART;
         let mut at = self.restart_at(block)?;
-        let mut path = String::new();
         for _ in 0..=(id % RESTART) {
             let (shared, used) = varint::get(self.rows.get(at..)?)?;
             at += used;
@@ -267,7 +279,7 @@ impl<'a> DirTable<'a> {
             path.push_str(std::str::from_utf8(self.rows.get(at..at + rest)?).ok()?);
             at += rest;
         }
-        Some(path)
+        Some(())
     }
 
     /// How deep every directory is, by number: the count of `/` in its path.

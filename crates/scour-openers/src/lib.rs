@@ -82,7 +82,7 @@ pub fn openers(mime: &str) -> Vec<Opener> {
         .values()
         .filter(|e| !seen.contains(&e.id) && e.takes(mime))
         .collect();
-    rest.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    rest.sort_by_cached_key(|a| a.name.to_lowercase());
     for entry in rest {
         out.push(Opener {
             id: entry.id.clone(),
@@ -300,7 +300,10 @@ fn associations(mime: &str) -> (Vec<String>, Vec<String>) {
             if key.trim() != mime {
                 continue;
             }
-            let ids = value.split(';').filter(|v| !v.is_empty()).map(str::to_owned);
+            let ids = value
+                .split(';')
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned);
             match section.as_str() {
                 "[Default Applications]" => default.extend(ids),
                 "[Added Associations]" => added.extend(ids),
@@ -386,12 +389,17 @@ fn language() -> String {
 /// Is this on the path, or an executable file where it points?
 fn runnable(program: &str) -> bool {
     if program.contains('/') {
-        return std::fs::metadata(program).map(|m| m.is_file()).unwrap_or(false);
+        return std::fs::metadata(program)
+            .map(|m| m.is_file())
+            .unwrap_or(false);
     }
     std::env::var_os("PATH")
         .map(|paths| {
-            std::env::split_paths(&paths)
-                .any(|d| std::fs::metadata(d.join(program)).map(|m| m.is_file()).unwrap_or(false))
+            std::env::split_paths(&paths).any(|d| {
+                std::fs::metadata(d.join(program))
+                    .map(|m| m.is_file())
+                    .unwrap_or(false)
+            })
         })
         .unwrap_or(false)
 }
@@ -405,14 +413,22 @@ mod tests {
     fn the_file_lands_where_the_entry_says_and_the_rest_of_the_codes_go() {
         let p = Path::new("/home/a/notes.txt");
         assert_eq!(command("gedit %U", p), vec!["gedit", "/home/a/notes.txt"]);
-        assert_eq!(command("code --new-window %F", p),
-                   vec!["code", "--new-window", "/home/a/notes.txt"]);
+        assert_eq!(
+            command("code --new-window %F", p),
+            vec!["code", "--new-window", "/home/a/notes.txt"]
+        );
         // `%i %c %k` are a launcher's to fill in, and a program handed `%c`
         // opens a file called `%c` or refuses to start.
-        assert_eq!(command("foo %i %c %k %f", p), vec!["foo", "/home/a/notes.txt"]);
+        assert_eq!(
+            command("foo %i %c %k %f", p),
+            vec!["foo", "/home/a/notes.txt"]
+        );
         // An entry that forgot its code still gets the file, appended — which
         // is what every launcher does.
-        assert_eq!(command("mousepad", p), vec!["mousepad", "/home/a/notes.txt"]);
+        assert_eq!(
+            command("mousepad", p),
+            vec!["mousepad", "/home/a/notes.txt"]
+        );
     }
 
     /// A path with a space in it is the ordinary case, not an edge one.

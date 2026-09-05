@@ -125,7 +125,12 @@ pub fn files(paths: &[&Path]) -> Result<(), Error> {
         // not a failure of the copy: everything that reads the standard type
         // already has what it needs.
         let gnome = format!("copy\n{}", uris.join("\n"));
-        let _ = feed(h.program, h.typed, &["x-special/gnome-copied-files"], gnome.as_bytes());
+        let _ = feed(
+            h.program,
+            h.typed,
+            &["x-special/gnome-copied-files"],
+            gnome.as_bytes(),
+        );
         return Ok(());
     }
     Err(Error::NoHelper)
@@ -198,8 +203,14 @@ mod tests {
     /// The encoding a paste depends on.
     #[test]
     fn a_uri_is_escaped_where_it_has_to_be_and_readable_where_it_does_not() {
-        assert_eq!(uri(Path::new("/home/a/notes.txt")), "file:///home/a/notes.txt");
-        assert_eq!(uri(Path::new("/home/a b/x.txt")), "file:///home/a%20b/x.txt");
+        assert_eq!(
+            uri(Path::new("/home/a/notes.txt")),
+            "file:///home/a/notes.txt"
+        );
+        assert_eq!(
+            uri(Path::new("/home/a b/x.txt")),
+            "file:///home/a%20b/x.txt"
+        );
         // Turkish file names are the ordinary case here, not an edge one.
         assert_eq!(uri(Path::new("/ev/çay.md")), "file:///ev/%C3%A7ay.md");
         // A percent that was already in the name must not read as an escape.

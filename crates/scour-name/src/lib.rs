@@ -226,7 +226,10 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
         let dangling = box_.join("gone.txt");
         std::os::unix::fs::symlink(box_.join("never-existed"), &dangling).unwrap();
-        assert!(!dangling.exists(), "the test's premise: it follows the link");
+        assert!(
+            !dangling.exists(),
+            "the test's premise: it follows the link"
+        );
 
         assert_eq!(check(&file, "gone.txt"), Err(Refusal::Taken));
 
