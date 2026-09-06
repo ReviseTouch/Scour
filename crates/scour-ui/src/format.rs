@@ -94,23 +94,62 @@ pub fn size(n: u64, decimal: char) -> String {
 /// Seconds in a day, which several of these count in.
 pub const DAY: i64 = 86_400;
 
-/// `YYYY-MM-DD HH:MM`, in UTC.
+/// `YYYY-MM-DD HH:MM`, in the zone the person is in.
 ///
-/// The same choice the command line makes and for the same reason: local time
-/// needs the zone database, and a listing is read for ordering far more often
-/// than for the exact minute.
+/// **It was UTC, on purpose, and the purpose was wrong.** The argument was
+/// that a listing is read for ordering more than for the exact minute, and
+/// that local time needs the zone database. Both are true and neither is the
+/// point: a file saved at 12:08 and shown as 09:08 is not "roughly ordered",
+/// it is wrong in the one place a person looks to check whether the index is
+/// keeping up — and it was reported exactly that way, with the browser page
+/// (which formats in the browser, hence locally) showing 12:08 beside it.
+/// Three faces showing two different times for one file is worse than any
+/// cost of asking the operating system what the zone is.
+///
+/// The zone comes from `localtime_r`, which reads the system's database and
+/// knows about daylight saving at *that* instant rather than now. Off Unix
+/// there is no such call in `libc` and the time stays UTC, which is the
+/// behaviour there was.
 pub fn stamp(secs: i64) -> String {
+    stamp_at(secs, local_offset(secs))
+}
+
+/// The same, with the zone offset given in seconds — the pure half, so a test
+/// can say what it expects without depending on where the machine is.
+pub fn stamp_at(secs: i64, offset: i64) -> String {
     if secs <= 0 {
         return String::new();
     }
-    let days = secs.div_euclid(DAY);
-    let rest = secs.rem_euclid(DAY);
+    let local = secs + offset;
+    let days = local.div_euclid(DAY);
+    let rest = local.rem_euclid(DAY);
     let (y, m, d) = civil(days);
     format!(
         "{y:04}-{m:02}-{d:02} {:02}:{:02}",
         rest / 3600,
         rest % 3600 / 60
     )
+}
+
+/// Seconds east of UTC at that instant, from the operating system.
+///
+/// Asked per instant and not once at start-up, because the answer changes
+/// twice a year and a service runs for weeks.
+#[cfg(unix)]
+pub fn local_offset(secs: i64) -> i64 {
+    let t = secs as libc::time_t;
+    // SAFETY: `tm` is plain data the call fills; `localtime_r` writes only
+    // into it and reads only `t`.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    tm.tm_gmtoff as i64
+}
+
+#[cfg(not(unix))]
+pub fn local_offset(_secs: i64) -> i64 {
+    0
 }
 
 /// Days since the epoch to a calendar date. Howard Hinnant's `civil_from_days`.
@@ -180,11 +219,34 @@ mod tests {
         assert_eq!(compact_bytes(2_147_483_648, ','), "2,0 GB");
     }
 
+    /// The pure half, pinned: this is what the machine-independent tests
+    /// used to assert of `stamp` itself, back when it was UTC.
     #[test]
-    fn a_stamp_is_utc_and_an_unset_time_says_nothing() {
-        assert_eq!(stamp(0), "");
-        assert_eq!(stamp(-1), "");
-        assert_eq!(stamp(1_755_000_000), "2025-08-12 12:00");
+    fn a_stamp_at_an_offset_is_exact_and_an_unset_time_says_nothing() {
+        assert_eq!(stamp_at(0, 0), "");
+        assert_eq!(stamp_at(-1, 3 * 3600), "");
+        assert_eq!(stamp_at(1_755_000_000, 0), "2025-08-12 12:00");
+        // Istanbul, which is where this was reported from: +03:00 all year.
+        assert_eq!(stamp_at(1_755_000_000, 3 * 3600), "2025-08-12 15:00");
+        // An offset that crosses midnight moves the date too.
+        assert_eq!(stamp_at(1_755_043_200, -3 * 3600), "2025-08-12 21:00");
+        assert_eq!(stamp_at(1_755_043_200, 0), "2025-08-13 00:00");
+    }
+
+    /// **The bug this fixes.** `stamp` is `stamp_at` with the operating
+    /// system's offset — never UTC on a machine that is not in UTC.
+    #[test]
+    fn a_stamp_is_in_the_zone_the_machine_is_in() {
+        let at = 1_755_000_000;
+        let off = local_offset(at);
+        assert!(off.abs() <= 14 * 3600, "an offset no zone has: {off}");
+        assert_eq!(stamp(at), stamp_at(at, off));
+        // And on a machine with a zone, it is not the UTC string. This can
+        // only be asserted where TZ is not UTC, so it says so instead of
+        // failing on a CI box.
+        if off != 0 {
+            assert_ne!(stamp(at), stamp_at(at, 0), "still UTC despite offset {off}");
+        }
     }
 
     #[test]

@@ -15,3 +15,10 @@ workspace = true
 # and turns it into whatever its own toolkit wants — CSS custom properties,
 # Slint globals, terminal escape codes. Nothing here knows any of them.
 [dependencies]
+
+# **For one call, `localtime_r`.** A timestamp a person reads has to be in the
+# zone they live in, and the zone database is the operating system's, not this
+# crate's. `scour-trash` reached the same conclusion for `.trashinfo` and for
+# the same reason: a time three hours off is a time nobody trusts.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }

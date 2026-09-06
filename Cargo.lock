@@ -5278,6 +5278,9 @@ dependencies = [
 [[package]]
 name = "scour-ui"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "scour-watch"
