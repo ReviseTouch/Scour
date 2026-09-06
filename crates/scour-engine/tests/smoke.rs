@@ -40,6 +40,13 @@ struct MemSource {
     /// happens between them is covered by whichever came second — and by
     /// neither if the walk did.
     order: Arc<RwLock<Vec<&'static str>>>,
+    /// What every walk was asked to cover, and when it started.
+    ///
+    /// `None` is a walk of the whole source. The count alone is not enough for
+    /// the debounce tests: what they assert is that *one* walk answered several
+    /// requests, which needs the subject of each walk and not just how many
+    /// there were.
+    walked: Arc<RwLock<Vec<(Option<String>, Instant)>>>,
     /// What every `retune` this source's watch was given said to skip.
     retuned: Arc<RwLock<Vec<Vec<String>>>>,
     /// Whether this source answers `excluder` at all.
@@ -63,6 +70,7 @@ impl MemSource {
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
+            walked: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
             has_rules: false,
             roots: vec!["/home/u".into()],
@@ -93,6 +101,7 @@ impl MemSource {
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
+            walked: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
             has_rules: false,
             roots: vec!["/home/u".into()],
@@ -166,6 +175,9 @@ impl Source for MemSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> scour_core::Result<ScanReport> {
         self.scans.fetch_add(1, Ordering::Relaxed);
+        self.walked
+            .write()
+            .push((opts.subtree.clone(), Instant::now()));
         // A walk that takes a while, so something can happen during it.
         let slow = self.slow_ms.load(Ordering::Relaxed);
         if slow > 0 {
@@ -363,6 +375,15 @@ impl scour_core::Index for Fragile {
 }
 
 fn fixture(files: usize) -> Fixture {
+    tuned_fixture(files, |_| {})
+}
+
+/// A fixture whose engine options the test gets to change first.
+///
+/// The clocks are what several of these tests are about, and the real ones are
+/// measured in seconds. Scaling them down is the difference between a test
+/// suite and a wait.
+fn tuned_fixture(files: usize, tune: impl FnOnce(&mut EngineOptions)) -> Fixture {
     let dir = tempfile::tempdir().expect("temp");
     let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
     let fs = generate(&MockOptions {
@@ -370,14 +391,12 @@ fn fixture(files: usize) -> Fixture {
         ..Default::default()
     });
     let source = MemSource::new(fs.entries);
-    let engine = Engine::new(
-        vec![source.clone()],
-        index,
-        EngineOptions {
-            commit_interval: Duration::from_millis(50),
-            ..Default::default()
-        },
-    );
+    let mut opts = EngineOptions {
+        commit_interval: Duration::from_millis(50),
+        ..Default::default()
+    };
+    tune(&mut opts);
+    let engine = Engine::new(vec![source.clone()], index, opts);
     Fixture {
         engine,
         source,
@@ -715,6 +734,150 @@ fn waiting_returns_when_something_changes_and_not_before() {
     assert_eq!(count(&f, "canli"), 1, "and it is findable when announced");
 }
 
+/// Remove one indexed row every `every`, for `how_long`, and say how many.
+///
+/// A removal is the cheapest honest bump there is: `apply` hides it from every
+/// search before it returns, which is the promise that makes the engine
+/// announce a new revision on the spot rather than at the next commit.
+fn drive_removals(f: &Fixture, every: Duration, how_long: Duration) -> u64 {
+    let doomed: Vec<String> = f
+        .source
+        .entries
+        .read()
+        .iter()
+        .filter(|e| !e.is_dir)
+        .map(|e| e.path.clone())
+        .collect();
+    let began = Instant::now();
+    let mut n = 0;
+    for path in doomed {
+        if began.elapsed() >= how_long {
+            break;
+        }
+        f.source.changed(Change::RemoveSubtree { path });
+        n += 1;
+        std::thread::sleep(every);
+    }
+    n
+}
+
+#[test]
+fn the_revision_is_exact_even_when_nobody_is_woken() {
+    // The half of this that must not change. `Status::revision` is what every
+    // client compares against, and a client that *asks* is entitled to the
+    // number as of now — the hold is on the push, not on the truth.
+    let f = tuned_fixture(200, |o| {
+        // Long enough that nothing in this test could possibly be a wake-up.
+        o.await_hold = Duration::from_secs(30);
+    });
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries > 0
+    });
+    let before = f.engine.status().revision;
+
+    // One named row, so "the revision moved" can be checked against something
+    // that actually left rather than against a total.
+    let doomed = f
+        .source
+        .entries
+        .read()
+        .iter()
+        .find(|e| !e.is_dir)
+        .expect("a file to remove")
+        .path
+        .clone();
+    let term = doomed.rsplit('/').next().expect("a name").to_owned();
+    assert_eq!(count(&f, &term), 1, "the row was not there to remove");
+
+    f.source.changed(Change::RemoveSubtree { path: doomed });
+    settle(&f, |f| f.engine.status().revision > before);
+
+    assert!(
+        f.engine.status().revision > before,
+        "the revision stopped moving because the wake-up was held"
+    );
+    assert_eq!(
+        count(&f, &term),
+        0,
+        "and it moved because the row really went"
+    );
+}
+
+#[test]
+fn a_waiter_is_woken_once_a_hold_however_fast_the_index_moves() {
+    // Measured on the live service: revision 5,259 → 5,477 in 62 s and
+    // 5,583 → 5,757 in 28 s — 3.5 to 6.2 bumps a second against at most one
+    // commit a second, the excess being one bump per subtree walk and one per
+    // removal batch. Each of them costs an attached window a full re-query,
+    // measured at 20.5–21 ms of service CPU — 7–13% of a core spent telling
+    // one idle page what it already had.
+    let hold = Duration::from_millis(500);
+    let drive = Duration::from_secs(3);
+    let f = tuned_fixture(400, |o| o.await_hold = hold);
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    f.engine.rescan(None).expect("rescan");
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries > 0
+    });
+
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let start = f.engine.status().revision;
+    let (wakes, last_seen, moved, reached) = std::thread::scope(|s| {
+        // **A long timeout, and that is the measurement.** `await_change`
+        // answers with the revision as of when it returns, and the revision is
+        // exact — so a waiter that times out every 400 ms would read every
+        // held-back bump off the clock and count it as a wake-up. Only a wait
+        // long enough that nothing but a notification can end it counts what
+        // this test is about.
+        let waiter = s.spawn(|| {
+            let mut seen = start;
+            let mut wakes = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                let st = f.engine.await_change(seen, Duration::from_secs(20));
+                if st.revision != seen {
+                    wakes += 1;
+                    seen = st.revision;
+                }
+            }
+            (wakes, seen)
+        });
+        // Ten removals a second — twice the fastest rate measured live.
+        let sent = drive_removals(&f, Duration::from_millis(100), drive);
+        assert!(sent >= 20, "only {sent} removals were sent");
+        // Longer than the hold, so the last held bump has been announced and
+        // the waiter has had its turn to see it.
+        std::thread::sleep(hold * 3);
+        let reached = f.engine.status().revision;
+        let moved = reached - start;
+        // An explicit flush is announced at once, so this both releases the
+        // waiter from its twenty-second wait and asserts that path still works.
+        stop.store(true, Ordering::Relaxed);
+        f.engine.maintain(Maintenance::Flush).expect("flush");
+        let (wakes, seen) = waiter.join().expect("the waiter");
+        (wakes, seen, moved, reached)
+    });
+
+    assert!(
+        moved >= 20,
+        "only {moved} revisions in {drive:?} — this is not the churn being measured"
+    );
+    // The window is the drive plus the settling sleep, and the flush that
+    // released the waiter is one more. Two spare on top, because a wake-up
+    // landing either side of a boundary is not the failure being looked for.
+    let allowed = ((drive + hold * 3).as_millis() / hold.as_millis()) as u64 + 3;
+    assert!(
+        wakes <= allowed,
+        "woken {wakes} times for {moved} revisions; at most {allowed} were allowed"
+    );
+    assert!(
+        last_seen >= reached,
+        "the waiter stopped at {last_seen} while the index had reached {reached} — \
+         a held-back wake-up must be late, not missing"
+    );
+}
+
 #[test]
 fn a_watcher_that_lost_track_causes_a_walk_rather_than_a_guess() {
     // Every platform loses track differently — inotify out of watches, a
@@ -740,6 +903,159 @@ fn a_watcher_that_lost_track_causes_a_walk_rather_than_a_guess() {
     assert_eq!(
         f.engine.status().entries,
         f.source.entries.read().len() as u64
+    );
+}
+
+/// Every walk of a subtree the source was asked for, in order.
+fn subtree_walks(f: &Fixture) -> Vec<(String, Instant)> {
+    f.source
+        .walked
+        .read()
+        .iter()
+        .filter_map(|(s, at)| s.clone().map(|s| (s, *at)))
+        .collect()
+}
+
+#[test]
+fn a_cluster_of_rescans_becomes_one_walk() {
+    // **A walk is cheap and the commit it ends in is not.** Measured live over
+    // twelve minutes with a build running: 157 subtree walks, 13.3 a minute,
+    // 0–1 ms of walking each and every one of them writing a segment and
+    // fsyncing a manifest. They arrive as a build creates directories — a few
+    // hundred milliseconds apart, so never two in one channel batch, so
+    // `coalesce` never saw them together and could not help.
+    let f = tuned_fixture(300, |o| {
+        o.walk_debounce = Duration::from_millis(300);
+        o.walk_debounce_cap = Duration::from_secs(3);
+    });
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+
+    // Ten requests for the same subtree, spread over the debounce the way a
+    // watcher spreads them, none of them far enough apart to settle.
+    for _ in 0..10 {
+        f.source.changed(Change::Rescan {
+            path: "/home/u/pkg".into(),
+        });
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    settle(&f, |f| !subtree_walks(f).is_empty());
+    // Long enough for a second walk to have shown up if the debounce were not
+    // holding them: the whole cluster spans 250 ms and the debounce is 300.
+    std::thread::sleep(Duration::from_millis(600));
+
+    let walks = subtree_walks(&f);
+    assert_eq!(
+        walks.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+        vec!["/home/u/pkg"],
+        "ten requests for one subtree are one walk"
+    );
+}
+
+#[test]
+fn a_walk_of_a_parent_answers_the_requests_below_it_and_siblings_still_walk() {
+    // The lossless half of the same rule. Merging is only allowed where the
+    // walk that runs *covers* the request that was dropped; two directories
+    // beside each other cover nothing of each other's and both must run.
+    let f = tuned_fixture(300, |o| {
+        o.walk_debounce = Duration::from_millis(300);
+        o.walk_debounce_cap = Duration::from_secs(3);
+    });
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+
+    for p in [
+        "/home/u/pkg/a",
+        "/home/u/pkg/b",
+        "/home/u/pkg",
+        "/home/u/etc",
+    ] {
+        f.source.changed(Change::Rescan { path: p.into() });
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    settle(&f, |f| subtree_walks(f).len() >= 2);
+    std::thread::sleep(Duration::from_millis(600));
+
+    let mut walked: Vec<String> = subtree_walks(&f).into_iter().map(|(p, _)| p).collect();
+    walked.sort();
+    assert_eq!(
+        walked,
+        vec!["/home/u/etc".to_owned(), "/home/u/pkg".to_owned()],
+        "the parent absorbed its children and the sibling walked on its own"
+    );
+}
+
+#[test]
+fn a_trickle_that_never_stops_is_walked_at_the_cap_anyway() {
+    // The debounce is a bet that the cluster ends. A build that writes a
+    // directory every hundred milliseconds for a minute never lets it, and
+    // without the cap the walk would be postponed for as long as the build
+    // ran — which is not "later", it is "never", and the subtree would be
+    // missing from the index the whole time.
+    let f = tuned_fixture(300, |o| {
+        o.walk_debounce = Duration::from_millis(300);
+        o.walk_debounce_cap = Duration::from_secs(1);
+    });
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+
+    let began = Instant::now();
+    // Three seconds of requests a hundred milliseconds apart: the debounce can
+    // never expire, so only the cap can fire.
+    let trickle = std::thread::scope(|s| {
+        let h = s.spawn(|| {
+            while began.elapsed() < Duration::from_secs(3) {
+                f.source.changed(Change::Rescan {
+                    path: "/home/u/pkg".into(),
+                });
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        settle(&f, |f| !subtree_walks(f).is_empty());
+        let first = subtree_walks(&f).first().map(|(_, at)| *at);
+        h.join().expect("the trickle");
+        first
+    });
+    let first = trickle.expect("the trickle was never walked at all");
+    let waited = first.duration_since(began);
+    assert!(
+        waited < Duration::from_millis(1_800),
+        "a walk asked for at the start of a continuous trickle waited {waited:?}, \
+         past the {:?} cap",
+        Duration::from_secs(1)
+    );
+}
+
+#[test]
+fn a_watcher_that_lost_track_does_not_wait_for_the_debounce() {
+    // An empty path is the one message that says the index is drifting and
+    // cannot say where. Holding it would hold the only thing that stops the
+    // drift, so it bypasses the debounce entirely — asserted against a
+    // debounce far longer than the assertion's own patience, so a test that
+    // passes cannot be one that merely waited.
+    let f = tuned_fixture(300, |o| {
+        o.walk_debounce = Duration::from_secs(30);
+        o.walk_debounce_cap = Duration::from_secs(60);
+    });
+    assert_eq!(f.engine.start_watching().expect("watch"), 1);
+    let before = f.source.scans.load(Ordering::Relaxed);
+
+    let began = Instant::now();
+    f.source.changed(Change::Rescan {
+        path: String::new(),
+    });
+    settle(&f, |f| f.source.scans.load(Ordering::Relaxed) > before);
+    let took = began.elapsed();
+
+    assert!(
+        f.source.scans.load(Ordering::Relaxed) > before,
+        "a watcher that lost track was left waiting for a debounce"
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "it waited {took:?} — the bypass is not a bypass"
+    );
+    assert_eq!(
+        f.source.walked.read().last().expect("a walk").0,
+        None,
+        "and it walked the whole source, not a subtree"
     );
 }
 
