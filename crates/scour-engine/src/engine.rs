@@ -122,6 +122,30 @@ pub struct EngineOptions {
     /// that did not exist a moment ago is findable this much later than it was,
     /// and no later.
     pub walk_debounce_cap: Duration,
+    /// How often [`Engine::await_change`] may wake the clients waiting in it.
+    ///
+    /// **[`Status::revision`] is exact and this is not a rate limit on it** —
+    /// it is a rate limit on the push. A client that asks gets the current
+    /// number and the current counts, always; what this bounds is how often
+    /// one that is asleep is woken to ask.
+    ///
+    /// Because the revision moves faster than the index can be written and
+    /// every bump costs a client a full re-query. Measured: revision 5,259 →
+    /// 5,477 in 62 s and 5,583 → 5,757 in 28 s — 3.5 to 6.2 a second, while
+    /// commits are at most one a second — the excess being one bump per
+    /// subtree walk and one per removal batch. Against **20.5–21 ms of service
+    /// CPU per revision** for a single attached window (447 ticks over 218
+    /// revisions, 364 over 174), that is 7–13% of a core spent telling one
+    /// idle page what it already had.
+    ///
+    /// Deliberately the same number as [`EngineOptions::commit_watched`] and
+    /// deliberately not that field: what a waiter is told about arrives in a
+    /// commit, so waking faster than the commit clock cannot show anything
+    /// new — but `commit_watched` is a decision about *writing* and this is a
+    /// decision about *waking*, and one must be changeable without the other.
+    ///
+    /// Zero turns it off: every bump wakes every waiter, as it did before.
+    pub await_hold: Duration,
 }
 
 impl Default for EngineOptions {
@@ -154,6 +178,10 @@ impl Default for EngineOptions {
             // the walk that finds it is not the slowest step on its way to
             // being findable, and this must not become the slowest one.
             walk_debounce_cap: Duration::from_secs(3),
+            // `commit_watched`, exactly, and for the reason given on the
+            // field: a waiter cannot be shown anything the index has not
+            // written, and it is not written more often than that.
+            await_hold: Duration::from_millis(1_000),
         }
     }
 }
@@ -215,6 +243,14 @@ struct Shared {
     /// landing in that gap without it is a change nobody hears about until the
     /// timeout, which is the one failure a live list must not have.
     waiters: (Mutex<()>, Condvar),
+    /// When they were last woken, and whether a bump has been held since.
+    ///
+    /// See [`EngineOptions::await_hold`]. The flag is what the worker loop
+    /// reads to know it owes a wake-up: a bump held back is not a bump
+    /// dropped, and the deadline that delivers it is the one thing that makes
+    /// the difference.
+    wake_at: Mutex<Instant>,
+    wake_owed: AtomicBool,
     /// The ordered hits of whichever query was asked for last.
     prepared: RwLock<Option<Prepared>>,
     /// When one was last asked for, so misses cannot queue one each.
@@ -384,12 +420,64 @@ impl Shared {
     ///
     /// Bumped under the waiters' lock, so a client that has read the revision
     /// and not yet gone to sleep on it is not overtaken.
+    ///
+    /// **The number moves now; the wake-up may not.** See
+    /// [`EngineOptions::await_hold`] — the revision is what anyone who asks is
+    /// told, and it stays exact, but a client that is *asleep* on it is woken
+    /// at most once per hold.
     fn touched(&self) {
         {
             let _held = self.waiters.0.lock();
             self.revision.fetch_add(1, Ordering::Release);
         }
+        self.announce(Instant::now());
+    }
+
+    /// The same, for a change somebody asked for by name.
+    ///
+    /// An emptied trash and an explicit flush are answers to a command that
+    /// was just typed, not churn from a watcher, and the window that sent the
+    /// command is the one waiting to see it. They are also bounded by how fast
+    /// a person can ask, which is what the hold exists to bound. So they skip
+    /// it — and reset it, so the next held bump measures its second from here.
+    fn touched_now(&self) {
+        {
+            let _held = self.waiters.0.lock();
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+        *self.wake_at.lock() = Instant::now();
+        self.wake_owed.store(false, Ordering::Relaxed);
         self.waiters.1.notify_all();
+    }
+
+    /// Wake the waiters, unless one was woken less than a hold ago.
+    ///
+    /// Returns whether it did. A bump that is held back sets `wake_owed`, and
+    /// the worker loop carries a deadline for exactly that: the announcement
+    /// is late, never missing. Announcing from *there* rather than from a
+    /// timer in the request thread is what keeps `watchers` above zero — a
+    /// waiter that went away to sleep would put the commit clock back on
+    /// `commit_idle`, and fifteen seconds is not a delay a live list survives.
+    fn announce(&self, now: Instant) -> bool {
+        let hold = self.opts.await_hold;
+        let mut at = self.wake_at.lock();
+        if hold.is_zero() || now.saturating_duration_since(*at) >= hold {
+            *at = now;
+            self.wake_owed.store(false, Ordering::Relaxed);
+            drop(at);
+            self.waiters.1.notify_all();
+            true
+        } else {
+            self.wake_owed.store(true, Ordering::Relaxed);
+            false
+        }
+    }
+
+    /// When a held-back wake-up comes due, if one is owed.
+    fn wake_due(&self) -> Option<Instant> {
+        self.wake_owed
+            .load(Ordering::Relaxed)
+            .then(|| *self.wake_at.lock() + self.opts.await_hold)
     }
 }
 
@@ -424,6 +512,7 @@ impl Engine {
         // answer to "what does the walk skip" and not two that can drift.
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let source_count = sources.len();
+        let await_hold = opts.await_hold;
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -440,6 +529,14 @@ impl Engine {
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(0),
             waiters: (Mutex::new(()), Condvar::new()),
+            // A hold ago, so the first change of the session is announced the
+            // moment it happens rather than a second after start-up.
+            wake_at: Mutex::new(
+                Instant::now()
+                    .checked_sub(await_hold)
+                    .unwrap_or_else(Instant::now),
+            ),
+            wake_owed: AtomicBool::new(false),
             watchers: AtomicU32::new(0),
             prepared: RwLock::new(None),
             prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
@@ -643,7 +740,7 @@ impl Engine {
         // the worker so a request never blocks for minutes.
         if level == Maintenance::Flush {
             let report = self.shared.index.maintain(level)?;
-            self.shared.touched();
+            self.shared.touched_now();
             return Ok(report);
         }
         self.send(Job::Maintain(level))?;
@@ -777,7 +874,7 @@ impl Engine {
                 .map(|path| Change::RemoveSubtree { path });
             self.shared.index.apply(&mut changes)?;
             self.shared.index.commit()?;
-            self.shared.touched();
+            self.shared.touched_now();
         }
         Ok(n)
     }
@@ -1396,7 +1493,18 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         // asks again immediately, and again, for the whole fifteen seconds.
         // Each deadline has to be the moment the body would actually *do*
         // something.
+        // **The wake-up a bump was not allowed to send.**
+        //
+        // See [`EngineOptions::await_hold`]: a revision that moved during the
+        // quiet second bumped the number and did not wake anybody, and this is
+        // the other half of that — the moment the second is over, whoever is
+        // asleep is told. First thing in the turn rather than last, so a
+        // deadline that has already come due is paid here instead of being
+        // asked for again below and floored.
         let now = Instant::now();
+        if shared.wake_due().is_some_and(|at| at <= now) {
+            shared.announce(now);
+        }
         let left = |at: Instant| at.saturating_duration_since(now);
         let mut wake = Duration::from_secs(10);
         // Which deadline set the wake-up, when asked.
@@ -1489,6 +1597,12 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             pending_walks.next_due(shared.opts.walk_debounce, shared.opts.walk_debounce_cap)
         {
             deadline!("walk", at);
+        }
+        // The held wake-up. Already paid if it was due — the block above runs
+        // before this one for exactly that reason — so what is left here is
+        // always in the future.
+        if let Some(at) = shared.wake_due() {
+            deadline!("announce", at);
         }
         // A backstop, not a schedule. If a deadline above is ever computed
         // wrong the cost is fifty turns a second rather than a spun core, and
