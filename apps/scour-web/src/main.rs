@@ -525,8 +525,18 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     // page decides which of it to show and asking again for a
                     // column that was switched on would be a second request
                     // for rows already sent.
+                    //
+                    // **The full path is not one of them.** It was sent beside
+                    // `dir` and `name`, which spell it — and the page throws
+                    // the wire field away on arrival (`fromService` lays
+                    // `path: row.dir` over the spread) and rebuilds
+                    // `dir + "/" + name` where it wants the whole thing.
+                    // Measured on 200-row windows it was 19-29% of the bytes
+                    // (77-157 B of 397-548 B a row), refetched 32-43 windows
+                    // in fifty seconds during a scan. Nothing else reads this
+                    // route: the CSV has its own writer, and the TUI, the
+                    // window and the MCP server speak the protocol, not HTTP.
                     serde_json::json!({
-                        "path": h.path,
                         "name": h.name(),
                         "dir": h.parent(),
                         "ext": scour_core::ext_of(h.name()),
