@@ -704,11 +704,19 @@ pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// **In the person's zone, like every other face.** This pinned UTC for
+    /// as long as `scour_ui::format::stamp` was UTC; the day that changed —
+    /// a file saved at 12:08 showing as 09:08 in the window — this test was
+    /// the one place still insisting on the old answer. The format is pinned
+    /// through the pure half, the zone through the same call the code uses.
     #[test]
     fn timestamps_read_as_dates() {
+        use scour_ui::format::{local_offset, stamp_at};
         assert_eq!(stamp(0), "—", "an unknown time is not 1970");
-        assert_eq!(stamp(1_769_817_600), "2026-01-31 00:00");
-        assert_eq!(stamp(1_769_817_600 + 3_661), "2026-01-31 01:01");
+        let at = 1_769_817_600;
+        assert_eq!(stamp_at(at, 0), "2026-01-31 00:00", "the shape, zone-free");
+        assert_eq!(stamp(at), stamp_at(at, local_offset(at)));
+        assert_eq!(stamp(at + 3_661), stamp_at(at + 3_661, local_offset(at + 3_661)));
     }
 
     #[test]
