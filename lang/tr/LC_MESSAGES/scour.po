@@ -1410,3 +1410,57 @@ msgstr "under:/home/a    o klasörün içinde"
 
 msgid "Escape closes this, or the × in the corner."
 msgstr "Escape kapatır, ya da köşedeki ×."
+
+msgid "  !word           leave it out"
+msgstr "  !kelime         bunu dışla"
+
+msgid "  "two words"     as written"
+msgstr "  "iki kelime"    yazıldığı gibi"
+
+msgid "  *.pdf   rep?rt  wildcards"
+msgstr "  *.pdf   rap?r   joker"
+
+msgid "  a | b           either one"
+msgstr "  a | b           ikisinden biri"
+
+msgid "  ext:pdf         extension"
+msgstr "  ext:pdf         uzantı"
+
+msgid "  kind:image      image, video, code, doc, archive, folder…"
+msgstr "  kind:image      image, video, code, doc, archive, folder…"
+
+msgid "  size:>10mb      also <, and kb mb gb"
+msgstr "  size:>10mb      < de olur; kb mb gb"
+
+msgid "  dm:7d           changed in the last 7 days — h, w, m, y too"
+msgstr "  dm:7d           son 7 günde değişen — h, w, m, y de"
+
+msgid "  dc: da:         created, opened"
+msgstr "  dc: da:         oluşturulma, açılma"
+
+msgid "  under:/home/a   inside that folder"
+msgstr "  under:/home/a   o klasörün içinde"
+
+msgid "  is:dir          folders only"
+msgstr "  is:dir          yalnız klasörler"
+
+msgid "  Enter           open        Ctrl+Enter   open its folder"
+msgstr "  Enter           aç          Ctrl+Enter   klasörünü aç"
+
+msgid "  Space           details     Alt+↓        search this folder"
+msgstr "  Boşluk          ayrıntı     Alt+↓        bu klasörde ara"
+
+msgid "  F2              rename      Delete       to the wastebasket"
+msgstr "  F2              adlandır    Delete       çöp kutusuna"
+
+msgid "  Ctrl+C          copy path   Ctrl+Shift+C copy name"
+msgstr "  Ctrl+C          yolu kopyala  Ctrl+Shift+C adı kopyala"
+
+msgid "  ↑ ↓ PgUp PgDn   move        Home End     first, last"
+msgstr "  ↑ ↓ PgUp PgDn   gezin       Home End     ilk, son"
+
+msgid "  Escape          clear the selection, or close this"
+msgstr "  Escape          seçimi bırak, ya da bunu kapat"
+
+msgid "The colour down the left of each row is how long ago it changed: warm for minutes, cold for years."
+msgstr "Satırın solundaki renk ne kadar önce değiştiğini söyler: sıcak dakikalar, soğuk yıllar."

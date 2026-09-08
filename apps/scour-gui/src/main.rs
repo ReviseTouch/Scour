@@ -4435,30 +4435,48 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     // explanation written for this window. **Stripped of the markup they
     // carry**: the catalogue is shared with a page that hangs a stylesheet on
     // `<code>` and `<b>`, and this window has none, so it was showing tags.
-    // **Help, not a manifesto.** This was eleven paragraphs explaining why the
-    // freshness ruler exists, what the measurement line proves and what
-    // TreeSize cannot do — true, and none of it what somebody wants at the
-    // moment they press `?`. It also ran off the bottom of its own panel.
+    // **Help is the two things clicking cannot show you.**
     //
-    // What a person wants there is the query language, because that is the
-    // one thing in this window that cannot be discovered by clicking. The
-    // reasoning moved to the documentation, where somebody who wants it goes
-    // looking; here are the terms, and nothing else.
+    // This was eleven paragraphs on why the freshness ruler exists and what
+    // the report proves — true, and not what somebody wants at the moment
+    // they press `?`. Cut to the query language it went too far the other
+    // way: a panel the size of a tooltip, and still missing the half a person
+    // is most likely to come looking for. Every shortcut in this window was
+    // undocumented — they live in `scour_ui::menu`, printed beside the items
+    // in the right-click menu, and nowhere a person browses.
+    //
+    // So: the terms, then the keys. Both are things the interface cannot
+    // teach by being clicked, and neither is an argument for the design.
     window.set_help_body(
         [
             "A word matches the name. Several words mean all of them.",
-            "!word            leave it out",
-            "\"two words\"      as written",
-            "*.pdf  rep?rt    wildcards",
-            "ext:pdf          extension",
-            "kind:image       kind: image, video, code, doc, archive…",
-            "size:>10mb       also <, and kb mb gb",
-            "dm:7d            changed in the last 7 days — also h, w, m, y",
-            "under:/home/a    inside that folder",
-            "Escape closes this, or the × in the corner.",
+            "",
+            "  !word           leave it out",
+            "  \"two words\"     as written",
+            "  *.pdf   rep?rt  wildcards",
+            "  a | b           either one",
+            "",
+            "  ext:pdf         extension",
+            "  kind:image      image, video, code, doc, archive, folder…",
+            "  size:>10mb      also <, and kb mb gb",
+            "  dm:7d           changed in the last 7 days — h, w, m, y too",
+            "  dc: da:         created, opened",
+            "  under:/home/a   inside that folder",
+            "  is:dir          folders only",
+            "",
+            "Keys",
+            "",
+            "  Enter           open        Ctrl+Enter   open its folder",
+            "  Space           details     Alt+↓        search this folder",
+            "  F2              rename      Delete       to the wastebasket",
+            "  Ctrl+C          copy path   Ctrl+Shift+C copy name",
+            "  ↑ ↓ PgUp PgDn   move        Home End     first, last",
+            "  Escape          clear the selection, or close this",
+            "",
+            "The colour down the left of each row is how long ago it changed: warm for minutes, cold for years.",
         ]
         .iter()
-        .map(|line| plain(&t(cat, line)))
+        .map(|line| if line.is_empty() { String::new() } else { plain(&t(cat, line)) })
         .collect::<Vec<_>>()
         .join("\n")
         .into(),

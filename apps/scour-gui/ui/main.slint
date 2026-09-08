@@ -337,7 +337,12 @@ component Sheet inherits Rectangle {
     // ran off its own bottom edge and sat over the ribbon with no way to
     // scroll or to see the rest. The ceiling is still there for the day
     // something genuinely long goes in one.
-    height: min(root.room-h - 120px, body.preferred-height + 32px);
+    // **Measured from what is inside the scroller, not from the scroller.**
+    // A `ScrollView` asks for very little — that is its job — so reading its
+    // height collapsed the panel to two lines with a bar beside them. The
+    // content knows how tall it wants to be; the ceiling decides whether it
+    // gets it, and the scroller carries whatever is left over.
+    height: min(root.room-h - 120px, sheet-body.preferred-height + 76px);
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.line;
@@ -389,7 +394,26 @@ component Sheet inherits Rectangle {
             height: 20px;
         }
 
-        @children
+        // **Scrolls, so the panel can never clip what is in it again.**
+        //
+        // The first shape was 560px whatever it held and the help ran off the
+        // bottom with no way to reach the rest. Sizing to the content fixed
+        // that and introduced the opposite: a panel long enough to fill the
+        // window whenever somebody adds a line. Both are the same bug — a box
+        // whose height and whose contents are decided in different places.
+        //
+        // With a scroller the height is free to be whatever fits, and the
+        // ceiling below stops it taking the window. Nothing is ever cut off:
+        // it is either shown or reachable.
+        ScrollView {
+            vertical-stretch: 1;
+            viewport-height: sheet-body.preferred-height;
+            sheet-body := VerticalLayout {
+                spacing: 8px;
+                padding-right: 6px;
+                @children
+            }
+        }
     }
 }
 
