@@ -5300,7 +5300,6 @@ mod tests {
         assert_eq!(facet_query(&s), "rapor");
     }
 
-    #[test]
     /// **The doze is a clock, and the clock is the whole feature.** A window
     /// that dozed while somebody was using it is a list that stops updating;
     /// one that never dozes is the twenty-six-times-the-CPU this was written
@@ -5317,10 +5316,17 @@ mod tests {
         // A doze asks again far less often than an awake window, which is
         // where the saving is — and not never, so the first frame after a
         // touch is close.
-        assert!(DOZE_AGAIN > AWAIT_AGAIN * 8, "a doze that asks as often is not a doze");
-        assert!(DOZE_AGAIN < AWAKE_FOR, "a doze must refresh before it could wake");
+        assert!(
+            DOZE_AGAIN > AWAIT_AGAIN * 8,
+            "a doze that asks as often is not a doze"
+        );
+        assert!(
+            DOZE_AGAIN < AWAKE_FOR,
+            "a doze must refresh before it could wake"
+        );
     }
 
+    #[test]
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
             stirred: std::time::Instant::now(),

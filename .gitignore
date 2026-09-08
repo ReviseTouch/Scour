@@ -7,3 +7,6 @@ Cargo.lock.bak
 /docs/*.local.md
 *.profraw
 __pycache__/
+
+# Codex bir tur bunu bıraktı; derleme çıktısı, depoya girmez.
+walk/

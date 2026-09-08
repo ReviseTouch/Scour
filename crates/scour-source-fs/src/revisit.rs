@@ -80,6 +80,32 @@ struct Shared {
     stop: AtomicBool,
 }
 
+/// What this module compares a file against: its length and when it changed.
+///
+/// **One reader rather than `MetadataExt` at four call sites.** The two facts
+/// are portable — every filesystem has a length and a modification time — but
+/// the cheap way to read them is not: on Unix they are already in the `statx`
+/// this `Metadata` came from, and off it they arrive as a `SystemTime` that
+/// has to be converted. Written once, so the four places that ask cannot
+/// disagree and the crate compiles for the platforms the README claims.
+fn shape(md: &std::fs::Metadata) -> (u64, i64) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        (md.size(), md.mtime())
+    }
+    #[cfg(not(unix))]
+    {
+        let mtime = md
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        (md.len(), mtime)
+    }
+}
+
 fn shared() -> &'static Arc<Shared> {
     static IT: OnceLock<Arc<Shared>> = OnceLock::new();
     IT.get_or_init(|| {
@@ -106,7 +132,6 @@ pub(crate) fn note(
     sink: &Arc<dyn ChangeSink>,
     md: Option<&std::fs::Metadata>,
 ) {
-    use std::os::unix::fs::MetadataExt;
     // A directory has no content to be written behind our back.
     if md.is_none_or(|m| m.is_dir()) {
         return;
@@ -120,8 +145,9 @@ pub(crate) fn note(
     if let Some(seen) = paths.get_mut(path) {
         seen.tier = 0;
         seen.next = now + TIERS[0];
-        seen.size = md.size();
-        seen.mtime = md.mtime();
+        let (size, mtime) = shape(md);
+        seen.size = size;
+        seen.mtime = mtime;
         seen.stamp = now;
     } else {
         if paths.len() >= CAP
@@ -140,8 +166,8 @@ pub(crate) fn note(
                 sink: Arc::clone(sink),
                 next: now + TIERS[0],
                 tier: 0,
-                size: md.size(),
-                mtime: md.mtime(),
+                size: shape(md).0,
+                mtime: shape(md).1,
                 stamp: now,
             },
         );
@@ -149,6 +175,8 @@ pub(crate) fn note(
     it.wake.notify_one();
 }
 
+// Only the fanotify reader calls this, and that is Linux.
+#[cfg(target_os = "linux")]
 /// Stop looking at a path: the kernel has said its content is final.
 ///
 /// `FAN_CLOSE_WRITE` is that statement, and for a mapping it arrives at
@@ -164,6 +192,8 @@ pub(crate) fn forget(path: &str) {
     }
 }
 
+// Only the fanotify reader calls this, and that is Linux.
+#[cfg(target_os = "linux")]
 fn started() -> Option<&'static Arc<Shared>> {
     static PROBE: OnceLock<()> = OnceLock::new();
     let _ = &PROBE;
@@ -231,12 +261,12 @@ fn run(it: &Arc<Shared>) {
             };
             match md {
                 Ok(md) => {
-                    use std::os::unix::fs::MetadataExt;
-                    if md.size() == seen.size && md.mtime() == seen.mtime {
+                    let (size, mtime) = shape(&md);
+                    if size == seen.size && mtime == seen.mtime {
                         continue;
                     }
-                    seen.size = md.size();
-                    seen.mtime = md.mtime();
+                    seen.size = size;
+                    seen.mtime = mtime;
                     let (id, real_modes, sink) = (seen.id, seen.real_modes, Arc::clone(&seen.sink));
                     drop(paths);
                     crate::watch::look(id, real_modes, p, false, sink.as_ref());

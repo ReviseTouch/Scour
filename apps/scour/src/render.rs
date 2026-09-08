@@ -716,7 +716,10 @@ mod tests {
         let at = 1_769_817_600;
         assert_eq!(stamp_at(at, 0), "2026-01-31 00:00", "the shape, zone-free");
         assert_eq!(stamp(at), stamp_at(at, local_offset(at)));
-        assert_eq!(stamp(at + 3_661), stamp_at(at + 3_661, local_offset(at + 3_661)));
+        assert_eq!(
+            stamp(at + 3_661),
+            stamp_at(at + 3_661, local_offset(at + 3_661))
+        );
     }
 
     #[test]

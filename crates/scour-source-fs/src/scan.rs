@@ -56,6 +56,12 @@ pub(crate) fn stand_aside() {
     // SAFETY: both are ordinary syscalls on the calling thread, and a failure
     // to become polite is not a failure to scan — so neither result is checked
     // beyond ignoring it.
+    // **Linux, because both halves of this are Linux.** `nice` is POSIX;
+    // `ioprio_set` is not — it is a Linux syscall with no portable name,
+    // and the disk half is the one that matters here. Elsewhere the walk
+    // runs at the priority it was given: worth doing when somebody runs
+    // Scour there and measures what it costs, not worth guessing at now.
+    #[cfg(target_os = "linux")]
     unsafe {
         // Ten *more* than whatever this already is, not ten absolutely.
         // `setpriority` sets a value and `nice` adds to one, and the difference
@@ -311,6 +317,8 @@ impl FsSource {
         self.traits.real_modes
     }
 
+    // Read by the fanotify walk, which is Linux.
+    #[cfg(target_os = "linux")]
     /// What the mounts under the roots are like to read.
     ///
     /// The fanotify backend walks the same tree for a different reason — see

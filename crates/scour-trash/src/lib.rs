@@ -36,12 +36,15 @@
 //! file manager's, and a search tool that grows them has become a file
 //! manager with a search box.
 
+#[cfg(unix)]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Why a file could not be sent to the trash.
 #[derive(Debug)]
 pub enum Error {
+    /// There is no wastebasket to move it to on this platform.
+    Unsupported,
     /// There is nowhere to put it: no writable trash for this filesystem.
     NoTrash(PathBuf),
     /// The path does not exist, or cannot be read.
@@ -54,6 +57,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Error::Unsupported => write!(f, "this platform has no wastebasket"),
             Error::NoTrash(p) => write!(f, "no trash directory for {}", p.display()),
             Error::Missing(p) => write!(f, "{} is not there", p.display()),
             Error::Unnamed(p) => write!(f, "{} has no name to trash", p.display()),
@@ -70,6 +74,7 @@ impl From<std::io::Error> for Error {
     }
 }
 
+#[cfg(unix)]
 /// Send one path to the trash. Returns where it ended up.
 ///
 /// The path may be a file, a directory or a symlink; a directory goes whole,
@@ -78,6 +83,7 @@ pub fn trash(path: &Path) -> Result<PathBuf, Error> {
     into(path, home_trash())
 }
 
+#[cfg(unix)]
 /// [`trash`], with the home wastebasket named rather than looked up.
 ///
 /// **Exists so the tests never touch the desktop's.** The obvious way to
@@ -141,6 +147,7 @@ fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     }
 }
 
+#[cfg(unix)]
 /// Is there somewhere to put this path, without moving it to find out?
 ///
 /// For a menu that would rather grey an item out than fail after the press.
@@ -155,6 +162,7 @@ pub fn can_trash(path: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
 /// Claim a name by creating its info file, and return both.
 ///
 /// **`create_new`, in a loop, is the whole point.** Asking whether a name is
@@ -184,6 +192,7 @@ fn claim(dir: &Path, name: &str) -> Result<(String, std::fs::File), Error> {
     Err(Error::NoTrash(dir.to_path_buf()))
 }
 
+#[cfg(unix)]
 /// `notes.tar.gz` splits at the last dot, not the first: `notes.tar` + `gz`.
 ///
 /// The numbered name has to stay recognisable, and `notes.2.tar.gz` reads as
@@ -196,6 +205,7 @@ fn split_extension(name: &str) -> (String, String) {
     }
 }
 
+#[cfg(unix)]
 fn home_trash() -> Option<PathBuf> {
     let base = match std::env::var_os("XDG_DATA_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),
@@ -204,6 +214,7 @@ fn home_trash() -> Option<PathBuf> {
     Some(base.join("Trash"))
 }
 
+#[cfg(unix)]
 /// The trash at the top of the volume a path lives on.
 ///
 /// `.Trash/$uid` only when the administrator made `.Trash` deliberately —
@@ -233,6 +244,7 @@ fn volume_trash(path: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(unix)]
 /// Walk up until the device number changes: that is the mount point.
 fn mount_point_of(path: &Path) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
@@ -249,6 +261,7 @@ fn mount_point_of(path: &Path) -> Option<PathBuf> {
     }
 }
 
+#[cfg(unix)]
 /// Which trash directory is this, and what is the volume under it?
 fn top_dir_of(trash: &Path) -> Option<PathBuf> {
     let name = trash.file_name()?.to_string_lossy().into_owned();
@@ -262,6 +275,7 @@ fn top_dir_of(trash: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(unix)]
 fn same_device(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     // The trash may not exist yet, so the question is really about the nearest
@@ -281,6 +295,7 @@ fn same_device(a: &Path, b: &Path) -> bool {
     }
 }
 
+#[cfg(unix)]
 fn absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -291,6 +306,7 @@ fn absolute(path: &Path) -> PathBuf {
     }
 }
 
+#[cfg(unix)]
 /// Percent-encoding, as the specification's `Path=` field wants it.
 ///
 /// The unreserved set of RFC 3986 plus `/`, which has to stay readable — a
@@ -309,6 +325,7 @@ fn encode(s: &str) -> String {
     out
 }
 
+#[cfg(unix)]
 /// `YYYY-MM-DDThh:mm:ss` in local time, which is what the specification says.
 ///
 /// Local rather than UTC because a file manager shows this string to a person
@@ -334,7 +351,7 @@ fn local_stamp() -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -458,4 +475,27 @@ mod tests {
         assert_eq!(split_extension("notes"), ("notes".into(), "".into()));
         assert_eq!(split_extension(".bashrc"), (".bashrc".into(), "".into()));
     }
+}
+
+/// **Not implemented off Unix, and saying so is the point.**
+///
+/// This crate is the freedesktop wastebasket: `$XDG_DATA_HOME/Trash`, a
+/// `.trashinfo` beside every file, `$topdir/.Trash-$uid` for another volume.
+/// None of that exists on Windows or macOS — they have a Recycle Bin and a
+/// `.Trashes`, reached through `SHFileOperation` and `NSFileManager`, which
+/// are different enough that pretending otherwise would be a delete that
+/// quietly did the wrong thing.
+///
+/// So the faces ask [`can_trash`] first, get `false`, and leave the item out
+/// of the menu rather than offering something that fails after the press —
+/// the rule the menu table was built around.
+#[cfg(not(unix))]
+pub fn trash(_path: &Path) -> Result<PathBuf, Error> {
+    Err(Error::Unsupported)
+}
+
+/// Always false off Unix. See [`trash`].
+#[cfg(not(unix))]
+pub fn can_trash(_path: &Path) -> bool {
+    false
 }

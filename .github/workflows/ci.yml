@@ -30,6 +30,29 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
 
+  # **The matrix above needs a runner per platform; this does not.** Every
+  # cross-platform break so far was a `std::os::unix` call with no `cfg` around
+  # it — `dev()`, `mode()`, `getuid()`, `localtime_r` — and `cargo check
+  # --target` finds all of them from one Linux runner in a minute, without
+  # waiting for a Windows or macOS machine to be free. It caught eight of them
+  # on 2026-09-08, in two crates, none of which the matrix had ever reported:
+  # the matrix jobs had been dying before their first step for weeks.
+  #
+  # Not a replacement for the matrix — this compiles, it does not run — but it
+  # is the half that fails fast and the half that would have kept the claim in
+  # the README true.
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, x86_64-apple-darwin, aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --locked --target x86_64-pc-windows-msvc
+      - run: cargo check --workspace --locked --target x86_64-apple-darwin
+      - run: cargo check --workspace --locked --target aarch64-apple-darwin
+
   lint:
     runs-on: ubuntu-latest
     steps:
