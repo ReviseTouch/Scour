@@ -5350,28 +5350,38 @@
     return Math.floor((c.near * 10 * (1000 - t) + c.far * 10 * t) / 1000);
   }
 
+  /* A dragged width is a wish, not a lock: honoured while there is room, and
+     giving way in proportion when there is not. Taking it out of the budget
+     meant the column beside it paid the whole bill — the name held 359px
+     while the location fell from 942 to 212. Never below the share it would
+     have had untouched, or asking for a width becomes a penalty. */
+  const DRAG_CAP = 450;
+
   function layOut(cols, room) {
-    /* A width somebody dragged is an answer, not a hole to pour space into. */
     const chosen = cols.map((c) => !!WIDTHS[c.id]);
     const base = cols.map((c, i) =>
       Math.max(c.min, (chosen[i] ? WIDTHS[c.id] : 0) || c.w || 120));
-    /* What the stretching columns divide between them: the room, less every
-       column that is not stretching — the fixed ones at their own width, the
-       dragged ones at whatever they were dragged to. */
+    /* Only the columns that never stretch come off the top. */
     let taken = 0;
-    cols.forEach((c, i) => { if (chosen[i] || !c.near) taken += base[i]; });
+    cols.forEach((c, i) => { if (!c.near) taken += base[i]; });
     const budget = Math.max(0, room - taken);
 
     const w = base.slice();
     const stretchy = [];
-    cols.forEach((c, i) => { if (!chosen[i] && c.near > 0) stretchy.push(i); });
+    cols.forEach((c, i) => { if (c.near > 0) stretchy.push(i); });
     let handed = 0;
     stretchy.forEach((i, n) => {
-      /* The last takes what the others left, so the shares add up to the
-         budget exactly however they rounded. */
-      const want = n + 1 === stretchy.length
-        ? Math.max(0, budget - handed)
-        : Math.floor((budget * shareAt(cols[i], room)) / 1000);
+      let want;
+      if (chosen[i]) {
+        const fair = Math.max(shareAt(cols[i], room), DRAG_CAP);
+        want = Math.min(WIDTHS[cols[i].id], Math.floor((budget * fair) / 1000));
+      } else if (n + 1 === stretchy.length) {
+        /* The last takes what the others left, so the shares add up to the
+           budget exactly however they rounded. */
+        want = Math.max(0, budget - handed);
+      } else {
+        want = Math.floor((budget * shareAt(cols[i], room)) / 1000);
+      }
       handed += want;
       w[i] = Math.max(want, cols[i].min);
       if (cols[i].max) w[i] = Math.max(Math.min(w[i], cols[i].max), cols[i].min);

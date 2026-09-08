@@ -725,30 +725,61 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
     // What the stretching columns have to divide between them: the room, less
     // every column that is not stretching — the fixed ones at their own width
     // and the dragged ones at whatever they were dragged to.
+    // Only the columns that never stretch are taken off the top. A dragged
+    // one stays in the budget — see `DRAG_CAP` below — so that narrowing the
+    // window is shared rather than paid by whichever column was not touched.
     let taken: u32 = cols
         .iter()
         .zip(&set)
-        .filter(|(c, s)| s.is_some() || c.near == 0)
+        .filter(|(c, _)| c.near == 0)
         .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
         .sum();
     let budget = avail.saturating_sub(taken);
-    let stretchy: Vec<usize> = (0..cols.len())
-        .filter(|&i| set[i].is_none() && cols[i].near > 0)
-        .collect();
+    let stretchy: Vec<usize> = (0..cols.len()).filter(|&i| cols[i].near > 0).collect();
 
     let mut w: Vec<u32> = cols
         .iter()
         .zip(&set)
         .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
         .collect();
+    // **A dragged width is a wish, not a lock.**
+    //
+    // It used to be taken out of the budget entirely, so a column somebody had
+    // dragged kept that width whatever the window did — and the column beside
+    // it paid the whole bill. Dragging the name to 359 and then narrowing the
+    // window took every pixel out of the location until it hit its floor, and
+    // only then did the name move at all. Reported as "the name never narrows,
+    // only the path does", which is exactly what the code said to do.
+    //
+    // So a dragged width is honoured while there is room for it and gives way
+    // in proportion when there is not: at most this share of what the
+    // stretching columns have between them. Wide open it changes nothing —
+    // 359 of a 1301px budget is 28% — and it is what makes a narrow window
+    // shrink both columns instead of one.
+    //
+    // Forty-five rather than sixty: at sixty the sharing did not begin until
+    // the location had fallen from 942px to 212, which is not "when there is
+    // no room", it is the other column being spent first. It is a floor under
+    // the column's own sliding share, never a ceiling below it.
+    const DRAG_CAP: u32 = 45;
     let mut handed = 0;
     for (n, &i) in stretchy.iter().enumerate() {
         // The last stretching column takes what the others left, so the
         // shares add up to the budget exactly however they rounded.
-        let want = if n + 1 == stretchy.len() {
-            budget.saturating_sub(handed)
-        } else {
-            budget * share_at(cols[i], avail) / 1000
+        let want = match set[i] {
+            // Dragged: what was asked for, while it fits inside a fair share
+            // — and never less than the column would have had untouched. A
+            // flat cap alone made a dragged name *narrower* in a small window
+            // than an undragged one, which turns asking for a width into a
+            // penalty for having asked.
+            Some(chosen) => {
+                let fair = share_at(cols[i], avail).max(DRAG_CAP * 10);
+                chosen.min(budget * fair / 1000)
+            }
+            // Not dragged, and last: whatever the others left, so the shares
+            // add up to the budget exactly however they rounded.
+            None if n + 1 == stretchy.len() => budget.saturating_sub(handed),
+            None => budget * share_at(cols[i], avail) / 1000,
         };
         handed += want;
         w[i] = want.max(cols[i].min);
@@ -1011,6 +1042,43 @@ mod column_tests {
         // The columns that never grow are exactly the width they asked for.
         for id in ["kind", "mtime", "size"] {
             assert_eq!(at(id), column(id).unwrap().width, "`{id}` grew");
+        }
+    }
+
+    /// **A dragged width is a wish, not a lock.**
+    ///
+    /// Reported as "the name never narrows, only the path does": a column
+    /// dragged to 359px was taken out of the budget entirely, so narrowing the
+    /// window took every pixel from the location — 942 down to 212 — before
+    /// the name moved at all. Now it is honoured while there is room and
+    /// follows its own share down when there is not.
+    #[test]
+    fn a_dragged_column_gives_way_too_once_there_is_no_room() {
+        let pinned = |id: &str| (id == "name").then_some(359);
+        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+
+        // Wide: exactly what was asked for.
+        let wide = lay_out(DEFAULT_COLUMNS, pinned, 1621);
+        assert_eq!(at(&wide, "name"), 359, "the drag was not honoured");
+
+        // Narrow: it moved, and it is not the location paying alone any more.
+        let tight = lay_out(DEFAULT_COLUMNS, pinned, 850);
+        assert!(at(&tight, "name") < 300, "the dragged column barely moved");
+
+        for avail in (400..1700).step_by(11) {
+            let w = lay_out(DEFAULT_COLUMNS, pinned, avail);
+            let free = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+            assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
+            // Never wider than asked for…
+            assert!(at(&w, "name") <= 359, "a drag grew at {avail}px");
+            // …and never narrower than it would have been untouched, which
+            // would turn asking for a width into a penalty for having asked.
+            assert!(
+                at(&w, "name") >= at(&free, "name").min(359),
+                "at {avail}px the drag cost it: {} against {}",
+                at(&w, "name"),
+                at(&free, "name")
+            );
         }
     }
 

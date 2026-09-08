@@ -2294,6 +2294,10 @@ mod tests {
     /// forgotten on one side is a column a pixel out at some widths and not
     /// others — the kind of difference nobody finds by looking.
     ///
+    /// A dragged width is pinned in the harness, because that is the half the
+    /// two sides most recently disagreed about — the page kept a dragged column
+    /// out of the budget after the crate had stopped doing so.
+    ///
     /// The three functions are lifted out of the page and run under `node`
     /// against every width from the floor to well past a wide screen. No node,
     /// no check — the same as `the_page_script_parses`, and for the same
@@ -2326,7 +2330,7 @@ mod tests {
             })
             .collect();
         let harness = format!(
-            "const WIDTHS = {{}};\n{}\nconst cols = [{}];\nconst out = [];\n             for (let r = 200; r <= 3600; r += 7) out.push(layOut(cols, r));\n             console.log(JSON.stringify(out));\n",
+            "const WIDTHS = {{\"name\": 359}};\n{}\nconst cols = [{}];\nconst out = [];\n             for (let r = 200; r <= 3600; r += 7) out.push(layOut(cols, r));\n             console.log(JSON.stringify(out));\n",
             &PAGE[from..to],
             cols.join(",")
         );
@@ -2364,7 +2368,11 @@ mod tests {
 
         let mut n = 0;
         for (i, room) in (200..=3600).step_by(7).enumerate() {
-            let want = scour_ui::lay_out(scour_ui::DEFAULT_COLUMNS, |_| None, room);
+            let want = scour_ui::lay_out(
+                scour_ui::DEFAULT_COLUMNS,
+                |id| (id == "name").then_some(359),
+                room,
+            );
             assert_eq!(rows[i], want, "at {room}px the page and the crate differ");
             n += 1;
         }
