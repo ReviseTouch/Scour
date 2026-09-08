@@ -39,11 +39,33 @@ checked from here.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
- 40.18 KiB  2026-08-02  /home/u/Projeler/Scour/crates/scour-index-native/src/search.rs
- 12.01 KiB  2026-08-02  /home/u/Projeler/Scour/crates/scour-config/src/schema.rs
-…
-40 / 43 · 1.74 ms
+      Code    5.18 MiB  /home/u/Projeler/Scour/target/release/build/scour-gui/out/main.rs
+      Code    20.1 KiB  /home/u/Projeler/Scour/apps/scour/src/main.rs
+      Code    30.2 KiB  /home/u/Projeler/Scour/apps/scour/src/render.rs
+      Code    24.9 KiB  /home/u/Projeler/ColpanRust/crates/repo_latches/tests/surface_line_budget.rs
+      Code    13.8 KiB  /home/u/Projeler/ColpanRust/crates/command_catalog/tests/panels.rs
+5 of 1705 in 3.27 ms (28000 rows) · -n 40 for more
 ```
+
+Five rows at a terminal, forty into a pipe — a search that answers in
+milliseconds is asked again, not scrolled. `-n` says how many.
+
+## The four faces
+
+One index, one service, one query. These three were photographed together,
+running `kind:code dm:7d size:>10kb` against the same 4.6 million entries.
+
+**The window** — `scour-gui`, Slint, no browser inside it.
+
+![The Scour window](docs/img/window.webp)
+
+**The browser** — `scour-web` serves one page to a browser already open.
+
+![Scour in a browser](docs/img/browser.webp)
+
+**The terminal** — `scour-tui`, the same rails and the same colours.
+
+![Scour in a terminal](docs/img/terminal.webp)
 
 ## Why this rather than `find`
 

@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Photograph a terminal program without photographing the screen.
+
+    scripts/tuishot --out shot.png -- ./target/release/scour-tui
+
+**Why this is not a screenshot.** There is no way to capture the terminal on
+this machine: XWayland has no root window to read, `import` cannot see a
+compositor's own layer, GNOME answers `Screenshot is not allowed`, and tmux is
+not installed. Every one of those was tried.
+
+So the program is run in a pseudo-terminal instead, its ANSI stream is replayed
+into a grid of cells, the grid is written out as HTML, and a browser draws it.
+Nothing is captured from the screen, so nothing depends on what is on it — and
+the result is sharper than a photograph of a screen would be, because the text
+is drawn rather than sampled.
+
+`--send` types into the program; give it more than once to type in order, and
+`\\r` for Return. `--settle` is how long to wait after each, `--wait` how long
+to wait before the picture. `--cols`/`--rows` are the terminal's size.
+
+    scripts/tuishot --cols 132 --rows 38 --send 'kind:code' --send '\\r' \\
+        --out shot.png -- ./target/release/scour-tui --socket /run/user/1000/x
+"""
+
+import argparse
+import fcntl
+import html
+import os
+import pty
+import select
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import time
+import unicodedata
+
+# The palette's own ground and ink, so a cell nobody coloured is still ours.
+GROUND = "#0d1117"
+INK = "#e7eaee"
+FONT = '"MesloLGS Nerd Font Mono", "Adwaita Mono", "DejaVu Sans Mono", monospace'
+
+
+def table_256() -> list[str]:
+    """The 256-colour palette, for a program that does not ask for true colour."""
+    base = [
+        "#000000", "#cd0000", "#00cd00", "#cdcd00", "#0000ee", "#cd00cd",
+        "#00cdcd", "#e5e5e5", "#7f7f7f", "#ff0000", "#00ff00", "#ffff00",
+        "#5c5cff", "#ff00ff", "#00ffff", "#ffffff",
+    ]
+    steps = [0, 95, 135, 175, 215, 255]
+    cube = [
+        f"#{steps[r]:02x}{steps[g]:02x}{steps[b]:02x}"
+        for r in range(6) for g in range(6) for b in range(6)
+    ]
+    grey = [f"#{v:02x}{v:02x}{v:02x}" for v in range(8, 239, 10)]
+    return base + cube + grey
+
+
+PALETTE = table_256()
+
+
+def wide(ch: str) -> bool:
+    return unicodedata.east_asian_width(ch) in ("W", "F")
+
+
+class Cell:
+    __slots__ = ("ch", "fg", "bg", "bold", "dim", "italic", "under", "strike")
+
+    def __init__(self) -> None:
+        self.blank()
+
+    def blank(self) -> None:
+        self.ch = " "
+        self.fg = None
+        self.bg = None
+        self.bold = self.dim = self.italic = self.under = self.strike = False
+
+    def style(self) -> tuple:
+        return (self.fg, self.bg, self.bold, self.dim, self.italic, self.under, self.strike)
+
+
+class Screen:
+    """A grid, and the part of ANSI that a full-screen program actually emits."""
+
+    def __init__(self, cols: int, rows: int) -> None:
+        self.cols, self.rows = cols, rows
+        self.grid = [[Cell() for _ in range(cols)] for _ in range(rows)]
+        self.x = self.y = 0
+        self.reset_pen()
+        self.state = "ground"
+        self.buf = ""
+
+    def reset_pen(self) -> None:
+        self.fg = self.bg = None
+        self.bold = self.dim = self.italic = self.under = self.strike = False
+        self.reverse = False
+
+    # -- writing ---------------------------------------------------------
+
+    def put(self, ch: str) -> None:
+        if self.x >= self.cols:
+            self.x = 0
+            self.down()
+        c = self.grid[self.y][self.x]
+        c.ch = ch
+        fg, bg = self.fg, self.bg
+        if self.reverse:
+            fg, bg = bg or GROUND, fg or INK
+        c.fg, c.bg = fg, bg
+        c.bold, c.dim, c.italic = self.bold, self.dim, self.italic
+        c.under, c.strike = self.under, self.strike
+        self.x += 1
+        if wide(ch) and self.x < self.cols:
+            # The second half of a wide glyph is not a cell anybody may write.
+            self.grid[self.y][self.x].blank()
+            self.grid[self.y][self.x].ch = ""
+            self.x += 1
+
+    def down(self) -> None:
+        if self.y + 1 < self.rows:
+            self.y += 1
+        else:
+            self.grid.pop(0)
+            self.grid.append([Cell() for _ in range(self.cols)])
+
+    def clear(self, cells) -> None:
+        for c in cells:
+            c.blank()
+            c.bg = self.bg if not self.reverse else self.fg
+
+    # -- parsing ---------------------------------------------------------
+
+    def feed(self, text: str) -> None:
+        for ch in text:
+            self.step(ch)
+
+    def step(self, ch: str) -> None:
+        if self.state == "ground":
+            if ch == "\x1b":
+                self.state, self.buf = "esc", ""
+            elif ch == "\r":
+                self.x = 0
+            elif ch == "\n":
+                self.down()
+            elif ch == "\b":
+                self.x = max(0, self.x - 1)
+            elif ch == "\t":
+                self.x = min(self.cols - 1, (self.x // 8 + 1) * 8)
+            elif ch in ("\x07", "\x00"):
+                pass
+            else:
+                self.put(ch)
+        elif self.state == "esc":
+            if ch == "[":
+                self.state, self.buf = "csi", ""
+            elif ch == "]":
+                self.state, self.buf = "osc", ""
+            elif ch in "PX^_":
+                self.state, self.buf = "osc", ""  # a string, ended the same way
+            elif ch == "M":  # reverse index
+                self.y = max(0, self.y - 1)
+                self.state = "ground"
+            else:
+                self.state = "ground"
+        elif self.state == "csi":
+            if "\x40" <= ch <= "\x7e":
+                self.csi(self.buf, ch)
+                self.state = "ground"
+            else:
+                self.buf += ch
+        elif self.state == "osc":
+            # Ends at BEL or at ST (ESC \). The ESC is swallowed by the next step.
+            if ch == "\x07":
+                self.state = "ground"
+            elif ch == "\x1b":
+                self.state = "osc-esc"
+            else:
+                self.buf += ch
+        elif self.state == "osc-esc":
+            self.state = "ground"
+
+    def csi(self, params: str, final: str) -> None:
+        private = params[:1] in ("?", ">", "<", "=")
+        body = params[1:] if private else params
+        nums = [int(p) if p.isdigit() else 0 for p in body.split(";")] if body else []
+        one = nums[0] if nums else 0
+
+        if private:
+            return  # cursor visibility, alternate screen, mouse — none of it draws
+
+        if final == "H" or final == "f":
+            self.y = min(self.rows - 1, max(0, (nums[0] if nums else 1) - 1))
+            self.x = min(self.cols - 1, max(0, (nums[1] if len(nums) > 1 else 1) - 1))
+        elif final == "A":
+            self.y = max(0, self.y - max(1, one))
+        elif final == "B":
+            self.y = min(self.rows - 1, self.y + max(1, one))
+        elif final == "C":
+            self.x = min(self.cols - 1, self.x + max(1, one))
+        elif final == "D":
+            self.x = max(0, self.x - max(1, one))
+        elif final == "G":
+            self.x = min(self.cols - 1, max(0, max(1, one) - 1))
+        elif final == "d":
+            self.y = min(self.rows - 1, max(0, max(1, one) - 1))
+        elif final == "J":
+            if one == 0:
+                self.clear(self.grid[self.y][self.x:])
+                for row in self.grid[self.y + 1:]:
+                    self.clear(row)
+            elif one == 1:
+                self.clear(self.grid[self.y][: self.x + 1])
+                for row in self.grid[: self.y]:
+                    self.clear(row)
+            else:
+                for row in self.grid:
+                    self.clear(row)
+        elif final == "K":
+            if one == 0:
+                self.clear(self.grid[self.y][self.x:])
+            elif one == 1:
+                self.clear(self.grid[self.y][: self.x + 1])
+            else:
+                self.clear(self.grid[self.y])
+        elif final == "X":
+            self.clear(self.grid[self.y][self.x: self.x + max(1, one)])
+        elif final == "m":
+            self.sgr(nums or [0])
+
+    def sgr(self, nums: list[int]) -> None:
+        i = 0
+        while i < len(nums):
+            n = nums[i]
+            if n == 0:
+                self.reset_pen()
+            elif n == 1:
+                self.bold = True
+            elif n == 2:
+                self.dim = True
+            elif n == 3:
+                self.italic = True
+            elif n == 4:
+                self.under = True
+            elif n == 7:
+                self.reverse = True
+            elif n == 9:
+                self.strike = True
+            elif n == 22:
+                self.bold = self.dim = False
+            elif n == 23:
+                self.italic = False
+            elif n == 24:
+                self.under = False
+            elif n == 27:
+                self.reverse = False
+            elif n == 29:
+                self.strike = False
+            elif 30 <= n <= 37:
+                self.fg = PALETTE[n - 30]
+            elif 90 <= n <= 97:
+                self.fg = PALETTE[n - 90 + 8]
+            elif n == 39:
+                self.fg = None
+            elif 40 <= n <= 47:
+                self.bg = PALETTE[n - 40]
+            elif 100 <= n <= 107:
+                self.bg = PALETTE[n - 100 + 8]
+            elif n == 49:
+                self.bg = None
+            elif n in (38, 48):
+                kind = nums[i + 1] if i + 1 < len(nums) else 0
+                if kind == 2 and i + 4 < len(nums):
+                    colour = "#%02x%02x%02x" % (nums[i + 2], nums[i + 3], nums[i + 4])
+                    i += 4
+                elif kind == 5 and i + 2 < len(nums):
+                    colour = PALETTE[nums[i + 2] % 256]
+                    i += 2
+                else:
+                    colour, i = None, i + 1
+                if n == 38:
+                    self.fg = colour
+                else:
+                    self.bg = colour
+            i += 1
+
+    # -- drawing ---------------------------------------------------------
+
+    def to_html(self, size: int, line: float) -> str:
+        out = []
+        for row in self.grid:
+            run, style = [], None
+            for c in row:
+                if c.ch == "":
+                    continue  # the far half of a wide glyph
+                if c.style() != style:
+                    if run:
+                        out.append(span(style, "".join(run)))
+                    run, style = [], c.style()
+                run.append(c.ch)
+            if run:
+                out.append(span(style, "".join(run)))
+            out.append("\n")
+        body = "".join(out).rstrip("\n")
+        return f"""<!doctype html><meta charset=utf-8><style>
+  html {{ background: #ff00ff; }}
+  body {{ margin: 0; }}
+  pre {{
+    display: inline-block; margin: 0; padding: 10px 12px;
+    background: {GROUND}; color: {INK};
+    font: {size}px/{line} {FONT};
+    font-variant-ligatures: none; -webkit-font-smoothing: antialiased;
+  }}
+  b {{ font-weight: 700 }}
+</style><pre>{body}</pre>"""
+
+
+def span(style, text: str) -> str:
+    fg, bg, bold, dim, italic, under, strike = style
+    css = []
+    if fg:
+        css.append(f"color:{fg}")
+    if bg:
+        css.append(f"background:{bg}")
+    if bold:
+        css.append("font-weight:700")
+    if dim:
+        css.append("opacity:.62")
+    if italic:
+        css.append("font-style:italic")
+    if under:
+        css.append("text-decoration:underline")
+    if strike:
+        css.append("text-decoration:line-through")
+    text = html.escape(text)
+    return f'<span style="{";".join(css)}">{text}</span>' if css else text
+
+
+def run(cmd: list[str], cols: int, rows: int, sends: list[str],
+        settle: float, wait: float) -> Screen:
+    """Give the program a terminal of its own and keep every byte it writes."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor",
+               COLUMNS=str(cols), LINES=str(rows))
+    proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
+                            env=env, start_new_session=True)
+    os.close(slave)
+
+    screen = Screen(cols, rows)
+
+    def drain(seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            r, _, _ = select.select([master], [], [], max(0.0, end - time.monotonic()))
+            if not r:
+                continue
+            try:
+                data = os.read(master, 65536)
+            except OSError:
+                return
+            if not data:
+                return
+            screen.feed(data.decode("utf8", "replace"))
+
+    try:
+        drain(settle)
+        for text in sends:
+            os.write(master, text.encode("utf8"))
+            drain(settle)
+        drain(wait)
+    finally:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.close(master)
+    return screen
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--cols", type=int, default=132)
+    ap.add_argument("--rows", type=int, default=38)
+    ap.add_argument("--send", action="append", default=[])
+    ap.add_argument("--settle", type=float, default=1.2)
+    ap.add_argument("--wait", type=float, default=2.0)
+    ap.add_argument("--size", type=int, default=15, help="font size in px")
+    ap.add_argument("--line", type=float, default=1.35, help="line height")
+    ap.add_argument("--scale", type=int, default=2)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--html", help="keep the intermediate HTML here")
+    ap.add_argument("-h", "--help", action="help")
+    ap.add_argument("cmd", nargs=argparse.REMAINDER)
+    args = ap.parse_args()
+
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        raise SystemExit(__doc__)
+
+    sends = [s.replace("\\r", "\r").replace("\\n", "\n").replace("\\t", "\t")
+             .replace("\\e", "\x1b") for s in args.send]
+
+    screen = run(cmd, args.cols, args.rows, sends, args.settle, args.wait)
+    page = screen.to_html(args.size, args.line)
+
+    out = os.path.abspath(args.out)
+    doc = args.html or out + ".html"
+    with open(doc, "w", encoding="utf8") as f:
+        f.write(page)
+
+    browser = shutil.which("chromium") or shutil.which("google-chrome-stable")
+    if not browser:
+        print(f"no browser to draw with; the page is at {doc}", file=sys.stderr)
+        return 1
+    subprocess.run([
+        browser, "--headless", f"--screenshot={out}",
+        f"--window-size={args.cols * args.size + 400},{int(args.rows * args.size * args.line) + 200}",
+        f"--force-device-scale-factor={args.scale}",
+        "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
+        f"file://{doc}",
+    ], check=True, capture_output=True)
+    # The page is magenta outside the grid, so the trim is exact rather than a guess.
+    if shutil.which("magick"):
+        subprocess.run(["magick", out, "-fuzz", "0%", "-trim", "+repage", out], check=True)
+    if not args.html:
+        os.unlink(doc)
+    print(f"{args.cols}x{args.rows} written to {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
