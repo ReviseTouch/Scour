@@ -240,38 +240,32 @@ impl From<Level> for Maintenance {
     }
 }
 
-/// How many rows a listing should print when nobody said.
+/// How many rows a listing prints when nobody said.
 ///
-/// **What fits, rather than a number somebody picked.** It was forty, which
-/// is more than most terminals are tall: the first lines scrolled away before
-/// they could be read, and the summary at the bottom — the count, the
-/// milliseconds — went with them. Forty is also arbitrary in the other
-/// direction, on a tall screen it wastes two thirds of it.
+/// **Five, because the answer is usually at the top or it is not there.**
+/// It was forty, then it was however tall the terminal was — both of them
+/// answering the wrong question. A search is not a listing to read through:
+/// either the file is in the first few rows, or the query needs another term.
+/// Forty rows of near-misses is scrollback, and it pushes the summary line —
+/// where the count and the milliseconds are — off the top of the window.
 ///
-/// So the terminal is asked. Three rows are left over for the summary line
-/// and the prompt that follows it, and the answer is clamped: five, because
-/// fewer is not a listing, and sixty, because past that a person scrolls
-/// rather than reads and the service pays for rows nobody looks at.
+/// The count is still shown in full (`5 of 881`), and the summary says how to
+/// see more. Asking for forty is one flag; getting forty unasked is a habit
+/// nobody chose.
 ///
-/// Only when stdout is a terminal. Piped into `head`, `wc` or a script the
-/// old fixed count stands — a program whose output changes with the window it
-/// was not run in is a program that cannot be scripted against.
+/// Piped into `head`, `wc` or a script the old count stands: a program whose
+/// output depends on whether a terminal was attached is a program that cannot
+/// be scripted against, and forty is what everything written so far expects.
 fn fits() -> u32 {
     const PIPED: u32 = 40;
+    const SHOWN: u32 = 5;
     #[cfg(unix)]
     {
-        // SAFETY: `isatty` reads a descriptor number and `ioctl` writes only
-        // into the `winsize` handed to it.
-        unsafe {
-            if libc::isatty(libc::STDOUT_FILENO) != 1 {
-                return PIPED;
-            }
-            let mut w: libc::winsize = std::mem::zeroed();
-            if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut w) != 0 || w.ws_row == 0 {
-                return PIPED;
-            }
-            u32::from(w.ws_row).saturating_sub(3).clamp(5, 60)
+        // SAFETY: `isatty` only reads a descriptor number.
+        if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1 {
+            return SHOWN;
         }
+        PIPED
     }
     #[cfg(not(unix))]
     {
@@ -535,14 +529,14 @@ fn build(args: &Args) -> Result<Request> {
 mod tests {
     use super::*;
 
-    /// **The listing has to end above the prompt.** Forty rows in a
-    /// twenty-four-row terminal means the first sixteen and the summary line
-    /// are gone before anybody reads them, and the summary is where the count
-    /// and the milliseconds are.
+    /// **The answer is at the top or it is not there.** Forty rows of
+    /// near-misses is scrollback, and it pushes the summary — where the count
+    /// and the milliseconds are — off the top of the window. Five, and the
+    /// summary says how to ask for more.
     #[test]
     fn the_default_count_leaves_room_for_the_summary_and_the_prompt() {
         let n = fits();
-        assert!((5..=60).contains(&n), "outside the clamp: {n}");
+        assert!((5..=40).contains(&n), "outside the range: {n}");
         // In a test the output is captured rather than a terminal, so this is
         // the piped answer — and the piped answer must be fixed. A number that
         // changed with a window the program was not run in is a number nothing

@@ -1464,3 +1464,6 @@ msgstr "  Escape          seçimi bırak, ya da bunu kapat"
 
 msgid "The colour down the left of each row is how long ago it changed: warm for minutes, cold for years."
 msgstr "Satırın solundaki renk ne kadar önce değiştiğini söyler: sıcak dakikalar, soğuk yıllar."
+
+msgid "for more"
+msgstr "daha fazlası için"

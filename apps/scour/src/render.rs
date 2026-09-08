@@ -101,7 +101,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 r.total.to_string()
             };
             eprintln!(
-                "{} of {total} in {:.2} ms{}{}",
+                "{} of {total} in {:.2} ms{}{}{}",
                 r.hits.len(),
                 r.took_us as f64 / 1000.0,
                 if r.fast_path {
@@ -120,6 +120,19 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 // fault rather than the page number's.
                 if r.rows_built > r.hits.len() as u64 * 2 {
                     format!(" · {} {}", r.rows_built, t("paths built"))
+                } else {
+                    String::new()
+                },
+                // **How to see the rest, when there is a rest.** Five rows is
+                // the right default and the wrong dead end: a person who has
+                // just been told there are 881 matches needs to know the flag
+                // exists without going to `--help` for it. Printed only when
+                // something was actually held back, so an answer that fits
+                // says nothing extra.
+                if (r.total as usize) > r.hits.len() || r.capped {
+                    // A number larger than what was just shown, or the advice
+                    // reads as "ask for what you already have".
+                    format!(" · -n {} {}", (r.hits.len() * 8).max(20), t("for more"))
                 } else {
                     String::new()
                 }
