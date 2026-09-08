@@ -15,10 +15,22 @@ in all four faces, with the numbers beside them.
 **[Releases](https://github.com/hasantr/Scour/releases)**
 
 Developed and used daily on Linux, against 4.6 million entries across an ext4
-home and an NTFS volume. Windows and macOS ports remain incomplete. The engine
-and configuration compile checks pass on both, but the full Windows build is
-currently blocked by Unix-specific trash integration. Neither port has been
-runtime-verified in this audit; see the [validation details](docs/RELIABILITY-PERFORMANCE.md#validation).
+home and an NTFS volume.
+
+**Windows: it runs.** The whole workspace builds for
+`x86_64-pc-windows-msvc` — the Unix-only pieces are behind `cfg` now, and the
+wastebasket says so rather than pretending — and the binaries were used on a
+Windows desktop on 2026-09-08: the service indexed, the command line searched,
+the query language answered. Not exhaustively tested, and three things are
+known to be untried there: the window, live watching, and network or FAT32
+volumes. There is no USN journal reader, so the first scan is a walk rather
+than a journal read; searching is the same speed, the first scan is not.
+
+**macOS: compiles, never run.** `x86_64-apple-darwin` and
+`aarch64-apple-darwin` both pass `cargo check --workspace` under
+`-D warnings`, and nothing else is claimed. A `cross` job in CI keeps all
+three honest — compiling is not running, but it is the half that can be
+checked from here.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
