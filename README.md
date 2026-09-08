@@ -14,6 +14,11 @@ in all four faces, with the numbers beside them.
 **[Documentation](https://revisetouch.com/en/docs/scour/introduction)** ·
 **[Releases](https://github.com/hasantr/Scour/releases)**
 
+> **Alpha.** Used daily on Linux against 4.6 million entries and measured
+> there; the Windows build has had one afternoon on one machine and macOS has
+> never been run. The index format may still change. Nothing here is a promise
+> yet — it is an invitation to try it and say what broke.
+
 Developed and used daily on Linux, against 4.6 million entries across an ext4
 home and an NTFS volume.
 
@@ -75,8 +80,8 @@ Download the tarball from [Releases](https://github.com/hasantr/Scour/releases),
 then:
 
 ```bash
-tar xzf scour-0.1.0-linux-x86_64.tar.gz
-cd scour-0.1.0-linux-x86_64
+tar xzf scour-0.2.0-alpha.1-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.1-linux-x86_64
 ./install.sh
 ```
 

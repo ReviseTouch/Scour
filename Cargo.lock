@@ -5008,7 +5008,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scour"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5026,11 +5026,11 @@ dependencies = [
 
 [[package]]
 name = "scour-clip"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "scour-config"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "directories",
  "scour-core",
@@ -5041,7 +5041,7 @@ dependencies = [
 
 [[package]]
 name = "scour-core"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "bitflags 2.13.1",
  "serde",
@@ -5050,11 +5050,11 @@ dependencies = [
 
 [[package]]
 name = "scour-dupes"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "scour-engine"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "crossbeam-channel",
  "parking_lot",
@@ -5069,14 +5069,14 @@ dependencies = [
 
 [[package]]
 name = "scour-export"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
 ]
 
 [[package]]
 name = "scour-gui"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5103,14 +5103,14 @@ dependencies = [
 
 [[package]]
 name = "scour-i18n"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
 ]
 
 [[package]]
 name = "scour-index-native"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "libc",
  "memchr",
@@ -5130,7 +5130,7 @@ dependencies = [
 
 [[package]]
 name = "scour-ipc"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "interprocess",
  "scour-core",
@@ -5141,7 +5141,7 @@ dependencies = [
 
 [[package]]
 name = "scour-mcp"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "humansize",
@@ -5159,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "scour-mock"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "regex",
  "scour-core",
@@ -5168,36 +5168,36 @@ dependencies = [
 
 [[package]]
 name = "scour-name"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "scour-openers"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "scour-page"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
 ]
 
 [[package]]
 name = "scour-places"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "scour-preview"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "scour-proto"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
  "scour-places",
@@ -5210,7 +5210,7 @@ dependencies = [
 
 [[package]]
 name = "scour-query"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
  "serde_json",
@@ -5218,7 +5218,7 @@ dependencies = [
 
 [[package]]
 name = "scour-settings"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5226,7 +5226,7 @@ dependencies = [
 
 [[package]]
 name = "scour-source-fs"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "crossbeam-channel",
  "ignore",
@@ -5239,7 +5239,7 @@ dependencies = [
 
 [[package]]
 name = "scour-thumbs"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "serde",
  "tempfile",
@@ -5247,14 +5247,14 @@ dependencies = [
 
 [[package]]
 name = "scour-trash"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scour-tui"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5278,21 +5278,21 @@ dependencies = [
 
 [[package]]
 name = "scour-ui"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scour-watch"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "scour-web"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -5312,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "scourd"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",

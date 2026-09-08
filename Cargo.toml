@@ -34,7 +34,12 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.1.0"
+# **Alpha, and the number says so.** `0.2.0-alpha.1` rather than `0.2.0`:
+# the Linux side is used daily against 4.6 M entries, but the Windows build
+# has had one afternoon on one machine, macOS has never been run, and the
+# performance round that halved the service's CPU landed the same week. A
+# version without a suffix is a promise about all of that.
+version      = "0.2.0-alpha.1"
 edition      = "2024"
 rust-version = "1.88"          # rmcp's MSRV, the highest of any dependency
 license      = "MIT OR Apache-2.0"
