@@ -1641,29 +1641,13 @@
     </dl>
 
     <h2 data-t="Why it looks like this"></h2>
-    <p class="help-lead" id="blurb" data-t-html="Every keystroke goes to &lt;code&gt;scourd&lt;/code&gt;, and every row and every number comes back from it. That is not a speed figure but a &lt;b&gt;permission&lt;/b&gt;: results, counters, filter counts and the time distribution can all be recomputed on every keystroke. The design is built on top of that."></p>
-    <div class="legend">
-      <section>
-        <h3 data-t="The freshness ruler"></h3>
-        <p data-t="The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column."></p>
-      </section>
-      <section>
-        <h3 data-t="The query is the interface"></h3>
-        <p data-t-html="Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: &lt;code&gt;kind:&lt;/code&gt; &lt;code&gt;under:&lt;/code&gt; &lt;code&gt;dm:&lt;/code&gt;. Clicking a filter adds the term to the &lt;em&gt;text&lt;/em&gt;, not to a hidden state."></p>
-      </section>
-      <section>
-        <h3 data-t="The measurement is not hidden"></h3>
-        <p data-t-html="&lt;code&gt;0.29 ms · 4,864 rows read&lt;/code&gt; — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so."></p>
-      </section>
-      <section>
-        <h3 data-t="The report: bytes by age"></h3>
-        <p data-t-html="Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; &lt;b&gt;25 GB nobody has touched in a year&lt;/b&gt; does. No tool has this, TreeSize included, because none of them has a date per row to hand."></p>
-      </section>
-      <section>
-        <h3 data-t="The time ribbon"></h3>
-        <p data-t-html="The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a &lt;code&gt;dm:&lt;/code&gt; term to the query. Possible only because filter counts take microseconds."></p>
-      </section>
-    </div>
+    <!-- **The manifesto that used to close this panel is gone.** Five headings
+         on why the freshness ruler exists, what the measurement line proves and
+         what TreeSize cannot do — true, and none of it what somebody wants at the
+         moment they press `?`. It ran past the panel in the window too. The
+         reasoning lives in the documentation now; what stays here is the query
+         language and the keys, which are the parts that cannot be discovered by
+         clicking. -->
 
     <!-- **Who made it, said once and quietly.**
          A search window is not a landing page, so this is a line at the foot

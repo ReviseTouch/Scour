@@ -1380,3 +1380,33 @@ msgstr "BİRLİKTE AÇ"
 
 msgid "nothing on this machine claims it"
 msgstr "bu makinede bu türü açan bir program yok"
+
+msgid "A word matches the name. Several words mean all of them."
+msgstr "Tek kelime ada bakar. Birden çok kelime hepsinin birden geçmesi demek."
+
+msgid "!word            leave it out"
+msgstr "!kelime          bunu dışla"
+
+msgid ""two words"      as written"
+msgstr ""iki kelime"     yazıldığı gibi"
+
+msgid "*.pdf  rep?rt    wildcards"
+msgstr "*.pdf  rap?r     joker"
+
+msgid "ext:pdf          extension"
+msgstr "ext:pdf          uzantı"
+
+msgid "kind:image       kind: image, video, code, doc, archive…"
+msgstr "kind:image       tür: image, video, code, doc, archive…"
+
+msgid "size:>10mb       also <, and kb mb gb"
+msgstr "size:>10mb       < de olur; kb mb gb"
+
+msgid "dm:7d            changed in the last 7 days — also h, w, m, y"
+msgstr "dm:7d            son 7 günde değişen — h, w, m, y de olur"
+
+msgid "under:/home/a    inside that folder"
+msgstr "under:/home/a    o klasörün içinde"
+
+msgid "Escape closes this, or the × in the corner."
+msgstr "Escape kapatır, ya da köşedeki ×."

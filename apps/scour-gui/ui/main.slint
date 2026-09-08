@@ -325,11 +325,19 @@ component Sheet inherits Rectangle {
     in property <length> room-w;
     in property <length> room-h;
 
+    /// Pressed the ×, or clicked outside it.
+    callback dismissed();
+
     visible: root.open;
     x: root.room-w - self.width - 20px;
     y: 64px;
     width: min(400px, root.room-w - 40px);
-    height: min(560px, root.room-h - 120px);
+    // **As tall as what is in it, not as tall as it is allowed to be.** It was
+    // 560px whatever it held, so the help panel — the longest of the three —
+    // ran off its own bottom edge and sat over the ribbon with no way to
+    // scroll or to see the rest. The ceiling is still there for the day
+    // something genuinely long goes in one.
+    height: min(root.room-h - 120px, body.preferred-height + 32px);
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.line;
@@ -342,8 +350,34 @@ component Sheet inherits Rectangle {
     // it on top, and the panels are the window's last three children.
     
 
-    VerticalLayout {
+    // **A way out that is visible.** Escape closed it and nothing said so —
+    // a panel with no × reads as something that got stuck, and this one
+    // covers the list while it is up. Drawn over the layout rather than in
+    // it, so the title keeps the full width and the glyph sits in the corner
+    // where a person looks for it.
+    shut := TouchArea {
+        x: parent.width - 30px;
+        y: 10px;
+        width: 22px;
+        height: 22px;
+        mouse-cursor: pointer;
+        clicked => { root.dismissed(); }
+        Rectangle {
+            background: shut.has-hover ? Theme.hover : transparent;
+            border-radius: 3px;
+            Text {
+                text: "×";
+                color: shut.has-hover ? Theme.ink : Theme.ink-3;
+                font-size: 16px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    body := VerticalLayout {
         padding: 16px;
+        padding-right: 34px;
         spacing: 8px;
 
         Text {
@@ -3780,6 +3814,7 @@ export component MainWindow inherits Window {
         Sheet {
             title: root.help-title;
             open: root.panel == "help";
+            dismissed => { root.panel = ""; }
             room-w: root.width - 40px;
             room-h: root.height - 40px;
 
@@ -3836,6 +3871,7 @@ export component MainWindow inherits Window {
         Sheet {
             title: root.lang-title;
             open: root.panel == "language";
+            dismissed => { root.panel = ""; }
             room-w: root.width - 40px;
             room-h: root.height - 40px;
 
@@ -3855,6 +3891,7 @@ export component MainWindow inherits Window {
         Sheet {
             title: root.rules-title;
             open: root.panel == "rules";
+            dismissed => { root.panel = ""; }
             room-w: root.width - 40px;
             room-h: root.height - 40px;
             // **The field takes the focus when the panel opens.** Clicking it

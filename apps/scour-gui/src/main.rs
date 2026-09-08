@@ -4435,24 +4435,32 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     // explanation written for this window. **Stripped of the markup they
     // carry**: the catalogue is shared with a page that hangs a stylesheet on
     // `<code>` and `<b>`, and this window has none, so it was showing tags.
+    // **Help, not a manifesto.** This was eleven paragraphs explaining why the
+    // freshness ruler exists, what the measurement line proves and what
+    // TreeSize cannot do — true, and none of it what somebody wants at the
+    // moment they press `?`. It also ran off the bottom of its own panel.
+    //
+    // What a person wants there is the query language, because that is the
+    // one thing in this window that cannot be discovered by clicking. The
+    // reasoning moved to the documentation, where somebody who wants it goes
+    // looking; here are the terms, and nothing else.
     window.set_help_body(
         [
-            "A word on its own matches the name. Put <code>!</code> in front of any term to exclude it, and write several to mean all of them at once.",
-            "The freshness ruler",
-            "The three pixels down the left of each row say in colour when the file last changed. The engine already stores rows in date order, so an unbroken spectrum runs the length of the list: warm yellow for a moment ago, cold slate for years ago. You can see where the fresh part is without reading a column.",
-            "The query is the interface",
-            "Nothing to tick. The text stays as it was typed — copyable, pasteable into MCP — but the terms it recognises are coloured: <code>kind:</code> <code>under:</code> <code>dm:</code>. Clicking a filter adds the term to the <em>text</em>, not to a hidden state.",
-            "The measurement is not hidden",
-            "<code>0.29 ms · 4,864 rows read</code> — the real numbers the engine reports. Instead of claiming to be fast it shows how much work it did; the day it slows down, the interface is the first thing that says so.",
-            "The report: bytes by age",
-            "Each folder's bar shows how much of its bytes are fresh and how much are stale. Size alone does not tell you what to delete; <b>25 GB nobody has touched in a year</b> does. No tool has this, TreeSize included, because none of them has a date per row to hand.",
-            "The time ribbon",
-            "The date distribution of the matching set, redrawn on every keystroke. Clicking a bar adds a <code>dm:</code> term to the query. Possible only because filter counts take microseconds.",
+            "A word matches the name. Several words mean all of them.",
+            "!word            leave it out",
+            "\"two words\"      as written",
+            "*.pdf  rep?rt    wildcards",
+            "ext:pdf          extension",
+            "kind:image       kind: image, video, code, doc, archive…",
+            "size:>10mb       also <, and kb mb gb",
+            "dm:7d            changed in the last 7 days — also h, w, m, y",
+            "under:/home/a    inside that folder",
+            "Escape closes this, or the × in the corner.",
         ]
         .iter()
         .map(|line| plain(&t(cat, line)))
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("\n")
         .into(),
     );
     let langs: Vec<Facet> = [("English", "en"), ("Türkçe", "tr")]
