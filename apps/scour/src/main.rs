@@ -27,7 +27,7 @@ struct Args {
     #[arg(long, global = true)]
     json: bool,
     /// How many results. Must come *before* the query.
-    #[arg(long, short = 'n', default_value_t = 40)]
+    #[arg(long, short = 'n', default_value_t = fits())]
     limit: u32,
     /// What to order by. Must come *before* the query.
     #[arg(long, short, default_value = "relevance")]
@@ -56,7 +56,7 @@ enum Command {
         /// Oldest, smallest or A-Z first.
         #[arg(long, short)]
         ascending: bool,
-        #[arg(long, short = 'n', default_value_t = 40)]
+        #[arg(long, short = 'n', default_value_t = fits())]
         limit: u32,
         #[arg(long, short, default_value_t = 0)]
         offset: u32,
@@ -237,6 +237,45 @@ impl From<Level> for Maintenance {
             Level::Compact => Maintenance::Compact,
             Level::Rebuild => Maintenance::Rebuild,
         }
+    }
+}
+
+/// How many rows a listing should print when nobody said.
+///
+/// **What fits, rather than a number somebody picked.** It was forty, which
+/// is more than most terminals are tall: the first lines scrolled away before
+/// they could be read, and the summary at the bottom — the count, the
+/// milliseconds — went with them. Forty is also arbitrary in the other
+/// direction, on a tall screen it wastes two thirds of it.
+///
+/// So the terminal is asked. Three rows are left over for the summary line
+/// and the prompt that follows it, and the answer is clamped: five, because
+/// fewer is not a listing, and sixty, because past that a person scrolls
+/// rather than reads and the service pays for rows nobody looks at.
+///
+/// Only when stdout is a terminal. Piped into `head`, `wc` or a script the
+/// old fixed count stands — a program whose output changes with the window it
+/// was not run in is a program that cannot be scripted against.
+fn fits() -> u32 {
+    const PIPED: u32 = 40;
+    #[cfg(unix)]
+    {
+        // SAFETY: `isatty` reads a descriptor number and `ioctl` writes only
+        // into the `winsize` handed to it.
+        unsafe {
+            if libc::isatty(libc::STDOUT_FILENO) != 1 {
+                return PIPED;
+            }
+            let mut w: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut w) != 0 || w.ws_row == 0 {
+                return PIPED;
+            }
+            u32::from(w.ws_row).saturating_sub(3).clamp(5, 60)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        PIPED
     }
 }
 
@@ -490,4 +529,24 @@ fn build(args: &Args) -> Result<Request> {
             unreachable!("handled before connecting")
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The listing has to end above the prompt.** Forty rows in a
+    /// twenty-four-row terminal means the first sixteen and the summary line
+    /// are gone before anybody reads them, and the summary is where the count
+    /// and the milliseconds are.
+    #[test]
+    fn the_default_count_leaves_room_for_the_summary_and_the_prompt() {
+        let n = fits();
+        assert!((5..=60).contains(&n), "outside the clamp: {n}");
+        // In a test the output is captured rather than a terminal, so this is
+        // the piped answer — and the piped answer must be fixed. A number that
+        // changed with a window the program was not run in is a number nothing
+        // can be scripted against.
+        assert_eq!(n, 40, "piped output should not follow a terminal");
+    }
 }

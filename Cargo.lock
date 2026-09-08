@@ -5013,6 +5013,7 @@ dependencies = [
  "anyhow",
  "clap",
  "humansize",
+ "libc",
  "scour-config",
  "scour-core",
  "scour-i18n",

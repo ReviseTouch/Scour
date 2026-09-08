@@ -31,3 +31,9 @@ anyhow       = { workspace = true }
 clap         = { workspace = true }
 serde_json   = { workspace = true }
 humansize    = { workspace = true }
+
+# **For one call: how tall the terminal is.** A listing that scrolls its own
+# first line off the top is a listing nobody read the beginning of, and the
+# only way to know where to stop is to ask. `TIOCGWINSZ` is the whole use.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
