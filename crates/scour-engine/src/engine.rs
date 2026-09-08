@@ -95,6 +95,57 @@ pub struct EngineOptions {
     pub poll_interval: Duration,
     /// Safety pass even when a source appears quiet. Pulses are only hints.
     pub reconcile_interval: Duration,
+    /// How long a [`Change::Rescan`] waits for its neighbours before it walks.
+    ///
+    /// **Because a walk is the expensive kind of change and they arrive in
+    /// clusters.** Every fresh directory a watcher sees asks for one, and a
+    /// walk ends in a commit — a segment and a manifest fsync — however little
+    /// it found. Measured live over twelve minutes with nothing but a build
+    /// running: **157 subtree walks, 13.3 a minute, 0–1 ms each, 0–81,920
+    /// entries, and every one of them committing.** Thirty-two of those
+    /// segments held 48,829 bytes between them and cost the worker 39.4 MB of
+    /// block writes.
+    ///
+    /// [`coalesce`] already merges the walks that happen to be in one channel
+    /// batch, and that is the whole of what it can do: a `cargo build` writing
+    /// a directory every few hundred milliseconds never puts two in the same
+    /// batch. Waiting a moment for the next one is what turns a burst into a
+    /// walk of the parent.
+    ///
+    /// [`Change::Rescan`]: scour_core::Change::Rescan
+    pub walk_debounce: Duration,
+    /// The ceiling on that wait, however long the cluster keeps arriving.
+    ///
+    /// A trickle that never stops would otherwise never settle, and a walk
+    /// that never runs is a subtree the index does not have. This is the whole
+    /// of the latency the debounce can cost: a file created inside a directory
+    /// that did not exist a moment ago is findable this much later than it was,
+    /// and no later.
+    pub walk_debounce_cap: Duration,
+    /// How often [`Engine::await_change`] may wake the clients waiting in it.
+    ///
+    /// **[`Status::revision`] is exact and this is not a rate limit on it** —
+    /// it is a rate limit on the push. A client that asks gets the current
+    /// number and the current counts, always; what this bounds is how often
+    /// one that is asleep is woken to ask.
+    ///
+    /// Because the revision moves faster than the index can be written and
+    /// every bump costs a client a full re-query. Measured: revision 5,259 →
+    /// 5,477 in 62 s and 5,583 → 5,757 in 28 s — 3.5 to 6.2 a second, while
+    /// commits are at most one a second — the excess being one bump per
+    /// subtree walk and one per removal batch. Against **20.5–21 ms of service
+    /// CPU per revision** for a single attached window (447 ticks over 218
+    /// revisions, 364 over 174), that is 7–13% of a core spent telling one
+    /// idle page what it already had.
+    ///
+    /// Deliberately the same number as [`EngineOptions::commit_watched`] and
+    /// deliberately not that field: what a waiter is told about arrives in a
+    /// commit, so waking faster than the commit clock cannot show anything
+    /// new — but `commit_watched` is a decision about *writing* and this is a
+    /// decision about *waking*, and one must be changeable without the other.
+    ///
+    /// Zero turns it off: every bump wakes every waiter, as it did before.
+    pub await_hold: Duration,
 }
 
 impl Default for EngineOptions {
@@ -116,6 +167,21 @@ impl Default for EngineOptions {
             idle_after: Duration::from_secs(20),
             poll_interval: Duration::from_secs(60),
             reconcile_interval: Duration::from_secs(1_800),
+            // Long enough to catch the cluster, short enough that nobody
+            // counts it out loud. The measured arrival rate is 13.3 walks a
+            // minute in bursts — 22 in five seconds and 58 in seven were both
+            // recorded — so half a second of quiet is a real gap and not a
+            // hopeful one.
+            walk_debounce: Duration::from_millis(500),
+            // Three seconds is the worst a file inside a brand-new directory
+            // can wait, and it is deliberately smaller than `commit_idle`:
+            // the walk that finds it is not the slowest step on its way to
+            // being findable, and this must not become the slowest one.
+            walk_debounce_cap: Duration::from_secs(3),
+            // `commit_watched`, exactly, and for the reason given on the
+            // field: a waiter cannot be shown anything the index has not
+            // written, and it is not written more often than that.
+            await_hold: Duration::from_millis(1_000),
         }
     }
 }
@@ -177,6 +243,14 @@ struct Shared {
     /// landing in that gap without it is a change nobody hears about until the
     /// timeout, which is the one failure a live list must not have.
     waiters: (Mutex<()>, Condvar),
+    /// When they were last woken, and whether a bump has been held since.
+    ///
+    /// See [`EngineOptions::await_hold`]. The flag is what the worker loop
+    /// reads to know it owes a wake-up: a bump held back is not a bump
+    /// dropped, and the deadline that delivers it is the one thing that makes
+    /// the difference.
+    wake_at: Mutex<Instant>,
+    wake_owed: AtomicBool,
     /// The ordered hits of whichever query was asked for last.
     prepared: RwLock<Option<Prepared>>,
     /// When one was last asked for, so misses cannot queue one each.
@@ -346,12 +420,64 @@ impl Shared {
     ///
     /// Bumped under the waiters' lock, so a client that has read the revision
     /// and not yet gone to sleep on it is not overtaken.
+    ///
+    /// **The number moves now; the wake-up may not.** See
+    /// [`EngineOptions::await_hold`] — the revision is what anyone who asks is
+    /// told, and it stays exact, but a client that is *asleep* on it is woken
+    /// at most once per hold.
     fn touched(&self) {
         {
             let _held = self.waiters.0.lock();
             self.revision.fetch_add(1, Ordering::Release);
         }
+        self.announce(Instant::now());
+    }
+
+    /// The same, for a change somebody asked for by name.
+    ///
+    /// An emptied trash and an explicit flush are answers to a command that
+    /// was just typed, not churn from a watcher, and the window that sent the
+    /// command is the one waiting to see it. They are also bounded by how fast
+    /// a person can ask, which is what the hold exists to bound. So they skip
+    /// it — and reset it, so the next held bump measures its second from here.
+    fn touched_now(&self) {
+        {
+            let _held = self.waiters.0.lock();
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+        *self.wake_at.lock() = Instant::now();
+        self.wake_owed.store(false, Ordering::Relaxed);
         self.waiters.1.notify_all();
+    }
+
+    /// Wake the waiters, unless one was woken less than a hold ago.
+    ///
+    /// Returns whether it did. A bump that is held back sets `wake_owed`, and
+    /// the worker loop carries a deadline for exactly that: the announcement
+    /// is late, never missing. Announcing from *there* rather than from a
+    /// timer in the request thread is what keeps `watchers` above zero — a
+    /// waiter that went away to sleep would put the commit clock back on
+    /// `commit_idle`, and fifteen seconds is not a delay a live list survives.
+    fn announce(&self, now: Instant) -> bool {
+        let hold = self.opts.await_hold;
+        let mut at = self.wake_at.lock();
+        if hold.is_zero() || now.saturating_duration_since(*at) >= hold {
+            *at = now;
+            self.wake_owed.store(false, Ordering::Relaxed);
+            drop(at);
+            self.waiters.1.notify_all();
+            true
+        } else {
+            self.wake_owed.store(true, Ordering::Relaxed);
+            false
+        }
+    }
+
+    /// When a held-back wake-up comes due, if one is owed.
+    fn wake_due(&self) -> Option<Instant> {
+        self.wake_owed
+            .load(Ordering::Relaxed)
+            .then(|| *self.wake_at.lock() + self.opts.await_hold)
     }
 }
 
@@ -386,6 +512,7 @@ impl Engine {
         // answer to "what does the walk skip" and not two that can drift.
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let source_count = sources.len();
+        let await_hold = opts.await_hold;
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -402,6 +529,14 @@ impl Engine {
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(0),
             waiters: (Mutex::new(()), Condvar::new()),
+            // A hold ago, so the first change of the session is announced the
+            // moment it happens rather than a second after start-up.
+            wake_at: Mutex::new(
+                Instant::now()
+                    .checked_sub(await_hold)
+                    .unwrap_or_else(Instant::now),
+            ),
+            wake_owed: AtomicBool::new(false),
             watchers: AtomicU32::new(0),
             prepared: RwLock::new(None),
             prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
@@ -605,7 +740,7 @@ impl Engine {
         // the worker so a request never blocks for minutes.
         if level == Maintenance::Flush {
             let report = self.shared.index.maintain(level)?;
-            self.shared.touched();
+            self.shared.touched_now();
             return Ok(report);
         }
         self.send(Job::Maintain(level))?;
@@ -739,7 +874,7 @@ impl Engine {
                 .map(|path| Change::RemoveSubtree { path });
             self.shared.index.apply(&mut changes)?;
             self.shared.index.commit()?;
-            self.shared.touched();
+            self.shared.touched_now();
         }
         Ok(n)
     }
@@ -1328,6 +1463,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     // again, so the volume stays as stale as it was until a person types
     // `scour rescan`.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
+    // Subtree walks asked for and waiting for their neighbours.
+    let mut pending_walks = PendingWalks::default();
     let mut pulses = Pulses::new(
         shared.sources.len(),
         shared.opts.poll_interval,
@@ -1356,7 +1493,18 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         // asks again immediately, and again, for the whole fifteen seconds.
         // Each deadline has to be the moment the body would actually *do*
         // something.
+        // **The wake-up a bump was not allowed to send.**
+        //
+        // See [`EngineOptions::await_hold`]: a revision that moved during the
+        // quiet second bumped the number and did not wake anybody, and this is
+        // the other half of that — the moment the second is over, whoever is
+        // asleep is told. First thing in the turn rather than last, so a
+        // deadline that has already come due is paid here instead of being
+        // asked for again below and floored.
         let now = Instant::now();
+        if shared.wake_due().is_some_and(|at| at <= now) {
+            shared.announce(now);
+        }
         let left = |at: Instant| at.saturating_duration_since(now);
         let mut wake = Duration::from_secs(10);
         // Which deadline set the wake-up, when asked.
@@ -1441,6 +1589,20 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         }
         if let Some(at) = retries.iter().map(|(_, at, _)| *at).min() {
             deadline!("retry", at);
+        }
+        // The held walks. Cleared by the flush below in the same turn this
+        // fires, so it cannot be the deadline that spins: an entry that reads
+        // zero here is walked before the loop comes round again.
+        if let Some(at) =
+            pending_walks.next_due(shared.opts.walk_debounce, shared.opts.walk_debounce_cap)
+        {
+            deadline!("walk", at);
+        }
+        // The held wake-up. Already paid if it was due — the block above runs
+        // before this one for exactly that reason — so what is left here is
+        // always in the future.
+        if let Some(at) = shared.wake_due() {
+            deadline!("announce", at);
         }
         // A backstop, not a schedule. If a deadline above is ever computed
         // wrong the cost is fifty turns a second rather than a spun core, and
@@ -1588,58 +1750,79 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     // A watcher that lost track becomes a walk of the subtree
                     // it lost. Every platform loses track differently; this is
                     // the one place that has to care.
+                    //
+                    // Held rather than run: the burst that makes these
+                    // expensive arrives spread over seconds, one request per
+                    // directory a build creates, and `coalesce` can only merge
+                    // what shares a batch. See [`PendingWalks`]; the walking
+                    // happens below, once the paths have stopped arriving.
+                    let now = Instant::now();
                     for path in coalesce(walks) {
-                        // An empty path means "I lost track and cannot say
-                        // where" — inotify exhausting its watches, a kernel
-                        // buffer overflowing. It used to match no source and be
-                        // dropped, which is the worst possible reading: the one
-                        // message that exists to say the index is drifting was
-                        // the one message thrown away, and the drift then
-                        // continued silently until someone rescanned by hand.
-                        if path.is_empty() {
-                            for i in 0..shared.sources.len() {
-                                if !scan(&shared, &mut pulses, i, None) {
-                                    schedule_retry(&mut retries, &pulses, i);
-                                }
-                            }
-                        } else if let Some(i) = owner_of(&shared, &path) {
-                            // **Watched before it is walked, and the order is
-                            // the whole point.** A walk is a snapshot; a watch
-                            // is everything after it. The other way round —
-                            // walk it, then watch it, because now we know it is
-                            // real — leaves the gap between them covered by
-                            // neither, which is the same race the walk exists
-                            // to close, moved rather than removed.
-                            //
-                            // Measured on the live index, having got it
-                            // backwards first: five thousand files written into
-                            // two hundred fresh directories left **1,260 of
-                            // them missing**, and not scattered — packages 32
-                            // to 82, one unbroken run, which is the window in
-                            // which the shell loop was fastest. Watching first:
-                            // 5,000 of 5,000.
-                            //
-                            // Watching something about to be walked costs a
-                            // duplicate upsert at worst, and an upsert is by
-                            // identity. Where the cover was rebuilt shallow
-                            // this is also the only way anything below here is
-                            // ever seen again; everywhere else it is a no-op.
-                            for (src, h) in shared.watches.lock().iter() {
-                                if *src == i {
-                                    h.cover(&path);
-                                }
-                            }
-                            if !scan(&shared, &mut pulses, i, Some(path.clone())) {
-                                schedule_retry(&mut retries, &pulses, i);
-                            }
-                        }
-                        dirty = true;
-                        idle_done = false;
+                        pending_walks.add(&path, now);
                     }
                 }
                 Err(_) => break,
             },
             default(wake) => {}
+        }
+
+        // The walks whose neighbours have stopped arriving.
+        //
+        // Here rather than in the arm that received them, because the moment
+        // they become due is usually a moment when nothing arrived at all —
+        // that is the entire point of waiting for one.
+        for path in pending_walks.take_due(
+            Instant::now(),
+            shared.opts.walk_debounce,
+            shared.opts.walk_debounce_cap,
+        ) {
+            // An empty path means "I lost track and cannot say where" —
+            // inotify exhausting its watches, a kernel buffer overflowing. It
+            // used to match no source and be dropped, which is the worst
+            // possible reading: the one message that exists to say the index is
+            // drifting was the one message thrown away, and the drift then
+            // continued silently until someone rescanned by hand.
+            if path.is_empty() {
+                for i in 0..shared.sources.len() {
+                    if !scan(&shared, &mut pulses, i, None) {
+                        schedule_retry(&mut retries, &pulses, i);
+                    }
+                }
+            } else if let Some(i) = owner_of(&shared, &path) {
+                // **Watched before it is walked, and the order is the whole
+                // point.** A walk is a snapshot; a watch is everything after
+                // it. The other way round — walk it, then watch it, because now
+                // we know it is real — leaves the gap between them covered by
+                // neither, which is the same race the walk exists to close,
+                // moved rather than removed.
+                //
+                // Measured on the live index, having got it backwards first:
+                // five thousand files written into two hundred fresh
+                // directories left **1,260 of them missing**, and not scattered
+                // — packages 32 to 82, one unbroken run, which is the window in
+                // which the shell loop was fastest. Watching first: 5,000 of
+                // 5,000.
+                //
+                // Watching something about to be walked costs a duplicate
+                // upsert at worst, and an upsert is by identity. Where the
+                // cover was rebuilt shallow this is also the only way anything
+                // below here is ever seen again; everywhere else it is a no-op.
+                //
+                // The debounce does not weaken this: covering happens when the
+                // walk does, and everything the watcher reports in the meantime
+                // still flows through `changes` as it always did.
+                for (src, h) in shared.watches.lock().iter() {
+                    if *src == i {
+                        h.cover(&path);
+                    }
+                }
+                if !scan(&shared, &mut pulses, i, Some(path.clone())) {
+                    schedule_retry(&mut retries, &pulses, i);
+                }
+            }
+            dirty = true;
+            idle_done = false;
+            last_busy = Instant::now();
         }
 
         // The pulses, read outside the wait rather than inside it.
@@ -1933,6 +2116,127 @@ fn coalesce(paths: Vec<String>) -> Vec<String> {
     scour_core::PrefixSet::new(paths).into_paths()
 }
 
+/// Walks asked for and not run yet, and when each was first and last asked for.
+///
+/// **[`coalesce`] can only merge what arrived together, and the requests do not
+/// arrive together.** They arrive as a `cargo build` or a `git clone` creates
+/// directories, a few hundred milliseconds apart, so each one is its own
+/// channel batch, its own walk, its own segment and its own manifest fsync.
+/// Measured live over twelve minutes: **157 subtree walks, 13.3 a minute, 0–1
+/// ms of walking each, every one of them committing** — the walking is free and
+/// the writing is not.
+///
+/// So a walk waits [`EngineOptions::walk_debounce`] for its neighbours before
+/// it runs, and the neighbours that arrive in that window either join it or
+/// replace it with their common parent. Nothing is dropped: a request either
+/// runs or is covered by an ancestor that runs, and
+/// [`EngineOptions::walk_debounce_cap`] is the whole of the delay either can
+/// cost.
+#[derive(Default)]
+struct PendingWalks {
+    /// Path, first asked, last asked.
+    ///
+    /// A `Vec` and a linear scan rather than a map, because the map would have
+    /// to be walked anyway to find the earliest deadline and this list is
+    /// tiny: the bursts that make the debounce worth having are 22 requests in
+    /// five seconds and 58 in seven, and they reduce to one or two paths *as
+    /// they arrive* — a request under a path already waiting never becomes an
+    /// entry of its own.
+    at: Vec<(String, Instant, Instant)>,
+}
+
+impl PendingWalks {
+    /// Note that `path` wants walking, merging it with what is already waiting.
+    fn add(&mut self, path: &str, now: Instant) {
+        // Normalised the way `PrefixSet` normalises, so `/a/` and `/a` are one
+        // entry and `/` is the empty path — which is what the caller already
+        // reads as "walk everything".
+        let path = path.trim_end_matches('/');
+        if path.is_empty() {
+            // A watcher that lost track and cannot say where. Walking every
+            // source covers every request in here by definition, and it does
+            // not wait: this is the one message that says the index is
+            // drifting, and the drift continues until it is answered.
+            self.at.clear();
+            self.at.push((String::new(), now, now));
+            return;
+        }
+        if let Some(e) = self
+            .at
+            .iter_mut()
+            .find(|(p, _, _)| scour_core::under(path, p))
+        {
+            // Already covered by a walk that is waiting — the same path, or an
+            // ancestor of it. Its clock is refreshed rather than a second entry
+            // made, because this arrival is more of the same churn and the
+            // point is to let it settle. The cap is what stops that being
+            // unbounded, and it is measured from *its* first arrival, which is
+            // no later than this one.
+            e.2 = now;
+            return;
+        }
+        // The other direction: this path covers some of what is waiting. Those
+        // entries go, and the earliest first-asked among them comes with it, so
+        // absorbing a request cannot postpone the deadline it already had.
+        let mut first = now;
+        self.at.retain(|(p, f, _)| {
+            if scour_core::under(p, path) {
+                first = first.min(*f);
+                false
+            } else {
+                true
+            }
+        });
+        self.at.push((path.to_owned(), first, now));
+    }
+
+    /// When the earliest of these has waited long enough.
+    fn next_due(&self, debounce: Duration, cap: Duration) -> Option<Instant> {
+        self.at
+            .iter()
+            .map(|(p, f, l)| Self::due_at(p, *f, *l, debounce, cap))
+            .min()
+    }
+
+    /// Take the walks that have waited long enough, reduced.
+    ///
+    /// Whatever is left that a taken path covers goes with it: the walk about
+    /// to run is that request's walk too, and leaving it behind would run the
+    /// same walk again a moment later.
+    fn take_due(&mut self, now: Instant, debounce: Duration, cap: Duration) -> Vec<String> {
+        let mut due: Vec<String> = Vec::new();
+        self.at.retain(|(p, f, l)| {
+            if Self::due_at(p, *f, *l, debounce, cap) <= now {
+                due.push(p.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if due.is_empty() {
+            return due;
+        }
+        self.at
+            .retain(|(p, _, _)| !due.iter().any(|d| scour_core::under(p, d)));
+        coalesce(due)
+    }
+
+    /// Quiet for `debounce`, or waiting since `cap` ago, whichever comes first.
+    fn due_at(
+        path: &str,
+        first: Instant,
+        last: Instant,
+        debounce: Duration,
+        cap: Duration,
+    ) -> Instant {
+        if path.is_empty() {
+            // "I lost track" does not wait.
+            return first;
+        }
+        (last + debounce).min(first + cap)
+    }
+}
+
 /// Walk one source and reconcile what it holds.
 /// Walk one source, and say whether the walk could see what it came for.
 ///
@@ -2195,10 +2499,25 @@ impl EntrySink for ToIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::coalesce;
+    use super::{PendingWalks, coalesce};
+    use std::time::{Duration, Instant};
 
     fn c(v: &[&str]) -> Vec<String> {
         coalesce(v.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    const DEBOUNCE: Duration = Duration::from_millis(500);
+    const CAP: Duration = Duration::from_secs(3);
+
+    /// The clock, without one: every instant this file cares about is relative
+    /// to when the first request arrived, and a test that slept for them would
+    /// take twelve seconds to assert what a subtraction can.
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
+    fn due(w: &mut PendingWalks, base: Instant, ms: u64) -> Vec<String> {
+        w.take_due(at(base, ms), DEBOUNCE, CAP)
     }
 
     #[test]
@@ -2237,5 +2556,135 @@ mod tests {
             vec!["/a"],
             "and the slash is normalised away"
         );
+    }
+
+    #[test]
+    fn nothing_is_walked_while_the_requests_are_still_arriving() {
+        // The measured shape: a request every few hundred milliseconds as a
+        // build creates directories. Each one is its own channel batch, so
+        // `coalesce` never sees two together — this is what does.
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        for ms in [0, 100, 200, 300, 400] {
+            w.add("/a/pkg", at(t, ms));
+            assert!(
+                due(&mut w, t, ms).is_empty(),
+                "walked at {ms} ms, while the cluster was still arriving"
+            );
+        }
+        assert!(due(&mut w, t, 800).is_empty(), "400 ms of quiet is not 500");
+        assert_eq!(due(&mut w, t, 900), vec!["/a/pkg"], "one walk for five");
+        assert!(
+            due(&mut w, t, 5_000).is_empty(),
+            "and it is not walked twice"
+        );
+    }
+
+    #[test]
+    fn a_trickle_is_walked_at_the_cap_however_long_it_goes_on() {
+        // Without this the debounce is not a delay, it is a cancellation: a
+        // build that writes a directory every hundred milliseconds for a
+        // minute would leave the subtree out of the index for the minute.
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        let mut walked_at = None;
+        for ms in (0..6_000).step_by(100) {
+            w.add("/a/pkg", at(t, ms));
+            if !due(&mut w, t, ms).is_empty() && walked_at.is_none() {
+                walked_at = Some(ms);
+            }
+        }
+        assert_eq!(
+            walked_at,
+            Some(CAP.as_millis() as u64),
+            "a request under a trickle must walk at the cap and not later"
+        );
+    }
+
+    #[test]
+    fn a_request_absorbed_by_a_parent_keeps_the_older_deadline() {
+        // The trap in merging: `/a/pkg/x` has been held since zero by a trickle
+        // of its own descendants, and at 2,900 the parent arrives and swallows
+        // it. If the merged entry took the *new* first-asked, the cap would
+        // restart and a request that had 100 ms of patience left would be given
+        // 3 s more — the debounce would be postponing without bound, which is
+        // the one thing the cap exists to prevent.
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        for ms in (0..2_900).step_by(100) {
+            w.add("/a/pkg/x", at(t, ms));
+        }
+        w.add("/a/pkg", at(t, 2_900));
+        assert!(due(&mut w, t, 2_950).is_empty());
+        assert_eq!(
+            due(&mut w, t, 3_000),
+            vec!["/a/pkg"],
+            "the parent inherited the child's cap and walked at it"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_runs_takes_the_requests_it_covers_with_it() {
+        // `/a/pkg` is due; `/a/pkg/x` arrived a moment ago and is not. Walking
+        // `/a/pkg` *is* the walk `/a/pkg/x` asked for, so leaving it behind
+        // would run the same walk twice — which is the cost this exists to
+        // remove. `/a/other` is covered by neither and must survive.
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        w.add("/a/pkg", at(t, 0));
+        w.add("/a/other", at(t, 400));
+        // Late enough to be swallowed rather than to hold the parent back: it
+        // is not the parent's own entry, so it does not refresh its clock.
+        w.at.push(("/a/pkg/x".to_owned(), at(t, 480), at(t, 480)));
+        assert_eq!(due(&mut w, t, 500), vec!["/a/pkg"]);
+        assert!(
+            due(&mut w, t, 800).is_empty(),
+            "the sibling is covered by nothing and is not due yet"
+        );
+        assert_eq!(
+            due(&mut w, t, 900),
+            vec!["/a/other"],
+            "and `/a/pkg/x` went with the walk that covered it"
+        );
+    }
+
+    #[test]
+    fn siblings_both_walk_and_neither_is_swallowed() {
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        w.add("/a/one", at(t, 0));
+        w.add("/a/two", at(t, 10));
+        w.add("/a/one/deep", at(t, 20));
+        let mut walked = due(&mut w, t, 600);
+        walked.sort();
+        assert_eq!(walked, vec!["/a/one".to_owned(), "/a/two".to_owned()]);
+    }
+
+    #[test]
+    fn a_lost_watcher_does_not_wait_and_covers_everything_waiting() {
+        // An empty path is "the index is drifting and I cannot say where".
+        // Holding it holds the only message that stops the drift.
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        w.add("/a/pkg", at(t, 0));
+        w.add("", at(t, 10));
+        assert_eq!(
+            due(&mut w, t, 10),
+            vec![String::new()],
+            "it walks the moment it arrives"
+        );
+        assert!(
+            due(&mut w, t, 5_000).is_empty(),
+            "and walking everything answered the subtree that was waiting"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_is_the_same_pending_walk() {
+        let t = Instant::now();
+        let mut w = PendingWalks::default();
+        w.add("/a/pkg/", at(t, 0));
+        w.add("/a/pkg", at(t, 100));
+        assert_eq!(due(&mut w, t, 700), vec!["/a/pkg"]);
     }
 }

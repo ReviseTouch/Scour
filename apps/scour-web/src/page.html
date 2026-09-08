@@ -1366,14 +1366,67 @@
      you without saying so is one you stop trusting — so what arrived is shown
      arriving. It fades rather than staying: this marks the event, not the row,
      and a permanent badge would still be there tomorrow. */
-  tbody tr.fresh { animation: arrived 1.6s ease-out; }
+  /* **The tint is a layer, not the row's background.** `background` is a
+     main-thread property: animating it made the renderer restyle, repaint and
+     raster every arriving row on every frame, and rows arrive by the dozen
+     whenever the index is moving. Opacity on an absolutely positioned overlay
+     is a compositor property — the layer is rastered once and the fade after
+     that is the compositor moving it.
+
+     Measured alternately against the live service, fifteen files a second
+     arriving in a watched folder, eight rounds of thirty seconds each,
+     headless with software raster and thirty-odd rows highlighted at any
+     moment — the same load either way, sampled: median 32.9 highlighted rows
+     against 32.0. Medians of the eight:
+
+         renderer  30.1% of a core -> 12.0%   lower in 8 of 8 rounds
+         GPU        6.4%           -> 10.5%   the work that moved
+         both       36.2%          -> 22.4%   lower in 8 of 8 rounds
+         TaskDuration       3.85 s -> 1.89 s  per 30 s
+         RecalcStyleDuration 0.67 s -> 0.43 s
+
+     Software raster inflates all of it, and the GPU line is the price: a
+     composited fade is not free, it is *elsewhere*. `will-change` was
+     measured against the same overlay without it over five more rounds and
+     the two were inside the noise of each other, so it stays for what it
+     says rather than for what it saved.
+
+     Same picture: `inset: 0` is the row's own box, `z-index: -1` inside the
+     stacking context `z-index: 0` opens puts it above the row background and
+     below the cells — which is exactly where a row background sits, so the
+     text stays over it and a selected row's cell colour still covers it.
+     Screenshots of the two builds at 0, 0.2, 0.8 and 1.6 s into the fade are
+     identical to the pixel. The delay is inherited rather than set again, so
+     `writeRow`'s one negative `animation-delay` on the row still carries a
+     half-finished fade through a repaint. `forwards` is not decoration:
+     without it the overlay would snap back to full tint when the fade ended.
+     `pointer-events: none` keeps the row's own cells taking the clicks —
+     without it an arriving row would stop selecting for 1.6 s.
+
+     One deliberate difference: a row hovered while it is fresh now shows the
+     hover grey under the tint, where the animation used to override hover
+     entirely for the 1.6 s. A selected fresh row differs by up to 2 of 255 in
+     a channel — `--pick` is a 20% wash, so the tint reaches through it, and
+     compositing a separate layer rounds once more than painting in place. */
+  tbody tr.fresh { position: relative; z-index: 0; }
+  tbody tr.fresh::after {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    pointer-events: none;
+    background: color-mix(in srgb, var(--t0) 22%, transparent);
+    will-change: opacity;
+    animation: arrived 1.6s ease-out forwards;
+    animation-delay: inherit;
+  }
   tbody tr.fresh td:first-child { box-shadow: inset 2px 0 0 var(--t0); }
   @keyframes arrived {
-    from { background: color-mix(in srgb, var(--t0) 22%, transparent); }
-    to   { background: transparent; }
+    from { opacity: 1; }
+    to   { opacity: 0; }
   }
+  /* No tint at all rather than a still one — `animation: none` on the overlay
+     would leave it parked at full opacity for ever, which is the opposite of
+     what the old rule did. */
   @media (prefers-reduced-motion: reduce) {
-    tbody tr.fresh { animation: none; }
+    tbody tr.fresh::after { display: none; }
   }
 
   .rowmenu {

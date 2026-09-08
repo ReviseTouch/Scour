@@ -288,6 +288,129 @@ struct Building {
 /// which is the back pressure this design needs and costs nothing to write.
 const MAX_BUILDING: usize = 4;
 
+/// How much larger a segment has to be than everything below it before it
+/// stops being folded together with them. `K` in the usual size-tiered
+/// arithmetic; see [`head_of`].
+///
+/// Four rather than two because the cut decides two things at once and they
+/// pull in opposite directions. It is how often a large segment is rewritten —
+/// once per `rows / K` rows of churn beneath it — and it is the base of the
+/// logarithm that bounds how many segments a search opens. Two would rewrite
+/// the measured 454k tail every 227k rows instead of every 113k, but would
+/// allow 24 segments at 5 M rows instead of 13, and a search pays per segment
+/// (1.11 ms for one against 5.20 ms for eleven, at 1.08 M entries). Eight would
+/// allow 9, and would leave a tier free to hold eight times its own weight in
+/// unsorted rows before merging — which is the state this exists to get out of.
+const TIER_RATIO: u64 = 4;
+
+/// Split segments into size tiers, smallest tier first.
+///
+/// Takes `(number, rows)` in any order, walks them by ascending size keeping a
+/// running total, and starts a new tier at the first member that is more than
+/// [`TIER_RATIO`] times everything already below it. Ties are broken by
+/// segment number so the answer does not depend on the order the manifest
+/// happened to list them in.
+///
+/// Pulled out of [`head_of`] because it is the whole of the arithmetic, and it
+/// is worth being able to test at sizes — 5 M rows, a thousand rounds of
+/// trickle — that building real segments could not reach.
+fn size_tiers(sizes: impl IntoIterator<Item = (u64, u64)>) -> Vec<Vec<u64>> {
+    let mut sizes: Vec<(u64, u64)> = sizes.into_iter().collect();
+    sizes.sort_by_key(|&(number, rows)| (rows, number));
+    let mut tiers: Vec<Vec<u64>> = Vec::new();
+    let mut below = 0u64;
+    for (number, rows) in sizes {
+        match tiers.last_mut() {
+            Some(tier) if rows <= TIER_RATIO.saturating_mul(below) => {
+                tier.push(number);
+                below += rows;
+            }
+            _ => {
+                tiers.push(vec![number]);
+                below = rows;
+            }
+        }
+    }
+    tiers
+}
+
+/// One candidate segment, as [`head_of`] sees it: a number and two counts.
+#[derive(Clone, Copy, Debug)]
+struct Member {
+    number: u64,
+    rows: u64,
+    dead: u64,
+}
+
+/// Which of a group of segments to fold together next, or nothing.
+///
+/// **The head is the smallest size tier, not the whole of the rest.**
+///
+/// Sparing the largest member and folding *everything else together* is what
+/// this used to do, and on an index that has a body and a tail it re-merged the
+/// tail every time the clock came round. Measured on the live service: a
+/// 4.6 M-row body beside a 454,184-row tail, `COMPACT_EVERY` at 60 s, and the
+/// tail's 11.70 MB of names reappearing under a new segment number nine times
+/// in eight and a half minutes — 1.5 to 1.8 s of worker CPU and 51 to 68 MB
+/// written per round, so 2.5–3% of a core and 50–65 MB/min with nobody touching
+/// the machine, and two folds taking 330 of 612 worker ticks over one
+/// two-minute window. The rows re-merged were the same rows every time. All
+/// that had changed was the handful of tiny segments a trickle of watcher
+/// commits had appended, and paying for the tail to absorb them once a minute
+/// is the whole of the waste.
+///
+/// So what is left once the largest is set aside gets walked in ascending size
+/// and cut where a member is larger than [`TIER_RATIO`] times everything below
+/// it, and only the smallest tier with more than one member is folded. The tail
+/// takes the trickle in when the trickle has grown to a quarter of it — every
+/// ~113k rows of churn rather than every minute — so a row is rewritten
+/// O(log n) times over the life of the index instead of once a minute for ever.
+/// Same argument as the 08-06 cohort fix in `docs/MEASUREMENTS.md:395-399`,
+/// which took this exact shape at 100k rows down to 27.4 ms/min; the 08-12
+/// one-group rule made cohorts irrelevant outside a scan and the tail came back
+/// 4.5× larger.
+///
+/// **The count stays bounded, which is what this has to be judged on.** The
+/// hazard is the one recorded at [`NativeIndex::groups`]: 241 segments across
+/// 205 generations, nothing foldable, every search opening all 241. When this
+/// has nothing left to hand back, every tier below the largest holds exactly
+/// one segment, and the cut says each of those is more than [`TIER_RATIO`]
+/// times the one under it — so their sizes grow at least geometrically from a
+/// single row and there can be at most `ceil(log4(rows)) + 1` segments in all:
+/// **13 at 5 M rows, 14 at 10 M**, against the 2→78 this oscillated between.
+/// `a_long_trickle_stays_under_the_geometric_bound` holds it to that.
+///
+/// Lossless whatever it picks: a fold is a merge of immutable rows, duplicates
+/// are already resolved at flush by `kill_paths`, and the search comparator
+/// breaks its last tie on the joined path rather than on which segment a row
+/// landed in — so how the same rows are divided up cannot be seen from a query.
+fn head_of(members: &[Member]) -> Option<Vec<u64>> {
+    let biggest = members.iter().max_by_key(|m| m.rows)?;
+    // A quarter of it dead is the point at which rewriting the largest segment
+    // gives back more than it costs — and when it is being rewritten anyway,
+    // everything riding along with it is the cheap part.
+    if biggest.dead * 4 > biggest.rows {
+        return Some(members.iter().map(|m| m.number).collect());
+    }
+    let rest: Vec<&Member> = members
+        .iter()
+        .filter(|m| m.number != biggest.number)
+        .collect();
+    let tiers = size_tiers(rest.iter().map(|m| (m.number, m.rows)));
+    tiers.into_iter().find(|tier| tier.len() >= 2).or_else(|| {
+        // Every tier a single segment: nothing to merge, but a segment a
+        // quarter of which is dead still pays for its own rewrite. Only the
+        // largest was ever asked this before, because every other member was in
+        // the head regardless. Now that a middle segment can sit alone in its
+        // tier, removing a large directory would otherwise leave its rows on
+        // disk until the next `scour maintain rebuild`. `fold` already accepts
+        // a group of one on exactly this condition.
+        rest.into_iter()
+            .find(|m| m.dead * 4 > m.rows)
+            .map(|m| vec![m.number])
+    })
+}
+
 #[cfg(test)]
 #[derive(Debug)]
 struct FoldGate {
@@ -1375,26 +1498,23 @@ impl NativeIndex {
     /// The next group of segments worth folding, or nothing.
     ///
     /// Read under its own lock and answered in numbers, so the caller can let
-    /// go of the index before it starts building.
+    /// go of the index before it starts building. What "worth folding" means
+    /// is [`head_of`], which is a decision about sizes and holds no lock.
     fn next_head(&self) -> Option<Vec<u64>> {
         let inner = self.inner.read();
         let group = Self::groups(&inner).into_iter().find(|g| g.len() >= 3)?;
-        let rows = |n: u64| {
-            inner
-                .segments
-                .iter()
-                .find(|s| s.number == n)
-                .map_or((0, 0), |s| (s.rows() as u64, s.dead_rows()))
-        };
-        let biggest = *group.iter().max_by_key(|&&n| rows(n).0)?;
-        let (big_rows, big_dead) = rows(biggest);
-        // A quarter of it dead is the point at which rewriting the largest
-        // segment gives back more than it costs.
-        if big_dead * 4 > big_rows {
-            Some(group)
-        } else {
-            Some(group.into_iter().filter(|&n| n != biggest).collect())
-        }
+        let members: Vec<Member> = group
+            .iter()
+            .map(|&number| {
+                let (rows, dead) = inner
+                    .segments
+                    .iter()
+                    .find(|s| s.number == number)
+                    .map_or((0, 0), |s| (s.rows() as u64, s.dead_rows()));
+                Member { number, rows, dead }
+            })
+            .collect();
+        head_of(&members)
     }
 
     /// Hand each segment to `f`. For diagnostics that need to see inside.
@@ -3278,6 +3398,349 @@ mod tests {
         // first closes the scan; the remaining roots must not keep advancing.
         close_generation(&mut inner, 7);
         assert_eq!(inner.generation, 8);
+    }
+
+    fn member(number: u64, rows: u64) -> Member {
+        Member {
+            number,
+            rows,
+            dead: 0,
+        }
+    }
+
+    /// The cut, at the sizes the live index actually holds.
+    ///
+    /// A cohort is not what decides a fold outside a scan any more — one group
+    /// holds everything, see `groups` — so what takes its place is size, and
+    /// this is that rule on its own. The numbers are the measured ones: a
+    /// 4.6 M-row body, a 454,184-row tail, and watcher commits of a few rows.
+    #[test]
+    fn size_tiers_cut_where_a_member_outweighs_everything_below_it() {
+        // Nothing below the tail comes to a quarter of it, so it stays where it
+        // is and the trickle folds on its own.
+        assert_eq!(
+            size_tiers([(1, 4_600_000), (2, 454_184), (3, 40), (4, 40), (5, 40)]),
+            vec![vec![3, 4, 5], vec![2], vec![1]]
+        );
+        // Once the trickle has grown to a quarter of the tail, the tail takes
+        // it in. That is the one fold this change is willing to pay for, and it
+        // is worth ~113k rows of churn rather than sixty seconds.
+        assert_eq!(
+            size_tiers([(1, 4_600_000), (2, 454_184), (3, 113_546)]),
+            vec![vec![3, 2], vec![1]]
+        );
+        // Equal sizes are one tier: a fixture of ten 800-row segments has no
+        // body to spare, and folding them together is the whole job.
+        assert_eq!(
+            size_tiers((1..=4).map(|n| (n, 800))),
+            vec![vec![1, 2, 3, 4]]
+        );
+        // Order in, and ties, must not decide the answer.
+        assert_eq!(
+            size_tiers([(9, 40), (1, 4_600_000), (5, 40)]),
+            size_tiers([(1, 4_600_000), (5, 40), (9, 40)])
+        );
+        assert_eq!(size_tiers([]), Vec::<Vec<u64>>::new());
+    }
+
+    /// The head is the trickle, and the tail is not in it.
+    #[test]
+    fn a_trickle_is_folded_without_the_tail() {
+        let live = [
+            member(1, 4_600_000),
+            member(2, 454_184),
+            member(3, 40),
+            member(4, 40),
+            member(5, 40),
+        ];
+        assert_eq!(head_of(&live), Some(vec![3, 4, 5]));
+
+        // With the trickle already folded there is nothing left worth a
+        // rewrite: three segments, and none of them touched.
+        assert_eq!(
+            head_of(&[member(1, 4_600_000), member(2, 454_184), member(6, 120)]),
+            None
+        );
+
+        // The old rule is kept where it earns its keep: a largest segment a
+        // quarter of which is dead is rewritten, and everything rides along.
+        let dead = [
+            Member {
+                number: 1,
+                rows: 4_600_000,
+                dead: 2_000_000,
+            },
+            member(2, 454_184),
+            member(3, 40),
+        ];
+        assert_eq!(head_of(&dead), Some(vec![1, 2, 3]));
+
+        // And a middle segment alone in its tier can still be shrunk, or
+        // deleting a large directory would leave its rows on disk until the
+        // next rebuild. `fold` accepts a group of one on exactly this test.
+        let hollow = [
+            member(1, 4_600_000),
+            Member {
+                number: 2,
+                rows: 454_184,
+                dead: 300_000,
+            },
+            member(3, 40),
+        ];
+        assert_eq!(head_of(&hollow), Some(vec![2]));
+    }
+
+    /// The segment count stays bounded under a trickle that never stops.
+    ///
+    /// **This is the assertion the change has to survive.** The rule it
+    /// replaces was written against a real failure — 241 segments across 205
+    /// generations, nothing foldable, every search opening all 241 (see
+    /// `groups`) — and any rule that folds less often has to show it cannot get
+    /// back there. Driven through `head_of` rather than real segments because
+    /// what matters is the count after thousands of rounds at live sizes, and
+    /// building 4.6 M rows of them would take minutes.
+    ///
+    /// Sixty commits a round, then a compaction: `COMPACT_EVERY` is 60 s and
+    /// the live index was measured oscillating between 2 and 78 segments
+    /// between folds.
+    #[test]
+    fn a_long_trickle_stays_under_the_geometric_bound() {
+        // Five hundred rounds of sixty forty-row commits on a 4.6 M-row body,
+        // run through both rules. `pick` is the rule: the one this file uses
+        // now, and the one it used before — everything but the largest member.
+        let trickle = |pick: &dyn Fn(&[Member]) -> Option<Vec<u64>>| {
+            let mut segments = vec![member(0, 4_600_000)];
+            let mut next = 1u64;
+            let (mut worst, mut folds, mut rewritten) = (0usize, 0usize, 0u64);
+            for _ in 0..500 {
+                for _ in 0..60 {
+                    segments.push(member(next, 40));
+                    next += 1;
+                }
+                // `maintain(Compact)`: fold what `next_head` hands back until
+                // it hands back nothing. `groups` offers three or more, or
+                // nothing.
+                while segments.len() >= 3 {
+                    let Some(head) = pick(&segments) else { break };
+                    if head.len() < 2 {
+                        break;
+                    }
+                    let rows: u64 = segments
+                        .iter()
+                        .filter(|m| head.contains(&m.number))
+                        .map(|m| m.rows)
+                        .sum();
+                    segments.retain(|m| !head.contains(&m.number));
+                    segments.push(member(next, rows));
+                    next += 1;
+                    folds += 1;
+                    rewritten += rows;
+                }
+                worst = worst.max(segments.len());
+            }
+            let total: u64 = segments.iter().map(|m| m.rows).sum();
+            (worst, folds, rewritten, total)
+        };
+
+        let (worst, folds, rewritten, total) = trickle(&|m| head_of(m));
+        // `ceil(log4(total)) + 1`: every tier below the largest holds one
+        // segment and each is more than four times the one under it, so their
+        // sizes climb geometrically from a single row; the largest is spared on
+        // top of that.
+        let bound = (64 - total.leading_zeros()).div_ceil(2) as usize + 1;
+        assert_eq!(bound, 13, "1.2 M rows of trickle on a 4.6 M-row body");
+        // Measured at five when this was written. The assertion is the bound,
+        // because that is the promise; the five is how much room it has.
+        assert!(
+            worst <= bound,
+            "{worst} segments at worst, against a bound of {bound}"
+        );
+
+        let (_, was_folds, was_rewritten, _) = trickle(&|members: &[Member]| {
+            let biggest = members.iter().max_by_key(|m| m.rows)?;
+            Some(
+                members
+                    .iter()
+                    .map(|m| m.number)
+                    .filter(|&n| n != biggest.number)
+                    .collect(),
+            )
+        });
+        // And this is the whole of it: the same trickle, the same number of
+        // compactions, and the tail dragged through every one of them.
+        assert_eq!(folds, was_folds, "the same rounds either way");
+        assert!(
+            rewritten * 20 < was_rewritten,
+            "{rewritten} rows rewritten over {folds} folds against the old rule's \
+             {was_rewritten}, on an index holding {total}"
+        );
+    }
+
+    /// Folding by tiers answers exactly what folding the whole rest answered.
+    ///
+    /// Two indexes given the same rows and the same removals, one compacted the
+    /// way this file does it now and one folded the way it did before —
+    /// everything but the largest member, in one group. A fold is a merge of
+    /// immutable rows, duplicates are already killed at flush by `kill_paths`,
+    /// and the search comparator breaks its last tie on the joined path rather
+    /// than on which segment a row landed in. So the division into segments is
+    /// not something a query can see, and this is what says so.
+    #[test]
+    fn a_tiered_fold_answers_what_folding_the_whole_rest_did() {
+        let tiered = tempfile::tempdir().expect("tmpdir");
+        let whole = tempfile::tempdir().expect("tmpdir");
+        let a = NativeIndex::open_or_create(tiered.path()).expect("create");
+        let b = NativeIndex::open_or_create(whole.path()).expect("create");
+        for index in [&a, &b] {
+            // A body, a tail, and a trickle: the live shape, scaled down.
+            commit_rows(
+                index,
+                (0..2_000).map(|i| row(0, &format!("/body/rapor-{i}.txt"), i % 97)),
+            );
+            commit_rows(
+                index,
+                (0..500).map(|i| row(0, &format!("/tail/rapor-{i}.md"), i % 89)),
+            );
+            for round in 0..9 {
+                commit_rows(
+                    index,
+                    (0..3).map(|i| row(0, &format!("/w/{round}-{i}.txt"), round * 7 + i)),
+                );
+            }
+            // Deaths, so the live bitmaps and the row counts disagree.
+            index
+                .apply(&mut (0..40).map(|i| Change::RemoveSubtree {
+                    path: format!("/body/rapor-{}.txt", i * 7),
+                }))
+                .expect("apply removals");
+            index.commit().expect("commit removals");
+        }
+
+        let fingerprint = |index: &NativeIndex| -> Vec<String> {
+            let mut out = Vec::new();
+            for sort in [
+                scour_core::SortKey::Modified,
+                scour_core::SortKey::Name,
+                scour_core::SortKey::Path,
+                scour_core::SortKey::Ext,
+                scour_core::SortKey::Size,
+            ] {
+                for descending in [true, false] {
+                    let answer = index
+                        .search(&SearchRequest {
+                            query: scour_query::parse("rapor"),
+                            sort,
+                            descending,
+                            page: scour_core::Page::new(0, 4_000),
+                        })
+                        .expect("search");
+                    out.push(format!("{sort:?} {descending} {}", answer.total));
+                    out.extend(
+                        answer
+                            .hits
+                            .iter()
+                            .map(|h| format!("{} {} {}", h.path, h.meta.size, h.meta.mtime)),
+                    );
+                }
+            }
+            out
+        };
+
+        let before = fingerprint(&a);
+        assert_eq!(fingerprint(&b), before, "the two fixtures start equal");
+
+        a.maintain(Maintenance::Compact).expect("compact");
+        // The rule this replaces, by hand: one group, everything but the
+        // largest member, until folding stops changing anything.
+        loop {
+            let head = {
+                let inner = b.inner.read();
+                if inner.segments.len() < 3 {
+                    break;
+                }
+                let biggest = inner
+                    .segments
+                    .iter()
+                    .max_by_key(|s| s.rows())
+                    .expect("a biggest")
+                    .number;
+                inner
+                    .segments
+                    .iter()
+                    .map(|s| s.number)
+                    .filter(|&n| n != biggest)
+                    .collect::<Vec<u64>>()
+            };
+            if !b.fold(&head).expect("fold") {
+                break;
+            }
+        }
+
+        assert_eq!(fingerprint(&a), before, "tiered folding changed an answer");
+        assert_eq!(fingerprint(&b), before, "the old rule changed an answer");
+        assert_eq!(
+            a.stats().expect("stats").entries,
+            b.stats().expect("stats").entries
+        );
+        // Which is the whole trade: the same answers out of one more segment,
+        // for a fold that did not touch the body or the tail.
+        assert!(
+            a.inner.read().segments.len() <= 3,
+            "{} segments after a tiered compaction",
+            a.inner.read().segments.len()
+        );
+    }
+
+    /// A trickle does not drag the tail through a fold with it.
+    ///
+    /// The live measurement this exists for: the tail's 11.70 MB of names
+    /// reappeared under a new segment number nine times in eight and a half
+    /// minutes, 1.5–1.8 s of worker CPU and 51–68 MB written each time, because
+    /// a handful of one-row watcher commits had landed beside it. The segment
+    /// keeping its number is the observable version of "it was not rewritten".
+    #[test]
+    fn a_trickle_of_small_segments_does_not_refold_the_tail() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        commit_rows(
+            &index,
+            (0..4_000).map(|i| row(0, &format!("/body/{i}.txt"), i)),
+        );
+        commit_rows(
+            &index,
+            (0..1_000).map(|i| row(0, &format!("/tail/{i}.txt"), i)),
+        );
+        let numbers = || -> Vec<u64> {
+            index
+                .inner
+                .read()
+                .segments
+                .iter()
+                .map(|s| s.number)
+                .collect()
+        };
+        let started = numbers();
+        assert_eq!(started.len(), 2, "the fixture is a body and a tail");
+        let (body, tail) = (started[0], started[1]);
+
+        for round in 0..4 {
+            for i in 0..6 {
+                commit_rows(&index, [row(0, &format!("/w/{round}-{i}.txt"), i)]);
+            }
+            index.maintain(Maintenance::Compact).expect("compact");
+            let after = numbers();
+            assert!(after.contains(&body), "round {round} rewrote the body");
+            assert!(
+                after.contains(&tail),
+                "round {round} rewrote the tail: this is the fold that cost 2.5-3% of a core"
+            );
+            assert_eq!(
+                after.len(),
+                3,
+                "body, tail, one folded trickle — and nothing accumulating: {after:?}"
+            );
+        }
+        assert_eq!(index.stats().expect("stats").entries, 4_000 + 1_000 + 24);
     }
 
     #[test]

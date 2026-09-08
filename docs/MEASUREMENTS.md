@@ -6466,3 +6466,57 @@ the setup wrapper now uses `--no-pager` for that display.
 
 The two private index copies under `target/scour-probes` were removed after
 measurement; raw results remain in the `/tmp` paths above.
+
+## 2026-09-06 — fanotify's directory map keeps names and parents, not paths
+
+The packed path arena of 2026-08-15 stopped scaling with the thing it stored.
+`find -xdev -type d` on the two live sources: `/home/hasan` is **423,384**
+directories averaging **118.1 B** of path against **15.6 B** of basename, and
+`/mnt/depo` is **180,566** averaging **98.7 B** against **12.7 B** — **68.2 MB**
+of paths for **8.9 MB** of names, because an ancestor's name is written down
+once per descendant, 10.6 times over on average.
+
+So a directory is now a 12-byte `Node { parent: u32, name: NameSlot }` over an
+arena of basenames, and a path is spelled out by climbing to a root. The probe
+builds both representations in one process, alternating the order round by
+round, at the measured shape. It generates 118.0 B / 16.2 B and 98.5 B / 13.4 B
+against those figures, so the name arena it models is about 4% larger than the
+real one.
+
+Median of ten rounds, retained heap by `mallinfo2` (`uordblks + hblkhd`) for
+both maps together: **87.82 MB → 39.58 MB**, −48.24 MB, **−54.9%**, and the
+graph won **10 of 10** rounds. Two earlier sittings under heavier load gave the
+same two figures to the byte. Renaming a directory with **781** descendants went
+from **17.43 ms to 2.32 µs**; renaming the whole `/home/hasan` root, 423,384
+descendants, from **45.56 ms to 480 ns**. Both of those ran under the reader's
+lock.
+
+**The lookup is the price, and it is more than the estimate.** 603,950 lookups
+a round in a pseudo-random permutation, as the reader makes them — the arena
+borrowing and calling `to_owned`, the graph spelling into a reused buffer:
+**114.3 ns → 371.6 ns**, **3.25×**, in the quietest of four sittings; the other
+three gave 3.5×, 3.6× and **4.3×**, the last under load average 14. Borrowing
+alone was 25.9 ns, which is not a comparison the reader can make: it has to own
+the string. The spread is the point — the climb touches about twenty cache lines
+where the arena touched two, so this is the arm that suffers when something else
+is using the cache, and the honest range is 3.2× to 4.3×. Laying the nodes out
+depth-first, the way a walker thread's own stack lays them out, measured 354.7
+and 384.3 ns and did not separate from breadth-first. At the module's documented
+busy rate of 2,120 events a second the extra 257–693 ns is **0.055% to 0.15% of
+one core**, against the 0.078% the whole reader costs there; on this machine's
+own traffic that is the trade for 48 MB, and 96 MB of what this process had in
+swap was this map. It is well over the 2× a reviewer asked to be told about.
+
+Building it costs one `statx` a directory to learn the parent, paid on the
+walker's own threads. Six alternating rounds against `/usr`, 22,631 directories
+after the rules prune: parallel×8 **51 → 54 ms** median, single-threaded **131 →
+146 ms** — 0.66 µs a directory serial, which is the `statx`, and 0.13 µs a
+directory once eight threads share it. Scaled to 603,950 directories that is
+about **80 ms** on a build the journal times at four seconds.
+
+```sh
+cargo test -p scour-source-fs --release directory_map_memory_probe -- \
+  --ignored --nocapture --test-threads=1
+SCOUR_WALK_ROOTS=/usr SCOUR_WALK_ROUNDS=1 cargo test -p scour-source-fs \
+  --release directory_map_walk_cost_probe -- --ignored --nocapture --test-threads=1
+```

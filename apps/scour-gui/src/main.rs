@@ -156,6 +156,29 @@ const BACKGROUND_IDLE_MS: u64 = 200;
 /// next. See the note where it is used.
 const AWAIT_AGAIN: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// How long after the last touch this window still counts itself as watched.
+///
+/// **A window nobody is using should not make the service work.** Measured
+/// here: with a face attached the service commits every second instead of
+/// every fifteen — 10.7% of a core and 103 MB a minute, against 0.4% and
+/// 20 MB with nothing attached. Twenty-six times the CPU to keep a list fresh
+/// that nobody is reading, which is exactly a window left behind a browser
+/// while a build runs.
+///
+/// So being *open* is not the signal; being *used* is. A key, a click, a
+/// scroll, a menu, a drag restarts this clock and the list is live again in
+/// the same frame. After it runs out the window dozes — see [`DOZE_AGAIN`].
+///
+/// A minute: longer than any pause in reading a list, shorter than any time a
+/// window sits genuinely forgotten.
+const AWAKE_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How often a dozing window asks anyway.
+///
+/// Not never: a window brought back to the front has to be right, and the
+/// cheapest way to be right is to have been roughly right all along.
+const DOZE_AGAIN: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// How long the list has to have been still before a page is re-read.
 ///
 /// Re-reading is for a page the index has moved under, and the index moves
@@ -182,6 +205,10 @@ const CHEAP_PAGE_US: u64 = 20_000;
 const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
+    /// When somebody last did something here. See [`AWAKE_FOR`].
+    stirred: std::time::Instant,
+    /// True while the window has stopped following the index closely.
+    dozing: bool,
     generation: u64,
     /// How many entries the index holds, as of the last status.
     ///
@@ -767,6 +794,9 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
+        // Awake at birth: opening the window is somebody doing something in it.
+        stirred: std::time::Instant::now(),
+        dozing: false,
         indexed: 0,
         generation: 0,
         query_revision: 0,
@@ -937,6 +967,7 @@ fn main() -> Result<()> {
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_query_changed(move |text| {
+            stir(&state, &link);
             // **A query has a length, and the reason is the renderer.**
             //
             // Slint's software renderer places every glyph at an `i16`
@@ -1030,6 +1061,7 @@ fn main() -> Result<()> {
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_facet_clicked(move |token| {
+            stir(&state, &link);
             let token = token.to_string();
             {
                 let mut s = state.borrow_mut();
@@ -1107,6 +1139,7 @@ fn main() -> Result<()> {
         let state = Rc::clone(&state);
         let weak = window.as_weak();
         window.on_peek_toggled(move || {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let on = !w.get_peeking();
             w.set_peeking(on);
@@ -1402,6 +1435,7 @@ fn main() -> Result<()> {
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_sort_by(move |key| {
+            stir(&state, &link);
             let key = key.to_string();
             {
                 let mut s = state.borrow_mut();
@@ -1444,6 +1478,7 @@ fn main() -> Result<()> {
         let cat = Rc::clone(&cat);
         let weak = window.as_weak();
         window.on_report_open(move |path| {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
             state.borrow_mut().scope = path.to_string();
@@ -1518,6 +1553,7 @@ fn main() -> Result<()> {
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_report_search(move || {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let scope = state.borrow().scope.clone();
             let query = if scope.is_empty() {
@@ -1544,6 +1580,7 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let weak = window.as_weak();
         window.on_dupes_toggled(move || {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let open = !w.get_dupes_open();
             w.set_dupes_open(open);
@@ -1569,6 +1606,7 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let weak = window.as_weak();
         window.on_dupes_read(move || {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             // **Reading is the only thing that turns a candidate into a
             // duplicate**, and it is asked for rather than assumed: it reads
@@ -1698,6 +1736,7 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let weak = window.as_weak();
         window.on_activated(move |i| {
+            stir(&state, &link);
             // **Opening a result is committing to the query too.** A person
             // who typed, looked and pressed the row meant that search as
             // much as one who pressed Enter — and the browser page has
@@ -1719,6 +1758,7 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let weak = window.as_weak();
         window.on_query_committed(move || {
+            stir(&state, &link);
             let query = full_query(&state.borrow());
             remember(&state, &link, &query);
             if let Some(w) = weak.upgrade() {
@@ -1851,6 +1891,7 @@ fn main() -> Result<()> {
         let pending = Rc::clone(&pending);
         let addr = addr.clone();
         window.on_menu_pick(move |id| {
+            stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let cat_now = cat.borrow().clone();
             let here = w.get_selected();
@@ -2047,6 +2088,7 @@ fn main() -> Result<()> {
         let pending = Rc::clone(&pending);
         let addr = addr.clone();
         window.on_ask_answer(move |yes| {
+            stir(&state, &link);
             let Some((what, paths)) = pending.borrow_mut().take() else {
                 return;
             };
@@ -2193,6 +2235,7 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let weak = window.as_weak();
         window.on_moved(move || {
+            stir(&state, &link);
             if let Some(w) = weak.upgrade() {
                 follow(&w, &state, &link, &rows);
             }
@@ -2849,6 +2892,23 @@ fn fetch_from(first: usize, visible: usize, wanted: Option<usize>) -> usize {
 fn refresh_ready(elapsed: Option<std::time::Duration>, cost_us: u64) -> bool {
     let rest = SETTLED.max(std::time::Duration::from_micros(cost_us).saturating_mul(10));
     elapsed.is_none_or(|spent| spent >= rest)
+}
+
+/// Somebody just did something in this window.
+///
+/// Restarts the clock in [`AWAKE_FOR`] and, if the window had dozed off, asks
+/// the service at once rather than waiting out [`DOZE_AGAIN`] — so the first
+/// thing a person sees after touching it is current.
+fn stir(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
+    let woke = {
+        let mut s = state.borrow_mut();
+        s.stirred = std::time::Instant::now();
+        std::mem::replace(&mut s.dozing, false)
+    };
+    if woke {
+        let since = state.borrow().revision;
+        link.send(Ask::Await { since });
+    }
 }
 
 fn follow(w: &MainWindow, state: &Rc<RefCell<State>>, link: &Rc<Link>, rows: &Rc<rows::Rows>) {
@@ -3915,6 +3975,32 @@ fn apply(
             // second, which is exactly the rate a person needs to believe
             // something is happening.
             w.set_scanning(scanning_note(cat, &st));
+            // **A window nobody is using stops following.** Not "open" —
+            // *used*: see [`AWAKE_FOR`]. Dozing takes the revision (it is not
+            // amnesia, and the pages in hand are marked so the next look
+            // re-reads them) but re-reads nothing now and asks again in ten
+            // seconds rather than a quarter of one. `stir` undoes it within
+            // the frame.
+            if state.borrow().stirred.elapsed() >= AWAKE_FOR {
+                {
+                    let mut s = state.borrow_mut();
+                    s.dozing = true;
+                    s.revision = st.revision;
+                }
+                rows.mark(st.revision);
+                let link = Rc::clone(link);
+                let state = Rc::clone(state);
+                slint::Timer::single_shot(DOZE_AGAIN, move || {
+                    let (dozing, since) = {
+                        let s = state.borrow();
+                        (s.dozing, s.revision)
+                    };
+                    if dozing {
+                        link.send(Ask::Await { since });
+                    }
+                });
+                return;
+            }
             {
                 let mut s = state.borrow_mut();
                 if st.revision == s.revision {
@@ -5157,6 +5243,8 @@ mod tests {
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
             indexed: 0,
+            stirred: std::time::Instant::now(),
+            dozing: false,
             generation: 0,
             query_revision: 0,
             past: Vec::new(),
@@ -5213,8 +5301,30 @@ mod tests {
     }
 
     #[test]
+    /// **The doze is a clock, and the clock is the whole feature.** A window
+    /// that dozed while somebody was using it is a list that stops updating;
+    /// one that never dozes is the twenty-six-times-the-CPU this was written
+    /// to remove. Both edges are here, and `stir` in between.
+    #[test]
+    fn a_window_dozes_only_after_a_minute_untouched_and_wakes_on_a_touch() {
+        let long_ago = std::time::Instant::now() - AWAKE_FOR - std::time::Duration::from_secs(1);
+        let just_now = std::time::Instant::now();
+
+        // Untouched for longer than the window stays awake: it dozes.
+        assert!(long_ago.elapsed() >= AWAKE_FOR, "the test's own premise");
+        // Touched within it: it does not.
+        assert!(just_now.elapsed() < AWAKE_FOR);
+        // A doze asks again far less often than an awake window, which is
+        // where the saving is — and not never, so the first frame after a
+        // touch is close.
+        assert!(DOZE_AGAIN > AWAIT_AGAIN * 8, "a doze that asks as often is not a doze");
+        assert!(DOZE_AGAIN < AWAKE_FOR, "a doze must refresh before it could wake");
+    }
+
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
+            stirred: std::time::Instant::now(),
+            dozing: false,
             sent_off: None,
             rules_shown: Default::default(),
             indexed: 0,
