@@ -201,6 +201,75 @@ fn absorb_separators(spans: &mut [Span], query: &str) {
     }
 }
 
+/// The same query with every term on one of `names` taken out of it.
+///
+/// **A rail cannot filter itself out of existence.** The list of kinds beside
+/// the results and the strip of ages under them are controls, and a control
+/// answers "what would switching to this give me" — so they are counted over
+/// the query *without* the term they set. Type `kind:code` and the rail still
+/// says how many images there are; type `dm:7d` and the strip still has a
+/// shape to press. Counting them over the query as typed makes every other
+/// bar read zero, which is a rail that can only ever confirm what is already
+/// on the screen.
+///
+/// `None` when nothing was taken out, so a caller can ask one question
+/// instead of two — which is every query without such a term, and that is
+/// most of them.
+///
+/// Names are the canonical ones from [`FIELDS`](crate::FIELDS): pass `"kind"`
+/// and `tür:` goes too, because the alias table is what decides here rather
+/// than the spelling.
+///
+/// ```
+/// # use scour_query::without;
+/// assert_eq!(without("rapor kind:code", &["kind"]).as_deref(), Some("rapor"));
+/// assert_eq!(without("rapor tür:code", &["kind"]).as_deref(), Some("rapor"));
+/// assert_eq!(without("rapor", &["kind"]), None);
+/// ```
+pub fn without(input: &str, names: &[&str]) -> Option<String> {
+    without_at(input, names, now_secs())
+}
+
+/// The same, as though `now` were the current unix time — `dm:7d` is a term
+/// only if the clock says it parses.
+pub fn without_at(input: &str, names: &[&str], now: i64) -> Option<String> {
+    let toks = tokens(input);
+    let mut kept: Vec<&str> = Vec::with_capacity(toks.len());
+    for (_, token) in &toks {
+        if is_space(token) || !drops(token, names, now) {
+            kept.push(token);
+        }
+    }
+    // **Compared by count, not by text.** Dropping a term leaves the space
+    // that was beside it, and a query differing from another only by a double
+    // space would ask the service the same question twice — two walks for one
+    // answer, on every keystroke.
+    if kept.len() == toks.len() {
+        return None;
+    }
+    Some(kept.concat().trim().to_string())
+}
+
+/// Is this one token a usable term on one of `names`?
+///
+/// **Usable, not merely spelled that way.** `kind:zurna` is not a kind filter
+/// — the engine searches for it as text — so taking it out would change the
+/// question rather than widen it. Same judgement as the colouring, from the
+/// same table.
+fn drops(token: &str, names: &[&str], now: i64) -> bool {
+    if token.starts_with('"') {
+        return false;
+    }
+    let bare = token.strip_prefix('!').unwrap_or(token);
+    let Some((name, value)) = field_split(bare) else {
+        return false;
+    };
+    let Some(f) = fields::lookup(&DefaultFolder::of(name)) else {
+        return false;
+    };
+    names.contains(&f.name) && fields::accepts(f, &DefaultFolder::of(&value.replace('"', "")), now)
+}
+
 /// The field a token filters on, if it is a field term at all.
 fn field_of(token: &str) -> Option<&'static fields::Field> {
     if token.starts_with('"') {
@@ -1442,5 +1511,81 @@ mod list_tests {
             let rebuilt: String = spans_at(q, 0).iter().map(|s| s.of(q)).collect();
             assert_eq!(rebuilt, q, "{q}");
         }
+    }
+}
+
+#[cfg(test)]
+mod without_tests {
+    use super::*;
+
+    /// A fixed clock, so `dm:7d` parses the same way in a year.
+    const NOW: i64 = 1_750_000_000;
+
+    fn drop_kind(q: &str) -> Option<String> {
+        without_at(q, &["kind"], NOW)
+    }
+
+    #[test]
+    fn a_term_on_the_named_field_goes_and_the_rest_stays() {
+        assert_eq!(drop_kind("rapor kind:code").as_deref(), Some("rapor"));
+        assert_eq!(drop_kind("kind:code rapor").as_deref(), Some("rapor"));
+        assert_eq!(drop_kind("kind:code").as_deref(), Some(""));
+        assert_eq!(
+            without_at("kind:code dm:7d size:>10kb", &["dm"], NOW).as_deref(),
+            Some("kind:code  size:>10kb"),
+        );
+    }
+
+    #[test]
+    fn nothing_to_drop_is_none_rather_than_the_same_string() {
+        // The caller asks one question instead of two on this answer, so it
+        // has to be distinguishable from a query that merely came back equal.
+        assert_eq!(drop_kind("rapor"), None);
+        assert_eq!(drop_kind(""), None);
+        assert_eq!(without_at("rapor kind:code", &["dm"], NOW), None);
+    }
+
+    #[test]
+    fn the_alias_table_decides_rather_than_the_spelling() {
+        assert_eq!(drop_kind("rapor tür:code").as_deref(), Some("rapor"));
+        assert_eq!(drop_kind("rapor tur:code").as_deref(), Some("rapor"));
+        assert_eq!(drop_kind("rapor type:code").as_deref(), Some("rapor"));
+    }
+
+    #[test]
+    fn an_excluded_term_is_still_that_field() {
+        // `!kind:image` narrows by kind as much as `kind:image` does, and a
+        // rail counted over it would be missing exactly the bar it is drawn
+        // to offer.
+        assert_eq!(drop_kind("rapor !kind:image").as_deref(), Some("rapor"));
+    }
+
+    #[test]
+    fn a_value_the_parser_would_not_take_is_left_alone() {
+        // `kind:zurna` is searched for as text. Dropping it would answer a
+        // different question, not a wider one.
+        assert_eq!(drop_kind("rapor kind:zurna"), None);
+        assert_eq!(without_at("rapor dm:soon", &["dm"], NOW), None);
+    }
+
+    #[test]
+    fn a_quoted_run_is_text_even_when_it_reads_like_a_field() {
+        assert_eq!(drop_kind("\"kind:code\""), None);
+        assert_eq!(
+            drop_kind("\"iki kelime\" kind:code").as_deref(),
+            Some("\"iki kelime\""),
+        );
+    }
+
+    #[test]
+    fn a_term_out_of_the_middle_leaves_the_spaces_that_were_beside_it() {
+        // Two spaces, and deliberately so: the page does exactly this, and a
+        // tidier answer here would be one more thing that has to be tidied
+        // identically there. The parser reads them as one separator, and the
+        // ends are trimmed, so the only visible effect is on a string nobody
+        // shows anybody.
+        assert_eq!(drop_kind("a kind:code b").as_deref(), Some("a  b"));
+        assert_eq!(drop_kind("kind:code b").as_deref(), Some("b"));
+        assert_eq!(drop_kind("a kind:code").as_deref(), Some("a"));
     }
 }

@@ -32,6 +32,12 @@ scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
 # The palette, shared with the browser page so the two cannot drift.
 scour-ui       = { workspace = true }
+# **The language, for one function: `without`.** The rails are counted over
+# the query with their own term taken out, and deciding which token is such a
+# term is the parser's judgement — `kind:zurna` is text, `tür:code` is a kind.
+# Asking the crate that owns the field table is what keeps that from becoming
+# a second, quietly different opinion about the query language.
+scour-query    = { workspace = true }
 scour-page     = { workspace = true }
 # For `Change` alone: what this window remembers goes to the service, so the
 # browser page opens in the same language and the same shape.

@@ -46,9 +46,17 @@ pub enum Ask {
         offset: u32,
         limit: u32,
     },
+    /// The rail's kinds and the ribbon's ages.
+    ///
+    /// **Two questions, and usually one walk.** Each is counted over the query
+    /// with its own term taken out, and those are the same string whenever the
+    /// query names neither a kind nor an age — which is nearly every query.
+    /// Then this is one request answering both. When the query does name one,
+    /// two go out and `half` says which is which.
     Facets {
         query_revision: u64,
         query: String,
+        half: Half,
     },
     /// How many match, exactly, once the typing has stopped.
     /// Read the query back: the runs, and what each one is.
@@ -168,6 +176,12 @@ pub enum Got {
     },
     Facets {
         query_revision: u64,
+        /// Which half of this answer the window asked for. Both groups are
+        /// always in the reply — asking for the kinds alone would put the
+        /// walk on the sampled path, see `AGE_SCAN_CAP` — so without this a
+        /// kind answer would also repaint the ribbon, with the wrong query
+        /// behind it.
+        half: Half,
         reply: Box<Response>,
     },
     Count {
@@ -389,6 +403,29 @@ impl Drop for Link {
     }
 }
 
+/// Which part of the sidebar a facet question is for.
+///
+/// The rail beside the results and the ribbon under them are counted over two
+/// different queries — each without the term it sets, so pressing a bar moves
+/// the filter rather than emptying the chart. Those two strings are equal
+/// unless the query itself names a kind or an age, and when they are equal
+/// this is `Both`: one walk, one answer, both halves painted from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Half {
+    Both,
+    Kinds,
+    Ages,
+}
+
+impl Half {
+    pub fn kinds(self) -> bool {
+        self != Half::Ages
+    }
+    pub fn ages(self) -> bool {
+        self != Half::Kinds
+    }
+}
+
 /// Which kind of answer a request is going to produce.
 #[derive(Clone, Copy)]
 enum Lane {
@@ -482,6 +519,12 @@ fn spawn_lane(
                 | Ask::PeekFacts { path } => path.clone(),
                 _ => String::new(),
             };
+            // Which half of the sidebar this answer is for, taken before the
+            // match consumes the request — the same reason as `weighed`.
+            let half = match ask {
+                Ask::Facets { half, .. } => half,
+                _ => Half::Both,
+            };
             let (revision, request, facets) = match ask {
                 Ask::Search {
                     generation,
@@ -519,6 +562,7 @@ fn spawn_lane(
                 Ask::Facets {
                     query_revision,
                     query,
+                    half: _,
                 } => (
                     query_revision,
                     // **Both in one request.** The rail's kinds and the
@@ -670,6 +714,7 @@ fn spawn_lane(
                     sink(match facets {
                         Lane::Facets => Got::Facets {
                             query_revision: revision,
+                            half,
                             reply,
                         },
                         Lane::Count => Got::Count {
@@ -841,6 +886,7 @@ mod tests {
         assert!(freshness.accepts(&Ask::Facets {
             query_revision: 2,
             query: "rapor".into(),
+            half: Half::Both,
         }));
         assert!(!freshness.accepts(&Ask::Count {
             query_revision: 1,

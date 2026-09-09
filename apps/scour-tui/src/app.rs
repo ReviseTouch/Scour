@@ -787,13 +787,18 @@ impl App {
     }
 
     /// The rail's counts arrived.
-    pub fn counted(&mut self, generation: u64, reply: scour_core::FacetResponse) {
+    ///
+    /// `age` says which of the two questions this answers. Both groups come
+    /// back in either reply — the request asks for both so that neither walk
+    /// is sampled — and taking the other one would count the rail over the
+    /// strip's query, or the other way round.
+    pub fn counted(&mut self, generation: u64, age: bool, reply: scour_core::FacetResponse) {
         if generation != self.generation {
             return;
         }
         for group in reply.groups {
             match group.by {
-                scour_core::FacetBy::Kind => {
+                scour_core::FacetBy::Kind if !age => {
                     // **Every kind, including the ones with none.** A kind
                     // that vanishes when a query has none of it takes the rest
                     // of the rail with it — every line below moves — and it
@@ -815,7 +820,7 @@ impl App {
                     kinds.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
                     self.kinds = kinds;
                 }
-                scour_core::FacetBy::Age { .. } => {
+                scour_core::FacetBy::Age { .. } if age => {
                     // **Every band, including the empty ones.** The answer
                     // leaves out bands nothing fell into, and a strip built
                     // from what came back has a different number of bars for
@@ -1160,7 +1165,8 @@ impl App {
     /// and the kinds stay, press a place and the kinds reflect it.
     pub fn kinds_over(&self) -> String {
         let filter = self.filter.as_deref().filter(|f| !f.starts_with("kind:"));
-        scour_ui::query::compose(&self.query, filter)
+        let typed = scour_query::without(&self.query, &["kind"]);
+        scour_ui::query::compose(typed.as_deref().unwrap_or(&self.query), filter)
     }
 
     /// What the **strip** is asked about, which is not the same rows.
@@ -1173,9 +1179,16 @@ impl App {
     /// had done. So the bars are always the distribution of the query
     /// *without* its age term: the shape stays, and pressing another band
     /// moves the filter rather than shrinking the strip.
+    ///
+    /// **Typed or pressed, it is the same term.** This dropped only what the
+    /// strip itself had set, so somebody who typed `dm:7d` got a strip with
+    /// one bar on it and no way back — the same dead control, reached by the
+    /// other door. The browser had it right and the window and the terminal
+    /// did not.
     pub fn strip_over(&self) -> String {
         let filter = self.filter.as_deref().filter(|f| !f.starts_with("dm:"));
-        scour_ui::query::compose(&self.query, filter)
+        let typed = scour_query::without(&self.query, &["dm"]);
+        scour_ui::query::compose(typed.as_deref().unwrap_or(&self.query), filter)
     }
 
     fn ask(&mut self, offset: u32, limit: u32, cap: u32) -> Want {

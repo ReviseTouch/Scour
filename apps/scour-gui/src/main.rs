@@ -28,7 +28,7 @@ use scour_i18n::Catalogue;
 use scour_proto::Response;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use link::{Ask, Got, Link, ReplyRevision};
+use link::{Ask, Got, Half, Link, ReplyRevision};
 
 /// The interface, as `slint-build` generated it.
 ///
@@ -3039,10 +3039,55 @@ fn schedule_background(
             if state.borrow().query_revision != query_revision {
                 return;
             }
-            link.send(Ask::Facets {
-                query_revision,
-                query,
-            });
+            // **Each half without the term it sets.** The rail offers kinds
+            // and the ribbon offers ages, so counting them over the query as
+            // typed makes `kind:code` a rail of one number and `dm:7d` a
+            // ribbon of one bar — controls that can only confirm what is
+            // already on the screen. The browser had this right from the
+            // start; the window did not.
+            //
+            // Both come out of one walk unless the query names a kind or an
+            // age, which is the uncommon case and the only one that pays for
+            // a second.
+            let for_kinds = scour_query::without(&query, &["kind"]);
+            let for_ages = scour_query::without(&query, &["dm"]);
+            match (for_kinds, for_ages) {
+                (None, None) => link.send(Ask::Facets {
+                    query_revision,
+                    query,
+                    half: Half::Both,
+                }),
+                (kinds, ages) => {
+                    link.send(Ask::Facets {
+                        query_revision,
+                        query: kinds.unwrap_or_else(|| query.clone()),
+                        half: Half::Kinds,
+                    });
+                    link.send(Ask::Facets {
+                        query_revision,
+                        query: ages.unwrap_or_else(|| query.clone()),
+                        half: Half::Ages,
+                    });
+                    // **And the count, which neither of those answers any
+                    // more.** One walk over the query in force used to count
+                    // it exactly on its way past; two walks over two wider
+                    // queries count something else, so the meter fell back to
+                    // the search's own ceiling and read `1.000+` over a result
+                    // of thirteen thousand. This is the pass that exists for
+                    // exactly that, asked here rather than after a reply that
+                    // is no longer about the right rows.
+                    let count = {
+                        let mut s = state.borrow_mut();
+                        s.start_count().then(|| full_query(&s))
+                    };
+                    if let Some(query) = count {
+                        link.send(Ask::Count {
+                            query_revision,
+                            query,
+                        });
+                    }
+                }
+            }
         },
     );
 }
@@ -4087,6 +4132,7 @@ fn apply(
         }
         Got::Facets {
             query_revision,
+            half,
             reply,
         } => {
             if query_revision != state.borrow().query_revision {
@@ -4113,115 +4159,127 @@ fn apply(
                 .map(|g| g.facets.as_slice())
                 .unwrap_or(&[]);
 
-            // The bar behind each row is that kind's share of the largest,
-            // which is the page's rule: it answers "is this most of what
-            // matched" without a second number to read.
-            let top = kinds.iter().map(|x| x.count).max().unwrap_or(1).max(1);
-            let mut fresh: Vec<Facet> = Vec::new();
-            for k in rows::offered_kinds() {
-                let token = k.token();
-                let Some(hit) = kinds.iter().find(|x| x.key == token) else {
-                    continue;
-                };
-                fresh.push(Facet {
-                    label: t(cat, k.msgid()),
-                    // The whole term, not the bare token: the filter slot
-                    // holds `kind:code`, `under:/home/x`, `dm:38d` — one kind
-                    // of thing, so the query is built by joining rather than
-                    // by remembering which prefix goes with which.
-                    token: format!("kind:{token}").into(),
-                    count: compact(hit.count).into(),
-                    share: hit.count as f32 / top as f32,
-                });
-            }
-            facets.set_vec(fresh);
-
-            // The ribbon. Keys are the edges as text, newest first, and
-            // `older` is everything past the last one — the service's own
-            // wording, so nothing here has to know how the bands were made.
-            // **Oldest on the left, which means reversing what the service
-            // was asked for.** `bar_edges()` is newest first — it is the list
-            // of upper bounds, and the smallest bound is the newest bar — but
-            // the ribbon reads left to right as time does, and its axis says
-            // "2 years ago" at the left end. Drawn in the asked-for order the
-            // bars ran backwards under an axis that did not, which is worse
-            // than no ribbon: it is a ribbon that is confidently wrong.
-            let edges = scour_ui::bar_edges();
-            let count_of = |key: &str| -> i32 {
-                ages.iter()
-                    .find(|x| x.key == key)
-                    .map(|x| x.count)
-                    .unwrap_or(0) as i32
-            };
-            let mut peak = 1i32;
-            let mut bars: Vec<Bar> = edges
-                .iter()
-                .rev()
-                .map(|days| {
-                    let count = count_of(&days.to_string());
-                    peak = peak.max(count);
-                    Bar {
-                        count,
-                        days: *days as i32,
-                        band: scour_ui::band_of(*days as f64) as i32,
-                        about: String::new().into(),
-                    }
-                })
-                .collect();
-            // Anything older than the last edge belongs to the oldest bar
-            // rather than to nothing: two years is where the scale ends, not
-            // where the files do.
-            if let Some(first) = bars.first_mut() {
-                // The oldest bar is not a filter: it has no upper bound, so
-                // `dm:730d` would select everything rather than narrow.
-                first.days = 0;
-                first.count += count_of("older");
-                peak = peak.max(first.count);
-            }
-            w.set_bar_peak(peak);
-            w.set_bars(ModelRc::new(VecModel::from(bars)));
-            let indexed = state.borrow().indexed;
-            let count_query = {
-                let mut s = state.borrow_mut();
-                if f.capped {
-                    s.start_count().then(|| full_query(&s))
-                } else {
-                    s.exact_count = Some(ExactCount {
-                        query_revision,
-                        total: f.total,
-                        capped: false,
+            if half.kinds() {
+                // The bar behind each row is that kind's share of the largest,
+                // which is the page's rule: it answers "is this most of what
+                // matched" without a second number to read.
+                let top = kinds.iter().map(|x| x.count).max().unwrap_or(1).max(1);
+                let mut fresh: Vec<Facet> = Vec::new();
+                for k in rows::offered_kinds() {
+                    let token = k.token();
+                    let Some(hit) = kinds.iter().find(|x| x.key == token) else {
+                        continue;
+                    };
+                    fresh.push(Facet {
+                        label: t(cat, k.msgid()),
+                        // The whole term, not the bare token: the filter slot
+                        // holds `kind:code`, `under:/home/x`, `dm:38d` — one kind
+                        // of thing, so the query is built by joining rather than
+                        // by remembering which prefix goes with which.
+                        token: format!("kind:{token}").into(),
+                        count: compact(hit.count).into(),
+                        share: hit.count as f32 / top as f32,
                     });
-                    None
                 }
-            };
-            // The facet walk counted the whole matching set on its way, so it
-            // is the first thing that can tell the list how long it really is.
-            if !f.capped {
-                rows.set_total(f.total.min(i32::MAX as u64) as usize);
+                facets.set_vec(fresh);
             }
-            // The same sentence the search reply draws — see there.
-            trace(&format!(
-                "meter/facets {}{} / {}",
-                grouped(f.total),
-                if f.capped { "+" } else { "" },
-                grouped(indexed)
-            ));
-            w.set_meter_count(
-                format!(
-                    "{}{} / {}",
+
+            if half.ages() {
+                // The ribbon. Keys are the edges as text, newest first, and
+                // `older` is everything past the last one — the service's own
+                // wording, so nothing here has to know how the bands were made.
+                // **Oldest on the left, which means reversing what the service
+                // was asked for.** `bar_edges()` is newest first — it is the list
+                // of upper bounds, and the smallest bound is the newest bar — but
+                // the ribbon reads left to right as time does, and its axis says
+                // "2 years ago" at the left end. Drawn in the asked-for order the
+                // bars ran backwards under an axis that did not, which is worse
+                // than no ribbon: it is a ribbon that is confidently wrong.
+                let edges = scour_ui::bar_edges();
+                let count_of = |key: &str| -> i32 {
+                    ages.iter()
+                        .find(|x| x.key == key)
+                        .map(|x| x.count)
+                        .unwrap_or(0) as i32
+                };
+                let mut peak = 1i32;
+                let mut bars: Vec<Bar> = edges
+                    .iter()
+                    .rev()
+                    .map(|days| {
+                        let count = count_of(&days.to_string());
+                        peak = peak.max(count);
+                        Bar {
+                            count,
+                            days: *days as i32,
+                            band: scour_ui::band_of(*days as f64) as i32,
+                            about: String::new().into(),
+                        }
+                    })
+                    .collect();
+                // Anything older than the last edge belongs to the oldest bar
+                // rather than to nothing: two years is where the scale ends, not
+                // where the files do.
+                if let Some(first) = bars.first_mut() {
+                    // The oldest bar is not a filter: it has no upper bound, so
+                    // `dm:730d` would select everything rather than narrow.
+                    first.days = 0;
+                    first.count += count_of("older");
+                    peak = peak.max(first.count);
+                }
+                w.set_bar_peak(peak);
+                w.set_bars(ModelRc::new(VecModel::from(bars)));
+            }
+            // **Only when one walk answered both.** `f.total` is the size of
+            // the set this reply counted, and a stripped query counts a wider
+            // one — reading the meter off it would say `2.238.902` over a
+            // result of eight thousand. The search reply draws the same
+            // sentence and is about the query actually in force, so nothing
+            // is lost by leaving it to that one here.
+            if half == Half::Both {
+                let indexed = state.borrow().indexed;
+                let count_query = {
+                    let mut s = state.borrow_mut();
+                    if f.capped {
+                        s.start_count().then(|| full_query(&s))
+                    } else {
+                        s.exact_count = Some(ExactCount {
+                            query_revision,
+                            total: f.total,
+                            capped: false,
+                        });
+                        None
+                    }
+                };
+                // The facet walk counted the whole matching set on its way, so it
+                // is the first thing that can tell the list how long it really is.
+                if !f.capped {
+                    rows.set_total(f.total.min(i32::MAX as u64) as usize);
+                }
+                // The same sentence the search reply draws — see there.
+                trace(&format!(
+                    "meter/facets {}{} / {}",
                     grouped(f.total),
                     if f.capped { "+" } else { "" },
-                    grouped(indexed),
-                )
-                .into(),
-            );
-            // The facet walk already counted the same rows. Only its own
-            // safety cap makes a second pass necessary.
-            if let Some(query) = count_query {
-                link.send(Ask::Count {
-                    query_revision,
-                    query,
-                });
+                    grouped(indexed)
+                ));
+                w.set_meter_count(
+                    format!(
+                        "{}{} / {}",
+                        grouped(f.total),
+                        if f.capped { "+" } else { "" },
+                        grouped(indexed),
+                    )
+                    .into(),
+                );
+                // The facet walk already counted the same rows. Only its own
+                // safety cap makes a second pass necessary.
+                if let Some(query) = count_query {
+                    link.send(Ask::Count {
+                        query_revision,
+                        query,
+                    });
+                }
             }
         }
     }

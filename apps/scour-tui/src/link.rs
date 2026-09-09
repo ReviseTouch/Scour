@@ -105,6 +105,10 @@ pub enum Got {
     /// The rail's counts, or the strip's.
     Facets {
         generation: u64,
+        /// Which of the two was asked. Both groups come back in either reply
+        /// — see the request — so without this each answer would repaint the
+        /// other half from a query that is not the other half's.
+        age: bool,
         reply: Box<scour_core::FacetResponse>,
     },
     /// The desktop's own folders.
@@ -331,6 +335,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             });
             continue;
         };
+        let for_age = matches!(ask, Ask::Facets { age: true, .. });
         let request = match ask {
             Ask::Search {
                 query,
@@ -350,15 +355,24 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     count_cap: cap,
                 },
             },
-            Ask::Facets { query, age, .. } => Request::Facets {
+            // **Both groups in both requests, and that is not laziness.**
+            // The scan cap is chosen from the questions asked: a distribution
+            // cannot be sampled, so asking for one lifts the cap for
+            // everything read in the same walk. Asking for the kinds alone —
+            // the obvious way to write this — quietly moves the rail onto the
+            // sampled path, where the sample is not proportional but simply
+            // the first two hundred thousand rows the walk reaches. The rail
+            // then disagrees with the same rail in the window by a sixth,
+            // and neither says which is right. The extra group is close to
+            // free: the walk is the cost, the counting is not.
+            Ask::Facets { query, .. } => Request::Facets {
                 query,
-                by: if age {
-                    vec![FacetBy::Age {
+                by: vec![
+                    FacetBy::Kind,
+                    FacetBy::Age {
                         edges: scour_ui::bar_edges(),
-                    }]
-                } else {
-                    vec![FacetBy::Kind]
-                },
+                    },
+                ],
             },
             Ask::Explain { query, .. } => Request::Explain {
                 query,
@@ -439,6 +453,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             Ok(Response::Facets(reply)) => {
                 let _ = out.send(Got::Facets {
                     generation,
+                    age: for_age,
                     reply: Box::new(reply),
                 });
             }

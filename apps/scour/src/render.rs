@@ -132,7 +132,18 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 if (r.total as usize) > r.hits.len() || r.capped {
                     // A number larger than what was just shown, or the advice
                     // reads as "ask for what you already have".
-                    format!(" · -n {} {}", (r.hits.len() * 8).max(20), t("for more"))
+                    //
+                    // **And where to put it, which is not a detail here.**
+                    // Everything after the query is the query — a filename can
+                    // contain `--` — so `scour rapor -n 40` searches for three
+                    // words and answers zero. Advice that lands somebody there
+                    // is worse than no advice: it is a flag that appears not to
+                    // work. See `Cli::query`.
+                    format!(
+                        " · -n {} {}",
+                        (r.hits.len() * 8).max(20),
+                        t("before the query, for more")
+                    )
                 } else {
                     String::new()
                 }

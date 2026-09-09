@@ -207,8 +207,12 @@ fn snap(
             // **Taken, not dropped.** The rail's counts and the desktop's
             // folders arrive on the other lane and usually first; a wait that
             // threw them away photographed an empty rail every time.
-            Ok(Beat::Reply(Got::Facets { generation, reply })) => {
-                state.counted(generation, *reply);
+            Ok(Beat::Reply(Got::Facets {
+                generation,
+                age,
+                reply,
+            })) => {
+                state.counted(generation, age, *reply);
             }
             Ok(Beat::Reply(Got::Places(places))) => state.places = places,
             Ok(Beat::Reply(Got::Rules {
@@ -392,8 +396,12 @@ fn run(
                 let want = state.landed(generation, offset, limit, *reply);
                 act(want, link);
             }
-            Beat::Reply(Got::Facets { generation, reply }) => {
-                state.counted(generation, *reply);
+            Beat::Reply(Got::Facets {
+                generation,
+                age,
+                reply,
+            }) => {
+                state.counted(generation, age, *reply);
             }
             Beat::Reply(Got::Places(places)) => {
                 state.places = places;
@@ -487,8 +495,12 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
-            Beat::Reply(Got::Facets { generation, reply }) => {
-                state.counted(generation, *reply);
+            Beat::Reply(Got::Facets {
+                generation,
+                age,
+                reply,
+            }) => {
+                state.counted(generation, age, *reply);
             }
             Beat::Reply(Got::Places(places)) => state.places = places,
             Beat::Reply(Got::Stats(stats)) => state.stats = Some(*stats),

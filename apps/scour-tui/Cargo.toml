@@ -28,6 +28,12 @@ scour-settings = { workspace = true }
 scour-places   = { workspace = true }
 scour-preview  = { workspace = true }
 scour-ui       = { workspace = true }
+# **The language, for one function: `without`.** The rails are counted over
+# the query with their own term taken out, and deciding which token is such a
+# term is the parser's judgement — `kind:zurna` is text, `tür:code` is a kind.
+# Asking the crate that owns the field table is what keeps that from becoming
+# a second, quietly different opinion about the query language.
+scour-query    = { workspace = true }
 # The wastebasket and the clipboard, the same two the window uses.
 scour-trash  = { workspace = true }
 scour-clip   = { workspace = true }

@@ -44,16 +44,26 @@ $ scour "ext:rs size:>10kb dm:7d"
       Code    30.2 KiB  /home/u/Projeler/Scour/apps/scour/src/render.rs
       Code    24.9 KiB  /home/u/Projeler/ColpanRust/crates/repo_latches/tests/surface_line_budget.rs
       Code    13.8 KiB  /home/u/Projeler/ColpanRust/crates/command_catalog/tests/panels.rs
-5 of 1705 in 3.27 ms (28000 rows) · -n 40 for more
+5 of 1705 in 3.27 ms (28000 rows) · -n 40 before the query, for more
 ```
 
 Five rows at a terminal, forty into a pipe — a search that answers in
-milliseconds is asked again, not scrolled. `-n` says how many.
+milliseconds is asked again, not scrolled. `-n` says how many, and it goes
+*before* the query: everything after the query is the query, because a
+filename can contain `--`.
 
 ## The four faces
 
-One index, one service, one query. These three were photographed together,
-running `kind:code dm:7d size:>10kb` against the same 4.6 million entries.
+One index, one service, one query. The window, the browser and the terminal
+below were photographed in one sitting, all three running
+`kind:code dm:7d size:>10kb` against the same 4.6 million entries — same counts
+down the rail, same shape along the ribbon, because there is one index behind
+them and not three.
+
+**The command line** — `scour`, and the two things a search box cannot do:
+read a query back before running it, and list a directory out of the index.
+
+![Scour on the command line](docs/img/command-line.webp)
 
 **The window** — `scour-gui`, Slint, no browser inside it.
 

@@ -3930,161 +3930,164 @@ export component MainWindow inherits Window {
                 }
             }
 
-            ScrollView {
-                viewport-height: sheetlist.preferred-height;
+            // **No scroller here: `Sheet` is one already.** This panel had
+            // its own, which put a `ScrollView` inside a `ScrollView` — and
+            // the outer one sizes itself from what its child asks for, while
+            // a scroller by design asks for almost nothing. So the panel
+            // opened as a box four lines tall with the rules inside it out of
+            // reach. The same collapse the `Sheet` comment describes, one
+            // level further in.
+            VerticalLayout {
+                spacing: 4px;
+                alignment: start;
 
-                sheetlist := VerticalLayout {
-                    spacing: 4px;
-                    alignment: start;
+                // **Three groups, because they are three different kinds
+                // of thing** — what somebody added here, what a file says,
+                // and what the program itself skips — and only the first
+                // can be deleted. A flat list said none of that, and there
+                // was no way to tell a rule in force from one switched off.
+                Text {
+                    text: root.rules-added-title;
+                    color: Theme.ink;
+                    font-size: 11px;
+                    font-weight: 650;
+                    letter-spacing: 1.2px;
+                }
+                Text {
+                    text: root.rules-added-note;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
 
-                    // **Three groups, because they are three different kinds
-                    // of thing** — what somebody added here, what a file says,
-                    // and what the program itself skips — and only the first
-                    // can be deleted. A flat list said none of that, and there
-                    // was no way to tell a rule in force from one switched off.
-                    Text {
-                        text: root.rules-added-title;
-                        color: Theme.ink;
-                        font-size: 11px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                for r[i] in root.rules-added: RuleRow {
+                    value: r.value;
+                    off: r.off;
+                    word: root.rules-off-word;
+                    removable: true;
+                    toggled => {
+                        root.rule-toggled(r.id);
                     }
-                    Text {
-                        text: root.rules-added-note;
-                        color: Theme.ink-3;
-                        font-size: 11px;
-                        wrap: word-wrap;
+                    dropped => {
+                        root.rule-dropped(r.kind, r.value);
                     }
+                }
 
-                    for r[i] in root.rules-added: RuleRow {
-                        value: r.value;
-                        off: r.off;
-                        word: root.rules-off-word;
-                        removable: true;
-                        toggled => {
-                            root.rule-toggled(r.id);
-                        }
-                        dropped => {
-                            root.rule-dropped(r.kind, r.value);
-                        }
-                    }
+                // A rule is added as a *name* whatever it looks like,
+                // because that is the rule people mean: matched wherever
+                // it appears. One that starts with a slash is a path, and
+                // guessing between them by anything subtler would be a
+                // rule nobody was told about.
+                Rectangle { height: 4px; }
 
-                    // A rule is added as a *name* whatever it looks like,
-                    // because that is the rule people mean: matched wherever
-                    // it appears. One that starts with a slash is a path, and
-                    // guessing between them by anything subtler would be a
-                    // rule nobody was told about.
-                    Rectangle { height: 4px; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
 
-                    HorizontalLayout {
-                        spacing: 6px;
-                        height: 26px;
+                    Rectangle {
+                        border-width: 1px;
+                        border-radius: 3px;
+                        border-color: Theme.line;
+                        background: Theme.panel;
 
-                        Rectangle {
-                            border-width: 1px;
-                            border-radius: 3px;
-                            border-color: Theme.line;
-                            background: Theme.panel;
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
 
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-
-                                fresh := TextInput {
-                                    color: Theme.ink;
-                                    font-family: Fonts.mono;
-                                    font-size: 11.5px;
-                                    single-line: true;
-                                    vertical-alignment: center;
-                                    selection-background-color: Theme.selection;
-                                    selection-foreground-color: Theme.ink;
-                                    edited => {
-                                        if (self.text.character-count > 400) {
-                                            self.text = root.rule-kept;
-                                        } else {
-                                            root.rule-kept = self.text;
-                                        }
-                                    }
-                                    accepted => {
-                                        root.rule-added(self.text);
-                                        self.text = "";
-                                        root.rule-kept = "";
-                                    }
-                                }
-                            }
-
-                            // The placeholder sits *under* the field rather
-                            // than beside it: a layout owns its children's
-                            // positions, and this one has to start where the
-                            // text does.
-                            if fresh.text == "": Text {
-                                text: root.rules-hint;
-                                color: Theme.ink-3;
+                            fresh := TextInput {
+                                color: Theme.ink;
                                 font-family: Fonts.mono;
                                 font-size: 11.5px;
+                                single-line: true;
                                 vertical-alignment: center;
-                                x: 8px;
-                                height: parent.height;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                                edited => {
+                                    if (self.text.character-count > 400) {
+                                        self.text = root.rule-kept;
+                                    } else {
+                                        root.rule-kept = self.text;
+                                    }
+                                }
+                                accepted => {
+                                    root.rule-added(self.text);
+                                    self.text = "";
+                                    root.rule-kept = "";
+                                }
                             }
                         }
 
-                        Push {
-                            label: root.rules-add;
-                            clicked => {
-                                root.rule-added(fresh.text);
-                                fresh.text = "";
-                            }
+                        // The placeholder sits *under* the field rather
+                        // than beside it: a layout owns its children's
+                        // positions, and this one has to start where the
+                        // text does.
+                        if fresh.text == "": Text {
+                            text: root.rules-hint;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            x: 8px;
+                            height: parent.height;
                         }
                     }
 
-                    Rectangle { height: 10px; }
-
-                    Text {
-                        text: root.rules-config-title;
-                        color: Theme.ink;
-                        font-size: 11px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
-                    }
-                    Text {
-                        text: root.rules-config-note;
-                        color: Theme.ink-3;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
-
-                    for r[i] in root.rules-config: RuleRow {
-                        value: r.value;
-                        off: r.off;
-                        word: root.rules-off-word;
-                        toggled => {
-                            root.rule-toggled(r.id);
+                    Push {
+                        label: root.rules-add;
+                        clicked => {
+                            root.rule-added(fresh.text);
+                            fresh.text = "";
                         }
                     }
+                }
 
-                    Rectangle { height: 10px; }
+                Rectangle { height: 10px; }
 
-                    Text {
-                        text: root.rules-builtin-title;
-                        color: Theme.ink;
-                        font-size: 11px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                Text {
+                    text: root.rules-config-title;
+                    color: Theme.ink;
+                    font-size: 11px;
+                    font-weight: 650;
+                    letter-spacing: 1.2px;
+                }
+                Text {
+                    text: root.rules-config-note;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                for r[i] in root.rules-config: RuleRow {
+                    value: r.value;
+                    off: r.off;
+                    word: root.rules-off-word;
+                    toggled => {
+                        root.rule-toggled(r.id);
                     }
-                    Text {
-                        text: root.rules-builtin-note;
-                        color: Theme.ink-3;
-                        font-size: 11px;
-                        wrap: word-wrap;
-                    }
+                }
 
-                    for r[i] in root.rules-builtin: RuleRow {
-                        value: r.value;
-                        off: r.off;
-                        word: root.rules-off-word;
-                        toggled => {
-                            root.rule-toggled(r.id);
-                        }
+                Rectangle { height: 10px; }
+
+                Text {
+                    text: root.rules-builtin-title;
+                    color: Theme.ink;
+                    font-size: 11px;
+                    font-weight: 650;
+                    letter-spacing: 1.2px;
+                }
+                Text {
+                    text: root.rules-builtin-note;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                for r[i] in root.rules-builtin: RuleRow {
+                    value: r.value;
+                    off: r.off;
+                    word: root.rules-off-word;
+                    toggled => {
+                        root.rule-toggled(r.id);
                     }
                 }
             }
