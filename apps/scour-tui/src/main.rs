@@ -112,6 +112,10 @@ fn main() -> Result<()> {
         words: catalogue,
         ..App::default()
     };
+    // The table's shape, from the same file and for the same reason as the
+    // language: the first frame should be the one somebody left, not the
+    // default for the instant before an answer arrives.
+    state.columns_from(&kept.columns);
 
     if let Some(size) = args.once.clone() {
         let outcome = snap(
@@ -214,7 +218,10 @@ fn snap(
             })) => {
                 state.counted(generation, age, *reply);
             }
-            Ok(Beat::Reply(Got::Places(places))) => state.places = places,
+            Ok(Beat::Reply(Got::Places(places, mounts))) => {
+                state.places = places;
+                state.mounts = mounts;
+            }
             Ok(Beat::Reply(Got::Rules {
                 added,
                 config,
@@ -403,7 +410,8 @@ fn run(
             }) => {
                 state.counted(generation, age, *reply);
             }
-            Beat::Reply(Got::Places(places)) => {
+            Beat::Reply(Got::Places(places, mounts)) => {
+                state.mounts = mounts;
                 state.places = places;
                 state.dirty = true;
             }
@@ -502,7 +510,10 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }) => {
                 state.counted(generation, age, *reply);
             }
-            Beat::Reply(Got::Places(places)) => state.places = places,
+            Beat::Reply(Got::Places(places, mounts)) => {
+                state.places = places;
+                state.mounts = mounts;
+            }
             Beat::Reply(Got::Stats(stats)) => state.stats = Some(*stats),
             Beat::Reply(Got::Usage(usage)) => state.usage = Some(*usage),
             Beat::Reply(Got::Peek(look)) => state.peek = Some(*look),

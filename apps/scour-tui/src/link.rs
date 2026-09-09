@@ -112,7 +112,12 @@ pub enum Got {
         reply: Box<scour_core::FacetResponse>,
     },
     /// The desktop's own folders.
-    Places(Vec<(String, String)>),
+    /// The desktop's folders, and where the volumes are.
+    ///
+    /// The mounts are for one column: `Accessed` on a `noatime` volume is a
+    /// creation time under the wrong heading, and the table says so with a
+    /// dash rather than saying something false.
+    Places(Vec<(String, String)>, Vec<scour_places::Mount>),
     /// What the index holds: rows, directories, bytes on disk, sources.
     Stats(Box<scour_core::IndexStats>),
     /// A weighed folder: what it holds, and its heaviest children.
@@ -537,12 +542,14 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 });
             }
             Ok(Response::Places(places)) => {
+                let mounts = places.mounts.clone();
                 let _ = out.send(Got::Places(
                     places
                         .places
                         .into_iter()
                         .map(|p| (p.label, p.path))
                         .collect(),
+                    mounts,
                 ));
             }
             Ok(other) => {

@@ -46,7 +46,8 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Dupe, Facet, Fact, Fonts, Kid, MainWindow, MenuItem, Row, Rule, Scheme, Span, Theme,
+    Bar, Cell, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule, Scheme,
+    Span, Theme,
 };
 
 thread_local! {
@@ -205,6 +206,14 @@ const CHEAP_PAGE_US: u64 = 20_000;
 const PAGE_MAX: u32 = rows::SPAN as u32;
 
 struct State {
+    /// Where the volumes are and whether they record reads.
+    ///
+    /// **For one column.** `Accessed` on a `noatime` volume is the file's
+    /// creation time wearing a different heading, so the column says nothing
+    /// there rather than saying something false. The list arrives with the
+    /// desktop's folders and is kept for the same reason they are: it does not
+    /// change while the window is open.
+    mounts: Vec<scour_places::Mount>,
     /// When somebody last did something here. See [`AWAKE_FOR`].
     stirred: std::time::Instant,
     /// True while the window has stopped following the index closely.
@@ -794,6 +803,7 @@ fn main() -> Result<()> {
     }
 
     let state = Rc::new(RefCell::new(State {
+        mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
         stirred: std::time::Instant::now(),
         dozing: false,
@@ -884,21 +894,11 @@ fn main() -> Result<()> {
     // twelve columns: sending only those would delete a width the browser page
     // had set on `ext` or `perm`, silently, the first time anybody dragged
     // anything here.
-    let widths = Rc::new(RefCell::new(kept.widths.clone()));
-    for (id, px) in &kept.widths {
-        let v = *px as f32;
-        match id.as_str() {
-            "name" => window.set_uw_name(v),
-            "kind" => window.set_uw_kind(v),
-            "path" => window.set_uw_path(v),
-            "mtime" => window.set_uw_mtime(v),
-            "size" => window.set_uw_size(v),
-            _ => {}
-        }
-    }
+    let table = Rc::new(RefCell::new(Table::read(&kept)));
     // And share the row out once with them, so the first frame is already the
     // right shape rather than the defaults for the instant before a resize.
-    relayout(&window);
+    set_heads(&window, &table.borrow(), &cat.borrow());
+    relayout(&window, &table.borrow());
     // The panel somebody left open. Read here with the rest of the shape,
     // before the first search, so it is open in the first frame rather than
     // appearing a moment later.
@@ -923,6 +923,7 @@ fn main() -> Result<()> {
     // claim about threading that is not true.
     let weak = window.as_weak();
     let ui_state = state.clone();
+    let ui_table = Rc::clone(&table);
     let ui_rows = rows.clone();
     let ui_lines = lines.clone();
     let ui_picks = Rc::clone(&picks);
@@ -946,6 +947,7 @@ fn main() -> Result<()> {
                 apply(
                     &w,
                     &ui_state,
+                    &ui_table,
                     &ui_rows,
                     &ui_lines,
                     &ui_picks,
@@ -1161,7 +1163,7 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
-        let widths = Rc::clone(&widths);
+        let table = Rc::clone(&table);
         window.on_column_dragged(move |which, delta| {
             let Some(w) = weak.upgrade() else { return };
             // **The floor is the column's own, not one number for all five.**
@@ -1170,36 +1172,38 @@ fn main() -> Result<()> {
             // column whose contents were gone. `scour-ui` says how narrow each
             // one may be, and `lay_out` will not go under it either.
             let floor = scour_ui::column(&which).map_or(48.0, |c| c.min as f32);
-            let now = match which.as_str() {
-                "name" => (w.get_cw_name() + delta).max(floor),
-                "kind" => (w.get_cw_kind() + delta).max(floor),
-                "path" => (w.get_cw_path() + delta).max(floor),
-                "mtime" => (w.get_cw_mtime() + delta).max(floor),
-                "size" => (w.get_cw_size() + delta).max(floor),
-                _ => return,
+            // Where it is now, read off the rendered widths by position —
+            // the one place that has to know which column is which, and the
+            // list it asks is the same one the header was drawn from.
+            let Some(at) = table
+                .borrow()
+                .shown
+                .iter()
+                .position(|c| c.id == which.as_str())
+            else {
+                return;
             };
-            match which.as_str() {
-                "name" => w.set_uw_name(now),
-                "kind" => w.set_uw_kind(now),
-                "path" => w.set_uw_path(now),
-                "mtime" => w.set_uw_mtime(now),
-                "size" => w.set_uw_size(now),
-                _ => return,
-            }
+            let Some(was) = w.get_cw().row_data(at) else {
+                return;
+            };
+            let now = (was + delta).max(floor);
             // **And then the whole row again, not just this column.** Widening
             // one column narrows the others, and before this the others were
             // simply not told: the total ran past the edge and whatever was
             // out there stopped being on screen.
-            relayout(&w);
             // **What is kept is what was asked for, not what it came out as.**
             // A drag that lands during a squeeze renders narrower than the
             // pointer went; saving the rendered width would walk the column in
             // a little every time the preview panel was opened and it was
             // dragged again.
-            widths.borrow_mut().insert(which.to_string(), now as u32);
+            table
+                .borrow_mut()
+                .widths
+                .insert(which.to_string(), now as u32);
+            relayout(&w, &table.borrow());
             link.send(Ask::Remember {
                 change: scour_settings::Change {
-                    widths: Some(widths.borrow().clone()),
+                    widths: Some(table.borrow().widths.clone()),
                     ..Default::default()
                 },
             });
@@ -1216,26 +1220,115 @@ fn main() -> Result<()> {
     {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
-        let widths = Rc::clone(&widths);
+        let table = Rc::clone(&table);
         window.on_column_reset(move |which| {
             let Some(w) = weak.upgrade() else { return };
-            // Zero is "nobody has touched it", here and in the settings file.
-            match which.as_str() {
-                "name" => w.set_uw_name(0.0),
-                "kind" => w.set_uw_kind(0.0),
-                "path" => w.set_uw_path(0.0),
-                "mtime" => w.set_uw_mtime(0.0),
-                "size" => w.set_uw_size(0.0),
-                _ => return,
-            }
-            relayout(&w);
-            widths.borrow_mut().remove(which.as_str());
+            // Removing it is what "nobody has touched it" means, here and in
+            // the settings file.
+            table.borrow_mut().widths.remove(which.as_str());
+            relayout(&w, &table.borrow());
             link.send(Ask::Remember {
                 change: scour_settings::Change {
-                    widths: Some(widths.borrow().clone()),
+                    widths: Some(table.borrow().widths.clone()),
                     ..Default::default()
                 },
             });
+        });
+    }
+
+    // **Which columns, from the ⋮ at the end of the header row.**
+    //
+    // The same overlay the right-click menu uses, holding switches instead of
+    // actions: one menu to place, dismiss and keep on screen rather than two
+    // that would drift apart. `menu-columns` is what says which it is holding.
+    {
+        let weak = window.as_weak();
+        let table = Rc::clone(&table);
+        let cat = Rc::clone(&cat);
+        window.on_columns_clicked(move |x, y| {
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            let table = table.borrow();
+            let mut model: Vec<MenuItem> = scour_ui::COLUMNS
+                .iter()
+                .map(|c| {
+                    let on = table.showing(c.id);
+                    MenuItem {
+                        id: c.id.into(),
+                        label: t(&cat, c.msgid),
+                        key: "".into(),
+                        rule: false,
+                        careful: false,
+                        heavy: false,
+                        on,
+                        // **The last one standing cannot be turned off.** A
+                        // table of no columns is not a smaller table, it is a
+                        // broken one — and the page refuses the same press for
+                        // the same reason.
+                        off: on && table.shown.len() == 1,
+                    }
+                })
+                .collect();
+            model.push(MenuItem {
+                id: "".into(),
+                label: t(&cat, "Back to the default"),
+                key: "".into(),
+                rule: true,
+                careful: false,
+                heavy: false,
+                on: false,
+                off: false,
+            });
+            w.set_menu(ModelRc::new(VecModel::from(model)));
+            // Under the ⋮ itself. The overlay keeps itself on screen from
+            // there — see `menu-x` — and the menu is wider than the button,
+            // so it hangs to the left of it rather than off the edge.
+            w.set_menu_x(x);
+            w.set_menu_y(y);
+            w.set_menu_columns(true);
+            w.set_menu_open(true);
+        });
+    }
+
+    // One switch pressed. The table changes, the rows are rebuilt because
+    // their cells are the columns, and the choice is saved — in that order,
+    // because the rows are built from the table.
+    {
+        let weak = window.as_weak();
+        let table = Rc::clone(&table);
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        let cat = Rc::clone(&cat);
+        window.on_column_toggled(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            stir(&state, &link);
+            {
+                let mut t = table.borrow_mut();
+                if id.is_empty() {
+                    t.shown = COLUMN_DEFAULT
+                        .iter()
+                        .filter_map(|id| scour_ui::column(id))
+                        .collect();
+                } else {
+                    t.toggle(&id);
+                }
+            }
+            w.set_menu_open(false);
+            w.set_menu_columns(false);
+            set_heads(&w, &table.borrow(), &cat.borrow());
+            relayout(&w, &table.borrow());
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    columns: Some(table.borrow().ids()),
+                    ..Default::default()
+                },
+            });
+            // **And the rows again, because a row is its cells.** Nothing on
+            // screen holds the value of a column that was not being shown, so
+            // the page is asked for afresh rather than repainted. Re-running
+            // the query is what does that, and it is a millisecond.
+            let query = w.get_query();
+            w.invoke_query_changed(query);
         });
     }
 
@@ -1243,9 +1336,10 @@ fn main() -> Result<()> {
     // and went. Slint reports it; the widths are worked out in Rust.
     {
         let weak = window.as_weak();
+        let table = Rc::clone(&table);
         window.on_relayout(move |_| {
             if let Some(w) = weak.upgrade() {
-                relayout(&w);
+                relayout(&w, &table.borrow());
             }
         });
     }
@@ -1410,6 +1504,9 @@ fn main() -> Result<()> {
             // re-asked for, because those are worded where they arrive.
             *held.borrow_mut() = Rc::new(Catalogue::for_language(&tag));
             words(&w, &held.borrow());
+            // The headings are words as well, and which of them there are is
+            // the table's answer rather than the catalogue's.
+            set_heads(&w, &table.borrow(), &held.borrow());
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     language: Some(tag.to_string()),
@@ -1861,6 +1958,8 @@ fn main() -> Result<()> {
                     rule: last.is_some_and(|l| l != item.group),
                     careful: item.weight == scour_ui::menu::Weight::Careful,
                     heavy: item.weight == scour_ui::menu::Weight::Heavy,
+                    on: false,
+                    off: false,
                 });
                 last = Some(item.group);
             }
@@ -2009,6 +2108,8 @@ fn main() -> Result<()> {
                             rule: false,
                             careful: false,
                             heavy: false,
+                            on: false,
+                            off: false,
                         })
                         .collect();
                     w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
@@ -2584,6 +2685,14 @@ fn main() -> Result<()> {
     }
 
     if let Ok(which) = std::env::var("SCOUR_GUI_PANEL") {
+        // The column picker is not a panel but it opens like one, and a
+        // picture of it is the only way to check it from here.
+        if which == "columns" {
+            // Where the ⋮ is, roughly: nothing has been laid out yet at this
+            // point, so a picture of the menu is a picture of the menu rather
+            // than of where it opens.
+            window.invoke_columns_clicked(1500.0, 150.0);
+        }
         // Press it, do not set it: the handler is what asks the service for
         // what the panel shows, and setting the property first made the press
         // read as a second one — which closes it and sends nothing.
@@ -3306,6 +3415,7 @@ fn facet_query(s: &State) -> String {
 fn apply(
     w: &MainWindow,
     state: &Rc<RefCell<State>>,
+    table: &Rc<RefCell<Table>>,
     rows: &Rc<rows::Rows>,
     lines: &Rc<rows::Lines>,
     picks: &Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>>,
@@ -3382,6 +3492,12 @@ fn apply(
             };
             let now = unix_now();
             let terms = terms_of(&state.borrow().query);
+            // The one string a cell needs that is not on the hit. Read once:
+            // a page is two hundred rows and the catalogue is a lookup.
+            let frozen_note = t(
+                cat,
+                "this volume does not record reads (noatime) — the number shown would be left over from when the file was created",
+            );
             let page: Vec<Row> = r
                 .hits
                 .iter()
@@ -3395,7 +3511,20 @@ fn apply(
                 // here does not know: it is whether *this page* held them a
                 // moment ago, and the page that held them is the model's. See
                 // `Rows::put`.
-                .map(|h| rows::row_of(h, &terms, now, &t(cat, h.kind.msgid()), false))
+                .map(|h| {
+                    rows::row_of(
+                        h,
+                        &terms,
+                        &rows::Shape {
+                            columns: &table.borrow().shown,
+                            mounts: &state.borrow().mounts,
+                            kind: &t(cat, h.kind.msgid()),
+                            frozen_note: &frozen_note,
+                            now,
+                        },
+                        false,
+                    )
+                })
                 .collect();
             // What each row weighs, beside the page rather than on it: Slint
             // counts in 32 bits and a file does not.
@@ -4118,6 +4247,7 @@ fn apply(
                 trace(&format!("places: unexpected reply {reply:?}"));
                 return;
             };
+            state.borrow_mut().mounts = p.mounts.clone();
             let scopes: Vec<Facet> = p
                 .places
                 .iter()
@@ -4628,20 +4758,101 @@ fn mono_family() -> String {
 /// would be a heading with no word, so the lookup is checked there by a test
 /// rather than unwrapped here.
 fn columns(window: &MainWindow, cat: &Catalogue) {
+    // The report has a size heading of its own, which is not the table's.
     let head = |id: &str| {
         scour_ui::column(id)
             .map(|c| t(cat, c.msgid))
             .unwrap_or_default()
     };
-    window.set_head_name(head("name"));
-    window.set_head_kind(head("kind"));
-    window.set_head_path(head("path"));
-    window.set_head_mtime(head("mtime"));
     window.set_head_size(head("size"));
 }
 
-/// The five columns this window shows, in the order it shows them.
-const COLUMN_IDS: [&str; 5] = ["name", "kind", "path", "mtime", "size"];
+/// The columns this window shows when nobody has said otherwise.
+///
+/// **`scour-ui`'s, so that this window opens the way it always has.** The
+/// browser page's own default is the same five in a different order, which is
+/// a disagreement older than this and not one to settle by quietly rearranging
+/// somebody's table.
+const COLUMN_DEFAULT: &[&str] = scour_ui::DEFAULT_COLUMNS;
+
+/// Which columns are shown, how wide, and what a person dragged them to.
+///
+/// **One place, because the three answers depend on each other.** Widths are
+/// shared out among the columns that are showing; showing one more takes room
+/// from the rest; and what somebody dragged has to survive a column being
+/// hidden and shown again — which it does here, because the map is kept whole
+/// rather than trimmed to what is on screen.
+struct Table {
+    shown: Vec<&'static scour_ui::Column>,
+    /// What each column was dragged to, by id, for **every** column and not
+    /// only the ones showing. `Change::widths` replaces the map rather than
+    /// merging into it, so a save has to send every width there is: sending
+    /// only the visible ones would delete what the browser page had set on a
+    /// column this window happens to be hiding.
+    widths: std::collections::BTreeMap<String, u32>,
+}
+
+impl Table {
+    /// What was saved, or the default where it says nothing usable.
+    ///
+    /// **Every unknown id dropped rather than the list refused.** A setting
+    /// written by a newer version, or by hand, names a column this build does
+    /// not have; showing the rest is what somebody meant, and an empty list is
+    /// the one answer that cannot be right — a table of no columns is not a
+    /// smaller table.
+    fn read(kept: &scour_settings::Settings) -> Table {
+        let mut shown: Vec<&'static scour_ui::Column> = kept
+            .columns
+            .iter()
+            .filter_map(|id| scour_ui::column(id))
+            .collect();
+        if shown.is_empty() {
+            shown = COLUMN_DEFAULT
+                .iter()
+                .filter_map(|id| scour_ui::column(id))
+                .collect();
+        }
+        Table {
+            shown,
+            widths: kept.widths.clone(),
+        }
+    }
+
+    fn ids(&self) -> Vec<String> {
+        self.shown.iter().map(|c| c.id.to_owned()).collect()
+    }
+
+    fn showing(&self, id: &str) -> bool {
+        self.shown.iter().any(|c| c.id == id)
+    }
+
+    /// Switch one column on or off.
+    ///
+    /// **Put back where its neighbours expect it, without moving the others.**
+    /// Rebuilding the list in table order would throw away an arrangement
+    /// somebody had made, every time they showed one more column — so a
+    /// column arrives in front of the first shown column that comes after it
+    /// in `scour_ui::COLUMNS`, and at the end when there is none.
+    fn toggle(&mut self, id: &str) {
+        if self.shown.len() == 1 && self.showing(id) {
+            return;
+        }
+        if let Some(at) = self.shown.iter().position(|c| c.id == id) {
+            self.shown.remove(at);
+            return;
+        }
+        let Some(col) = scour_ui::column(id) else {
+            return;
+        };
+        let rank = |x: &str| scour_ui::COLUMNS.iter().position(|c| c.id == x);
+        let at = self
+            .shown
+            .iter()
+            .position(|c| rank(c.id) > rank(col.id))
+            .unwrap_or(self.shown.len());
+        self.shown.insert(at, col);
+    }
+}
 
 /// Divide the row up among the columns again and hand each one its width.
 ///
@@ -4651,32 +4862,45 @@ const COLUMN_IDS: [&str; 5] = ["name", "kind", "path", "mtime", "size"];
 /// page, so a table that fits in one fits in the other — and its promise is
 /// that the widths add up to the room, which is what keeps the date and the
 /// size on screen instead of drawn past the right-hand edge.
-fn relayout(window: &MainWindow) {
+fn relayout(window: &MainWindow, table: &Table) {
+    let ids = table.ids();
+    let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
     let widths = scour_ui::lay_out(
-        &COLUMN_IDS,
-        |id| {
-            // What somebody dragged this column to, or nothing. Zero is
-            // "nobody has touched it", the same as in the settings file.
-            let v = match id {
-                "name" => window.get_uw_name(),
-                "kind" => window.get_uw_kind(),
-                "path" => window.get_uw_path(),
-                "mtime" => window.get_uw_mtime(),
-                "size" => window.get_uw_size(),
-                _ => 0.0,
-            };
-            (v > 0.0).then_some(v as u32)
-        },
+        &ids,
+        // What somebody dragged this column to, or nothing. Zero is "nobody
+        // has touched it", the same as in the settings file.
+        |id| table.widths.get(id).copied().filter(|v| *v > 0),
         window.get_lane().max(0.0) as u32,
     );
-    if widths.len() != COLUMN_IDS.len() {
+    if widths.len() != ids.len() {
         return;
     }
-    window.set_cw_name(widths[0] as f32);
-    window.set_cw_kind(widths[1] as f32);
-    window.set_cw_path(widths[2] as f32);
-    window.set_cw_mtime(widths[3] as f32);
-    window.set_cw_size(widths[4] as f32);
+    let px: Vec<f32> = widths.iter().map(|w| *w as f32).collect();
+    window.set_cw(ModelRc::new(VecModel::from(px)));
+}
+
+/// The headings, in the order they are shown.
+///
+/// Redone whenever the columns change or the language does — both are what a
+/// heading *is*, and neither happens while anybody is reading one.
+fn set_heads(window: &MainWindow, table: &Table, cat: &Catalogue) {
+    window.set_heads(ModelRc::new(VecModel::from(heads_of(table, cat))));
+}
+
+/// The same, without a window to put them in — which is what makes the wiring
+/// testable. A heading carrying the wrong sort key is a column that reorders
+/// the list by something else: visible, but only if you knew what to expect.
+fn heads_of(table: &Table, cat: &Catalogue) -> Vec<HeadInfo> {
+    table
+        .shown
+        .iter()
+        .map(|c| HeadInfo {
+            id: c.id.into(),
+            label: t(cat, c.msgid),
+            sort: c.sort.into(),
+            right: c.align == scour_ui::Align::End,
+        })
+        .collect()
 }
 
 /// One `scour-ui` palette, in the shape the window's generated struct wants.
@@ -5326,6 +5550,7 @@ mod tests {
     #[test]
     fn the_rail_composes_with_the_text_rather_than_replacing_it() {
         let mut s = State {
+            mounts: Vec::new(),
             indexed: 0,
             stirred: std::time::Instant::now(),
             dozing: false,
@@ -5413,6 +5638,7 @@ mod tests {
     #[test]
     fn sorting_reuses_query_scoped_sidebar_and_count_work() {
         let mut s = State {
+            mounts: Vec::new(),
             stirred: std::time::Instant::now(),
             dozing: false,
             sent_off: None,
@@ -5475,36 +5701,79 @@ mod tests {
     }
 
     #[test]
-    fn every_visible_header_requests_the_sort_key_the_shared_crate_names() {
-        let ui = include_str!("../ui/main.slint");
-        // The five the window shows, and `scour-ui` is what says which five
-        // and what each one sorts by. A heading wired to the wrong key is a
-        // column that reorders the list by something else — visible, but only
-        // if you know what you were expecting.
-        for id in scour_ui::DEFAULT_COLUMNS {
-            let c = scour_ui::column(id).unwrap_or_else(|| panic!("`{id}` is not a column"));
-            let want = format!("sort: \"{}\"", c.sort);
-            assert!(
-                ui.contains(&want),
-                "no heading asks for `{}`, which is what `{id}` sorts by",
-                c.sort
-            );
+    fn every_heading_carries_the_sort_key_the_shared_crate_names() {
+        let cat = Catalogue::for_language("en");
+        // Every column the table can offer, not only the ones showing: which
+        // five are on screen is a person's answer now, and any of the twelve
+        // can be one of them.
+        let table = Table {
+            shown: scour_ui::COLUMNS.iter().collect(),
+            widths: Default::default(),
+        };
+        let heads = heads_of(&table, &cat);
+        assert_eq!(heads.len(), scour_ui::COLUMNS.len());
+        for (h, c) in heads.iter().zip(scour_ui::COLUMNS) {
+            assert_eq!(h.id, c.id);
+            assert_eq!(h.sort, c.sort, "`{}` asks the wrong sort key", c.id);
+            // The word comes from the crate rather than from this file: a
+            // heading spelled here would be a second place the column is
+            // named, and the page would go on calling it the first.
+            assert!(!h.label.is_empty(), "`{}` has no heading word", c.id);
         }
-        // And the headings take their words from the crate rather than
-        // spelling them here — `@tr("Name")` in this file would be a second
-        // place the column is named.
-        for prop in [
-            "head-name",
-            "head-kind",
-            "head-path",
-            "head-mtime",
-            "head-size",
-        ] {
-            assert!(
-                ui.contains(&format!("root.{prop}")),
-                "the window does not use `{prop}`"
-            );
-        }
+    }
+
+    #[test]
+    fn a_column_switched_on_lands_where_the_table_says_and_moves_nothing() {
+        let col = |id: &str| scour_ui::column(id).unwrap();
+        let ids = |t: &Table| t.ids().join(",");
+
+        let mut t = Table {
+            // Deliberately not the table's own order: this is somebody's
+            // arrangement, and switching a column on must not undo it.
+            shown: vec![col("size"), col("name")],
+            widths: Default::default(),
+        };
+        // `path` comes after `name` and before `size` in `COLUMNS`, so it
+        // lands in front of the first shown column that outranks it — which
+        // is `size`, at the front — and the arrangement survives.
+        t.toggle("path");
+        assert_eq!(ids(&t), "path,size,name");
+
+        // Off is off, and the width it was dragged to stays behind for when
+        // it comes back.
+        t.toggle("size");
+        assert_eq!(ids(&t), "path,name");
+
+        // **The last one standing cannot be turned off.** A table of no
+        // columns is not a smaller table, it is a broken one.
+        t.toggle("path");
+        assert_eq!(ids(&t), "name");
+        t.toggle("name");
+        assert_eq!(ids(&t), "name");
+
+        // An id from a newer version, or a typo, changes nothing at all.
+        t.toggle("zurna");
+        assert_eq!(ids(&t), "name");
+    }
+
+    #[test]
+    fn a_saved_column_list_is_read_back_and_a_broken_one_is_not_obeyed() {
+        let read = |cols: &[&str]| {
+            Table::read(&scour_settings::Settings {
+                columns: cols.iter().map(|s| (*s).to_string()).collect(),
+                ..Default::default()
+            })
+            .ids()
+            .join(",")
+        };
+        assert_eq!(read(&["kind", "name"]), "kind,name");
+        // A column this build does not have is dropped rather than the whole
+        // list refused: the rest is what somebody meant.
+        assert_eq!(read(&["kind", "zurna", "name"]), "kind,name");
+        // And a list with nothing left in it is the one answer that cannot be
+        // right, so the default stands.
+        assert_eq!(read(&["zurna"]), COLUMN_DEFAULT.join(","));
+        assert_eq!(read(&[]), COLUMN_DEFAULT.join(","));
     }
 
     #[test]

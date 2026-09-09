@@ -109,6 +109,13 @@ pub enum Panel {
     /// more thing to learn how to leave; `Esc` closes this the same way it
     /// closes the menu it replaced.
     Openers,
+    /// Which columns the table shows.
+    ///
+    /// **A list of switches, not of actions.** Every column the table can
+    /// offer, with a tick against the ones that are on, and one line at the
+    /// bottom that puts them all back. The window and the page have the same
+    /// list behind a `⋮`; a terminal has no `⋮` to press, so it has a key.
+    Columns,
     /// The question that comes before something that changes files.
     ///
     /// Two lines, and the cursor starts on the safe one. A terminal cannot dim
@@ -296,6 +303,12 @@ pub struct App {
     pub panel: Panel,
     /// Where the cursor is inside the open panel.
     pub panel_at: usize,
+    /// Which columns the table shows, in the order it shows them.
+    ///
+    /// **The same setting all three faces read.** Arrange the table in the
+    /// window and the terminal opens arranged; a terminal that kept its own
+    /// list would be a fourth answer to a question that already has one.
+    pub columns: Vec<&'static scour_ui::Column>,
     /// The menu as it stands, built when it is opened.
     ///
     /// Held rather than recomputed per frame because the row under the cursor
@@ -344,6 +357,8 @@ pub struct App {
     /// The rail: what the matching rows are made of, and where they live.
     pub kinds: Vec<(String, u64)>,
     pub places: Vec<(String, String)>,
+    /// Where the volumes are and whether they record reads. See `frozen_atime`.
+    pub mounts: Vec<scour_places::Mount>,
     /// The twenty-four bars of the time strip, oldest first, and the day
     /// each of them stands for.
     pub strip: Vec<(u32, u64)>,
@@ -416,6 +431,10 @@ impl Default for App {
             waste: 0,
             panel: Panel::None,
             panel_at: 0,
+            columns: scour_ui::DEFAULT_COLUMNS
+                .iter()
+                .filter_map(|id| scour_ui::column(id))
+                .collect(),
             menu: Vec::new(),
             pending: None,
             ask_title: String::new(),
@@ -432,6 +451,7 @@ impl Default for App {
             spans: Vec::new(),
             kinds: Vec::new(),
             places: Vec::new(),
+            mounts: Vec::new(),
             strip: Vec::new(),
             filter: None,
             rail: true,
@@ -481,6 +501,29 @@ pub const SORTS: [(SortKey, &str); 4] = [
     (SortKey::Size, "size"),
 ];
 
+/// The engine's own key behind a column's `sort` word.
+///
+/// **The shared table names it and the protocol spells it the same**, so this
+/// is one match rather than a second list to keep level. `None` is a column
+/// that cannot be sorted by, which the table also says by leaving it empty.
+pub fn sort_key(name: &str) -> Option<SortKey> {
+    Some(match name {
+        "name" => SortKey::Name,
+        "path" => SortKey::Path,
+        "modified" => SortKey::Modified,
+        "created" => SortKey::Created,
+        "accessed" => SortKey::Accessed,
+        "size" => SortKey::Size,
+        "disk" => SortKey::Disk,
+        "kind" => SortKey::Kind,
+        "ext" => SortKey::Ext,
+        "mode" => SortKey::Mode,
+        "uid" => SortKey::Uid,
+        "gid" => SortKey::Gid,
+        _ => return None,
+    })
+}
+
 impl App {
     /// What the sort is called, for the meter — as a msgid, not as words.
     ///
@@ -501,20 +544,26 @@ impl App {
     /// reverses. Newest first to begin with, because that is what a date
     /// column is for.
     pub fn sort_by(&mut self, column: usize) -> Want {
-        let Some((key, _)) = SORTS.get(column) else {
+        // **What the heading was drawn for, not what the fourth heading used
+        // to be.** Which columns are on screen is a person's answer now, so
+        // the key comes off the column at that position rather than off a
+        // fixed list that happened to agree with it.
+        let Some(key) = self.columns.get(column).and_then(|c| sort_key(c.sort)) else {
             return Want::Nothing;
         };
-        if self.sort == *key {
+        if self.sort == key {
             return self.flip();
         }
-        self.sort = *key;
+        self.sort = key;
         self.descending = true;
         self.reask()
     }
 
-    /// Which column is being sorted by, if it is one of the four drawn.
+    /// Which heading has the arrow on it, if the column it sorts by is shown.
     pub fn sorted_column(&self) -> Option<usize> {
-        SORTS.iter().position(|(key, _)| *key == self.sort)
+        self.columns
+            .iter()
+            .position(|c| sort_key(c.sort) == Some(self.sort))
     }
 
     /// Sort by the next column along, or the previous one.
@@ -953,11 +1002,14 @@ impl App {
     /// The labels are msgids; [`crate::draw::tool_spans`] looks them up, and
     /// it does so because it is the same function that says where a press
     /// lands — a translated word is a different width.
-    pub fn tools(&self) -> [(&'static str, &'static str); 6] {
+    pub fn tools(&self) -> [(&'static str, &'static str); 7] {
         [
             ("faces", "^U"),
             ("lang", "^L"),
             ("skips", "^K"),
+            // Where the window has a `⋮` at the end of the header row. A
+            // terminal has no room for one and nothing to press it with.
+            ("columns", "^T"),
             ("csv", "^E"),
             // Next to the peek key it belongs beside: both are about the row
             // the cursor is on.
@@ -981,8 +1033,12 @@ impl App {
                 self.show(Panel::Rules);
                 Want::Rules
             }
-            3 => self.write_sheet(),
-            4 => {
+            3 => {
+                self.show(Panel::Columns);
+                Want::Nothing
+            }
+            4 => self.write_sheet(),
+            5 => {
                 self.open_menu();
                 Want::Nothing
             }
@@ -1419,6 +1475,86 @@ impl App {
         self.dirty = true;
     }
 
+    /// Does this path sit on a volume that has stopped recording reads?
+    ///
+    /// **The deepest mount wins**, which is the only rule that gets a second
+    /// volume right when `/` is mounted too. With nothing known the answer is
+    /// no: showing a timestamp that might be stale beats showing a dash that
+    /// certainly is wrong.
+    pub fn frozen_atime(&self, path: &str) -> bool {
+        let mut owner: Option<&scour_places::Mount> = None;
+        for m in &self.mounts {
+            let under = m.at == "/" || format!("{path}/").starts_with(&format!("{}/", m.at));
+            if under && owner.is_none_or(|o| m.at.len() > o.at.len()) {
+                owner = Some(m);
+            }
+        }
+        owner.is_some_and(|m| !m.reads)
+    }
+
+    /// The line the cursor is on in the column panel: switch it, and keep it.
+    ///
+    /// **The panel stays open.** Turning three columns on is three presses,
+    /// and a panel that closed after each of them would be three trips back.
+    pub fn pick_column(&mut self) -> Want {
+        match scour_ui::COLUMNS.get(self.panel_at) {
+            Some(c) => {
+                let id = c.id;
+                self.toggle_column(id);
+            }
+            // Past the end is the line that puts them all back.
+            None => {
+                self.columns = scour_ui::DEFAULT_COLUMNS
+                    .iter()
+                    .filter_map(|id| scour_ui::column(id))
+                    .collect();
+            }
+        }
+        Want::Remember(scour_settings::Change {
+            columns: Some(self.columns.iter().map(|c| c.id.to_owned()).collect()),
+            ..Default::default()
+        })
+    }
+
+    /// Take the saved column list, dropping anything this build does not have.
+    ///
+    /// **An empty list is the one answer that cannot be right** — a table of no
+    /// columns is not a smaller table — so the default stands where nothing
+    /// usable was saved.
+    pub fn columns_from(&mut self, saved: &[String]) {
+        let shown: Vec<&'static scour_ui::Column> =
+            saved.iter().filter_map(|id| scour_ui::column(id)).collect();
+        if !shown.is_empty() {
+            self.columns = shown;
+        }
+    }
+
+    /// Switch one column on or off.
+    ///
+    /// Put back where its neighbours expect it, without moving the ones
+    /// already there: rebuilding in table order would throw away an
+    /// arrangement somebody had made, every time they showed one more column.
+    pub fn toggle_column(&mut self, id: &str) {
+        let showing = self.columns.iter().any(|c| c.id == id);
+        if showing && self.columns.len() == 1 {
+            return;
+        }
+        if let Some(at) = self.columns.iter().position(|c| c.id == id) {
+            self.columns.remove(at);
+            return;
+        }
+        let Some(col) = scour_ui::column(id) else {
+            return;
+        };
+        let rank = |x: &str| scour_ui::COLUMNS.iter().position(|c| c.id == x);
+        let at = self
+            .columns
+            .iter()
+            .position(|c| rank(c.id) > rank(col.id))
+            .unwrap_or(self.columns.len());
+        self.columns.insert(at, col);
+    }
+
     /// Build the menu for the row the cursor is on, and open it.
     ///
     /// **A terminal has no right button**, so the gesture is a key. What is in
@@ -1712,6 +1848,8 @@ impl App {
             Panel::Faces => 3,
             Panel::Menu => self.menu.len(),
             Panel::Openers => self.openers.len(),
+            // Every column, and the line that goes back to the default.
+            Panel::Columns => scour_ui::COLUMNS.len() + 1,
             Panel::Ask => 3,
             Panel::None => 0,
         }

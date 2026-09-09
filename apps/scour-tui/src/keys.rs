@@ -185,6 +185,10 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.show(Panel::Language);
             return Want::Nothing;
         }
+        KeyCode::Char('t') if ctrl => {
+            app.show(Panel::Columns);
+            return Want::Nothing;
+        }
         KeyCode::Char('u') if ctrl => {
             app.show(Panel::Faces);
             return Want::Nothing;
@@ -352,6 +356,7 @@ fn panel_press(app: &mut App) -> Want {
         Panel::Faces => app.run_face(app.panel_at),
         Panel::Menu => app.menu_pick(),
         Panel::Openers => app.open_with(),
+        Panel::Columns => app.pick_column(),
         // Enter on the line being typed into means yes, the same as it does
         // in every box that takes a name.
         Panel::Ask if app.panel_at == 0 => app.ask_answer(2),
@@ -618,7 +623,7 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     // arithmetic that drew them.
     if row == LIST_TOP - 1 {
         let from = if railed { RAIL_WIDE } else { 0 };
-        return match crate::draw::column_at(col.saturating_sub(from), width - from) {
+        return match crate::draw::column_at(col.saturating_sub(from), width - from, &app.columns) {
             Some(column) => Spot::Head(column),
             None => Spot::Nothing,
         };

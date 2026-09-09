@@ -1467,3 +1467,29 @@ msgstr "Satırın solundaki renk ne kadar önce değiştiğini söyler: sıcak d
 
 msgid "before the query, for more"
 msgstr "sorgudan önce, daha fazlası için"
+
+# The terminal's own column headings: short and upper-case, because a heading
+# there is read in a glance across a row of them.
+msgid "COLUMNS"
+msgstr "KOLONLAR"
+
+msgid "EXTENSION"
+msgstr "UZANTI"
+
+msgid "CREATED"
+msgstr "OLUŞTURMA"
+
+msgid "ACCESSED"
+msgstr "ERİŞİM"
+
+msgid "MODE"
+msgstr "İZİNLER"
+
+msgid "OWNER"
+msgstr "SAHİP"
+
+msgid "GROUP"
+msgstr "GRUP"
+
+msgid "ON DISK"
+msgstr "DİSKTE"

@@ -6,11 +6,13 @@
 //! would be a second implementation of something that
 //! already exists in `scour-core`, and the two would drift.
 
-use std::cell::{Cell, RefCell};
+// `Cell` here is the interior-mutability one; the table's is `crate::Cell`,
+// and the two meet in this file more than anywhere else.
+use std::cell::{Cell as Flag, RefCell};
 
 use scour_core::{Hit, Kind, text::Folder};
 
-use crate::Row;
+use crate::{Cell, Row};
 
 /// The picture a row has when it has none.
 ///
@@ -106,26 +108,141 @@ fn tint_of(token: &str) -> slint::Brush {
     }
 }
 
-pub fn row_of(h: &Hit, terms: &[String], now: i64, kind: &str, fresh: bool) -> Row {
-    let (pre, hit, post) = split_at_match(h.name(), terms);
+/// What a row needs that is not on the row: which columns, and what the
+/// machine calls things.
+///
+/// **Read once per page, not once per cell.** Translating `Modified` and
+/// asking the mount table whether a volume records reads are both answers that
+/// are the same for every row in a reply, and a page is two hundred rows.
+pub struct Shape<'a> {
+    /// The chosen columns, in the order they are shown.
+    pub columns: &'a [&'static scour_ui::Column],
+    /// Where volumes are and whether they record reads, for the `Accessed`
+    /// column. Empty is "nothing known", which shows the timestamp rather
+    /// than a dash: a guess in the confident direction is the wrong one here.
+    pub mounts: &'a [scour_places::Mount],
+    /// The kind's own word, already translated.
+    pub kind: &'a str,
+    /// `this volume does not record reads…`, already translated.
+    pub frozen_note: &'a str,
+    pub now: i64,
+}
+
+/// Does this path sit on a volume that has stopped recording reads?
+///
+/// **The deepest mount wins**, which is the only rule that gets `/mnt/depo`
+/// right when `/` is mounted too. A `noatime` volume's access times are frozen
+/// at whenever the file was made, so the column would be showing a number that
+/// means nothing at all — the page says so with a dash and so does this.
+fn frozen_atime(path: &str, mounts: &[scour_places::Mount]) -> bool {
+    let mut owner: Option<&scour_places::Mount> = None;
+    for m in mounts {
+        let under = m.at == "/" || format!("{path}/").starts_with(&format!("{}/", m.at));
+        if under && owner.is_none_or(|o| m.at.len() > o.at.len()) {
+            owner = Some(m);
+        }
+    }
+    owner.is_some_and(|m| !m.reads)
+}
+
+/// One cell, for one column, of one row.
+///
+/// Everything the table can show is written out here — the language, the
+/// decimal mark and the clock's offset all live on this side — and what goes
+/// back is text plus the little that decides how to *draw* it.
+fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
+    let text = |t: String| Cell {
+        id: id.into(),
+        text: t.into(),
+        age: -1,
+        ..Cell::default()
+    };
+    let mono = |t: String| Cell {
+        mono: true,
+        ..text(t)
+    };
+    let num = |t: String| Cell {
+        right: true,
+        ..mono(t)
+    };
+    let when = |at: i64| Cell {
+        text: if at == 0 {
+            slint::SharedString::new()
+        } else {
+            scour_ui::format::stamp(at).into()
+        },
+        age: band(shape.now, at),
+        mono: true,
+        ..text(String::new())
+    };
+
+    match id {
+        "name" => {
+            let (pre, hit, post) = split_at_match(h.name(), terms);
+            Cell {
+                pre: pre.into(),
+                hit: hit.into(),
+                post: post.into(),
+                ..text(String::new())
+            }
+        }
+        "kind" => text(shape.kind.to_owned()),
+        "path" => mono(h.parent().to_owned()),
+        "mtime" => when(h.meta.mtime),
+        "ctime" => when(h.meta.ctime),
+        "atime" => {
+            if frozen_atime(&h.path, shape.mounts) {
+                Cell {
+                    text: "—".into(),
+                    dim: true,
+                    hint: shape.frozen_note.into(),
+                    ..mono(String::new())
+                }
+            } else {
+                when(h.meta.atime)
+            }
+        }
+        // **A folder's size is what is under it, and it is marked.** The
+        // column was blank for folders, which is what every file manager does
+        // and what makes "which of these is eating the disk" a question you
+        // have to leave the list to answer. The `~` is not decoration: the
+        // number is the size of what *this index holds* under that folder,
+        // and the scan rules leave things out.
+        "size" => num(match (h.is_dir, h.under.as_ref()) {
+            (true, Some(u)) => format!("~{}", scour_ui::format::size(u.disk, decimal())),
+            (true, None) => String::new(),
+            (false, _) => scour_ui::format::size(h.meta.size.max(0) as u64, decimal()),
+        }),
+        "disk" => num(if h.meta.disk > 0 {
+            scour_ui::format::size(h.meta.disk as u64, decimal())
+        } else {
+            String::new()
+        }),
+        "ext" => text(scour_core::ext_str(h.name()).to_owned()),
+        "perm" => mono(scour_core::mode_string(h.meta.mode)),
+        "user" => mono(scour_core::owner_name(scour_core::Owner::User, h.meta.uid)),
+        "group" => mono(scour_core::owner_name(scour_core::Owner::Group, h.meta.gid)),
+        // A column the table offers and this does not write is a bug, but it
+        // is not a reason to draw nothing where a row should be.
+        _ => text(String::new()),
+    }
+}
+
+pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
+    let cells: Vec<Cell> = shape
+        .columns
+        .iter()
+        .map(|c| cell_of(h, c.id, shape, terms))
+        .collect();
     Row {
-        pre: pre.into(),
-        hit: hit.into(),
-        post: post.into(),
-        folder: h.parent().into(),
+        cells: slint::ModelRc::new(slint::VecModel::from(cells)),
+        name: h.name().into(),
         path: h.path.as_str().into(),
-        kind: kind.into(),
         fresh,
         ktoken: h.kind.token().into(),
         tint: tint_of(h.kind.token()),
-        size: if h.is_dir {
-            slint::SharedString::new()
-        } else {
-            scour_ui::format::size(h.meta.size.max(0) as u64, decimal()).into()
-        },
-        stamp: scour_ui::format::stamp(h.meta.mtime).into(),
         is_dir: h.is_dir,
-        age: band(now, h.meta.mtime),
+        age: band(shape.now, h.meta.mtime),
         picked: false,
         // Empty, and filled in after the row is on screen — see
         // [`Rows::look_for_pictures`]. A page is two hundred rows and the eye
@@ -303,14 +420,14 @@ pub struct Rows {
     pages: RefCell<scour_page::Pages<Kept>>,
     /// The page `row_data` last answered from, so the order is only rewritten
     /// when the eye crosses a page boundary rather than on every row drawn.
-    touched: Cell<usize>,
+    touched: Flag<usize>,
     /// A row the view asked for and this could not answer.
-    want: Cell<Option<usize>>,
+    want: Flag<Option<usize>>,
     /// How many times the view has been told the list changed length.
     ///
     /// Kept because it is the number the scrolling bug was made of: it should
     /// move when the result's length changes and at no other time.
-    resets: Cell<u64>,
+    resets: Flag<u64>,
     /// How many rows in hand nobody has looked for a picture for.
     ///
     /// **So that the ten-a-second sweep can decide not to run.** Once every
@@ -322,7 +439,7 @@ pub struct Rows {
     /// window takes its unlooked-at rows with it and this does not hear about
     /// it, which costs one sweep that finds nothing. Too low would lose a
     /// picture.
-    unlooked: Cell<usize>,
+    unlooked: Flag<usize>,
     notify: slint::ModelNotify,
 }
 
@@ -330,10 +447,10 @@ impl Default for Rows {
     fn default() -> Self {
         Rows {
             pages: RefCell::new(scour_page::Pages::default()),
-            touched: Cell::new(usize::MAX),
-            want: Cell::new(None),
-            resets: Cell::new(0),
-            unlooked: Cell::new(0),
+            touched: Flag::new(usize::MAX),
+            want: Flag::new(None),
+            resets: Flag::new(0),
+            unlooked: Flag::new(0),
             notify: slint::ModelNotify::default(),
         }
     }
@@ -827,9 +944,9 @@ pub struct Lines {
     rows: std::rc::Rc<Rows>,
     /// Tiles on a line, and zero while the table is showing — a model nobody
     /// is looking at should not be building anything.
-    per: Cell<usize>,
+    per: Flag<usize>,
     /// The length this last told the view about. See [`Lines::sync`].
-    shown: Cell<usize>,
+    shown: Flag<usize>,
     notify: slint::ModelNotify,
 }
 
@@ -837,8 +954,8 @@ impl Lines {
     pub fn new(rows: std::rc::Rc<Rows>) -> Lines {
         Lines {
             rows,
-            per: Cell::new(0),
-            shown: Cell::new(0),
+            per: Flag::new(0),
+            shown: Flag::new(0),
             notify: slint::ModelNotify::default(),
         }
     }

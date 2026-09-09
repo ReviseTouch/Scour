@@ -281,6 +281,33 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 })
                 .collect(),
         ),
+        // **The tick is the whole point**, so it is in the text rather than
+        // in a column of its own: a terminal panel is one string a line, and
+        // a switch whose label shuffles sideways as it is turned on is a
+        // switch nobody can aim at twice.
+        Panel::Columns => (
+            app.say("COLUMNS"),
+            scour_ui::COLUMNS
+                .iter()
+                .map(|c| {
+                    let on = app.columns.iter().any(|x| x.id == c.id);
+                    PanelLine {
+                        text: format!("{} {}", if on { "✓" } else { " " }, app.say(c.msgid)),
+                        key: String::new(),
+                        dimmed: !on,
+                        careful: false,
+                        rule: false,
+                    }
+                })
+                .chain(std::iter::once(PanelLine {
+                    text: format!("  {}", app.say("Back to the default")),
+                    key: String::new(),
+                    dimmed: false,
+                    careful: false,
+                    rule: true,
+                }))
+                .collect(),
+        ),
         Panel::Openers => (
             app.say("OPEN WITH"),
             app.openers
@@ -648,9 +675,11 @@ fn hint(app: &App) -> std::borrow::Cow<'_, str> {
 }
 
 /// Which column covers this offset into the list's own width.
-pub fn column_at(col: u16, width: u16) -> Option<usize> {
+pub fn column_at(col: u16, width: u16, cols: &[&'static scour_ui::Column]) -> Option<usize> {
     let area = Rect::new(0, 0, width, 1);
-    let columns = Layout::horizontal(widths_for(width)).spacing(1).split(area);
+    let columns = Layout::horizontal(widths_for(width, cols))
+        .spacing(1)
+        .split(area);
     columns
         .iter()
         .position(|c| col >= c.x && col < c.x + c.width)
@@ -663,12 +692,17 @@ pub fn column_at(col: u16, width: u16) -> Option<usize> {
 /// the terminal that is too narrow to draw the column at all.
 fn heading(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let quiet = Style::new().fg(theme.ink_3()).add_modifier(Modifier::DIM);
-    let names = [
-        format!("  {}", app.say("NAME")),
-        app.say("WHERE").into_owned(),
-        app.say("CHANGED").into_owned(),
-        app.say("SIZE").into_owned(),
-    ];
+    let names: Vec<String> = app
+        .columns
+        .iter()
+        .enumerate()
+        .map(|(at, c)| {
+            let word = app.say(heading_msgid(c.id)).into_owned();
+            // The first column carries the two cells the mark and the stripe
+            // are drawn in, so its heading starts two in from the edge.
+            if at == 0 { format!("  {word}") } else { word }
+        })
+        .collect();
     let sorted = app.sorted_column();
     let cells: Vec<Cell> = names
         .iter()
@@ -696,27 +730,99 @@ fn heading(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         })
         .collect();
     f.render_widget(
-        Table::new(vec![Row::new(cells)], widths_for(area.width)).column_spacing(1),
+        Table::new(vec![Row::new(cells)], widths_for(area.width, &app.columns)).column_spacing(1),
         area,
     );
 }
 
-/// What each column gets. `Fill` on the two that can take it, so a narrow
+/// The word this heading is written with.
+///
+/// **The terminal's own four, and the shared table's word for the rest.** A
+/// terminal heading is read in a glance across a row of them, so the four that
+/// have always been here keep the shorter, upper-case spelling the face was
+/// designed with — `WHERE` rather than `Location` — and the eight that were
+/// never in a terminal before take the name the other faces use.
+fn heading_msgid(id: &str) -> &'static str {
+    match id {
+        "name" => "NAME",
+        "path" => "WHERE",
+        "mtime" => "CHANGED",
+        "size" => "SIZE",
+        "kind" => "KIND",
+        "ext" => "EXTENSION",
+        "ctime" => "CREATED",
+        "atime" => "ACCESSED",
+        "perm" => "MODE",
+        "user" => "OWNER",
+        "group" => "GROUP",
+        "disk" => "ON DISK",
+        _ => "",
+    }
+}
+
+/// What each column gets. `Fill` on the ones that can take it, so a narrow
 /// terminal eats the path before it eats the name.
-fn widths_for(width: u16) -> [Constraint; 4] {
-    [
-        // **No kind column.** It was ten columns of the same English word
-        // repeated down the screen — `doc doc doc doc` — while the name beside
-        // it was already drawn in that kind's colour and the rail already said
-        // how many of each there were. The room went to the two columns that
-        // were being cut mid-word.
-        Constraint::Fill(3),
-        Constraint::Fill(4),
-        // The time of day goes first when there is no room for it: the date
-        // orders the list and the minute is read once in a hundred rows.
-        Constraint::Length(if width >= 110 { 16 } else { 10 }),
-        Constraint::Length(9),
-    ]
+///
+/// **The shares are `scour-ui`'s, in characters rather than pixels.** A
+/// terminal cell is about eight pixels wide at the sizes this was designed
+/// against, and dividing is one rule rather than a second table that would
+/// have to be kept level with the first by hand. The two that stretch keep the
+/// 3:4 they have always had.
+fn widths_for(width: u16, cols: &[&'static scour_ui::Column]) -> Vec<Constraint> {
+    cols.iter()
+        .map(|c| match c.id {
+            "name" => Constraint::Fill(3),
+            "path" => Constraint::Fill(4),
+            // The time of day goes first when there is no room for it: the
+            // date orders the list and the minute is read once in a hundred
+            // rows.
+            "mtime" | "ctime" | "atime" => Constraint::Length(if width >= 110 { 16 } else { 10 }),
+            _ => Constraint::Length((c.width as u16 / 8).max(6)),
+        })
+        .collect()
+}
+
+/// What one column says about one hit, as text.
+///
+/// The name and the path are not here: those two are drawn out of several
+/// spans — an icon, a mark, a colour of their own — and everything else is one
+/// value written the way the other two faces write it.
+fn value_of(hit: &scour_core::Hit, id: &str, app: &App, width: u16, decimal: char) -> String {
+    match id {
+        "kind" => app.say(hit.kind.msgid()).into_owned(),
+        "ext" => scour_core::ext_str(scour_ui::path::leaf(&hit.path)).to_owned(),
+        "mtime" => when_of(hit.meta.mtime, width),
+        "ctime" => when_of(hit.meta.ctime, width),
+        // **A dash where the volume records nothing.** `noatime` freezes the
+        // access time at whenever the file was made, so the column would be
+        // showing a creation date under the wrong heading. The window says the
+        // same thing the same way.
+        "atime" => {
+            if app.frozen_atime(&hit.path) {
+                "—".to_owned()
+            } else {
+                when_of(hit.meta.atime, width)
+            }
+        }
+        // A folder's size is what the index holds under it, and the `~` says
+        // so: the scan rules leave things out.
+        "size" => match (hit.is_dir, hit.under.as_ref()) {
+            (true, Some(u)) => format!("~{}", format::size(u.disk, decimal)),
+            (true, None) => String::new(),
+            (false, _) => format::size(hit.meta.size.max(0) as u64, decimal),
+        },
+        "disk" => {
+            if hit.meta.disk > 0 {
+                format::size(hit.meta.disk as u64, decimal)
+            } else {
+                String::new()
+            }
+        }
+        "perm" => scour_core::mode_string(hit.meta.mode),
+        "user" => scour_core::owner_name(scour_core::Owner::User, hit.meta.uid),
+        "group" => scour_core::owner_name(scour_core::Owner::Group, hit.meta.gid),
+        _ => String::new(),
+    }
 }
 
 /// The stamp, cut to what the column can hold.
@@ -748,15 +854,13 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         .unwrap_or(0);
     // What each column actually comes to, so that a name can be cut with a
     // mark rather than by the table, which cuts silently and mid-word.
-    let columns = Layout::horizontal(widths_for(area.width))
+    let columns = Layout::horizontal(widths_for(area.width, &app.columns))
         .spacing(1)
         .split(area);
     // What the kind's glyph takes, when there is one.
     let icon_wide = if crate::icons::drawing() { 2 } else { 0 };
-    let (name_w, where_w) = (
-        columns[0].width.saturating_sub(2) as usize,
-        columns[1].width as usize,
-    );
+    // How much room each column came out with, so a value can be cut to it.
+    let room: Vec<usize> = columns.iter().map(|c| c.width as usize).collect();
     let mut drawn: Vec<Row> = Vec::with_capacity(app.room);
     for row in app.top..(app.top + app.room).min(total.max(app.top)) {
         let here = row == app.cursor;
@@ -776,47 +880,72 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         // The mark answers the pointer on its own, so that the two columns
         // that pick a row look like something that picks a row.
         let ticking = app.hover == Spot::Tick(row);
-        let cells = vec![
-            Cell::from(Line::from(vec![
-                // The age stripe: one cell of colour, the same six bands the
-                // window draws down the left of every row.
-                Span::styled("▎", Style::new().fg(theme.band(band))),
-                Span::styled(
-                    if picked {
-                        "✓"
-                    } else if ticking {
-                        "·"
-                    } else if here {
-                        "▸"
-                    } else {
-                        " "
-                    },
-                    Style::new().fg(if ticking && !picked {
-                        theme.ink()
-                    } else {
-                        theme.key()
-                    }),
-                ),
-                Span::styled(
-                    crate::icons::of_kind(hit.kind.token()).to_string(),
-                    Style::new().fg(theme.kind(hit.kind.token())),
-                ),
-                Span::styled(cut(name, name_w.saturating_sub(icon_wide)), line),
-            ])),
-            Cell::from(Span::styled(
-                tail(scour_ui::path::folder(&hit.path), where_w),
-                Style::new().fg(theme.ink_3()),
-            )),
-            Cell::from(Span::styled(when_of(hit.meta.mtime, area.width), line)),
-            Cell::from(Span::styled(
-                if hit.is_dir {
-                    String::new()
+        // **The mark and the stripe live in the first column, whichever
+        // column that is.** They are two characters of the row rather than a
+        // column of their own — a column would be one more thing to lay out,
+        // and the header above it would have nothing to say.
+        let mark_spans = vec![
+            // The age stripe: one cell of colour, the same six bands the
+            // window draws down the left of every row.
+            Span::styled("▎", Style::new().fg(theme.band(band))),
+            Span::styled(
+                if picked {
+                    "✓"
+                } else if ticking {
+                    "·"
+                } else if here {
+                    "▸"
                 } else {
-                    format::size(hit.meta.size.max(0) as u64, mark.1)
+                    " "
                 },
-                line,
-            )),
+                Style::new().fg(if ticking && !picked {
+                    theme.ink()
+                } else {
+                    theme.key()
+                }),
+            ),
         ];
+        let cells: Vec<Cell> = app
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(at, c)| {
+                let wide = room.get(at).copied().unwrap_or(0);
+                let mut spans = if at == 0 {
+                    mark_spans.clone()
+                } else {
+                    Vec::new()
+                };
+                let left = if at == 0 {
+                    wide.saturating_sub(2)
+                } else {
+                    wide
+                };
+                match c.id {
+                    "name" => {
+                        spans.push(Span::styled(
+                            crate::icons::of_kind(hit.kind.token()).to_string(),
+                            Style::new().fg(theme.kind(hit.kind.token())),
+                        ));
+                        spans.push(Span::styled(
+                            cut(name, left.saturating_sub(icon_wide)),
+                            line,
+                        ));
+                    }
+                    // A path is cut from the *front*: the end of it is the
+                    // part that says which folder this is.
+                    "path" => spans.push(Span::styled(
+                        tail(scour_ui::path::folder(&hit.path), left),
+                        Style::new().fg(theme.ink_3()),
+                    )),
+                    _ => spans.push(Span::styled(
+                        cut(&value_of(hit, c.id, app, area.width, mark.1), left),
+                        line,
+                    )),
+                }
+                Cell::from(Line::from(spans))
+            })
+            .collect();
         // Pressed is brighter than hovered is brighter than nothing, which is
         // the order every interface anybody has used says it in.
         let style = if pushed {
@@ -831,7 +960,7 @@ fn rows(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char))
         drawn.push(Row::new(cells).style(style));
     }
     f.render_widget(
-        Table::new(drawn, widths_for(area.width)).column_spacing(1),
+        Table::new(drawn, widths_for(area.width, &app.columns)).column_spacing(1),
         area,
     );
 

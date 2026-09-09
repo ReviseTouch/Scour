@@ -16,18 +16,68 @@ import { ListView, ScrollView } from "std-widgets.slint";
 // One result. Flat, and deliberately: a struct of strings is what crosses the
 // language boundary cheaply, and the formatting was done in Rust where the
 // catalogue and the size units already live.
-export struct Row {
-    // The name in three pieces: before the match, the match, after it.
-    //
-    // Split in Rust rather than here because Slint has no way to take a
-    // substring — and that turns out to be the right place anyway. The offsets
-    // come out of folded text, Turkish folding changes byte lengths, and
-    // mapping them back to the original spelling is `scour-core`'s job.
+/// One cell of one row, already formatted by Rust.
+///
+/// **Text, not a value.** Every column the table can show — a size in binary
+/// units, a date in the person's own zone, a mode as `rwxr-xr-x` — is written
+/// out on the Rust side, where the language, the decimal mark and the clock's
+/// offset all live. This carries the result and what is needed to *draw* it,
+/// which is not the same thing: an alignment, a colour band, and the three
+/// pieces a name is cut into.
+export struct Cell {
+    // Which column this is. The two that are not plain text — the name, which
+    // has the match picked out of it, and the icon that sits inside it — are
+    // found by this rather than by position, because position is now a thing
+    // somebody chooses.
+    id: string,
+    text: string,
+    // The name in three pieces: before the match, the match, after it. Empty
+    // for every column but `name`.
     pre: string,
     hit: string,
     post: string,
-    // The directory, without the name. Shown quieter and to the right.
-    folder: string,
+    // Which age band a time column falls in, 0 (minutes) to 5 (older).
+    // **-1 for everything else**, which is what says "do not colour this".
+    age: int,
+    // Numbers read right-aligned; words do not.
+    right: bool,
+    // A monospaced column: sizes, dates, modes, owners. The name and the kind
+    // are the two that are not.
+    mono: bool,
+    // Drawn in the quiet ink: a value the volume does not actually record.
+    dim: bool,
+    // Hover text, where the column has more to say than fits. Empty otherwise.
+    hint: string,
+}
+
+/// One column heading, in the order the table shows them.
+export struct HeadInfo {
+    id: string,
+    label: string,
+    // What `sort:` this heading asks for. Empty means it cannot be sorted by.
+    sort: string,
+    right: bool,
+}
+
+export struct Row {
+    // One per shown column, in the order they are shown.
+    //
+    // **Formatted in Rust, and cut up there too.** Slint has no way to take a
+    // substring, so the match inside a name could never have been picked out
+    // here — and that turns out to be the right place anyway: the offsets come
+    // out of folded text, Turkish folding changes byte lengths, and mapping
+    // them back to the original spelling is `scour-core`'s job.
+    //
+    // The list is rebuilt when the chosen columns change, which is the only
+    // time it has to be: widths travel separately, in `cw`, so dragging an
+    // edge does not touch a single row.
+    cells: [Cell],
+    // The whole name, whether or not the name column is being shown.
+    //
+    // **The tiles have no columns at all**, so what they draw cannot come out
+    // of the cell list: somebody who hides the name column in the table has
+    // not asked for nameless tiles.
+    name: string,
     // The whole path. Not drawn — it is what opening, revealing and copying
     // the row read, and it lives on the row so that those can never be looking
     // at a different row from the one under the pointer.
@@ -42,12 +92,6 @@ export struct Row {
     // a person reads: one is vocabulary, the other is language.
     ktoken: string,
     tint: brush,
-    // What kind of thing it is, already translated — the engine's own
-    // vocabulary, so the window never invents a word for a kind it does not
-    // know about.
-    kind: string,
-    size: string,
-    stamp: string,
     is-dir: bool,
     // Which age band the row falls in, 0 (minutes) to 5 (older).
     age: int,
@@ -122,6 +166,12 @@ export struct MenuItem {
     careful: bool,
     // Starts more programs than there are hands, and asks first — drawn dim.
     heavy: bool,
+    // Shown with a tick: this is a switch rather than an action. Only the
+    // column picker uses it.
+    on: bool,
+    // Cannot be pressed. The last column standing is this: a table of no
+    // columns is not a smaller table, it is a broken one.
+    off: bool,
 }
 
 export struct Rule {
@@ -851,11 +901,6 @@ export component MainWindow inherits Window {
     // The columns, handed in from `scour-ui` so that this window and the
     // browser page cannot disagree about what they are called or how wide
     // they start. See `dress()` in `main.rs`.
-    in property <string> head-name;
-    in property <string> head-kind;
-    in property <string> head-path;
-    in property <string> head-mtime;
-    in property <string> head-size;
     // **The grid counts lines, not rows.** A tile view puts several results on
     // one scrolled line, so everything the virtual list rests on — how many
     // fit, which one is on top, how far a page moves — is counted in lines and
@@ -946,7 +991,13 @@ export component MainWindow inherits Window {
     // taken off the width the columns divide up, and the header loses it too
     // so the two stay in line.
     property <length> chrome: 40px + 2px + 186px + 1px + 24px + 14px;
-    property <length> gaps: 8px * 4;
+    // One gap between each pair of headings, and one more before the picker.
+    // **Counted, not fixed at four**, because how many columns there are is
+    // something a person decides now.
+    property <length> gaps: 8px * max(1, root.heads.length);
+    /// The ⋮ at the end of the header row, which is a column's worth of room
+    /// that the columns themselves may not have.
+    property <length> picker-w: 16px;
     // **The preview panel is part of the furniture too**, and leaving it out
     // was most of why the date and the size went off the right-hand edge. It
     // takes 380 pixels off the list and the columns were still being sized
@@ -956,7 +1007,7 @@ export component MainWindow inherits Window {
 
     /// What there is for the columns to divide up.
     out property <length> lane: max(0px,
-        root.width - root.chrome - root.gaps - root.peek-w);
+        root.width - root.chrome - root.gaps - root.picker-w - root.peek-w);
     /// Divide it up again — in `scour_ui::lay_out`, which the page uses too.
     ///
     /// **Rust rather than a binding here.** Sharing out what is left over and
@@ -969,20 +1020,15 @@ export component MainWindow inherits Window {
     // **What a person dragged wins over what was computed.** Zero means "not
     // chosen", which is how the settings file says it too — a width of zero is
     // not a column somebody wanted, it is a column nobody has touched.
-    in-out property <length> uw-name;
-    in-out property <length> uw-kind;
-    in-out property <length> uw-path;
-    in-out property <length> uw-mtime;
-    in-out property <length> uw-size;
     // The widths every row and the header are handed, worked out together so
     // that they add up to `lane` exactly. The defaults are `scour-ui`'s own,
     // so a window that somehow drew a frame before the first `relayout` shows
     // a sane table rather than five columns of nothing.
-    in-out property <length> cw-name: 240px;
-    in-out property <length> cw-kind: 110px;
-    in-out property <length> cw-path: 320px;
-    in-out property <length> cw-mtime: 120px;
-    in-out property <length> cw-size: 90px;
+    in-out property <[length]> cw: [240px, 110px, 320px, 120px, 90px];
+    // The headings, in the order they are shown, so the header row and every
+    // row below it are laid out from one list and cannot disagree about how
+    // many columns there are.
+    in-out property <[HeadInfo]> heads;
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
@@ -1102,6 +1148,9 @@ export component MainWindow inherits Window {
     callback menu-at(int, length, length);
     /// One of the items was pressed.
     callback menu-pick(string);
+    /// The same overlay, holding the column switches instead of row actions.
+    in-out property <bool> menu-columns: false;
+    callback column-toggled(string);
 
     // --- asking before something that changes files ----------------------
     //
@@ -1186,6 +1235,9 @@ export component MainWindow inherits Window {
     callback dupes-read();
     in property <string> head-folder;
     in property <string> head-age;
+    // Still its own property: the report has a header of its own, and it is
+    // not the table's — the table's headings travel in `heads` now.
+    in property <string> head-size;
     in property <string> head-share;
     in property <string> head-files;
     callback report-open(string);
@@ -1255,6 +1307,10 @@ export component MainWindow inherits Window {
     callback column-dragged(string, length);
     /// Double-clicked an edge: that column stretches with the window again.
     callback column-reset(string);
+    /// The ⋮ at the end of the header row: which columns to show. Carries
+    /// where it is, because the menu opens under it and Rust cannot see where
+    /// a heading ended up.
+    callback columns-clicked(length, length);
     // **No page callbacks.** The list is a model whose length is the whole
     // result, so there is no window for the view to slide and no anchor for it
     // to keep: it scrolls, and the window fetches what scrolled into sight.
@@ -2848,16 +2904,45 @@ export component MainWindow inherits Window {
                         padding-right: 12px;
                         spacing: 8px;
 
-                        Head { which: "name"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-name; sort: "name"; w: root.cw-name;
-                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "kind"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-kind; sort: "kind"; w: root.cw-kind;
-                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "path"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-path; sort: "path"; w: root.cw-path;
-                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "mtime"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-mtime; sort: "modified"; w: root.cw-mtime;
-                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
-                        Head { which: "size"; dragged(c, d) => { root.column-dragged(c, d); } reset(c) => { root.column-reset(c); } text: root.head-size; sort: "size"; w: root.cw-size; align-right: true; last: true;
-                               sorted-by: root.sorted-by; clicked(k) => { root.sort-by(k); } }
+                        for h[i] in root.heads: Head {
+                            which: h.id;
+                            text: h.label;
+                            sort: h.sort;
+                            align-right: h.right;
+                            // The last heading has no line after it: there is
+                            // nothing on the other side but the scrollbar's
+                            // lane, and a line there reads as the edge of a
+                            // column that is not on screen.
+                            last: i == root.heads.length - 1;
+                            w: root.cw[i];
+                            sorted-by: root.sorted-by;
+                            dragged(c, d) => { root.column-dragged(c, d); }
+                            reset(c) => { root.column-reset(c); }
+                            clicked(k) => { root.sort-by(k); }
+                        }
+
+                        // **Where a column would be, which is where the eye
+                        // already is** when the question "why is this column
+                        // here" comes up. The page puts it in the same place
+                        // and the room it takes is counted out of the lane —
+                        // see `PICKER_W` in `relayout`.
+                        Rectangle {
+                            width: 16px;
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.columns-clicked(self.absolute-position.x,
+                                        self.absolute-position.y + self.height);
+                                }
+                                Text {
+                                    text: "⋮";
+                                    color: parent.has-hover ? Theme.ink : Theme.ink-3;
+                                    font-size: 14px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -3110,58 +3195,50 @@ export component MainWindow inherits Window {
                             // the left of the column it names. The page puts
                             // the icon inside the name cell for the same
                             // reason.
-                            Marked {
-                                pre: here.pre;
-                                hit: here.hit;
-                                post: here.post;
-                                colour: here.is-dir ? Theme.q-key : Theme.ink;
-                                width: max(0px, root.cw-name - 15px - 8px);
-                            }
+                            // **One loop over the cells, not five named
+                            // ones.** Which columns are shown is a person's
+                            // choice now, so the row cannot know at compile
+                            // time what its third cell holds. Two of them are
+                            // still not plain text and are found by `id`
+                            // rather than by position: the name, which has
+                            // the match picked out of it, and — with it —
+                            // the icon, which lives inside the name's own
+                            // width so that a row is never wider than the
+                            // header above it.
+                            for c[ci] in here.cells: HorizontalLayout {
+                                width: root.cw[ci];
 
-                            Text {
-                                width: root.cw-kind;
-                                text: here.kind;
-                                color: Theme.ink-3;
-                                font-size: Fonts.small;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
+                                if c.id == "name": Marked {
+                                    pre: c.pre;
+                                    hit: c.hit;
+                                    post: c.post;
+                                    colour: here.is-dir ? Theme.q-key : Theme.ink;
+                                    width: max(0px, root.cw[ci] - 15px - 8px);
+                                }
 
-                            Text {
-                                width: root.cw-path;
-                                text: here.folder;
-                                color: Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 11.5px;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            // **The age is the date's colour, not a dot beside
-                            // it.** The page paints the stamp itself, and it
-                            // reads better: the eye is already there to find
-                            // out when, so the answer and how-long-ago are one
-                            // glance rather than two.
-                            Text {
-                                width: root.cw-mtime;
-                                text: here.stamp;
-                                font-family: Fonts.mono;
-                                color: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
-                                     : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
-                                     : here.age == 4 ? Theme.t4 : Theme.t5;
-                                font-size: Fonts.small;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-
-                            Text {
-                                width: root.cw-size;
-                                text: here.size;
-                                color: Theme.ink-2;
-                                font-family: Fonts.mono;
-                                font-size: 11.5px;
-                                horizontal-alignment: right;
-                                vertical-alignment: center;
+                                if c.id != "name": Text {
+                                    width: root.cw[ci];
+                                    text: c.text;
+                                    // **The age is the date's colour, not a
+                                    // dot beside it.** The page paints the
+                                    // stamp itself and it reads better: the
+                                    // eye is already there to find out when,
+                                    // so the answer and how-long-ago are one
+                                    // glance rather than two. `-1` is a
+                                    // column that is not a time at all.
+                                    color: c.dim ? Theme.ink-3
+                                         : c.age < 0 ? (c.right ? Theme.ink-2 : Theme.ink-3)
+                                         : c.age == 0 ? Theme.t0 : c.age == 1 ? Theme.t1
+                                         : c.age == 2 ? Theme.t2 : c.age == 3 ? Theme.t3
+                                         : c.age == 4 ? Theme.t4 : Theme.t5;
+                                    // An empty family is the window's own, which is what the name and
+                                    // the kind are set in.
+                                    font-family: c.mono ? Fonts.mono : "";
+                                    font-size: c.mono ? 11.5px : Fonts.small;
+                                    horizontal-alignment: c.right ? right : left;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
                             }
                         }
                     }
@@ -3284,7 +3361,7 @@ export component MainWindow inherits Window {
                                     }
 
                                     Text {
-                                        text: cell.pre + cell.hit + cell.post;
+                                        text: cell.name;
                                         color: cell.is-dir ? Theme.q-key : Theme.ink;
                                         font-family: Fonts.mono;
                                         font-size: root.view-mode == "large" ? 12px : 11px;
@@ -4302,9 +4379,23 @@ export component MainWindow inherits Window {
                             padding-right: 10px;
                             spacing: 12px;
 
+                            // **A lane for the tick, kept even when it is
+                            // empty.** The column picker is a list of
+                            // switches, and switches whose labels shuffle
+                            // sideways as they are turned on are switches
+                            // nobody can aim at twice.
+                            if root.menu-columns: Text {
+                                text: it.on ? "✓" : "";
+                                color: Theme.q-key;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                                width: 12px;
+                            }
+
                             Text {
                                 text: it.label;
-                                color: it.careful ? Theme.danger
+                                color: it.off ? Theme.line
+                                     : it.careful ? Theme.danger
                                      : it.heavy ? Theme.ink-3
                                      : Theme.ink-2;
                                 font-size: 12.5px;
@@ -4331,7 +4422,11 @@ export component MainWindow inherits Window {
                         hit := TouchArea {
                             clicked => {
                                 root.menu-open = false;
-                                root.menu-pick(it.id);
+                                if (root.menu-columns) {
+                                    root.column-toggled(it.id);
+                                } else {
+                                    root.menu-pick(it.id);
+                                }
                             }
                         }
                     }
