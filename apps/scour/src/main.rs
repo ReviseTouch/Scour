@@ -52,8 +52,9 @@ enum Command {
         #[arg(long, default_value_t = 100_000)]
         count_cap: u32,
     },
-    /// Write everything that matches to a spreadsheet. The whole matching set,
-    /// written as it is walked, in the index's own order rather than sorted.
+    /// Write everything that matches to a spreadsheet.
+    ///
+    /// The whole matching set, in the index's own order rather than sorted.
     Export {
         query: Vec<String>,
         /// Where to write it. Left out, it goes to standard output.
@@ -103,8 +104,9 @@ enum Command {
         #[arg(long, short = 'q', default_value = "")]
         query: String,
     },
-    /// The same file, several times over — largest saving first. Works down from
-    /// the biggest; `--budget-mb 0` reads nothing and answers from sizes alone.
+    /// The same file, several times over — largest saving first.
+    ///
+    /// Works down from the biggest; `--budget-mb 0` reads nothing and answers from sizes alone.
     Dupes {
         /// Empty for everything indexed.
         #[arg(default_value = "")]
@@ -122,14 +124,14 @@ enum Command {
     Explain { query: Vec<String> },
     /// The query language reference.
     Syntax,
-    /// Open another face — the window, the terminal or the browser — and remember
-    /// it as the one to open next time. Through `scour-open`, which owns the list.
+    /// Open another face — the window, the terminal or the browser.
+    ///
+    /// Remembered as the one to open next time, through `scour-open`.
     Faces {
         /// `window`, `tui` or `browser`. Left out, it says which is current.
         face: Option<String>,
     },
-    /// What Scour does, and which of its four faces does it. The table is
-    /// `scour_ui::faces`; this prints it.
+    /// What Scour does, and which of its four faces does it.
     Features,
     /// The configured sources.
     Sources,

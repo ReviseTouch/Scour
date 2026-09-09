@@ -113,12 +113,15 @@ when a volume's write counter moves; nothing is missed, changes take longer to
 appear. Network and FUSE mounts have no counter and need the mark.
 
 ```bash
-cargo build --release -p scour-watch
-sudo bash packaging/install-service.sh     # the only step that needs root
+sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # the only step that needs root
 systemctl start scour.service
 ```
 
-The shipped unit targets one account (UID 1000); read it before installing.
+The user defaults to whoever ran `sudo`; the roots — the filesystems to mark —
+default to `/home`. Read the unit and the polkit rule before installing: the
+rule lets that one account start and stop this one service without a prompt,
+and nothing else. Turn the user unit off first if you had one
+(`systemctl --user disable --now scourd.service`).
 
 ### Settings
 

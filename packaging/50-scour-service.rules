@@ -1,7 +1,8 @@
-// Install only alongside the root-owned helper and unit in install-service.sh.
-// This permits lifecycle operations, never unit editing or arbitrary commands.
+// Installed by packaging/install-service.sh beside the root-owned helper and
+// unit. Lets one account start, stop and restart scour.service without a
+// prompt — never edit units or run anything else as root.
 polkit.addRule(function(action, subject) {
-    if (subject.user !== "hasan" ||
+    if (subject.user !== "@USER@" ||
         action.id !== "org.freedesktop.systemd1.manage-units" ||
         action.lookup("unit") !== "scour.service") {
         return;

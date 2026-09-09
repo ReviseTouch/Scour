@@ -1,64 +1,33 @@
 [Unit]
 # Scour, started at boot with the one privilege it needs.
 #
-# **Why a system unit and not the user one.** Watching a whole filesystem means
-# one `FAN_MARK_FILESYSTEM` a superblock, and placing a mark needs
-# CAP_SYS_ADMIN. `scour-watch` is the only program here that ever has it: it
-# opens the fanotify descriptor, sets the marks, drops to the invoking user and
-# execs `scourd`, which then runs unprivileged for the rest of its life. The
-# handover was measured rather than assumed — the served process comes back
-# `CapEff=0` and both escalation attempts return EPERM.
+# Watching a whole filesystem is one `FAN_MARK_FILESYSTEM` per superblock, and
+# placing a mark needs CAP_SYS_ADMIN. `scour-watch` is the only program here
+# that ever has it: it opens the fanotify descriptor, sets the marks, drops to
+# the user named below and execs `scourd`, which runs unprivileged from then on
+# (`CapEff=0`, measured). The helper lives under root-owned /usr/local/libexec;
+# never point ExecStart at a user-writable path.
 #
-# The installer keeps the privileged helper under root-owned /usr/local/libexec.
-# Only scourd, executed after the identity drop, remains in the user's home.
-# Its polkit rule lets hasan start/stop/restart this fixed unit without a prompt;
-# editing units, running arbitrary programs as root and other services are not
-# covered. Never change the privileged ExecStart back to a user-writable path.
+# Without the mark there is no watching on Linux: `scourd` reconciles by
+# walking when a volume's write counter moves — nothing is missed, changes
+# take longer to appear. The mark is what makes it cheap and immediate.
 #
-# Install (once):
-#
-#   cargo build --release -p scour-watch
-#   sudo bash packaging/install-service.sh
-#   systemctl start scour.service
-#
-# **Why it is worth doing rather than leaving.** Without the mark, `scourd`
-# falls back to inotify — one watch a directory, out of a budget shared with
-# every other program in the session. A home directory does not fit in it, and
-# what runs out is not Scour: it is the *session's* budget, so the next editor
-# or development tool to start fails with an error that never mentions watches.
-# That happened on this machine, and the symptom was that Claude Code would
-# not open.
-#
-# The fallback now refuses above a quarter of the budget rather than taking it
-# — see `crates/scour-source-fs/src/watch.rs` — so nothing breaks either way.
-# But a refused watch is a source reconciled by walking, which is slower to
-# notice a change and more expensive when it does. The mark is what makes it
-# both cheap and immediate.
-#
-# and turn the user unit off, or two writers race for the index lock:
-#
-#   systemctl --user disable --now scourd.service
+# `@USER@`, `@UID@`, `@HOME@` and `@ROOTS@` are filled in by
+# packaging/install-service.sh; the user unit must be off, or two writers race
+# for the index lock:  systemctl --user disable --now scourd.service
 Description=Scour file index
 Documentation=https://github.com/hasantr/Scour
-# **Not at boot — after the session.** The socket lives in
-# `/run/user/1000/scour/`, and systemd-logind does not create `/run/user/1000`
-# until the user logs in. Starting earlier fails; the restart below covers a
-# race, the ordering covers the ordinary case.
-After=local-fs.target user@1000.service
-Wants=user@1000.service
+# After the session, not at boot: the socket lives in /run/user/@UID@, which
+# logind creates at login.
+After=local-fs.target user@@UID@.service
+Wants=user@@UID@.service
 
 [Service]
 Type=simple
-# **`--as`, because there is no shell here.** `scour-watch` learns who to drop
-# to from `SUDO_UID` when a person runs it, and from this flag when a unit
-# does; it must name whoever owns the `~/.config/scour/config.toml` and the
-# index this is meant to serve. Three `Environment=SUDO_*` lines pretending to
-# be sudo said the same thing less honestly.
-#
-# The roots are named rather than left out: without them every real filesystem
-# is marked, including `/efi`, which holds nothing anybody searches for. These
-# two are what `config.toml` lists as sources.
-ExecStart=/usr/local/libexec/scour/scour-watch --as hasan /home /mnt/depo -- /home/hasan/.local/bin/scourd
+# `--as` names who to drop to — whoever owns ~/.config/scour/config.toml and
+# the index. The roots are the filesystems to mark; left out, every real
+# filesystem would be, `/efi` included.
+ExecStart=/usr/local/libexec/scour/scour-watch --as @USER@ @ROOTS@ -- @HOME@/.local/bin/scourd
 # Also the safety net for starting before the runtime directory exists.
 Restart=on-failure
 RestartSec=5

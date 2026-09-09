@@ -298,10 +298,10 @@ fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
         Some(uid) => uid,
         None => std::env::var("SUDO_UID")
             .map_err(|_| {
-                "kime dusulecegi belli degil — sudo ile calistir ya da --as <uid> ver".to_string()
+                "nobody to drop to — run under sudo or pass --as <uid>".to_string()
             })?
             .parse()
-            .map_err(|_| "SUDO_UID sayi degil".to_string())?,
+            .map_err(|_| "SUDO_UID is not a number".to_string())?,
     };
     let gid: u32 = match asked {
         Some(uid) => group_of(uid).unwrap_or(uid),
@@ -311,7 +311,7 @@ fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
             .unwrap_or(uid),
     };
     if uid == 0 {
-        return Err("hedef kullanici root — dusurulecek ayricalik yok".into());
+        return Err("the target user is root — there is no privilege to drop".into());
     }
     unsafe {
         if libc::setgroups(0, std::ptr::null()) != 0 {
@@ -324,7 +324,7 @@ fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
             return Err(format!("setuid: {}", err()));
         }
         if libc::geteuid() != uid || libc::setuid(0) == 0 {
-            return Err("ayricalik gercekten dusurulemedi".into());
+            return Err("the privilege was not actually dropped".into());
         }
     }
     Ok((uid, gid))
@@ -332,11 +332,11 @@ fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
 
 fn usage() {
     eprintln!(
-        "kullanim:\n  \
-         sudo scour-watch -- <komut> [arg...]     butun gercek dosya sistemleri\n  \
-         sudo scour-watch <yol>... -- <komut>     yalniz bu yollarin dosya sistemleri\n  \
-         sudo scour-watch --show                  ne isaretlenecegini yaz, hicbir sey yapma\n  \
-         --as <kullanici|uid>                     kime dusulecek (sudo yoksa: servis birimi)"
+        "usage:\n  \
+         sudo scour-watch -- <command> [arg...]   every real filesystem\n  \
+         sudo scour-watch <path>... -- <command>  only the filesystems under these paths\n  \
+         sudo scour-watch --show                  print what would be marked, do nothing\n  \
+         --as <user|uid>                          who to drop to (without sudo: a service unit)"
     );
 }
 
@@ -348,11 +348,11 @@ fn user_arg(paths: &[String]) -> Result<(Option<u32>, Option<String>), String> {
     };
     let who = paths
         .get(at + 1)
-        .ok_or_else(|| "--as bir kullanici ya da uid ister".to_string())?;
+        .ok_or_else(|| "--as wants a user name or a uid".to_string())?;
     if let Ok(uid) = who.parse::<u32>() {
         return Ok((Some(uid), Some(who.clone())));
     }
-    let uid = uid_of(who).ok_or_else(|| format!("boyle bir kullanici yok: {who}"))?;
+    let uid = uid_of(who).ok_or_else(|| format!("no such user: {who}"))?;
     Ok((Some(uid), Some(who.clone())))
 }
 
@@ -427,12 +427,12 @@ pub(crate) fn main() -> ExitCode {
     }
 
     if sbs.is_empty() {
-        eprintln!("scour-watch: isaretlenecek dosya sistemi bulunamadi");
+        eprintln!("scour-watch: no filesystem to mark");
         return ExitCode::FAILURE;
     }
 
     if show {
-        println!("isaretlenecek dosya sistemleri:");
+        println!("filesystems that would be marked:");
         for sb in &sbs {
             println!(
                 "  {:<14} {:<7} {}{}",
@@ -455,7 +455,7 @@ pub(crate) fn main() -> ExitCode {
     }
 
     if unsafe { libc::geteuid() } != 0 {
-        eprintln!("scour-watch: root gerekiyor (FAN_MARK_FILESYSTEM icin CAP_SYS_ADMIN)");
+        eprintln!("scour-watch: root is needed (CAP_SYS_ADMIN for FAN_MARK_FILESYSTEM)");
         return ExitCode::FAILURE;
     }
 
@@ -468,7 +468,7 @@ pub(crate) fn main() -> ExitCode {
     println!("scour-watch:");
     let marked = sbs.iter().filter(|sb| mark(fd, sb)).count();
     if marked == 0 {
-        eprintln!("scour-watch: hicbir dosya sistemi isaretlenemedi");
+        eprintln!("scour-watch: no filesystem could be marked");
         return ExitCode::FAILURE;
     }
 
@@ -481,7 +481,7 @@ pub(crate) fn main() -> ExitCode {
         }
     };
     restore_environment(uid, gid);
-    println!("  {marked} dosya sistemi, uid={uid} gid={gid} olarak calistiriliyor\n");
+    println!("  {marked} filesystem(s) marked, running as uid={uid} gid={gid}\n");
 
     // The descriptor has to cross the exec, so the flag that would close it is
     // cleared here — `fanotify_init` does not offer the choice separately.
