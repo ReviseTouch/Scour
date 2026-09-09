@@ -1,34 +1,7 @@
-//! Which programs on this machine claim a kind of file, and starting one.
-//!
-//! **This is what `Open with…` needs and `xdg-open` does not give.** Opening a
-//! file is one call to `xdg-open`; offering a *choice* means reading the same
-//! tables `xdg-open` reads and showing what is in them. There is no command
-//! that prints the list — `xdg-mime query default` gives one answer and no
-//! alternatives — so the tables are read here.
-//!
-//! ## Where the answer comes from
-//!
-//! * **`applications/*.desktop`** under `$XDG_DATA_HOME` and each
-//!   `$XDG_DATA_DIRS` entry. A desktop entry names itself, says what to run,
-//!   and lists the MIME types it will take.
-//! * **`mimeapps.list`**, under `$XDG_CONFIG_HOME`, each `$XDG_CONFIG_DIRS`
-//!   entry, and beside the applications themselves. Its `[Default
-//!   Applications]` section is what somebody chose, and it wins; its
-//!   `[Added Associations]` adds programs the desktop file itself does not
-//!   claim.
-//!
-//! Earlier directories win, which is the specification's rule and the reason a
-//! choice made in a home directory beats a package's.
-//!
-//! ## What is deliberately left out
-//!
-//! `NoDisplay` and `Hidden` entries, and anything whose `TryExec` is not on the
-//! path. All three mean "do not offer this to a person", and a menu that offers
-//! a program which is not installed is a menu that fails after the press.
-//!
-//! The type of a file is **not** worked out here. `scour-thumbs` already reads
-//! the shared MIME database to answer that, and two readers of one table is the
-//! drift this workspace keeps writing down.
+//! Which programs on this machine claim a kind of file, and starting one — what
+//! `Open with…` needs and no command prints. Read from `applications/*.desktop`
+//! and `mimeapps.list`, earlier directories winning. `NoDisplay`, `Hidden` and a
+//! missing `TryExec` are left out; the type of a file is `scour-thumbs`'s answer.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,18 +14,15 @@ pub struct Opener {
     pub id: String,
     /// What to show a person, in their language where the entry has one.
     pub name: String,
-    /// The `Exec=` line, field codes and all. Use [`launch`] rather than
-    /// running it: the codes have to come out first.
+    /// The `Exec=` line, field codes and all. Use [`launch`]: the codes have to
+    /// come out first.
     pub exec: String,
     /// Somebody chose this one for this type.
     pub preferred: bool,
 }
 
-/// Every program that claims this MIME type, the chosen one first.
-///
-/// The list is read from disk each time. That is deliberate: this is asked once
-/// when a menu is opened, never per row, and a person who has just installed an
-/// editor expects to see it without restarting a search tool.
+/// Every program that claims this MIME type, the chosen one first. Read from disk
+/// each time: this is asked once per menu, never per row.
 pub fn openers(mime: &str) -> Vec<Opener> {
     let entries = desktop_entries();
     let (default, added) = associations(mime);
@@ -76,8 +46,7 @@ pub fn openers(mime: &str) -> Vec<Opener> {
         }
     }
 
-    // Then everything that claims the type itself, by name so the list does not
-    // reshuffle between two openings of the same menu.
+    // Then everything claiming the type, by name so the menu does not reshuffle.
     let mut rest: Vec<&Entry> = entries
         .values()
         .filter(|e| !seen.contains(&e.id) && e.takes(mime))
@@ -112,14 +81,9 @@ pub fn launch(opener: &Opener, path: &Path) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-/// An `Exec=` line with its field codes resolved, split into words.
-///
-/// **The codes are not optional decoration.** `%f` is where the file goes and
-/// `%i %c %k` are things a launcher fills in that a search tool has no business
-/// filling in — left in place they become literal arguments, and a program
-/// handed `%c` as a file name opens a file called `%c` or refuses to start.
-/// An entry with no code at all still gets the path, appended: that is what
-/// every launcher does, and an entry that forgot its `%f` is common.
+/// An `Exec=` line with its field codes resolved, split into words. `%f` is where
+/// the file goes; `%i %c %k` are dropped, since left in place they become literal
+/// arguments. An entry with no code at all still gets the path, appended.
 fn command(exec: &str, path: &Path) -> Vec<String> {
     let file = path.to_string_lossy().into_owned();
     let mut out: Vec<String> = Vec::new();
@@ -130,8 +94,7 @@ fn command(exec: &str, path: &Path) -> Vec<String> {
                 out.push(file.clone());
                 took_file = true;
             }
-            // Deprecated and meaningless here; the specification says to drop
-            // them rather than pass them on.
+            // Deprecated: the specification says to drop rather than pass on.
             "%d" | "%D" | "%n" | "%N" | "%v" | "%m" | "%i" | "%c" | "%k" => {}
             _ => out.push(word),
         }
@@ -192,11 +155,8 @@ impl Entry {
     }
 }
 
-/// Every usable desktop entry on this machine, keyed by file name.
-///
-/// Earlier directories win: `$XDG_DATA_HOME` before `$XDG_DATA_DIRS`, so a
-/// entry a person put in their own home replaces the packaged one of the same
-/// name rather than appearing beside it.
+/// Every usable desktop entry on this machine, keyed by file name. Earlier
+/// directories win, so a home entry replaces the packaged one of the same name.
 fn desktop_entries() -> BTreeMap<String, Entry> {
     let mut out: BTreeMap<String, Entry> = BTreeMap::new();
     for dir in data_dirs() {
@@ -230,8 +190,7 @@ fn read_entry(at: &Path, id: &str) -> Option<Entry> {
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
-            // Only the main group. An action's `[Desktop Action open]` has its
-            // own `Exec`, and taking that one starts the wrong thing.
+            // Only the main group: `[Desktop Action open]` has its own `Exec`.
             in_entry = line == "[Desktop Entry]";
             continue;
         }
@@ -408,7 +367,6 @@ fn runnable(program: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The field codes, which are the part that goes wrong quietly.
     #[test]
     fn the_file_lands_where_the_entry_says_and_the_rest_of_the_codes_go() {
         let p = Path::new("/home/a/notes.txt");
@@ -417,21 +375,18 @@ mod tests {
             command("code --new-window %F", p),
             vec!["code", "--new-window", "/home/a/notes.txt"]
         );
-        // `%i %c %k` are a launcher's to fill in, and a program handed `%c`
-        // opens a file called `%c` or refuses to start.
+        // A program handed `%c` opens a file called `%c` or refuses to start.
         assert_eq!(
             command("foo %i %c %k %f", p),
             vec!["foo", "/home/a/notes.txt"]
         );
-        // An entry that forgot its code still gets the file, appended — which
-        // is what every launcher does.
+        // An entry that forgot its code still gets the file, appended.
         assert_eq!(
             command("mousepad", p),
             vec!["mousepad", "/home/a/notes.txt"]
         );
     }
 
-    /// A path with a space in it is the ordinary case, not an edge one.
     #[test]
     fn a_quoted_word_stays_one_word() {
         assert_eq!(split(r#"foo "a b" c"#), vec!["foo", "a b", "c"]);
@@ -441,11 +396,9 @@ mod tests {
         assert_eq!(split("  spaced   out  "), vec!["spaced", "out"]);
     }
 
-    /// The two letters, out of whatever shape the variable is in.
     #[test]
     fn the_language_is_the_first_two_letters_and_nothing_else() {
-        // Not asserted against the environment — that is the caller's — but
-        // the shapes the function has to survive.
+        // The shapes the function has to survive, not the environment's value.
         for (value, want) in [
             ("tr_TR.UTF-8", "tr"),
             ("en_GB", "en"),
@@ -463,12 +416,8 @@ mod tests {
         }
     }
 
-    /// Reading this machine's real tables, without asserting what is on it.
-    ///
-    /// **A test that says nothing about the answer and everything about the
-    /// shape of it.** What is installed differs on every machine, so the thing
-    /// worth checking is that the reader survives the real files: no panic, no
-    /// entry with an empty name, no entry with nothing to run.
+    /// Reading this machine's real tables: what is installed differs everywhere,
+    /// so only the shape is checked — no panic, no empty name, nothing to run.
     #[test]
     fn the_real_tables_are_read_without_falling_over() {
         for mime in ["text/plain", "image/png", "application/pdf"] {

@@ -1,32 +1,8 @@
-//! Ask the desktop for pictures of these files, and say exactly what happened.
+//! Ask the desktop for pictures of these files and say what happened, including
+//! how many processes a batch actually started. Point `XDG_CACHE_HOME` at your
+//! own directory, never the desktop's real cache.
 //!
-//! ```text
-//! XDG_CACHE_HOME=/var/tmp/probe \
-//!   cargo run --release -p scour-thumbs --example ask -- <path>...
-//! ```
-//!
-//! **The measurement tool for the one number this design rests on**: how many
-//! processes a batch actually starts. Everything else about thumbnails is
-//! visible — a tile is drawn or it is not — but "twenty thousand tiles came
-//! into view and thirty-two processes ran" is a claim that is otherwise
-//! unfalsifiable from outside. `ran` is printed for every call, so asking
-//! twice shows the second call starting nothing.
-//!
-//! It is also how the standard was checked rather than assumed. Point
-//! `XDG_CACHE_HOME` somewhere of your own — never the desktop's real cache,
-//! which belongs to the desktop — run this, and then ask another program
-//! whether it accepts what was written:
-//!
-//! ```python
-//! import gi; gi.require_version("GnomeDesktop", "4.0")
-//! from gi.repository import GnomeDesktop
-//! f = GnomeDesktop.DesktopThumbnailFactory.new(GnomeDesktop.DesktopThumbnailSize.LARGE)
-//! print(f.lookup(uri, mtime))     # the path, or None if it will regenerate
-//! ```
-//!
-//! That is the library GNOME Files uses. A `None` from it means the picture
-//! Scour wrote is one nothing else will read, which is the failure mode this
-//! whole module is arranged to avoid.
+//! `XDG_CACHE_HOME=/var/tmp/probe cargo run -p scour-thumbs --example ask -- <path>...`
 
 fn main() {
     let paths: Vec<String> = std::env::args().skip(1).collect();

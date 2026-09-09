@@ -13,22 +13,15 @@ pub fn is_running(addr: &str) -> bool {
     crate::server::name(addr).is_ok_and(|n| Stream::connect(n).is_ok())
 }
 
-/// A connection to the service.
-///
-/// Kept open across requests. A search box sends one per keystroke, and paying
-/// for a connection each time would put the connection cost inside the latency
-/// this whole project exists to minimise.
+/// A connection to the service, kept open across requests: a search box sends one
+/// per keystroke, and a `connect` each time is latency inside every one.
 pub struct Client {
     write: Stream,
     read: BufReader<Stream>,
     next_id: u64,
-    /// A [`Client::stream`] was abandoned part way through.
-    ///
-    /// The frames nobody read are still coming, so this connection can never
-    /// be trusted again — the next request would be answered by the tail of
-    /// the last one. Refusing to send is the only safe thing left; the caller
-    /// opens a new connection, which costs a `connect` and is what a cancelled
-    /// download should cost.
+    /// A [`Client::stream`] was abandoned part way through, so unread frames are
+    /// still coming and the next request would be answered by the last one's tail.
+    /// The caller opens a new connection.
     stopped: bool,
 }
 
@@ -56,13 +49,9 @@ impl Client {
         })
     }
 
-    /// Ask, and read the one frame that answers.
-    ///
-    /// **Refuses a request that answers in pieces**, rather than reading the
-    /// first of them. Reading it would leave the rest in the buffer and the
-    /// next request on this connection would be answered by the leftovers —
-    /// which does not look like a failure, it looks like the wrong file. Use
-    /// [`Client::stream`].
+    /// Ask, and read the one frame that answers. Refuses a request that answers in
+    /// pieces: reading the first would leave the rest to answer the next request,
+    /// which looks like the wrong file rather than an error. Use [`Client::stream`].
     pub fn call(&mut self, request: Request) -> Result<Response> {
         if request.streams() {
             return Err(Error::Config {
@@ -71,9 +60,8 @@ impl Client {
         }
         let id = self.send(request)?;
         let reply = self.frame(id)?;
-        // Cannot happen for a request that says it does not stream, and it is
-        // checked anyway: this is the one failure that produces a wrong answer
-        // rather than an error, so it is worth two lines to make it an error.
+        // Checked anyway: this is the one failure that produces a wrong answer
+        // rather than an error.
         if reply.more {
             return Err(Error::Unreachable {
                 detail: "the service answered in pieces where one frame was expected".into(),
@@ -85,18 +73,9 @@ impl Client {
         }
     }
 
-    /// Ask for something that arrives in pieces, and be handed each one.
-    ///
-    /// `on_piece` is called per frame as it arrives — nothing is collected
-    /// here, which is the whole point: an export of this index is a couple of
-    /// hundred megabytes and the caller is writing them to a socket or a file
-    /// as they come. Returning `false` stops reading and hangs the connection
-    /// up, because the service is mid-answer and there is no way to tell it to
-    /// stop that does not involve inventing a cancel message; dropping the
-    /// connection *is* the cancel, and the service's next write fails.
-    ///
-    /// The terminating frame is returned. An error frame is returned as `Err`,
-    /// so a caller that gets `Ok` knows the answer is whole.
+    /// Ask for something that arrives in pieces and be handed each one; nothing is
+    /// collected here, and returning `false` hangs the connection up, which is the
+    /// cancel. The terminating frame is returned, an error frame as `Err`.
     pub fn stream(
         &mut self,
         request: Request,
@@ -117,8 +96,7 @@ impl Client {
                 Outcome::Error(e) => return Err(e),
             };
             if !on_piece(piece) {
-                // The caller has stopped caring — its own reader went away, in
-                // every case that has one. This connection is now mid-answer
+                // The caller stopped reading. This connection is now mid-answer
                 // and unusable; see `Client::stopped`.
                 self.stopped = true;
                 return Err(Error::Unreachable {
@@ -166,9 +144,8 @@ impl Client {
         let reply: Reply = serde_json::from_str(line.trim()).map_err(|e| Error::Io {
             detail: e.to_string(),
         })?;
-        // Requests are sent one at a time on this connection, so a reply
-        // carrying a different id means the stream has desynchronised — and
-        // continuing from there would answer the wrong question.
+        // One request at a time on this connection, so a different id means the
+        // stream has desynchronised.
         if reply.id != id {
             return Err(Error::Unreachable {
                 detail: format!("expected reply {id}, got {}", reply.id),

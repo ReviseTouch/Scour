@@ -1,9 +1,5 @@
-//! The tools a model is offered.
-//!
-//! Each description says what the tool is *for*, not merely what it does. A
-//! model choosing between `scour_search` and `scour_tree` is making the same
-//! decision a person does — am I looking for something, or am I looking
-//! around — and the descriptions are written to make that decision easy.
+//! The tools a model is offered. Each description says what the tool is for and
+//! not merely what it does, so choosing between two of them is easy.
 
 use std::sync::Mutex;
 
@@ -23,15 +19,9 @@ pub struct Scour {
 }
 
 struct Inner {
-    /// One connection, serialised, and **not opened until something is asked**.
-    ///
-    /// Requests are milliseconds long and a model makes a few at a time, so a
-    /// lock costs nothing measurable and avoids a connection per call.
-    ///
-    /// `None` means no connection is held — either nothing has been asked yet,
-    /// or the last attempt found nobody listening. That distinction does not
-    /// matter here, which is the point: every call takes the same path, and a
-    /// service that appears later is picked up by the next one.
+    /// One connection, serialised, and not opened until something is asked. `None`
+    /// means none is held, whether or not anything was ever tried — every call
+    /// takes the same path, so a service that starts later is picked up.
     client: Mutex<Option<Client>>,
     addr: String,
 }
@@ -123,20 +113,9 @@ pub struct NoArgs {}
 
 #[tool_router]
 impl Scour {
-    /// Name the service to talk to. **Nothing is opened here.**
-    ///
-    /// This used to connect, and to fail if it could not — which read as
-    /// carefulness and was the opposite. An MCP client starts its servers when
-    /// *it* starts, and this service is started separately by hand; whichever
-    /// order that happens in, a server that exits at spawn is a server the
-    /// client marks dead and does not spawn again. So the window in which
-    /// `scourd` was a few seconds behind cost the whole session its tools, and
-    /// the only way back was for somebody to notice and reconnect by hand.
-    ///
-    /// Refusing to start is also the wrong shape for the failure. "The service
-    /// is not running" is an answer a model can act on — it can say so, and it
-    /// can try again later — and it can only reach the model as the reply to a
-    /// tool call, which requires having started.
+    /// Name the service to talk to. Nothing is opened here: a server that exits at
+    /// spawn is one the MCP client marks dead, and "the service is not running" is
+    /// an answer a model can act on — but only as the reply to a tool call.
     pub fn new(addr: &str) -> Scour {
         Scour {
             inner: std::sync::Arc::new(Inner {
@@ -147,16 +126,9 @@ impl Scour {
         }
     }
 
-    /// Send a request, connecting or reconnecting as needed.
-    ///
-    /// **Nothing that changes anything leaves this function.** Every tool goes
-    /// through here, so this is the one place the promise can be kept rather
-    /// than repeated: the server is read-only because a request that would
-    /// write is refused, not because the three tools that could write were
-    /// never written. The difference matters the day somebody adds a tenth
-    /// tool — `Request::is_mutating` knows the answer for a variant nobody has
-    /// thought about yet, and a guard that has to be remembered is a guard
-    /// that will not be.
+    /// Send a request, connecting or reconnecting as needed. Nothing mutating
+    /// leaves here: every tool passes through, so the server is read-only because
+    /// `Request::is_mutating` refuses, not because no such tool was written.
     fn call(&self, req: Request) -> String {
         if req.is_mutating() {
             return crate::render::failure(&scour_core::Error::unsupported(format!(
@@ -164,10 +136,8 @@ impl Scour {
                 req.name()
             )));
         }
-        // The query text, kept because the answer may carry a warning about a
-        // term the engine could not read, and that warning arrives as offsets
-        // into this string. Here rather than in each tool, so that the next
-        // query-taking tool gets it without anybody remembering to add it.
+        // Kept because a warning arrives as offsets into this string. Here
+        // rather than in each tool, so the next one gets it for free.
         let query = match &req {
             Request::Search { query, .. }
             | Request::Count { query, .. }
@@ -181,9 +151,8 @@ impl Scour {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        // The connection we hold, if we hold one. A transient failure drops it
-        // and falls through to a fresh one; anything else is the answer, since
-        // reconnecting will not change what the service thinks of the request.
+        // A transient failure drops the held connection and falls through to a
+        // fresh one; anything else is the answer.
         if let Some(held) = guard.as_mut() {
             match held.call(req.clone()) {
                 Ok(r) => return say(&r),
@@ -351,18 +320,9 @@ impl Scour {
 
 #[tool_handler]
 impl ServerHandler for Scour {
-    /// **Written out rather than left to the macro, and that cost something.**
-    ///
-    /// `#[tool_handler]` generates a `get_info` that declares the tool
-    /// capability and names the server; defining one by hand replaces it
-    /// silently. What went out on the wire was `ServerInfo::default()`, whose
-    /// `server_info` comes from *rmcp's* build environment — so this server
-    /// introduced itself as **rmcp 3.1.0** with an empty `capabilities`, never
-    /// declaring that it has tools at all. `tools/list` still answered, which
-    /// is why a permissive client never complained and nobody noticed.
-    ///
-    /// So the two halves the macro would have provided are here explicitly,
-    /// beside the instructions that are the reason for overriding it.
+    /// Overriding `#[tool_handler]`'s generated `get_info` replaces it silently,
+    /// so the tool capability and the server name are declared here by hand —
+    /// without them this introduces itself as rmcp with no tools at all.
     fn get_info(&self) -> rmcp::model::ServerInfo {
         let mut info = rmcp::model::ServerInfo::new(
             rmcp::model::ServerCapabilities::builder()
@@ -406,12 +366,8 @@ mod tests {
 
     const NOWHERE: &str = "/nonexistent/scour-should-not-be-here.sock";
 
-    /// A server with nothing to talk to is still a server.
-    ///
-    /// The failure this guards is not a crash, which is why it was invisible:
-    /// the process exited 1 at spawn, the MCP client wrote "server failed" in
-    /// a log nobody opens, and every tool was gone for the rest of the
-    /// session. Whoever noticed blamed the query.
+    /// A server with nothing to talk to is still a server: exiting at spawn loses
+    /// every tool for the session, and says so only in a log nobody opens.
     #[test]
     fn a_server_starts_with_no_service_to_talk_to() {
         let s = Scour::new(NOWHERE);
@@ -422,10 +378,8 @@ mod tests {
         );
     }
 
-    /// Asking again is how a service that starts late gets picked up.
-    ///
-    /// One attempt per call, and no memory of having failed — a server that
-    /// gave up after the first refusal would be the same bug one call later.
+    /// One attempt per call and no memory of having failed, so a service that
+    /// starts late is picked up.
     #[test]
     fn a_failed_call_does_not_poison_the_next_one() {
         let s = Scour::new(NOWHERE);
@@ -434,12 +388,8 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    /// The read-only promise costs no connection to keep.
-    ///
-    /// Worth its own test because the order matters: refusing *after*
-    /// connecting would mean a service that is down turns "this server is
-    /// read-only" into "the service is not running", which is a different and
-    /// wrong answer to the question the caller asked.
+    /// The order matters: refusing after connecting would turn "this server is
+    /// read-only" into "the service is not running" whenever it is down.
     #[test]
     fn a_request_that_would_write_is_refused_before_anything_is_opened() {
         let s = Scour::new(NOWHERE);

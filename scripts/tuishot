@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
-"""Photograph a terminal program without photographing the screen.
+"""Photograph a terminal program without photographing the screen: run it in a
+pseudo-terminal, replay its ANSI stream into a grid, write that as HTML and let
+a browser draw it.
 
     scripts/tuishot --out shot.png -- ./target/release/scour-tui
-
-**Why this is not a screenshot.** There is no way to capture the terminal on
-this machine: XWayland has no root window to read, `import` cannot see a
-compositor's own layer, GNOME answers `Screenshot is not allowed`, and tmux is
-not installed. Every one of those was tried.
-
-So the program is run in a pseudo-terminal instead, its ANSI stream is replayed
-into a grid of cells, the grid is written out as HTML, and a browser draws it.
-Nothing is captured from the screen, so nothing depends on what is on it — and
-the result is sharper than a photograph of a screen would be, because the text
-is drawn rather than sampled.
-
-`--send` types into the program; give it more than once to type in order, and
-`\\r` for Return. `--settle` is how long to wait after each, `--wait` how long
-to wait before the picture. `--cols`/`--rows` are the terminal's size.
-
     scripts/tuishot --cols 132 --rows 38 --send 'kind:code' --send '\\r' \\
         --out shot.png -- ./target/release/scour-tui --socket /run/user/1000/x
+
+`--send` types into the program, once per use and in order, with `\\r` for
+Return. `--settle` waits after each, `--wait` before the picture, and
+`--cols`/`--rows` set the terminal's size.
 """
 
 import argparse

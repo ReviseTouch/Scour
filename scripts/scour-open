@@ -1,22 +1,10 @@
 #!/usr/bin/env bash
-# Open Scour as whichever face was last switched to.
+# Open Scour as whichever face was last switched to (`Settings::face`); empty or
+# unrecognised means the window. The one list of terminals, since no face can run
+# `scour-tui` without a tty.
 #
 #   scripts/scour-open            the face somebody last switched to
 #   scripts/scour-open tui        that one, whatever the preference says
-#
-# **The terminal list lives here and nowhere else.** The window and the page
-# both offer "open the terminal", and neither can run `scour-tui` directly —
-# it needs a tty. So they run this, and there is one list of terminals to keep
-# right rather than three.
-#
-# **The launcher does not name a program.** A desktop entry and a hotkey ask
-# for *Scour*; which face that means is a preference somebody set from inside
-# one of them, and it is kept beside the index with everything else they have
-# chosen — the column widths, the language, the rules. See
-# `Settings::face` in `crates/scour-settings`.
-#
-# Empty, missing or unrecognised means the window. That is the default because
-# it is the one that needs nothing: no port, no terminal.
 
 set -euo pipefail
 
@@ -26,15 +14,13 @@ state="${XDG_DATA_HOME:-$HOME/.local/share}/scour/state/settings.json"
 # Said outright, or read from what somebody last switched to.
 face="${1:-}"
 if [ -z "$face" ] && [ -r "$state" ]; then
-    # One value out of a small JSON file, without a JSON parser in the
-    # dependency list of a launcher: the key is written by `serde` and is
-    # always `"face":"…"`.
+    # One value out of a small JSON file, no parser: `serde` always writes
+    # the key as `"face":"…"`.
     face="$(sed -n 's/.*"face"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$state" | head -1)"
 fi
 
-# Beside this script first, then the installed copy — the same order the
-# faces themselves use when they start each other, and for the same reason: a
-# build being tried out should not quietly start the installed one.
+# Beside this script first, then the installed copy — the order the faces use
+# on each other, so a build being tried out never starts the installed one.
 run() {
     local name="$1"
     if [ -x "$here/../target/release/$name" ]; then
@@ -48,11 +34,9 @@ case "$face" in
         exec "$here/scour-app"
         ;;
     tui)
-        # The terminal is chosen the way the panels choose it: what the person
-        # said, then the freedesktop spec's utility, then the Debian
-        # alternative, then the ones that are actually installed. Each takes
-        # its command after a different flag, which is why this is a list
-        # rather than a loop over names.
+        # `TERMINAL`, then the freedesktop utility, the Debian alternative, and
+        # what is installed. A list and not a loop: each takes its command after
+        # a different flag.
         cmd="$here/../target/release/scour-tui"
         [ -x "$cmd" ] || cmd="scour-tui"
         if [ -n "${TERMINAL:-}" ]; then exec "$TERMINAL" -e "$cmd"; fi

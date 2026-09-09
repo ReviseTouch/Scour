@@ -1,21 +1,9 @@
 #!/usr/bin/env bash
-# Put Scour in the launcher, give it its icon, and bind the hotkey.
+# Put Scour in the launcher, give it its icon, install the GNOME extension and
+# bind Ctrl+" — the key left of `1` unshifted, hence `<Control>quotedbl` with no
+# `<Shift>`. Per-user and repeatable; nothing outside `~/.local` and dconf.
 #
 #   scripts/install-desktop
-#
-# Everything here is per-user and reversible; nothing needs root and nothing is
-# written outside `~/.local` and dconf. Safe to run again.
-#
-# Four things:
-#
-#   * the icon, as SVG and as the fixed sizes GTK prefers to scale from;
-#   * `scour.desktop`, whose `StartupWMClass` is what lets the shell match the
-#     window to the application — without it the window belongs to nothing and
-#     cannot be raised or shown as running;
-#   * the GNOME extension, which is the only thing allowed to bring a window
-#     forward under Wayland;
-#   * Ctrl+" — the key left of `1` on a Turkish keyboard, unshifted, which is
-#     why the accelerator is `<Control>quotedbl` with no `<Shift>` in it.
 
 set -euo pipefail
 
@@ -30,8 +18,8 @@ mkdir -p "$icons/scalable/apps"
 cp "$root/assets/scour.svg" "$icons/scalable/apps/scour.svg"
 
 if command -v rsvg-convert >/dev/null; then
-    # Rasterised here rather than left to the toolkit: a 16-pixel icon scaled
-    # from an SVG at draw time is softer than one rendered at that size.
+    # Rasterised here: a 16-pixel icon scaled from an SVG at draw time is
+    # softer than one rendered at that size.
     for n in 16 24 32 48 64 128 256; do
         mkdir -p "$icons/${n}x${n}/apps"
         rsvg-convert -w "$n" -h "$n" "$root/assets/scour.svg" \
@@ -62,8 +50,7 @@ StartupNotify=true
 StartupWMClass=Scour
 ENTRY
 
-# The window used to have an entry of its own, from when it was "the interface
-# being designed". There is one Scour now.
+# There is one Scour entry, not one per face.
 rm -f "$apps/scour-app.desktop"
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$apps" || true
 
@@ -73,8 +60,7 @@ if [[ -d $root/platform/gnome/$ext_uuid ]]; then
     mkdir -p "$dest"
     cp "$root/platform/gnome/$ext_uuid"/* "$dest/"
     if command -v gnome-extensions >/dev/null; then
-        # A newly copied extension is not in the shell's list until it rescans,
-        # which it does on its own but not always at once.
+        # A newly copied extension is not listed until the shell rescans.
         gnome-extensions enable "$ext_uuid" 2>/dev/null \
             || echo "install-desktop: enable $ext_uuid after the next login" >&2
     fi
@@ -89,8 +75,8 @@ gsettings set "$entry" name 'Scour'
 gsettings set "$entry" command "$root/scripts/scour-show"
 gsettings set "$entry" binding '<Control>quotedbl'
 
-# Added to the list, and anything else already bound to the same keys is taken
-# out of it — two commands on one accelerator is one of them silently losing.
+# Anything else on the same accelerator is unbound: two commands on one is one
+# of them silently losing.
 current=$(gsettings get "$media" custom-keybindings)
 python3 - "$path" "$current" <<'PY' | xargs -0 gsettings set "$media" custom-keybindings
 import ast, subprocess, sys

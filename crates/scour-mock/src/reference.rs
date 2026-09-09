@@ -1,10 +1,6 @@
-//! The obviously-correct answer.
-//!
-//! Every predicate here is written the slow, direct way: look at the entry,
-//! decide. Nothing is indexed, nothing terminates early, nothing is capped.
-//! That is the point — this is what a real index's answer is compared against,
-//! and a reference implementation that shares a trick with the thing it checks
-//! is not a reference implementation.
+//! The obviously-correct answer: every predicate written the slow, direct way.
+//! Nothing is indexed, nothing terminates early, nothing is capped — a reference
+//! that shares a trick with the thing it checks is not a reference.
 
 use scour_core::text::{DefaultFolder, Folder};
 use scour_core::{Ast, Cmp, Entry, Hit, Match, SortKey, TimeField};
@@ -17,8 +13,8 @@ pub fn matches(e: &Entry, ast: &Ast) -> bool {
         .all(|g| g.alts.iter().any(|(neg, m)| matches_one(e, m) != *neg))
 }
 
-/// The stored number a query names. The brute-force twin of the index's own
-/// `num_field`, and it exists so the two can be compared row for row.
+/// The stored number a query names — the brute-force twin of the index's own
+/// `num_field`, so the two can be compared row for row.
 fn num_of(e: &Entry, f: scour_core::NumField) -> i64 {
     use scour_core::NumField as N;
     match f {
@@ -52,9 +48,7 @@ fn matches_one(e: &Entry, m: &Match) -> bool {
         Match::NameLen(cmp, v) => cmp.holds(e.name().chars().count() as i64, *v),
         Match::NameContainsCased(t) => e.name().contains(t.as_str()),
         Match::Depth(cmp, v) => cmp.holds(e.path.bytes().filter(|&b| b == b'/').count() as i64, *v),
-        // Compiled per call, which is exactly what the index must not do and
-        // exactly what a reference should: the slow, obvious version is the
-        // thing the fast one is checked against.
+        // Compiled per call: what the index must not do and a reference should.
         Match::Regex(p) => regex::Regex::new(p).is_ok_and(|re| re.is_match(&name)),
         Match::Bits {
             field,
@@ -99,10 +93,8 @@ pub fn brute_force(
         .collect();
     hits.sort_unstable_by(|a, b| {
         let o = match sort {
-            // The reference does not model relevance: scoring belongs to the
-            // index, and a second implementation of it here would verify that
-            // two copies of one idea agree rather than that the idea is right.
-            // Queries sorted this way are not compared against this.
+            // Relevance is not modelled here: a second implementation would
+            // only prove two copies of one idea agree.
             SortKey::Relevance => std::cmp::Ordering::Equal,
             SortKey::Name => DefaultFolder
                 .fold(a.name())
@@ -121,14 +113,8 @@ pub fn brute_force(
         };
         let o = if desc { o.reverse() } else { o };
         // Ties break the way the index stores rows: newest first, then path.
-        //
-        // Not path alone, which is what this said first and which is only
-        // sensible for a high-cardinality key. Sorting by *kind* on a real disk
-        // puts a hundred thousand rows in one tie group, and breaking that
-        // group on the path means an engine has to look at every one of them to
-        // name the first forty. Newest-first is both cheaper — it is the order
-        // the rows are already in — and the better answer: "code files, newest
-        // first" is what someone sorting by kind wanted.
+        // Path alone would make an engine walk a hundred-thousand-row tie group
+        // — sorting by kind — to name the first forty.
         o.then_with(|| b.meta.mtime.cmp(&a.meta.mtime))
             .then_with(|| a.path.cmp(&b.path))
     });

@@ -1,41 +1,22 @@
 #!/usr/bin/env bash
-# Build real filesystems in RAM and check what Scour makes of them.
-#
-# Every claim in `crates/scour-source-fs/src/fs.rs` — this one has stable
-# inode numbers, that one is case-insensitive, this other one is a spinning
-# disk — was written against two NVMe drives and one NTFS volume, because that
-# is what this machine has. Everything else was reasoned about rather than
-# tried.
-#
-# This makes the rest available: a file in tmpfs, formatted, mounted on a loop
-# device, filled with a small tree, and handed to the same code paths the real
-# scanner uses. tmpfs so the disk is never touched; loop so no partition is
-# risked; sizes chosen per filesystem because their minimums differ by two
-# orders of magnitude.
+# Build real filesystems in RAM and check `crates/scour-source-fs/src/fs.rs`'s
+# claims against them. Root is for `mount` alone; all of it is deleted on exit.
 #
 #   sudo scripts/fstest.sh              # every filesystem the machine can make
 #   sudo scripts/fstest.sh exfat vfat   # only these
-#
-# Needs root — for `mount`, and only for that. Everything it mounts is a file
-# it created under /dev/shm, and it unmounts and deletes all of them on exit,
-# including on failure.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="${TMPDIR:-/dev/shm}/scour-fstest.$$"
 EXAMPLE="$ROOT/target/release/examples/fstraits"
 
-# Minimum sizes, in MiB. XFS refuses under 300 MB and btrfs under ~110; the
-# FAT family and ext4 are happy in a tenth of that. Using one size for all of
-# them would mean either wasting a gigabyte of RAM or skipping half the list.
+# Minimum sizes, in MiB: XFS refuses under 300 and btrfs under ~110, while the
+# FAT family and ext4 are happy in a tenth of that.
 declare -A SIZE=( [fat16]=64 [fat32]=64 [exfat]=64 [ext4]=64 [ext2]=64 [xfs]=320 [btrfs]=128 [f2fs]=128 )
-# The command, where it is not simply `mkfs.<name>`. FAT is the reason this
-# map exists: `mkfs.vfat` on a 64 MB image produces **FAT16**, not FAT32 — the
-# first version of this script tested FAT16 and labelled it vfat. FAT32 needs
-# `-F 32` and, measured here, works from 33 MB up.
+# The command, where it is not simply `mkfs.<name>`: `mkfs.vfat` on a 64 MB
+# image produces FAT16, and FAT32 needs `-F 32` and at least 33 MB.
 declare -A MKFS=( [fat16]="mkfs.vfat -F 16" [fat32]="mkfs.vfat -F 32" )
-# Mount options that make a filesystem usable by the invoking user rather than
-# only by root, where the filesystem supports the idea at all.
+# What makes a filesystem usable by the invoking user, where it has the idea.
 declare -A OPTS=( [fat16]="uid=SUDO_UID,gid=SUDO_GID" [fat32]="uid=SUDO_UID,gid=SUDO_GID" [exfat]="uid=SUDO_UID,gid=SUDO_GID" )
 
 cleanup() {
@@ -59,8 +40,8 @@ WANT=("$@")
 [ ${#WANT[@]} -eq 0 ] && WANT=(fat16 fat32 exfat ext4 xfs btrfs f2fs)
 mkdir -p "$WORK"
 
-# A small tree with the awkward cases in it: a name that only differs by case,
-# a non-ASCII name, a name with a semicolon, and a hard link.
+# The awkward cases: a name differing only by case, a non-ASCII name, a name
+# with a semicolon, and a hard link.
 populate() {
     local d="$1"
     mkdir -p "$d/sub/deeper"
@@ -104,10 +85,8 @@ for fs in "${WANT[@]}"; do
 
     real=$(file -b "$img" | grep -oE 'FAT \([0-9]+ bit\)|exFAT|ext[234]|XFS|BTRFS|F2FS' | head -1)
     populate "$mnt"
-    # How many *entries* the directory actually holds, not how many names
-    # resolve. On a case-insensitive filesystem `readme.md` finds `README.md`,
-    # so testing `-f` on both says yes everywhere — which is exactly what the
-    # first version of this script reported for vfat and exfat.
+    # How many entries the directory holds, not how many names resolve: on a
+    # case-insensitive filesystem `-f` says yes to both spellings.
     n=$(find "$mnt" -maxdepth 1 -iname 'readme.md' | wc -l)
     both=$([ "$n" -ge 2 ] && echo 2-entries || echo 1-entry)
     # One inode with two links → hard links are supported.

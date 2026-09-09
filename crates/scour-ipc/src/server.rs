@@ -38,13 +38,9 @@ impl std::fmt::Debug for Server {
 }
 
 impl Server {
-    /// Listen, clearing a socket left behind by a process that is gone.
-    ///
-    /// A crash leaves the file on disk on unix, and refusing to start because
-    /// of it would mean the service never comes back without manual help. So a
-    /// bind failure is checked by trying to *connect*: something answering
-    /// means a real instance is running and this one should stop; nothing
-    /// answering means the file is a corpse.
+    /// Listen, clearing a socket left behind by a process that is gone. A bind
+    /// failure is checked by trying to connect: an answer means a real instance is
+    /// running, and no answer means the file on disk is a corpse.
     pub fn bind(addr: &str) -> Result<Server> {
         if let Some(dir) = std::path::Path::new(addr).parent()
             && !cfg!(windows)
@@ -80,15 +76,9 @@ impl Server {
         &self.addr
     }
 
-    /// Serve until `stop` is set.
-    ///
-    /// One thread per connection. A client holds its connection open for a
-    /// whole session — the search box sends one request per keystroke — so the
-    /// count is the number of open windows, not the number of requests.
-    ///
-    /// The handler is given somewhere to put the pieces of an answer that has
-    /// them. Almost nothing uses it: the reply it returns is the answer, and
-    /// for an export it is the last frame of one.
+    /// Serve until `stop` is set, one thread per connection — a client holds its
+    /// connection for a whole session, so the count is open windows and not
+    /// requests. The handler is given somewhere to put the pieces of an answer.
     pub fn serve<H>(self, handler: H, stop: Arc<AtomicBool>)
     where
         H: Fn(Request, &mut dyn Emit) -> Outcome + Send + Sync + 'static,
@@ -111,19 +101,12 @@ impl Server {
     }
 }
 
-/// Somewhere to put a piece of an answer.
-///
-/// A handler that produces an answer in pieces writes them here as it makes
-/// them and returns the last frame as its [`Outcome`]. Nothing is buffered:
-/// the write goes to the socket, so the kernel's buffer is the backpressure
-/// and a client that has gone away shows up as an error on the next piece
-/// rather than as memory the service keeps growing.
+/// Somewhere to put a piece of an answer; the last frame is the handler's
+/// [`Outcome`]. Nothing is buffered — the write goes to the socket, so the
+/// kernel's buffer is the backpressure and a gone client is the next error.
 pub trait Emit {
-    /// Send one piece.
-    ///
-    /// `Err` means the reader is gone — an ordinary cancelled download. The
-    /// only correct response is to stop producing, which is why this returns
-    /// a result the caller has to look at rather than swallowing it.
+    /// Send one piece. `Err` means the reader is gone and the only correct
+    /// response is to stop producing, so the result must not be ignored.
     fn piece(&mut self, response: Response) -> scour_core::Result<()>;
 }
 
@@ -131,8 +114,7 @@ pub trait Emit {
 struct ToSocket<'a, W: Write> {
     out: &'a mut W,
     id: u64,
-    /// Pieces written, so that a handler which never emitted one can be told
-    /// apart from one that did — the shutdown path and the tests both care.
+    /// Pieces written, so a handler that emitted none can be told from one that did.
     sent: u64,
 }
 
@@ -162,12 +144,8 @@ where
         Ok(c) => c,
         Err(_) => return,
     };
-    // Bounded, not `lines()`. A line is one request and requests are small —
-    // the largest by far is a query someone typed. Reading without a ceiling
-    // means a client that opens the socket and sends bytes with no newline in
-    // them grows the service's memory for as long as it cares to: measured at
-    // 19 MB to 282 MB from a single 256 MB write, from a peer that had to do
-    // nothing but connect.
+    // Bounded, not `lines()`: a peer sending bytes with no newline grows the
+    // service's memory as far as it likes — 19 MB to 282 MB from one 256 MB write.
     let mut reader = BufReader::new(conn);
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -176,8 +154,8 @@ where
         let line = match read_line_capped(&mut reader) {
             Ok(Some(line)) => line,
             Ok(None) => return,
-            // Over the ceiling: say so and hang up. Continuing would mean
-            // resynchronising on a newline that may never arrive.
+            // Over the ceiling: say so and hang up, since resynchronising waits
+            // on a newline that may never arrive.
             Err(TooLong) => {
                 let reply = Reply::whole(
                     0,
@@ -196,17 +174,13 @@ where
         if line.trim().is_empty() {
             continue;
         }
-        // A malformed line is answered, not dropped. A client that sent
-        // nonsense should be told, and a client waiting for a reply that never
-        // comes is the worst failure this layer can produce.
+        // A malformed line is answered, not dropped: a client waiting for a reply
+        // that never comes is the worst failure this layer can produce.
         let reply = match serde_json::from_str::<Call>(&line) {
             Ok(call) => {
-                // The pieces of an answer, if it has any, go out here while
-                // the handler is still running. The terminating frame is what
-                // it returns — including when it stopped early because this
-                // socket failed, in which case writing that frame fails too
-                // and the loop below hangs up. Which is right: there is
-                // nobody left to tell.
+                // Pieces go out while the handler runs; the frame it returns
+                // terminates. If the socket failed, writing that frame fails too
+                // and the loop hangs up, which is right — nobody is left to tell.
                 let mut emit = ToSocket {
                     out: &mut out,
                     id: call.id,
@@ -232,20 +206,15 @@ where
     }
 }
 
-/// The largest request this will read.
-///
-/// A megabyte is far beyond anything the protocol produces — the longest real
-/// request is a query with a path in it — and far below anything that hurts.
+/// The largest request this will read: far beyond anything the protocol produces
+/// — the longest real request is a query with a path in it.
 const MAX_LINE: usize = 1024 * 1024;
 
 /// The peer sent more than [`MAX_LINE`] bytes without a newline.
 struct TooLong;
 
 /// One newline-terminated line, or the end of the stream, or a refusal.
-///
-/// `BufRead::read_line` would do this in one call and has no ceiling; every
-/// other part of it — UTF-8 validation, stripping the newline — is reproduced
-/// here because the ceiling is the point.
+/// `BufRead::read_line` would do this in one call and has no ceiling.
 fn read_line_capped<R: BufRead>(reader: &mut R) -> std::result::Result<Option<String>, TooLong> {
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -255,8 +224,7 @@ fn read_line_capped<R: BufRead>(reader: &mut R) -> std::result::Result<Option<St
             Err(_) => return Ok(None),
         };
         if available.is_empty() {
-            // End of stream. A trailing line without a newline is still a
-            // request, and answering it is friendlier than dropping it.
+            // End of stream: a trailing line without a newline is still a request.
             return Ok(if buf.is_empty() {
                 None
             } else {

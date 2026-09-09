@@ -1,13 +1,7 @@
-//! Settings.
-//!
-//! TOML, because the file is meant to be opened and edited by hand — the
-//! exclusion lists in particular, which are the first place someone looks when
-//! a file they expected is missing from the index.
-//!
-//! Every table is `#[serde(default)]`, so an older file loads with new fields
-//! filled in and nothing has to migrate. Unknown keys are rejected rather than
-//! ignored: a typo in a setting that silently does nothing is worse than one
-//! that says so, because the first kind is discovered months later.
+//! Settings. TOML, because the file is meant to be edited by hand — the exclusion
+//! lists in particular. Every table is `#[serde(default)]`, so an older file loads
+//! with new fields filled in and nothing has to migrate; unknown keys are rejected
+//! rather than ignored, since a typo that silently does nothing is found months on.
 
 mod paths;
 mod schema;

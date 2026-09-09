@@ -1,9 +1,5 @@
-//! Where things live, per platform.
-//!
-//! Through `directories`, rather than by hand. The hand-rolled version this
-//! replaces put macOS configuration in `~/.config`, which is a Linux
-//! convention that macOS does not share — the kind of mistake that is invisible
-//! until someone on the other platform cannot find their settings.
+//! Where things live, per platform. Through `directories` rather than by hand:
+//! macOS does not put configuration in `~/.config`.
 
 use std::path::PathBuf;
 
@@ -31,26 +27,15 @@ pub fn default_index_dir() -> PathBuf {
     data_dir().join("index")
 }
 
-/// The address the service listens on.
-///
-/// A local socket rather than a TCP port. Binding a fixed loopback port is
-/// simpler, but it raises a firewall prompt on Windows and macOS the first
-/// time, offers no access control at all, and is reachable by anything else on
-/// the machine. A socket in the user's own runtime directory is protected by
-/// the filesystem's own permissions, which is exactly the boundary wanted here.
+/// The address the service listens on: a local socket, not a TCP port. A loopback
+/// port is reachable by anything on the machine and prompts the firewall; a socket
+/// in the user's runtime directory is bounded by filesystem permissions.
 pub fn socket_path() -> String {
     #[cfg(windows)]
     {
-        // Named pipes live in one machine-wide namespace, not in a filesystem
-        // where permissions would separate users. A fixed name therefore means
-        // the second user to log in talks to the first user's service — and
-        // reads the first user's file names, which is the whole of what this
-        // index holds. The user name is the separator that a path gives for
-        // free everywhere else.
-        //
-        // It is not an access control: another user who guesses the name can
-        // still connect. It is what stops two people colliding by default, and
-        // an ACL on the pipe is the fix for the rest.
+        // Named pipes share one machine-wide namespace, so a fixed name would
+        // let the second user to log in read the first user's file names. Not
+        // access control — an ACL on the pipe would be — just a separator.
         let who = std::env::var("USERNAME").unwrap_or_else(|_| "user".into());
         let who: String = who
             .chars()

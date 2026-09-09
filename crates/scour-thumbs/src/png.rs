@@ -1,34 +1,11 @@
-//! The two text chunks that make a thumbnail a thumbnail.
-//!
-//! **Scour decodes nothing.** Nothing here reads a pixel, resizes anything, or
-//! knows what a colour is: a PNG is a signature and a run of length-tagged
-//! chunks, and all that happens here is putting two of them in and reading one
-//! back out. The image the thumbnailer produced travels through untouched.
-//!
-//! ## Why this exists at all
-//!
-//! The standard requires `Thumb::URI` and `Thumb::MTime` in the PNG's text
-//! chunks, and **a thumbnail without them is invalid**: every desktop compares
-//! them against the original before drawing, and regenerates when they do not
-//! match. The obvious assumption — that the thumbnailer writes them — is
-//! wrong. Measured on this machine, `glycin-thumbnailer` on a 640×480 PNG:
-//!
-//! ```text
-//! tEXt::Thumb::URI = None
-//! tEXt::Thumb::MTime = None
-//! ```
-//!
-//! That is the standard's own division of labour: the *thumbnailer* makes a
-//! picture, the *managing application* — which is what Scour becomes by
-//! calling one — records what it is a picture of. Skipping this step would
-//! have made Scour a program that quietly fills a cache no other program will
-//! read from, which is worse than the blank tile it set out to fix.
+//! The two text chunks that make a thumbnail a thumbnail. No pixel is read here.
+//! `Thumb::URI` and `Thumb::MTime` are required and a thumbnail without them is
+//! invalid — every desktop regenerates. Thumbnailers do not write them: by the
+//! standard's division of labour that is the managing application's job.
 
-/// Put text chunks into a PNG, replacing any with the same keyword.
-///
-/// Returns `None` for anything that is not a PNG, which is also the check that
-/// the thumbnailer produced what it promised: several of them exit zero having
-/// written nothing, and an empty file is not a picture.
+/// Put text chunks into a PNG, replacing any with the same keyword. `None` for
+/// anything that is not a PNG — which is also how a thumbnailer that exited zero
+/// having written nothing is caught.
 pub fn with_text(png: &[u8], pairs: &[(&str, String)]) -> Option<Vec<u8>> {
     const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
     if png.len() < 8 || png[..8] != SIGNATURE {
@@ -42,9 +19,8 @@ pub fn with_text(png: &[u8], pairs: &[(&str, String)]) -> Option<Vec<u8>> {
     let mut saw_header = false;
 
     for (kind, data) in chunks(&png[8..])? {
-        // The header has to stay first; ours go straight after it, which is
-        // where every other writer puts them and where a reader that gives up
-        // early will still find them.
+        // The header stays first and ours go straight after, where a reader
+        // that gives up early still finds them.
         if kind == *b"IHDR" {
             saw_header = true;
             out.extend_from_slice(&chunk(&kind, data));
@@ -54,8 +30,7 @@ pub fn with_text(png: &[u8], pairs: &[(&str, String)]) -> Option<Vec<u8>> {
             wrote_ours = true;
             continue;
         }
-        // Somebody else's answer to the same question, dropped rather than
-        // left to argue with ours.
+        // Somebody else's answer to the same question, dropped.
         if kind == *b"tEXt"
             && let Some((key, _)) = split_text(data)
             && replacing.contains(&key)
@@ -67,13 +42,11 @@ pub fn with_text(png: &[u8], pairs: &[(&str, String)]) -> Option<Vec<u8>> {
     (saw_header && wrote_ours).then_some(out)
 }
 
-/// The `Thumb::MTime` a PNG records, if it records one.
-///
-/// This is how a failure note says *which version* of a file failed. A file
-/// that has been edited since is worth trying again; one that has not is not.
+/// The `Thumb::MTime` a PNG records, if it records one — how a failure note says
+/// which version of a file failed.
 pub fn stamp_of(path: &std::path::Path) -> Option<i64> {
-    // A ceiling, because this reads from a directory anything may write into.
-    // A thumbnail is kilobytes and anything that is not is not one.
+    // A ceiling: this reads a directory anything may write into, and a
+    // thumbnail is kilobytes.
     let meta = std::fs::metadata(path).ok()?;
     if meta.len() > 4 * 1024 * 1024 {
         return None;
@@ -92,24 +65,17 @@ pub fn stamp_of(path: &std::path::Path) -> Option<i64> {
     None
 }
 
-/// The smallest valid PNG, which is what a failure note is made of.
-///
-/// The standard wants a real image file rather than an empty one, so that a
-/// reader loading it with an ordinary image library gets an image rather than
-/// an error it has to tell apart from a missing file. One transparent pixel
-/// costs 69 bytes and is unambiguous.
+/// The smallest valid PNG, which is what a failure note is made of: the standard
+/// wants a real image, and one transparent pixel costs 69 bytes.
 pub fn one_transparent_pixel() -> Vec<u8> {
-    // width 1, height 1, 8 bits, colour type 6 (RGBA), no compression,
-    // filter or interlace variation.
+    // 1×1, 8 bits, colour type 6 (RGBA), no compression/filter/interlace.
     let mut header = Vec::new();
     header.extend_from_slice(&1u32.to_be_bytes());
     header.extend_from_slice(&1u32.to_be_bytes());
     header.extend_from_slice(&[8, 6, 0, 0, 0]);
 
-    // A zlib stream holding one stored (uncompressed) deflate block: the
-    // scanline's filter byte and four zero channels. Written out rather than
-    // compressed, because pulling in a deflate implementation to encode five
-    // zero bytes would be the tail wagging the dog.
+    // A zlib stream of one stored deflate block: the scanline's filter byte and
+    // four zero channels. Hand-written rather than a deflate dependency.
     let raw = [0u8; 5];
     let mut data = vec![0x78, 0x01]; // zlib header: deflate, 32 KiB window
     data.push(0x01); // final block, stored
@@ -125,11 +91,8 @@ pub fn one_transparent_pixel() -> Vec<u8> {
     out
 }
 
-/// Every chunk in order, or `None` if the run does not add up.
-///
-/// Deliberately strict: a length that runs off the end is a truncated file,
-/// and a truncated thumbnail written back out with our metadata on it would be
-/// a broken picture that every reader now trusts.
+/// Every chunk in order, or `None` if the run does not add up. Strict: a
+/// truncated file stamped with our metadata is a broken picture readers trust.
 fn chunks(mut rest: &[u8]) -> Option<Vec<([u8; 4], &[u8])>> {
     let mut out = Vec::new();
     while !rest.is_empty() {
@@ -160,12 +123,8 @@ fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A `tEXt` chunk: a Latin-1 keyword, a NUL, and Latin-1 text.
-///
-/// Every value this is given is already ASCII — a URI is percent-escaped by
-/// `cache::uri_of` and a timestamp is digits — so nothing needs transcoding.
-/// Bytes that are not are dropped rather than mangled, because a keyword the
-/// standard cannot hold is better absent than present and wrong.
+/// A `tEXt` chunk: a Latin-1 keyword, a NUL, and Latin-1 text. Every value given
+/// is already ASCII, and a byte that is not is dropped rather than mangled.
 fn text_chunk(key: &str, value: &str) -> Vec<u8> {
     let mut data = Vec::with_capacity(key.len() + value.len() + 1);
     data.extend(key.bytes().filter(|b| *b != 0));
@@ -212,11 +171,8 @@ fn adler32(bytes: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    /// The one made here has to be loadable by whatever loads PNGs.
-    ///
-    /// The checksums are the part that cannot be eyeballed: a chunk with a
-    /// wrong CRC is refused by every decoder, and the failure note would then
-    /// be a file nothing can read sitting where a readable one belongs.
+    /// The checksums are the part that cannot be eyeballed: a chunk with a wrong
+    /// CRC is refused by every decoder.
     #[test]
     fn the_smallest_png_is_a_png() {
         let png = one_transparent_pixel();
@@ -229,8 +185,7 @@ mod tests {
         assert_eq!(kinds, ["IHDR", "IDAT", "IEND"]);
     }
 
-    /// The published check value, so a broken table is caught here rather than
-    /// by a decoder refusing a thumbnail three layers away.
+    /// The published check values, so a broken table is caught here.
     #[test]
     fn crc32_is_crc32() {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
@@ -249,7 +204,7 @@ mod tests {
         )
         .expect("a PNG takes text");
         let parsed = chunks(&with[8..]).unwrap();
-        // Straight after the header, which is where a reader looks first.
+        // Straight after the header, where a reader looks first.
         assert_eq!(&parsed[0].0, b"IHDR");
         assert_eq!(
             split_text(parsed[1].1),
@@ -261,11 +216,8 @@ mod tests {
         );
     }
 
-    /// Writing twice must not leave two answers to the same question.
-    ///
-    /// A reader takes the first one it meets, so a stale `Thumb::MTime` left
-    /// in front of a fresh one is a thumbnail that is invalid forever while
-    /// looking, to us, like it was just written.
+    /// A reader takes the first it meets, so a stale `Thumb::MTime` in front of a
+    /// fresh one is a thumbnail that is invalid forever.
     #[test]
     fn writing_again_replaces_rather_than_repeats() {
         let png = one_transparent_pixel();
@@ -286,8 +238,8 @@ mod tests {
     fn what_is_not_a_png_is_refused() {
         assert!(with_text(b"", &[]).is_none());
         assert!(with_text(b"not a png at all", &[]).is_none());
-        // A signature and nothing behind it: what a thumbnailer that exited
-        // zero having written nothing leaves.
+        // A signature and nothing behind it, as a thumbnailer that wrote nothing
+        // leaves.
         assert!(with_text(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a], &[]).is_none());
         // Truncated in the middle of a chunk.
         let png = one_transparent_pixel();
@@ -305,7 +257,7 @@ mod tests {
         .unwrap();
         std::fs::write(&at, &png).unwrap();
         assert_eq!(stamp_of(&at), Some(1_700_000_042));
-        // And nothing is claimed about a file that has none.
+        // Nothing is claimed about a file that has none.
         std::fs::write(&at, one_transparent_pixel()).unwrap();
         assert_eq!(stamp_of(&at), None);
         assert_eq!(stamp_of(&dir.path().join("absent.png")), None);

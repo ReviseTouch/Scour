@@ -1,40 +1,8 @@
-//! The desktop's wastebasket, as the specification describes it.
-//!
-//! **Why a deletion should be a move.** A search tool that offers to delete
-//! offers to delete the wrong file, because the row under the pointer is one
-//! of several with the same name and the person is going by what they can
-//! see. `unlink` makes that mistake final. Moving to the trash makes it a
-//! mistake somebody can undo from their file manager, without this program
-//! having to grow an undo of its own — the desktop already has one, and it is
-//! the one they already know how to use.
-//!
-//! That is also what lets the menu keep its rule. The comment in the browser
-//! face says a menu should be safe to press; a permanent delete is not, and a
-//! reversible one is.
-//!
-//! ## What the specification actually asks for
-//!
-//! <https://specifications.freedesktop.org/trash-spec/trashspec-1.0.html>
-//!
-//! * The trash for a file on the home filesystem is `$XDG_DATA_HOME/Trash`,
-//!   holding `files/` and `info/`.
-//! * A file on **another** filesystem goes to a trash at that filesystem's
-//!   mount point, because the move has to be a rename and a rename cannot
-//!   cross a device. Either `$topdir/.Trash/$uid` — only if `.Trash` exists,
-//!   is a real directory rather than a symlink, and has the sticky bit — or
-//!   `$topdir/.Trash-$uid`, which this creates.
-//! * Every trashed file has an `info/NAME.trashinfo` beside it saying where it
-//!   came from and when it went.
-//! * Names collide, so the name is *claimed* by creating the info file with
-//!   `O_EXCL` before anything is moved. Two programs trashing `notes.txt` at
-//!   the same moment is the case this is for, and checking whether a name is
-//!   free and then using it is exactly the race it is not allowed to be.
-//!
-//! ## What this deliberately does not do
-//!
-//! It does not empty the trash, restore from it, or list it. Those are the
-//! file manager's, and a search tool that grows them has become a file
-//! manager with a search box.
+//! The desktop's wastebasket: <https://specifications.freedesktop.org/trash-spec/>.
+//! A deletion is a move, so a wrong row is a mistake the file manager can undo.
+//! `$XDG_DATA_HOME/Trash` for the home filesystem, `$topdir/.Trash/$uid` or
+//! `$topdir/.Trash-$uid` for another, because the move must be a rename. A name
+//! is claimed by creating its `info/NAME.trashinfo` with `O_EXCL`, never checked.
 
 #[cfg(unix)]
 use std::io::Write;
@@ -75,32 +43,22 @@ impl From<std::io::Error> for Error {
 }
 
 #[cfg(unix)]
-/// Send one path to the trash. Returns where it ended up.
-///
-/// The path may be a file, a directory or a symlink; a directory goes whole,
-/// because a rename moves a tree in one step and this never copies.
+/// Send one path to the trash and say where it ended up. A file, a directory or a
+/// symlink; a directory goes whole, since a rename moves a tree and never copies.
 pub fn trash(path: &Path) -> Result<PathBuf, Error> {
     into(path, home_trash())
 }
 
 #[cfg(unix)]
-/// [`trash`], with the home wastebasket named rather than looked up.
-///
-/// **Exists so the tests never touch the desktop's.** The obvious way to
-/// redirect them is `XDG_DATA_HOME`, and that is a process-wide variable in a
-/// test runner that runs threads in parallel: three tests set it, whichever
-/// set it last wins, and two of them then trash into a third's directory. That
-/// is not a hypothetical — it passed alone and failed in the workspace run,
-/// which is the worst shape a test failure comes in.
+/// [`trash`], with the home wastebasket named rather than looked up — so a test
+/// need not set the process-wide `XDG_DATA_HOME` its neighbours also read.
 fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     let path = absolute(path);
     let name = path
         .file_name()
         .ok_or_else(|| Error::Unnamed(path.clone()))?
         .to_owned();
-    // `symlink_metadata`, so a broken symlink is still trashable — it is a
-    // thing on disk with a name, and refusing to remove it because what it
-    // points at is gone would be the wrong answer twice.
+    // `symlink_metadata`, so a broken symlink is still trashable.
     let meta = std::fs::symlink_metadata(&path).map_err(|_| Error::Missing(path.clone()))?;
     let _ = meta;
 
@@ -113,9 +71,8 @@ fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     std::fs::create_dir_all(dir.join("info"))?;
 
     let name = name.to_string_lossy().into_owned();
-    // **Relative to the top directory for a volume trash**, absolute for the
-    // home one. A volume can be mounted somewhere else tomorrow, and a restore
-    // that puts the file back at yesterday's mount point puts it nowhere.
+    // Relative to the top directory for a volume trash, absolute for the home
+    // one: a volume remounted elsewhere would restore to yesterday's path.
     let recorded = match top_dir_of(&dir) {
         Some(top) => path
             .strip_prefix(&top)
@@ -138,9 +95,8 @@ fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     match std::fs::rename(&path, &landed) {
         Ok(()) => Ok(landed),
         Err(e) => {
-            // The name was claimed and nothing was moved into it. Leaving the
-            // info file behind would make the trash list a file that is not
-            // there, which every file manager renders as a phantom row.
+            // The name was claimed and nothing moved into it; an orphan info
+            // file is a phantom row in every file manager's trash listing.
             let _ = std::fs::remove_file(dir.join("info").join(format!("{claimed}.trashinfo")));
             Err(Error::Io(e))
         }
@@ -148,9 +104,8 @@ fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
 }
 
 #[cfg(unix)]
-/// Is there somewhere to put this path, without moving it to find out?
-///
-/// For a menu that would rather grey an item out than fail after the press.
+/// Is there somewhere to put this path, without moving it to find out? For a menu
+/// that would rather grey an item out than fail after the press.
 pub fn can_trash(path: &Path) -> bool {
     let path = absolute(path);
     if path.file_name().is_none() {
@@ -163,11 +118,8 @@ pub fn can_trash(path: &Path) -> bool {
 }
 
 #[cfg(unix)]
-/// Claim a name by creating its info file, and return both.
-///
-/// **`create_new`, in a loop, is the whole point.** Asking whether a name is
-/// free and then taking it is two steps with a gap, and the gap is where the
-/// other program trashing the same name lands.
+/// Claim a name by creating its info file, and return both. `create_new` in a
+/// loop: asking whether a name is free and then taking it leaves a gap to race in.
 fn claim(dir: &Path, name: &str) -> Result<(String, std::fs::File), Error> {
     let (stem, ext) = split_extension(name);
     for n in 0u32..10_000 {
@@ -193,10 +145,8 @@ fn claim(dir: &Path, name: &str) -> Result<(String, std::fs::File), Error> {
 }
 
 #[cfg(unix)]
-/// `notes.tar.gz` splits at the last dot, not the first: `notes.tar` + `gz`.
-///
-/// The numbered name has to stay recognisable, and `notes.2.tar.gz` reads as
-/// the same file where `notes.tar.2.gz` reads as a different kind of one.
+/// `notes.tar.gz` splits at the last dot, not the first: `notes.tar` + `gz`, so
+/// the numbered form stays `notes.tar.2.gz` and still opens.
 fn split_extension(name: &str) -> (String, String) {
     match name.rfind('.') {
         // A leading dot is a hidden file, not an extension.
@@ -215,12 +165,8 @@ fn home_trash() -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-/// The trash at the top of the volume a path lives on.
-///
-/// `.Trash/$uid` only when the administrator made `.Trash` deliberately —
-/// a directory, not a link, with the sticky bit set, exactly as the
-/// specification says. Otherwise `.Trash-$uid`, which belongs to one user and
-/// can be created without asking anybody.
+/// The trash at the top of the volume a path lives on. `.Trash/$uid` only when
+/// `.Trash` is a real directory with the sticky bit, else `.Trash-$uid`.
 fn volume_trash(path: &Path) -> Option<PathBuf> {
     let top = mount_point_of(path)?;
     let uid = unsafe { libc::getuid() };
@@ -278,8 +224,7 @@ fn top_dir_of(trash: &Path) -> Option<PathBuf> {
 #[cfg(unix)]
 fn same_device(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    // The trash may not exist yet, so the question is really about the nearest
-    // parent that does.
+    // The trash may not exist yet: ask the nearest parent that does.
     let dev = |p: &Path| -> Option<u64> {
         let mut at = p;
         loop {
@@ -307,11 +252,8 @@ fn absolute(path: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-/// Percent-encoding, as the specification's `Path=` field wants it.
-///
-/// The unreserved set of RFC 3986 plus `/`, which has to stay readable — a
-/// trash info file is a thing people open in an editor when something has gone
-/// wrong, and `%2F` between every component helps nobody.
+/// Percent-encoding for the specification's `Path=` field: RFC 3986's unreserved
+/// set plus `/`, which stays literal so the file is readable in an editor.
 fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -326,13 +268,8 @@ fn encode(s: &str) -> String {
 }
 
 #[cfg(unix)]
-/// `YYYY-MM-DDThh:mm:ss` in local time, which is what the specification says.
-///
-/// Local rather than UTC because a file manager shows this string to a person
-/// and a deletion that says it happened three hours from now is a deletion
-/// they will not trust. `localtime_r` is the only thing here the standard
-/// library cannot do: it needs the timezone database, and reading that is the
-/// operating system's job rather than this crate's.
+/// `YYYY-MM-DDThh:mm:ss` in local time, as the specification says: a file manager
+/// shows this string to a person. `localtime_r` because `std` has no zone database.
 fn local_stamp() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -396,7 +333,6 @@ mod tests {
         std::fs::remove_dir_all(&box_).ok();
     }
 
-    /// The case a check-then-use would get wrong.
     #[test]
     fn a_second_file_of_the_same_name_gets_a_number_rather_than_the_first_ones_place() {
         let box_ = sandbox();
@@ -419,7 +355,7 @@ mod tests {
         // The extension survives the number, so the file still opens.
         assert_eq!(names[1], "notes.tar.1.gz");
         assert_eq!(names[2], "notes.tar.2.gz");
-        // And all three are still distinguishable by their contents.
+        // All three are still distinguishable by their contents.
         for (i, p) in landed.iter().enumerate() {
             assert_eq!(std::fs::read_to_string(p).unwrap(), i.to_string());
         }
@@ -457,8 +393,7 @@ mod tests {
 
     #[test]
     fn the_path_in_the_note_survives_a_round_trip() {
-        // Spaces, an accent and a percent sign — the three things a naive
-        // writer gets wrong, and all three appear in real file names.
+        // A space, an accent and a percent sign all appear in real file names.
         assert_eq!(
             encode("/home/a b/çay%1.txt"),
             "/home/a%20b/%C3%A7ay%251.txt"
@@ -477,18 +412,9 @@ mod tests {
     }
 }
 
-/// **Not implemented off Unix, and saying so is the point.**
-///
-/// This crate is the freedesktop wastebasket: `$XDG_DATA_HOME/Trash`, a
-/// `.trashinfo` beside every file, `$topdir/.Trash-$uid` for another volume.
-/// None of that exists on Windows or macOS — they have a Recycle Bin and a
-/// `.Trashes`, reached through `SHFileOperation` and `NSFileManager`, which
-/// are different enough that pretending otherwise would be a delete that
-/// quietly did the wrong thing.
-///
-/// So the faces ask [`can_trash`] first, get `false`, and leave the item out
-/// of the menu rather than offering something that fails after the press —
-/// the rule the menu table was built around.
+/// Not implemented off Unix: Windows and macOS reach their own wastebaskets
+/// through `SHFileOperation` and `NSFileManager`, not this specification. Faces
+/// ask [`can_trash`] first and leave the item out of the menu.
 #[cfg(not(unix))]
 pub fn trash(_path: &Path) -> Result<PathBuf, Error> {
     Err(Error::Unsupported)

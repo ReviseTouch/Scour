@@ -1,33 +1,8 @@
-//! Put something on the desktop's clipboard, using the desktop's own program.
-//!
-//! **Why a subprocess rather than a clipboard library.** Two of Scour's faces
-//! need this — a window and a terminal — and neither has any other reason to
-//! know whether it is running under Wayland or X11. A clipboard crate would
-//! link a protocol binding into both of them, and on Wayland it would also need
-//! a surface to own the selection, which a terminal does not have. The display
-//! server already ships a program for this; the window already spawns
-//! `xdg-open` and `fc-match` without anyone calling that a dependency.
-//!
-//! ## The part that is not obvious
-//!
-//! Copying a *file* is not copying its path. A file manager pastes a file when
-//! it is offered `text/uri-list` — a list of `file://` URIs — and pastes a
-//! string of text when it is offered `text/plain`. Offering the path as plain
-//! text produces a paste of the path *into* whatever was focused, which is a
-//! different and usually wrong thing.
-//!
-//! GNOME's Files wants one more: an `x-special/gnome-copied-files` payload
-//! beginning with `copy` or `cut`. Sending both is what makes a paste work in
-//! Files *and* in every toolkit that only reads the standard type.
-//!
-//! ## What it cannot promise
-//!
-//! On Wayland the clipboard belongs to a surface, and `wl-copy` keeps a
-//! process alive to hold it. Killing that process empties the clipboard — so a
-//! copy from a program that exits immediately afterwards may not survive. That
-//! is the display server's rule rather than this crate's, and it is why
-//! [`text`] returns once the helper has *taken* the selection rather than once
-//! it has exited.
+//! Put something on the desktop's clipboard through the desktop's own helper
+//! program, so no face has to know whether it is under Wayland or X11. Copying a
+//! file is not copying its path: a file manager pastes a file only for
+//! `text/uri-list`, and GNOME's Files also wants `x-special/gnome-copied-files`.
+//! On Wayland `wl-copy` holds the selection while alive, so it is not waited on.
 
 use std::io::Write;
 use std::path::Path;
@@ -63,12 +38,8 @@ struct Helper {
     typed: &'static [&'static str],
 }
 
-/// In the order they are tried.
-///
-/// Wayland first because that is what a modern session is, and `wl-copy` under
-/// X11 fails immediately rather than doing something surprising. `xclip` before
-/// `xsel` because it is the one that can be told a MIME type, which is the
-/// whole of [`files`].
+/// In the order they are tried: Wayland first, since `wl-copy` under X11 fails
+/// immediately; `xclip` before `xsel`, since only it can be told a MIME type.
 const HELPERS: &[Helper] = &[
     Helper {
         program: "wl-copy",
@@ -83,16 +54,14 @@ const HELPERS: &[Helper] = &[
     Helper {
         program: "xsel",
         plain: &["--clipboard", "--input"],
-        // `xsel` has no way to name a type, so it can only do plain text. The
-        // caller finds out from [`files`] returning `NoHelper` rather than from
-        // a paste that silently produces a path.
+        // `xsel` cannot name a type, so [`files`] returns `NoHelper` rather
+        // than pasting a path.
         typed: &[],
     },
 ];
 
-/// Is there anything on this machine that can do it?
-///
-/// For a menu that would rather leave an item out than fail after the press.
+/// Is there anything on this machine that can do it? For a menu that would rather
+/// leave an item out than fail after the press.
 pub fn available() -> bool {
     HELPERS.iter().any(|h| found(h.program))
 }
@@ -108,10 +77,8 @@ pub fn text(s: &str) -> Result<(), Error> {
     Err(Error::NoHelper)
 }
 
-/// Put files on the clipboard, so that a file manager pastes *the files*.
-///
-/// Not the same as putting their paths on it as text — see the note at the top
-/// of this module.
+/// Put files on the clipboard, so that a file manager pastes the files. Not the
+/// same as putting their paths on it as text.
 pub fn files(paths: &[&Path]) -> Result<(), Error> {
     let uris: Vec<String> = paths.iter().map(|p| uri(p)).collect();
     let list = uris.join("\r\n");
@@ -121,9 +88,8 @@ pub fn files(paths: &[&Path]) -> Result<(), Error> {
             continue;
         }
         feed(h.program, h.typed, &["text/uri-list"], list.as_bytes())?;
-        // GNOME's Files reads its own type and nothing else. Failing here is
-        // not a failure of the copy: everything that reads the standard type
-        // already has what it needs.
+        // Failing here is not a failure of the copy: readers of the standard
+        // type already have what they need.
         let gnome = format!("copy\n{}", uris.join("\n"));
         let _ = feed(
             h.program,
@@ -157,16 +123,13 @@ fn feed(program: &str, args: &[&str], subst: &[&str], body: &[u8]) -> Result<(),
         .ok_or(Error::NoHelper)?
         .write_all(body)
         .map_err(Error::Io)?;
-    // **Not waited for.** `wl-copy` stays alive holding the selection, which is
-    // how Wayland works: the clipboard belongs to a live client. Waiting here
+    // Not waited for: `wl-copy` stays alive holding the selection, so waiting
     // would hang the caller for as long as the copy is useful.
     Ok(())
 }
 
-/// `file:///home/a%20b/notes.txt` — the form a file manager expects.
-///
-/// Percent-encoded as RFC 3986 asks, with `/` left alone so the URI stays
-/// something a person can read in a paste that went to the wrong window.
+/// `file:///home/a%20b/notes.txt` — the form a file manager expects. RFC 3986
+/// percent-encoding, with `/` left literal so a stray paste is still readable.
 fn uri(path: &Path) -> String {
     let mut out = String::from("file://");
     for b in path.to_string_lossy().as_bytes() {
@@ -180,11 +143,8 @@ fn uri(path: &Path) -> String {
     out
 }
 
-/// Is this program on the path?
-///
-/// `PATH` rather than `which`, because spawning a process to find out whether a
-/// process exists is the cost this is trying to avoid — the menu asks once a
-/// press.
+/// Is this program on `PATH`? Read directly rather than through `which`: spawning
+/// a process to learn whether a process exists is the cost being avoided.
 fn found(program: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
@@ -200,7 +160,6 @@ fn found(program: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The encoding a paste depends on.
     #[test]
     fn a_uri_is_escaped_where_it_has_to_be_and_readable_where_it_does_not() {
         assert_eq!(
@@ -211,17 +170,14 @@ mod tests {
             uri(Path::new("/home/a b/x.txt")),
             "file:///home/a%20b/x.txt"
         );
-        // Turkish file names are the ordinary case here, not an edge one.
+        // Non-ASCII names are the ordinary case here, not an edge one.
         assert_eq!(uri(Path::new("/ev/çay.md")), "file:///ev/%C3%A7ay.md");
         // A percent that was already in the name must not read as an escape.
         assert_eq!(uri(Path::new("/a/50%.txt")), "file:///a/50%25.txt");
     }
 
-    /// Every helper can do text; only some can name a type.
-    ///
-    /// The table is the thing that decides whether `files` works, so it is the
-    /// thing worth checking — a `typed` list that lost its `{}` would put the
-    /// literal two characters on the clipboard as a MIME type.
+    /// A `typed` list that lost its `{}` would send those two characters as the
+    /// MIME type.
     #[test]
     fn a_helper_that_can_name_a_type_has_somewhere_to_put_it() {
         for h in HELPERS {

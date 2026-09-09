@@ -1,14 +1,7 @@
-//! Just enough gettext to read a `.po` file.
-//!
-//! Enough, and not more: `msgid`, `msgstr`, continuation lines, escapes, and
-//! comments. No plural forms, no contexts, no obsolete entries. Adding them
-//! when something needs them is a small change; carrying a full gettext
-//! implementation for strings that are almost all "Folder" and "modified" is
-//! not.
-//!
+//! Just enough gettext to read a `.po` file: `msgid`, `msgstr`, continuation
+//! lines, escapes and comments. No plural forms, contexts or obsolete entries.
 //! An entry whose translation is empty is dropped rather than stored, so a
-//! half-finished catalogue falls back to English per string instead of showing
-//! blanks.
+//! half-finished catalogue falls back to English per string.
 
 use std::collections::HashMap;
 
@@ -137,9 +130,8 @@ msgstr ""
 
     #[test]
     fn escapes_survive() {
-        // Written with explicit escapes rather than a raw string: a `.po` file
-        // is full of quotes and backslashes, and a test whose own literal is
-        // ambiguous proves nothing about the parser.
+        // Explicit escapes rather than a raw string: an ambiguous literal
+        // proves nothing about the parser.
         let text = "msgid \"a\\nb\"\nmsgstr \"c\\td\\\"e\"\n";
         let m = parse(text);
         assert_eq!(m.get("a\nb").map(String::as_str), Some("c\td\"e"));

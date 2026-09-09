@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# What Scour costs right now: queries, the service's CPU and memory, and how
-# long each face takes to say something.
+# What Scour costs right now: queries, the service's CPU and memory, and how long
+# each face takes to say something. Read-only; writes one file per run to diff
+# against another. `docs/MEASUREMENTS.md` has the rule for deciding from them.
 #
 #   scripts/bench [label]
-#
-# **A baseline is only worth what it can be compared against**, so this writes
-# one file per run and nothing else. Run it, change something, run it again,
-# diff the two. The rule from `docs/MEASUREMENTS.md` still holds for deciding
-# anything: alternate the two builds, do not compare a morning to an afternoon.
-#
-# Read-only. It asks the running service the same questions a person would.
 
 set -uo pipefail
 
@@ -19,8 +13,7 @@ tui="$here/../target/release/scour-tui"
 label="${1:-run}"
 out="/tmp/scour-bench-$label.txt"
 
-# Each query three times; the middle one is what is reported. One run is a
-# cold cache and a wrong number.
+# Each query three times, reporting the middle: one run is a cold cache.
 runs=3
 
 say() { printf '%s\n' "$*" | tee -a "$out"; }

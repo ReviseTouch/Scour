@@ -1,11 +1,6 @@
-//! Turning a reply into something a person reads.
-//!
-//! Only this file composes sentences. Everything below it returned numbers,
-//! codes and typed variants precisely so that the wording lives in one place
-//! and can be translated once — which is what `t()` below actually does.
-//!
-//! The English text is the key, so an untranslated string is still correct,
-//! just untranslated. `SCOUR_LANG=tr scour status` switches this program alone.
+//! Turning a reply into something a person reads. Only this file composes
+//! sentences, so the wording is translated in one place. The English text is the
+//! key, so an untranslated string is still correct; `SCOUR_LANG=tr` switches it.
 
 use std::sync::OnceLock;
 
@@ -14,7 +9,7 @@ use anyhow::Result;
 fn format_size(bytes: u64, _unused: ()) -> String {
     scour_ui::format::size(bytes, '.')
 }
-/// What the old call sites pass as a unit; the shared formatter picks its own.
+/// The unit argument every call site passes; the shared formatter picks its own.
 const BINARY: () = ();
 use scour_core::{Catalog, FacetBy, Kind, Role, TreeNode};
 use scour_i18n::Catalogue;
@@ -33,37 +28,20 @@ fn t(msgid: &str) -> String {
 
 /// A label, padded so the column lines up whatever language it is in.
 fn label(msgid: &str) -> String {
-    // Twelve columns *and* a space. `değiştirilme` is exactly twelve
-    // characters, so padding alone leaves the value touching the label — the
-    // kind of thing that only shows up in the language nobody tested in.
+    // Twelve columns and a space: `değiştirilme` is exactly twelve characters,
+    // so padding alone leaves the value touching the label.
     format!("{:<12} ", t(msgid))
 }
 
-/// Say which terms the engine could not read the way they were written.
-///
-/// **The one thing a search box gets for free and a command line does not.**
-/// The parser never fails, so `dm:yarin` becomes a search for the text
-/// "dm:yarin" and answers `0 of 0` — the same answer a query that was
-/// understood and matched nothing gives, and the reader has no way to tell
-/// them apart. A window colours the term while it is being typed; here there
-/// is one line of output and then the shell prompt.
-///
-/// To stderr, beside the timing line, so a pipeline still receives only paths.
-///
-/// **[`Role::BadValue`] only, though the wire carries both warning roles.**
-/// `UnknownField` means "letters, a colon, and not a field", which is a
-/// perfectly ordinary thing to search for: `http://example.com`, `12:30`,
-/// `C:`. Warning about those would put a line of noise under a query that did
-/// exactly what it looked like. `BadValue` is the other case — a field that
-/// *is* real, refusing the value written for it — and that is nearly always a
-/// mistake.
+/// Say which terms the engine could not read as written, to stderr so a pipeline
+/// still receives only paths. [`Role::BadValue`] only, though the wire carries
+/// both roles: `UnknownField` is ordinary text like `http://example.com`.
 fn complain(misread: &[scour_core::Span], query: Option<&str>) {
     let Some(query) = query else { return };
     let mut said: Vec<&str> = Vec::new();
     for span in misread.iter().filter(|s| s.role == Role::BadValue) {
         let term = span.term_of(query);
-        // One line per term, not per span: `ext:a size:>x;>y` can refuse twice
-        // inside one term and saying so twice adds nothing.
+        // One line per term, not per span: one term can refuse twice.
         if term.is_empty() || said.contains(&term) {
             continue;
         }
@@ -83,10 +61,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!(
                     "{:>10}  {:>10}  {}",
                     kind_tag(h.kind),
-                    // A folder's number is what is under it, and the `~` says
-                    // it is the size of what the index holds — whatever the
-                    // scan rules exclude is not in it. A dash where the index
-                    // could not say, which is not the same as zero.
+                    // A folder's number is what is under it; `~` says it counts
+                    // only what the index holds. A dash is unknown, not zero.
                     match (h.is_dir, h.under) {
                         (true, Some(u)) => format!("~{}", format_size(u.disk, BINARY)),
                         (true, None) => "—".to_owned(),
@@ -113,32 +89,19 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 } else {
                     format!(" ({})", t("full scan"))
                 },
-                // Only when it dominates. Paging deep means building a path
-                // per row to reach the offset and throwing all but a page of
-                // them away — 225 ms at offset 200,000 against 0.54 ms at
-                // zero — and without this the slowness looks like the query's
-                // fault rather than the page number's.
+                // Only when it dominates: a deep page builds a path per row to
+                // reach the offset — 225 ms at offset 200,000 against 0.54 ms at
+                // zero — so the cost has to be named as the page number's.
                 if r.rows_built > r.hits.len() as u64 * 2 {
                     format!(" · {} {}", r.rows_built, t("paths built"))
                 } else {
                     String::new()
                 },
-                // **How to see the rest, when there is a rest.** Five rows is
-                // the right default and the wrong dead end: a person who has
-                // just been told there are 881 matches needs to know the flag
-                // exists without going to `--help` for it. Printed only when
-                // something was actually held back, so an answer that fits
-                // says nothing extra.
+                // Printed only when something was actually held back.
                 if (r.total as usize) > r.hits.len() || r.capped {
-                    // A number larger than what was just shown, or the advice
-                    // reads as "ask for what you already have".
-                    //
-                    // **And where to put it, which is not a detail here.**
-                    // Everything after the query is the query — a filename can
-                    // contain `--` — so `scour rapor -n 40` searches for three
-                    // words and answers zero. Advice that lands somebody there
-                    // is worse than no advice: it is a flag that appears not to
-                    // work. See `Cli::query`.
+                    // Larger than what was just shown, and placed before the
+                    // query: everything after the query is the query, so `-n`
+                    // written after it is searched for. See `Args::query`.
                     format!(
                         " · -n {} {}",
                         (r.hits.len() * 8).max(20),
@@ -154,19 +117,16 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             total,
             capped,
             misread,
-            // A count prints one number and a person reading it is not asking
-            // what it cost. `--json` carries it for anyone who is.
+            // No timing line here; `--json` carries it for anyone who wants it.
             took_us: _,
         } => {
             println!("{total}{}", if *capped { "+" } else { "" });
             complain(misread, echo);
         }
         Response::Facets(f) => {
-            // A kind facet is keyed by the token so that a rail can build
-            // `kind:build` from it; a person should see the word for it in
-            // their own language. `by` is what says which of the two this is —
-            // an extension can be spelled like a token (`ext:bin` against
-            // `kind:bin`) and translating it would be a plain mistake.
+            // Only a kind facet is translated: its key is a token a rail turns
+            // into `kind:build`. An extension can be spelled the same way
+            // (`ext:bin`), so `by` is what decides.
             let shown: Vec<String> = f
                 .facets
                 .iter()
@@ -193,9 +153,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             unconfirmed,
         } => {
             for g in groups {
-                // The saving first, because it is the reason to look: a header
-                // line per group and then its paths, so the output stays
-                // greppable and a person reads down the left edge.
+                // The saving first: a header line per group, then its paths.
                 println!(
                     "{:>10}  ×{}  {}  [{}]",
                     format_size(g.waste, BINARY),
@@ -211,11 +169,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     println!("            {p}");
                 }
             }
-            // **Two numbers, not one.** The first is what was read and
-            // compared; the second is what merely shares a size with
-            // something. On this disk they are 18.29 GiB and 39.36 GiB, and
-            // printing only the larger tells somebody they can delete
-            // database pages that happen to be the same length.
+            // Two numbers: what was read and compared, then what merely shares
+            // a size — 18.29 GiB against 39.36 GiB on this disk.
             eprintln!(
                 "{} {} · {} {} · {} {} · {} {}",
                 format_size(*proven, BINARY),
@@ -227,8 +182,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 format_size(*read, BINARY),
                 t("read")
             );
-            // **The one line that must never be dropped.** A partial answer
-            // that looks complete is what gets files deleted on a guess.
+            // Never dropped: a partial answer that looks complete gets files
+            // deleted on a guess.
             if *unconfirmed > 0 {
                 eprintln!(
                     "{unconfirmed} {}",
@@ -237,9 +192,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             }
         }
         Response::Settings(s) => {
-            // Printed rather than hidden, because `scour where` exists for the
-            // same reason: when something is remembered wrongly, the first
-            // question is what is remembered.
+            // Shown, not hidden: when something is remembered wrongly, the
+            // first question is what is remembered.
             println!("{}{}", label("columns"), s.columns.join(", "));
             println!("{}{}", label("sort"), s.sort);
             for q in s.history.iter().take(20) {
@@ -266,20 +220,15 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             }
         }
-        // **No CLI command asks for this**, and none is being added: making
-        // thumbnails is what a window that draws them wants, and a terminal
-        // that drew one would have nowhere to put it. The arm exists because
-        // the match is exhaustive, and it prints the one thing a terminal
-        // could do with the answer — the paths that have a picture now, plain,
-        // so nothing here needs a word from the catalogue.
+        // No CLI command asks for thumbnails; the arm exists because the match
+        // is exhaustive, and prints only the paths that now have a picture.
         Response::Thumbnails(made) => {
             for path in &made.ready {
                 println!("{path}");
             }
         }
-        // Built in first and marked, because the difference is the whole
-        // point: one list can be edited and the other cannot, and it is the
-        // uneditable one that does nearly all of the excluding.
+        // Built-in first and marked: only the other list can be edited, and the
+        // built-in one does nearly all of the excluding.
         Response::Rules {
             builtin_paths,
             builtin_dirs,
@@ -308,9 +257,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 ("added allow", "allow", added_allow),
             ] {
                 for v in list {
-                    // A switched-off rule is listed and marked rather than
-                    // hidden: it is still a rule somebody wrote, and the whole
-                    // point of the switch is that it can be turned back on.
+                    // A switched-off rule is listed and marked, not hidden.
                     let id = scour_settings::rule_id(kind, v);
                     let state = if off.iter().any(|o| o.eq_ignore_ascii_case(&id)) {
                         format!("  ({})", t("off"))
@@ -360,8 +307,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     t("folders, largest first")
                 );
             }
-            // Said rather than left to be found out: a total that disagrees
-            // with `du -l` for a reason nobody stated reads as a bug.
+            // A total that disagrees with `du -l` for an unstated reason reads
+            // as a bug.
             println!("{}", t("a hard-linked file is counted once, like du"));
         }
         Response::Tree { root, took_us: _ } => print_tree(root, ""),
@@ -397,9 +344,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
             spans,
             ..
         } => {
-            // The colouring is meant for a search box, but a terminal has
-            // colours too — and printing it here is what proves the spans line
-            // up with the query rather than merely claiming to.
+            // The colouring is meant for a search box; a terminal has colours
+            // too, and printing it here proves the spans line up.
             if let Some(q) = echo {
                 println!("{}", paint(q, spans));
             }
@@ -484,13 +430,9 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
         }
         Response::Accepted => println!("{}", t("accepted")),
         Response::Text { text } => println!("{text}"),
-        // An export does not arrive here. Its pieces go to the file or the
-        // pipe as they come — see `run_export` in `main.rs` — and passing one
-        // through the pretty-printer would put it on stdout a second time.
-        //
-        // Named rather than covered by a wildcard: this match is what makes
-        // whoever adds the next response variant decide how it looks, and one
-        // `_` would retire that for every variant after it.
+        // An export never arrives here; `run_export` in `main.rs` writes its
+        // pieces as they come. Named rather than covered by a `_`, so the next
+        // response variant added has to be given a look here.
         Response::ExportChunk { .. } | Response::ExportDone { .. } => {}
     }
     Ok(())
@@ -521,18 +463,8 @@ fn print_tree(node: &TreeNode, prefix: &str) {
     }
 }
 
-/// The word for a kind.
-///
-/// Through `Kind::msgid()` rather than a second table here: the kinds are core
-/// vocabulary and every frontend has to name them the same way, or a filter
-/// called "Belge" in one place and "Document" in another is the same filter
-/// with two names.
-/// The age of a directory's bytes, as one compact bar.
-///
-/// Six bands — today, this week, this month, six months, this year, older —
-/// drawn as a share of the total rather than as numbers, because the question
-/// it answers is comparative: twenty-five gigabytes matters less than
-/// twenty-five gigabytes nothing has touched in a year.
+/// The age of a directory's bytes as one bar: six bands — today, this week, this
+/// month, six months, this year, older — drawn as shares of the total.
 fn ages(d: &scour_core::DirUsage) -> String {
     const BLOCKS: [char; 5] = ['\u{2581}', '\u{2583}', '\u{2585}', '\u{2587}', '\u{2588}'];
     let total = d.bytes.max(1);
@@ -549,15 +481,14 @@ fn ages(d: &scour_core::DirUsage) -> String {
         .collect()
 }
 
+/// The word for a kind, through `Kind::msgid()` rather than a second table here:
+/// every face has to name the kinds the same way.
 fn kind_tag(k: Kind) -> String {
     t(k.msgid())
 }
 
-/// The word for a `kind:` facet key.
-///
-/// An unknown token is printed as it arrived rather than dropped: a service
-/// newer than this client can send a kind this build has never heard of, and
-/// showing the token is a much better answer than showing nothing.
+/// The word for a `kind:` facet key. An unknown token is printed as it arrived: a
+/// newer service can send a kind this build has never heard of.
 fn facet_word(token: &str) -> String {
     match Kind::from_name(token) {
         Some([k]) => kind_tag(*k),
@@ -565,12 +496,8 @@ fn facet_word(token: &str) -> String {
     }
 }
 
-/// `YYYY-MM-DD HH:MM` in UTC, or a dash for a time nothing set.
-///
-/// The shape is [`scour_ui::format::stamp`]'s — the same one every face
-/// prints, because a listing read here and in a window has to be the same
-/// listing. The dash is this one's own: a column of text has nowhere else to
-/// put "nothing".
+/// `YYYY-MM-DD HH:MM` in the local zone, or a dash for a time nothing set. The
+/// shape is [`scour_ui::format::stamp`]'s, so every face prints one listing.
 fn stamp(secs: i64) -> String {
     match scour_ui::format::stamp(secs).as_str() {
         "" => "—".into(),
@@ -644,16 +571,8 @@ fn languages() -> String {
         .join(", ")
 }
 
-/// The query, with each run in the colour its role earns.
-///
-/// A terminal is not the audience for this — a search box is — but the two
-/// warning roles are worth having at the command line too, because they are
-/// the cases where the engine answers a question nobody asked. `kind:zurna`
-/// looks like a filter and is a text search, and here it is underlined in red
-/// rather than discovered three screens of results later.
-///
-/// Colours are dropped when the output is not a terminal, so `scour explain |
-/// grep` sees plain text.
+/// The query, with each run in the colour its role earns. Colours are dropped
+/// when the output is not a terminal, so `scour explain | grep` sees plain text.
 fn paint(query: &str, spans: &[scour_core::Span]) -> String {
     use scour_core::Role;
     if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
@@ -663,9 +582,8 @@ fn paint(query: &str, spans: &[scour_core::Span]) -> String {
     for s in spans {
         let text = s.of(query);
         let code = match s.role {
-            // The two that mean "this is not doing what it looks like". They
-            // come first because a term can be both excluded and misread, and
-            // the misreading is the thing worth saying.
+            // First, because a term can be both excluded and misread and the
+            // misreading is what is worth saying.
             Role::UnknownField | Role::BadValue => "4;31",
             // The whole of an excluded term, not the `!` in front of it.
             _ if s.not => "1;31",
@@ -687,19 +605,15 @@ fn paint(query: &str, spans: &[scour_core::Span]) -> String {
     out
 }
 
-/// Open another face, or say which one opens.
-///
-/// The launcher is the one thing that knows how to start each of them — which
-/// terminal, which flag — and it is also what the desktop entry runs. So this
-/// asks it rather than knowing any of that itself.
+/// Open another face, or say which one opens. Runs `scour-open`, which owns the
+/// list of terminals and is also what the desktop entry runs.
 pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
     let dir = std::env::var("XDG_DATA_HOME")
         .unwrap_or_else(|_| format!("{}/.local/share", std::env::var("HOME").unwrap_or_default()));
     let settings = format!("{dir}/scour/state/settings.json");
     let Some(face) = face else {
-        // Read rather than asked over the socket: this is a question about
-        // what would open, and the answer has to be available when nothing is
-        // running.
+        // Read, not asked over the socket: the answer must exist when nothing
+        // is running.
         let said = std::fs::read_to_string(&settings)
             .ok()
             .and_then(|text| {
@@ -728,11 +642,8 @@ pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// **In the person's zone, like every other face.** This pinned UTC for
-    /// as long as `scour_ui::format::stamp` was UTC; the day that changed —
-    /// a file saved at 12:08 showing as 09:08 in the window — this test was
-    /// the one place still insisting on the old answer. The format is pinned
-    /// through the pure half, the zone through the same call the code uses.
+    /// In the person's zone: the format is pinned through the pure half, the
+    /// zone through the same call the code uses.
     #[test]
     fn timestamps_read_as_dates() {
         use scour_ui::format::{local_offset, stamp_at};
@@ -757,11 +668,8 @@ mod tests {
         }
     }
 
-    /// Every string this file asks for exists in the Turkish catalogue.
-    ///
-    /// A missing one is not a failure at run time — it falls back to English —
-    /// which is exactly why it needs a test: a half-translated program looks
-    /// fine until someone reads it.
+    /// Every string this file asks for exists in the Turkish catalogue; at run
+    /// time a missing one falls back to English rather than failing.
     #[test]
     fn the_turkish_catalogue_covers_what_this_file_uses() {
         let c = scour_i18n::Catalogue::for_language("tr");

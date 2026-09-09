@@ -54,9 +54,8 @@ def page_url() -> str:
     pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
     if not pages:
         raise SystemExit(f"no page is open on port {PORT}; is the window running with SCOUR_APP_DEBUG set?")
-    # A browser has more open than the page being measured — an extension's
-    # background page will happily answer and report nothing at all. The bridge
-    # is always loopback HTTP; anything else is somebody else's.
+    # An extension's background page answers too and reports nothing; the
+    # bridge is always loopback HTTP.
     for t in pages:
         url = t.get("url", "")
         if url.startswith(("http://127.0.0.1", "http://localhost")):
@@ -66,19 +65,15 @@ def page_url() -> str:
 
 
 class Socket:
-    """As much of RFC 6455 as talking to a debugger on this machine needs.
-
-    No TLS, no continuation frames on the way out, and the only control frame
-    that matters is a ping — the debugger sends none, but a client that would
-    hang on one is not worth the four lines it saves."""
+    """As much of RFC 6455 as talking to a debugger needs: no TLS, no outgoing
+    continuation frames, and a ping is the only control frame answered."""
 
     def __init__(self, url: str):
         rest = url.removeprefix("ws://")
         hostport, _, path = rest.partition("/")
         host, _, port = hostport.partition(":")
-        # Long enough for a measurement to finish. A script that drives the
-        # list through several queries takes minutes, and a socket that gives
-        # up first reports a timeout for a page that is working.
+        # Long enough for a measurement: a socket that gives up first reports
+        # a timeout for a page that is working.
         self.sock = socket.create_connection((host, int(port or 80)), timeout=300)
         key = base64.b64encode(os.urandom(16)).decode()
         self.sock.sendall(

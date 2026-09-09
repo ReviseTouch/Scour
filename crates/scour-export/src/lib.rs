@@ -1,65 +1,26 @@
-//! The result set, as a spreadsheet.
-//!
-//! Comma-separated values, written a row at a time into a buffer the caller
-//! owns. Nothing here accumulates and nothing here knows how many rows are
-//! coming — an export of this index is two and a quarter million of them, and
-//! the only shape that works at that size is one that never holds more than
-//! the row in hand.
-//!
-//! ## The decisions, which are older than this crate
-//!
-//! All four were made in the browser bridge and are carried here unchanged;
-//! they are the reason a file produced by `a7789d8` and one produced now are
-//! byte for byte the same.
-//!
-//! * **RFC 4180 quoting**, because filenames contain commas, quotes and
-//!   newlines — all three, on this machine.
-//! * **A byte-order mark**, because the spreadsheet most people open this in
-//!   guesses the encoding otherwise and guesses wrong on Turkish.
-//! * **Dates as `2026-03-07 18:25:13`** rather than the window's "5 dk önce".
-//!   One is for a person glancing at a screen, the other for something that
-//!   will sort and filter it.
-//! * **The columns are named by the caller, in the caller's order**, because
-//!   they are what the reader chose. A column that is not on screen is one
-//!   click from showing and then exported.
-//!
-//! ## Why this is not in the bridge any more
-//!
-//! It was, and the bridge is one frontend of four. The terminal had no export
-//! at all and the window and the model server would each have needed their own
-//! — which is three more chances for the quoting to be subtly different, and a
-//! CSV whose quoting is subtly different is a file that opens and is wrong.
+//! The result set as a spreadsheet: RFC 4180, a byte-order mark, dates as
+//! `2026-03-07 18:25:13`, and the caller's columns in the caller's order.
+//! One row at a time into a buffer the caller owns. Nothing accumulates and
+//! nothing here knows how many rows are coming — an export of this index is two
+//! and a quarter million of them.
 
 use scour_core::Hit;
 
-/// The bytes that go in front of the first line.
-///
-/// UTF-8's byte-order mark. It signals nothing about byte order — UTF-8 has
-/// none — and is here for one reason: without it, the spreadsheet most people
-/// open a `.csv` in guesses the encoding, and on Turkish text it guesses a
-/// legacy codepage and renders `ç` and `ğ` as mojibake. Written once, before
-/// the header row.
+/// UTF-8's byte-order mark, written once before the header row: without it the
+/// spreadsheet most people open a `.csv` in guesses a legacy codepage.
 pub const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
-/// What a row is written into.
-///
-/// The buffer is the caller's, reused between rows. A `String` per row was
-/// measured at nothing much per row and two and a quarter million allocations
-/// over an export, which is the sort of cost that only shows up at the size
-/// this exists for.
+/// What a row is written into. The buffer is the caller's, reused between rows: a
+/// `String` per row is 2.25 M allocations over one export.
 #[derive(Debug, Clone)]
 pub struct Sheet {
     columns: Vec<String>,
 }
 
 impl Sheet {
-    /// The columns to write, in the order they will appear.
-    ///
-    /// An unknown name is kept rather than rejected. It writes an empty cell
-    /// under its own heading, which is what a caller asking for a column this
-    /// version does not have should see: the shape it asked for, with the part
-    /// nobody could fill left blank. Refusing would mean a frontend that grew a
-    /// column could not export until the service caught up.
+    /// The columns to write, in the order they will appear. An unknown name is
+    /// kept and writes an empty cell under its own heading, so a frontend that
+    /// grew a column can still export before the service catches up.
     pub fn new<I, S>(columns: I) -> Sheet
     where
         I: IntoIterator<Item = S>,
@@ -94,12 +55,8 @@ impl Sheet {
         out.extend_from_slice(b"\r\n");
     }
 
-    /// One row, appended.
-    ///
-    /// `cell` is a scratch buffer rather than a `String` returned per column:
-    /// an export of this index writes two and a quarter million rows of five
-    /// columns, and a returned `String` is eleven million allocations that do
-    /// nothing a cleared buffer does not.
+    /// One row, appended. `cell` is a scratch buffer, not a `String` per column:
+    /// 2.25 M rows of five columns is eleven million allocations otherwise.
     pub fn row(&self, hit: &Hit, out: &mut Vec<u8>) {
         let mut cell = String::new();
         for (i, id) in self.columns.iter().enumerate() {
@@ -114,13 +71,9 @@ impl Sheet {
     }
 }
 
-/// RFC 4180: quote when the value holds a separator, a quote or a line break,
-/// and double any quote inside.
-///
-/// Filenames contain all three. `a,b.txt` unquoted is two columns; a name with
-/// a newline in it — which ext4 allows and something on this machine has done
-/// — unquoted is two rows, and every row after it is shifted by one column
-/// for the rest of the file.
+/// RFC 4180: quote when the value holds a separator, a quote or a line break, and
+/// double any quote inside. Filenames contain all three, and an unquoted newline
+/// shifts every row after it by one column for the rest of the file.
 fn escape_into(value: &str, out: &mut Vec<u8>) {
     if value.contains([',', '"', '\n', '\r']) {
         out.push(b'"');
@@ -143,11 +96,8 @@ pub fn escape(value: &str) -> String {
     String::from_utf8(out).unwrap_or_default()
 }
 
-/// What a column is called, and how to read it off a hit.
-///
-/// Keyed by the same ids the window uses for its columns, so that "the columns
-/// on screen, in the order they are on screen" is a list of strings the page
-/// already has and does not have to translate.
+/// What a column is called, and how to read it off a hit. Keyed by the same ids
+/// the faces use, so "the columns on screen" needs no translation.
 fn cell_of(id: &str, h: &Hit, out: &mut String) {
     match id {
         "name" => out.push_str(h.name()),
@@ -164,8 +114,7 @@ fn cell_of(id: &str, h: &Hit, out: &mut String) {
         "user" => out.push_str(&owner(scour_core::Owner::User, h.meta.uid)),
         "group" => out.push_str(&owner(scour_core::Owner::Group, h.meta.gid)),
         "items" => push_num(h.meta.items, out),
-        // Not a column this version knows. An empty cell under the heading the
-        // caller asked for — see `Sheet::new`.
+        // Not a column this version knows: an empty cell under its heading.
         _ => {}
     }
 }
@@ -175,12 +124,8 @@ fn push_num(v: i64, out: &mut String) {
     let _ = write!(out, "{v}");
 }
 
-/// Seconds since the epoch, written the way a spreadsheet reads a date.
-///
-/// `2026-03-07 18:25:13` rather than the window's "5 dk önce": one is for a
-/// person glancing at a screen and the other is for a column that will be
-/// sorted and filtered by something else. Zero means the filesystem never
-/// said, and an empty cell says that better than 1970 does.
+/// Seconds since the epoch as `2026-03-07 18:25:13`, for a column something else
+/// will sort. Zero means the filesystem never said, and writes an empty cell.
 fn stamp(t: i64, out: &mut String) {
     use std::fmt::Write;
     if t <= 0 {
@@ -198,11 +143,8 @@ fn stamp(t: i64, out: &mut String) {
     );
 }
 
-/// Days since 1970-01-01 to a calendar date.
-///
-/// Howard Hinnant's `civil_from_days`, which is exact for every date this
-/// index can hold and needs no dependency. A date crate would be the fifth
-/// thing in the workspace's dependency tree for fourteen lines of arithmetic.
+/// Days since 1970-01-01 to a calendar date: Hinnant's `civil_from_days`, exact
+/// for every date this index can hold and needing no dependency.
 fn civil(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
@@ -216,10 +158,7 @@ fn civil(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// The name behind a numeric id, from this machine.
-///
-/// [`scour_core::owner_name`]'s answer. The copy that used to be here was
-/// identical to the browser bridge's, comment included.
+/// The name behind a numeric id, from this machine: [`scour_core::owner_name`].
 fn owner(which: scour_core::Owner, id: i64) -> String {
     scour_core::owner_name(which, id)
 }
@@ -260,13 +199,8 @@ mod tests {
         assert_eq!(&out[..3], &BOM, "the byte-order mark comes first");
     }
 
-    /// The three characters a filename is allowed to contain and a CSV is not.
-    ///
-    /// Each of them on its own, because the failures are different: a comma
-    /// splits the row into an extra column, a quote ends the field early, and a
-    /// newline splits it into an extra *row* — and that last one shifts every
-    /// line after it, so a file with one such name is wrong from there to the
-    /// end rather than wrong in one place.
+    /// Each on its own: a comma adds a column, a quote ends the field, and a
+    /// newline adds a row and shifts everything after it.
     #[test]
     fn the_three_characters_a_filename_may_hold_are_quoted() {
         let sheet = Sheet::new(["name"]);
@@ -295,7 +229,7 @@ mod tests {
         assert_eq!(out, "2026-03-07 18:25:13");
     }
 
-    /// Zero is not 1970. The filesystem never said, and a blank says so.
+    /// Zero is not 1970: the filesystem never said, and a blank says so.
     #[test]
     fn a_date_nobody_recorded_is_blank_rather_than_the_epoch() {
         let mut out = String::new();
@@ -317,9 +251,8 @@ mod tests {
         assert_eq!(lines.next().expect("row"), "file,12,a.txt");
     }
 
-    /// A name this version does not know writes an empty cell under its own
-    /// heading rather than dropping the column — otherwise a frontend that
-    /// grew a column would silently produce rows one field short of its header.
+    /// Dropping the column instead would produce rows one field short of the
+    /// header.
     #[test]
     fn an_unknown_column_keeps_its_place() {
         let sheet = Sheet::new(["name", "phase-of-moon", "size"]);

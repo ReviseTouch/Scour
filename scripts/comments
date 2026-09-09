@@ -5,9 +5,7 @@
     scripts/comments path/to/file    # every block of 3+ lines in one file
     scripts/comments --min 6         # only blocks at least this long
 
-The policy is in CLAUDE.md: a doc comment says what, in one or two lines; an
-inline comment states an invariant or a number, in one; history is in git.
-This does not enforce it — it says where to look.
+The policy is in CLAUDE.md. This does not enforce it; it says where to look.
 """
 import re, subprocess, sys
 

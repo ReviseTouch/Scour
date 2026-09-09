@@ -1,37 +1,15 @@
-//! Where a person keeps things, and what the volumes under them record.
-//!
-//! Two questions a file interface has to answer and neither of which is about
-//! searching: *what are this desktop's own folders called*, and *does this
-//! volume record when a file was read*.
-//!
-//! ## Why the service answers them
-//!
-//! Both were in the browser bridge, worked out from `$HOME` and
-//! `/proc/self/mounts` on the spot. That is one frontend's copy of a rule, and
-//! there are meant to be four — so a terminal interface would parse
-//! `user-dirs.dirs` again, a Slint window a third time, and the day one of
-//! them got the quoting wrong its sidebar would point at folders that are not
-//! there. The same guess had already been wrong once at a higher layer: the
-//! page shipped with `/home/hasan` written into it.
-//!
-//! The service runs where the files are and every frontend already talks to
-//! it. So it answers, and a frontend draws what it is told.
-//!
-//! ## No dependencies but `serde`
-//!
-//! Nothing here knows what an index is. It reads two files a desktop writes
-//! and returns what they say, which is a question about a machine rather than
-//! about Scour — the same reasoning that keeps `scour-preview` and
-//! `scour-dupes` standing on their own.
+//! Two questions a file interface has to answer and neither is about searching:
+//! what this desktop's own folders are called, and whether a volume records when
+//! a file was read. The service answers both so no face parses `user-dirs.dirs`
+//! for itself. Depends on nothing but `serde`; it knows nothing about an index.
 
 use serde::{Deserialize, Serialize};
 
 /// A folder the desktop has its own name for.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Place {
-    /// What the desktop calls it, **already in the owner's language** — it is
-    /// the last component of the path, and `user-dirs.dirs` is written by the
-    /// desktop in the language it was set up in. Nothing here translates.
+    /// What the desktop calls it: the last component of the path, already in the
+    /// owner's language. Nothing here translates.
     pub label: String,
     pub path: String,
 }
@@ -40,8 +18,7 @@ pub struct Place {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Mount {
     pub at: String,
-    /// False under `noatime`, where `st_atime` is written when the file is
-    /// made and never again.
+    /// False under `noatime`, where `st_atime` is written once and never again.
     pub reads: bool,
 }
 
@@ -77,12 +54,8 @@ fn read_mounts() -> String {
     std::fs::read_to_string("/proc/self/mounts").unwrap_or_default()
 }
 
-/// Where a desktop puts what it downloads, if it says.
-///
-/// Read from the same file as the rest, and by key rather than by name: the
-/// folder is called `İndirilenler` on this machine and something else on the
-/// next, and a frontend guessing at the word would be a frontend that saves a
-/// file somewhere nobody looks.
+/// Where a desktop puts what it downloads, if it says. By key and not by name:
+/// the folder is called something different in every language.
 pub fn download_dir(home: &str, text: &str) -> Option<String> {
     if home.is_empty() {
         return None;
@@ -110,11 +83,8 @@ pub fn downloads() -> Option<String> {
     download_dir(&home, &user_dirs(&home))
 }
 
-/// The folders named in `user-dirs.dirs`, in the desktop's own words.
-///
-/// The format is `XDG_DOCUMENTS_DIR="$HOME/Belgeler"` a line, and both the
-/// quoting and the `$HOME` are part of it. `exists` is passed in so the rule
-/// can be tested without a home directory to arrange.
+/// The folders named in `user-dirs.dirs`, in the desktop's own words. The format
+/// is `XDG_DOCUMENTS_DIR="$HOME/Belgeler"`; quoting and `$HOME` are part of it.
 pub fn places_of(home: &str, text: &str, exists: impl Fn(&str) -> bool) -> Vec<Place> {
     let mut out: Vec<Place> = Vec::new();
     if home.is_empty() {
@@ -129,8 +99,8 @@ pub fn places_of(home: &str, text: &str, exists: impl Fn(&str) -> bool) -> Vec<P
         }
         let path = value.trim().trim_matches('"').replace("$HOME", home);
         let label = path.rsplit('/').next().unwrap_or_default().to_owned();
-        // `XDG_DESKTOP_DIR` is often the home itself on a headless setup, and
-        // a shortcut to everything is not a shortcut.
+        // The home itself is often named here, and a shortcut to everything is
+        // not a shortcut.
         if label.is_empty() || path == home || !exists(&path) {
             continue;
         }
@@ -141,23 +111,9 @@ pub fn places_of(home: &str, text: &str, exists: impl Fn(&str) -> bool) -> Vec<P
     out
 }
 
-/// Every mount point, and whether the kernel records reads on it.
-///
-/// **A column that shows a number nobody maintains is worse than an empty
-/// one.** With `noatime`, `st_atime` is written once — when the file is made —
-/// and never again, so a browser profile rewritten every second reports
-/// "accessed eleven days ago", which is the day the application was installed.
-/// Every one of those numbers is *true* and none of them answers the question
-/// the column's heading asks.
-///
-/// **All of them, not only the `noatime` ones**, because mount points nest and
-/// the deepest one owns the file: `/` is `noatime` on this machine while
-/// `/mnt/depo` under it is `relatime`, so a list of just the silent mounts
-/// would call the whole disk silent. That was the first version, and it marked
-/// every row.
-///
-/// Empty on anything without `/proc/self/mounts` — the honest answer where
-/// this cannot be asked, and a frontend then behaves as it did before it could.
+/// Every mount point, and whether the kernel records reads on it — all of them,
+/// because mounts nest and the deepest one owns the file, so a list of only the
+/// `noatime` ones would call a whole disk silent. Empty without `/proc/self/mounts`.
 pub fn mounts_from(text: &str) -> Vec<Mount> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -167,8 +123,7 @@ pub fn mounts_from(text: &str) -> Vec<Mount> {
         else {
             continue;
         };
-        // A mount point with a space in it is written `\040`, and `/proc` does
-        // not escape anything else.
+        // A space is written `\040`; `/proc` escapes nothing else.
         let at = at.replace("\\040", " ");
         let silent = opts.split(',').any(|o| o == "noatime");
         out.push(Mount { at, reads: !silent });
@@ -182,8 +137,7 @@ mod tests {
 
     #[test]
     fn a_download_folder_is_found_by_key_not_by_name() {
-        // It is `İndirilenler` here and `Downloads` on the next machine, so
-        // the key is what says which one it is.
+        // The name differs per language, so the key is what identifies it.
         let text = concat!(
             "XDG_DOCUMENTS_DIR=\"$HOME/Belgeler\"\n",
             "XDG_DOWNLOAD_DIR=\"$HOME/İndirilenler\"\n",
@@ -192,8 +146,7 @@ mod tests {
             download_dir("/home/u", text).as_deref(),
             Some("/home/u/İndirilenler")
         );
-        // A desktop that points it at the home has no download folder, and
-        // saying it does would put a file where nobody looks for one.
+        // Pointed at the home means no download folder.
         assert_eq!(
             download_dir("/home/u", "XDG_DOWNLOAD_DIR=\"$HOME\"\n"),
             None
@@ -228,7 +181,6 @@ mod tests {
         );
     }
 
-    /// A folder named in the file and not on the disk is not offered.
     #[test]
     fn a_shortcut_to_nothing_is_not_a_shortcut() {
         let text = "XDG_MUSIC_DIR=\"$HOME/Müzik\"\nXDG_VIDEOS_DIR=\"$HOME/Videolar\"\n";
@@ -237,9 +189,8 @@ mod tests {
         assert_eq!(p[0].label, "Müzik");
     }
 
-    /// **The nesting is the whole point.** `/` silent and `/mnt/depo` under it
-    /// recording is the arrangement on the machine this was written for, and a
-    /// list of only the silent mounts would call the whole disk silent.
+    /// A silent `/` with a recording mount under it: reporting only the silent
+    /// ones would call the whole disk silent.
     #[test]
     fn every_mount_is_reported_not_only_the_silent_ones() {
         let text = concat!(
@@ -272,8 +223,7 @@ mod tests {
         assert!(!m[0].reads);
     }
 
-    /// Nothing to read is not a failure — it is the answer on a machine that
-    /// has no `/proc`, and a frontend then behaves as it did before it asked.
+    /// Nothing to read is not a failure; it is the answer where there is no `/proc`.
     #[test]
     fn a_machine_that_cannot_be_asked_says_nothing() {
         assert!(mounts_from("").is_empty());

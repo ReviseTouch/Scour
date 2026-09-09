@@ -104,8 +104,7 @@ pub struct MockOptions {
     pub seed: u64,
     /// The newest timestamp; everything is generated backwards from it.
     pub now: i64,
-    /// How many files share one timestamp on average. The real index measured
-    /// 115. A value of one would be the unrealistic uniform case.
+    /// How many files share one timestamp on average; the real index measured 115.
     pub files_per_event: usize,
     pub source: SourceId,
 }
@@ -140,8 +139,7 @@ pub fn generate(opt: &MockOptions) -> MockFs {
         .collect();
     events.sort_unstable();
 
-    // The directory skeleton. Every directory is an entry too, exactly as a
-    // real scanner produces.
+    // Every directory is an entry too, as a real scanner produces.
     let mut dirs: Vec<String> = [
         "/home/u",
         "/home/u/Projeler",
@@ -169,29 +167,21 @@ pub fn generate(opt: &MockOptions) -> MockFs {
         }
     }
 
-    // One big, old tree: the adversarial case, where many matches sit at the
-    // far end of the sort order so anything walking newest-first has a long way
-    // to go before it can stop.
+    // One big old tree: matches at the far end of the sort order, so a
+    // newest-first walk has a long way to go before it can stop.
     let ancient = "/home/u/Projeler/eski-arsiv";
     dirs.push(ancient.to_string());
-    // Clustered like the rest, and for the same reason: an archive extraction
-    // stamps everything it writes at one instant. Giving these files scattered
-    // timestamps instead would quietly make the generated tree *easier* than a
-    // real one, since large tie groups are exactly what a page boundary has to
-    // cope with.
+    // Clustered like the rest: an archive extraction stamps everything at one
+    // instant, and large tie groups are what a page boundary has to cope with.
     let ancient_base = opt.now - 3 * 365 * 86_400;
     let ancient_events: Vec<i64> = (0..32)
         .map(|_| ancient_base - rng.below(90 * 86_400) as i64)
         .collect();
 
     let mut entries: Vec<Entry> = Vec::with_capacity(opt.files + dirs.len());
-    // **No path twice.** A filesystem cannot hold two entries with the same
-    // name in the same directory, and a generator that does hands the index a
-    // case it will never see — which is worse than a missing case, because
-    // every count computed from `MockFs::entries` then disagrees with what a
-    // correct index reports. Names are random, so collisions happen: five in
-    // 8,667 entries, and they went unnoticed for as long as identity was the
-    // inode, which made two files at one path look like two files.
+    // No path twice: a duplicate makes every count from `MockFs::entries`
+    // disagree with a correct index. Names are random, so collisions do happen —
+    // five in 8,667 entries.
     let mut taken: HashSet<String> = HashSet::with_capacity(opt.files + dirs.len());
     let mut push = |path: String, is_dir: bool, size: i64, mtime: i64| {
         if !taken.insert(path.clone()) {
@@ -270,8 +260,7 @@ pub fn generate(opt: &MockOptions) -> MockFs {
     MockFs { entries, dirs }
 }
 
-/// Statistics that show whether the generated tree really looks like a
-/// filesystem, so the numbers can be checked against the real index.
+/// Statistics for checking the generated tree against the real index.
 pub fn describe(fs: &MockFs) -> String {
     use scour_core::text::{DefaultFolder, Folder};
     let n = fs.entries.len();
@@ -306,9 +295,8 @@ mod tests {
             ..Default::default()
         });
         let mtimes: HashSet<i64> = fs.entries.iter().map(|e| e.meta.mtime).collect();
-        // The property that matters: far fewer timestamps than files. A uniform
-        // generator would produce roughly one each and flatter every design.
-        // The real index measured 115 files per distinct timestamp.
+        // Far fewer timestamps than files: the real index measured 115 per
+        // distinct timestamp, where a uniform generator would produce one.
         assert!(
             fs.entries.len() / mtimes.len() > 50,
             "timestamps should cluster, got {} files over {} stamps",

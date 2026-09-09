@@ -1,13 +1,7 @@
-//! Turning a reply into text a model reads.
-//!
-//! Compact on purpose. Every token spent on formatting is a token not spent on
-//! the answer, and a filesystem tool that floods a context window is a tool
-//! that gets turned off. So: no box drawing, no repeated absolute prefixes
-//! where a relative path will do, and totals stated once rather than implied.
-//!
-//! What is never trimmed is the part that says the answer is incomplete. A
-//! model that cannot tell a full listing from a truncated one will draw
-//! confident wrong conclusions from it.
+//! Turning a reply into text a model reads, compactly: no box drawing, no
+//! repeated absolute prefixes, totals stated once. What is never trimmed is the
+//! part saying an answer is incomplete — a model that cannot tell a full listing
+//! from a truncated one draws confident wrong conclusions from it.
 
 use humansize::{BINARY, format_size};
 use scour_core::{Error, Kind, Role, Span, TreeNode};
@@ -20,11 +14,9 @@ pub fn human(r: &Response) -> String {
             for h in &s.hits {
                 out.push_str(&format!(
                     "{}  {}  {}\n",
-                    // The folder's total, marked. A model asked "what is
-                    // big here" can answer from the listing rather than
-                    // calling disk usage per row — and the `~` is not
-                    // decoration: it is the size of what the index holds, and
-                    // the scan rules leave build trees out.
+                    // The folder's total, so disk usage need not be called per
+                    // row. `~` means the size of what the index holds, and the
+                    // scan rules leave build trees out.
                     match (h.is_dir, h.under) {
                         (true, Some(u)) =>
                             format!("{:>9}", format!("~{}", format_size(u.disk, BINARY))),
@@ -54,8 +46,7 @@ pub fn human(r: &Response) -> String {
             total,
             capped,
             took_us: _,
-            // Warnings are appended by `warning` for every reply alike, so that
-            // no arm here can forget one.
+            // `warning` appends for every reply alike, so no arm can forget one.
             misread: _,
         } => {
             if *capped {
@@ -84,8 +75,8 @@ pub fn human(r: &Response) -> String {
                     format_size(g.waste, BINARY),
                     g.paths.len(),
                     format_size(g.size, BINARY),
-                    // Never "identical" unless it was read and compared. The
-                    // caller may be about to delete one of these.
+                    // Never "identical" unless read and compared: the caller may
+                    // be about to delete one of these.
                     match g.certainty.as_str() {
                         "content" => "read and compared, identical",
                         "edges" => "same size and same first and last 4 KB, not fully compared",
@@ -111,8 +102,7 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
-        // Never reached: the tool surface offers no settings tool, and a
-        // write would be refused as mutating regardless.
+        // Unreachable: no settings tool, and a write is refused as mutating.
         Response::Settings(_) => "settings are not part of this surface.".into(),
         Response::Facets(f) => {
             if f.facets.is_empty() {
@@ -127,16 +117,14 @@ pub fn human(r: &Response) -> String {
                 };
                 out.push_str(&format!("{:>9}  {key}\n", x.count));
             }
-            // Left as the token rather than translated, because the caller is
-            // a model and the useful thing it can do with `build` is write
+            // Left as the token: what a model does with `build` is write
             // `kind:build`.
             if f.capped {
                 out.push_str("(counts are a lower bound: the scan hit its cap)\n");
             }
             out
         }
-        // No tool reaches this yet — see `tools.rs`. Rendered so that the
-        // day one does, it prints rather than panics.
+        // No tool reaches this yet; rendered so the day one does, it prints.
         Response::Preview(l) => {
             let mut out = format!("{} · {} · {} bytes\n", l.shape, l.kind, l.len);
             if !l.head.is_empty() {
@@ -148,8 +136,7 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
-        // Marked, because a model asked to change the rules has to know which
-        // half it can change. The built-in set is not editable from anywhere.
+        // Marked: only one of the two halves can be edited at all.
         Response::Rules {
             builtin_paths,
             builtin_dirs,
@@ -180,8 +167,7 @@ pub fn human(r: &Response) -> String {
             ] {
                 for v in list {
                     // A third column only where there is something to say: a
-                    // rule that is listed but switched off reads as in force
-                    // otherwise, which is the one misreading that matters here.
+                    // switched-off rule would otherwise read as in force.
                     let id = scour_settings::rule_id(kind, v);
                     let state = if off.iter().any(|o| o.eq_ignore_ascii_case(&id)) {
                         "\toff"
@@ -198,9 +184,8 @@ pub fn human(r: &Response) -> String {
             for place in &p.places {
                 out.push_str(&format!("{}\t{}\n", place.label, place.path));
             }
-            // The volumes that record nothing, named — a model reading an
-            // access time off a `noatime` mount would be reading the day the
-            // file was made and calling it "last used".
+            // The volumes that record nothing: an access time off a `noatime`
+            // mount is the day the file was made.
             let silent: Vec<&str> = p
                 .mounts
                 .iter()
@@ -238,9 +223,8 @@ pub fn human(r: &Response) -> String {
                     u.child_count
                 ));
             }
-            // Said rather than left to be discovered: a total that folds
-            // hard links while the shell's does not is how a report ends up
-            // disagreeing with `du -l` for no visible reason.
+            // A total that folds hard links where the shell's does not would
+            // disagree with `du -l` for no visible reason.
             out.push_str("(a hard-linked file is counted once, as du counts it)\n");
             out
         }
@@ -325,19 +309,13 @@ pub fn human(r: &Response) -> String {
         Response::Maintained(m) => format!("{:?} finished in {} ms.", m.level, m.took_ms),
         Response::Accepted => "Accepted.".into(),
         Response::Text { text } => text.clone(),
-        // The MCP server exposes no export, so these never arrive. It could:
-        // the transport under it streams already, and the tool would be a
-        // `Client::stream` writing where the model said. What stops it is that
-        // a model must not be handed two hundred megabytes through a context
-        // window — so the tool would have to answer with a *filename* rather
-        // than with rows, which makes it the only tool here that writes to
-        // disk. That is the owner's decision to take, not this match arm's.
+        // No export tool is exposed: a model must not be handed two hundred
+        // megabytes through a context window, and answering with a filename
+        // instead would make it the only tool here that writes to disk.
         Response::ExportChunk { .. } | Response::ExportDone { .. } => String::new(),
-        // And this one cannot arrive at all rather than merely not being
-        // exposed: `Request::Thumbnails` is mutating, and `call` refuses
-        // everything `is_mutating` answers true for before it reaches the
-        // socket. It is mutating precisely so that a model cannot make this
-        // machine start a handful of image decoders on files it chose.
+        // This one cannot arrive at all: `Request::Thumbnails` is mutating, and
+        // `call` refuses those before the socket, so a model cannot start image
+        // decoders on files it chose.
         Response::Thumbnails(_) => String::new(),
     }
 }
@@ -359,8 +337,8 @@ fn tree(node: &TreeNode, depth: usize, out: &mut String) {
     for c in &node.nodes {
         tree(c, depth + 1, out);
     }
-    // Never trimmed: without this a model reads a partial listing as a
-    // complete one and concludes the missing files do not exist.
+    // Never trimmed: a partial listing read as complete means the missing files
+    // are concluded not to exist.
     if node.truncated {
         let left = node.children.saturating_sub(node.nodes.len() as u64);
         out.push_str(&format!(
@@ -374,26 +352,9 @@ fn tree(node: &TreeNode, depth: usize, out: &mut String) {
     }
 }
 
-/// The English text of a typed failure, plus what to do about it.
-///
-/// The advice is the point: a model that is told "the index is not ready yet"
-/// and nothing else will either give up or retry forever.
-/// What the engine could not read the way it was written, if anything.
-///
-/// **The worst failure this server has, and it looks like a correct answer.**
-/// The parser never fails: `dm:yarin` is not a date, so the whole term becomes
-/// a search for the text "dm:yarin", and the reply is `0 matches.` — which is
-/// also what a query that was understood and matched nothing says. A model
-/// reading that concludes the files are not there and moves on. There is no
-/// second question it would know to ask.
-///
-/// Appended rather than woven into each arm, so that adding a reply type
-/// cannot quietly drop it.
-///
-/// [`Role::BadValue`] only, though the wire carries both warning roles:
-/// `UnknownField` means letters and a colon that are not a field, which is
-/// what `http://example.com` and `12:30` legitimately are. A field that exists
-/// and refuses its value is the case that is nearly always a mistake.
+/// What the engine could not read as written, if anything: without it a misread
+/// term answers `0 matches.` and reads as an understood query. [`Role::BadValue`]
+/// only — `UnknownField` is what `http://example.com` and `12:30` legitimately are.
 pub fn warning(r: &Response, query: Option<&str>) -> String {
     let (Some(query), Some(misread)) = (query, misread_of(r)) else {
         return String::new();
@@ -434,6 +395,8 @@ fn misread_of(r: &Response) -> Option<&[Span]> {
     }
 }
 
+/// The English text of a typed failure, plus what to do about it: told only "the
+/// index is not ready yet", a model will give up or retry forever.
 pub fn failure(e: &Error) -> String {
     let advice = match e {
         Error::QueryTooShort { .. } => {
@@ -450,11 +413,8 @@ pub fn failure(e: &Error) -> String {
     format!("{e}.{advice}")
 }
 
-/// The word for a kind, for a reader who is a model.
-///
-/// Straight from `Kind::msgid()` and not through the catalogue: this surface
-/// is English by design. A second table here is a second thing to forget when
-/// a kind is added, which is exactly what happened to the first version.
+/// The word for a kind, straight from `Kind::msgid()` and not through the
+/// catalogue: this surface is English by design.
 fn kind_word(k: Kind) -> String {
     k.msgid().to_lowercase()
 }

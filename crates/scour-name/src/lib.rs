@@ -1,30 +1,13 @@
-//! What a file may be called, and giving it a different name.
+//! What a file may be called, and giving it a different name. One copy of the
+//! checks for every face, each returning why rather than a bool.
 //!
-//! **The rename is one line; the answer to "is that a name" is not.** Three
-//! faces offer to rename a file, and three copies of the checks would be three
-//! sets of rules that agree today: one would forget that a trailing space is
-//! legal on Linux and invisible everywhere, another would allow `..` and turn
-//! a rename into a move, a third would let an empty box through and leave the
-//! reader looking at a file that has vanished from the list because it is now
-//! called nothing.
-//!
-//! So the checks are here, and each of them returns *why* rather than a bool —
-//! a face that can only say "no" is a face that makes somebody guess.
-//!
-//! ## What this deliberately does not do
-//!
-//! It does not move files. A new name with a slash in it is refused rather
-//! than followed: the reader typed into a box beside a file name, and a box
-//! beside a file name that quietly relocates the file is a trap. Moving is a
-//! different gesture and belongs to a file manager.
+//! It does not move files: a new name with a slash is refused rather than
+//! followed, because a box beside a file name that relocates the file is a trap.
 
 use std::path::{Path, PathBuf};
 
-/// Why a name was refused.
-///
-/// Each one is a sentence a face can show as it is. They are English source
-/// strings and therefore catalogue keys, the same as everything else a person
-/// reads.
+/// Why a name was refused. Each is an English sentence a face can show as it is,
+/// and therefore a catalogue key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refusal {
     /// Nothing was typed.
@@ -35,9 +18,7 @@ pub enum Refusal {
     Dots,
     /// A NUL byte, which no filesystem will take.
     HasNul,
-    /// Ends in a space or a dot. Legal here, invisible to the reader, and
-    /// refused by Windows and by every archive that has to survive a trip
-    /// through it.
+    /// Ends in a space or a dot: legal here, invisible, refused by Windows.
     TrailingSpace,
     /// Longer than a filesystem component may be.
     TooLong,
@@ -69,18 +50,12 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// The longest a single path component may be, on every filesystem in use.
-///
-/// `NAME_MAX` is 255 **bytes**, not characters — a Turkish name of 200 letters
-/// is over it. Counting characters here would let a name through that the
-/// kernel then refuses, and the reader would be told nothing by the box and
-/// everything by a failure afterwards.
+/// The longest a single path component may be: `NAME_MAX` is 255 bytes, not
+/// characters, so a 200-letter non-ASCII name is over it.
 const NAME_MAX: usize = 255;
 
-/// Would this be a legal new name for that path?
-///
-/// Answers before anything is touched, so a face can grey a button or colour a
-/// box while somebody is still typing.
+/// Would this be a legal new name for that path? Answers before anything is
+/// touched, so a face can grey a button while somebody is still typing.
 pub fn check(path: &Path, new_name: &str) -> Result<(), Refusal> {
     if new_name.is_empty() {
         return Err(Refusal::Empty);
@@ -109,21 +84,16 @@ pub fn check(path: &Path, new_name: &str) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Give it the new name. Returns where it now is.
-///
-/// The checks run again here rather than being assumed: between a box being
-/// typed into and a button being pressed, something else can create the name
-/// that was free.
+/// Give it the new name and say where it now is. The checks run again here:
+/// between typing and pressing, something else can take the name that was free.
 pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf, Refusal> {
     check(path, new_name)?;
     let to = beside(path, new_name);
-    // **`rename` and not `copy` + `remove`.** A rename is atomic and keeps the
-    // inode, so anything holding the file open keeps holding the same file, and
-    // a failure leaves the original exactly where it was.
+    // `rename`, not `copy` + `remove`: atomic, keeps the inode, and a failure
+    // leaves the original where it was.
     match std::fs::rename(path, &to) {
         Ok(()) => Ok(to),
-        // The only failure worth naming separately: somebody won the race
-        // between the check above and this line.
+        // Somebody won the race between the check above and this line.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(Refusal::Taken),
         Err(_) => Err(Refusal::Taken),
     }
@@ -138,10 +108,8 @@ fn beside(path: &Path, name: &str) -> PathBuf {
 }
 
 trait SymlinkExists {
-    /// Is there anything there — including a symlink pointing nowhere?
-    ///
-    /// `Path::exists` follows links, so a broken link reads as free and the
-    /// rename then fails with a name the reader was told was available.
+    /// Is there anything there, including a symlink pointing nowhere?
+    /// `Path::exists` follows links, so a broken link would read as free.
     fn symlink_exists(&self) -> bool;
 }
 
@@ -187,8 +155,6 @@ mod tests {
         std::fs::remove_dir_all(&box_).ok();
     }
 
-    /// A Turkish name of two hundred letters is over the limit, and a naive
-    /// character count says it is not.
     #[test]
     fn the_length_is_counted_in_bytes_because_that_is_what_the_kernel_counts() {
         let box_ = sandbox();
@@ -211,14 +177,13 @@ mod tests {
 
         assert_eq!(check(&a, "b.txt"), Err(Refusal::Taken));
         assert_eq!(rename(&a, "b.txt"), Err(Refusal::Taken));
-        // And nothing happened to either of them.
+        // Nothing happened to either of them.
         assert_eq!(std::fs::read(&a).unwrap(), b"one");
         assert_eq!(std::fs::read(&b).unwrap(), b"two");
 
         std::fs::remove_dir_all(&box_).ok();
     }
 
-    /// A broken symlink is something there, and `Path::exists` says it is not.
     #[test]
     fn a_link_pointing_nowhere_still_holds_its_name() {
         let box_ = sandbox();

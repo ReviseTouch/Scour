@@ -1,33 +1,8 @@
-//! What this machine says it can make a picture of.
-//!
-//! Two declarations, both the desktop's own, neither of them ours:
-//!
-//! * **`$XDG_DATA_DIRS/thumbnailers/*.thumbnailer`** — the thumbnail managing
-//!   standard's contract. Per MIME type, the command that turns a file into a
-//!   PNG. This is read rather than guessed at: a hardcoded list of programs
-//!   would be a fifth opinion about a question the machine already answers, it
-//!   would be wrong the moment a package is installed or removed, and it would
-//!   silently stop matching what Files and Loupe do.
-//! * **`$XDG_DATA_DIRS/mime/globs2`** — the shared MIME-info database, which
-//!   is how a name becomes a MIME type. Also read rather than guessed at, for
-//!   the same reason and one more: the thumbnailers are *keyed* by MIME type,
-//!   so any table of our own would have to agree with this one exactly to be
-//!   worth having.
-//!
-//! ## What is deliberately not done
-//!
-//! **No content sniffing.** The MIME database also carries magic byte
-//! patterns, and the full rule prefers them over the name in some cases. That
-//! would mean opening every file in a result list to decide whether to draw a
-//! tile, which is the cost the whole design is arranged to avoid. Every type
-//! anything on this machine can thumbnail — images, video, PDF, office
-//! documents — is named by its extension. A file whose name says nothing gets
-//! the glyph it gets today.
-//!
-//! **No glob engine.** Only `*.ext` and bare literal names are taken from
-//! `globs2`; patterns with a wildcard anywhere else are skipped. On this
-//! machine that leaves 45 of 1,791 globs unread, none of which any installed
-//! thumbnailer claims.
+//! What this machine says it can make a picture of, from two of its own
+//! declarations: `$XDG_DATA_DIRS/thumbnailers/*.thumbnailer` for the command per
+//! MIME type, and `$XDG_DATA_DIRS/mime/globs2` for name-to-type. No content
+//! sniffing — opening every file in a result to pick a tile is the cost this
+//! avoids — and no glob engine: only `*.ext` and literal names, 45 of 1,791 skipped.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,13 +15,9 @@ pub struct Known {
     by_name: HashMap<String, String>,
 }
 
-/// Ask the machine, once for the life of the process.
-///
-/// **Once, and never again**, which is a decision rather than an oversight: a
-/// package installed while the service is running will not be noticed until it
-/// restarts. The alternative is re-reading nine files per row of every result
-/// page, and the thing being avoided — a thumbnailer appearing mid-session —
-/// costs a restart to pick up and nothing to be wrong about in the meantime.
+/// Ask the machine, once for the life of the process. A package installed while
+/// the service runs is not noticed until it restarts; the alternative is
+/// re-reading every declaration once per row of every result page.
 pub fn known() -> &'static Known {
     static IT: std::sync::LazyLock<Known> = std::sync::LazyLock::new(read);
     &IT
@@ -63,26 +34,20 @@ impl Known {
         self.by_ext.get(ext).map(String::as_str)
     }
 
-    /// Could something on this machine make a picture of a file with this
-    /// name?
-    ///
-    /// **Two hash lookups and no I/O**, because this is asked once per row of
-    /// every answer — the same budget `has_thumbnail` was cut down to. It says
-    /// nothing about whether the attempt would succeed; that costs a process,
-    /// and the answer to it is the failure directory.
+    /// Could something on this machine make a picture of a file with this name?
+    /// Two hash lookups and no I/O, because it is asked once per row of every
+    /// answer. It says nothing about whether the attempt would succeed.
     pub fn can(&self, name: &str) -> bool {
         self.mime_of(name)
             .is_some_and(|mime| self.by_mime.contains_key(mime))
     }
 
-    /// The command that makes a picture of this type, as a template still
-    /// holding the standard's `%i` `%u` `%o` `%s`.
+    /// The command for this type, still holding the standard's `%i %u %o %s`.
     pub fn command_for(&self, mime: &str) -> Option<&[String]> {
         self.by_mime.get(mime).map(Vec::as_slice)
     }
 
-    /// How many types this machine can draw. For diagnostics and for the test
-    /// that this read anything at all.
+    /// How many types this machine can draw.
     pub fn types(&self) -> usize {
         self.by_mime.len()
     }
@@ -90,10 +55,8 @@ impl Known {
 
 fn read() -> Known {
     let mut it = Known::default();
-    // **Lowest priority first, so the loop below simply overwrites.**
-    // `$XDG_DATA_HOME` beats `$XDG_DATA_DIRS`, and earlier entries in
-    // `XDG_DATA_DIRS` beat later ones, so the search order is reversed here
-    // and the last writer wins.
+    // Lowest priority first, so the loop overwrites: `$XDG_DATA_HOME` beats
+    // `$XDG_DATA_DIRS` and earlier entries beat later, so the order is reversed.
     for base in data_dirs().iter().rev() {
         take_globs(
             &mut it,
@@ -129,10 +92,8 @@ fn take_thumbnailers(it: &mut Known, dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    // Sorted, because `read_dir` is in whatever order the filesystem hands
-    // back and two thumbnailers claiming one type would otherwise be resolved
-    // differently on different machines — and differently between two runs on
-    // the same one.
+    // Sorted: `read_dir` order is the filesystem's, so two thumbnailers claiming
+    // one type would resolve differently between runs.
     let mut files: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -171,9 +132,8 @@ fn take_thumbnailer(it: &mut Known, text: &str) {
     let (Some(exec), Some(mimes)) = (exec, mimes) else {
         return;
     };
-    // The standard's own "is this installed" check, and it is worth honouring:
-    // an entry left behind by a removed package would otherwise be a process
-    // spawn that fails, per file, forever.
+    // The standard's "is this installed" check: an entry left by a removed
+    // package would otherwise be a failing spawn per file, forever.
     if let Some(binary) = try_exec
         && !runnable(binary)
     {
@@ -221,10 +181,8 @@ fn take_globs(it: &mut Known, text: &str) {
         else {
             continue;
         };
-        // The weight is deliberately ignored: this file is already sorted by
-        // it, highest first, so the first claim on a glob wins and later ones
-        // are the alternatives. Written the other way round the parse would
-        // have to re-sort a file that arrives sorted.
+        // The weight is ignored: the file arrives sorted by it, highest first,
+        // so the first claim on a glob wins.
         let mime = mime.to_lowercase();
         if let Some(ext) = glob.strip_prefix("*.")
             && !ext.contains(['*', '?', '['])
@@ -236,12 +194,9 @@ fn take_globs(it: &mut Known, text: &str) {
     }
 }
 
-/// Whitespace, and double quotes when there are any.
-///
-/// The desktop entry specification defines a fuller quoting than this. None of
-/// the nine thumbnailers installed here uses any of it — every `Exec` is bare
-/// words — so what is implemented is what is used, and a line this cannot
-/// parse produces no thumbnailer rather than a wrong command.
+/// Whitespace, and double quotes when there are any — less than the desktop entry
+/// specification allows. A line this cannot parse yields no thumbnailer at all,
+/// never a wrong command.
 fn split_command(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
@@ -284,8 +239,7 @@ mod tests {
     #[test]
     fn a_thumbnailer_entry_is_read() {
         let mut it = Known::default();
-        // `/bin/sh` stands in for the thumbnailer, because the test has to
-        // survive the `TryExec` check on a machine with nothing installed.
+        // `/bin/sh` stands in, so the `TryExec` check passes anywhere.
         take_thumbnailer(
             &mut it,
             "[Thumbnailer Entry]\nTryExec=/bin/sh\nExec=/bin/sh -c x %i %o %s\nMimeType=image/png;image/gif;\n",
@@ -298,7 +252,6 @@ mod tests {
         assert!(it.command_for("image/jpeg").is_none());
     }
 
-    /// A package that was removed leaves its declaration behind.
     #[test]
     fn a_thumbnailer_whose_program_is_gone_is_not_offered() {
         let mut it = Known::default();
@@ -315,7 +268,6 @@ mod tests {
         assert_eq!(it.types(), 0);
     }
 
-    /// Keys outside the entry's own group are somebody else's.
     #[test]
     fn only_the_thumbnailer_group_is_read() {
         let mut it = Known::default();
@@ -335,8 +287,7 @@ mod tests {
         );
         assert_eq!(it.mime_of("holiday.PNG"), Some("image/png"));
         assert_eq!(it.mime_of("makefile"), Some("text/x-makefile"));
-        // A glob with a wildcard where this does not look is skipped rather
-        // than half-understood.
+        // A wildcard this does not read is skipped, not half-understood.
         assert_eq!(it.mime_of("a.tar.gz"), None);
         assert_eq!(it.mime_of("a"), None);
         assert_eq!(it.mime_of(""), None);
@@ -378,9 +329,7 @@ mod tests {
         assert_eq!(split_command(""), Vec::<String>::new());
     }
 
-    /// Whatever this machine has, reading it must not panic and must not
-    /// invent. Run against the real directories, so it is a smoke test of the
-    /// parse rather than of any particular desktop.
+    /// Against the real directories: a smoke test of the parse, not of a desktop.
     #[test]
     fn the_real_machine_can_be_read() {
         let it = known();

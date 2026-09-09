@@ -1,41 +1,10 @@
 #!/usr/bin/env bash
-# Build a filesystem of each format in RAM and check what Scour believes about it.
+# Build a filesystem of each format in RAM and check what `FsTraits` believes
+# about it: a wrong statfs magic entry is a silently wrong index, not a crash.
+# Root is for `mount(2)` alone and unavoidable — these formats are not
+# FS_USERNS_MOUNT, and a FUSE mount reports FUSE's magic, not the image's.
 #
-#   sudo bash scripts/fsmatrix.sh [format...]
-#
-# `bash` explicitly, and from the repository: sudo resolves a bare relative
-# path against secure_path rather than the working directory.
-#
-# Needs root, and there is no way around that. Two were tried:
-#
-#   * A user namespace does not help. ext4, btrfs, xfs, vfat and exfat are not
-#     marked FS_USERNS_MOUNT, so `unshare -r -m mount -o loop` fails with
-#     EPERM whatever capabilities the namespace hands out. (Tested; it does.)
-#
-#   * FUSE would mount rootless — fuse2fs and ntfs-3g exist and FUSE *is*
-#     FS_USERNS_MOUNT — but it would measure the wrong thing. `statfs` on a
-#     FUSE mount returns FUSE's magic, not the magic of whatever is underneath,
-#     so `traits_of` lands in its UNKNOWN branch and answers about FUSE. Live
-#     proof, from mounts this machine already has:
-#
-#       /run/user/1000/gvfs   fuse.gvfsd-fuse   Network   case=yes ids=NO
-#
-#     An ext4 image behind fuse2fs would read exactly the same. The sudo is
-#     not an oversight; it is what the question requires.
-#
-# RAM is not the part that needs privilege — the images live in /dev/shm and
-# no disk is touched. `mount(2)` is.
-#
-# The images live in /dev/shm, so this touches no disk and leaves nothing
-# behind. Each is mounted with the invoking user as owner, the `filesystems`
-# example is run against it, and it is unmounted again.
-#
-# What it is for: `FsTraits` comes from a table of statfs magic numbers, and a
-# wrong entry there is not a crash. It is a silently wrong index — a claimed
-# `stable_ids` where st_ino is invented makes every file its own duplicate
-# after a remount, and a claimed `case_sensitive` where the filesystem folds
-# makes Rapor.pdf and rapor.pdf two rows for one file. The FAT family is the
-# case that matters, and it is the one no developer machine has mounted.
+#   sudo bash scripts/fsmatrix.sh [format...]     # `bash`, for sudo's secure_path
 
 set -euo pipefail
 
@@ -88,8 +57,7 @@ for fs in "${FORMATS[@]}"; do
     mnt="$BASE/mnt-$fs"
     mkdir -p "$mnt"
     truncate -s "$(size_for "$fs")M" "$img"
-    # `-q` is not universal — vfat and exfat have no such flag — so the quiet
-    # form is tried first and the plain one is the fallback.
+    # `-q` is not universal: vfat and exfat have no such flag.
     if ! mkfs."$fs" -q "$img" >/dev/null 2>&1 && ! mkfs."$fs" "$img" >/dev/null 2>&1; then
         echo "skip $fs: mkfs.$fs would not make a filesystem in $(size_for "$fs") MB"
         continue
@@ -105,23 +73,16 @@ for fs in "${FORMATS[@]}"; do
 done
 
 echo
-# Run as the invoking user: the probe writes files, and running it as root
-# would measure permissions the service will never have.
+# As the invoking user: as root it would measure permissions the service will
+# never have.
 sudo -u "#$UID_" env HOME="$HOME_" \
     "$REPO/target/release/examples/filesystems" "${BUILT[@]}" \
     || cargo run --release -q --manifest-path "$REPO/Cargo.toml" \
          -p scour-source-fs --example filesystems -- "${BUILT[@]}"
 
-# --- what the example cannot ask -------------------------------------------
-#
-# `stable_ids` says `st_ino` "is stored on disk and survives a remount". The
-# example runs as an ordinary user against something already mounted, so it can
-# only see one mount session: it answers "are the numbers distinct, and do they
-# survive a rename", which is a weaker question with the same shape. FAT
-# synthesises `st_ino` from the directory entry's position on disk, and whether
-# *that* survives being unmounted and mounted again is the whole of the claim.
-#
-# Only root can unmount, so it is asked here.
+# What the example cannot ask: it sees one mount session, so it can only test
+# that ids are distinct and survive a rename. FAT synthesises `st_ino` from the
+# directory entry's position, and whether that survives a remount is the claim.
 echo
 printf '%-8s %-22s %s\n' "format" "ids survive a remount" "ids survive a move"
 
@@ -133,16 +94,14 @@ for mnt in "${BUILT[@]}"; do
     sub="$d/moved"
     mkdir -p "$sub"
     for i in $(seq 0 49); do : > "$d/f$i"; done
-    # A file of its own for the move, so the remount count is not short by the
-    # one that was moved out of the compared set — the control read 49/50 and
-    # the missing one was this.
+    # A file of its own for the move, or the remount count is short by one.
     : > "$d/mover"
     sync
 
     before="$(cd "$d" && stat -c '%n %i' f* | sort)"
 
-    # A move within the same filesystem, which on FAT rewrites the directory
-    # entry the number is derived from.
+    # A move within one filesystem, which on FAT rewrites the directory entry
+    # the number is derived from.
     mv "$d/mover" "$sub/mover"
     moved_before="$(stat -c '%i' "$sub/mover")"
 

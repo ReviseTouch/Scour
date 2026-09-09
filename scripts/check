@@ -1,29 +1,16 @@
 #!/usr/bin/env bash
-# Everything that has to be true before a commit.
+# Everything that has to be true before a commit, minutes before CI says it.
 #
 #   scripts/check          format, lint, tests, and every target that is claimed
 #   scripts/check --quick  the first three only
 #
-# **This exists because the CI is slower than you are.**
-# `.github/workflows/ci.yml` has a three-platform matrix and now has somewhere
-# to run — `origin` was added on 2026-08-07 — but it answers in minutes and
-# after the fact. A workflow nobody runs is a claim nobody checks: the Windows
-# build was broken twice in two days by changes that passed everything anybody
-# actually ran, and the breakage was found by a reviewer rather than by a
-# machine. This is the one that answers before the commit, not after it.
-#
-# The cross checks are `cargo check`, not `cargo test`: nothing here can run a
-# Windows binary. They prove the code still compiles for a target, which is the
-# difference between "unsupported" and "quietly rotting". What they cannot
-# prove is that it *behaves* — the README says what Windows still needs
-# before it is a platform rather than a compilation.
+# The cross checks are `cargo check`: nothing here can run a Windows binary.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# The desktop crate pulls in a toolkit per platform, and those are not in the
-# local registry for targets this machine does not build for. Everything that
-# is not the window is checked everywhere.
+# The desktop crate pulls in a toolkit per platform, which is not in the local
+# registry for targets this machine does not build for.
 PORTABLE=(
     -p scour-core -p scour-query -p scour-config -p scour-index-native
     -p scour-source-fs -p scour-engine -p scour-ipc -p scour-proto
@@ -41,11 +28,9 @@ cargo fmt --check
 step "lint"
 cargo clippy --workspace --all-targets -- -D warnings
 
-# **The page is a string until it is a program.** `page.html` is compiled into
-# the bridge, so nothing in the Rust toolchain ever parses the JavaScript in
-# it: a duplicate declaration ships, the browser refuses the whole script, and
-# the window comes up blank with nothing reported anywhere. That happened, and
-# it cost an hour of looking at a perfectly healthy service.
+# `page.html` is compiled into the bridge as a string, so nothing in the Rust
+# toolchain parses its JavaScript: one duplicate declaration ships, the browser
+# refuses the whole script, and the window comes up blank with nothing reported.
 step "the page"
 bash -n packaging/install-service.sh
 if command -v node >/dev/null; then

@@ -1,40 +1,14 @@
 #!/usr/bin/env bash
-# Scour in a window of its own, without a browser around it.
+# Scour in a window of its own, without a browser around it: an installed
+# browser under `--app`, with its own `--class` and profile.
 #
 #   scripts/scour-app
-#
-# **Temporary, and shaped by that.** The interface is being designed in HTML
-# and will be rebuilt in Slint once it settles; what is wanted until then is a
-# window rather than a tab, with no address bar, no tabs, and its own entry in
-# the task bar. That is a flag on a browser that is already installed, not a
-# new stack:
-#
-#   --app=URL          no chrome at all: no tabs, no address bar, no menu
-#   --class=Scour      the window manager treats it as its own application
-#   --user-data-dir    its own profile, so it is a separate window group and
-#                      shares nothing with the browser being used for browsing
-#
-# The alternative is a webview binding — `wry`, which is what Tauri is built on
-# and is about forty lines for exactly this. It needs `webkit2gtk-4.1`, which
-# is not installed here:
-#
-#   sudo pacman -S webkit2gtk-4.1
-#
-# That is worth doing when the window has to be shipped to somebody else. It is
-# not worth doing to look at a design, which is what this is for.
 
 set -euo pipefail
 
-# **A fixed port, and it is not a preference.** `localStorage` is scoped to an
-# origin, and the port is part of one — so a bridge on a port the system picked
-# handed the page a fresh, empty store on every launch. The column widths, the
-# chosen columns, the notes toggle and the last query all live there, which is
-# to say: everything the window was asked to remember was being thrown away
-# every time it opened, and nothing said so.
-#
-# What the random port was avoiding — a second launch failing to bind — is
-# handled below instead, by clearing what is holding the port. There is one
-# window and one bridge; `scour-show` is what makes sure of it.
+# A fixed port, because `localStorage` is scoped to an origin and the port is
+# part of one: on a system-picked port the page gets an empty store per launch.
+# A second launch failing to bind is handled below by clearing the port.
 PORT="${SCOUR_APP_PORT:-7621}"
 PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/scour/app"
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/release"
@@ -45,35 +19,18 @@ if [[ ! -x $WEB ]]; then
     exit 1
 fi
 
-# A bridge from a window that has since closed. Common, because a browser that
-# is killed does not tell its launcher.
+# A bridge from a window that has since closed: a killed browser tells nobody.
 pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
 
-# **And the window that bridge belonged to.**
-#
-# Only the bridge was ended here, and the window was assumed gone because it
-# looked gone. It is not always: a window can be closed and its process outlive
-# it. Then this starts a second browser against the same profile, and a profile
-# has one owner — the new one comes up with **"Profiliniz açılırken bir sorun
-# oluştu. Bazı özellikler kullanılamayabilir"**, one dialog per attempt,
-# stacked. Meanwhile the old window is still on screen pointing at a token that
-# died with the old bridge, so one of the two windows says the service is
-# unreachable and the other is missing pieces.
-#
-# `stale_lock` below does not catch it: that is for a lock whose owner is dead,
-# and this owner is alive. So the old window is ended rather than assumed away.
-#
-# The pattern is this port's app URL and nothing else can carry it — not an
-# ordinary browser window, not another application. Deliberately narrower than
-# `--class=Scour`, which a future Slint window would also answer to.
+# And the window that bridge belonged to: a profile has one owner, so a window
+# whose process outlives it makes the next launch a stack of error dialogs.
+# The pattern is this port's app URL, narrower than `--class=Scour` on purpose.
 pkill -f -- "--app=http://127.0.0.1:$PORT/" 2>/dev/null || true
-# Chromium lets go of the profile as it goes; starting into it before it has is
-# the same failure by a shorter route.
+# Chromium lets go of the profile as it goes; starting before it has is the
+# same failure by a shorter route.
 sleep 0.4
 
-# The token changes with every start, so an old window's link stops working —
-# which is the point of the token and also why the URL is read back rather than
-# assumed.
+# The token changes with every start, which is why the URL is read back.
 log=$(mktemp -t scour-app.XXXXXX)
 "$WEB" --port "$PORT" --no-open >"$log" 2>&1 &
 bridge=$!
@@ -96,8 +53,7 @@ for b in chromium google-chrome-stable google-chrome brave vivaldi; do
     if command -v "$b" >/dev/null; then browser=$b; break; fi
 done
 if [[ -z $browser ]]; then
-    # Firefox has no `--app`; `--kiosk` is the nearest thing and takes the
-    # whole screen, which is worse but is still not a browser window.
+    # Firefox has no `--app`; `--kiosk` takes the whole screen but is not a tab.
     if command -v firefox >/dev/null; then
         exec firefox --kiosk --new-instance --profile "$PROFILE" "$url"
     fi
@@ -107,18 +63,9 @@ fi
 
 mkdir -p "$PROFILE"
 
-# **A profile the last window has not let go of yet.**
-#
-# A browser started against a locked profile does not wait and does not
-# complain: it hands its command line to the instance holding the lock and
-# exits, immediately and successfully. This script then sees the browser exit,
-# does what it is supposed to do on that — kills the bridge — and the window
-# never appears. Which is exactly what a hotkey that closes the old window and
-# opens a new one produces, if the old one takes more than a moment to go.
-#
-# So a lock whose owner is gone is removed, and the whole start is retried once
-# if the browser exits at once. The retry is the honest guard: it catches every
-# reason the first attempt can fail, not only the one that was diagnosed.
+# A browser started against a locked profile hands its command line to the lock
+# holder and exits successfully, so this kills the bridge and no window appears.
+# A dead owner's lock is removed and the start retried once.
 stale_lock() {
     local owner
     owner=$(readlink "$PROFILE/SingletonLock" 2>/dev/null) || return 1
@@ -126,50 +73,24 @@ stale_lock() {
     [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null
 }
 
-# **The screen's own rate, rather than sixty.**
-#
-# Chromium on this machine defaults to XWayland, and a window on XWayland
-# scrolls at 60 Hz while the screen is running at 165. Measured with a wheel
-# gesture on a page holding nothing but a tall gradient — no application code at
-# all — 16.6 ms a frame through XWayland against 6.1 ms under Wayland, on the
-# same screen a minute apart. So the list was never what made scrolling feel
-# heavy: two thirds of the frames were simply not being drawn, and every other
-# window on the desktop was moving at the full rate beside it.
-#
-# Only when the session is Wayland. Asking for it under X11 gets a window that
-# does not open.
+# The screen's own rate rather than XWayland's 60 Hz: 16.6 ms a frame through
+# XWayland against 6.1 ms under Wayland, on one 165 Hz screen a minute apart.
+# Only when the session is Wayland; asking under X11 opens no window.
 WAYLAND_ARGS=()
 if [[ ${XDG_SESSION_TYPE:-} == wayland && -n ${WAYLAND_DISPLAY:-} ]]; then
     WAYLAND_ARGS=(--ozone-platform=wayland)
 fi
 
-# A port for looking inside the window while it runs, off unless asked for:
-#
-#   SCOUR_APP_DEBUG=9222 scripts/scour-app
-#
-# `scripts/probe` speaks to it. Off by default because it is a way in, and a
-# search index is a list of everything on the machine.
+# A port for looking inside the running window, which `scripts/probe` speaks to.
+# Off by default — it is a way in — and turned on with SCOUR_APP_DEBUG=9222.
 DEBUG_ARGS=()
 if [[ -n ${SCOUR_APP_DEBUG:-} ]]; then
     DEBUG_ARGS=(--remote-debugging-port="$SCOUR_APP_DEBUG" --remote-allow-origins='*')
 fi
 
-# **No keyring.** A browser keeps the key to its own cookie and password store
-# in the desktop's secret service, and asks for it at startup. On a machine
-# where the login keyring is not unlocked by the login itself -- a fingerprint
-# hands PAM no password to unlock it with -- that is a password prompt in front
-# of a search box, once per boot, for a profile that holds no secret: measured
-# here, zero saved passwords and zero cookies, because the page is on loopback
-# and its token arrives in the URL.
-#
-# `basic` keeps that key in the profile instead of the keyring. What it weakens
-# is the protection on saved passwords and cookies, and there are none. What
-# the window is actually asked to remember -- the chosen columns, their widths,
-# the last query -- is `localStorage`, which no password store touches; those
-# keys are readable in the profile's LevelDB today.
-#
-# This flag leaves with the browser. A Slint window has no cookie store, and no
-# keyring to ask.
+# `--password-store=basic`: otherwise the browser asks the desktop secret service
+# for its cookie key at startup, which is a password prompt in front of a search
+# box. It weakens saved passwords and cookies, of which this profile has none.
 start_window() {
     if stale_lock; then
         rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
@@ -191,13 +112,11 @@ start_window() {
     (( SECONDS - began < 3 ))
 }
 
-# **Not `exec`.** Replacing this shell with the browser takes the trap above
-# with it, so the bridge outlived every window that ever closed — one abandoned
-# process a launch, holding a socket, for as long as the session lasted.
-# Waiting here instead costs a sleeping shell and cleans up after itself.
+# Not `exec`: replacing this shell with the browser takes the trap with it, and
+# the bridge then outlives every window that closes. Waiting costs a sleeping
+# shell and cleans up after itself.
 if start_window; then
-    # It came straight back. Give the last one a moment to finish dying, take
-    # the lock away from it, and try once more.
+    # It came straight back: let the last one finish dying, take its lock, retry.
     sleep 1
     rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
     start_window || true

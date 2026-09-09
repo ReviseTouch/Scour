@@ -22,11 +22,8 @@ struct Running {
     addr: String,
     stop: Arc<AtomicBool>,
     calls: Arc<AtomicU64>,
-    /// Pieces the stand-in export managed to write before the reader went.
-    ///
-    /// The only way a test can see the thing that matters about a cancelled
-    /// download: that the *service* stopped producing, rather than running to
-    /// the end and writing into a socket nobody was reading.
+    /// Pieces the stand-in export wrote before the reader went — the only way to
+    /// see that the service stopped producing rather than ran to the end.
     wrote: Arc<AtomicU64>,
     _dir: tempfile::TempDir,
 }
@@ -46,10 +43,8 @@ impl Running {
                     move |req, emit| {
                         calls.fetch_add(1, Ordering::Relaxed);
                         match req {
-                            // A stand-in export. The first column names how
-                            // many pieces to write and the query is what goes
-                            // in each, so a test can ask for far more frames
-                            // than any buffer holds without needing an index.
+                            // A stand-in export: the first column names how many
+                            // pieces to write and the query is what goes in each.
                             Request::Export { query, columns } => {
                                 let want: u64 =
                                     columns.first().and_then(|c| c.parse().ok()).unwrap_or(3);
@@ -59,9 +54,8 @@ impl Running {
                                         .piece(Response::ExportChunk { csv: query.clone() })
                                         .is_err()
                                     {
-                                        // The reader is gone. Stopping here is
-                                        // the whole of what a cancelled
-                                        // download costs the service.
+                                        // The reader is gone; stopping here is
+                                        // all a cancel costs the service.
                                         break;
                                     }
                                     sent += 1;
@@ -88,8 +82,7 @@ impl Running {
                 );
             });
         }
-        // Binding happened before the thread started, so this is only waiting
-        // for the accept loop.
+        // Binding happened before the thread started: this waits on the accept loop.
         let deadline = Instant::now() + Duration::from_secs(5);
         while !is_running(&addr) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -133,9 +126,8 @@ fn a_request_gets_its_own_reply_back() {
 
 #[test]
 fn one_connection_carries_many_requests_in_order() {
-    // The reason a client holds its connection open: a search box sends one
-    // request per keystroke, and a fresh connection each time would put that
-    // cost inside the latency this project exists to remove.
+    // A search box sends one request per keystroke, so a fresh connection each
+    // time would put a `connect` inside every one.
     let s = Running::start();
     let mut c = Client::connect(&s.addr).expect("connect");
     for i in 0..50 {
@@ -218,8 +210,7 @@ fn connecting_to_nothing_says_so_instead_of_hanging() {
 #[test]
 #[cfg(not(windows))]
 fn a_socket_left_by_a_crash_is_cleared_rather_than_fatal() {
-    // Otherwise the service would never come back after a crash without
-    // someone deleting a file by hand.
+    // Otherwise a crash leaves a file that has to be deleted by hand.
     let dir = tempfile::tempdir().expect("temp");
     let path = dir.path().join("stale.sock");
     std::fs::write(&path, b"not a socket").expect("write");
@@ -229,9 +220,8 @@ fn a_socket_left_by_a_crash_is_cleared_rather_than_fatal() {
     assert_eq!(server.addr(), addr);
 }
 
-/// A peer that connects and sends bytes without a newline used to grow the
-/// service's memory for as long as it cared to — measured at 19 MB to 282 MB
-/// from one 256 MB write. Now it is answered and hung up on.
+/// A peer sending bytes with no newline is answered and hung up on rather than
+/// growing the service's memory: 19 MB to 282 MB from one 256 MB write.
 #[test]
 fn a_request_without_an_end_is_refused_rather_than_buffered() {
     use std::io::{BufRead, BufReader, Write};
@@ -242,8 +232,8 @@ fn a_request_without_an_end_is_refused_rather_than_buffered() {
     let mut conn = Stream::connect(raw_name(&s.addr)).expect("connect");
     // Two megabytes with no newline in them, against a one megabyte ceiling.
     let flood = vec![b'x'; 2 * 1024 * 1024];
-    // The write may fail partway once the far end hangs up, which is itself
-    // the behaviour being asserted; either outcome is a pass at this step.
+    // The write may fail partway once the far end hangs up, which is itself the
+    // behaviour asserted; either outcome passes here.
     let _ = conn.write_all(&flood);
     let _ = conn.flush();
 
@@ -256,7 +246,7 @@ fn a_request_without_an_end_is_refused_rather_than_buffered() {
         "expected a refusal, got {line}"
     );
 
-    // And the service is still serving everyone else.
+    // The service is still serving everyone else.
     let mut ok = Client::connect(&s.addr).expect("reconnect");
     let reply = ok
         .call(Request::Explain {
@@ -300,12 +290,8 @@ fn a_finished_stream_leaves_the_connection_where_it_found_it() {
     );
 }
 
-/// A request answered in pieces is refused by `call` rather than half-read.
-///
-/// The failure this prevents is the one that does not look like a failure:
-/// reading the first piece as the whole answer leaves the rest in the buffer,
-/// and the *next* request on that connection is answered by the leftovers. A
-/// search box would show the wrong files and nothing anywhere would error.
+/// A request answered in pieces is refused by `call` rather than half-read: the
+/// leftovers would answer the next request, and nothing would error.
 #[test]
 fn a_streamed_answer_is_refused_by_the_call_that_cannot_read_it() {
     let s = Running::start();
@@ -313,7 +299,7 @@ fn a_streamed_answer_is_refused_by_the_call_that_cannot_read_it() {
     let err = c.call(Running::export(5)).unwrap_err();
     assert_eq!(err.code(), "config");
 
-    // And the connection was never written to, so it still works.
+    // The connection was never written to, so it still works.
     assert!(matches!(
         c.call(Request::Syntax {}).expect("call"),
         Response::Text { .. }
@@ -325,19 +311,9 @@ fn a_streamed_answer_is_refused_by_the_call_that_cannot_read_it() {
     );
 }
 
-/// A reader that goes away mid-export — an ordinary cancelled download.
-///
-/// **What must not happen is the service carrying on.** It is walking a
-/// matching set that can be two million rows, and a walk that runs to the end
-/// writing into a socket nobody is reading is a minute of a core and a
-/// connection thread spent on an answer that has no reader. So the assertion
-/// is not that the client survived — it is that the *service* stopped, which
-/// `wrote` is what sees.
-///
-/// Ten thousand pieces against a client that takes five, so that the stop
-/// happens far from either end. The socket buffer absorbs some number of
-/// pieces after the reader has gone, which is why the bound below is generous:
-/// what is being tested is that it is bounded at all.
+/// A reader that goes away mid-export. The assertion is that the service stopped,
+/// which `wrote` sees: ten thousand pieces against a client that takes five, with
+/// a generous bound because the socket buffer absorbs some after the reader goes.
 #[test]
 fn a_reader_that_goes_away_stops_the_service_producing() {
     let s = Running::start();
@@ -352,13 +328,11 @@ fn a_reader_that_goes_away_stops_the_service_producing() {
     assert_eq!(err.code(), "unreachable");
     assert_eq!(seen, 5);
 
-    // Drop the connection, which is what a cancelled download is: there is no
-    // cancel message, and inventing one would mean a client that dies without
-    // sending it leaves the service producing for ever.
+    // Dropping the connection is the cancel: a client that dies without sending
+    // an invented cancel message would leave the service producing forever.
     drop(c);
 
-    // The service notices on its next write. Give it a moment — this is the
-    // one thing here that is not synchronous.
+    // The service notices on its next write; this is the one asynchronous step.
     let deadline = Instant::now() + Duration::from_secs(5);
     while s.wrote.load(Ordering::Relaxed) >= 10_000 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -377,11 +351,8 @@ fn a_reader_that_goes_away_stops_the_service_producing() {
     ));
 }
 
-/// A connection abandoned mid-stream is never reused.
-///
-/// The frames nobody read are still in flight, so the next request on it would
-/// be answered by the tail of the last one. Refusing to send costs a
-/// `connect`, which is what a cancelled download should cost.
+/// A connection abandoned mid-stream is never reused: unread frames are still in
+/// flight, so the next request would be answered by the last one's tail.
 #[test]
 fn an_abandoned_stream_poisons_only_its_own_connection() {
     let s = Running::start();
@@ -413,9 +384,8 @@ fn a_stream_with_no_pieces_still_ends_properly() {
     assert_eq!(done, Response::ExportDone { rows: 0 });
 }
 
-/// The address as `interprocess` wants it — the same rule `Server::name` uses,
-/// repeated here because that function is private and this test needs a raw
-/// connection rather than a `Client`.
+/// The address as `interprocess` wants it — `Server::name`'s rule, repeated
+/// because it is private and this test needs a raw connection.
 fn raw_name(addr: &str) -> interprocess::local_socket::Name<'_> {
     use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ToFsName, ToNsName};
     if cfg!(windows) {

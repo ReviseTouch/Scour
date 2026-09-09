@@ -1,37 +1,17 @@
-//! Which page of a result to hold, and which one to ask for next.
+//! Which page of a result to hold, and which one to ask for next: a window onto
+//! a list of millions that no face actually has.
 //!
-//! A result is two and a half million rows and a screen holds forty. Every
-//! face of Scour therefore shows a window onto a list it does not have, and
-//! every one of them needs the same six answers: which page a row is in, which
-//! page to ask for, which to let go of, when a page is stale, how long the
-//! list really is, and what to do with an answer that arrives after the eye
-//! has moved on.
-//!
-//! **The window learned those six the hard way.** Each of them was a bug that
-//! only appeared while the list was moving — a page filed at the wrong offset,
-//! a length taken from a counting cap, a last page that could never be
-//! reached — and none of them is visible in a screenshot. Writing them a
-//! second time for the terminal would mean finding them a second time.
-//!
-//! So the policy lives here and the drawing does not. This crate holds no
-//! toolkit type: [`Pages`] is generic over whatever a row is to its owner, and
-//! says what changed rather than telling anybody to redraw.
+//! Policy only, no drawing. [`Pages`] is generic over whatever a row is to its
+//! owner, and says what changed rather than telling anybody to redraw.
 
 use std::collections::HashMap;
 
-/// Rows per page, everywhere.
-///
-/// The service has a ceiling of its own and this is it — asking for more than
-/// this returns fewer rows than were asked for, which a caller reads as the
-/// end of the list. See [`Pages::length`].
+/// Rows per page, everywhere. The service caps a page at this, so asking for more
+/// returns short — which a caller reads as the end of the list.
 pub const SPAN: usize = scour_core::PAGE_ROWS as usize;
 
-/// How many pages to keep before letting the least recently used go.
-///
-/// Thirty-two pages is 6,400 rows: several screens either way of wherever
-/// somebody is, and a few megabytes. Keeping everything is how a drag down a
-/// two-million-row result ends in a gigabyte of rows nobody will look at
-/// again.
+/// How many pages to keep before letting the least recently used go: 32 pages is
+/// 6,400 rows, several screens either way of wherever somebody is.
 pub const KEPT: usize = 32;
 
 /// A page that has arrived, and what the index looked like when it did.
@@ -41,28 +21,17 @@ struct Held<T> {
     revision: u64,
 }
 
-/// What a call changed, for a caller that has to tell a view about it.
-///
-/// **Said rather than done**, because "tell the view" is the one thing every
-/// face does differently — `ModelNotify::row_changed` in one, a redraw flag in
-/// another — and a crate that knew about either would not be usable by the
-/// other.
+/// What a call changed, for a caller that has to tell a view about it. Said and
+/// not done: every face notifies its view differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
     /// Nothing arrived that was not already here.
     Nothing,
     /// These rows are new or different: a half-open range.
     Rows { from: usize, to: usize },
-    /// The result is a different length than it was — and, when a page
-    /// arrived in the same call, which rows that page replaced.
-    ///
-    /// **`rows` is the half of this that was missing, and it was a bug you
-    /// could watch.** A page that arrived while the total was moving reported
-    /// only the length: the rows it had just replaced were never announced, so
-    /// a view redrew nothing and went on showing the values it had. Dates and
-    /// sizes stopped updating for as long as anything was being scanned or
-    /// watched — which is exactly when they are most likely to be wrong. It is
-    /// `None` only when the length moved on its own, with no page behind it.
+    /// The result is a different length than it was — and, when a page arrived in
+    /// the same call, which rows that page replaced. `rows` is `None` only when
+    /// the length moved on its own, with no page behind it.
     Length {
         was: usize,
         now: usize,
@@ -115,12 +84,8 @@ impl<T> Pages<T> {
         self.total
     }
 
-    /// The most rows any page has actually carried.
-    ///
-    /// **Not [`SPAN`], and the difference is a bug that emptied the list.** The
-    /// service answers with at most its own ceiling; a caller that asked for
-    /// 256 and compared the 200 it got against 256 read every full page as a
-    /// short one, decided it had reached the end, and cut the result there.
+    /// The most rows any page has actually carried — not [`SPAN`]: a caller that
+    /// asked for 256 and got the service's 200 would read every page as the last.
     pub fn served(&self) -> usize {
         self.served.max(1)
     }
@@ -136,23 +101,17 @@ impl<T> Pages<T> {
         self.held.get(&page)?.rows.get(row - Self::start_of(page))
     }
 
-    /// The pages belong to a different question. Drop them.
-    ///
-    /// **The length is not dropped with them**, and neither is what a page has
-    /// been observed to carry. A view sized from zero collapses and springs
-    /// back the moment the first answer lands; keeping the old length holds
-    /// the shape of the list for the fraction of a second before the new one
-    /// says how long it really is. [`Pages::set_total`] is what changes it.
+    /// The pages belong to a different question. Drop them — but not the length
+    /// or the observed page size: a view sized from zero collapses and springs
+    /// back. [`Pages::set_total`] is what changes the length.
     pub fn empty(&mut self) {
         self.held.clear();
         self.order.clear();
         self.asked = None;
     }
 
-    /// What the index looks like now.
-    ///
-    /// A page fetched before this is stale, and [`Pages::next_page`] will offer
-    /// to fetch it again — but only when the caller says there is time.
+    /// What the index looks like now. A page fetched before this is stale, and
+    /// [`Pages::next_page`] offers to refetch it when the caller says there is time.
     pub fn mark(&mut self, revision: u64) {
         self.revision = revision;
     }
@@ -162,8 +121,7 @@ impl<T> Pages<T> {
         self.asked = Some((page, self.revision));
     }
 
-    /// Forget an outstanding fetch — the service died, or the answer was for a
-    /// query nobody is looking at any more.
+    /// Forget an outstanding fetch: the service died, or nobody wants that query.
     pub fn forget_asking(&mut self) {
         self.asked = None;
     }
@@ -173,23 +131,14 @@ impl<T> Pages<T> {
         self.asked.map(|(page, _)| page)
     }
 
-    /// File a page that has arrived.
-    ///
-    /// `total` is what the service says the whole result comes to. Returns what
-    /// changed, for a caller that has to tell a view.
-    ///
-    /// **The page number comes from the answer, not from what this asked for.**
-    /// Fetching does not move the index on, so two offsets of the same query
-    /// are both current, and a caller that filed an answer at the offset it
-    /// last requested put the rows one page from where they belong the moment
-    /// somebody scrolled while a fetch was out.
+    /// File a page that has arrived; `total` is the whole result's length. Returns
+    /// what changed. The page number comes from the answer and not from what was
+    /// last requested, or a scroll mid-fetch files the rows one page out.
     pub fn put(&mut self, page: usize, rows: Vec<T>, total: usize) -> Change {
         self.served = self.served.max(rows.len());
         let count = rows.len();
-        // **Stamped with the revision the request went out at**, not the one
-        // that is current now. An index that moved while the page was in
-        // flight has not been read yet, and stamping it as read would leave
-        // that change unfetched until the next one.
+        // Stamped with the revision the request went out at, not the current
+        // one: an index that moved in flight has not been read yet.
         let revision = match self.asked {
             Some((out, revision)) if out == page => revision,
             _ => self.revision,
@@ -214,12 +163,8 @@ impl<T> Pages<T> {
         Change::Rows { from, to }
     }
 
-    /// Say how long the result is without having a page to go with it.
-    ///
-    /// The count arrives on its own — a search answers with a page and a cap,
-    /// and the exact count follows. **A cap is not a length:** an interactive
-    /// search stops counting at a thousand, and a view sized from that is a
-    /// thousand rows long over a two-million-row result.
+    /// Say how long the result is without having a page to go with it. A counting
+    /// cap is not a length: an interactive search stops counting at a thousand.
     pub fn set_total(&mut self, total: usize) -> Change {
         let was = self.total;
         if total == was {
@@ -233,11 +178,8 @@ impl<T> Pages<T> {
         }
     }
 
-    /// Which page to ask for, if any.
-    ///
-    /// `first..=last` is what the eye can see. `speculate` allows one page
-    /// either side; `refresh` allows re-reading a page the index has moved
-    /// under.
+    /// Which page to ask for, if any. `first..=last` is what the eye can see;
+    /// `speculate` allows one page either side, `refresh` a page gone stale.
     pub fn next_page(
         &self,
         first: usize,
@@ -248,10 +190,8 @@ impl<T> Pages<T> {
         if self.total == 0 {
             return None;
         }
-        // **One request at a time, always for where the eye is now.** A hand
-        // that throws a scrollbar across a million rows crosses a page every
-        // frame, and a request per crossing is sixty requests for the one page
-        // anybody will look at — each queued ahead of it.
+        // One request at a time, always for where the eye is now: a thrown
+        // scrollbar crosses a page per frame and would queue sixty requests.
         if self.asked.is_some() {
             return None;
         }
@@ -267,8 +207,7 @@ impl<T> Pages<T> {
             }
         }
         // Ahead, then behind, and only while a page is cheap: deep in a long
-        // result a page can cost the service a walk of everything above it, and
-        // guessing wrong there spends that on rows nobody asked for.
+        // result a page costs the service a walk of everything above it.
         if !speculate {
             return None;
         }
@@ -276,15 +215,9 @@ impl<T> Pages<T> {
         near.into_iter().flatten().find(|page| !self.holds(*page))
     }
 
-    /// How long the list is to draw, given a page that has just arrived.
-    ///
-    /// **A short page is the end of the result — but only if it is short by
-    /// both measures.** The count is taken once and the index moves while
-    /// somebody scrolls, so the last page can come back shorter than the count
-    /// promised and those rows would be asked for forever. It has to be
-    /// shorter than what was asked for *and* shorter than the most this
-    /// service has ever given, because the first page of a new query is
-    /// deliberately short.
+    /// How long the list is to draw, given a page that has just arrived. A short
+    /// page ends the result only if it is short by both measures — shorter than
+    /// what was asked for and than the most this service has ever given.
     pub fn length(&self, page: usize, arrived: usize, asked_for: usize) -> usize {
         if arrived < asked_for && arrived < self.served() {
             Self::start_of(page) + arrived
@@ -320,8 +253,7 @@ impl<T> Pages<T> {
         }
     }
 
-    /// The pages here, oldest use first. For a caller walking what it holds —
-    /// marking arrivals, say — without walking the whole result.
+    /// The pages here, oldest use first, for a caller walking only what it holds.
     pub fn pages(&self) -> impl Iterator<Item = usize> + '_ {
         self.order.iter().copied()
     }
@@ -335,30 +267,22 @@ impl<T> Pages<T> {
 #[cfg(test)]
 mod tests {
 
-    /// **The bug this was written for.** A page that arrives while the result
-    /// is also changing length has to announce both, or a view redraws the
-    /// length and keeps the rows it had.
-    ///
-    /// It was reported as dates that stopped updating: the window showed a
-    /// file's old timestamp and went on showing it. The index was right and
-    /// the page was refetched correctly — `put` simply returned early with the
-    /// length and never said which rows it had just replaced, and that only
-    /// happens while something is being scanned or watched, which is exactly
-    /// when a row is most likely to have moved.
+    /// A page arriving while the result also changes length has to announce both,
+    /// or a view redraws the length and keeps the rows it had.
     #[test]
     fn a_page_that_lands_while_the_length_moves_still_says_which_rows_it_replaced() {
         let mut pages: Pages<u32> = Pages::default();
         pages.set_total(100);
 
-        // The ordinary case: the length held still, so the rows are reported.
+        // The length held still, so the rows are reported.
         pages.asking(0);
         match pages.put(0, vec![7; SPAN], 100) {
             Change::Rows { from, to } => assert_eq!((from, to), (0, SPAN)),
             other => panic!("expected the rows, got {other:?}"),
         }
 
-        // And the case that was silent: the same page again, with the total
-        // moved by one because something appeared while it was in flight.
+        // The same page again, with the total moved by one because something
+        // appeared while it was in flight.
         pages.asking(0);
         match pages.put(0, vec![9; SPAN], 101) {
             Change::Length { was, now, rows } => {
@@ -372,9 +296,8 @@ mod tests {
             other => panic!("expected a length change carrying its rows, got {other:?}"),
         }
 
-        // A length that moves on its own has no page behind it, and must not
-        // claim one — a view told to redraw rows that did not arrive would
-        // read them out of a page it does not hold.
+        // A length that moves on its own has no page behind it and must not
+        // claim one: the view would read rows out of a page it does not hold.
         match pages.set_total(140) {
             Change::Length { rows, .. } => assert_eq!(rows, None),
             other => panic!("expected a bare length change, got {other:?}"),
@@ -396,8 +319,7 @@ mod tests {
 
     #[test]
     fn a_page_is_filed_where_the_answer_says_it_belongs() {
-        // The bug this is here for: asking for page 4, scrolling, and the
-        // answer arriving while page 7 is what is wanted. It is still page 4.
+        // Page 4 was asked for and page 7 is now wanted; the answer is still 4.
         let mut p: Pages<usize> = Pages::default();
         p.asking(7);
         assert_eq!(
@@ -457,9 +379,8 @@ mod tests {
 
     #[test]
     fn a_page_is_stamped_with_the_index_it_was_asked_at() {
-        // The index moved while the answer was in flight. The rows in hand are
-        // from before it moved, so they are stale the moment they land — and a
-        // refresh has to offer to read them again.
+        // The index moved in flight, so these rows are stale as they land and a
+        // refresh has to offer them again.
         let mut p: Pages<usize> = Pages::default();
         p.set_total(1_000);
         p.mark(1);

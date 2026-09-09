@@ -1,29 +1,6 @@
-//! The file itself.
-//!
-//! ## Eight settings that were removed rather than wired up
-//!
-//! `index.engine`, `index.paths`, `index.heap_mb`, `scan.fast`, `ui.columns`,
-//! `service.maintain_every_hours`, `content.enabled`, `content.max_file_mb`.
-//! All were parsed, defaulted and round-trip tested; none was read by anything.
-//! A third of this file described a program that did not exist.
-//!
-//! Two of them did worse than nothing. `scan.fast` promised "the difference
-//! between a usable index in a minute and one in ten" and was forced off at
-//! both wiring sites. `index.paths` carried a real measurement — 174 MB of a
-//! 352 MB index on 855,126 entries — and said "turn this on if `path:` matters
-//! more than the disk", and turning it on did nothing at all. A setting that
-//! promises a measured result and delivers none is worse than an absent one,
-//! because the absent one cannot be believed.
-//!
-//! `content.*` went with them even though `trait Extractor` is deliberately
-//! reserved and stays. The trait is vocabulary the workspace talks to itself
-//! in; a config key is a promise to a person, and `content.enabled = true`
-//! silently did nothing. `ui.columns` went because the Slint window will want
-//! column *widths* beside the list, so the shape it would come back in is
-//! already known to differ from the shape it had.
-//!
-//! They come back when something reads them, and the file is shorter and true
-//! until then.
+//! The file itself. Every key here is read by something: a setting that is
+//! parsed and then ignored is worse than an absent one, because the absent one
+//! cannot be believed.
 
 use std::path::PathBuf;
 
@@ -34,12 +11,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub index: IndexCfg,
-    /// Where entries come from.
-    ///
-    /// An array rather than a list of roots, because a source is more than a
-    /// path: it has its own kind, its own capabilities, and eventually its own
-    /// credentials. A cloud bucket added later is another entry here, not a
-    /// new shape of configuration file.
+    /// Where entries come from. An array and not a list of roots, because a
+    /// source carries its own kind, capabilities and eventually credentials.
     #[serde(rename = "source")]
     pub sources: Vec<SourceCfg>,
     pub scan: ScanCfg,
@@ -118,18 +91,9 @@ pub struct ScanCfg {
     pub follow_symlinks: bool,
     /// Worker threads; zero decides from the hardware.
     pub threads: usize,
-    /// Rescan every source when the service starts.
-    ///
-    /// **On by default, and it has to be until there is a journal.** Nothing
-    /// watches a filesystem while the service is stopped, and no source here
-    /// advertises `Caps::JOURNAL`, so a file created, deleted or renamed
-    /// between one run and the next has no way into the index at all. Off, an
-    /// ordinary restart left those changes wrong for as long as the machine
-    /// lived, and nothing anywhere said so.
-    ///
-    /// A walk costs a few seconds of background work on a warm cache. That is
-    /// the price of the index being about the disk rather than about the last
-    /// time somebody remembered to rescan.
+    /// Rescan every source when the service starts. On by default and required
+    /// until a source advertises `Caps::JOURNAL`: nothing watches a filesystem
+    /// while the service is stopped, so changes between runs have no other way in.
     pub on_start: bool,
 }
 
@@ -162,37 +126,13 @@ pub struct ExcludeCfg {
 pub struct ServiceCfg {
     /// Where the service listens. Empty means the platform default.
     pub socket: String,
-    /// How long changes accumulate before a commit.
-    ///
-    /// A commit costs tens of milliseconds, so committing per change would
-    /// make a `git checkout` unusable. What this buys is that a new file
-    /// appears in results after about this long rather than instantly —
-    /// removals are hidden immediately regardless, because a deleted file that
-    /// is still listed is the more annoying failure.
+    /// How long changes accumulate before a commit. A commit costs tens of
+    /// milliseconds, so a new file appears after about this long; removals are
+    /// hidden immediately regardless.
     pub commit_interval_ms: u64,
-    /// How long a handful of changes may wait while **nobody is looking**.
-    ///
-    /// The bound on staleness for a search typed at a prompt, which is the case
-    /// this exists for: an open window registers as a watcher and gets the fast
-    /// clock, a `scour foo` does not, so this is what it sees.
-    ///
-    /// **It is the largest single piece of what an idle service costs**, and
-    /// the trade is measured. Only this number changed, alternating 180-second
-    /// runs at three changes a second, arms that do not overlap:
-    ///
-    /// | this setting | worker |
-    /// |---|---|
-    /// | 5 s | ~0.09% of a core |
-    /// | 15 s | 0.050% / 0.056% |
-    /// | 60 s | 0.022% / 0.022% |
-    ///
-    /// The cost is linear in the number of commits and not in the rows they
-    /// carry: a commit is about **ten `fsync` calls** — seven segment parts,
-    /// the alive bitmap, the manifest — and one row costs 22.5 ms where a
-    /// hundred and twenty-eight cost 23.7. So this is a freshness contract with
-    /// a price on it rather than a tuning knob, and it belongs in the
-    /// configuration for the same reason: only the person searching knows what
-    /// their answer is worth.
+    /// How long changes may wait while nobody is looking; a window registers as a
+    /// watcher and gets the fast clock. The largest piece of an idle service's
+    /// cost, and linear in commits: 0.09% of a core at 5 s, 0.022% at 60 s.
     pub commit_idle_ms: u64,
     /// Recheck a source without a change feed or a readable pulse.
     pub poll_interval_secs: u64,
@@ -216,19 +156,9 @@ impl Default for ServiceCfg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UiCfg {
-    /// The most rows one page may hold, whatever a caller asks for.
-    ///
-    /// A ceiling on the service rather than a preference of any one window: it
-    /// is what stops a client turning a keystroke into a million built rows.
-    ///
-    /// **Not honoured below 200.** `scourd` raises anything smaller, because
-    /// the browser window fetches in fixed runs of 200 rows and marks the whole
-    /// run as loaded — a page cut short leaves rows that never arrive and
-    /// nothing that would ask for them again.
-    ///
-    /// The default was 200 against a floor of 1,000, so the number in this file
-    /// did nothing for any value anyone was likely to write and the default
-    /// itself was unreachable. 1,000 is what the service has always used.
+    /// The most rows one page may hold, whatever a caller asks for: a ceiling on
+    /// the service, not a preference of any one window. `scourd` raises anything
+    /// below [`scour_core::PAGE_ROWS`], the fixed run a paging window fetches in.
     pub result_limit: u32,
     /// BCP-47 tag, or empty for the system language.
     pub language: String,
@@ -244,33 +174,16 @@ impl Default for UiCfg {
 }
 
 impl Config {
-    /// Load the file, or write a default one and return that.
-    ///
-    /// Writing on first run is deliberate: the exclusion lists are the thing
-    /// people need to edit, and a file that does not exist cannot be read to
-    /// find out what the options are.
+    /// Load the file, or write a default one and return that. Writing on first run
+    /// is what makes the exclusion lists visible enough to edit.
     pub fn load_or_default() -> (Config, Option<Error>) {
         let path = crate::paths::config_path();
         match std::fs::read_to_string(&path) {
             Ok(text) => match toml::from_str::<Config>(&text) {
                 Ok(c) => (c.with_defaults_filled(), None),
-                // **A file that exists and does not parse is fatal**, and the
-                // reasoning it replaces was right about the wrong settings.
-                // "A malformed file must not stop the service: it starts on
-                // defaults and reports why" is correct for a result limit or a
-                // language — the default is harmless and the user loses a
-                // preference. It is not correct for a source list, because the
-                // default *is* a source list: one entry, the home directory.
-                //
-                // So a stray character in the file — one unknown key, and the
-                // schema denies those — dropped every other source. On this
-                // machine that is `/mnt/depo`: the engine sees a source it no
-                // longer has and calls `forget`, and a million rows leave the
-                // index. The service stays up, indexing the wrong tree, and
-                // says so in one line on stderr that goes to the journal.
-                //
-                // Refusing to start is the smaller failure by a wide margin.
-                // It is loud, it is immediate, and nothing is lost.
+                // Fatal, because falling back to defaults falls back to a source
+                // list of one entry: the engine would `forget` every other source
+                // and drop its rows while staying up.
                 Err(e) => (
                     Config::default().with_defaults_filled(),
                     Some(Error::Config {
@@ -315,7 +228,7 @@ impl Config {
     }
 
     /// Fill in what a bare file leaves out: the home directory as a source, and
-    /// the platform's own list of things no index should hold.
+    /// the platform's list of things no index should hold.
     fn with_defaults_filled(mut self) -> Self {
         if self.sources.is_empty() {
             let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf());
@@ -340,8 +253,7 @@ impl Config {
             exclude_dirs: self.exclude.dirs.clone(),
             exclude_files: self.exclude.files.clone(),
             allow: self.exclude.allow.clone(),
-            // Filled by the wiring, which is the only place that knows where
-            // the index went.
+            // Filled by the wiring, the only place that knows where the index went.
             deny: Vec::new(),
             subtree: None,
         }
@@ -355,19 +267,9 @@ impl Config {
         }
     }
 
-    /// Where everything a person chose from inside a face is kept — the
-    /// column widths, the language, the rules they added, the face to open.
-    ///
-    /// Beside the index rather than in `config.toml`, because that file is
-    /// hand-written and carries the reasoning behind every value in it; see
-    /// [`scour_settings::Settings`]. `--config` therefore isolates the
-    /// settings along with the index, which is what makes a second
-    /// installation a second installation.
-    ///
-    /// **Here rather than in each program.** The service, the window and the
-    /// terminal all need this path, and it was written out three times: the
-    /// day one of them disagreed, a preference set in one face would have
-    /// been invisible to the others with nothing to say why.
+    /// Where everything a person chose from inside a face is kept. Beside the
+    /// index rather than in the hand-written `config.toml`, so `--config` isolates
+    /// both; one copy, because all four faces have to agree on it.
     pub fn state_dir(&self) -> std::path::PathBuf {
         self.index
             .dir
@@ -393,7 +295,7 @@ mod tests {
     #[test]
     fn an_older_file_loads_with_new_fields_filled_in() {
         // Every table is `default`, so a file written before a field existed is
-        // still valid — which is the whole reason nothing has to migrate.
+        // still valid and nothing has to migrate.
         let text = r#"
             [index]
             rebuild_threshold = 50000
@@ -411,8 +313,7 @@ mod tests {
 
     #[test]
     fn a_misspelt_key_is_reported_rather_than_ignored() {
-        // Silently doing nothing is the failure mode that gets discovered
-        // months later.
+        // A key that silently does nothing is discovered months later.
         let text = "[scan]\nhiden = true\n";
         let err = toml::from_str::<Config>(text).unwrap_err();
         assert!(err.to_string().contains("hiden"), "{err}");

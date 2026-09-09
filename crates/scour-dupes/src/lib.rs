@@ -1,60 +1,8 @@
-//! The same file, several times over.
-//!
-//! ## Nobody wants a count of duplicates. They want the space back.
-//!
-//! That sentence is the whole design, and it is why this does not work the way
-//! a duplicate finder usually does. The usual shape is *gate by size, then
-//! hash everything that survives* — and the gate was measured on this machine,
-//! against 1,474,650 files and 493.6 GB:
-//!
-//! **"A file with a unique size cannot have a duplicate" is true and nearly
-//! useless.** It eliminates 6.2% of files. Not the overwhelming majority. The
-//! reason is that 59.3% of files are 4 KB or smaller — 22,761 of them are
-//! exactly zero bytes — and small files collide on size trivially. Build
-//! output makes it worse rather than better.
-//!
-//! The same gate is excellent by *bytes*:
-//!
-//! | candidates above | files | bytes they hold | head+tail to check |
-//! |---|---|---|---|
-//! | nothing | 1,382,866 | 169.8 GB | 10.55 GB |
-//! | 4 KB | 531,020 | 169.0 GB | 4.05 GB |
-//! | 64 KB | 104,482 | 163.0 GB | 0.80 GB |
-//! | 1 MB | **18,723** | **141.8 GB** | **0.14 GB** |
-//! | 10 MB | 1,919 | 90.9 GB | 0.01 GB |
-//!
-//! So it works **down from the largest**. Above a megabyte, reading the first
-//! and last four kilobytes of every size-collision candidate costs 140 MB and
-//! covers 141.8 GB of the possible waste — a thousandfold return, finishing in
-//! seconds where a whole-disk hash takes hours.
-//!
-//! ## Three stages, and each one is useful on its own
-//!
-//! 1. **Group by size, descending.** Free — the sizes are already known — and
-//!    the potential saving of each group is a number nobody had to read a byte
-//!    for. This is what a caller gets with a `read_budget` of zero, and it is
-//!    already the answer to "where might my disk be going".
-//! 2. **Head and tail.** Four kilobytes from each end, folded to one number.
-//!    Two files that differ anywhere near either end part here, which is where
-//!    nearly all of them differ.
-//! 3. **The bytes.** What survives is compared against the first file of its
-//!    group, in full, byte for byte.
-//!
-//! **Stage three is a comparison and not a hash, and that is deliberate.**
-//! Every other tool of this kind reports "same digest" and calls it identical;
-//! at a hundred thousand files a 64-bit digest is a coin flip away from a
-//! collision, and the thing being decided is which file somebody deletes. A
-//! comparison of two files of equal size costs the same reads as hashing both
-//! and cannot be wrong. The digest earns its place in stage two, where being
-//! wrong only means reading a little more.
-//!
-//! ## Interruptible, because it is the caller's disk
-//!
-//! `read_budget` bounds the reading, and the groups are confirmed largest
-//! first, so whatever the budget buys is the most valuable part of the answer.
-//! A run that stops early says so rather than presenting a partial answer as a
-//! complete one: every group carries [`Certainty`], and the report says how
-//! many groups were left unconfirmed.
+//! The same file, several times over: group by size, then head and tail, then a
+//! full byte-for-byte comparison. Confirmed largest first, because a unique size
+//! eliminates only 6.2% of files while the 18,723 candidates above 1 MB hold
+//! 141.8 GB of the possible waste. Stage three compares rather than digests: it
+//! decides what somebody deletes.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -70,17 +18,11 @@ const CHUNK: usize = 64 * 1024;
 /// What a caller wants out of this.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// Ignore anything smaller than this.
-    ///
-    /// Not a performance knob so much as a statement about what the answer is
-    /// for: below a megabyte the candidate list is a million files and covers
-    /// 28 GB, above it the list is nineteen thousand and covers 141.8 GB.
+    /// Ignore anything smaller than this. Below a megabyte the candidates are a
+    /// million files over 28 GB; above it, nineteen thousand over 141.8 GB.
     pub min_size: u64,
-    /// How many bytes may be read to confirm.
-    ///
-    /// **Zero means read nothing**, and that is a supported answer rather than
-    /// a degenerate one: the size groups and their potential saving are free,
-    /// and for "what might I get back" they are the whole answer.
+    /// How many bytes may be read to confirm. Zero is a supported answer: the
+    /// size groups and their potential saving cost nothing.
     pub read_budget: u64,
     /// At most this many groups in the reply, largest saving first.
     pub top: usize,
@@ -88,9 +30,8 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        // A megabyte and a gigabyte of reading: the measured knee, and enough
-        // budget to confirm the whole of the interesting range on the corpus
-        // those numbers came from.
+        // A megabyte is the measured knee; a gigabyte of reading confirms the
+        // whole interesting range above it.
         Options {
             min_size: 1024 * 1024,
             read_budget: 1024 * 1024 * 1024,
@@ -104,8 +45,7 @@ impl Default for Options {
 pub enum Certainty {
     /// Same size, nothing read. These files *may* be identical.
     Size,
-    /// Same size and same first and last four kilobytes. Very likely, and not
-    /// proven — this is the stage a budget runs out in.
+    /// Same size and same first and last four kilobytes. Likely, not proven.
     Edges,
     /// Read end to end and compared. Identical.
     Content,
@@ -125,8 +65,7 @@ impl Certainty {
 /// Files that are, or may be, the same file.
 #[derive(Debug, Clone)]
 pub struct Group {
-    /// What each of them weighs. They all weigh the same — that is what makes
-    /// them a group.
+    /// What each of them weighs; equal size is what makes them a group.
     pub size: u64,
     /// Their paths, in the order they arrived.
     pub paths: Vec<String>,
@@ -134,11 +73,8 @@ pub struct Group {
 }
 
 impl Group {
-    /// What deleting all but one would give back.
-    ///
-    /// The number the whole thing is for, and the reason groups are ordered by
-    /// it rather than by size or by count: ten copies of a 100 MB file matter
-    /// more than two copies of a 400 MB one.
+    /// What deleting all but one would give back. Groups are ordered by this and
+    /// not by size: ten copies of 100 MB beat two copies of 400 MB.
     pub fn waste(&self) -> u64 {
         self.size * (self.paths.len() as u64 - 1)
     }
@@ -151,44 +87,27 @@ pub struct Report {
     pub groups: Vec<Group>,
     /// How many files were considered at all.
     pub candidates: u64,
-    /// Everything the groups could give back, including the ones left out of
-    /// `groups` by `top` — a total that changed when the list was truncated
-    /// would be a total nobody could act on.
+    /// Everything the groups could give back, including those `top` left out: a
+    /// total that moved with the list length would be one nobody could act on.
     pub waste: u64,
-    /// How much of `waste` was read and compared rather than guessed.
-    ///
-    /// **The two numbers are different questions and printing only the first
-    /// answers the wrong one.** "39 GB could be freed" out of a run that read
-    /// nothing means "39 GB of files happen to share a size with another
-    /// file", and on a real disk that is mostly database pages and build
-    /// output that are the same length and not the same bytes — measured here
-    /// as 39.36 GiB by size against 18.29 GiB once read. Somebody acting on
-    /// the first number deletes files that were not copies.
+    /// How much of `waste` was read and compared rather than guessed: 39.36 GiB
+    /// by size was 18.29 GiB once read, so `waste` alone names files that are
+    /// merely the same length.
     pub proven: u64,
     /// Bytes actually read confirming.
     pub read: u64,
-    /// Groups the budget did not reach.
-    ///
-    /// **Said rather than left to be inferred.** A partial answer that looks
-    /// complete is the failure this field exists to prevent: a caller that
-    /// cannot tell "these are the duplicates" from "these are the duplicates I
-    /// had time for" will delete files on the strength of the second.
+    /// Groups the budget did not reach. Without it a partial answer looks like a
+    /// complete one.
     pub unconfirmed: u64,
 }
 
-/// Find them.
-///
-/// `files` is whatever the caller can produce — an index walk, a directory
-/// walk, a list from somewhere else. Only the size is used before anything is
-/// read, and a file that has since disappeared is dropped rather than being an
-/// error: this runs against a filesystem that is still being used.
+/// Find them. Only the size is used before anything is read, and a file that has
+/// since disappeared is dropped rather than failing the run.
 pub fn find<I>(files: I, opts: &Options) -> Report
 where
     I: IntoIterator<Item = (String, u64)>,
 {
-    // Stage one. A map from size to the paths at it, which is the whole of the
-    // free part — no `stat`, no `open`, nothing but arithmetic on numbers the
-    // caller already had.
+    // Stage one: size to paths. No `stat`, no `open` — the caller had the sizes.
     let mut by_size: HashMap<u64, Vec<String>> = HashMap::new();
     let mut candidates = 0u64;
     for (path, size) in files {
@@ -203,10 +122,8 @@ where
         .into_iter()
         .filter(|(_, paths)| paths.len() > 1)
         .collect();
-    // Largest possible saving first, so that a budget that runs out has been
-    // spent where it was worth the most. Ties by size, then by path, so two
-    // runs over the same disk answer the same way — a report that reshuffles
-    // itself is one nobody can compare against yesterday's.
+    // Largest possible saving first, so a budget runs out where it is worth
+    // least. Ties by size then path, so two runs over one disk answer alike.
     pending.sort_by(|a, b| {
         let (wa, wb) = (a.0 * (a.1.len() as u64 - 1), b.0 * (b.1.len() as u64 - 1));
         wb.cmp(&wa)
@@ -220,8 +137,8 @@ where
 
     for (size, mut paths) in pending {
         paths.sort();
-        // Nothing more may be read. The group still goes in the answer — it is
-        // a real size collision and a real *possible* saving — but it says so.
+        // Out of budget: a real size collision and a real possible saving, but
+        // it goes into the answer saying it is unconfirmed.
         if read >= opts.read_budget {
             unconfirmed += 1;
             out.push(Group {
@@ -232,14 +149,11 @@ where
             continue;
         }
 
-        // Stage two: the ends. Files that differ anywhere near either end part
-        // here, and nearly all of them do.
+        // Stage two: the ends, which is where nearly all differing files differ.
         let mut buckets: HashMap<u64, Vec<String>> = HashMap::new();
         for p in paths {
-            // A file that has gone, or that cannot be read, is dropped rather
-            // than failing the run: this works against a filesystem somebody
-            // is still using, and one vanished file must not cost the other
-            // nineteen thousand their answer.
+            // Dropped rather than fatal: one vanished file must not cost the
+            // rest of the run its answer.
             if let Ok((mark, n)) = edges(Path::new(&p), size) {
                 read += n;
                 buckets.entry(mark).or_default().push(p);
@@ -251,9 +165,8 @@ where
                 continue;
             }
             same.sort();
-            // Stage three: the bytes, against the first of the group. A
-            // comparison rather than a digest, because what is being decided
-            // is which file somebody deletes.
+            // Stage three: the bytes against the first of the group — a
+            // comparison and not a digest, since this decides a deletion.
             if read >= opts.read_budget {
                 unconfirmed += 1;
                 out.push(Group {
@@ -298,15 +211,12 @@ where
     }
 }
 
-/// One number from the first and last four kilobytes.
-///
-/// Returns the mark and how much was read. A file shorter than two edges is
-/// read once and whole, which is both cheaper and exact.
+/// One number from the first and last four kilobytes, and how much was read. A
+/// file shorter than two edges is read once and whole.
 fn edges(path: &Path, size: u64) -> std::io::Result<(u64, u64)> {
     let mut f = File::open(path)?;
     let mut h = Fnv::new();
-    // The size goes into the mark, so a short read cannot make two files of
-    // different lengths collide.
+    // The size goes into the mark, so a short read cannot collide two lengths.
     h.write(&size.to_le_bytes());
 
     let mut buf = vec![0u8; EDGE as usize];
@@ -323,11 +233,8 @@ fn edges(path: &Path, size: u64) -> std::io::Result<(u64, u64)> {
     Ok((h.finish(), moved))
 }
 
-/// Which of these really are the first one, byte for byte.
-///
-/// Everything is compared against `paths[0]` rather than pairwise: files of
-/// equal content are equal to each other by transitivity, and pairwise would
-/// be quadratic reads for an answer that is linear.
+/// Which of these really are the first one, byte for byte. Against `paths[0]`
+/// and not pairwise: equality is transitive, and pairwise reads are quadratic.
 fn confirm(paths: &[String], size: u64) -> (Vec<String>, u64) {
     let mut same = vec![paths[0].clone()];
     let mut read = 0u64;
@@ -337,7 +244,7 @@ fn confirm(paths: &[String], size: u64) -> (Vec<String>, u64) {
                 same.push(other.clone());
                 read += size * 2;
             }
-            Ok(false) => read += size, // parted early; an over-estimate, and stated as one
+            Ok(false) => read += size, // Parted early; a whole file's worth over-estimates.
             Err(_) => {}
         }
     }
@@ -346,9 +253,7 @@ fn confirm(paths: &[String], size: u64) -> (Vec<String>, u64) {
 
 /// Byte for byte, stopping at the first difference.
 fn identical(a: &Path, b: &Path) -> std::io::Result<bool> {
-    // The same file under two names is identical without reading either. Not
-    // an optimisation: a hard link *is* one file, and reading it twice to
-    // discover that would be the most expensive way to learn it.
+    // One file under two names: a hard link needs no reading to be identical.
     if a == b {
         return Ok(true);
     }
@@ -366,12 +271,8 @@ fn identical(a: &Path, b: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Fill the buffer, or reach the end trying.
-///
-/// `Read::read` is allowed to return less than was asked for at any time, and
-/// a comparison that treats a short read as the end of the file reports two
-/// different files as identical. That is the failure worth spelling out: this
-/// decides what somebody deletes.
+/// Fill the buffer, or reach the end trying. `Read::read` may return short at any
+/// time, and treating that as end-of-file calls two different files identical.
 fn read_full(f: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut at = 0;
     while at < buf.len() {
@@ -383,11 +284,8 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(at)
 }
 
-/// FNV-1a, 64 bits.
-///
-/// Ten lines rather than a dependency, and it is only ever a *filter*: two
-/// files that agree here are then compared in full. Nothing is ever reported
-/// as identical on the strength of a hash.
+/// FNV-1a, 64 bits. Only ever a filter: two files that agree here are then
+/// compared in full, so no hash decides identity.
 struct Fnv(u64);
 
 impl Fnv {
@@ -462,9 +360,7 @@ mod tests {
         );
     }
 
-    /// **The case a digest gets wrong and this cannot.** Same size, same first
-    /// and last four kilobytes, different in the middle — which is exactly
-    /// what a file edited in place looks like.
+    /// Same size, same edges, different in the middle — an in-place edit.
     #[test]
     fn two_files_that_differ_only_in_the_middle_are_not_the_same_file() {
         let d = Dir::new("middle");
@@ -474,11 +370,10 @@ mod tests {
         b[10_000] = b'2';
         let r = find(vec![d.file("a", &a), d.file("b", &b)], &opts(1000));
         assert!(r.groups.is_empty(), "{:?}", r.groups);
-        // And it was read to find that out, which is the point of the stage.
+        // And it was read to find that out.
         assert!(r.read > 0);
     }
 
-    /// The ends part them without reading the middle at all.
     #[test]
     fn files_that_differ_at_the_start_are_parted_without_being_read() {
         let d = Dir::new("edges");
@@ -491,9 +386,7 @@ mod tests {
         assert!(r.read <= EDGE * 4, "read {} bytes", r.read);
     }
 
-    /// Zero budget is an answer, not a failure: the size groups and what they
-    /// might save are free, and for "where might my disk be going" they are
-    /// the whole answer.
+    /// Zero budget is an answer, not a failure: the size groups are free.
     #[test]
     fn nothing_read_still_reports_what_might_be_saved() {
         let d = Dir::new("nobudget");
@@ -512,15 +405,10 @@ mod tests {
         assert_eq!(r.groups[0].certainty, Certainty::Size);
         assert_eq!(r.groups[0].waste(), 8000);
         assert_eq!(r.unconfirmed, 1, "a partial answer must say it is partial");
-        // **The number that keeps the other one honest.** Nothing was read, so
-        // nothing is proven — and a caller printing only `waste` would be
-        // telling somebody they can free eight kilobytes that may not be
-        // copies at all.
+        // Nothing was read, so nothing is proven.
         assert_eq!(r.proven, 0);
     }
 
-    /// Ordered by what deleting would give back, not by size: ten copies of a
-    /// small file beat two copies of a large one.
     #[test]
     fn the_biggest_saving_comes_first_even_when_it_is_not_the_biggest_file() {
         let d = Dir::new("order");
@@ -538,7 +426,6 @@ mod tests {
         assert_eq!(r.groups[1].size, 9000);
     }
 
-    /// A file that goes away mid-run costs itself and nothing else.
     #[test]
     fn a_file_that_disappeared_does_not_take_the_answer_with_it() {
         let d = Dir::new("gone");
@@ -550,7 +437,6 @@ mod tests {
         assert_eq!(r.groups[0].paths.len(), 3);
     }
 
-    /// The size gate is what it claims to be.
     #[test]
     fn anything_under_the_floor_is_not_looked_at() {
         let d = Dir::new("floor");
@@ -561,8 +447,6 @@ mod tests {
         assert_eq!(r.read, 0);
     }
 
-    /// A short read is not the end of a file, and treating it as one reports
-    /// two different files as the same.
     #[test]
     fn a_comparison_reads_to_the_end_rather_than_to_the_first_short_read() {
         let d = Dir::new("chunky");
@@ -583,7 +467,6 @@ mod tests {
         assert_eq!(r.waste, 0);
     }
 
-    /// The total is about everything found, not about what fitted in the list.
     #[test]
     fn the_total_does_not_change_when_the_list_is_cut() {
         let d = Dir::new("top");
