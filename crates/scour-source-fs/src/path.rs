@@ -1,43 +1,13 @@
 //! One separator, everywhere — and every name representable.
 //!
-//! Paths cross this boundary as `/`-separated strings on every platform. The
-//! index tokenises ancestors by splitting on `/`, the query language matches
-//! `path:` fragments, the wire protocol carries them to a model that has never
-//! heard of drive letters. Having two separators above this line would mean
-//! every one of those places needing to know which platform produced the
-//! string.
-//!
-//! So converting is this crate's job, in both directions, and nothing above it
-//! ever sees a backslash.
-//!
-//! ## The part that is not about separators
-//!
-//! A Unix filename is a sequence of bytes that is not required to be UTF-8, and
-//! this crate used `to_string_lossy`, which replaces every invalid byte with
-//! `U+FFFD`. That is not a display blemish. Since a row is identified by its
-//! path, two files whose names differ only in bytes the decoder threw away
-//! became **one row** — the second silently replaced the first, and `stat`
-//! could not name either of them again. Reproduced with `same-\xfe` and
-//! `same-\xff`: two files on disk, one row in the index.
-//!
-//! So invalid bytes are *encoded* rather than replaced, into a private-use
-//! character each: byte `0xNN` becomes `U+F7NN`. The mapping is one-to-one and
-//! [`to_path`] undoes it, so the path stays a `String` — which is what keeps
-//! this from being a change to every crate above — while still naming exactly
-//! one file.
-//!
-//! **What it does not do:** a file whose name legitimately contains a character
-//! in `U+F700..=U+F7FF` collides with the encoding of the corresponding byte.
-//! Those are private-use code points; nothing assigns them and no locale
-//! produces them. It is the same trade Python makes with `surrogateescape`,
-//! which cannot be copied exactly here because Rust's `String` cannot hold a
-//! lone surrogate. A truly injective key means carrying native bytes through
-//! the wire protocol and the on-disk format, which is the right long-term
-//! answer and a much larger change than this one.
+//! Paths cross this boundary as `/`-separated strings on every platform. A Unix
+//! name need not be UTF-8, so an invalid byte `0xNN` is *encoded* into `U+F7NN`
+//! rather than replaced: `same-\xfe` and `same-\xff` have to stay two rows.
 
 use std::path::{Path, PathBuf};
 
 /// The private-use block invalid bytes are encoded into. `0xNN` → `BASE + NN`.
+/// A name legitimately holding `U+F700..=U+F7FF` collides; nothing assigns them.
 const BASE: u32 = 0xF700;
 
 /// A platform path as the rest of Scour sees it.
@@ -117,11 +87,7 @@ fn unescape(s: &str) -> Vec<u8> {
 }
 
 /// The name as the operating system holds it.
-///
-/// A `Cow` so that the two platforms have the same signature: unix hands over
-/// the bytes it already has, Windows has to make some. Writing it twice with
-/// two return types means every caller needs a conversion that is useless on
-/// one of them, which the linter is right to object to.
+/// A `Cow` so both platforms share one signature: unix borrows, Windows allocates.
 #[cfg(unix)]
 fn bytes_of(p: &Path) -> std::borrow::Cow<'_, [u8]> {
     use std::os::unix::ffi::OsStrExt;
@@ -134,10 +100,8 @@ fn from_os_bytes(raw: &[u8]) -> PathBuf {
     PathBuf::from(std::ffi::OsStr::from_bytes(raw))
 }
 
-/// Windows names are ill-formed UTF-16 rather than ill-formed UTF-8, and the
-/// standard library will not hand out their code units. The lossy conversion
-/// stays there for now, and the same collision with it — this is the half of
-/// the problem a native key is needed for.
+/// Windows names are ill-formed UTF-16 rather than UTF-8, and the standard library
+/// will not hand out their code units; the lossy conversion and its collision stay.
 #[cfg(not(unix))]
 fn bytes_of(p: &Path) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Owned(p.to_string_lossy().into_owned().into_bytes())
@@ -163,8 +127,7 @@ mod tests {
     #[cfg(unix)]
     fn two_names_that_are_not_utf8_stay_two_names() {
         use std::os::unix::ffi::OsStrExt;
-        // The reproduction: `same-\xfe` and `same-\xff` both decoded to
-        // `same-\u{fffd}`, took the same path identity, and became one row.
+        // `same-\xfe` and `same-\xff` both decoded to `same-\u{fffd}`: one row.
         let a = Path::new(std::ffi::OsStr::from_bytes(b"/t/same-\xfe"));
         let b = Path::new(std::ffi::OsStr::from_bytes(b"/t/same-\xff"));
         assert_ne!(from_path(a), from_path(b), "two files, one name");
@@ -173,8 +136,7 @@ mod tests {
         assert_eq!(to_path(&from_path(a)), a);
         assert_eq!(to_path(&from_path(b)), b);
 
-        // A name that is *partly* valid keeps the valid part readable, which
-        // is what makes it findable by the letters it does have.
+        // A partly valid name keeps its valid part findable by the letters it has.
         let mixed = Path::new(std::ffi::OsStr::from_bytes(b"/t/rapor-\xc3(2).pdf"));
         let s = from_path(mixed);
         assert!(s.contains("rapor-"), "{s:?}");
@@ -185,8 +147,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_valid_name_is_never_encoded() {
-        // The escape must cost nothing and change nothing for the names
-        // everybody actually has, Turkish ones included.
+        // The escape must cost nothing and change nothing for ordinary names.
         for p in ["/home/u/Çalışmalar/rapor.pdf", "/home/u/ЖЖ/файл", "/a/漢字"] {
             assert_eq!(from_path(&to_path(p)), p);
             assert!(!p.chars().any(is_escaped));
@@ -206,8 +167,7 @@ mod tests {
     #[test]
     #[cfg(not(windows))]
     fn a_backslash_is_an_ordinary_character_on_unix() {
-        // It is a legal filename character here, and rewriting it would rename
-        // the file as far as every lookup is concerned.
+        // A legal filename character here; rewriting it would rename the file.
         assert_eq!(normalise("/home/u/odd\\name"), "/home/u/odd\\name");
     }
 }

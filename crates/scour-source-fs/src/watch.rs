@@ -1,18 +1,8 @@
 //! Watching for changes.
 //!
-//! Every watching mechanism gives up somewhere, and each gives up differently.
-//! inotify needs one watch per directory and a home directory can exhaust the
-//! per-user limit. Windows keeps a fixed kernel buffer per handle and drops
-//! events when it overflows. macOS coalesces, and hides events for files the
-//! process does not own. `notify` papers over the API differences but cannot
-//! paper over that.
-//!
-//! So the contract here is deliberately weak, and stated rather than implied:
-//! **an event is a hint to look again, never a description of what happened.**
-//! Every path that arrives is re-examined against the filesystem. When the
-//! mechanism reports that it lost track, [`Change::Rescan`] says so and the
-//! engine walks the subtree again. That single variant is what lets the layer
-//! above stay free of platform knowledge.
+//! The contract is deliberately weak: **an event is a hint to look again, never
+//! a description of what happened.** Every path that arrives is re-examined
+//! against the filesystem; a backend that lost track sends [`Change::Rescan`].
 
 use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
@@ -31,56 +21,14 @@ use crate::rules::Rules;
 use crate::scan::FsSource;
 
 /// The rule set the watcher filters by, swappable while it runs.
-///
-/// Two layers, and both are load-bearing: the outer lock is what lets
-/// [`WatchHandle::retune`] replace the set, and the inner `Arc` is what lets an
-/// event take a copy and let go of the lock immediately rather than filtering
-/// with it held.
+/// The outer lock lets [`WatchHandle::retune`] replace it; the inner `Arc` lets
+/// an event copy the set and release the lock before filtering.
 #[cfg(not(target_os = "linux"))]
 type SharedRules = Arc<RwLock<Arc<Rules>>>;
 
-/// Watch a source for changes.
-///
-/// **On Linux this is a fanotify mark or it is nothing, and that is a decision
-/// rather than an accident.**
-///
-/// There used to be an inotify fallback here, and the fallback was the damage.
-/// inotify costs one watch a directory out of a budget belonging to the
-/// *session*, not to this program: 524,288 on this machine against the ~609,000
-/// directories these roots hold. Taking them did not make Scour slow — it made
-/// the next editor, file manager or language server fail to start, with an
-/// error that never contains the word "watch". It happened twice, and the
-/// second time the machine could not open a development tool at all.
-///
-/// A ceiling was tried: refuse any source wanting more than a quarter of the
-/// budget. That kept the desktop alive and left the index quietly stale, with
-/// nothing on screen saying which of the two had happened. And it could not be
-/// raised into a fix, because the numbers do not permit one. The unprivileged
-/// alternative is worse still: `fs.fanotify.max_user_marks` is 295,420 here,
-/// *narrower* than the inotify budget, so a mark per inode is not a lateral
-/// move but a downgrade.
-///
-/// So there is one mechanism. One mark a filesystem, no per-directory cost,
-/// and it sees what inotify cannot. It needs `CAP_SYS_ADMIN`, this process must
-/// not have it, and the two are reconciled outside: a helper places the marks
-/// and hands the descriptor over.
-///
-/// **No descriptor, no watching — and saying so is the point.** A source that
-/// is not watched is usually not unattended: the engine walks it when its pulse
-/// moves, exactly as the system source has always been handled, so it is slower
-/// to notice rather than blind. What the fallback cost was the ability to tell.
-///
-/// **"Usually" is doing real work in that sentence.** A pulse is read from the
-/// root's block device, and a root that has none — NFS, CIFS, sshfs, any FUSE
-/// mount, tmpfs — gets `Probe::None`, which `Pulses::decide` skips outright.
-/// Such a source is then neither watched nor reconciled: it is walked once and
-/// goes stale for good. inotify used to cover it whenever it fitted the budget,
-/// so removing the fallback widened that hole rather than making it. It is
-/// still a hole, it wants a timed walk in the engine, and until there is one
-/// this is not promised to those mounts.
-///
-/// See the README's "Watching, and the one privilege", and
-/// `packaging/scour.service`.
+/// Watch a source for changes: on Linux a fanotify mark, or nothing at all.
+/// There is no inotify fallback — one watch per directory out of a *session*
+/// budget (524,288 here for ~609,000 directories) starves the rest of the desktop.
 #[cfg(target_os = "linux")]
 pub fn start(
     source: FsSource,
@@ -88,6 +36,9 @@ pub fn start(
     sink: Box<dyn ChangeSink>,
 ) -> Result<Box<dyn WatchHandle>> {
     let sink: Arc<dyn ChangeSink> = Arc::from(sink);
+    // The mark needs `CAP_SYS_ADMIN`, which this process must not hold: a helper
+    // places it and passes the descriptor in. Unwatched is not unattended — a
+    // root with a block device is walked when its pulse moves; a FUSE one is not.
     if let Some(started) = crate::fanotify::try_start(&source, opts, Arc::clone(&sink)) {
         return started;
     }
@@ -105,12 +56,7 @@ pub fn start(
 }
 
 /// Watch a source for changes, through whatever the platform offers.
-///
-/// **Not Linux — there the only mechanism is fanotify; see the other
-/// `start`.** Windows keeps a fixed kernel buffer per handle and drops events
-/// when it overflows; macOS coalesces and hides events for files the process
-/// does not own. `notify` papers over the API differences but not over those,
-/// which is why the contract at the top of this module is as weak as it is.
+/// Not Linux: there the only mechanism is fanotify — see the other `start`.
 #[cfg(not(target_os = "linux"))]
 pub fn start(
     source: FsSource,
@@ -122,15 +68,8 @@ pub fn start(
     let roots: Vec<_> = source.roots().to_vec();
     let id = source.source_id();
     let real_modes = source.real_modes();
-    // The same rules the walk uses. Without them the watcher reports changes
-    // for files the walk skips, and every one is an entry that exists until
-    // something else removes it — a `cargo test` under a watched but unscanned
-    // build directory took a query here from 8 ms to 13 seconds.
-    //
-    // **Behind a lock, because the rules can change while this is running.**
-    // They used to be settable in a file read once at start-up; a window can
-    // add one now, and a watcher still filtering by the old set would put back
-    // everything a new rule had just swept out. See [`WatchHandle::retune`].
+    // The same rules the walk uses, or the watcher indexes what the walk skips.
+    // Behind a lock: [`WatchHandle::retune`] can replace them while this runs.
     let rules: SharedRules = Arc::new(RwLock::new(Arc::new(Rules::from_options(opts))));
 
     let handler = {
@@ -138,10 +77,7 @@ pub fn start(
         let rules = Arc::clone(&rules);
         move |res: notify::Result<Event>| match res {
             Ok(event) => {
-                // Cloned out of the lock rather than held across the
-                // translation: the read is a pointer copy, and holding it
-                // would put every event in line behind a `retune` that is
-                // rebuilding the set.
+                // Copied, not held: filtering under the lock queues events behind a `retune`.
                 let held = match rules.read() {
                     Ok(r) => Arc::clone(&r),
                     Err(p) => Arc::clone(&p.into_inner()),
@@ -149,10 +85,7 @@ pub fn start(
                 translate(id, real_modes, &held, &event, &sink)
             }
             Err(e) => {
-                // The interesting failures are the ones that mean "I stopped
-                // seeing things": inotify running out of watches, a Windows
-                // buffer overflow. `notify` reports them here, and the honest
-                // answer to all of them is the same.
+                // "I stopped seeing things" — watches exhausted, a buffer overflow.
                 for p in &e.paths {
                     sink.emit(Change::Rescan {
                         path: path::from_path(p),
@@ -167,22 +100,8 @@ pub fn start(
         }
     };
 
-    // **The watcher has to follow the same links the walk does, and by default
-    // it does not.** `notify`'s `follow_symlinks` is on, so a recursive watch
-    // descends through every symlink it meets while `WalkBuilder::follow_links`
-    // here is off — and the two disagreeing is not a matter of taste.
-    //
-    // What it costs is not watches, it is **rows**. On this machine
-    // `~/.wine-hukuk/dosdevices/z:` points at `/`, and a file created in the
-    // home directory arrived as `/home/u/.wine-hukuk/dosdevices/z:/home/u/…`:
-    // a path that does not exist, that no walk will ever produce, and that
-    // *is* textually under the root — so every sweep killed those rows and the
-    // watcher put them straight back. Reproduced by creating a directory and
-    // finding its contents in the index under the alias and nowhere else.
-    //
-    // The watch *count* is not evidence of this, and was briefly taken for it:
-    // 242,643 watches sounds like the whole filesystem and is what a home
-    // directory of 242,242 directories costs on its own.
+    // The watcher must follow the same links the walk does: a recursive watch
+    // through a link to `/` reports paths no walk will ever produce.
     let mut watcher = notify::RecommendedWatcher::new(
         handler,
         notify::Config::default().with_follow_symlinks(opts.follow_symlinks),
@@ -193,15 +112,7 @@ pub fn start(
 
     let mut watched = 0usize;
     let mut skipped = Vec::new();
-    // **Why the last one was refused, carried out.**
-    //
-    // This said `no root could be watched` and stopped there, which is the one
-    // sentence that cannot be acted on. The reason is nearly always the same
-    // and nearly always fixable — `inotify` ran out of watches, because the
-    // budget is per user and shared with every other program on the desktop —
-    // and `notify` says so in words this was throwing away. Four tests in this
-    // crate failed for days with the useless sentence while the machine's
-    // budget sat at 524,169 of 524,288.
+    // Carry out why the last root was refused: `notify` names it, usually the watch budget.
     let mut refused: Option<String> = None;
     for r in &roots {
         match cover(
@@ -238,31 +149,13 @@ pub fn start(
 }
 
 /// How far down to keep splitting a refused directory.
-///
-/// Each level costs a directory listing and a re-walk of the branches that
-/// still work, so this bounds the repair rather than the tree. Six is deeper
-/// than any real accident — `~/.local/share/waydroid/data/vendor`, the one that
-/// prompted all of this, is five.
+/// Each level costs a listing and a re-walk; six is deeper than any real accident.
 #[cfg(not(target_os = "linux"))]
 const SPLIT_DEPTH: u32 = 6;
 
-/// How many uncovered subtrees are named before the list starts counting.
-///
-/// **This list has no natural end.** [`WatchHandle::cover`] is called for every
-/// directory the engine discovers, and every call appends whatever could not be
-/// watched — so on a machine that has run out of inotify watches, *each new
-/// directory adds an entry that no later call removes*. The entries are
-/// distinct paths, so the `dedup` below does nothing for them. Measured on this
-/// machine: two sources want 511,116 watches against a per-user ceiling of
-/// 524,288, which is 97.5% of the whole allowance — the failure mode is one
-/// `git clone` away, and the list would then grow one path per directory
-/// created for as long as the service runs.
-///
-/// What it is for survives the cap. The list is a diagnostic, read by
-/// `scourd`'s start-up line, which reduces it to the one shared prefix a person
-/// can act on — 191 Waydroid directories became `~/.local/share/waydroid/data`.
-/// A thousand examples answer that question exactly as well as a million, and
-/// cost about 100 KB instead of being unbounded.
+/// How many uncovered subtrees are named before the list stops growing.
+/// [`WatchHandle::cover`] appends one per directory the engine discovers, and the
+/// paths are distinct, so the `dedup` beside it is no bound; this is.
 #[cfg(not(target_os = "linux"))]
 const MAX_SKIPPED: usize = 1_024;
 
@@ -274,35 +167,17 @@ fn remember(skipped: &mut Vec<String>, path: String) {
     }
 }
 
-/// Watch `dir` and everything under it, going around what cannot be watched.
-///
-/// Returns whether anything at all was watched beneath it.
-///
-/// **`notify`'s recursive mode is all or nothing.** It walks the tree itself
-/// and abandons the whole watch on the first directory it cannot read — so on
-/// this machine a single root-owned `~/.local/share/waydroid/data/vendor` left
-/// the entire home directory unwatched, and the status line said `watching 0`
-/// with no reason attached to it. The recorded diagnosis was that inotify had
-/// run out of watches; the limit here is 524,288 against 342,000 directories,
-/// so it never had.
-///
-/// So: ask for the whole subtree, and only if that is refused ask for each
-/// child separately. The branch that is really unreadable is the only one that
-/// gets split, and it gets split down to itself rather than costing its
-/// siblings anything.
-/// Roughly how many watches a set of roots will cost.
-///
 /// What happened to one attempt at covering a directory.
-///
-/// The `String` is the watcher's own words for the refusal — `OS file watch
-/// limit reached`, most often — kept because it is the difference between a
-/// message somebody can act on and one they cannot.
+/// The `String` is the watcher's own words — `OS file watch limit reached`, most often.
 #[cfg(not(target_os = "linux"))]
 enum Covered {
     Yes,
     No(Option<String>),
 }
 
+/// Watch `dir` and everything under it, going around what cannot be watched.
+/// `notify`'s recursive mode is all or nothing — one unreadable directory
+/// abandons the whole watch — so a refused subtree is split child by child.
 #[cfg(not(target_os = "linux"))]
 fn cover(
     watcher: &mut notify::RecommendedWatcher,
@@ -313,24 +188,17 @@ fn cover(
     follow_symlinks: bool,
 ) -> Covered {
     // A link is covered by whoever owns its target, exactly as in the walk.
-    // Descending here would index the same files a second time under a path
-    // nothing else in the system produces.
     if !follow_symlinks
         && depth > 0
         && std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink())
     {
         return Covered::No(None);
     }
-    // The refusal is kept, not just the failure: `notify` says *why* — the
-    // watch budget, a vanished directory, a permission — and that sentence is
-    // the whole difference between a message somebody can act on and one they
-    // cannot.
     let refused = match watcher.watch(dir, RecursiveMode::Recursive) {
         Ok(()) => return Covered::Yes,
         Err(e) => e.to_string(),
     };
-    // Out of patience. Readable, so a walk can still cover what a watch will
-    // not — say so and let the engine schedule it.
+    // Out of patience. Readable, so a walk can still cover what a watch cannot.
     if depth >= SPLIT_DEPTH {
         remember(skipped, path::from_path(dir));
         if std::fs::read_dir(dir).is_ok() {
@@ -340,24 +208,15 @@ fn cover(
         }
         return Covered::No(Some(refused));
     }
-    // Not readable at all, which is the ordinary reason a watch is refused —
-    // 191 root-owned Waydroid directories, here.
-    //
-    // **No `Rescan` for these**, and getting that wrong was instructive: a
-    // walk needs exactly the permission the watch just did not have, so each
-    // one queued a scan that could not read anything, and 191 of them behind
-    // one worker thread took a query from 14 ms to 51 seconds. A subtree
-    // nobody can read is not pending work. It is recorded and left alone.
+    // Unreadable, the ordinary reason a watch is refused. **No `Rescan`**: a walk
+    // needs the permission the watch just lacked, so it is not pending work.
     let Ok(children) = std::fs::read_dir(dir) else {
         remember(skipped, path::from_path(dir));
         return Covered::No(Some(refused));
     };
-    // The directory itself, without its contents, so that a file created
-    // directly in it is still seen.
     let mut any = watcher.watch(dir, RecursiveMode::NonRecursive).is_ok();
     for child in children.flatten() {
-        // Only directories: a file is covered by the watch on its parent, and
-        // a symlink is followed by whoever owns the target.
+        // A file is covered by the watch on its parent; a link, by its target.
         if child.file_type().is_ok_and(|t| t.is_dir())
             && matches!(
                 cover(
@@ -381,26 +240,9 @@ fn cover(
     }
 }
 
-/// Turn one `notify` event into changes.
-///
-/// A create or a modify becomes an upsert *after re-examining the path*, never
-/// from the event's own description: by the time this runs the file may have
-/// been changed again, or removed, and the event says only where to look.
-/// Look at one path and say what changed there.
-///
-/// **This is where the contract at the top of the module is kept**, and it is
-/// shared rather than duplicated because the two backends arrive at it from
-/// opposite directions: inotify hands over a path and fanotify hands over a
-/// directory handle and a name. What neither of them hands over is what
-/// happened — a fanotify event merges a create, a write, a close and a delete
-/// into one mask with no order, measured — so both end here, at a `stat`.
-///
-/// `fresh` means the path was not there a moment ago: a create, or the
-/// destination of a rename. It is the only case that needs the walk below, and
-/// separating it is what keeps a compile from queueing one for every directory
-/// whose mtime moved.
-/// Returns what the `stat` saw, so a caller that wants to remember this path
-/// does not pay for a second one. `None` means the path is gone or unreadable.
+/// Look at one path and say what changed there; `None` if it is unreadable.
+/// Both backends end at this `stat`: neither an event nor a fanotify mask says
+/// what happened. `fresh` — a create or a rename's destination — also walks.
 pub(crate) fn look(
     id: scour_core::SourceId,
     real_modes: bool,
@@ -417,27 +259,9 @@ pub(crate) fn look(
                 md.is_dir(),
                 real_modes,
             )));
-            // **A directory that has just appeared is a subtree, not a row.**
-            // Three different things are lost by treating it as one, and all
-            // three were reproduced:
-            //
-            // * Between `mkdir a/b` and the moment an inotify backend has added
-            //   a watch for `a/b`, anything created inside it produces no event
-            //   at all. `mkdir d && echo > d/f` left `f` on disk and out of the
-            //   index permanently; the same two commands eight seconds apart
-            //   worked. That is `git clone`, `cargo new`, `unzip` and every
-            //   installer.
-            // * Where the recursive watch was refused and rebuilt shallow (see
-            //   `cover`), a directory created in the shallow parent never gets
-            //   a watch at all, so *nothing* inside it is ever seen.
-            // * A btrfs snapshot makes a whole tree visible behind **one**
-            //   event: measured at 1 event for 201 files, and a subvolume
-            //   deletion at 1 for 202. No per-file event exists to be missed,
-            //   on any mechanism, because the kernel never made one.
-            //
-            // A walk covers all three, because it reads what is there instead
-            // of waiting to be told. `symlink_metadata` rather than `metadata`,
-            // so a link to a directory is not descended.
+            // A directory that has just appeared is a subtree, not a row: what is
+            // created inside it before a watch exists produces no event, and a
+            // btrfs snapshot exposes a whole tree behind one (1 event, 201 files).
             if fresh && md.is_dir() {
                 sink.emit(Change::Rescan {
                     path: path.to_owned(),
@@ -445,20 +269,12 @@ pub(crate) fn look(
             }
             return Some(md);
         }
-        // Gone between the event and the look. That is a removal, and it is the
-        // common case under any kind of churn — it is also the cheap one:
-        // a failing `statx` costs 0.6–2.3 µs against 98 µs for one that finds
-        // something on a cold NTFS volume.
+        // Gone between the event and the look: a removal, and the common case.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => sink.emit(Change::RemoveSubtree {
             path: path.to_owned(),
         }),
-        // **Everything else is "I could not look", and that is not a
-        // deletion.** Out of file descriptors, permission withdrawn, a network
-        // mount gone stale, a transient read error: treating any of them as a
-        // removal hides a tree that is still there, and the next commit makes
-        // it durable. Ask for the path to be walked again instead — it is the
-        // same message the backend sends when it loses track, and the engine
-        // already knows what to do with it.
+        // Everything else is "I could not look", not a deletion: removing on that
+        // evidence hides a tree that is still there. Ask for a walk instead.
         Err(_) => sink.emit(Change::Rescan {
             path: path.to_owned(),
         }),
@@ -466,6 +282,7 @@ pub(crate) fn look(
     None
 }
 
+/// Turn one `notify` event into changes, re-examining every path it names.
 #[cfg(not(target_os = "linux"))]
 fn translate(
     id: scour_core::SourceId,
@@ -474,38 +291,19 @@ fn translate(
     event: &Event,
     sink: &Arc<dyn ChangeSink>,
 ) {
-    // What the walk would not have looked at, this does not report. Checked
-    // once here rather than in each arm, because every arm has the same answer
-    // and a path that slips through is an index entry nobody asked for.
-    //
-    // From the **path alone**, with no `stat`. The first version asked
-    // `is_dir()`, which is a syscall for every file a compiler writes — 74% of
-    // a core while a build ran, spent deciding to discard the event.
+    // What the walk would not look at, this does not report — from the **path
+    // alone**: an `is_dir()` here cost 74% of a core while a build ran.
     let watched = |p: &std::path::Path| -> bool { !rules.excludes_path(&path::from_path(p)) };
-    // `fresh` means the path was not there a moment ago — a create, or the
-    // destination of a rename. It is the only case that needs the extra
-    // sentence below, and separating it is what keeps a compile from queueing a
-    // walk for every directory whose mtime moved.
     let upsert = |p: &std::path::Path, fresh: bool| {
         let text = path::from_path(p);
-        // Looked at now, and looked at again later: a write through a shared
-        // mapping produces no event on this backend either. See
-        // [`crate::revisit`].
+        // A write through a shared mapping produces no event here either. See [`crate::revisit`].
         let md = look(id, real_modes, &text, fresh, sink.as_ref());
         let _ = &md;
         crate::revisit::note(&text, id, real_modes, sink, md.as_ref());
     };
 
-    // **The backend has lost track.** inotify's queue overflowed, a watch was
-    // dropped, a poll missed a window — every backend has its own way of
-    // saying it and `notify` normalises all of them onto this flag. It arrives
-    // as `EventKind::Other` **with no paths at all**, so the arm below that
-    // loops over `event.paths` did exactly nothing with the one message whose
-    // whole purpose is to say the index is drifting.
-    //
-    // An empty path is how the engine is told "and I cannot say where", which
-    // it answers with a walk of everything. Expensive, and cheap next to an
-    // index nobody knows is wrong.
+    // The backend lost track. It arrives as `EventKind::Other` with **no paths**,
+    // and an empty path is how the engine is told to walk everything.
     if event.need_rescan() {
         let mut any = false;
         for p in event.paths.iter().filter(|p| watched(p)) {
@@ -528,16 +326,8 @@ fn translate(
                 upsert(p, true);
             }
         }
-        // A rename arrives as one event with two paths, or as two events. Both
-        // are handled by looking at every path mentioned: the one that no
-        // longer exists is removed, the one that does is upserted.
-        //
-        // A rename is also how a whole populated directory appears at once —
-        // `mv ~/Downloads/project ~/src` produces no events for anything inside
-        // it — so its destination counts as fresh for the same reason a create
-        // does. Every other kind of modify does not: a directory's mtime moves
-        // whenever a file in it is written, and treating that as fresh would
-        // queue a walk per file during a build.
+        // A rename arrives as one event with two paths, or as two events; either
+        // way its destination is fresh — a populated directory can arrive that way.
         EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
             for p in event.paths.iter().filter(|p| watched(p)) {
                 upsert(p, true);
@@ -549,23 +339,14 @@ fn translate(
             }
         }
         EventKind::Remove(_) => {
-            // Removals are **not** filtered, and the asymmetry is deliberate:
-            // the rules are checked against a path that no longer exists, so
-            // `is_dir` is false whatever it was, and an excluded directory
-            // would answer differently on the way out than on the way in.
-            // Removing something the index never held costs one lookup that
-            // finds nothing; keeping something that is gone is a wrong answer.
+            // Removals are **not** filtered: the rules see a path that no longer
+            // exists, so `is_dir` is false whatever it was.
             for p in &event.paths {
                 let path = path::from_path(p);
-                // Removing a path also removes everything under it. For a file
-                // that is the file alone; for a directory it is one term in the
-                // index rather than a walk. The event does not always say
-                // which, and it does not need to.
+                // Removing a path removes everything under it: one index term, not a walk.
                 sink.emit(Change::RemoveSubtree { path });
             }
         }
-        // Backends emit these when they have lost track — a queue overflowed,
-        // a watch was dropped. Look again rather than guess.
         EventKind::Any | EventKind::Other => {
             for p in event.paths.iter().filter(|p| watched(p)) {
                 sink.emit(Change::Rescan {
@@ -579,28 +360,15 @@ fn translate(
 
 #[cfg(not(target_os = "linux"))]
 struct FsWatch {
-    /// Behind a lock because the cover can be extended after the fact — see
-    /// [`WatchHandle::cover`]. Uncontended in practice: the engine's one worker
-    /// thread is the only caller and it takes it after a walk, not during one.
+    /// Behind a lock because [`WatchHandle::cover`] extends the cover after the fact.
     watcher: std::sync::Mutex<notify::RecommendedWatcher>,
     stopped: AtomicBool,
     /// Subtrees nothing is watching, because they could not be read.
-    ///
-    /// Kept rather than counted: "live updates are off somewhere" is not
-    /// something a user can act on, and `~/.local/share/waydroid/data` is.
-    ///
-    /// **Behind a lock because it grows after the fact.** A subtree that fails
-    /// to be covered later — a watch limit reached while a `git clone` is
-    /// running, a directory whose permissions changed — is exactly as
-    /// uncovered as one that failed at the start, and used to be pushed into a
-    /// local vector that was dropped on the next line. The one message saying
-    /// "nothing below here will be seen again" was thrown away.
+    /// Kept rather than counted, and behind a lock because a later `cover` adds
+    /// to it: "live updates are off somewhere" is not actionable, a path is.
     skipped: std::sync::Mutex<Vec<String>>,
     follow_symlinks: bool,
-    /// Shared with the event handler, so [`WatchHandle::retune`] can replace
-    /// what it filters by without taking the watch down and putting it back —
-    /// which on this backend means re-installing one inotify watch per
-    /// directory, 296,711 of them for a home directory here.
+    /// Shared with the event handler, so [`WatchHandle::retune`] can replace the filter in place.
     rules: SharedRules,
 }
 
@@ -627,15 +395,7 @@ impl WatchHandle for FsWatch {
         let Ok(mut watcher) = self.watcher.lock() else {
             return;
         };
-        // Asking for a watch that is already there is not an error and not a
-        // second watch — inotify keys them by inode, and `notify` replaces the
-        // entry. So this does not have to know whether the recursive watch
-        // above already covers the path, which it cannot know cheaply.
-        //
-        // A failure here is a hole in the live cover: everything below the
-        // path will change without anyone hearing about it until the next full
-        // scan. It joins the list the source reports rather than being
-        // discarded, which is what used to happen.
+        // Watching a path twice is not a second watch: the backend keys by inode.
         let mut skipped = Vec::new();
         cover(
             &mut watcher,
@@ -651,21 +411,14 @@ impl WatchHandle for FsWatch {
             held.extend(skipped);
             held.sort_unstable();
             held.dedup();
-            // **After the dedup, because the dedup is not a bound.** These are
-            // distinct paths — one per directory that could not be watched — so
-            // nothing here collapses them and the list only ever grew. See
-            // [`MAX_SKIPPED`].
+            // After the dedup, because distinct paths make the dedup no bound.
             held.truncate(MAX_SKIPPED);
         }
     }
 
     /// Filter by the new rules from the next event on.
-    ///
-    /// The cover is deliberately left alone. A watch that is now inside an
-    /// excluded directory costs one inotify entry and reports events this
-    /// throws away; taking it out would mean walking the whole cover, and
-    /// putting it back when the rule goes would mean installing 296,711
-    /// watches again. The filter is where the rule has to be right, and it is.
+    /// The cover is left alone: rebuilding it means re-installing one watch per
+    /// directory, and the filter is where the rule has to be right.
     fn retune(&self, opts: &ScanOptions) {
         let fresh = Arc::new(Rules::from_options(opts));
         match self.rules.write() {
@@ -681,9 +434,7 @@ impl WatchHandle for FsWatch {
 }
 
 /// A sink for the one `cover` call that must not queue more work.
-///
-/// Extending the cover happens *because* a walk just ran; asking for another
-/// one from inside it is how a walk becomes a loop.
+/// Extending the cover happens because a walk just ran; asking for another is a loop.
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug)]
 struct Discard;
@@ -725,15 +476,7 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn losing_track_asks_for_a_walk_even_when_it_cannot_say_where() {
-        // **The message that used to be dropped.** inotify's queue overflowing
-        // arrives as `EventKind::Other` carrying the rescan flag and *no
-        // paths*; the arm that handled that kind looped over the paths, so the
-        // one event whose entire purpose is to say "the index is drifting"
-        // produced nothing at all. A `git clone` or an `rm -rf` large enough to
-        // overflow the queue left permanent holes and permanent ghosts.
-        //
-        // Built the way the backend builds it — see `notify`'s inotify
-        // backend, which sends exactly this before any path is attached.
+        // A queue overflow arrives as `EventKind::Other` with the rescan flag and *no paths*.
         let overflow = Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan);
         assert_eq!(
             translated(overflow),
@@ -743,8 +486,6 @@ mod tests {
             "an empty path is how the engine is told to walk everything"
         );
 
-        // And when the backend can name the subtree it lost, that is what is
-        // walked rather than the whole filesystem.
         let somewhere = Event::new(EventKind::Other)
             .set_flag(notify::event::Flag::Rescan)
             .add_path("/home/u/Projeler".into());
@@ -759,16 +500,7 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn the_uncovered_list_stops_growing_instead_of_growing_forever() {
-        // **The list had no end.** `cover` is called once per directory the
-        // engine discovers, and each call appends whatever could not be
-        // watched. The entries are distinct paths, so the `dedup` beside them
-        // collapses nothing; on a machine that has exhausted its inotify
-        // watches — 511,116 wanted against 524,288 allowed here, 97.5% — every
-        // new directory would add one and none would ever be removed.
-        //
-        // Driven through the retained list the way `WatchHandle::cover` fills
-        // it, rather than through a real watcher, because the failure is about
-        // what is kept and not about what the kernel said.
+        // The paths are distinct, so nothing but the truncation bounds the list.
         let held: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
         for round in 0..40 {
             let batch: Vec<String> = (0..200)
@@ -790,35 +522,22 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn a_refused_subtree_is_still_named_when_there_are_few_of_them() {
-        // The cap must not cost the ordinary case anything: 191 Waydroid
-        // directories is the real report this list exists for, and it is far
-        // below the ceiling.
+        // 191 refused directories is the real report this list exists for.
         let mut skipped = Vec::new();
         for i in 0..191 {
             remember(&mut skipped, format!("/home/u/.local/share/waydroid/{i}"));
         }
         assert_eq!(skipped.len(), 191, "an ordinary report was truncated");
 
-        // And past the ceiling it stops rather than refusing or panicking.
         for i in 0..MAX_SKIPPED * 2 {
             remember(&mut skipped, format!("/home/u/başka/{i}"));
         }
         assert_eq!(skipped.len(), MAX_SKIPPED);
     }
 
-    /// **Asked of `look` rather than of a `notify` event**, because `look` is
-    /// what both mechanisms end at and it is the only one Linux still has. It
-    /// used to go through `translate`, which no longer exists here — and this
-    /// distinction is one worth keeping on the platform the program is used on.
     #[test]
     fn a_path_that_cannot_be_read_is_not_a_path_that_is_gone() {
-        // A stat that fails with anything other than "it is not there" means
-        // the watcher could not look: out of descriptors, permission
-        // withdrawn, a stale network mount. Removing on that evidence hides a
-        // tree that still exists, and the next commit makes it durable.
-        //
-        // A directory with no execute bit is the deterministic way to get
-        // `EACCES` from `symlink_metadata` on a path inside it.
+        // A directory with no execute bit deterministically gives `EACCES`.
         let tmp = tempfile::tempdir().expect("tmpdir");
         let dir = tmp.path().join("kapali");
         std::fs::create_dir(&dir).expect("mkdir");
@@ -832,8 +551,7 @@ mod tests {
         let sink = Collect(PlMutex::new(Vec::new()));
         look(scour_core::SourceId(1), false, &inside, false, &sink);
 
-        // Put the bit back before asserting, so a failure does not leave an
-        // unreadable directory behind for the next run of the suite.
+        // Put the bit back before asserting, so a failure leaves nothing behind.
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, was);
         std::fs::set_permissions(&dir, mode).expect("chmod back");
 
@@ -845,7 +563,6 @@ mod tests {
             "an unreadable path was reported as deleted"
         );
 
-        // Gone is still gone.
         let missing = crate::path::from_path(&tmp.path().join("yok.txt"));
         let sink = Collect(PlMutex::new(Vec::new()));
         look(scour_core::SourceId(1), false, &missing, false, &sink);

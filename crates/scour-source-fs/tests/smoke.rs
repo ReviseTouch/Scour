@@ -120,8 +120,7 @@ fn metadata_arrives_with_the_entry_unless_it_was_skipped() {
     assert!(main.meta.mtime > 0);
     with.push(main.path.clone());
 
-    // A stat-less scan trades those fields for speed, and says nothing false:
-    // the metadata is UNKNOWN rather than zeroed-and-plausible.
+    // A stat-less scan says nothing false: the metadata is UNKNOWN, not zeroed.
     let mut fast = Keep(Vec::new());
     src.scan(
         &ScanOptions {
@@ -191,20 +190,12 @@ fn a_sink_can_stop_a_walk_partway() {
         ..Default::default()
     };
     let report = src.scan(&ScanOptions::default(), &mut sink).expect("scan");
-    // A stop guarantees two things. The sink is not pushed to again — the drain
-    // loop stops feeding it the moment it says so, so this is exact and not a
-    // lower bound. And the report says the scan was cut short, which is what
-    // the engine reads: reconciling on a partial tally would delete every entry
-    // the walk never reached.
+    // A stop is exact rather than a lower bound — the drain loop stops feeding the
+    // sink at once — and the report says the scan was cut short.
     assert_eq!(sink.paths.len(), 3, "no push after a Stop");
     assert!(report.cancelled);
-    // What a stop does not guarantee is *where* the walk stopped. The walk is
-    // parallel and sits behind a buffered channel, so by the time the third
-    // entry reaches the sink the other threads have usually counted and queued
-    // theirs already; a tree this small fits in the buffer whole. `entries` is
-    // what the walk found, not what the sink was given, and on a cancelled
-    // report it is a partial tally with no defined stopping point. Asserting a
-    // ceiling on it would be asserting a promptness the walker does not offer.
+    // What a stop does not guarantee is *where*: `entries` is what the walk found,
+    // not what the sink was given, and a cancelled tally has no stopping point.
     assert!(report.entries >= 3);
 }
 
@@ -220,9 +211,8 @@ fn scanning_a_subtree_ignores_the_configured_roots() {
         },
     );
     let rel = rel(&paths, dir.path());
-    // The subtree root is an entry too, exactly as a full scan includes its
-    // roots — otherwise a rescan of a directory would quietly forget the
-    // directory.
+    // The subtree root is an entry too, or a rescan of a directory would quietly
+    // forget the directory.
     assert_eq!(
         rel,
         vec!["src", "src/deep", "src/deep/RAPOR.pdf", "src/main.rs"]
@@ -251,11 +241,8 @@ fn capabilities_describe_this_platform_honestly() {
     let (_dir, src) = tree();
     let caps = src.caps();
     assert!(caps.contains(Caps::WATCH));
-    // **Not `CONTENT`**, and this assertion used to say the opposite — which
-    // is how a test named for honesty came to hold the one dishonest claim in
-    // the file. `open` refuses unconditionally, so advertising the capability
-    // told a caller it could ask for something no answer exists for, and
-    // `scour sources` printed it. It comes back with the first `Extractor`.
+    // **Not `CONTENT`**: `open` refuses unconditionally, and `scour sources` prints
+    // what is claimed here. It comes back with the first `Extractor`.
     assert!(
         !caps.contains(Caps::CONTENT),
         "nothing here can open a file, so nothing here may claim it can"
@@ -269,8 +256,7 @@ fn capabilities_describe_this_platform_honestly() {
     }
     #[cfg(any(windows, target_os = "macos"))]
     assert!(caps.contains(Caps::RECURSIVE_WATCH));
-    // Nothing here has a durable journal yet; that is what an $MFT or FSEvents
-    // history source would add.
+    // Nothing here has a durable journal yet; an $MFT or FSEvents source would add one.
     assert!(!caps.contains(Caps::JOURNAL));
     assert_eq!(src.describe().roots.len(), 1);
 }
@@ -287,8 +273,7 @@ impl ChangeSink for Seen {
 }
 
 /// Wait for a predicate to hold, or give up. Filesystem notifications are
-/// asynchronous on every platform and coalesced on some; a fixed sleep is
-/// either flaky or slow.
+/// asynchronous on every platform and coalesced on some, so a fixed sleep is flaky.
 fn wait_for(seen: &Arc<Seen>, what: impl Fn(&[Change]) -> bool) -> Vec<Change> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -305,30 +290,9 @@ fn wait_for(seen: &Arc<Seen>, what: impl Fn(&[Change]) -> bool) -> Vec<Change> {
     }
 }
 
-/// Start a watch, or say why this test cannot and let it pass.
-///
-/// **On Linux the only watching mechanism is a fanotify mark**, and placing one
-/// needs `CAP_SYS_ADMIN` — which a test runner does not have and should not be
-/// given. The inotify fallback that used to carry these four tests is gone on
-/// purpose: it cost one watch a directory out of a budget belonging to the
-/// whole desktop session, and taking it stopped other programs from starting.
-///
-/// **A skip must not read as a pass**, and the first attempt at this got that
-/// wrong: it printed a line to stderr and returned, which `cargo test` captures
-/// and hides — so four untested tests reported `ok` and a green run claimed
-/// something it had not checked. These four are the only end-to-end proof that
-/// an event becomes a `Change`.
-///
-/// So they carry `#[ignore]` instead. libtest counts those in the summary line,
-/// where the number cannot be missed, and prints the reason beside the name.
-/// To actually run them:
-///
-/// ```text
-/// sudo scour-watch -- cargo test -p scour-source-fs -- --ignored
-/// ```
-///
-/// Reached with `--ignored` and still no descriptor, this panics rather than
-/// passing: the run asked for the real thing and did not get it.
+/// Start a watch, or say why this test cannot and let it pass. A fanotify mark needs
+/// `CAP_SYS_ADMIN`, so these carry `#[ignore]`; under `--ignored` and still no
+/// descriptor this panics. `sudo scour-watch -- cargo test -p scour-source-fs -- --ignored`
 fn watching(src: &FsSource, sink: Box<dyn ChangeSink>, test: &str) -> Box<dyn WatchHandle> {
     match src.watch(&ScanOptions::default(), sink) {
         Ok(handle) => handle,
@@ -404,16 +368,9 @@ impl ChangeSink for Fwd {
 #[test]
 #[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 fn a_new_directory_is_reported_as_a_subtree_to_walk() {
-    // The gap this closes cost a file permanently on the live index. Between
-    // `mkdir a/b` and the moment the backend has a watch on `a/b`, anything
-    // created inside it produces no event at all — there is nothing to report
-    // it against. Reproduced there: `mkdir d && echo > d/f` left `f` on disk
-    // and out of the index for the rest of the session, while the same two
-    // commands eight seconds apart worked.
-    //
-    // So the watcher does not try to win the race. A directory that has just
-    // appeared is reported as a place to walk, and a walk reads what is there
-    // instead of waiting to be told about it.
+    // Between `mkdir a/b` and a watch existing on `a/b`, anything created inside it
+    // produces no event at all. So a directory that has just appeared is reported as
+    // a place to walk, and a walk reads what is there.
     let (dir, src) = tree();
     let seen = Arc::new(Seen::default());
     let handle = watching(
@@ -443,9 +400,8 @@ fn a_new_directory_is_reported_as_a_subtree_to_walk() {
 #[test]
 #[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 fn writing_to_a_file_does_not_ask_for_a_walk() {
-    // The other half of the rule, and the reason it is not simply "rescan on
-    // every modify": a directory's mtime moves whenever a file inside it is
-    // written, so a build would queue a walk per object file.
+    // The other half of the rule: a directory's mtime moves whenever a file in it is
+    // written, so "rescan on every modify" would queue a walk per object file.
     let (dir, src) = tree();
     let seen = Arc::new(Seen::default());
     let handle = watching(
@@ -472,11 +428,8 @@ fn writing_to_a_file_does_not_ask_for_a_walk() {
 #[ignore = "needs a fanotify descriptor: sudo scour-watch -- cargo test -p scour-source-fs -- --ignored"]
 #[cfg(unix)]
 fn a_watch_does_not_walk_out_through_a_symlink() {
-    // On the live index `~/.wine-hukuk/dosdevices/z:` points at `/`, and
-    // `notify`'s `follow_symlinks` is on by default while the walk's is off.
-    // The watcher left the home directory through it and held 242,643 inotify
-    // watches on the whole root filesystem — and reported every file created
-    // anywhere on the machine under a path that does not exist.
+    // A watcher that follows symlinks the walk does not reports files under a path
+    // no walk ever produces — `~/.wine-hukuk/dosdevices/z:` points at `/`.
     let (dir, src) = tree();
     let outside = tempfile::tempdir().expect("temp dir");
     std::os::unix::fs::symlink(outside.path(), dir.path().join("keep/elsewhere")).expect("symlink");
@@ -488,8 +441,7 @@ fn a_watch_does_not_walk_out_through_a_symlink() {
         "a_watch_does_not_walk_out_through_a_symlink",
     );
 
-    // Something happening on the far side of the link, and something on this
-    // side to prove the watch is alive at all.
+    // Something on the far side of the link, and something on this side to prove it is alive.
     std::fs::write(outside.path().join("beyond.txt"), "x").expect("write");
     let here = dir.path().join("keep/here.txt");
     std::fs::write(&here, "x").expect("write");
@@ -521,8 +473,7 @@ fn a_watch_does_not_walk_out_through_a_symlink() {
 
 #[test]
 fn identities_are_stable_across_two_scans() {
-    // Whatever a platform can offer, it has to offer the same answer twice, or
-    // every rescan would look like a complete replacement of the index.
+    // The same answer twice, or every rescan looks like a complete replacement.
     let (_dir, src) = tree();
     struct Ids(Vec<(String, scour_core::EntryId)>);
     impl EntrySink for Ids {
@@ -544,29 +495,22 @@ fn identities_are_stable_across_two_scans() {
 
 #[test]
 fn a_source_told_not_to_watch_says_it_cannot() {
-    // `source.watch` had been in the configuration since it was written and
-    // nothing read it — every source was watched regardless. The engine asks
-    // `caps()`, so this is where the answer belongs.
+    // The engine asks `caps()`, so that is where `source.watch` has to be answered.
     let s = FsSource::new(SourceId(0), "t", vec!["/tmp".into()]);
     assert!(s.caps().contains(Caps::WATCH), "watching by default");
     let s = s.with_watch(false);
     assert!(!s.caps().contains(Caps::WATCH));
     assert!(!s.caps().contains(Caps::RECURSIVE_WATCH));
-    // And what is left says something about the filesystem rather than about
-    // this source: /tmp is case sensitive here, and that is measured rather
-    // than assumed. Nothing else remains —  went when it turned out
-    // that claiming it and refusing every  were the same source.
+    // And what is left says something about the filesystem rather than about this
+    // source: /tmp is case sensitive here, measured rather than assumed.
     assert_eq!(s.caps(), Caps::CASE_SENSITIVE);
 }
 
 #[test]
 fn an_empty_root_is_reported_as_one_that_could_not_be_looked_at() {
-    // **A mount that is not mounted is a readable, empty directory.** That is
-    // the case a machine meets every time it boots: the service starts with the
-    // session, and `/mnt/depo` opens fine and lists nothing until something
-    // mounts it. The `read_dir` check alone says the root is fine, the walk
-    // reports zero entries, and the engine reconciles on that — which deletes
-    // everything the index held for that volume.
+    // **A mount that is not mounted is a readable, empty directory.** The `read_dir`
+    // check says the root is fine and the walk reports zero entries — reconciling on
+    // that deletes everything the index held for the volume.
     let dir = tempfile::tempdir().expect("temp dir");
     let src = FsSource::new(SourceId(9), "empty", vec![dir.path().to_path_buf()]);
     let (_paths, report) = scan(&src, &ScanOptions::default());
@@ -578,9 +522,8 @@ fn an_empty_root_is_reported_as_one_that_could_not_be_looked_at() {
 
 #[test]
 fn an_emptied_subtree_is_still_reconciled() {
-    // The other half, and the reason the rule is about source roots only:
-    // emptying a folder is an ordinary thing a person does, and the walk of it
-    // has to be believed or the folder's contents never leave the index.
+    // The other half, and why the rule is about source roots only: emptying a folder
+    // is ordinary, and the walk of it has to be believed.
     let (dir, src) = tree();
     let empty = dir.path().join("emptied");
     std::fs::create_dir(&empty).expect("mkdir");
@@ -598,9 +541,8 @@ fn an_emptied_subtree_is_still_reconciled() {
 
 #[test]
 fn a_root_that_cannot_be_read_is_reported_as_such() {
-    // The difference between "found nothing" and "could not look". The engine
-    // reconciles on a scan report, and reconciling the second deletes the whole
-    // index for that source — measured at five entries becoming zero.
+    // The difference between "found nothing" and "could not look": reconciling the
+    // second deletes the whole index for that source, measured at five entries to zero.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let real = tmp.path().join("here");
     std::fs::create_dir(&real).expect("mkdir");
@@ -622,15 +564,9 @@ fn a_root_that_cannot_be_read_is_reported_as_such() {
     assert_eq!(r.entries, 0);
 }
 
-/// A spinning disk is not a fast disk with fewer cores — and a fast disk is
-/// not a reason to use every core.
-///
-/// The thread count belongs to the device *and* to what the entries are handed
-/// to: one thread stages and indexes them, so walker threads past what it can
-/// absorb spin in `ignore`'s wait-for-work loop and starve it. Two is the lower
-/// CPU whether the tree is in the page cache or has to come off the disk; see
-/// `Medium::threads` for all four measurements. A spinning disk is still one,
-/// because every extra concurrent reader is another seek.
+/// A spinning disk is not a fast disk with fewer cores — and a fast disk is not a
+/// reason to use every core. The count belongs to the device *and* to the one
+/// thread the entries are handed to; `Medium::threads` carries the measurements.
 #[test]
 fn the_device_decides_how_many_threads_are_worth_using() {
     use scour_source_fs::fs::Medium;
@@ -638,8 +574,7 @@ fn the_device_decides_how_many_threads_are_worth_using() {
     assert_eq!(Medium::Solid.threads(20), 2);
     assert_eq!(Medium::Memory.threads(20), 2);
     assert_eq!(Medium::Network.threads(20), 4);
-    // The core count does not enter into it in either direction: the walk is
-    // bounded by what one consumer can take, not by what the machine has.
+    // The walk is bounded by what one consumer can take, not by what the machine has.
     assert_eq!(Medium::Solid.threads(128), 2);
     assert_eq!(Medium::Solid.threads(1), 2);
     // Nor does a spinning disk on a big machine.
@@ -669,11 +604,9 @@ fn a_real_mount_is_classified() {
 
 #[test]
 fn stat_cannot_be_walked_out_of_the_source() {
-    // **The fence that was not one.** `stat` is what the web bridge calls the
-    // index fence around opening a file, and what the MCP server hands to a
-    // model. The check in front of it compared strings: a path starting with a
-    // configured root was inside it, whatever the kernel would make of the
-    // path. Both of these returned `/etc/passwd` against the running service.
+    // **The fence that was not one.** `stat` is the fence the web bridge and the MCP
+    // server rely on, and a string prefix is not containment: both of these returned
+    // `/etc/passwd` against the running service.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let root = tmp.path().join("kok");
     std::fs::create_dir(&root).expect("mkdir");
@@ -698,8 +631,7 @@ fn stat_cannot_be_walked_out_of_the_source() {
         "a symlink out of the tree was followed"
     );
 
-    // And the link itself is still a row of its own: `stat` of a symlink
-    // describes the link, not what it points at.
+    // The link itself is still a row of its own: `stat` of it describes the link.
     let link = src
         .stat(&format!("{}/disari", root.display()))
         .expect("the link is inside the source");
@@ -709,10 +641,8 @@ fn stat_cannot_be_walked_out_of_the_source() {
 #[test]
 #[cfg(unix)]
 fn two_files_whose_names_are_not_utf8_are_two_entries() {
-    // **Two files on disk used to become one row.** Every invalid byte decoded
-    // to the same replacement character, so `same-\xfe` and `same-\xff` took
-    // the same path — and since a row is identified by its path, the second
-    // upsert replaced the first. Neither could be named again afterwards.
+    // **Two files on disk used to become one row**: every invalid byte decoded to the
+    // same replacement character, so `same-\xfe` and `same-\xff` took one path.
     use std::os::unix::ffi::OsStrExt;
 
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -735,8 +665,7 @@ fn two_files_whose_names_are_not_utf8_are_two_entries() {
     paths.sort();
     assert_eq!(paths.len(), 3, "names collapsed into each other: {paths:?}");
 
-    // And every one of them can be asked about again, which is what a search
-    // result has to be able to do.
+    // And every one of them can be asked about again, which a search result must do.
     for p in &paths {
         let back = src
             .stat(p)
@@ -748,10 +677,8 @@ fn two_files_whose_names_are_not_utf8_are_two_entries() {
 
 #[test]
 fn a_directory_that_cannot_be_read_is_named_so_the_sweep_can_spare_it() {
-    // A directory that loses its read permission *after* it was indexed still
-    // holds every one of its files. The walk cannot say they are gone, because
-    // it could not look — and a sweep that does not know that deletes them.
-    // Counting the failures was never enough; the sweep needs the paths.
+    // A directory that loses its read permission after it was indexed still holds
+    // every one of its files, so the sweep needs the paths and not a count.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let root = tmp.path().join("kok");
     let closed = root.join("kapali");
@@ -788,16 +715,9 @@ fn a_directory_that_cannot_be_read_is_named_so_the_sweep_can_spare_it() {
 
 #[test]
 fn a_root_that_changes_underneath_the_walk_is_not_vouched_for() {
-    // The check used to be one `read_dir` before the walk started; everything
-    // after that was taken on trust. Unmount a volume mid-scan, let a share
-    // drop, pull a disk — the walk still came back with a report the engine
-    // reconciled against, and reconciling against a filesystem that is not
-    // there deletes every row it had.
-    //
-    // A bind mount is the portable way to make a directory's device number
-    // change without root here; without one, the same evidence comes from a
-    // root that is replaced by a different filesystem between the two checks.
-    // What is asserted is the rule itself: same device, or no vouching.
+    // One `read_dir` before the walk leaves everything after it on trust: unmount a
+    // volume mid-scan and the engine reconciles against a filesystem that is not
+    // there. A bind mount is the portable way to change a device number without root.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let root = tmp.path().join("kok");
     std::fs::create_dir(&root).expect("mkdir");

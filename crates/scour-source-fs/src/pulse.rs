@@ -1,32 +1,8 @@
-//! "Has anything happened here?", for microseconds.
+//! "Has anything happened here?", for microseconds — a trigger for reconciliation.
 //!
-//! A watcher on Linux costs one inotify watch per directory out of a budget
-//! shared with every other program the user runs, and a volume that changes
-//! four times a day does not earn 152,529 of them. What replaces watching is
-//! reconciliation — but reconciliation on a timer is work done mostly for
-//! nothing, so it wants a trigger.
-//!
-//! This is the trigger. Two of them, chosen by what is under the root:
-//!
-//! * **btrfs** answers exactly. `BTRFS_IOC_GET_SUBVOL_INFO` reports the
-//!   subvolume's `ctransid` — the transaction it last changed in — and it has
-//!   no capability check, unlike the `TREE_SEARCH` that `btrfs subvolume show`
-//!   reaches for and fails on. Measured: still across three idle seconds,
-//!   moved on a write, a rename and a delete, **8 µs a read**.
-//!
-//! * **Anything else** falls back to the block layer: the write-sector counter
-//!   for the partition behind the root, out of `/proc/diskstats`. Measured on
-//!   the NTFS volume: zero drift over three idle seconds, and it moves for a
-//!   rename, which `statvfs`'s free-block count sleeps through.
-//!
-//! Neither says *what* changed, and that is the point — they cost nothing and
-//! the expensive question is only asked when the answer can differ.
-//!
-//! **The block counter is only as good as the partition is private.** `/home`
-//! shares `nvme0n1p5` with `/var/log`, `/var/cache` and `/srv`, so its write
-//! sectors moved fourteen times in fifteen idle seconds — noise, not signal.
-//! That is why btrfs is asked first and why a caller must treat a moving pulse
-//! as "look", never as "something of mine changed".
+//! btrfs answers with `BTRFS_IOC_GET_SUBVOL_INFO`'s `ctransid`: 8 µs a read, no
+//! capability check. Anything else falls back to a write-sector counter, which its
+//! neighbours move too — a pulse means "look", never "something of mine changed".
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -45,9 +21,8 @@ mod linux {
         None,
     }
 
-    // BTRFS_IOC_GET_SUBVOL_INFO — _IOR(0x94, 60, struct
-    // btrfs_ioctl_get_subvol_info_args). The struct is 504 bytes and
-    // `ctransid` sits at offset 344; nothing else in it is wanted here.
+    // BTRFS_IOC_GET_SUBVOL_INFO — _IOR(0x94, 60, btrfs_ioctl_get_subvol_info_args),
+    // a 504-byte struct with `ctransid` at offset 344.
     const BTRFS_GET_SUBVOL_INFO: libc::c_ulong = (2 << 30) | (504 << 16) | (0x94 << 8) | 60;
     const CTRANSID_AT: usize = 344;
     const BTRFS_MAGIC: i64 = 0x9123_683E;
@@ -91,12 +66,8 @@ mod linux {
                 buf.as_mut_ptr() as *mut libc::c_void,
             )
         };
-        // **Not `!= 0`.** This ioctl answers with a *non-negative* number, and
-        // on this machine it answers 1 — the search that filled the struct
-        // found its key past an exact match and the kernel passes that back.
-        // Reading it as failure cost an afternoon: the struct was filled every
-        // time, and the error printed alongside was a stale `errno` from
-        // something else entirely.
+        // **Not `!= 0`.** The ioctl answers with a non-negative number and answers
+        // 1 here; the struct is filled either way.
         if rc < 0 {
             if std::env::var_os("SCOUR_PULSE_TRACE").is_some() {
                 eprintln!(
@@ -113,11 +84,8 @@ mod linux {
     }
 
     /// The device name `/proc/diskstats` uses for whatever this path is on.
-    ///
-    /// From `/proc/self/mountinfo`, which gives the major:minor of the mount
-    /// the path belongs to; `/sys/dev/block/<major>:<minor>` names it. The
-    /// longest matching mount point wins, so a bind mount inside another does
-    /// not answer for its parent.
+    /// From `/proc/self/mountinfo`'s major:minor, named by `/sys/dev/block`. The
+    /// longest matching mount point wins, so a bind mount does not answer for its parent.
     fn device_of(root: &Path) -> Option<String> {
         let root = root.canonicalize().ok()?;
         let mounts = fs::read_to_string("/proc/self/mountinfo").ok()?;

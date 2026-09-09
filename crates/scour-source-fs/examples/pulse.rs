@@ -1,9 +1,7 @@
 //! What a source's pulse says, for a path given on the command line.
 //!
-//! Diagnostic rather than test: whether a pulse can be read at all depends on
-//! the filesystem under the path and on the machine, so this asks rather than
-//! asserts.
-//!
+//! Diagnostic rather than test: whether a pulse can be read depends on the
+//! filesystem and the machine, so this asks rather than asserts.
 //!     cargo run -p scour-source-fs --example pulse -- /home/hasan /mnt/depo
 
 use scour_core::{Source, SourceId};

@@ -1,36 +1,17 @@
 //! What not to index.
 //!
-//! Three kinds of rule, plus one that overrules them:
-//!
-//! * **Paths** — a prefix. `/proc` skips everything under it.
-//! * **Directory names** — anywhere they appear. `node_modules` skips every
-//!   copy of it, and there are always many.
-//! * **File names** — likewise.
-//! * **Allow** — a prefix that wins over all of the above, so one interesting
-//!   directory can be rescued from a broad exclusion without unpicking it.
-//!
-//! Defaults are per-platform and live in [`platform_defaults`]. They are data
-//! rather than code so that the settings screen can show and edit them, which
-//! is the whole reason a user ever looks at this: something they wanted was
-//! missing, and they need to see why.
+//! Three kinds of rule — a path prefix, a directory name anywhere, a file name
+//! anywhere — plus `allow`, which overrules them. Defaults are data rather than
+//! code in [`platform_defaults`], so a settings screen can show and edit them.
 
 use scour_core::ScanOptions;
 
 /// Compiled exclusion rules. Built once per scan, then asked per entry.
-///
-/// Directory rules are compiled into **component sequences**, and that is the
-/// whole of a bug this file carried for as long as it has existed: the
-/// defaults contain `.git/objects` and `.cargo/registry`, and both sides
-/// compared a rule containing a `/` against a single file name, which can
-/// never contain one. The two highest-churn directories on a developer's disk
-/// were named in the defaults, shown in the settings, and indexed anyway.
+/// A rule containing `/` is a component sequence, not a name: `.git/objects`.
 #[derive(Debug, Default, Clone)]
 pub struct Rules {
     paths: Vec<String>,
-    /// Rules naming one directory, wherever it appears. The common case, and
-    /// the one that has to stay a hash lookup on the entry's own name — it was
-    /// a `Vec` under that very comment, so every entry compared its name
-    /// against every rule in turn.
+    /// Rules naming one directory wherever it appears — a hash lookup per entry.
     dirs: std::collections::HashSet<String>,
     /// Rules naming a sequence — `.git/objects`. Matched at any component
     /// boundary, and everything below the match goes with it.
@@ -38,22 +19,11 @@ pub struct Rules {
     files: std::collections::HashSet<String>,
     allow: Vec<String>,
     /// Allow rules naming a sequence rather than a place — `target/release`,
-    /// matched wherever it appears.
-    ///
-    /// **Why a sequence and not a path.** The exclusion that matters most to a
-    /// developer is `target`, and it is right: 852,437 of 2,986,545 entries
-    /// here, and a flood through the watcher while a build runs. But the
-    /// binaries it produces are the very things a person wants to find and
-    /// run, and they live in exactly two of its children. A path-shaped allow
-    /// means writing one line per project and rewriting it per checkout; a
-    /// sequence means `target/release` once, for every project on the disk.
+    /// matched wherever it appears, so one line covers every project on the disk
+    /// instead of one line per checkout.
     allow_seqs: Vec<Vec<String>>,
     /// Exclusions an allow rule may not overrule.
-    ///
-    /// The index's own directory is the whole reason this exists: a user's
-    /// `allow` that happens to cover it turns the service into a thing that
-    /// indexes what it writes while writing it — measured, before it was
-    /// excluded, at 36% and 26% of two cores feeding each other.
+    /// The index's own directory: indexing what it writes cost 36% and 26% of two cores.
     deny: Vec<String>,
 }
 
@@ -92,8 +62,7 @@ impl Rules {
                     .cloned()
                     .collect(),
             ),
-            // Anything that is not an absolute path is a sequence of directory
-            // names, the same shape the exclusions already accept.
+            // Anything that is not an absolute path is a sequence of directory names.
             allow_seqs: opts
                 .allow
                 .iter()
@@ -110,9 +79,7 @@ impl Rules {
     }
 
     /// Does a directory-sequence rule match, ending at this path?
-    ///
-    /// For the scan, where the entry being judged is the directory itself: the
-    /// walker prunes it, so its children never arrive to be asked about.
+    /// For the scan, where the entry judged is the directory itself and is pruned.
     fn seq_ends_at(&self, path: &str, name: &str) -> bool {
         let lower = name.to_lowercase();
         let comps: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
@@ -127,9 +94,7 @@ impl Rules {
     }
 
     /// Does a directory-sequence rule match anywhere in this path?
-    ///
-    /// For the watcher, which is handed a path with no walk behind it and has
-    /// to decide about descendants on its own.
+    /// For the watcher, which is handed a path with no walk behind it.
     fn seq_within(&self, path: &str) -> bool {
         if self.dir_seqs.is_empty() {
             return false;
@@ -153,18 +118,8 @@ impl Rules {
     }
 
     /// Is this path taken back by an allow rule?
-    ///
-    /// **The two shapes mean different amounts, and the numbers are why.** A
-    /// path — `/home/u/big/keep` — takes back a *subtree*, which is what a
-    /// person naming one place means.
-    ///
-    /// A sequence — `target/release` — takes back that directory's **own
-    /// entries and no deeper**. Measured on this machine: `target/release` is
-    /// 11,056 entries in one project and 114,463 in another, nearly all of it
-    /// `deps/`, while its top level is **41 entries containing all 5
-    /// binaries**. A subtree rule would hand back everything the exclusion
-    /// exists to keep out in order to reach a handful of files; this hands
-    /// back the handful.
+    /// A path takes back a subtree; a sequence takes back that directory's own
+    /// entries and no deeper — `target/release` is 41 entries holding all 5 binaries.
     fn allows(&self, path: &str, is_dir: bool) -> bool {
         if self.allow.iter().any(|a| under(path, a)) {
             return true;
@@ -172,18 +127,8 @@ impl Rules {
         if self.allow_seqs.is_empty() {
             return false;
         }
-        // **Only the tail can match, and it is read from the end.** This runs
-        // once an entry — 1,350,806 of them on this machine's smaller volume —
-        // and it used to fold every component of a hundred-and-fifteen-byte
-        // path into its own `String` to compare the last two. Measured with
-        // `examples/rulecost.rs`, which times each rule kind over the same
-        // collected paths: 0.68 µs an entry, against 0.03 for the other three
-        // kinds put together.
-        //
-        // Three things came out, in that order, and only the last two are
-        // worth much. Folding the tail rather than the path: 0.63. Reading the
-        // tail from the end rather than counting components to skip them,
-        // which was two passes over the whole path: 0.55.
+        // Only the tail can match, and it is read from the end: folding whole
+        // paths cost 0.68 µs an entry against 0.03 for the other three kinds.
         let keep = self.allow_seqs.iter().map(Vec::len).max().unwrap_or(0) + 1;
         let mut buf = [""; MAX_TAIL];
         if keep > MAX_TAIL {
@@ -211,32 +156,21 @@ impl Rules {
             if n >= l && matches(0) {
                 return true;
             }
-            // A file directly inside it. Directories are deliberately left
-            // out: `deps` under `release` is where the noise lives, and
-            // refusing it here is what lets the walk prune it.
+            // A file directly inside it. Directories are left out on purpose:
+            // `deps` under `release` is the noise, and refusing it lets the walk prune.
             !is_dir && n > l && matches(1)
         })
     }
 
     /// Is any *ancestor* of this path an excluded directory?
-    ///
-    /// **Only asked when an allow rule exists.** Ordinarily an excluded
-    /// directory is pruned and nothing under it is ever offered, so this
-    /// question cannot arise and the walk pays nothing for it. An allow rule
-    /// changes that: the walk is let into `target` to reach `target/release`,
-    /// and without this everything else in there — every object file, every
-    /// fingerprint — would be indexed *because* one child was wanted.
+    /// Only asked when an allow rule exists: the walk is let into `target` to reach
+    /// `target/release`, and everything else in there must still go.
     fn inside_excluded(&self, path: &str) -> bool {
-        // **One buffer, not one string a component.** This is the other thing
-        // an allow rule turns on for every entry, and it folded a
-        // hundred-and-fifteen-byte path into ten fresh `String`s to ask ten
-        // questions of a nine-name list. The buffer is reused across
-        // components and the list is a set.
+        // One reused buffer, not one `String` a component; the list is a set.
         let mut fold = String::with_capacity(32);
         let mut it = path.split('/').filter(|c| !c.is_empty()).peekable();
         while let Some(c) = it.next() {
-            // The last component is the entry itself; its own rules were
-            // already applied by the caller.
+            // The last component is the entry itself, already judged by the caller.
             if it.peek().is_none() {
                 break;
             }
@@ -249,9 +183,7 @@ impl Rules {
         self.seq_within(path)
     }
 
-    /// Should this entry be skipped?
-    ///
-    /// `path` is already `/`-normalised.
+    /// Should this entry be skipped? `path` is already `/`-normalised.
     pub fn excludes(&self, path: &str, name: &str, is_dir: bool) -> bool {
         if self.deny.iter().any(|d| under(path, d)) {
             return true;
@@ -279,24 +211,13 @@ impl Rules {
     }
 
     /// Should this path be skipped, judged from the path alone?
-    ///
-    /// The same answer as [`Rules::excludes`] without the `is_dir` argument,
-    /// and therefore **without a syscall** — every component is checked
-    /// against the directory rules and the last one against the file rules,
-    /// so a path with `target` anywhere in it is out whether or not anything
-    /// still exists to stat.
-    ///
-    /// This is what a watcher needs. The first version of that filter called
-    /// `is_dir()` per event, which is one `stat` for every file a compiler
-    /// writes — measured at 74% of a core while a build ran, for events that
-    /// were then thrown away.
+    /// The same answer as [`Rules::excludes`] **without a syscall**, which is what
+    /// a watcher needs: an `is_dir()` per event cost 74% of a core during a build.
     pub fn excludes_path(&self, path: &str) -> bool {
         if self.deny.iter().any(|d| under(path, d)) {
             return true;
         }
-        // No `is_dir` here, and the generous reading is the safe one: a
-        // watcher letting one event through costs a check, and refusing one
-        // costs a row that never updates.
+        // No `is_dir`: letting one event through costs a check, refusing one a stale row.
         if self.allows(path, false) || self.allows(path, true) {
             return false;
         }
@@ -314,9 +235,7 @@ impl Rules {
     }
 
     /// Could anything under this directory still be wanted?
-    ///
-    /// A directory excluded by prefix may still contain an allowed subtree, and
-    /// pruning it there would make the allow rule a lie.
+    /// A directory excluded by prefix may still contain an allowed subtree.
     pub fn may_contain_allowed(&self, path: &str) -> bool {
         if self.allow.iter().any(|a| under(a, path)) {
             return true;
@@ -324,8 +243,8 @@ impl Rules {
         if self.allow_seqs.is_empty() {
             return false;
         }
-        // A rule naming `target/release` has to let the walk into `target`,
-        // which is to say: this directory ends with some head of the rule.
+        // `target/release` has to let the walk into `target`: this path ends
+        // with some head of the rule.
         let comps = lower_components(path);
         self.allow_seqs.iter().any(|rule| {
             (1..=rule.len().min(comps.len())).any(|n| comps[comps.len() - n..] == rule[..n])
@@ -340,32 +259,13 @@ fn lower_components(path: &str) -> Vec<String> {
         .collect()
 }
 
-/// The last `keep` components of a path, folded.
-///
-/// **The whole path used to be folded to compare its tail.** A sequence rule of
-/// `l` components is only ever matched against the last `l`, or against the `l`
-/// before the name — so `l + 1` components are all that can matter, and on this
-/// machine `l` is two. The paths are not short: 1,350,806 entries under
-/// `/mnt/depo` average 115 bytes and about ten components each, so folding all
-/// of them cost thirteen million allocations a scan to look at three.
-///
-/// Folding is `to_lowercase` rather than the ASCII one, because the names here
-/// are as often Turkish as not: `Müzik` and `MÜZIK` are one directory and only
-/// the Unicode form says so.
 /// How deep a tail this can read without allocating. Longer than any sequence
 /// rule anybody writes; a rule past it falls back to folding the path.
 const MAX_TAIL: usize = 8;
 
-/// The last components of a path, newest first, borrowed.
-///
-/// **From the end and without folding.** A sequence rule is compared against
-/// the tail, so the head is never looked at — and the comparison itself does
-/// not need the tail folded, only compared folded, which [`eq_folded`] does in
-/// place. What is left is `rsplit`, which touches the bytes it returns and no
-/// others.
-///
-/// Returned reversed, so `tail[0]` is the last component. The caller compares
-/// rules reversed to match, which costs nothing and saves putting it back.
+/// The last components of a path, newest first, borrowed and unfolded.
+/// [`eq_folded`] compares folded in place, so `rsplit` touches only the bytes it
+/// returns; `tail[0]` is the last component, so rules are compared reversed.
 fn tail_of<'a>(path: &'a str, keep: usize, buf: &mut [&'a str; MAX_TAIL]) -> usize {
     let mut n = 0;
     for c in path.rsplit('/').filter(|c| !c.is_empty()).take(keep) {
@@ -376,14 +276,8 @@ fn tail_of<'a>(path: &'a str, keep: usize, buf: &mut [&'a str; MAX_TAIL]) -> usi
 }
 
 /// Is `component` this rule component, ignoring case?
-///
-/// `folded` is already lowercase — every rule is folded when it is built — so
-/// only one side has to be, and folding it into a comparison rather than into a
-/// `String` is what takes the allocation out of the walk's inner loop.
-///
-/// No length shortcut. `to_lowercase` is not length-preserving outside ASCII —
-/// `İ` folds to two characters — and this file exists on a machine whose paths
-/// are half Turkish.
+/// Rules are folded when built, so only one side folds, and into the comparison
+/// rather than into a `String`. No length shortcut: `İ` folds to two characters.
 fn eq_folded(component: &str, folded: &str) -> bool {
     component
         .chars()
@@ -403,17 +297,10 @@ fn under(path: &str, prefix: &str) -> bool {
 }
 
 /// Things no file index should hold, per platform.
-///
-/// Two categories, and they are excluded for different reasons. Virtual
-/// filesystems (`/proc`, `/sys`) are not files at all and reading them can
-/// block forever. Build output and package caches are real files, but they
-/// churn constantly and bury real results under thousands of hashes — the
-/// user's own `target/` directory is the single loudest source of noise in a
-/// developer's home directory.
+/// Two reasons: a virtual filesystem is not files and can block for ever, and
+/// build output churns and buries real results.
 pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
-    // `mut` on a platform that adds nothing to them is an unused-mut warning,
-    // and Android is that platform: it has no `/proc` to exclude by absolute
-    // path because an app cannot walk outside its own directory anyway.
+    // Android adds nothing to these, and an untouched `mut` is a warning.
     #[allow(unused_mut)]
     let mut paths: Vec<String> = Vec::new();
     #[allow(unused_mut)]
@@ -455,23 +342,9 @@ pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
         );
     }
 
-    // Everywhere: churn, not content.
-    //
-    // `target` is the one this list used to describe and not contain, and the
-    // omission was expensive twice over. It is **852,437 of 2,986,545 entries**
-    // on this machine — 28% of an index, none of it written by anyone — and
-    // while a compile is running the watcher turns it into a flood: 3,935
-    // changes queued, the service at 67% of a core, and every search behind
-    // them. Measured during one `cargo test`.
-    //
-    // It is a *directory name*, so it is skipped wherever it appears, and
-    // `exclude.allow` takes it back for anyone who wants to search a build
-    // tree — one line of configuration against a third of the index.
-    //
-    // `build`, `dist` and `out` are deliberately **not** here. They cost
-    // another 249,445 entries and they are plausible names for real work,
-    // which `target` beside a `Cargo.toml` is not. Anyone who wants them gone
-    // adds them; the default does not guess.
+    // Everywhere: churn, not content. `target` is 852,437 of 2,986,545 entries
+    // here, and one `cargo test` queued 3,935 changes at 67% of a core. `build`,
+    // `dist` and `out` stay out of it: those are names people use for real work.
     dirs.extend(
         [
             ".git/objects",
@@ -505,8 +378,7 @@ mod tests {
         })
     }
 
-    /// `target` excluded the way the defaults exclude it, plus the allow
-    /// rules under test.
+    /// `target` excluded the way the defaults exclude it, plus the allow rules.
     fn allowing(allow: &[&str]) -> Rules {
         Rules::from_options(&ScanOptions {
             exclude_dirs: vec!["target".into()],
@@ -550,8 +422,7 @@ mod tests {
         );
     }
 
-    /// The rule as it is actually used: the platform's own exclusions, plus
-    /// what the shipped configuration suggests.
+    /// The rule as actually used: platform exclusions plus the shipped configuration.
     #[test]
     fn the_defaults_plus_one_line_bring_the_binaries_back() {
         let (paths, dirs, files) = platform_defaults();
@@ -604,11 +475,8 @@ mod tests {
 
     #[test]
     fn a_rule_naming_two_components_excludes_the_tree_under_it() {
-        // `.git/objects` and `.cargo/registry` are in the defaults, are shown
-        // in the settings, and were indexed anyway: the scan compared a rule
-        // containing a `/` against a file name, which never contains one, and
-        // the watcher's version matched the directory itself but nothing below
-        // it. The two busiest directories on a developer's disk.
+        // A rule with a `/` matches a component sequence, not a name: the scan
+        // prunes the directory and the watcher judges everything below it.
         let rules = Rules::from_options(&ScanOptions {
             exclude_dirs: vec![".git/objects".into(), "node_modules".into()],
             ..Default::default()
@@ -620,8 +488,7 @@ mod tests {
         assert!(rules.excludes_path("/p/.git/objects/aa/3f2b1c"));
         assert!(rules.excludes_path("/p/.git/objects"));
 
-        // What must not be caught: the same last component under a different
-        // parent, and the parent itself.
+        // What must not be caught: the same last component under another parent.
         assert!(!rules.excludes("/p/build/objects", "objects", true));
         assert!(!rules.excludes_path("/p/build/objects/aa"));
         assert!(!rules.excludes_path("/p/.git/config"));
@@ -643,8 +510,7 @@ mod tests {
 
     #[test]
     fn an_excluded_directory_on_the_way_to_an_allowed_one_is_not_pruned() {
-        // Otherwise the allow rule would be unreachable: the walk would stop at
-        // /home/u/big and never see /home/u/big/keep.
+        // Otherwise the walk would stop at /home/u/big and never see the allow.
         let r = rules();
         assert!(r.may_contain_allowed("/home/u/big"));
         assert!(r.may_contain_allowed("/home/u"));

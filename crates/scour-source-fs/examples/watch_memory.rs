@@ -1,9 +1,6 @@
 //! What one recursive watch holds in userspace.
-//!
-//! Diagnostic rather than test: point it at a real tree, then compare the
-//! allocator and `/proc` readings before and after `Source::watch` has walked
-//! every directory. The handle is kept alive until Enter so the second sample
-//! describes the steady state rather than its teardown.
+//! Diagnostic rather than test: allocator and `/proc` readings before and after
+//! `Source::watch`, the handle held until Enter so the second is the steady state.
 
 use std::io::Read;
 

@@ -1,30 +1,7 @@
-//! Which rule costs what.
-//!
-//! A good part of a rescan's walk is the rule tests, and measuring them through
-//! a whole walk could not say which rule: the first fix aimed at them measured
-//! *flat* across four runs each way, because it was worth 0.9 core-seconds of a
-//! number that swung between 5.6 and 6.2 on its own.
-//!
-//! So each kind goes in on its own and then cumulatively, over the same
-//! collected paths, and each line is one kind's share rather than a total to be
-//! subtracted from another total. The answer was not close:
-//!
-//! | rule kind | µs an entry |
-//! |---|---|
-//! | none, short-circuited | 0.08 |
-//! | 7 excluded paths | 0.11 |
-//! | 11 excluded directory names | 0.08 |
-//! | 3 excluded file names | 0.08 |
-//! | **2 allow sequences** | **0.68** |
-//!
-//! All of it in the one rule the settings file treats as an afterthought.
-//! `target/release` turns on two whole-path folds an entry — `Rules::allows`
-//! to place the tail, `Rules::inside_excluded` to check every ancestor — where
-//! the other three kinds are a hash lookup and a few prefix comparisons.
-//! Reading the tail from the end and folding into a reused buffer took the
-//! allow line to 0.35 and the real configuration from 1.09 to 0.75.
-//!
-//!   cargo run --release -p scour-source-fs --example rulecost -- <root>
+//! Which rule costs what: each kind on its own and then cumulatively, over the same
+//! collected paths, because through a whole walk the difference is inside the noise.
+//! Two allow sequences measured 0.68 µs an entry against 0.08–0.11 for the other
+//! three kinds together. `cargo run --release --example rulecost -- <root>`
 
 use std::time::Instant;
 
@@ -52,8 +29,7 @@ fn main() {
     let allow = vec!["target/release".to_owned(), "target/debug".to_owned()];
 
     // Collected with no rules at all, so every entry is present to be judged —
-    // including the ones the real rules would have pruned, which are exactly
-    // the ones the tests have to run on.
+    // including the ones the real rules would have pruned.
     let source = FsSource::new(SourceId(0), "probe", vec![root.clone().into()]);
     let mut keep = Keep::default();
     let began = Instant::now();
@@ -75,8 +51,7 @@ fn main() {
     let n = keep.rows.len().max(1);
     let time = |what: &str, opts: ScanOptions| {
         let rules = Rules::from_options(&opts);
-        // Two rounds, and the faster reported: this is a cache-resident loop
-        // over the same data, so the slower one is measuring the machine.
+        // Two rounds and the faster reported: this loop is cache-resident.
         let mut best = f64::MAX;
         for _ in 0..2 {
             let t = Instant::now();

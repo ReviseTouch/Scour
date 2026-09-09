@@ -1,37 +1,8 @@
 //! Watching a whole filesystem with one mark.
 //!
-//! inotify costs a watch a directory. On the machine this was built for that is
-//! 296,711 directories under the home alone against a limit of 268,593, and
-//! 152,529 for the NTFS volume — which is why that volume was not being watched
-//! at all. `FAN_MARK_FILESYSTEM` costs **one mark a superblock**, measured at
-//! 0.005 ms and no measurable kernel memory, against 26.4 ms and 3.1 MB for
-//! 30,000 inode marks that still miss every directory created afterwards.
-//!
-//! Three things about this mechanism decide the shape of everything below, and
-//! each was measured rather than assumed:
-//!
-//! * **Events merge.** A file created, written, closed and deleted between two
-//!   reads arrives as a single event with `mask = 0x30a` — CREATE, MODIFY,
-//!   CLOSE_WRITE and DELETE together, in no order. Nothing in the event says
-//!   whether the file is there now. So the mask is never read as a description;
-//!   the path is looked at instead, which is the contract [`crate::watch`]
-//!   already states.
-//! * **The cost is the wake, not the event.** Per event the reader spends
-//!   11.4 µs at 20 events a second and 1.1 µs at 230,000 — the difference is a
-//!   fixed cost amortised over the batch. Draining on a timer instead of on
-//!   arrival took a 2,120-event-a-second load from 0.84% of a core to 0.078%,
-//!   and idle from 143 wakes a second to 5. Hence [`WINDOW`].
-//! * **A file handle is not a path.** The event carries the *parent directory*
-//!   as an opaque handle plus the entry name. Turning that into a path takes
-//!   either `open_by_handle_at` — which needs `CAP_DAC_READ_SEARCH`, measured
-//!   EPERM as an ordinary user — or a map this process builds itself. It builds
-//!   it: the handle's bytes carry the inode number, and the walk already stats
-//!   every directory.
-//!
-//! What this module does *not* do is decide anything. Every path it resolves
-//! goes through the same [`crate::watch::look`] as an inotify event, so the
-//! rules, the metadata read and the "a new directory is a subtree" step are
-//! shared and cannot drift apart.
+//! `FAN_MARK_FILESYSTEM` costs one mark a superblock: 0.005 ms and no measurable
+//! kernel memory. Events merge — a create, write, close and delete arrive as one
+//! mask — so the mask is never a description; a path is stated instead.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -48,91 +19,35 @@ use crate::rules::Rules;
 use crate::scan::FsSource;
 
 /// Where the privileged helper leaves the already-marked descriptor.
-///
-/// The marks need `CAP_SYS_ADMIN` and this process does not have it and must
-/// not: measured, an unprivileged process that is handed the descriptor can
-/// read every event on both disks while `fanotify_mark` and `fanotify_init`
-/// both return EPERM to it. So privilege is spent once, before this process
-/// starts, and what crosses over is a descriptor that cannot be used to widen
-/// the watch.
+/// The marks need `CAP_SYS_ADMIN`: a process handed the descriptor reads every
+/// event while `fanotify_init` and `fanotify_mark` still return EPERM to it.
 const FD_ENV: &str = "SCOUR_FANOTIFY_FD";
 
 /// How long to let events pile up before draining them.
-///
-/// Two hundred milliseconds, and the number is the whole reason this is
-/// affordable. Measured against a steady load, wakes a second and the share of
-/// one core they cost:
-///
-/// | window | ~212 events/s | ~2120 events/s |
-/// |---|---|---|
-/// | 0 ms | 143 wakes, 0.274% | 1417 wakes, 0.838% |
-/// | 50 ms | 17 wakes, 0.073% | 20 wakes, 0.157% |
-/// | **200 ms** | **5 wakes, 0.030%** | **5 wakes, 0.078%** |
-/// | 500 ms | 2 wakes, 0.019% | 2 wakes, 0.062% |
-/// | 1000 ms | 1 wake, 0.014% | 1 wake, **0.075%** |
-///
-/// Past 500 ms it stops paying and at 1000 ms it reverses: the batch reaches
-/// 2,600 events and stops fitting in cache. Two hundred is where the idle cost
-/// crosses under a thirtieth of a percent, which is the requirement, and the
-/// price is that the index is at most this far behind — well under the time it
-/// takes to type a query.
+/// At 2,120 events a second: 5 wakes and 0.078% of a core here, against 1,417
+/// wakes and 0.838% at 0 ms. Past 500 ms the batch stops fitting in cache.
 const WINDOW: Duration = Duration::from_millis(200);
 
-/// Read buffer.
-///
-/// 256 KiB against 64 KiB carries 3.98× as many events a call and is 1.04×
-/// faster, so the syscall is not the cost and this is sized for the batch
-/// rather than for throughput. At 71 bytes an event it holds about 3,600.
+/// Read buffer. 256 KiB carries 3.98× as many events a call as 64 KiB for 1.04×
+/// the speed, so it is sized for the batch: about 3,600 events at 71 bytes each.
 const BUF: usize = 256 * 1024;
 
-/// The most events one window will collect before it stops reading and says it
-/// lost track.
-///
-/// **The kernel queue is deliberately unlimited and this vector was not.**
-/// `scour-watch` opens the group with `FAN_UNLIMITED_QUEUE` — its own comment
-/// costs that at "about 95 bytes an event, so a million unread events is 90 MB
-/// of kernel memory", and calls the 4.6-million-a-second drain rate "what makes
-/// that a bound rather than a risk". That reasoning covers the kernel's side of
-/// the queue and stops there: draining it is what moves those events *into this
-/// process*, and the read loop below kept going until the queue was empty or
-/// two seconds had passed. Two seconds at the measured drain rate is about nine
-/// million [`Seen`] values, each with an owned name — several hundred megabytes
-/// of anonymous memory, reached by nothing more unusual than deleting a large
-/// tree.
-///
-/// So the deadline is a *time* bound and this is the *memory* one. Past it the
-/// window is abandoned exactly as a kernel overflow is: `lost` is set, and the
-/// subtree is walked again. That is the module's existing contract — an event
-/// is a hint to look again, never a description of what happened — so nothing
-/// downstream needs to learn a new case.
-///
-/// A quarter of a million is far above any ordinary burst (a kernel build, a
-/// `git clone`, an unpacked archive) and is about 20 MB of `Seen` while it is
-/// held. The ceiling is approached rather than hit exactly: [`parse`] empties a
-/// whole buffer before the check, so a window may end up to one buffer — about
-/// 3,600 events — past it.
+/// The most events one window collects before it stops and says it lost track.
+/// The kernel queue is unlimited, so this is the memory bound the deadline is not:
+/// about 20 MB of [`Seen`], reached to within one buffer — [`parse`] empties one.
 const MAX_SEEN: usize = 262_144;
 
 /// The capacity one window may leave behind for the next.
-///
-/// `clear` keeps capacity, so without this a single burst sets the reader's
-/// allocation for the life of the process: the peak becomes the floor, and the
-/// service ends an afternoon holding memory that one `rm -rf` asked for. Ten
-/// thousand events is about 800 KB and covers an ordinary window without
-/// reallocating; anything past it is given back when the window ends.
+/// `clear` keeps capacity, so without this a burst's peak becomes the floor.
+/// Ten thousand events is about 800 KB.
 const KEEP_SEEN: usize = 10_000;
 
-// Not in `libc` at the time of writing, and their numeric values are kernel
-// ABI, so they are written out rather than derived.
+// Not in `libc` at the time of writing, and their values are kernel ABI.
 const FAN_REPORT_DIR_FID: u32 = 0x0000_0400;
 const FAN_REPORT_NAME: u32 = 0x0000_0800;
 /// What the helper has to have opened the group with, or nothing below works.
-///
-/// Both bits, not either: `DIR_FID` puts the parent directory's handle in the
-/// event and `NAME` puts the entry name next to it, and this module needs the
-/// pair to build a path. Without them the events still arrive and still parse —
-/// they just carry the object's own handle and no name, so every path would be
-/// wrong rather than absent, which is the failure worth spending a check on.
+/// Both bits: `DIR_FID` puts the parent's handle in the event and `NAME` the
+/// entry name. Without them events still parse, so paths would be wrong, not absent.
 const REQUIRED_FLAGS: u32 = FAN_REPORT_DIR_FID | FAN_REPORT_NAME;
 const FAN_Q_OVERFLOW: u64 = 0x0000_4000;
 const FAN_EVENT_INFO_TYPE_DFID_NAME: u8 = 2;
@@ -142,23 +57,16 @@ const FAN_MOVED_TO: u64 = 0x0000_0080;
 const FAN_CLOSE_WRITE: u64 = 0x0000_0008;
 
 /// What identifies a directory across a reboot, a remount and a rename.
-///
-/// The device number rather than btrfs's subvolume id, because that is what
-/// `stat` hands the walk. The event carries the subvolume id instead, and the
-/// two are matched through a table with one row a mounted subvolume — seven on
-/// this machine — rather than one a directory.
+/// The device number, because that is what `stat` hands the walk; the event
+/// carries btrfs's subvolume id, matched through one row a mounted subvolume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct DirKey {
     dev: u64,
     ino: u64,
 }
 
-/// One name in [`NameArena`].
-///
-/// The field order keeps this at eight bytes. A component that
-/// `symlink_metadata` accepted on Linux is at most `NAME_MAX` and a root's
-/// whole path at most `PATH_MAX`, both far below `u16::MAX`; a chunk is one
-/// MiB, and 65,536 chunks would already mean 64 GiB of directory names.
+/// One name in [`NameArena`]. The field order keeps this at eight bytes: a
+/// component is at most `NAME_MAX`, a chunk one MiB, both far below `u16::MAX`.
 #[derive(Debug, Clone, Copy)]
 struct NameSlot {
     start: u32,
@@ -178,32 +86,8 @@ impl NameSlot {
 const _: () = assert!(std::mem::size_of::<NameSlot>() == 8);
 
 /// One directory: what it is called, and which directory it is called that in.
-///
-/// **Twelve bytes a directory instead of its whole path.** The representation
-/// this replaced packed every directory's *full* path into an arena, which was
-/// itself a measured win — 2026-08-15, retained heap −28% against one `String`
-/// a directory — and then stopped scaling with the thing it was storing. Both
-/// live sources here hold 603,950 directories between them, and `find -xdev
-/// -type d` puts the average full path at 118.1 B and 98.7 B against average
-/// *basenames* of 15.6 B and 12.7 B: an ancestor's name is written down once
-/// per descendant, ten and a half times over on average. That is 68.2 MB of
-/// path against 8.9 MB of name, about 70% of the daemon's anonymous memory and
-/// all of the 96 MB this process had in swap. Both maps together weighed
-/// **87.82 MB** of retained heap and now weigh **39.58 MB**.
-///
-/// So a name is stored once and a path is spelled out from the chain when an
-/// event needs it. The second thing that falls out of it is the rename: a
-/// directory keeps `(dev, ino)` when it moves but every descendant's *spelled*
-/// path changes, so the arena had to rewrite all of them — two passes over the
-/// whole map, **under the reader's lock**, measured at 17.4 ms to move 781
-/// directories and 45.6 ms to move a root of 423,384. Here the descendants
-/// point at this node, so moving it is one assignment: 2.3 µs and 480 ns.
-///
-/// What it costs is the lookup, and the probe is the place that argues about
-/// it: 114.3 ns → 371.6 ns for the path an event needs, and 3.2× to 4.3×
-/// across four sittings — the climb touches about twenty cache lines where the
-/// arena touched two, so it is the arm that suffers under load. See
-/// `docs/MEASUREMENTS.md`, 2026-09-06.
+/// Twelve bytes each rather than a whole path: 603,950 directories weigh 39.58 MB
+/// against 87.82, a rename is 17.4 ms → 2.3 µs, and a lookup 114.3 ns → 371.6 ns.
 #[derive(Debug, Clone, Copy)]
 struct Node {
     parent: u32,
@@ -212,32 +96,23 @@ struct Node {
 
 const _: () = assert!(std::mem::size_of::<Node>() == 12);
 
-/// [`Node::parent`] for a directory that is nobody's child here: a walk root,
-/// or a directory whose parent this map never learned. It holds its whole path
-/// as its name, which is what makes the two cases the same case.
+/// [`Node::parent`] for a directory that is nobody's child here: a walk root, or
+/// one whose parent this map never learned. It holds its whole path as its name.
 const NO_PARENT: u32 = u32::MAX;
 
 /// How many components [`DirMap::components`] keeps on the stack.
-///
-/// Six times the measured average of 10.6, which is 512 bytes to zero on a
-/// lookup rather than the 16 KB an array that could not overflow would need.
-/// Deeper than this is not refused, it spills — see [`DirMap::components`].
+/// Six times the measured average of 10.6, which is 512 bytes to zero a lookup.
+/// Deeper is not refused, it spills — see [`DirMap::components`].
 const INLINE_DEPTH: usize = 64;
 
-/// How far a climb will follow parent links before calling the chain broken.
-///
-/// This is **not** a depth limit: `PATH_MAX` is 4096 bytes and a component
-/// costs at least two of them, so no real path reaches this. It is a *cycle*
-/// guard. A chain that never reaches a root would spin the reader thread
-/// forever, and the only honest answer to a broken chain is the one an unknown
-/// handle already gets — no path at all, rather than a partial one.
+/// How far a climb follows parent links before calling the chain broken.
+/// A cycle guard, not a depth limit: `PATH_MAX` is 4096 bytes and a component
+/// costs at least two, so no real path reaches this.
 const MAX_DEPTH: usize = 4096;
 
 /// Names in coarse allocations rather than one allocator object a directory.
-///
-/// A single growing `Vec` would briefly need both the old and new allocation
-/// whenever it grows. Fixed-size chunks keep peak memory bounded, waste less
-/// than one chunk at the end, and never move bytes that an existing slot names.
+/// Fixed chunks never need the old and the new allocation at once, and never
+/// move bytes an existing slot names.
 #[derive(Debug, Default)]
 struct NameArena {
     chunks: Vec<Vec<u8>>,
@@ -267,12 +142,8 @@ impl NameArena {
     }
 
     /// The bytes back as text.
-    ///
-    /// Checked rather than `from_utf8_unchecked`, which is what the full-path
-    /// arena needed: everything written here came from a `&str`, so the check
-    /// can only pass, and it is 15 bytes a component against a lookup whose
-    /// cost is the cache misses of the climb. The probe measures it; buying an
-    /// `unsafe` block back would have to be argued from that number.
+    /// Checked rather than `from_utf8_unchecked`: everything written here came from
+    /// a `&str`, and 15 bytes a component is under the climb's cache misses.
     fn get(&self, slot: NameSlot) -> &str {
         let start = slot.start as usize;
         let end = start + slot.len as usize;
@@ -283,22 +154,16 @@ impl NameArena {
             .unwrap_or_default()
     }
 
-    /// What the names actually cost, for the probes and for the tests that
-    /// hold a rename to writing one name rather than one path a descendant.
+    /// What the names actually cost, for the probes and the rename tests.
     #[cfg(test)]
     fn used_bytes(&self) -> usize {
         self.chunks.iter().map(Vec::len).sum()
     }
 }
 
-/// A path's parent and its last component, `/`-separated.
-///
-/// `/a/b` is `("/a", "b")`, `/a` is `("/", "a")`, and `/` — or anything else
-/// ending in a separator, or holding none — has no last component and is kept
-/// whole. Splitting the string rather than the `Path` is deliberate: this is
-/// the same string [`crate::path::from_path`] produced, and a byte that is not
-/// valid UTF-8 is encoded into a private-use character there, never into
-/// something that could be read as a separator.
+/// A path's parent and its last component, `/`-separated: `/a/b` is `("/a", "b")`,
+/// `/a` is `("/", "a")`, and anything with no last component is kept whole. The
+/// string is [`crate::path::from_path`]'s, so no invalid byte can read as a separator.
 fn split_name(path: &str) -> Option<(&str, &str)> {
     let at = path.rfind('/')?;
     if at + 1 == path.len() {
@@ -308,12 +173,8 @@ fn split_name(path: &str) -> Option<(&str, &str)> {
 }
 
 /// What identifies the directory at this path, if it is one.
-///
-/// One `statx`, and it is what buys the parent link. The walk pays it on its
-/// own threads — 0.55 µs warm, against a directory the walker has just read, so
-/// the parent is in the dentry cache by construction — and [`DirMap::learn`]
-/// pays it once per created directory. The alternative was a second index from
-/// path to node, which is the memory this whole representation is removing.
+/// One `statx`, 0.55 µs warm, and it is what buys the parent link. The
+/// alternative is a second index from path to node — the memory this removes.
 fn dir_key(at: &std::path::Path) -> Option<DirKey> {
     use std::os::unix::fs::MetadataExt;
     if at.as_os_str().is_empty() {
@@ -326,15 +187,9 @@ fn dir_key(at: &std::path::Path) -> Option<DirKey> {
     })
 }
 
-/// The inode number a file handle carries, by filesystem.
-///
-/// The layouts are not documented as stable and are read here anyway, because
-/// the alternative — `open_by_handle_at` — needs a capability this process
-/// deliberately does not hold. Each was confirmed against `stat` on 5,000 real
-/// directories, and the pair `(type, length)` is what distinguishes them:
-/// tmpfs and ntfs3 both report type 1 with the fields the other way round, so
-/// the type alone is not enough and reading it as though it were puts a
-/// generation number where an inode belongs.
+/// The inode number a file handle carries, by filesystem — undocumented layouts,
+/// read anyway because `open_by_handle_at` needs a capability this process does
+/// not hold. `(type, length)` distinguishes them: tmpfs and ntfs3 both report type 1.
 fn handle_ino(fh_type: i32, bytes: &[u8]) -> Option<u64> {
     let le64 = |at: usize| -> Option<u64> {
         bytes
@@ -353,80 +208,42 @@ fn handle_ino(fh_type: i32, bytes: &[u8]) -> Option<u64> {
     match (fh_type, bytes.len()) {
         // btrfs: ino u64 @0, subvolume id u64 @8, generation u32 @16.
         (0x4d..=0x4f, 20..) => le64(0),
-        // tmpfs: generation u32 @0, ino u64 @4. Twelve bytes, and the reason
-        // the length is part of the match.
+        // tmpfs: generation u32 @0, ino u64 @4 — twelve bytes, hence the length match.
         (1, 12) => le64(4),
-        // FILEID_INO32_GEN, which is what ntfs3 and most others use: ino u32
-        // @0, generation u32 @4.
+        // FILEID_INO32_GEN, what ntfs3 and most others use: ino u32 @0, generation @4.
         (1, 8) => le32(0),
         _ => None,
     }
 }
 
-/// Directory identity to path, for the directories this source covers.
-///
-/// Held in memory rather than in the index. The index used to carry an inode a
-/// row and it was removed for a measured reason — 19 MB of a 200 MB index, on
-/// 2.09 million rows, to answer a question the path already answered. What is
-/// needed here is narrower: one key and one path per directory.
-///
-/// The path is not stored. [`Node`] says why: names are held once each and a
-/// path is spelled out by climbing to a root. The ignored
-/// `directory_map_memory_probe` test measures the complete allocator footprint
-/// and the lookup cost of that climb, at live-machine scale, against the
-/// full-path arena this replaced.
-///
-/// **What the graph assumes is that the map holds whole trees.** The walk
-/// records every directory it descends through and prunes excluded ones
-/// entirely, so a directory in this map has its parent in it too — up to the
-/// root, which is where the chain stops. A directory inserted without its
-/// ancestors still resolves to exactly the right path (it keeps its whole path
-/// and parents nothing), it simply does not move when an ancestor is renamed —
-/// and neither did it before, because it had no ancestor to be renamed.
+/// Directory identity to path: an event names its parent by opaque file handle,
+/// and this turns one into a path. No path is stored — [`Node`] holds a name and a
+/// parent link — and the walk records whole trees, so a parent is always present.
 #[derive(Debug, Default)]
 struct DirMap {
     by_key: HashMap<DirKey, u32>,
     nodes: Vec<Node>,
     names: NameArena,
-    /// Directories that are only somebody's parent.
-    ///
-    /// A walk root's parent is outside the tree — `/home` for a source that
-    /// watches `/home/hasan` — and the parallel walk can hand a directory over
-    /// before the batch its parent is sitting in. Both need a node to hang a
-    /// child off, and neither may be answerable by [`DirMap::path_of`]:
-    /// resolving an event in `/home` for this source would name a path no scan
-    /// of it ever produces, and the reader would deliver a change outside its
-    /// own roots. So they live here instead of in `by_key`, and the moment the
-    /// walk reaches one for real it moves across, keeping its node and its
-    /// children with it.
+    /// Directories that are only somebody's parent — a walk root's parent, or one
+    /// whose batch has not arrived yet. Deliberately not answerable by
+    /// [`DirMap::path_of`]: that would name a path no scan of this source produces.
     outside: HashMap<DirKey, u32>,
     /// Device candidates an event's inode is looked up against.
-    ///
-    /// The event gives an inode but not a device — btrfs reports the
-    /// superblock's fsid on every event whatever subvolume it came from — so the
-    /// inode is offered to each device this source actually covers.
-    ///
-    /// There are only a handful, but deriving them from `by_key` is not cheap:
-    /// on this machine it copied and sorted 103,000 or 152,000 keys every time a
-    /// directory was created. Keep the unique list as entries arrive instead.
+    /// The event gives an inode but no device — btrfs reports the superblock's fsid
+    /// whatever subvolume it came from — so the inode is offered to each in turn.
     devices: Vec<u64>,
 }
 
 /// How many directories a walker thread gathers before handing them over.
-///
-/// The same shape as the scan's, and for the same reason: a send per directory
-/// on a bounded channel drained by one thread is a queue that is always full,
-/// which cost that walk 9.5 context switches a file until it was batched.
+/// A send per directory on a bounded channel cost the scan 9.5 context switches a file.
 const DIR_BATCH: usize = 512;
 
-/// How many batches may be in the air. This is the whole of the extra memory
-/// the parallel walk costs over the stack walk it replaced — threads times
-/// batch, not a quarter of a million paths held twice.
+/// How many batches may be in the air — threads times batch is the whole of the
+/// extra memory the parallel walk costs over the stack walk it replaced.
 const DIR_IN_FLIGHT: usize = 64;
 
-/// One directory as a walker thread hands it over: what it is, what its parent
-/// is, and where it is. The parent travels with it because the walker is the
-/// one place that can name it cheaply — it has just read that directory.
+/// One directory as a walker thread hands it over. The parent travels with it
+/// because the walker has just read that directory and can name it cheaply.
 type Walked = (DirKey, Option<DirKey>, String);
 
 /// One walker thread's outgoing buffer of directories.
@@ -459,11 +276,8 @@ impl DirBatch {
 }
 
 /// The tail of a thread's last batch.
-///
-/// `ignore` gives a visitor no way to say it has finished, but it does drop the
-/// box when the thread ends — so this is where the remainder goes. Without it
-/// the map loses up to [`DIR_BATCH`] directories a thread, and a directory
-/// missing from the map is one whose every event resolves to nothing.
+/// `ignore` gives a visitor no way to say it has finished but does drop the box
+/// when the thread ends; a directory missing from the map resolves none of its events.
 impl Drop for DirBatch {
     fn drop(&mut self) {
         self.flush();
@@ -472,39 +286,8 @@ impl Drop for DirBatch {
 
 impl DirMap {
     /// Walk the roots and record what each directory is.
-    ///
-    /// The order matters and was measured: with the mark placed **after** the
-    /// walk, ten files created during it were lost; with the mark placed first,
-    /// none were, because everything that happens during the walk is sitting in
-    /// the queue when it finishes. The mark here is always already in place —
-    /// the helper set it before this process existed — so the walk is safe by
-    /// construction.
-    ///
-    /// **This is a second pass over the tree the scan also walks, and it is not
-    /// the one a reviewer looked for.** The recorded double walk belongs to
-    /// inotify, which holds one watch per directory and must enumerate the tree
-    /// to install them — 342,000 of them, 15.1 s. None of that runs here:
-    /// [`crate::watch::start`] returns from [`try_start`] before `notify` is
-    /// ever built. What this backend needs the tree for is different and
-    /// unavoidable: an event names its parent directory by file handle, not by
-    /// path, so without this map every event resolves to nothing. Resolving a
-    /// handle on demand instead is `open_by_handle_at`, which wants
-    /// `CAP_DAC_READ_SEARCH` — the one capability this process is careful not
-    /// to have.
-    ///
-    /// So the pass stays. What it does not have to stay is **single-threaded**:
-    /// it reads exactly the directories the scan reads, and the scan reads them
-    /// on several threads. Measured on this machine, warm, alternating in one
-    /// process: `/mnt/depo`'s 152,530 directories went from 1.03 s to 0.19 s,
-    /// and `/home/hasan`'s 103,524 from 0.80 s to 0.16 s. Cold, `/mnt/depo`
-    /// went from 15.7 s to 4.7 s. See `docs/MEASUREMENTS.md`.
-    ///
-    /// The walk's own thread count is decided here rather than taken from
-    /// [`crate::fs::Medium`], and the difference is the consumer. The scan is
-    /// held to two threads because the index behind it cannot take more —
-    /// "a faster consumer would make this number four again", says that
-    /// comment. This walk's consumer is a hash-map insert at 213 ns, so the
-    /// disk is the only thing left to saturate.
+    /// The mark predates this process, so what happens during the walk is queued
+    /// behind it. `/mnt/depo`'s 152,530 directories: 1.03 s → 0.19 s warm on eight.
     fn build(roots: &[std::path::PathBuf], rules: &Rules, threads: usize) -> DirMap {
         let mut map = DirMap::default();
         let Some((first, rest)) = roots.split_first() else {
@@ -516,49 +299,36 @@ impl DirMap {
             builder.add(r);
         }
         builder
-            // `ignore` is used here as a concurrent directory walk and nothing
-            // else, exactly as in the scan: a rule about what belongs in an
-            // index is not a rule about what a watcher can resolve.
+            // `ignore` as a concurrent directory walk and nothing else, exactly as in the scan.
             .standard_filters(false)
-            // The stack walk that came before this filtered no name, so nor
-            // does this: a change under `~/.config` is a change.
+            // No name is filtered here: a change under `~/.config` is a change.
             .hidden(false)
-            // `symlink_metadata` and `DirEntry::file_type` both refused to
-            // descend a link, and the map must agree with the walk about that
-            // or an event resolves to a path no scan ever produces.
+            // The map must agree with the walk about links, or an event resolves to a
+            // path no scan ever produces.
             .follow_links(false)
             .same_file_system(false)
             .threads(threads);
 
-        // Drained while the walk runs rather than collected and merged
-        // afterwards. The whole point of the packed arena is that a quarter of
-        // a million separate `String`s is 13 MB nobody needs; holding them all
-        // once more in a joining vector would put that peak straight back, on a
-        // machine where the invariant is `RssAnon + VmSwap`.
+        // Drained while the walk runs: holding a quarter of a million `String`s once
+        // more in a joining vector would put a 13 MB peak straight back.
         let (tx, rx) = crossbeam_channel::bounded::<Vec<Walked>>(DIR_IN_FLIGHT);
         std::thread::scope(|scope| {
             let walker_tx = tx.clone();
             scope.spawn(move || {
                 builder.build_parallel().run(|| {
                     let mut batch = DirBatch::new(walker_tx.clone());
-                    // On the first entry rather than here, because `ignore`
-                    // builds the visitor on the thread that spawns the workers
-                    // and this would otherwise make that one polite instead.
+                    // On the first entry rather than here, because `ignore` builds the visitor
+                    // on the thread that spawns the workers.
                     let mut polite = false;
                     Box::new(move |result| {
                         if !polite {
                             polite = true;
-                            // The same nice value and idle I/O class the scan's
-                            // walkers take. Eight threads reading a disk at
-                            // start-up is worth having only if it yields to the
-                            // session coming up beside it, and neither costs
-                            // anything on an idle machine.
+                            // The same nice value and idle I/O class the scan's walkers take, and
+                            // neither costs anything on an idle machine.
                             crate::scan::stand_aside();
                         }
                         let Ok(de) = result else {
-                            // A directory that cannot be read resolves no
-                            // events, which is what the stack walk's silent
-                            // `continue` also meant.
+                            // A directory that cannot be read resolves no events.
                             return ignore::WalkState::Continue;
                         };
                         if !de.file_type().is_some_and(|t| t.is_dir()) {
@@ -566,11 +336,8 @@ impl DirMap {
                         }
                         let text = path::from_path(de.path());
                         if rules.excludes_path(&text) {
-                            // Pruned, not merely skipped: the stack walk never
-                            // pushed an excluded directory's children either,
-                            // and a watcher that resolves what the scan
-                            // discards is how a `cargo test` under an unscanned
-                            // build tree took a query from 8 ms to 13 seconds.
+                            // Pruned, not merely skipped: resolving what the scan discards is how a
+                            // `cargo test` under a build tree took a query from 8 ms to 13 seconds.
                             return ignore::WalkState::Skip;
                         }
                         let Ok(md) = de.metadata() else {
@@ -581,10 +348,8 @@ impl DirMap {
                             dev: md.dev(),
                             ino: md.ino(),
                         };
-                        // Named here rather than at the far end, because this
-                        // thread has just read the parent and the far end is a
-                        // single thread that would pay every one of these
-                        // `statx` calls in series. See [`dir_key`].
+                        // Named here rather than at the far end: this thread has just read the
+                        // parent, and the far end would pay every `statx` in series.
                         let parent = de.path().parent().and_then(dir_key);
                         if batch.push(key, parent, text) {
                             ignore::WalkState::Continue
@@ -594,9 +359,8 @@ impl DirMap {
                     })
                 });
             });
-            // The senders are dropped when the visitors are, which is what ends
-            // the loop below — so this clone has to go with them or it never
-            // ends. Each visitor's own tail is flushed by [`DirBatch`]'s `Drop`.
+            // The senders go when the visitors do, which is what ends the loop below,
+            // so this clone has to go with them. Each tail is flushed by [`DirBatch`]'s `Drop`.
             drop(tx);
             for batch in rx {
                 for (key, parent, text) in batch {
@@ -620,32 +384,23 @@ impl DirMap {
     }
 
     /// Record what a directory is called and where it hangs.
-    ///
-    /// `parent` is the directory this one is *in*, as its caller already knows
-    /// it — the walker `statx`ed it on its own thread, [`learn`] on the one
-    /// event that needed it. `None`, or a parent this map has never heard of,
-    /// is not an error and not a guess: the directory keeps its whole path and
-    /// resolves exactly as it always did.
-    ///
-    /// [`learn`]: DirMap::learn
+    /// `parent` is the directory this one is in, as the caller already knows it.
+    /// `None`, or a parent this map never heard of, keeps the whole path instead.
     fn insert_key(&mut self, key: DirKey, parent: Option<DirKey>, path: &str) {
         if !self.devices.contains(&key.dev) {
             self.devices.push(key.dev);
         }
-        // A directory that is its own parent would be a chain that never
-        // reaches a root — every event below it unresolvable, and only the
-        // depth cap between the reader and a spin.
+        // A directory that is its own parent would be a chain that never reaches a root:
+        // every event below it unresolvable, with only the depth cap before a spin.
         let (parent_id, name) = self.place_under(parent.filter(|p| *p != key), path);
 
         if let Some(id) = self.by_key.get(&key).copied() {
-            // The ordinary case is that nothing has changed: `learn` runs on
-            // every created directory and most of them are already here.
+            // `learn` runs on every created directory, and most are already here.
             if self.nodes[id as usize].parent == parent_id && self.path_matches(id, path) {
                 return;
             }
-            // A directory keeps `(dev, ino)` across a rename, and so does every
-            // descendant — which is why the whole subtree moves with this one
-            // assignment rather than being rewritten path by path.
+            // A directory keeps `(dev, ino)` across a rename and so does every descendant,
+            // so the whole subtree moves with this one assignment.
             let slot = self.names.push(name);
             self.nodes[id as usize] = Node {
                 parent: parent_id,
@@ -654,9 +409,8 @@ impl DirMap {
             return;
         }
 
-        // Met as somebody's parent before the walk reached it. Take that node
-        // over — its children already point at it — rather than leaving two
-        // nodes for one directory and a subtree hanging off the wrong one.
+        // Met as somebody's parent before the walk reached it. Take that node over —
+        // its children already point at it — rather than leaving two for one directory.
         let id = match self.outside.remove(&key) {
             Some(id) => {
                 let slot = self.names.push(name);
@@ -672,10 +426,8 @@ impl DirMap {
     }
 
     /// The node a path hangs off, and the name it is known by there.
-    ///
-    /// The `&str` comes back out of `path` rather than out of the arena, so the
-    /// caller can hand it straight to [`NameArena::push`] while still holding
-    /// the map mutably.
+    /// The `&str` comes out of `path` rather than the arena, so the caller can push
+    /// it while still holding the map mutably.
     fn place_under<'p>(&mut self, parent: Option<DirKey>, path: &'p str) -> (u32, &'p str) {
         let (Some(parent), Some((parent_path, name))) = (parent, split_name(path)) else {
             return (NO_PARENT, path);
@@ -703,36 +455,22 @@ impl DirMap {
     }
 
     /// Record a directory that appeared after the map was built.
-    ///
-    /// Without this a `mkdir` is seen once — the create in its parent, which
-    /// does resolve — and then everything inside it arrives against a handle
-    /// nothing knows, so a `git clone` would be a stream of unresolvable
-    /// events. The walk that [`crate::watch::look`] already queues for a fresh
-    /// directory covers the entries; this covers the *events*.
+    /// Without it a `mkdir` resolves once — the create in its parent — and everything
+    /// inside then arrives against a handle nothing knows.
     fn learn(&mut self, path: &str) {
         if let Ok(md) = std::fs::symlink_metadata(path::to_path(path))
             && md.is_dir()
         {
-            // The parent is in this map already — the event that produced this
-            // path was resolved through it — but its *key* is not, and one
-            // `statx` is what turns the path back into the link. Only paid when
-            // a directory is created, which is why it is not on the event path.
+            // The parent is in this map but its *key* is not, and one `statx` turns the
+            // path back into the link. Only paid when a directory is created.
             let parent = split_name(path).and_then(|(at, _)| dir_key(&path::to_path(at)));
             self.insert(&md, parent, path);
         }
     }
 
     /// The path of the directory this inode names, written into `out`.
-    ///
-    /// `out` is the caller's buffer rather than a returned `&str` because there
-    /// is no longer a path anywhere to borrow — it is spelled out from the
-    /// chain each time. The one production caller already copied the answer
-    /// into a `String` of its own, so this moves that allocation rather than
-    /// adding one, and lets the reader keep a single buffer for a whole window.
-    ///
-    /// False leaves `out` empty. A path that is missing a component names a
-    /// different file, so a chain that does not reach a root is refused whole,
-    /// exactly like a handle nothing recognises.
+    /// The caller's buffer, because there is no path anywhere to borrow. False leaves
+    /// `out` empty: a chain that misses a component names a different file.
     fn path_of(&self, ino: u64, out: &mut String) -> bool {
         out.clear();
         let Some(id) = self.node_of(ino) else {
@@ -747,22 +485,9 @@ impl DirMap {
             .find_map(|&dev| self.by_key.get(&DirKey { dev, ino }).copied())
     }
 
-    /// Every component of this node's path, root first.
-    ///
-    /// The climb collects *names* rather than node numbers, because the caller
-    /// would otherwise have to go back into `nodes` for each of them — two
-    /// random accesses a component instead of one, on the one path an event
-    /// takes. The measured average is 10.6 components; [`INLINE_DEPTH`] holds
-    /// six times that on the stack and anything past it spills to a `Vec` that
-    /// is never allocated otherwise. The spill is what keeps this **lossless**:
-    /// a fixed cap would silently stop resolving events under a directory
-    /// nested deeper than it, and `PATH_MAX` permits far deeper than any array
-    /// worth zeroing on every lookup.
-    ///
-    /// False for a chain that does not end — a parent link pointing at nothing,
-    /// or a cycle. Neither is reachable through a rename the kernel permits: it
-    /// refuses to move a directory inside itself with `EINVAL`. See
-    /// [`MAX_DEPTH`] for why the guard is here anyway.
+    /// Every component of this node's path, root first — names rather than node
+    /// numbers, so the caller makes one random access each. [`INLINE_DEPTH`] on the
+    /// stack, spilling past it; false for a chain that does not end. See [`MAX_DEPTH`].
     fn components(&self, id: u32, mut each: impl FnMut(&str)) -> bool {
         let mut stack = [NameSlot::EMPTY; INLINE_DEPTH];
         let mut spill: Vec<NameSlot> = Vec::new();
@@ -797,8 +522,7 @@ impl DirMap {
 
     fn write_path(&self, id: u32, out: &mut String) -> bool {
         let complete = self.components(id, |name| {
-            // A root keeps its whole path, and the only path that ends in a
-            // separator is `/` itself — where a second one would spell `//x`.
+            // The only path ending in a separator is `/`, where a second would spell `//x`.
             if !out.is_empty() && !out.ends_with('/') {
                 out.push('/');
             }
@@ -811,10 +535,8 @@ impl DirMap {
     }
 
     /// Whether this node already spells exactly this path.
-    ///
-    /// Compared component by component against the caller's string rather than
-    /// through a rebuilt one: this runs on every `learn`, which is every
-    /// created directory, and most of those are already here and unchanged.
+    /// Compared component by component rather than through a rebuilt string: this
+    /// runs on every `learn`, and most of those are unchanged.
     fn path_matches(&self, id: u32, path: &str) -> bool {
         let mut at = 0usize;
         let mut same = true;
@@ -840,14 +562,8 @@ impl DirMap {
 }
 
 /// Every filesystem with a block device behind it, as `mountinfo` sees it.
-///
-/// The key is the mount id — the first field, unique for the life of a mount —
-/// rather than the device, because a disk that is unmounted and mounted again
-/// is a *new* mount of the same device and the two have to be told apart: the
-/// mark does not survive it. Measured, and it is the surprising half of the
-/// pair: the mark does survive the unmount of the path it was placed through,
-/// but a remount of the filesystem itself does not bring it back. A fresh
-/// group saw the same write the old one had gone silent for.
+/// Keyed by mount id, not device: the mark survives the unmount of the path it
+/// was placed through, but a remount of the filesystem does not bring it back.
 fn mounts(text: &str) -> HashSet<(u32, String)> {
     let mut out = HashSet::new();
     for line in text.lines() {
@@ -873,13 +589,8 @@ fn mounts(text: &str) -> HashSet<(u32, String)> {
 }
 
 /// Open `/proc/self/mountinfo` for watching rather than for reading.
-///
-/// `poll` on it returns `POLLERR | POLLPRI` when the mount table changes and
-/// nothing otherwise — measured at 300 ms from the mount to the wake, with a
-/// negative control that stayed quiet. It is the only way this process learns a
-/// disk was plugged in, because a filesystem mark covers one superblock and a
-/// new disk is a new superblock: the events simply never come, measured, and
-/// nothing about that is visible from inside the fanotify descriptor.
+/// `poll` returns `POLLERR | POLLPRI` when the mount table changes, 300 ms from
+/// the mount. A new disk is a new superblock, and its events simply never come.
 fn mountinfo() -> Option<std::fs::File> {
     std::fs::File::open("/proc/self/mountinfo").ok()
 }
@@ -891,31 +602,17 @@ struct Seen {
     name: String,
     fresh: bool,
     is_dir: bool,
-    /// The kernel says the content is final: a descriptor opened for writing
-    /// was closed. For a mapping that is `munmap` rather than `close`, which
-    /// is what takes a path off the revisit list without asking `/proc`
-    /// anything. See [`crate::revisit::forget`].
+    /// The kernel says the content is final: a descriptor opened for writing was
+    /// closed — `munmap` for a mapping. See [`crate::revisit::forget`].
     settled: bool,
 }
 
 /// Collect one window's events, and say whether anything was lost.
-///
-/// Split out of [`drain`] so the ceiling has something to be tested against:
-/// the loop it came from could only be reached with a real fanotify group and a
-/// real burst, which is why nothing had ever checked what it costs. `read` is
-/// the one syscall it needs, and a test supplies its own.
-///
-/// Three things end a window, and only one of them is "the kernel had no more
-/// to give": the other two are [`MAX_SEEN`] and the two-second deadline, and
-/// both report themselves as lost rather than as a complete window. Reporting a
-/// truncated window as complete is the one outcome that would be wrong — the
-/// events that were not read still happened, and a sweep on that evidence
-/// deletes rows that exist.
+/// [`MAX_SEEN`] and the two-second deadline both report lost rather than
+/// complete: a truncated window called complete has a sweep delete rows that exist.
 fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) -> isize) -> bool {
     seen.clear();
-    // Before the window rather than after it: whatever the last burst asked for
-    // is given back here, so the peak does not become the floor. See
-    // [`KEEP_SEEN`].
+    // Before the window, so the last burst's peak does not become the floor.
     if seen.capacity() > KEEP_SEEN {
         seen.shrink_to(KEEP_SEEN);
     }
@@ -929,17 +626,13 @@ fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) ->
         if !parse(&buf[..n as usize], seen) {
             lost = true;
         }
-        // **The memory bound**, checked before the time one because it is the
-        // one a busy filesystem reaches first. See [`MAX_SEEN`].
+        // The memory bound, checked before the time one — see [`MAX_SEEN`].
         if seen.len() >= MAX_SEEN {
             lost = true;
             break;
         }
-        // A burst larger than the buffer is read out in this loop rather
-        // than left for the next window, but not forever: the drain rate
-        // is 4.6 million events a second, so two seconds is far past any
-        // real batch and exists only so a pathological producer cannot
-        // hold the thread.
+        // A burst larger than the buffer is read out here, but not forever: at
+        // 4.6 million events a second, two seconds is far past any real batch.
         if Instant::now() > deadline {
             lost = true;
             break;
@@ -949,12 +642,8 @@ fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) ->
 }
 
 /// Pull every event out of one buffer.
-///
-/// Returns `None` for the whole batch if the kernel reported that it dropped
-/// events. The overflow record carries no information at all — `event_len`
-/// equals `metadata_len`, the descriptor is `FAN_NOFD` and there is no info
-/// record, all measured — so there is nothing to be selective about and the
-/// only honest response is to say the subtree was lost.
+/// `None` for the whole batch when the kernel dropped events: the overflow record
+/// carries nothing — `event_len` equals `metadata_len` and the descriptor is `FAN_NOFD`.
 fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
     let mut at = 0usize;
     let mut ok = true;
@@ -1014,21 +703,15 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
 }
 
 /// Take the descriptor the helper left, if it left one.
-///
-/// Absent is the ordinary case — nothing is installed, or the helper is not
-/// being used — and it is not an error: [`try_start`] returns `None` and the
-/// caller falls back to inotify.
+/// Absent is the ordinary case and not an error: [`try_start`] returns `None`.
 fn inherited() -> Option<OwnedFd> {
     let raw: RawFd = std::env::var(FD_ENV).ok()?.trim().parse().ok()?;
     if raw < 0 {
         return None;
     }
-    // **Check what it is before reading it.** A stale environment variable
-    // pointing at some other open file would otherwise be read as a stream of
-    // events, and a group opened without the two report flags would parse into
-    // paths that are wrong rather than missing. `fdinfo` answers both: the
-    // first line of a fanotify descriptor is `fanotify flags:%x event-flags:%x`
-    // and nothing else produces it.
+    // **Check what it is before reading it.** A stale variable naming another open
+    // file would be read as events, and a group without the report flags would parse
+    // into wrong paths. `fdinfo`'s first line answers both.
     let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{raw}")).ok()?;
     let flags = info.lines().find_map(|l| {
         let rest = l.strip_prefix("fanotify flags:")?;
@@ -1044,20 +727,9 @@ fn inherited() -> Option<OwnedFd> {
     Some(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// One source's share of the one reader.
-///
-/// **There is a single fanotify group and it cannot be split.** Two readers on
-/// two descriptors for the same group share one queue, so each would take about
-/// half the events and silently drop the other half. The first attempt handed
-/// the descriptor to whichever source asked first and left the second on
-/// inotify, which put `/mnt/depo` — 152,529 watches, the volume this whole
-/// mechanism exists for — back to being unwatched. So one thread reads, and the
-/// sources subscribe to it.
-///
-/// Routing is not a lookup table: each subscriber knows its own directories, so
-/// the event's parent handle is offered to each in turn and the one that
-/// recognises it owns the path. A source cannot claim another's tree because it
-/// never walked it.
+/// One source's share of the one reader: a single group that cannot be split,
+/// since two readers of one queue each silently drop the other's half. Routing is
+/// recognition — the event's parent handle is offered to each subscriber in turn.
 struct Sub {
     id: SourceId,
     real_modes: bool,
@@ -1065,12 +737,11 @@ struct Sub {
     sink: Arc<dyn ChangeSink>,
     roots: Vec<std::path::PathBuf>,
     map: DirMap,
-    /// What [`walk_threads`] answered when the map was first built, kept so
-    /// that rebuilding it in [`WatchHandle::retune`] does not have to ask a
-    /// `FsSource` that is no longer in reach.
+    /// What [`walk_threads`] answered when the map was built, kept so that rebuilding
+    /// it in [`WatchHandle::retune`] need not ask an `FsSource` out of reach.
     threads: usize,
-    /// Cleared when the handle is dropped. The entry stays in the list — an
-    /// index has to keep meaning what it meant — and is simply skipped.
+    /// Cleared when the handle is dropped; the entry stays, because an index has to
+    /// keep meaning what it meant.
     live: Arc<AtomicBool>,
     uncovered: Arc<Mutex<Vec<String>>>,
 }
@@ -1092,18 +763,10 @@ impl std::fmt::Debug for Sub {
 #[derive(Debug)]
 struct FanWatch {
     /// Which subscription in [`SUBS`] is this one's, for [`WatchHandle::retune`].
-    ///
-    /// The list is shared by every source and the reader walks all of it, so a
-    /// handle that wants to change its own rules has to be able to say which
-    /// entry it is. Nothing else here needed to know.
     id: SourceId,
     live: Arc<AtomicBool>,
-    /// Filesystems that appeared after the marks were set.
-    ///
-    /// They are not covered and cannot be from here: placing a mark needs
-    /// `CAP_SYS_ADMIN` and this process deliberately has none, so the honest
-    /// thing is to name them and let the layer above say so. That is what this
-    /// side of [`WatchHandle`] is for, and `scourd` already prints it.
+    /// Filesystems that appeared after the marks were set: not covered, and not
+    /// coverable from here, so they are named for the layer above to report.
     uncovered: Arc<Mutex<Vec<String>>>,
 }
 
@@ -1112,28 +775,13 @@ impl WatchHandle for FanWatch {
         self.uncovered.lock().map(|v| v.clone()).unwrap_or_default()
     }
 
-    /// Nothing to do, and that is the point of this backend.
-    ///
-    /// inotify needs to be told about a subtree that appeared after the watch
-    /// did, because it holds a watch per directory and a new directory has
-    /// none. A filesystem mark covers the superblock, so a directory created a
-    /// moment ago is already watched — measured: a file written inside a
-    /// subvolume created after the mark produced its event like any other.
+    /// Nothing to do, and that is the point of this backend: a filesystem mark covers
+    /// the superblock, so a directory created a moment ago is already watched.
     fn cover(&self, _path: &str) {}
 
-    /// Take the new rules, and rebuild the directory map behind them.
-    ///
-    /// **The map is not an optimisation here, it is how an event gets a name.**
-    /// A fanotify event names its parent by file handle, and this backend
-    /// answers that from a map it built by walking the roots *under the rules
-    /// in force at the time*. So a rule that is switched off re-opens a subtree
-    /// the map has never heard of, and every event in it would arrive
-    /// unnameable and be dropped — live updates silently off for exactly the
-    /// tree somebody just asked to see.
-    ///
-    /// Built before the lock is taken, because building it walks the disk —
-    /// 0.38 s cold on the NTFS volume here, 0.7 s for both roots warm — and the
-    /// reader takes that same lock for every event it delivers.
+    /// Take the new rules, and rebuild the directory map behind them: the map is how
+    /// an event gets a name, and a rule switched off re-opens a subtree it never heard
+    /// of. Built before the lock — walking both roots is 0.7 s warm, 0.38 s cold on NTFS.
     fn retune(&self, opts: &ScanOptions) {
         let rules = Arc::new(Rules::from_options(opts));
         let Some((roots, threads)) = SUBS.lock().ok().and_then(|subs| {
@@ -1152,12 +800,8 @@ impl WatchHandle for FanWatch {
         }
     }
 
-    /// Leave the reader running.
-    ///
-    /// It serves every source, so one of them stopping is not a reason to take
-    /// it down; the subscription goes quiet and the thread stays for the rest.
-    /// The thread ends with the process, which is the only moment at which no
-    /// source is left to serve.
+    /// Leave the reader running: it serves every source, so one stopping is no reason
+    /// to take it down. The subscription goes quiet and the thread stays.
     fn stop(self: Box<Self>) {
         self.live.store(false, Ordering::Relaxed);
     }
@@ -1170,12 +814,8 @@ impl Drop for FanWatch {
 }
 
 /// How many threads to walk the tree for the directory map on.
-///
-/// The scan's answer, asked the same way, because the question is about the
-/// device and not about what the walk is for: a spinning disk turns every extra
-/// reader into a seek whoever is asking. An explicit `scan.threads` is honoured
-/// for the same reason it is honoured by the scan — somebody who set it meant
-/// this disk, not that walk.
+/// The scan's answer, because the question is about the device: a spinning disk
+/// turns every extra reader into a seek, whoever is asking.
 fn walk_threads(source: &FsSource, opts: &ScanOptions) -> usize {
     if opts.threads != 0 {
         return opts.threads;
@@ -1188,19 +828,15 @@ fn walk_threads(source: &FsSource, opts: &ScanOptions) -> usize {
 }
 
 /// Subscribe to the one reader, or say this mechanism is not available here.
-///
-/// `None` means "not this one" rather than "no watching": the caller falls back
-/// to inotify, which is why nothing in here panics or reports a failure for the
-/// ordinary case of a machine where the helper was never installed.
+/// `None` means no descriptor was handed over, which is the ordinary case on a
+/// machine where the helper was never installed.
 pub fn try_start(
     source: &FsSource,
     opts: &ScanOptions,
     sink: Arc<dyn ChangeSink>,
 ) -> Option<Result<Box<dyn WatchHandle>>> {
-    // The descriptor is taken once. After that the reader owns it and later
-    // sources join the reader instead of trying to take it again — two owners
-    // of one descriptor is a double close, and two readers of one group is half
-    // the events each.
+    // The descriptor is taken once: two owners is a double close, and two readers
+    // of one group is half the events each.
     let first = READER.get().is_none();
     let fd = if first { Some(inherited()?) } else { None };
 
@@ -1249,26 +885,18 @@ pub fn try_start(
 }
 
 /// The reader. One thread, however many sources.
-///
-/// Wakes at most five times a second by construction: `poll` returns as soon as
-/// the first event lands, and then the window runs before anything is read, so
-/// what arrives during it is taken in one call. Everything the window collected
-/// is reduced to distinct paths before a single `stat` is made — the same file
-/// written a hundred times in the window is one look, which is where the second
-/// saving is, and it does not show up in an event count.
+/// At most five wakes a second: `poll` returns on the first event and the window
+/// runs before anything is read, then its events reduce to distinct paths.
 fn drain(fd: OwnedFd) {
     let mut buf = vec![0u8; BUF];
     let mut seen: Vec<Seen> = Vec::new();
-    // One buffer for every path the reader resolves, for the life of the
-    // thread. The map no longer holds a path to borrow, so this is where the
-    // spelled-out directory lands — and it is the allocation the caller used to
-    // make per event with `to_owned`, moved rather than added.
+    // One buffer for every path the reader resolves, for the life of the thread:
+    // the allocation the caller used to make per event, moved rather than added.
     let mut dir = String::new();
     let raw = fd.as_raw_fd();
 
-    // The mount table, watched beside the events rather than on a thread of its
-    // own: one `poll` over two descriptors costs nothing extra and keeps the
-    // whole watcher a single place that can be stopped.
+    // The mount table, watched beside the events: one `poll` over two descriptors
+    // keeps the whole watcher a single place that can be stopped.
     let mut mi = mountinfo();
     let mut known = mi
         .as_mut()
@@ -1288,8 +916,7 @@ fn drain(fd: OwnedFd) {
             },
             libc::pollfd {
                 fd: mi.as_ref().map_or(-1, |f| f.as_raw_fd()),
-                // `POLLERR` is not requested — it always arrives — but `POLLPRI`
-                // is what the mount table signals a change with.
+                // `POLLPRI` is how the mount table signals a change; `POLLERR` always arrives.
                 events: libc::POLLPRI,
                 revents: 0,
             },
@@ -1300,8 +927,7 @@ fn drain(fd: OwnedFd) {
         }
 
         if pfds[1].revents != 0 {
-            // Re-read from the start, or `poll` keeps reporting the same change
-            // and the loop spins.
+            // Re-read from the start, or `poll` keeps reporting the same change.
             if let Some(f) = mi.as_mut() {
                 let mut s = String::new();
                 if f.seek(SeekFrom::Start(0)).is_ok() && f.read_to_string(&mut s).is_ok() {
@@ -1328,9 +954,8 @@ fn drain(fd: OwnedFd) {
         let Ok(mut subs) = SUBS.lock() else { return };
 
         if lost {
-            // Nothing in the overflow record says what was missed, so the
-            // subtree is the only unit available — for everyone, because the
-            // queue that overflowed was shared.
+            // Nothing in the overflow record says what was missed, so the subtree is the
+            // only unit available — for everyone, because the queue was shared.
             for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
                 for r in &s.roots {
                     s.sink.emit(Change::Rescan {
@@ -1341,17 +966,12 @@ fn drain(fd: OwnedFd) {
             continue;
         }
 
-        // Distinct paths a subscriber, keeping "this might be new" if any event
-        // said so.
+        // Distinct paths a subscriber, keeping "this might be new" if any event said so.
         let mut batch: HashMap<(usize, String), (bool, bool, bool)> = HashMap::new();
         for ev in seen.drain(..) {
-            // The subscriber that walked this directory owns the path. An event
-            // nobody recognises is **dropped, not escalated**: it is almost
-            // always another source's tree or an excluded one, and answering it
-            // with a rescan of every root turns ordinary traffic into a storm.
-            // The case that would have justified escalating is covered
-            // elsewhere — a btrfs snapshot arrives as a create *in a directory
-            // that is known*, and a fresh directory already queues a walk.
+            // The subscriber that walked this directory owns the path. An event nobody
+            // recognises is **dropped, not escalated**: it is almost always another
+            // source's tree, and a rescan of every root would turn traffic into a storm.
             let Some(i) = subs.iter().enumerate().find_map(|(i, s)| {
                 if !s.live.load(Ordering::Relaxed) {
                     return None;
@@ -1380,9 +1000,8 @@ fn drain(fd: OwnedFd) {
                 s.map.learn(&full);
             }
             let md = crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
-            // A write through a mapping produces no event at all, so a path
-            // that has just spoken is a path worth looking at again later —
-            // unless the kernel has said the content is final.
+            // A write through a mapping produces no event, so a path that has just spoken
+            // is worth another look — unless the kernel has said the content is final.
             if settled {
                 crate::revisit::forget(&full);
             } else {
@@ -1393,11 +1012,8 @@ fn drain(fd: OwnedFd) {
 }
 
 /// A filesystem that appeared after the marks were set.
-///
-/// Its contents can still be indexed — a walk reads what is there — but nothing
-/// here can watch it: a new filesystem is a new superblock and a mark needs a
-/// privilege this process does not have. So it goes to every subscriber that
-/// wants it, as a walk and as an entry on the list `unwatched` carries.
+/// Its contents can still be indexed, but nothing here can watch it: a new
+/// filesystem is a new superblock and a mark needs a privilege this process lacks.
 fn note_new_mounts(fresh: &[String]) {
     let Ok(subs) = SUBS.lock() else { return };
     for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
@@ -1419,25 +1035,16 @@ fn note_new_mounts(fresh: &[String]) {
 mod tests {
     use super::*;
 
-    /// [`DirMap::path_of`] as a test would rather read it.
-    ///
-    /// The reader keeps one buffer for the life of its thread; a test that
-    /// checks a single directory should be able to say so in one line.
+    /// [`DirMap::path_of`] as a test would rather read it: the reader keeps one
+    /// buffer for the life of its thread.
     fn resolved(map: &DirMap, ino: u64) -> Option<String> {
         let mut out = String::new();
         map.path_of(ino, &mut out).then_some(out)
     }
 
     /// The full-path arena this replaced, kept as the explicit control.
-    ///
-    /// The same reasoning as `build_serial` below: an A/B against a git
-    /// revision nobody will rebuild is not an A/B, and the two representations
-    /// have to be measured **in one process** or the reading is of two
-    /// different states of an allocator. This is the 2026-08-15 packed arena
-    /// verbatim — `HashMap<DirKey, PathSlot>` over one-MiB chunks of whole
-    /// paths, with the two-pass rebase a directory rename cost — and nothing
-    /// but `directory_map_memory_probe` and the rename-equivalence test below
-    /// uses it.
+    /// Two representations have to be weighed in one process, or the reading is of two
+    /// allocator states. Only the probes and the rename test below use it.
     mod full_path {
         use super::DirKey;
         use std::collections::HashMap;
@@ -1525,9 +1132,8 @@ mod tests {
             pub fn get(&self, slot: PathSlot) -> &str {
                 let start = slot.start as usize;
                 let end = start + slot.len as usize;
-                // SAFETY: the arena's append methods copy valid UTF-8 from
-                // `&str` or another valid arena range; slots name only the
-                // exact appended bytes.
+                // SAFETY: the arena's append methods copy valid UTF-8 from `&str` or another
+                // valid arena range; slots name only the exact appended bytes.
                 unsafe {
                     std::str::from_utf8_unchecked(&self.chunks[slot.chunk as usize][start..end])
                 }
@@ -1646,24 +1252,8 @@ mod tests {
     }
 
     /// The two directory maps this machine really holds, as a function.
-    ///
-    /// Measured with `find -xdev -type d`, 2026-09-06: `/home/hasan` is 423,384
-    /// directories averaging 118.1 B of path against 15.6 B of basename, and
-    /// `/mnt/depo` is 180,566 averaging 98.7 B against 12.7 B — 603,950
-    /// directories, 68.2 MB of paths and 8.9 MB of names, at about 10.6 path
-    /// components each. The journal names the same two counts.
-    ///
-    /// **Nothing is stored.** A directory's parent, name and key are all
-    /// functions of its index, so a probe can walk 604k directories without
-    /// holding 68 MB of strings beside the thing it is trying to weigh.
-    ///
-    /// A name is `stem + depth` bytes long because that is what makes the two
-    /// averages come out at once: an ancestor's name is shorter than a leaf's
-    /// in every real tree — `src`, `.git`, `hasan` against
-    /// `2026-08-rapor-taslak` — which is why the average path is 7.6 basenames
-    /// wide rather than 10.6 of them. Both fits are within 4%, and
-    /// [`Shape::describe`] prints what was actually generated beside the
-    /// measured figures rather than asking anyone to take this on trust.
+    /// 603,950 directories at about 10.6 components: 68.2 MB of path against 8.9 MB of
+    /// name. Nothing is stored — parent, name and key are all functions of the index.
     #[derive(Clone, Copy)]
     struct Shape {
         root: &'static str,
@@ -1671,8 +1261,7 @@ mod tests {
         count: usize,
         fanout: usize,
         stem: usize,
-        /// Every other name one byte longer, which is how a non-integer average
-        /// name length is reached with integer names.
+        /// Every other name one byte longer, which is how a non-integer average is reached.
         jitter: bool,
     }
 
@@ -1723,8 +1312,7 @@ mod tests {
             self.parent_of(n).map(|up| self.key(up))
         }
 
-        /// The name this directory is known by inside its parent — for the
-        /// root, its whole path, which is what the map holds for a root too.
+        /// The name this directory is known by inside its parent; for a root, its whole path.
         fn name(&self, n: usize, out: &mut String) {
             use std::fmt::Write;
             if n == 0 {
@@ -1733,8 +1321,7 @@ mod tests {
             }
             let want = self.stem + self.depth_of(n) + usize::from(self.jitter && n & 1 == 1);
             let from = out.len();
-            // Five bytes and not ASCII: a name arena that only ever held
-            // `[a-z]` would not notice a slicing bug on a multi-byte boundary.
+            // Five bytes and not ASCII, so a slicing bug on a multi-byte boundary shows.
             let _ = write!(out, "öge-{n:x}");
             while out.len() - from < want {
                 out.push('a');
@@ -1774,9 +1361,8 @@ mod tests {
         }
     }
 
-    /// What a generated shape actually came out as, for printing beside what
-    /// was measured on the disk. Read off the paths themselves rather than off
-    /// the generator, so a bug in the generator cannot hide in its own summary.
+    /// What a generated shape actually came out as. Read off the paths rather than
+    /// off the generator, so a bug in it cannot hide in its own summary.
     fn summarise(root: &str, paths: &[String]) -> String {
         let path_bytes: usize = paths.iter().map(String::len).sum();
         // The root holds its whole path in the arena; everything else a name.
@@ -1804,12 +1390,9 @@ mod tests {
         )
     }
 
-    /// One `FAN_CREATE` event for `name` in the directory with inode `ino`,
-    /// laid out the way [`parse`] reads it.
-    ///
-    /// Built by hand rather than captured, because what these tests need is a
-    /// stream that never ends — which is exactly the shape no recorded capture
-    /// has.
+    /// One `FAN_CREATE` event for `name` in the directory with inode `ino`, laid out
+    /// the way [`parse`] reads it. Built by hand, because these tests need a stream
+    /// that never ends.
     fn event(ino: u32, name: &str) -> Vec<u8> {
         let info_len = 29 + name.len();
         let event_len = 24 + info_len;
@@ -1820,8 +1403,7 @@ mod tests {
         let p = 24;
         e[p] = FAN_EVENT_INFO_TYPE_DFID_NAME;
         e[p + 2..p + 4].copy_from_slice(&(info_len as u16).to_le_bytes());
-        // `struct file_handle`: eight bytes of handle, type 1 — the
-        // `FILEID_INO32_GEN` shape `handle_ino` reads as a u32 inode.
+        // `struct file_handle`: eight bytes of handle, type 1 — the `FILEID_INO32_GEN` shape.
         e[p + 12..p + 16].copy_from_slice(&8u32.to_le_bytes());
         e[p + 16..p + 20].copy_from_slice(&1i32.to_le_bytes());
         e[p + 20..p + 24].copy_from_slice(&ino.to_le_bytes());
@@ -1840,8 +1422,7 @@ mod tests {
 
     #[test]
     fn the_hand_built_event_is_the_one_parse_reads() {
-        // Every ceiling below is measured in events, so a builder that produced
-        // nothing at all would make all of them pass while testing nothing.
+        // A builder that produced nothing would make every ceiling below pass.
         let mut seen = Vec::new();
         assert!(parse(&event(4242, "rapor.pdf"), &mut seen));
         assert_eq!(seen.len(), 1);
@@ -1852,16 +1433,9 @@ mod tests {
 
     #[test]
     fn a_window_stops_collecting_before_it_can_eat_the_heap() {
-        // **The kernel queue is unlimited on purpose.** `scour-watch` opens the
-        // group with `FAN_UNLIMITED_QUEUE` and reasons about what that costs in
-        // *kernel* memory; nothing had ever reasoned about the userspace vector
-        // that drains it. A producer that never stops — an `rm -rf` of a large
-        // tree, an unpacked archive — used to be read into this vector until
-        // the two-second deadline, which at the module's own measured drain
-        // rate of 4.6 million events a second is about nine million owned
-        // names.
-        //
-        // A reader that never runs out of events is the whole test.
+        // The kernel queue is unlimited on purpose, and nothing bounded the userspace
+        // vector draining it: at 4.6 million events a second, two seconds is about nine
+        // million owned names. A reader that never runs out of events is the whole test.
         let mut buf = vec![0u8; BUF];
         let mut seen: Vec<Seen> = Vec::new();
         let stream = buffer_of(1_000);
@@ -1877,8 +1451,7 @@ mod tests {
             "a window that stopped early must say so, or the events it never \
              read are treated as events that never happened"
         );
-        // `parse` empties a whole buffer before the length is looked at, so the
-        // ceiling is reached from below by at most one buffer.
+        // `parse` empties a whole buffer before the length is looked at.
         assert!(
             seen.len() < MAX_SEEN + 1_000,
             "the window collected {} events against a ceiling of {MAX_SEEN}",
@@ -1888,8 +1461,7 @@ mod tests {
             seen.len() >= MAX_SEEN,
             "it stopped early for some other reason than the ceiling"
         );
-        // And it stopped because of the count, not because two seconds passed:
-        // this stream is served from memory and could not have taken that long.
+        // Stopped because of the count, not the deadline: this stream is served from memory.
         assert!(
             calls < MAX_SEEN,
             "the deadline ended the window, not the cap"
@@ -1898,10 +1470,8 @@ mod tests {
 
     #[test]
     fn a_burst_does_not_become_the_reader_s_floor() {
-        // `clear` keeps capacity. Without the shrink in `fill`, one burst set
-        // the reader's allocation for the rest of the process's life: the peak
-        // became the floor, and a service that had been busy once held the
-        // memory for it while idle.
+        // `clear` keeps capacity. Without the shrink in `fill`, one burst sets the
+        // reader's allocation for the rest of the process's life.
         let mut buf = vec![0u8; BUF];
         let mut seen: Vec<Seen> = Vec::new();
         let stream = buffer_of(1_000);
@@ -1932,9 +1502,8 @@ mod tests {
 
     #[test]
     fn an_ordinary_window_is_read_to_the_end_and_reported_complete() {
-        // The negative control the ceiling needs: a window that fits must not
-        // be reported as lost, or every ordinary burst becomes a full walk of
-        // every root and the bound costs more than it saves.
+        // The negative control the ceiling needs: a window that fits must not be
+        // reported as lost, or every ordinary burst becomes a full walk of every root.
         let mut buf = vec![0u8; BUF];
         let mut seen: Vec<Seen> = Vec::new();
         let stream = buffer_of(1_000);
@@ -1953,8 +1522,8 @@ mod tests {
 
     #[test]
     fn the_kernel_saying_it_dropped_events_is_still_reported() {
-        // The overflow record was the only way `lost` could be set before, and
-        // the new ceiling must not have displaced it.
+        // The overflow record was the only way `lost` could be set; the ceiling
+        // must not displace it.
         let mut over = event(1, "x");
         let mask = FAN_CREATE | FAN_Q_OVERFLOW;
         over[8..16].copy_from_slice(&mask.to_le_bytes());
@@ -1975,14 +1544,8 @@ mod tests {
         );
     }
 
-    /// What the directory map's **own walk** costs against a real tree.
-    ///
-    /// This backend does not walk to establish the watch — the mark covers the
-    /// superblock and the helper set it before this process existed — but it
-    /// does walk to learn which directory an event's file handle names. That is
-    /// a second pass over the same tree the scan walks, and this measures it
-    /// beside the scan's own parallel walk of the same roots so the two can be
-    /// compared rather than guessed at.
+    /// What the directory map's own walk costs against a real tree, beside the scan's
+    /// parallel walk of the same roots.
     ///
     /// ```text
     /// SCOUR_WALK_ROOTS=/home/hasan cargo test -p scour-source-fs --release \
@@ -2002,8 +1565,7 @@ mod tests {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3);
 
-        // The rules scourd actually runs with, or the walk prunes nothing and
-        // the number is of a scan nobody performs.
+        // The rules scourd actually runs with, or the walk prunes nothing.
         let (paths, dirs, files) = crate::rules::platform_defaults();
         let opts = ScanOptions {
             hidden: true,
@@ -2031,11 +1593,8 @@ mod tests {
             }
         }
 
-        /// The stack walk this replaced, kept here as the explicit control.
-        ///
-        /// An A/B against an unset variable is not an A/B — the repository has
-        /// been caught by that once — so the old shape stays in the probe that
-        /// retired it rather than in a git revision nobody will rebuild.
+        /// The stack walk this replaced, kept here as the explicit control: an A/B
+        /// against a git revision nobody will rebuild is not an A/B.
         fn build_serial(roots: &[std::path::PathBuf], rules: &Rules) -> DirMap {
             let mut map = DirMap::default();
             let mut stack: Vec<std::path::PathBuf> = roots.to_vec();
@@ -2067,8 +1626,7 @@ mod tests {
         let cores = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
-        // The shipped setting by default, so an ordinary run of this probe
-        // measures what the service does rather than a sweep of what it could.
+        // The shipped setting by default, so an ordinary run measures what the service does.
         let threads: Vec<usize> = std::env::var("SCOUR_WALK_THREADS")
             .map(|v| v.split(':').filter_map(|s| s.parse().ok()).collect())
             .unwrap_or_else(|_| vec![walk_threads(&source, &opts)]);
@@ -2080,9 +1638,7 @@ mod tests {
             source.medium().threads(cores),
         );
         for round in 0..rounds {
-            // Alternating within the round, because this machine drifts more
-            // than 10% across a day and two numbers taken an hour apart are two
-            // different machines.
+            // Alternating within the round: this machine drifts more than 10% across a day.
             let began = Instant::now();
             let serial = build_serial(&roots, &rules);
             let serial_took = began.elapsed();
@@ -2124,29 +1680,9 @@ mod tests {
         }
     }
 
-    /// What the directory map costs in **process anonymous memory**, which is a
-    /// different question from what it costs in allocations.
-    ///
-    /// [`directory_map_memory_probe`] answers the second one: it reads
-    /// `mallinfo2`, and reported the packing as 46.05 MB → 33.03 MB with
-    /// retained allocations falling 255,769 → 19. Its author was explicit that
-    /// this is a claim about the allocator and not about RSS, and a later
-    /// summary repeated the number without that caveat. This test exists so the
-    /// RSS half is not a matter of opinion: an allocation that is freed into a
-    /// glibc arena and never returned to the kernel is a saving `mallinfo2`
-    /// sees and `RssAnon` does not.
-    ///
-    /// One shape per process, chosen by `SCOUR_DIRMAP_SHAPE`, because the two
-    /// shapes in one process share an allocator whose arenas the first one
-    /// already grew — which is exactly the confusion being resolved. Scale is
-    /// `SCOUR_DIRMAP_DIRS`; the default is both live sources at once, 603,950
-    /// directories, at the shape [`Shape`] reproduces.
-    ///
-    /// ```text
-    /// SCOUR_DIRMAP_SHAPE=strings cargo test -p scour-source-fs --release directory_map_rss_probe -- --ignored --nocapture --test-threads=1
-    /// SCOUR_DIRMAP_SHAPE=paths   cargo test -p scour-source-fs --release directory_map_rss_probe -- --ignored --nocapture --test-threads=1
-    /// SCOUR_DIRMAP_SHAPE=graph   cargo test -p scour-source-fs --release directory_map_rss_probe -- --ignored --nocapture --test-threads=1
-    /// ```
+    /// What the directory map costs in **process anonymous memory**, which `mallinfo2`
+    /// does not answer: memory freed into a glibc arena is a saving `RssAnon` never
+    /// sees. `SCOUR_DIRMAP_SHAPE` is strings|paths|graph, `SCOUR_DIRMAP_DIRS` the scale.
     #[test]
     #[ignore = "diagnostic RSS probe"]
     fn directory_map_rss_probe() {
@@ -2241,26 +1777,9 @@ mod tests {
         );
     }
 
-    /// What the directory map costs the allocator, and what a lookup costs,
-    /// at the scale and the shape of the two live sources.
-    ///
-    /// **This is the measurement the parent-component graph exists for, so it
-    /// carries its own control.** [`full_path::DirMap`] is the packed
-    /// whole-path arena that shipped on 2026-08-15; both are built, weighed,
-    /// looked up and renamed *inside one process*, because two processes are
-    /// two allocator states and the August reading was already misread once as
-    /// a claim about RSS. The order alternates round by round for the reason
-    /// the walk probe's does: this machine drifts more than 10% across a day.
-    ///
-    /// The lookup is timed twice for the arena — once borrowing, once with the
-    /// `to_owned` the reader actually did — because the graph cannot borrow: it
-    /// spells the path into the caller's buffer. Comparing a borrow against a
-    /// spelled-out path would flatter the arena by an allocation the reader
-    /// paid anyway.
-    ///
-    /// Run alone so allocator readings do not include another test:
-    ///
-    /// `cargo test -p scour-source-fs directory_map_memory_probe --release -- --ignored --nocapture --test-threads=1`
+    /// What the directory map costs the allocator, and what a lookup costs, at the
+    /// scale and shape of the two live sources. [`full_path::DirMap`] is weighed in
+    /// the *same process*, and the lookup timed twice because the graph cannot borrow.
     #[test]
     #[ignore = "diagnostic allocator and latency probe"]
     fn directory_map_memory_probe() {
@@ -2302,9 +1821,7 @@ mod tests {
             .unwrap_or(6);
         let sources = [HOME, DEPO];
 
-        // Generated once and held, so a round measures the map and not the
-        // generator — and allocated before the first reading, so it is outside
-        // every heap delta below.
+        // Generated once and held, and allocated before the first reading.
         let paths: Vec<Vec<String>> = sources.iter().map(|s| s.paths(s.count)).collect();
         for (s, p) in sources.iter().zip(&paths) {
             println!("shape   {}", summarise(s.root, p));
@@ -2315,8 +1832,7 @@ mod tests {
              on disk both        603950 dirs · ~10.6 components · find -xdev -type d, 2026-09-06"
         );
 
-        // The subtree the small rename moves: the node whose descendants come
-        // closest to a thousand. Sizes in one pass, children before parents.
+        // The subtree the small rename moves: sizes in one pass, children before parents.
         let mut sizes = vec![1u32; HOME.count];
         for n in (1..HOME.count).rev() {
             let up = HOME.parent_of(n).expect("only the root has no parent");
@@ -2333,9 +1849,8 @@ mod tests {
             sizes[0],
         );
 
-        // A fixed pseudo-random order, so neither arm sees the inodes in the
-        // order it inserted them. 104,729 is prime and coprime with both
-        // counts, so this is a permutation rather than a sample.
+        // A fixed pseudo-random order, so neither arm sees the inodes in insertion
+        // order. 104,729 is prime and coprime with both counts, so it is a permutation.
         let order: Vec<Vec<u64>> = sources
             .iter()
             .map(|s| {
@@ -2393,11 +1908,9 @@ mod tests {
             row
         };
 
-        // The order the walk hands directories over in, which decides how far
-        // apart a node and its parent end up — and therefore what the climb
-        // costs. The index order is breadth-first; `ignore` gives each worker
-        // its own stack, so a real walk is closer to depth-first, and the two
-        // are measured rather than argued about.
+        // The order the walk hands directories over in decides how far apart a node and
+        // its parent end up, and therefore what the climb costs. Index order is
+        // breadth-first; `ignore` gives each worker its own stack, so a real walk is not.
         let depth_first: Vec<Vec<usize>> = sources
             .iter()
             .map(|s| {
@@ -2492,8 +2005,7 @@ mod tests {
 
         let (mut arena, mut graph, mut deep) = (Vec::new(), Vec::new(), Vec::new());
         for round in 0..rounds {
-            // Alternating within the round: two numbers taken minutes apart on
-            // a machine that drifts are two different machines.
+            // Alternating within the round: two numbers taken minutes apart are two machines.
             let mut run = |which: usize| match which {
                 0 => {
                     let row = arena_round();
@@ -2587,8 +2099,7 @@ mod tests {
                 for n in 0..breadth {
                     let dir = parent.join(format!("d{level}-{n}"));
                     std::fs::create_dir(&dir).expect("directory");
-                    // A file beside it, so the walk has to reject something as
-                    // well as accept something.
+                    // A file beside it, so the walk rejects as well as accepts.
                     std::fs::write(dir.join("dosya.txt"), b"x").expect("file");
                     made.push(dir.clone());
                     next.push(dir);
@@ -2601,18 +2112,9 @@ mod tests {
 
     #[test]
     fn the_parallel_walk_finds_every_directory_the_stack_walk_found() {
-        // **A directory missing from this map is a directory whose every event
-        // resolves to nothing**, so the walk that fills it has to be complete
-        // in a way an index can afford not to be: the scan can miss a file and
-        // find it next time, and this cannot, because "next time" is the next
-        // full scan and everything in between is invisible.
-        //
-        // The failure this guards is the one the batching introduced. Each
-        // walker thread gathers `DIR_BATCH` directories before sending, and
-        // `ignore` gives a visitor no way to say it has finished — so without
-        // the `Drop` on `DirBatch` every thread silently drops its last partial
-        // buffer. The tree is deliberately not a multiple of the batch, so most
-        // threads end holding one.
+        // A directory missing from this map resolves none of its events, so the walk that
+        // fills it must be complete in a way an index can afford not to be. The tree is
+        // deliberately not a multiple of [`DIR_BATCH`], so most threads end holding one.
         let root = tempfile::tempdir().expect("temporary directory");
         let made = plant(root.path(), 7, 4);
         assert!(
@@ -2646,39 +2148,23 @@ mod tests {
             made.len(),
             "the walk recorded a different number of directories than exist"
         );
-        // One thread and eight must agree about the tree, or the thread count
-        // is a correctness setting rather than a speed one.
+        // One thread and eight must agree, or the thread count is a correctness setting.
         let single = DirMap::build(&roots, &rules, 1);
         assert_eq!(single.by_key.len(), parallel.by_key.len());
     }
 
     #[test]
     fn a_directory_that_appears_during_the_walk_is_still_reachable() {
-        // **The hole `scan.on_start` exists to close, checked on this backend.**
-        //
-        // On inotify the race is real and was fixed by ordering: a directory
-        // walked before it is watched is one whose contents change unheard. On
-        // fanotify the mark is on the superblock and the helper set it before
-        // this process existed, so coverage never depends on this walk — what
-        // depends on it is *resolution*, and an event naming a directory this
-        // map has never heard of is dropped rather than escalated.
-        //
-        // So the guarantee to hold is this: whatever appears while the walk is
-        // running, no event about it is lost. It is held by two things
-        // together, and both are checked here — the new directory's **parent**
-        // is in the map whichever side of the walk it was created on, and
-        // `learn` puts the new directory itself in on the strength of that
-        // parent's event. The events themselves cannot be lost meanwhile
-        // because they are queued by a mark that predates the process, and the
-        // subscription is not registered until the walk has finished.
+        // Coverage never depends on this walk — the mark predates the process — but
+        // *resolution* does, and an event naming a directory this map never heard of is
+        // dropped. So: whatever appears while the walk runs, its parent is in the map.
         let root = tempfile::tempdir().expect("temporary directory");
         let made = plant(root.path(), 6, 3);
         let rules = Rules::from_options(&ScanOptions::default());
         let roots = vec![root.path().to_path_buf()];
 
-        // Created *while the walk runs*, in directories that already existed —
-        // which is the only shape this race has, because a parent that did not
-        // exist when the walk began has a parent that did.
+        // Created *while the walk runs*, in directories that already existed — the only
+        // shape this race has, since a parent that did not exist has one that did.
         let parents: Vec<std::path::PathBuf> = made.iter().skip(1).step_by(3).cloned().collect();
         assert!(parents.len() > 8, "too few parents to race against");
         let racing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -2706,8 +2192,7 @@ mod tests {
             racing.store(false, Ordering::Relaxed);
             let born = creator.join().expect("the creating thread");
 
-            // Every directory that was there before the walk began is in the
-            // map. That is what makes the rest of this reachable.
+            // Every directory that was there before the walk began is in the map.
             for dir in &made {
                 use std::os::unix::fs::MetadataExt;
                 let md = std::fs::symlink_metadata(dir).expect("metadata");
@@ -2718,9 +2203,8 @@ mod tests {
                 );
             }
 
-            // And every directory born during it is either already in the map
-            // or resolvable through its parent — never neither, which is the
-            // hole.
+            // And every directory born during it is either already in the map or resolvable
+            // through its parent — never neither, which is the hole.
             let mut map = map;
             for dir in &born {
                 use std::os::unix::fs::MetadataExt;
@@ -2782,9 +2266,8 @@ mod tests {
         assert_eq!(map.devices, [first_md.dev()]);
         assert_eq!(map.by_key.len(), 2);
         assert_eq!(map.names.used_bytes(), bytes);
-        // The directory both of these are *in* is not one of them. It has a
-        // node, because their names hang off it, and it is deliberately not
-        // answerable: an event in it belongs to whatever source walked it.
+        // The directory both of these are *in* is deliberately not answerable: an event
+        // in it belongs to whatever source walked it.
         assert_eq!(map.outside.len(), 1);
         assert_eq!(map.nodes.len(), 3);
         assert_eq!(
@@ -2822,8 +2305,7 @@ mod tests {
             resolved(&map, md.ino()).as_deref(),
             Some(after_text.as_str())
         );
-        // A rename writes the new *name*, not the new path. The old name is
-        // left where it is — five bytes against a compaction pass.
+        // A rename writes the new *name*, not the new path: five bytes against a compaction pass.
         assert_eq!(map.names.used_bytes(), names + "after".len());
     }
 
@@ -2882,8 +2364,7 @@ mod tests {
         assert_eq!(map.by_key.len(), keys);
         assert_eq!(map.by_key.capacity(), capacity);
         assert_eq!(map.devices, devices);
-        // The descendants moved without being written down again: the whole
-        // rename cost the arena one basename.
+        // The descendants moved without being written down: the rename cost one basename.
         assert_eq!(map.names.used_bytes(), names + "moved-tree".len());
 
         let bytes = map.names.used_bytes();
@@ -2894,12 +2375,9 @@ mod tests {
         assert_eq!(map.by_key.len(), keys);
     }
 
-    /// A synthetic tree at the depth the real one has, built the way the
-    /// parallel walk builds it: out of order.
-    ///
-    /// Turkish names because the arena stores bytes and the climb slices them:
-    /// a map that only ever held `[a-z]` would not notice an off-by-one on a
-    /// multi-byte boundary, and `Çalışmalar` is what is actually in `~`.
+    /// A synthetic tree at the depth the real one has, built out of order the way the
+    /// parallel walk builds it. Turkish names, because the arena stores bytes and the
+    /// climb slices them.
     struct Planted {
         paths: Vec<String>,
         keys: Vec<DirKey>,
@@ -2937,21 +2415,16 @@ mod tests {
         }
     }
 
-    /// A deterministic permutation of `0..n`, so a child usually arrives before
-    /// its parent — which is what several walker threads flushing batches
-    /// independently does, and what the old representation never had to care
-    /// about because it stored whole paths.
+    /// A deterministic permutation of `0..n`, so a child usually arrives before its
+    /// parent — which is what several walker threads flushing independently does.
     fn shuffled(n: usize) -> Vec<usize> {
         (0..n).map(|i| i.wrapping_mul(104_729) % n).collect()
     }
 
     #[test]
     fn a_hundred_thousand_directories_spell_out_the_paths_they_were_given() {
-        // The whole claim of this representation in one test: nothing stores a
-        // path any more, so every path has to come back out of the chain
-        // byte-identical — at the depth the real tree has, on names that are
-        // not ASCII, inserted in an order that puts most children before their
-        // parents.
+        // Nothing stores a path, so every path has to come back out of the chain
+        // byte-identical: at real depth, on non-ASCII names, inserted out of order.
         const DIRS: usize = 100_000;
         let tree = plant_synthetic(DIRS, 3);
         let deepest = tree.paths.iter().map(|p| p.matches('/').count()).max();
@@ -2960,9 +2433,8 @@ mod tests {
             "a tree {deepest:?} deep does not exercise the climb"
         );
 
-        // The premise, checked rather than assumed: this order really does put
-        // most children in before their parents. If it did not, the whole
-        // placeholder path would go untested and this would still pass.
+        // The premise, checked rather than assumed: this order really does put most
+        // children in before their parents.
         let order = shuffled(DIRS);
         let mut arrived = vec![false; DIRS];
         let mut early = 0usize;
@@ -2984,9 +2456,8 @@ mod tests {
         }
 
         assert_eq!(map.by_key.len(), DIRS);
-        // Every directory that was first met as somebody's parent was claimed
-        // when the walk reached it: a node left over here would be a subtree
-        // that a rename above it could not move.
+        // Every directory first met as somebody's parent was claimed when the walk
+        // reached it: a node left over here is a subtree a rename could not move.
         assert!(
             map.outside.is_empty(),
             "{} placeholder(s) were never claimed",
@@ -3011,12 +2482,9 @@ mod tests {
 
     #[test]
     fn renaming_a_directory_moves_its_descendants_exactly_where_a_rebuild_puts_them() {
-        // **The one behaviour a graph could plausibly lose.** The arena moved a
-        // subtree by rewriting every descendant's string; this moves one node
-        // and lets the climb do the rest. So the test is not "the paths look
-        // right", it is "the paths are the same ones" — against two
-        // independent oracles: the arena doing the rename its own way, and a
-        // map built from scratch out of the renamed paths.
+        // **The one behaviour a graph could plausibly lose.** The arena moved a subtree
+        // by rewriting every descendant, so the test is not "the paths look right" but
+        // "the paths are the same ones", against two independent oracles.
         const DIRS: usize = 5_000;
         let tree = plant_synthetic(DIRS, 4);
         let moved = 1usize;
@@ -3042,8 +2510,7 @@ mod tests {
             "only {descendants} directories move, which is not the case worth testing"
         );
 
-        // Out of order again, because a rename has to move the subtrees that
-        // were stitched together late as well as the ones that were not.
+        // Out of order again, because a rename has to move late-stitched subtrees too.
         let mut graph = DirMap::default();
         let mut arena = full_path::DirMap::default();
         for n in shuffled(DIRS) {
@@ -3088,13 +2555,9 @@ mod tests {
 
     #[test]
     fn a_directory_nested_deeper_than_the_stack_buffer_still_resolves() {
-        // The climb keeps [`INLINE_DEPTH`] components on the stack. Past that
-        // it spills to a `Vec` rather than giving up, and the difference
-        // matters because the failure mode of giving up is invisible: an event
-        // that resolves to nothing looks exactly like an event that never
-        // happened, so a subtree nested past a fixed cap would simply stop
-        // being watched with nothing said. `PATH_MAX` allows about 2,000
-        // components; this is four times the buffer.
+        // The climb keeps [`INLINE_DEPTH`] components on the stack and spills past it.
+        // Giving up instead is invisible — an event that resolves to nothing looks like
+        // one that never happened. `PATH_MAX` allows about 2,000 components.
         const DEEP: usize = INLINE_DEPTH * 4;
         let key = |n: usize| DirKey {
             dev: 42,
@@ -3123,10 +2586,8 @@ mod tests {
             );
         }
 
-        // And a chain that never reaches a root resolves to nothing rather
-        // than spinning the reader thread. The kernel refuses to move a
-        // directory inside itself, so this cannot be reached through
-        // `insert_key` — which is exactly why it is worth pinning here.
+        // And a chain that never reaches a root resolves to nothing rather than spinning
+        // the reader. The kernel refuses to move a directory inside itself.
         map.nodes[0].parent = DEEP as u32 - 1;
         for n in [0usize, DEEP / 2, DEEP - 1] {
             assert_eq!(
@@ -3152,8 +2613,7 @@ mod tests {
         ntfs.extend_from_slice(&0x27u32.to_le_bytes());
         assert_eq!(handle_ino(1, &ntfs), Some(0x0003_0f45));
 
-        // tmpfs uses the same type number with the fields the other way round,
-        // which is why the length is part of the decision.
+        // tmpfs uses the same type number the other way round, hence the length.
         let mut tmp = Vec::new();
         tmp.extend_from_slice(&0x8f45_42b1u32.to_le_bytes());
         tmp.extend_from_slice(&99u64.to_le_bytes());
@@ -3203,17 +2663,15 @@ mod tests {
 
     #[test]
     fn two_mounts_of_one_disk_are_two_mounts_because_a_remount_loses_the_mark() {
-        // Both lines are `/dev/nvme0n1p5`, and they are deliberately *not*
-        // folded together: what matters here is not which superblock it is but
-        // whether this particular mount is one the marks were placed before.
+        // Both lines are `/dev/nvme0n1p5` and are deliberately *not* folded: what matters
+        // is whether this particular mount is one the marks were placed before.
         let text = "\
 31 1 259:5 /@ / rw - btrfs /dev/nvme0n1p5 rw,subvolid=256
 48 1 259:5 /@home /home rw - btrfs /dev/nvme0n1p5 rw,subvolid=257
 ";
         assert_eq!(mounts(text).len(), 2);
 
-        // The same filesystem unmounted and mounted again comes back with a
-        // different mount id, which is what makes it visible as new.
+        // The same filesystem remounted comes back with a different mount id.
         let after = "49 1 259:5 /@home /home rw - btrfs /dev/nvme0n1p5 rw,subvolid=257\n";
         let before = mounts(text);
         let now = mounts(after);

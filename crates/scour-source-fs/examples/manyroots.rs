@@ -1,14 +1,8 @@
 //! Does a walk of several roots at once reach all of them?
 //!
-//! The service walks `/usr /etc /opt /var` as one source, and the live index
-//! was seen alternating between holding all four and holding only the first:
-//! `/opt` 5.477 rows then 0, `/etc` 2.309 then 34. A walk that does not reach
-//! a root is a walk the sweep then treats as proof the root is empty.
-//!
 //!   cargo run --release -p scour-source-fs --example manyroots -- /usr /etc /opt /var
 //!
-//! Prints one line per root per run, so an unstable walk shows as a number
-//! that moves between runs of the *same* binary on the *same* disk.
+//! One line per root per run: an unstable walk is a number that moves between runs.
 
 use std::collections::BTreeMap;
 

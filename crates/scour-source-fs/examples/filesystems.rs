@@ -1,32 +1,7 @@
 //! What `traits_of` believes about a filesystem, against what it actually does.
-//!
-//! `cargo run --release -p scour-source-fs --example filesystems <dir>...`
-//!
-//! With no arguments it tries every writable filesystem currently mounted.
-//!
-//! [`FsTraits`] is read from `statfs`'s magic number and a table, and a wrong
-//! entry in that table is not a compile error or a crash — it is a silently
-//! wrong index. Claiming `stable_ids` where `st_ino` is invented makes every
-//! file its own duplicate after a remount; claiming `case_sensitive` where the
-//! filesystem folds makes `Rapor.pdf` and `rapor.pdf` two rows for one file.
-//!
-//! So this does not trust the table. It writes files and finds out:
-//!
-//! * **case** — create `ScourCase.probe`, then try to open `scourcase.probe`.
-//!   If it opens, two names are one file.
-//! * **identities** — create a hundred files and count the distinct
-//!   `(dev, ino)` pairs. On the FAT family `st_ino` is the driver's invention
-//!   and repeats.
-//! * **rename** — an identity that changes when a file is renamed is not an
-//!   identity, and a rename then reaches the index as a delete and an add.
-//!
-//! Everything it makes, it removes.
-//!
-//! **The formats this cannot reach.** Mounting a loopback image needs real
-//! `CAP_SYS_ADMIN` — a user namespace does not help, because ext4, btrfs, xfs,
-//! vfat and exfat are not `FS_USERNS_MOUNT`. So the full matrix is
-//! `scripts/fsmatrix.sh`, which needs `sudo`; this covers whatever the machine
-//! already has mounted, which needs nothing.
+//! `cargo run -p scour-source-fs --example filesystems <dir>...`, or with no
+//! arguments every writable filesystem mounted. A wrong table entry is a silently
+//! wrong index, so this writes files and finds out; `scripts/fsmatrix.sh` does the rest.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -78,18 +53,14 @@ struct Measured {
 
 impl Measured {
     fn agrees_with(&self, claimed: &FsTraits) -> bool {
-        // Only one direction is a defect. Claiming *less* than the filesystem
-        // offers is the deliberate conservative choice `FsTraits::UNKNOWN`
-        // documents; claiming more is the silent wrong index.
+        // Only one direction is a defect: claiming *less* than the filesystem offers
+        // is the conservative choice, claiming more is the silent wrong index.
         !(claimed.case_sensitive && !self.case_sensitive)
             && !(claimed.real_modes && !self.real_modes)
     }
 
-    /// `ids` and `rename` are reported and nothing is claimed against them:
-    /// since a row is identified by its path, no code asks the filesystem for
-    /// an identity. The numbers stay because the finding they produced —
-    /// vfat and exfat inventing `st_ino`, 0 of 50 surviving a remount — is
-    /// what makes that decision look obvious in hindsight.
+    /// `ids` and `rename` are reported and nothing is claimed against them: a row is
+    /// identified by its path, so nothing asks the filesystem for an identity.
     fn show(&self) -> String {
         format!(
             "case={} ids={} rename={} chmod={}",
@@ -127,8 +98,7 @@ fn probe(dir: &Path) -> Option<Measured> {
     }
     let case_sensitive = std::fs::metadata(root.join("scourcase.probe")).is_err();
 
-    // Identities. A hundred files, and how many distinct `(dev, ino)` pairs
-    // they turn out to have.
+    // Identities. A hundred files, and how many distinct `(dev, ino)` pairs they have.
     let mut ids: HashSet<(u64, u64)> = HashSet::new();
     for i in 0..100 {
         let p = root.join(format!("id{i}.probe"));
@@ -150,8 +120,8 @@ fn probe(dir: &Path) -> Option<Measured> {
             .map(|m| Some((m.dev(), m.ino())) == was)
             .unwrap_or(false);
 
-    // Modes. A filesystem with none of its own takes what the mount says and
-    // ignores a chmod, so asking for one and reading it back is the whole test.
+    // Modes. A filesystem with none of its own takes what the mount says and ignores
+    // a chmod, so asking for one and reading it back is the whole test.
     let m = root.join("mode.probe");
     let _ = std::fs::write(&m, b"x");
     let real_modes = std::fs::set_permissions(&m, std::fs::Permissions::from_mode(0o600)).is_ok()

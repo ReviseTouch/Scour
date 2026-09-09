@@ -1,32 +1,8 @@
 //! Looking again at what stopped announcing itself.
 //!
-//! **A file written through a shared mapping produces no event.** The write is
-//! a page fault rather than a system call, so nothing reaches `fsnotify` and no
-//! watcher of any kind reports it — this is not an fanotify gap, inotify is
-//! just as blind. Measured: content changed from one byte to another while
-//! `mtime`, `ctime`, `size` and `blocks` stayed identical through `msync`,
-//! fifty-five seconds of writeback, `munmap` and `close`.
-//!
-//! What saves it is that such a file was announced *once*. A database is
-//! created, its `-wal` and `-shm` beside it, and those creations are ordinary
-//! events. So the path is known; it is only that nobody looks again.
-//!
-//! This looks again. Every path an event arrived for is remembered and
-//! re-examined on a widening clock, and dropped when the kernel says the
-//! content is final.
-//!
-//! **The cheap part is what it does not do.** Enumerating which files are
-//! currently mapped means reading `/proc/*/maps` for every process, measured at
-//! **1.3 seconds a pass** on this machine — the kernel walks each process's
-//! whole VMA list and resolves every path. Spreading that over time does not
-//! make it cost less, only later: five processes a second is 1.1% of a core,
-//! which is more than everything else the service does put together. A `statx`
-//! is 0.55 µs, so revisiting five hundred paths every thirty seconds is 275 µs
-//! a minute, and no `/proc` at all.
-//!
-//! And nothing is emitted unless something moved. Re-announcing five hundred
-//! files on a clock would put a commit where there was none, which costs 87 ms
-//! on disk — worse than the staleness it set out to fix.
+//! **A write through a shared mapping produces no event**: it is a page fault, not
+//! a syscall, so nothing reaches `fsnotify`. Paths an event arrived for are re-read
+//! on a widening clock — 0.55 µs a `statx`, against 1.3 s a pass over `/proc/*/maps`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,12 +12,8 @@ use std::time::{Duration, Instant};
 use scour_core::{ChangeSink, SourceId};
 
 /// How long to wait before each look, and there are only ever four.
-///
-/// The first is short because the common case is a file still being written;
-/// the last is the floor a long-lived mapping settles onto. A database mapped
-/// for a week is looked at six times an hour for ever, which is six `statx`
-/// calls — the reason the list does not need to expire is that staying on it
-/// costs nothing.
+/// The first is short because the file is probably still being written; the last
+/// is a floor, so a mapping held for a week costs six `statx` calls an hour.
 const TIERS: [Duration; 4] = [
     Duration::from_secs(5),
     Duration::from_secs(30),
@@ -49,12 +21,8 @@ const TIERS: [Duration; 4] = [
     Duration::from_secs(600),
 ];
 
-/// How many paths may be remembered at once.
-///
-/// A bound rather than a policy: the list holds what recently changed, which
-/// on an idle machine is a handful and during a build is unbounded. Four
-/// thousand entries is about 400 KB, and the oldest goes when a new one
-/// arrives — losing the least recently touched is losing the one least likely
+/// How many paths may be remembered at once — about 400 KB.
+/// The oldest goes when a new one arrives: least recently touched is least likely
 /// to still be open.
 const CAP: usize = 4_096;
 
@@ -65,8 +33,7 @@ struct Seen {
     sink: Arc<dyn ChangeSink>,
     next: Instant,
     tier: usize,
-    /// The two fields a mapped write can move. Compared rather than trusted:
-    /// **the point of the list is to emit nothing when nothing changed.**
+    /// The two fields a mapped write can move, compared rather than trusted.
     size: u64,
     mtime: i64,
     /// Roughly when this was last touched, for choosing what to forget.
@@ -81,13 +48,7 @@ struct Shared {
 }
 
 /// What this module compares a file against: its length and when it changed.
-///
-/// **One reader rather than `MetadataExt` at four call sites.** The two facts
-/// are portable — every filesystem has a length and a modification time — but
-/// the cheap way to read them is not: on Unix they are already in the `statx`
-/// this `Metadata` came from, and off it they arrive as a `SystemTime` that
-/// has to be converted. Written once, so the four places that ask cannot
-/// disagree and the crate compiles for the platforms the README claims.
+/// One reader, because the cheap way to read those two is not portable.
 fn shape(md: &std::fs::Metadata) -> (u64, i64) {
     #[cfg(unix)]
     {
@@ -111,9 +72,8 @@ fn shared() -> &'static Arc<Shared> {
     IT.get_or_init(|| {
         let it: Arc<Shared> = Arc::default();
         let theirs = Arc::clone(&it);
-        // One thread, whatever the watcher is and however many sources there
-        // are. It sleeps on a condition variable until the earliest deadline,
-        // so an idle list costs no wake-ups at all.
+        // One thread, whatever the watcher is and however many sources there are.
+        // It sleeps on a condition variable, so an idle list costs no wake-ups.
         let _ = std::thread::Builder::new()
             .name("scour-revisit".into())
             .spawn(move || run(&theirs));
@@ -122,9 +82,7 @@ fn shared() -> &'static Arc<Shared> {
 }
 
 /// Remember a path, or move one already remembered back to the first tier.
-///
-/// Called for every event a backend resolves, with the metadata the look that
-/// followed it already read — so this costs a hash lookup and no syscall.
+/// Takes the metadata the look already read: a hash lookup and no syscall.
 pub(crate) fn note(
     path: &str,
     id: SourceId,
@@ -178,12 +136,8 @@ pub(crate) fn note(
 // Only the fanotify reader calls this, and that is Linux.
 #[cfg(target_os = "linux")]
 /// Stop looking at a path: the kernel has said its content is final.
-///
-/// `FAN_CLOSE_WRITE` is that statement, and for a mapping it arrives at
-/// `munmap` rather than at `close` — measured, because `MAP_SHARED` holds a
-/// reference to the open file and `__fput` runs when the last one goes. So the
-/// event that says "the mapping is gone" is the event that takes the path off
-/// this list, and no `/proc` was consulted to learn it.
+/// `FAN_CLOSE_WRITE` arrives at `munmap` for a mapping, because `MAP_SHARED` holds
+/// a reference to the open file and `__fput` runs when the last one goes.
 pub(crate) fn forget(path: &str) {
     // Nothing has ever been noted: do not start the thread to say so.
     let Some(it) = started() else { return };
@@ -197,8 +151,7 @@ pub(crate) fn forget(path: &str) {
 fn started() -> Option<&'static Arc<Shared>> {
     static PROBE: OnceLock<()> = OnceLock::new();
     let _ = &PROBE;
-    // `shared()` starts the thread, so only touch it once something is on the
-    // list — which `note` guarantees before any `forget` can matter.
+    // `shared()` starts the thread, so only touch it once something is on the list.
     if LIVE.load(Ordering::Relaxed) {
         Some(shared())
     } else {
@@ -225,8 +178,7 @@ fn run(it: &Arc<Shared>) {
                     .map(|(p, _)| p.clone()),
             );
             if due.is_empty() {
-                // Sleep until the earliest deadline, or until something is
-                // noted. An empty list waits for ever and costs nothing.
+                // Sleep until the earliest deadline. An empty list waits for ever.
                 let next = paths.values().map(|s| s.next).min();
                 let wait = next.map_or(Duration::from_secs(3_600), |at| {
                     at.saturating_duration_since(now)
@@ -237,8 +189,7 @@ fn run(it: &Arc<Shared>) {
                 };
                 continue;
             }
-            // Advance the tier before releasing the lock, so a look that takes
-            // a while cannot be started twice.
+            // Advance the tier under the lock, so a slow look cannot start twice.
             for p in &due {
                 if let Some(s) = paths.get_mut(p) {
                     s.tier = (s.tier + 1).min(TIERS.len() - 1);
@@ -250,8 +201,7 @@ fn run(it: &Arc<Shared>) {
         let _ = wait;
 
         for p in &due {
-            // The lock is not held across the `stat` or the emit: a look is
-            // microseconds and a sink is somebody else's channel.
+            // The lock is not held across the `stat` or the emit.
             let md = std::fs::symlink_metadata(p);
             let Ok(mut paths) = it.paths.lock() else {
                 return;
@@ -271,8 +221,7 @@ fn run(it: &Arc<Shared>) {
                     drop(paths);
                     crate::watch::look(id, real_modes, p, false, sink.as_ref());
                 }
-                // Gone. `look` is what turns that into a removal, and it is the
-                // same answer a watcher would have given.
+                // Gone. `look` turns that into a removal, as a watcher would.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     let (id, real_modes, sink) = (seen.id, seen.real_modes, Arc::clone(&seen.sink));
                     paths.remove(p);
@@ -291,8 +240,7 @@ mod tests {
 
     #[test]
     fn the_clock_widens_and_then_stops_widening() {
-        // Four looks and then a floor: a mapping held for a week is examined
-        // six times an hour for ever, not once and forgotten.
+        // Four looks and then a floor: a week-old mapping is still examined.
         let mut tier = 0usize;
         let mut seen = Vec::new();
         for _ in 0..8 {
@@ -316,13 +264,11 @@ mod tests {
 
     #[test]
     fn a_directory_is_never_remembered() {
-        // Its contents announce themselves; the directory itself has no body
-        // that a mapping could change behind a watcher's back.
+        // A directory has no body a mapping could change behind a watcher's back.
         let dir = tempfile::tempdir().expect("tempdir");
         let md = std::fs::symlink_metadata(dir.path()).expect("stat");
         assert!(md.is_dir());
-        // `note` returns early; the observable effect is that nothing was
-        // started, which `started()` reports.
+        // `note` returns early, and the observable effect is that nothing started.
         let before = LIVE.load(Ordering::Relaxed);
         note(
             &dir.path().to_string_lossy(),
@@ -335,12 +281,7 @@ mod tests {
     }
 
     /// The whole point, end to end: a file changes with no event, and it is
-    /// noticed anyway.
-    ///
-    /// A mapped write is simulated rather than performed — what matters is the
-    /// shape, which is that the content moved and nothing told us. If this
-    /// stops passing, a database being written through a mapping goes back to
-    /// carrying whatever timestamp it had when it was created.
+    /// The mapped write is simulated: what matters is that content moved silently.
     #[test]
     fn a_change_nobody_announced_is_found_on_the_next_look() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -353,8 +294,7 @@ mod tests {
         let md = std::fs::symlink_metadata(&file).expect("stat");
         note(&path, SourceId(0), true, &sink, Some(&md));
 
-        // Changed behind the watcher's back: no event, and the size moves the
-        // way a mapped write would move it.
+        // Changed behind the watcher's back, the way a mapped write would move it.
         std::fs::write(&file, b"one and then some more").expect("rewrite");
 
         let deadline = Instant::now() + TIERS[0] + Duration::from_secs(4);
@@ -368,8 +308,7 @@ mod tests {
     }
 
     /// And the other half: looking again must not *say* anything when nothing
-    /// moved. Five hundred paths re-announced on a clock would put a commit
-    /// where there was none, which costs 87 ms on disk.
+    /// moved. A commit where there was none costs 87 ms on disk.
     #[test]
     fn a_look_that_finds_nothing_changed_says_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");

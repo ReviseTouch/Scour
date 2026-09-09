@@ -1,41 +1,20 @@
 //! Asking the filesystem what it can actually promise.
 //!
-//! [`Caps`] used to be a constant: every Unix build declared `STABLE_IDS |
-//! CASE_SENSITIVE` at compile time, whatever it was pointed at. Both halves of
-//! that were wrong on filesystems people really use.
-//!
-//! * **Identity** is no longer asked about at all — a row is identified by its
-//!   path, so nothing here has to decide whether `st_ino` can be trusted. The
-//!   measurement that made the question interesting is kept in
-//!   `examples/filesystems.rs`: on vfat and exfat `st_ino` is invented by the
-//!   driver and 0 of 50 files kept theirs across a remount.
-//! * **Case.** This machine's NTFS volume answers `PROJELER` and refuses
-//!   `projeler`, because Linux's ntfs3 is case-sensitive by default. The same
-//!   disk under Windows is not. So the answer belongs to the mounted
-//!   filesystem, not to the format and not to the operating system.
-//!
-//! Measured here rather than assumed: the magic numbers below were read off
-//! this machine with `stat -f -c %t`, which is also how the ntfs3 value was
-//! found — `coreutils` does not know it and prints `UNKNOWN`.
-//!
-//! [`EntryId`]: scour_core::EntryId
+//! Case and mode belong to the mounted filesystem, not to the format and not to
+//! the operating system: this machine's NTFS volume is case-sensitive under
+//! ntfs3 and insensitive under Windows. The magics below came from `stat -f -c %t`.
 
 use std::path::Path;
 
 /// How a mount behaves under a scan.
-///
-/// Separate from [`FsTraits`], which is about correctness. This is about
-/// speed, and the two do not correlate: exFAT has no stable ids and is fast,
-/// NFS has stable ids and is slow.
+/// Speed, not correctness: exFAT has no stable ids and is fast, NFS the reverse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Medium {
     /// A local device with deep hardware queues. Parallelism is free.
     Solid,
-    /// A spinning disk. Every concurrent reader is a seek, so parallelism
-    /// actively hurts.
+    /// A spinning disk. Every concurrent reader is a seek, so parallelism hurts.
     Spinning,
-    /// Reached over a network — NFS, SMB, sshfs, a cloud mount. Bounded by
-    /// round trips rather than by the device.
+    /// Reached over a network. Bounded by round trips rather than by the device.
     Network,
     /// In memory. tmpfs, ramfs.
     Memory,
@@ -44,105 +23,34 @@ pub enum Medium {
 }
 
 impl Medium {
-    /// How many walker threads this mount is worth.
-    ///
-    /// **This number belonged to the device and it does not.** It was twenty
-    /// here — the core count, and this machine's NVMe hardware queue count,
-    /// which is the same number and looked like a reason. What that measured
-    /// was the *walk*: 1.85 M entries in 241 ms at twenty threads against
-    /// 1073 ms at eight.
-    ///
-    /// A scan is not a walk. Entries go down a channel to one thread that
-    /// stages and indexes them, and it takes them slower than one walker
-    /// produces them. So the channel fills, a walker blocks in `send` while
-    /// still owing a directory, and `ignore`'s other workers spin in their
-    /// wait-for-work loop until it comes back — at a full core each, starving
-    /// the one thread that would have released them. The walk got faster and
-    /// the scan got worse.
-    ///
-    /// First scan of `/mnt/depo`, 1,565,781 entries on ntfs3, whole service,
-    /// both directions. The page cache is the variable that matters, so both
-    /// states are here — cold is the first scan after a boot, warm is every
-    /// restart during a session:
-    ///
-    /// | threads | warm | cold |
-    /// |---|---|---|
-    /// | 1 | 12.1 core-s · 8.4 s | — |
-    /// | **2** | **13.3 core-s · 5.1 s** | 20.1 core-s · 17-24 s |
-    /// | 4 | 31.0 core-s · 8.2 s | 27.2 core-s · **11-14 s** |
-    /// | 8 | 70.3 core-s · 10.9 s | — |
-    /// | 20 | 176.3 core-s · 13.2 s | — |
-    ///
-    /// Warm, two wins on both axes and twenty is the worst row on both — it
-    /// measured 8,231,481 voluntary context switches against 24,007 at two.
-    /// Cold, four is half the wall clock, because the walker is waiting on the
-    /// device rather than on anything here.
-    ///
-    /// **Two.** It is the lower CPU in *both* states — a third less cold, less
-    /// than half warm — and the only thing four buys is about six seconds of a
-    /// scan that happens once a boot, against a saving on every restart during
-    /// the session.
-    ///
-    /// The number is a symptom and worth naming as one. The walk alone costs
-    /// 3.0 core-seconds and scales to four threads perfectly, 0.85 s wall with
-    /// no spinning at all; the whole scan costs 13.3. The other ten are the
-    /// index, and the wait it imposes: one consumer cannot take rows as fast as
-    /// one walker produces them, so the channel fills, a walker blocks holding
-    /// a directory it owes, and `ignore`'s other workers spin waiting for it.
-    /// A faster consumer would make this number four again — see
-    /// `scour-source-fs/examples/walkcost.rs`, which is how it was split.
-    ///
-    /// The network and spinning figures are **not measured** — there is no HDD
-    /// and no network mount on this machine. They are conservative guesses,
-    /// and marked as such rather than presented as findings.
+    /// How many walker threads this mount is worth — capped by the one indexing
+    /// consumer, not the device: `/mnt/depo`'s 1,565,781 entries cost 13.3 core-s at
+    /// two and 176.3 at twenty. Network and spinning are unmeasured guesses.
     pub fn threads(self, cores: usize) -> usize {
         match self {
             Medium::Solid | Medium::Memory => 2,
-            // One seek at a time. Concurrency on a spinning disk turns a
-            // sequential read into a head-thrashing one.
+            // One seek at a time; concurrency here is head-thrashing.
             Medium::Spinning => 1,
-            // Bounded by latency, so some concurrency hides round trips — but
-            // too much floods a link that the local kernel cannot see.
+            // Some concurrency hides round trips; too much floods an unseen link.
             Medium::Network => 4,
             Medium::Unknown => (cores / 2).clamp(2, 8),
         }
     }
 
-    /// How many threads are worth walking on when the consumer is **not** the
-    /// limit.
-    ///
-    /// [`Medium::threads`] answers for the scan, and its answer is held down by
-    /// what is behind it: the channel fills, a walker blocks holding a directory
-    /// it owes, and "a faster consumer would make this number four again". The
-    /// fanotify directory map walks the same tree into a hash-map insert
-    /// measured at 213 ns, so nothing behind it fills. Measured warm on this
-    /// machine, `/mnt/depo`'s 152,530 directories: **1.10 s** on the scan's two
-    /// threads, **0.33 s** on eight, **0.22 s** on sixteen — the device was
-    /// still scaling at sixteen.
-    ///
-    /// Eight rather than sixteen is not the fastest number and is not meant to
-    /// be. This walk runs when the service starts, which on a desktop is while
-    /// the rest of the session is also coming up, and taking eighty per cent of
-    /// twenty cores to save a further tenth of a second of a start-up nobody is
-    /// waiting on is the trade [`crate::scan`]'s `stand_aside` exists to refuse.
-    ///
-    /// The device's own opinion survives intact, and that is the half that must
-    /// not be lost: a spinning disk wants one reader whoever is asking, because
-    /// every concurrent reader there is a seek rather than a queue slot.
+    /// How many threads are worth walking on when the consumer is **not** the limit.
+    /// `/mnt/depo`'s 152,530 directories: 1.10 s on the scan's two threads, 0.33 s
+    /// on eight, 0.22 s on sixteen — eight, so start-up does not take the desktop.
     pub fn walk_threads(self, cores: usize) -> usize {
         match self {
             Medium::Spinning => 1,
-            // Bounded by round trips rather than by the device, so the consumer
-            // was never what capped this one.
+            // Bounded by round trips rather than by the device.
             Medium::Network => 4,
             Medium::Solid | Medium::Memory | Medium::Unknown => (cores / 2).clamp(2, 8),
         }
     }
 
     /// How long to let filesystem events settle before acting on them.
-    ///
-    /// A network mount reports changes late and in bursts, and each reaction
-    /// costs a round trip; batching harder is worth more there than promptness.
+    /// A network mount reports late and in bursts, and each reaction is a round trip.
     pub fn debounce_ms(self) -> u64 {
         match self {
             Medium::Solid | Medium::Memory => 200,
@@ -168,36 +76,17 @@ impl Medium {
 pub struct FsTraits {
     /// Two names differing only in case are two files.
     pub case_sensitive: bool,
-    /// The executable bit means something here.
-    ///
-    /// Not quite "the filesystem has modes" — measured, `ntfs3` does store one
-    /// for a file created under Linux, and a `chmod 600` on it sticks. What it
-    /// cannot do is invent one for the files Windows wrote, and those take
-    /// `fmask` off the mount line instead: `/mnt/depo` is mounted `fmask=0022`,
-    /// so **everything Windows put there reads 0755**.
-    ///
-    /// Which makes the bit noise for almost every file on such a volume, and
-    /// `kind_of` classifies on it: 293,811 files under `/mnt/depo` came back
-    /// `exec` against 21,342 under the real filesystem beside it. Not a
-    /// rounding error — a whole volume in the wrong category, and `kind:exec`
-    /// useless for finding a program.
-    ///
-    /// So it is withheld wherever a mount supplies the mode for anything, and
-    /// the cost is a genuinely `chmod +x` script on such a volume not being
-    /// called executable. That is the cheaper mistake by five orders.
+    /// Withheld wherever a mount supplies the mode: `/mnt/depo` is mounted
+    /// `fmask=0022`, and 293,811 files there classified `exec` against 21,342 beside it.
     pub real_modes: bool,
 }
 
 impl FsTraits {
     /// What to assume when the filesystem cannot be identified.
-    ///
-    /// Not "no idea, allow everything": every field here takes the cheaper
-    /// mistake.
+    /// Not "no idea, allow everything": every field takes the cheaper mistake.
     pub const UNKNOWN: FsTraits = FsTraits {
         case_sensitive: cfg!(unix),
-        // The cheaper mistake again. Withholding it loses `kind:exec` on a
-        // filesystem nobody recognised; claiming it wrongly fills the category
-        // with every file on the volume.
+        // Claiming it wrongly fills `kind:exec` with every file on the volume.
         real_modes: false,
     };
 
@@ -210,12 +99,9 @@ impl FsTraits {
     }
 }
 
-/// What the mount under `path` is like to read.
-///
-/// Three questions in order, because each is cheaper and more certain than the
-/// next: is the filesystem itself a network or memory one (`statfs` says so
-/// outright), does the kernel call its device rotational, and how many
-/// hardware queues does that device have.
+/// What the mount under `path` is like to read: whether `statfs` calls the
+/// filesystem a network or memory one, then whether the kernel calls its device
+/// rotational.
 pub fn medium_of(path: &Path) -> Medium {
     #[cfg(target_os = "linux")]
     return linux::medium_of(path);
@@ -227,13 +113,9 @@ pub fn medium_of(path: &Path) -> Medium {
     return fallback::medium_of(path);
 }
 
-/// What the filesystem under `path` promises.
-///
-/// One `statfs` per root at start-up, not per entry. A root that spans a
-/// nested mount — `/` with an NTFS volume under it — is judged by the root
-/// itself; per-device judgement is possible from `st_dev` and is not done
-/// here, because a source whose roots straddle filesystems is the unusual
-/// case and taking the narrower promise for all of it is safe.
+/// What the filesystem under `path` promises: one `statfs` per root at start-up,
+/// not per entry. A root spanning a nested mount is judged by the root itself,
+/// because the narrower promise is the safe one.
 pub fn traits_of(path: &Path) -> FsTraits {
     #[cfg(target_os = "linux")]
     return linux::traits_of(path);
@@ -252,8 +134,7 @@ mod linux {
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
-    // Read off this machine with `stat -f -c %t`, and cross-checked against
-    // the kernel's `include/uapi/linux/magic.h` where it lists them.
+    // Read with `stat -f -c %t`, cross-checked against `linux/magic.h`.
     const EXT: i64 = 0xEF53; // ext2, ext3, ext4 — all three
     const BTRFS: i64 = 0x9123_683E;
     const XFS: i64 = 0x5846_5342;
@@ -261,18 +142,12 @@ mod linux {
     const TMPFS: i64 = 0x0102_1994;
     const ZFS: i64 = 0x2FC1_2FC1;
     const OVERLAY: i64 = 0x794C_7630;
-    // The FAT family, where `st_ino` is the driver's invention.
     const MSDOS: i64 = 0x4D44;
     const EXFAT: i64 = 0x2011_BAB0;
-    // Two NTFS drivers with two different magics. The second is what ntfs3
-    // reports and is "ntfs" as little-endian bytes; `coreutils` prints it as
-    // UNKNOWN, which is how it came to be measured rather than looked up.
+    // Two NTFS drivers, two magics; the second is `ntfs` as little-endian bytes.
     const NTFS_3G: i64 = 0x5346_544E;
     const NTFS3: i64 = 0x7366_746E;
-    // Reached over a network, whatever the device underneath turns out to be.
-    // `fuse` covers sshfs, rclone and most cloud mounts; it also covers local
-    // FUSE filesystems, and treating one of those as remote costs some
-    // parallelism rather than correctness.
+    // Reached over a network. A local FUSE mount read as remote costs parallelism.
     const NFS: i64 = 0x6969;
     const SMB: i64 = 0x517B;
     const CIFS: i64 = 0xFF53_4D42;
@@ -292,16 +167,10 @@ mod linux {
                 case_sensitive: true,
                 real_modes: true,
             },
-            // Linux's NTFS drivers keep the on-disk MFT record number, so the
-            // identity is real. Case is the driver's: ntfs3 is sensitive
-            // unless mounted `nocase`, which cannot be seen from here — and
-            // claiming sensitivity when the mount is insensitive only means a
-            // duplicate is ruled out that would have been ruled out anyway.
+            // ntfs3 is case-sensitive unless mounted `nocase`, invisible from here.
             NTFS_3G | NTFS3 => FsTraits {
                 case_sensitive: true,
-                // NTFS has an access-control model and neither Linux driver
-                // maps it onto `st_mode`; what `stat` returns is `fmask` and
-                // `dmask` from the mount line, the same value for every file.
+                // `stat` returns `fmask`/`dmask`, the same value for every file.
                 real_modes: false,
             },
             MSDOS | EXFAT => FsTraits {
@@ -327,12 +196,8 @@ mod linux {
     }
 
     /// Does the kernel call the device under this path rotational?
-    ///
-    /// The chain is mount point → source device → `/sys/dev/block/MAJ:MIN`.
-    /// Two things make it less obvious than it looks. A partition's sysfs
-    /// entry has no `queue/`, so the parent disk's has to be read — hence the
-    /// `..` fallback. And btrfs reports its source as `/dev/nvme0n1p5[/@home]`,
-    /// with the subvolume in brackets, which is not a path that exists.
+    /// A partition's sysfs entry has no `queue/`, hence the `..` fallback; btrfs names
+    /// its source `/dev/nvme0n1p5[/@home]`, which is not a path that exists.
     fn rotational(path: &Path) -> Option<bool> {
         let out = std::process::Command::new("findmnt")
             .args(["-no", "SOURCE", "--target"])
@@ -362,8 +227,7 @@ mod linux {
     /// `statfs(2)`'s `f_type`, or `None` if the path cannot be reached.
     fn magic(path: &Path) -> Option<i64> {
         let c = CString::new(path.as_os_str().as_bytes()).ok()?;
-        // SAFETY: a zeroed `statfs` is a valid one to write into, and the
-        // path is a NUL-terminated C string that outlives the call.
+        // SAFETY: a zeroed `statfs` is valid to write into, and `c` outlives the call.
         let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
         let rc = unsafe { libc::statfs(c.as_ptr(), &mut buf) };
         if rc != 0 {
@@ -383,25 +247,18 @@ mod windows_impl {
         GetDriveTypeW, GetVolumeInformationW, GetVolumePathNameW,
     };
 
-    // Win32's own values, written out rather than imported: `windows-sys`
-    // moves them between modules across versions, and these have not changed
-    // since Windows 95 and will not.
+    // Written out rather than imported: `windows-sys` moves them across versions.
     const DRIVE_REMOVABLE: u32 = 2;
     const DRIVE_FIXED: u32 = 3;
     const DRIVE_REMOTE: u32 = 4;
     const FILE_CASE_SENSITIVE_SEARCH: u32 = 0x0000_0001;
 
     /// The volume root a path lives on: `C:\` for `C:\Users\x`.
-    ///
-    /// Everything Windows can say about a filesystem is keyed to the volume,
-    /// not to the path, and `GetVolumePathNameW` is the supported way to get
-    /// from one to the other — including for a path on a mounted volume with
-    /// no drive letter of its own.
+    /// Windows keys everything it can say about a filesystem to the volume.
     fn volume_root(path: &Path) -> Option<Vec<u16>> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
         let mut root = vec![0u16; 260];
-        // SAFETY: both buffers are valid for the lengths passed, and the input
-        // is NUL-terminated.
+        // SAFETY: both buffers are valid for the lengths passed; the input is NUL-terminated.
         let ok = unsafe { GetVolumePathNameW(wide.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
         (ok != 0).then_some(root)
     }
@@ -412,8 +269,7 @@ mod windows_impl {
         };
         let mut name = [0u16; 64];
         let mut flags: u32 = 0;
-        // SAFETY: null is accepted for every output not wanted; the two
-        // buffers passed are valid for the lengths given.
+        // SAFETY: null is accepted for unwanted outputs; both buffers are valid.
         let ok = unsafe {
             GetVolumeInformationW(
                 root.as_ptr(),
@@ -429,22 +285,15 @@ mod windows_impl {
         if ok == 0 {
             return FsTraits::UNKNOWN;
         }
-        // The filesystem's name — NTFS, ReFS, FAT32 — is read and not used:
-        // nothing here is decided by which format it is any more. Kept because
-        // the call that fills it is the same one that fills `flags`, and
-        // because it is the first thing anybody debugging this will want.
+        // Read and not used: the same call fills `flags`, and debugging wants it.
         let _fs = String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)]);
 
-        // Windows reports case sensitivity per volume, and it is off by
-        // default even on NTFS — the opposite of the same disk under Linux's
-        // ntfs3, which is where this ceased to be a property of the format.
+        // Off by default even on NTFS — the opposite of the same disk under ntfs3.
         let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
 
         FsTraits {
             case_sensitive,
-            // Windows has ACLs, not a mode bit. Nothing here can report an
-            // executable bit because there is not one to report; `kind_of`
-            // classifies by extension there, which is what Explorer does.
+            // Windows has ACLs, not a mode bit; `kind_of` classifies by extension.
             real_modes: false,
         }
     }
@@ -456,19 +305,11 @@ mod windows_impl {
         // SAFETY: `root` is a NUL-terminated wide string from Windows itself.
         match unsafe { GetDriveTypeW(root.as_ptr()) } {
             DRIVE_REMOTE => Medium::Network,
-            // A removable volume is usually flash, and treating it as solid
-            // costs nothing if it is not: the alternative reading is "spinning",
-            // and a removable spinning disk is rare enough that assuming it
-            // would slow down every USB stick.
+            // Usually flash, and assuming spinning would slow every USB stick.
             DRIVE_REMOVABLE | DRIVE_FIXED => Medium::Solid,
             _ => Medium::Unknown,
         }
-        // Telling NVMe from SATA needs `IOCTL_STORAGE_QUERY_PROPERTY` with
-        // `StorageAdapterProperty`, and telling a spinning disk from an SSD
-        // needs `DEVICE_SEEK_PENALTY_DESCRIPTOR`. Both open the raw volume
-        // handle, which is a privileged operation on some systems and a
-        // measurable cost on all of them — and neither can be tested from
-        // here. Left until there is a Windows machine to measure on.
+        // Telling NVMe from SATA needs the raw volume handle: privileged, untestable here.
     }
 }
 
@@ -479,15 +320,11 @@ mod macos {
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;
 
-    /// `statfs`'s own name for the filesystem: "apfs", "hfs", "exfat",
-    /// "msdos", "nfs", "smbfs", "webdav".
-    ///
-    /// A string rather than a magic number, which is the one place macOS is
-    /// easier than Linux here.
+    /// `statfs`'s own name for the filesystem: "apfs", "hfs", "exfat", "msdos",
+    /// "nfs", "smbfs", "webdav".
     fn fstype(path: &Path) -> Option<(String, u32)> {
         let c = CString::new(path.as_os_str().as_bytes()).ok()?;
-        // SAFETY: a zeroed `statfs` is valid to write into and the path is a
-        // NUL-terminated C string that outlives the call.
+        // SAFETY: a zeroed `statfs` is valid to write into, and `c` outlives the call.
         let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statfs(c.as_ptr(), &mut buf) } != 0 {
             return None;
@@ -506,10 +343,7 @@ mod macos {
             return FsTraits::UNKNOWN;
         };
         match fs.as_str() {
-            // APFS and HFS+ are case-insensitive as shipped and can be
-            // formatted case-sensitive, and nothing in `statfs` says which.
-            // The safe reading is insensitive: claiming sensitivity that is
-            // not there would let two spellings of one file both be indexed.
+            // Either can be formatted case-sensitive and `statfs` does not say.
             "apfs" | "hfs" => FsTraits {
                 case_sensitive: false,
                 real_modes: true,
@@ -526,17 +360,13 @@ mod macos {
         let Some((fs, flags)) = fstype(path) else {
             return Medium::Unknown;
         };
-        // `MNT_LOCAL` is off for anything reached over a network, whatever it
-        // calls itself — which covers the mounts a name check would miss.
+        // `MNT_LOCAL` is off for anything reached over a network, whatever it calls itself.
         if flags & libc::MNT_LOCAL as u32 == 0 {
             return Medium::Network;
         }
         match fs.as_str() {
             "nfs" | "smbfs" | "afpfs" | "webdav" | "ftp" => Medium::Network,
-            // Every Mac since 2016 boots from NVMe, Intel and Apple Silicon
-            // alike, and APFS is not offered on rotational media. An external
-            // spinning disk formatted HFS+ is the case this gets wrong, and
-            // IOKit is where the real answer lives.
+            // APFS is not offered on rotational media; an external HFS+ disk is missed.
             "apfs" => Medium::Solid,
             _ => Medium::Unknown,
         }
@@ -578,8 +408,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn a_real_directory_is_identified() {
-        // Whatever this machine's filesystem is, a temp directory is on one of
-        // the recognised ones and must not fall through to UNKNOWN.
+        // A temp directory is on a recognised filesystem, whatever this machine runs.
         let t = traits_of(&std::env::temp_dir());
         assert!(t.case_sensitive, "{t:?}");
     }

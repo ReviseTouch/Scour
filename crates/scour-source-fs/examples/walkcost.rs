@@ -1,16 +1,7 @@
-//! What a walk costs before anything is indexed.
-//!
-//! A start-up scan of `/mnt/depo` was measured at 12.1 core-seconds on one
-//! thread — 8 µs an entry, where `find` walks the same tree at 0.55. Almost
-//! none of that can be the walk itself, so this splits the two: it runs the
-//! real [`FsSource`] with the real rules into a sink that does nothing but
-//! count, which leaves the directory reads, the rule tests, the path
-//! normalisation and building an [`Entry`] — and no index at all.
-//!
-//!   cargo run --release -p scour-source-fs --example walkcost -- <root> [threads]
-//!
-//! `SCOUR_WALK_NOMETA=1` drops the per-entry `stat` as well, which is the other
-//! half of the split.
+//! What a walk costs before anything is indexed: the real [`FsSource`] with the
+//! real rules into a sink that only counts, so what is left is directory reads,
+//! rule tests, path normalisation and building an [`Entry`]. `SCOUR_WALK_NOMETA=1`
+//! drops the per-entry `stat`. `cargo run --release --example walkcost -- <root> [n]`
 
 use std::time::Instant;
 
@@ -39,9 +30,8 @@ fn main() {
     let threads: usize = args.next().and_then(|s| s.parse().ok()).unwrap_or(1);
     let meta = std::env::var_os("SCOUR_WALK_NOMETA").is_none();
 
-    // **The rules are not decoration.** With every list empty the walk skips
-    // rule evaluation entirely — `rules.is_empty()` short-circuits it — so a
-    // measurement taken that way is of a scan nobody runs. `SCOUR_WALK_NORULES`
+    // **The rules are not decoration.** With every list empty the walk short-circuits
+    // rule evaluation, so that measurement is of a scan nobody runs. `SCOUR_WALK_NORULES`
     // takes them back out, which is how their share is read off.
     let rules = std::env::var_os("SCOUR_WALK_NORULES").is_none();
     let (def_paths, def_dirs, def_files) = scour_source_fs::platform_defaults();

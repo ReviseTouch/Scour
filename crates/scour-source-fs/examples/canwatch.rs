@@ -1,32 +1,10 @@
 //! Can this directory be watched, and if not, what does the system say?
-//!
 //! `cargo run --release -p scour-source-fs --example canwatch <path>...`
 //!
-//! Exists because the answer was being thrown away twice. `watch::start`
-//! returns "no root could be watched" without the reason, `start_watching`
-//! discards even that, and the status line then reports `watching 0` — which
-//! tells a user that live updates are off and nothing about why, or whether it
-//! is something they can change.
-//!
-//! Prints how long the watch took to install as well as whether it worked: on
-//! Linux a recursive watch is one inotify watch per directory, so the cost is
-//! proportional to the tree and is worth knowing before it is paid at start-up.
-//!
-//! And then it **proves the watch works**, which is a different question from
-//! whether it was accepted. `watch()` returning `Ok` means the kernel took the
-//! request; it does not mean events arrive. Network mounts, FUSE, and anything
-//! whose changes happen on the far side of the wire accept a watch and report
-//! nothing — so this writes a file under the path and waits to be told about
-//! it. A volume that answers `watched` and then `no events` is one that has to
-//! be rescanned on a timer instead.
+//! Accepting a watch is not delivering events — network and FUSE mounts accept one
+//! and report nothing — so this writes a file under the path and waits for it.
 
-//! **On Linux this asks a question the program no longer has.** The inotify
-//! fallback is gone — one watch a directory out of a budget shared with the
-//! whole session was what stopped other programs from starting, twice — so
-//! there is one mechanism here now and it is a fanotify mark. Whether *that*
-//! works is answered by `scour features` and by `scour-watch` itself, not by
-//! installing a recursive watch and timing it. The measurement below is kept
-//! for the platforms that still reach the kernel through `notify`.
+//! Not asked on Linux, where the one mechanism is a fanotify mark — see `scour features`.
 
 #[cfg(not(target_os = "linux"))]
 use std::sync::mpsc;
@@ -84,9 +62,7 @@ fn main() {
 }
 
 /// Write something under a watched path and see whether the watcher notices.
-///
-/// The file is created inside a directory of its own and both are removed
-/// afterwards, so a volume being probed is left as it was found.
+/// The file and its directory are removed afterwards, so the volume is left as found.
 #[cfg(not(target_os = "linux"))]
 fn proof(rx: &mpsc::Receiver<notify::Result<notify::Event>>, root: &std::path::Path) -> String {
     let dir = root.join(".scour-watch-probe");

@@ -24,57 +24,23 @@ enum Msg {
 }
 
 /// How many entries a walker thread collects before handing them over.
-///
-/// The number is not delicate — anything that turns a send per entry into a
-/// send per hundred does almost all of the work — but it is bounded on both
-/// sides. Too small and the channel is busy again; too large and the walk
-/// stutters, because a batch is invisible to the index until it is sent.
+/// Too small and the channel is busy again; too large and the walk stutters.
 const BATCH: usize = 512;
 
-/// How many batches may be in the air. Bound times batch is what the channel
-/// holds, and it is deliberately about what one message used to hold.
+/// How many batches may be in the air; bound × batch is what the channel holds.
 const IN_FLIGHT: usize = 64;
 
 /// Step out of the way of everything else on the machine.
-///
-/// **A first scan has no deadline and the rest of the boot does.** The walk
-/// starts when the service does, which on a desktop is while every other
-/// service is also coming up and reading from the same disk — and a cold walk
-/// of an NTFS volume here is sixty-one seconds of device time. Nothing about
-/// the index is more urgent than the session the person is waiting for.
-///
-/// **Per thread, and that is the point.** Only the walkers are made polite; the
-/// worker that answers searches and the connection threads are left alone, so a
-/// query typed during the first scan is served at full speed. On Linux both of
-/// these apply to the calling task rather than the process, which is what makes
-/// that possible.
-///
-/// Neither costs anything on an idle machine: a nice value only decides who
-/// yields when two want the same core, and the idle I/O class only defers when
-/// something else wants the disk. Measured that way before it shipped.
+/// Per thread, so a query typed during the first scan is still answered at full
+/// speed. A cold NTFS walk here is 61 s of device time.
 pub(crate) fn stand_aside() {
-    // SAFETY: both are ordinary syscalls on the calling thread, and a failure
-    // to become polite is not a failure to scan — so neither result is checked
-    // beyond ignoring it.
-    // **Linux, because both halves of this are Linux.** `nice` is POSIX;
-    // `ioprio_set` is not — it is a Linux syscall with no portable name,
-    // and the disk half is the one that matters here. Elsewhere the walk
-    // runs at the priority it was given: worth doing when somebody runs
-    // Scour there and measures what it costs, not worth guessing at now.
+    // SAFETY: ordinary syscalls on the calling thread, and failing to become
+    // polite is not failing to scan. Linux only: `ioprio_set` has no portable name.
     #[cfg(target_os = "linux")]
     unsafe {
-        // Ten *more* than whatever this already is, not ten absolutely.
-        // `setpriority` sets a value and `nice` adds to one, and the difference
-        // shows on a service someone has already made polite: started at
-        // `Nice=15`, an absolute ten would make the walkers the most aggressive
-        // thing in the process, which is the opposite of the intent.
-        //
-        // Ten is enough to lose every contest against an interactive process,
-        // and not so much that the walk starves outright on a busy machine.
+        // Ten *more*: `nice` adds where `setpriority` sets, and the unit may say `Nice=15`.
         libc::nice(10);
-        // IOPRIO_CLASS_IDLE (3) << IOPRIO_CLASS_SHIFT (13). The disk is the
-        // half that matters: the walk is `getdents` and `statx` all the way
-        // down, and cold that is where the sixty-one seconds go.
+        // IOPRIO_CLASS_IDLE (3) << IOPRIO_CLASS_SHIFT (13). The disk is the half that matters.
         const IOPRIO_WHO_PROCESS: libc::c_int = 1;
         const IOPRIO_CLASS_IDLE: libc::c_int = 3;
         libc::syscall(
@@ -87,17 +53,8 @@ pub(crate) fn stand_aside() {
 }
 
 /// One walker thread's outgoing buffer.
-///
-/// **The channel was the scan.** Twenty threads sending one entry each into a
-/// bounded queue drained by one is a queue that is always full, so nearly every
-/// send parks the thread and nearly every receive wakes one: measured at
-/// 8,231,481 voluntary context switches for 870,000 entries — 9.5 a file — and
-/// 84 of the 112 core-seconds a start-up cost were the kernel doing that. The
-/// same walk on two threads cost 44,238 switches and 7.9 core-seconds.
-///
-/// The fix is not fewer threads, which only hides it; it is fewer messages.
-/// Backpressure is unchanged — [`IN_FLIGHT`] batches is about as many entries
-/// as the old bound — and so is what the walk is allowed to get ahead by.
+/// One send an entry made the channel the scan: 8,231,481 voluntary context switches
+/// for 870,000 entries, against 44,238 for the same walk batched.
 struct Batch {
     tx: crossbeam_channel::Sender<Msg>,
     buf: Vec<Entry>,
@@ -127,11 +84,8 @@ impl Batch {
 }
 
 /// The tail of a thread's last batch.
-///
-/// `ignore` gives a visitor no way to say it has finished, but it does drop the
-/// box when the thread ends — so this is where the remainder goes. Without it a
-/// walk loses up to [`BATCH`] entries a thread, which on a quiet disk is the
-/// whole scan.
+/// `ignore` gives a visitor no way to say it has finished but does drop the box
+/// when the thread ends; without this a walk loses up to [`BATCH`] a thread.
 impl Drop for Batch {
     fn drop(&mut self) {
         self.flush();
@@ -139,17 +93,11 @@ impl Drop for Batch {
 }
 
 /// How many unreadable subtrees are worth remembering by name.
-///
-/// Past this the root is not vouched for at all: a walk that could not look
-/// into thousands of places has not proved anything about what is missing.
+/// Past this the root is not vouched for: a walk blind in thousands of places proves nothing.
 const MAX_BLIND: usize = 4_096;
 
 /// Where the walker's error happened.
-///
-/// The path is wrapped: an unreadable directory arrives as `WithDepth` around
-/// `WithPath` around the `io::Error`, so matching the outer variant finds
-/// nothing — which is exactly what the first version of this did, and the
-/// blind list stayed empty while the count went up.
+/// The path is wrapped: `WithDepth` around `WithPath` around the `io::Error`.
 fn where_of(e: &ignore::Error) -> Option<&std::path::Path> {
     match e {
         ignore::Error::WithPath { path, .. } => Some(path),
@@ -163,10 +111,7 @@ fn where_of(e: &ignore::Error) -> Option<&std::path::Path> {
 }
 
 /// Which filesystem a path is on, or nothing if it cannot be asked.
-///
-/// The number itself means nothing outside this machine and this boot. What
-/// matters is that it is the *same* number at the end of a walk as at the
-/// start — see `ScanReport::vouched`.
+/// What matters is that it is the same at the end of a walk as at the start.
 fn device_of(p: &std::path::Path) -> Option<u64> {
     #[cfg(unix)]
     {
@@ -175,9 +120,7 @@ fn device_of(p: &std::path::Path) -> Option<u64> {
     }
     #[cfg(not(unix))]
     {
-        // Windows has volume serial numbers, through
-        // `GetFileInformationByHandle` — an open per root, which is a thing to
-        // add when this is wired for that platform.
+        // Windows has volume serial numbers through `GetFileInformationByHandle`.
         std::fs::metadata(p).ok().map(|_| 0)
     }
 }
@@ -189,30 +132,23 @@ pub struct FsSource {
     roots: Vec<PathBuf>,
     kind: SourceKind,
     watch: bool,
-    /// What the filesystems under the roots actually promise, asked once at
-    /// construction rather than assumed at compile time.
+    /// What the filesystems under the roots promise, asked once at construction.
     traits: FsTraits,
-    /// What they are like to read: how many threads are worth using, and how
-    /// long to let events settle.
+    /// What they are like to read: thread count and how long events settle.
     medium: crate::fs::Medium,
-    /// How to ask "has anything happened here" without walking anything, one
-    /// per root. Decided at construction because the answer depends on the
-    /// filesystem and the device, neither of which changes under a mount.
+    /// One per root, decided at construction: neither filesystem nor device changes under a mount.
     probes: Vec<crate::pulse::Probe>,
 }
 
 impl FsSource {
     pub fn new(id: SourceId, name: impl Into<String>, roots: Vec<PathBuf>) -> Self {
-        // One `statfs` per root, at construction. A source spanning two
-        // filesystems takes the narrower promise of the two — see `FsTraits`.
+        // One `statfs` per root. A source spanning two takes the narrower promise.
         let traits = roots
             .iter()
             .map(|r| crate::fs::traits_of(r))
             .reduce(FsTraits::and)
             .unwrap_or(FsTraits::UNKNOWN);
-        // The slowest root decides, for the same reason `FsTraits` takes the
-        // narrower promise: one spinning disk in the set makes twenty threads
-        // the wrong answer for all of them.
+        // The slowest root decides: one spinning disk makes twenty threads wrong for all.
         let medium = roots
             .iter()
             .map(|r| crate::fs::medium_of(r))
@@ -231,32 +167,13 @@ impl FsSource {
         }
     }
 
-    /// The path, resolved, and refused if it is not really under a root.
-    ///
-    /// **A prefix comparison is not a containment check**, and this is the one
-    /// place it was being used as one. `stat` is what stands between a caller
-    /// and the filesystem — the web bridge documents it as the fence around
-    /// `/api/open`, and the MCP server offers it to a model — while the check
-    /// in front of it only asked whether the *string* started with a root.
-    /// The kernel does not read strings: `~/../../etc/shadow` starts with the
-    /// home directory and resolves to `/etc/shadow`, and so does any path
-    /// through a symlink that points out of the tree. Both were confirmed
-    /// against the running service.
-    ///
-    /// So the parent is resolved — which is what follows the symlinks — and
-    /// only then compared against the resolved roots. The **last** component is
-    /// joined back on unresolved, deliberately: a symlink is a row of its own
-    /// and `stat` of it must describe the link, not what it points at.
-    ///
-    /// This closes the escape, not the race: between the check and the open,
-    /// a component can be replaced. Closing that needs `openat2` with
-    /// `RESOLVE_BENEATH` on Linux and its equivalents elsewhere, which is worth
-    /// doing when this is asked on someone else's behalf across a boundary.
+    /// The path, resolved, and refused if it is not really under a root: a prefix
+    /// comparison is not containment. The parent is resolved and the last component
+    /// joined back unresolved, so a symlink is `stat`ed as itself. Not the race.
     fn inside(&self, p: &str) -> Result<PathBuf> {
         let native = path::to_path(p);
         let missing = || Error::NotFound { path: p.to_owned() };
-        // Lexically first, so the refusal is cheap and says what it means. A
-        // `.` or `..` in an indexed path is not a thing the index produces.
+        // Lexically first, so the refusal is cheap. The index never produces a `.` or `..`.
         if native.components().any(|c| {
             matches!(
                 c,
@@ -286,13 +203,7 @@ impl FsSource {
     }
 
     /// Whether this source should be watched for changes.
-    ///
-    /// Expressed by *withholding the capability* rather than by a flag the
-    /// engine has to remember to check. The configuration has had a `watch`
-    /// field since it was written and nothing read it — every source was
-    /// watched regardless — because the engine asks `caps()` and `caps()` was
-    /// a constant. Saying it here is the same sentence the rest of the design
-    /// already speaks: a source declares what it can do, and the engine adapts.
+    /// Expressed by withholding the capability rather than by a flag to remember.
     pub fn with_watch(mut self, watch: bool) -> Self {
         self.watch = watch;
         self
@@ -320,12 +231,7 @@ impl FsSource {
     // Read by the fanotify walk, which is Linux.
     #[cfg(target_os = "linux")]
     /// What the mounts under the roots are like to read.
-    ///
-    /// The fanotify backend walks the same tree for a different reason — see
-    /// `DirMap::build` — and has to make the same decision about concurrency
-    /// that the scan makes here. A spinning disk is the case that matters: it
-    /// wants one reader whatever the walk is for, and asking the medium is how
-    /// that stays true in both places.
+    /// The fanotify backend makes the same concurrency decision — `DirMap::build`.
     pub(crate) fn medium(&self) -> crate::fs::Medium {
         self.medium
     }
@@ -347,11 +253,7 @@ impl Source for FsSource {
     }
 
     /// The roots' pulses, folded into one number.
-    ///
-    /// Folded rather than reported separately because the caller's question is
-    /// "is it worth looking at this source", and any root moving is a yes.
-    /// `None` only when *nothing* under it can be asked cheaply — one root
-    /// that can answer is enough to be useful.
+    /// Folded because any root moving is a yes; `None` only when none can be asked.
     fn pulse(&self) -> Option<u64> {
         let mut any = false;
         let mut folded = 0u64;
@@ -365,25 +267,15 @@ impl Source for FsSource {
     }
 
     fn caps(&self) -> Caps {
-        // **Not `CONTENT`.** This claimed it unconditionally while `open`
-        // refused unconditionally, which made the one capability bit a caller
-        // could act on a bit that lied — and `scour sources` printed it, so the
-        // lie was on screen. The flag comes back with the first `Extractor`,
-        // which is what it is for; until then the honest answer is that this
-        // source hands out metadata and nothing else.
+        // **Not `CONTENT`.** `open` refuses unconditionally, and `scour sources` prints this.
         let mut c = Caps::empty();
         if self.watch {
             c |= Caps::WATCH;
         }
-        // One watch covers a subtree on Windows and macOS. On Linux inotify
-        // needs one per directory, and a home directory exhausts the per-user
-        // limit — which is why this is declared rather than assumed.
         if self.watch && cfg!(any(windows, target_os = "macos")) {
             c |= Caps::RECURSIVE_WATCH;
         }
-        // Measured, not assumed. This used to be `cfg!(unix)`, which told a
-        // caller that an NTFS volume was case-insensitive — true for the disk
-        // under Windows and false for the same disk under Linux's ntfs3.
+        // Measured: the same NTFS disk is insensitive under Windows and sensitive under ntfs3.
         if self.traits.case_sensitive {
             c |= Caps::CASE_SENSITIVE;
         }
@@ -391,16 +283,8 @@ impl Source for FsSource {
     }
 
     /// The walk's own rules, compiled once and handed back as a test.
-    ///
-    /// **`Rules::excludes`, the same call the walk makes, and not
-    /// `excludes_path`.** The two are different questions and the difference
-    /// bites here: `excludes_path` has no `is_dir` and reads generously on
-    /// purpose — it is the watcher's filter, where letting an event through
-    /// costs a check and refusing one costs a row that never updates again. As
-    /// a test for what the index should hold it is simply wrong: it calls a
-    /// symlink named `node_modules` excluded, the walk does not, and the pass
-    /// that used it deleted 36 rows every time a rule changed and got them all
-    /// back on the next walk.
+    /// `Rules::excludes`, not `excludes_path`: the latter has no `is_dir` and
+    /// reads generously for the watcher, which as a test for the index is wrong.
     fn excluder(
         &self,
         opts: &ScanOptions,
@@ -423,30 +307,9 @@ impl Source for FsSource {
             return Ok(ScanReport::default());
         };
 
-        // Can every root be read, and is there anything in it?
-        //
-        // The walker reports an unreadable root as one error among many and
-        // then finishes normally, so a scan of a root that is not there and a
-        // scan of a root that is genuinely empty both come back `entries: 0`.
-        // The engine reconciles on that, and reconciling the second is right
-        // while reconciling the first deletes the whole index for that source.
-        // Unplug a drive, let a share drop, boot before an encrypted home is
-        // mounted — measured: five entries became zero.
-        //
-        // **A mount that is not mounted is a readable, empty directory.**
-        // `/mnt/depo` unmounted opens fine and lists nothing, and a machine
-        // that has just booted is precisely where a scan-on-start meets a
-        // volume that is not up yet. So an empty root is not evidence that its
-        // contents are gone.
-        //
-        // Only for a **whole source**, never for a subtree. Emptying a folder
-        // is an ordinary thing a person does and the walk of it has to be
-        // reconciled, or the folder's contents never leave the index — and an
-        // explicit `scour rescan <path>` is a subtree walk, which is how a
-        // source root that really was emptied is reconciled on purpose.
-        //
-        // Per root, not per source: one absent removable disk used to stop a
-        // home directory being reconciled at all.
+        // An unreadable root and a genuinely empty one both come back `entries: 0`,
+        // and reconciling the first deletes the source; an unmounted mount is a
+        // readable, empty directory. Distrusted per root, and for whole sources only.
         let whole_source = opts.subtree.is_none();
         let before: Vec<(PathBuf, Option<u64>)> = roots
             .iter()
@@ -459,10 +322,8 @@ impl Source for FsSource {
             })
             .collect();
 
-        // `ignore`'s parallel walker, with every one of its opinions turned
-        // off. It is used here purely as a fast concurrent directory walk: a
-        // file index must not skip what `.gitignore` says to skip, because the
-        // whole point is finding the file you cannot find.
+        // `ignore`'s parallel walker with its opinions off: an index must hold what
+        // `.gitignore` skips.
         let mut blind: Vec<String> = Vec::new();
         let mut too_blind = false;
         let mut builder = WalkBuilder::new(first);
@@ -474,10 +335,8 @@ impl Source for FsSource {
             .hidden(!opts.hidden)
             .follow_links(opts.follow_symlinks)
             .same_file_system(false)
-            // Zero means "decide for me", and the decision belongs to the
-            // device rather than to the core count. `ignore`'s own default is
-            // the core count, which is right on NVMe and wrong on a spinning
-            // disk, where every extra thread is another seek.
+            // Zero means "decide for me", and the device decides: on a spinning
+            // disk every extra thread is another seek.
             .threads(if opts.threads == 0 {
                 self.medium.threads(
                     std::thread::available_parallelism()
@@ -497,15 +356,8 @@ impl Source for FsSource {
         let want_meta = !opts.skip_metadata;
         let real_modes = self.traits.real_modes;
 
-        // The walker runs on its own threads and the sink is drained on this
-        // one, over a bounded channel.
-        //
-        // The alternative — requiring `EntrySink: Send + Sync` and locking it —
-        // would push a lock into every implementation of the trait, including
-        // the ones that are single-threaded by nature. A channel keeps the
-        // sink's world simple and gives backpressure for free: when the
-        // consumer is slower than the disk, the walker waits instead of
-        // building an unbounded queue of a million entries in memory.
+        // The walker runs on its own threads and the sink is drained on this one,
+        // over a bounded channel: backpressure free, and no `Send` bound on the trait.
         let (tx, rx) = crossbeam_channel::bounded::<Msg>(IN_FLIGHT);
 
         std::thread::scope(|scope| {
@@ -516,10 +368,8 @@ impl Source for FsSource {
                 builder.build_parallel().run(|| {
                     let tx = walker_tx.clone();
                     let mut batch = Batch::new(tx.clone());
-                    // On the first entry rather than here: `ignore` builds the
-                    // visitor on the thread that spawns the workers, so setting
-                    // a thread's priority at this point would set the wrong
-                    // one. The closure below runs on the walker itself.
+                    // On the first entry, not here: `ignore` builds the visitor on the
+                    // spawning thread.
                     let mut polite = false;
                     Box::new(move |result| {
                         if !polite {
@@ -532,15 +382,11 @@ impl Source for FsSource {
                         let de = match result {
                             Ok(de) => de,
                             Err(e) => {
-                                // A directory that could not be read is
-                                // reported, not swallowed: "the index is
-                                // missing things" should be visible rather than
-                                // mysterious.
+                                // Reported, not swallowed.
                                 unreadable.fetch_add(1, Ordering::Relaxed);
-                                // The path, not only the count. A directory
-                                // that became unreadable after it was indexed
-                                // still holds its files, and the sweep has to
-                                // be told to spare it — see `ScanReport::blind`.
+                                // The path, not only the count: an unreadable
+                                // directory still holds its files and the sweep
+                                // must spare it — see `ScanReport::blind`.
                                 let where_ = where_of(&e).map(path::from_path).unwrap_or_default();
                                 let _ = tx.send(Msg::Unreadable(where_, e.to_string()));
                                 return WalkState::Continue;
@@ -548,15 +394,12 @@ impl Source for FsSource {
                         };
                         let is_dir = de.file_type().is_some_and(|t| t.is_dir());
                         let normalised = path::from_path(de.path());
-                        // The same encoding as the path it came from, so a
-                        // rule comparing them compares like with like.
+                        // The same encoding as the path, so rules compare like with like.
                         let name = path::from_path(std::path::Path::new(de.file_name()));
 
                         if !rules.is_empty() && rules.excludes(&normalised, &name, is_dir) {
                             excluded.fetch_add(1, Ordering::Relaxed);
-                            // Prune — unless an allowed subtree lives below,
-                            // because an allow rule the walk never reaches is
-                            // not a rule.
+                            // Prune — unless an allowed subtree lives below it.
                             return if is_dir && !rules.may_contain_allowed(&normalised) {
                                 WalkState::Skip
                             } else {
@@ -564,12 +407,8 @@ impl Source for FsSource {
                             };
                         }
 
-                        // Skipping the per-entry `stat` is the difference
-                        // between a usable index in a minute and one in ten: a
-                        // directory read already knows the name and the type,
-                        // and everything else costs one more syscall per file.
-                        // What it costs is that sizes and dates arrive later,
-                        // in a second pass.
+                        // Skipping the per-entry `stat` is a usable index in a minute
+                        // rather than ten; sizes and dates arrive in a second pass.
                         let md = if want_meta { de.metadata().ok() } else { None };
                         entries.fetch_add(1, Ordering::Relaxed);
                         if is_dir {
@@ -588,15 +427,13 @@ impl Source for FsSource {
                     })
                 });
             });
-            // The walker holds clones of the sender; this one has to go, or the
-            // loop below never ends.
+            // The walker holds clones of the sender; this one has to go.
             drop(tx);
 
             let mut stopping = false;
             for msg in rx {
                 if stopping {
-                    // Keep draining after a stop so the walker's threads are
-                    // never left blocked on a full channel.
+                    // Keep draining, so no walker thread is left on a full channel.
                     continue;
                 }
                 match msg {
@@ -610,11 +447,7 @@ impl Source for FsSource {
                         }
                     }
                     Msg::Unreadable(path, detail) => {
-                        // Bounded: a tree nobody may read produces one of these
-                        // per directory, and a list of them is not worth more
-                        // memory than the index it protects. Past the ceiling
-                        // the root stops being vouched for at all, which is the
-                        // safe direction.
+                        // Past the ceiling the root stops being vouched for at all.
                         if !path.is_empty() && blind.len() < MAX_BLIND {
                             blind.push(path.clone());
                         } else if !path.is_empty() {
@@ -627,13 +460,8 @@ impl Source for FsSource {
             let _ = walker.join();
         });
 
-        // **Asked again, now that the walk is over.** The check before it was
-        // one `read_dir`; everything after that was taken on trust, so a volume
-        // that went away mid-walk — an unmount, a pulled disk, a share that
-        // dropped — still produced a report the engine reconciled against, and
-        // reconciling against a filesystem that is not there deletes all of it.
-        // A device number that is not the one the walk started on means the
-        // walk was about something else.
+        // Asked again: a device number that is not the one the walk started on means
+        // the walk was about something else.
         let vouched: Vec<String> = before
             .iter()
             .filter(|(root, dev)| dev.is_some() && *dev == device_of(root) && !too_blind)
@@ -657,10 +485,7 @@ impl Source for FsSource {
     }
 
     /// One `stat` a path, straight into the sink — see [`Source::recheck`].
-    ///
-    /// `fresh` is true for the same reason the watcher sets it: a path that
-    /// has become a directory since the index last saw it is a subtree, and a
-    /// row where a tree belongs is a rename that half-landed.
+    /// `fresh`, because a path that has become a directory is a subtree.
     fn recheck(&self, paths: &[String], sink: &dyn scour_core::ChangeSink) -> usize {
         for path in paths {
             crate::watch::look(self.id, self.traits.real_modes, path, true, sink);
@@ -669,9 +494,7 @@ impl Source for FsSource {
     }
 
     fn open(&self, _id: &EntryId) -> Result<Box<dyn Read + Send>> {
-        // An id is not a path. Content extraction goes through `stat` to
-        // resolve a path first; when a durable path->id map exists this can
-        // answer directly.
+        // An id is not a path: extraction resolves one through `stat` first.
         Err(Error::unsupported("opening by entry id"))
     }
 
@@ -688,14 +511,8 @@ impl Source for FsSource {
     }
 }
 
-/// Build an entry from a normalised path and, when it was worth the syscall,
-/// its metadata.
-///
-/// An inode survives a rename, which is what lets a moved file be *updated*
-/// rather than deleted and re-added. Windows has no cheap equivalent — its file
-/// id requires opening the file — so there the path is the identity and a
-/// rename genuinely is two operations. Without metadata there is no inode
-/// either, so a stat-less scan falls back to the same thing.
+/// Build an entry from a normalised path and, when it was worth the syscall, its
+/// metadata. The identity is the path — see below — so metadata is optional.
 pub(crate) fn entry_of(
     source: SourceId,
     path: &str,
@@ -703,34 +520,16 @@ pub(crate) fn entry_of(
     is_dir: bool,
     real_modes: bool,
 ) -> Entry {
-    // **The path, always.** The inode was the identity here wherever the
-    // filesystem promised a stable one, and that promise is about the *object*
-    // while a row is a *name*. Everything that saves carefully — an editor, a
-    // browser — writes a temporary file and renames it over the target, so the
-    // path survives and the inode does not: the row for the new inode was
-    // added and the row for the old one was never removed, because nothing can
-    // say "the inode that used to be at this path is gone". Measured on the
-    // live index: 267 rows at one path, one per save.
-    //
-    // The FAT-family measurement that used to be quoted here — `st_ino`
-    // invented by the driver, 0 of 50 surviving a remount, from
-    // `scripts/fsmatrix.sh` — still stands; it is simply no longer load
-    // bearing, because nothing asks the filesystem for an identity any more.
+    // **The path, always.** A row is a name, not an object: save-by-rename leaves
+    // the old inode's row with nothing able to say it is gone. Measured on the
+    // live index, 267 rows at one path — one per save.
     let id = EntryId::path_hash(source, path);
     let mut meta = md
         .map(|m| Meta::from_std(m, is_dir))
         .unwrap_or(Meta::UNKNOWN);
-    // **A mode the mount invented is not a mode.** NTFS and the FAT family
-    // have no permissions of their own; what `stat` returns there is `fmask`
-    // and `dmask` off the mount line, the same value for every file. Storing
-    // it makes `kind_of` read an executable bit that says nothing: on this
-    // machine `/mnt/depo` is mounted 0022, so 293,811 of its files were
-    // classified `exec` against 21,342 on the real filesystem beside it, and
-    // `kind:exec` was useless for finding a program.
-    //
-    // Replaced rather than zeroed, so `mode_string` still prints something a
-    // person recognises — and what it prints is true: no permissions of its
-    // own, readable, and executable only if it is a directory.
+    // A mode the mount invented is not a mode: `/mnt/depo` is mounted 0022, so
+    // 293,811 files there classified `exec` against 21,342 beside it. Replaced
+    // rather than zeroed, so `mode_string` still prints something true.
     if !real_modes && meta != Meta::UNKNOWN {
         meta.mode = if is_dir { 0o040755 } else { 0o100644 };
     }

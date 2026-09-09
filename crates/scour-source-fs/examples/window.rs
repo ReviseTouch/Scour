@@ -1,27 +1,8 @@
 //! What a wider collection window would deduplicate, on this machine.
 //!
-//! The fanotify reader collects events for [`WINDOW`] before it reads them, and
-//! reduces whatever it collected to distinct paths — the same file written a
-//! hundred times inside the window costs one `statx` and one `Upsert`. How much
-//! that saves is a property of the machine's actual churn, not of the code, so
-//! it has to be measured rather than argued.
-//!
-//! Diagnostic rather than test: point it at the real roots, leave it for a few
-//! minutes, and it prints the deduplication ratio for a range of window lengths
-//! **against one trace**. One trace and several windows rather than several
-//! runs, because a desktop's churn differs more between two minutes than the
-//! windows differ between themselves.
-//!
-//! It records through `Source::watch`, so what it sees is exactly what the
-//! engine would have been sent. On Linux without the privileged helper that is
-//! inotify, which emits once per event and no more — which is what makes the
-//! trace a *raw* one and the replay below meaningful.
-//!
-//! ```text
-//! cargo run --release --example window -- 300 /home/you
-//! ```
-//!
-//! [`WINDOW`]: fanotify's collection window, 200 ms at the time of writing.
+//! The fanotify reader collects for 200 ms and reduces to distinct paths; how much
+//! that saves is a property of the machine's churn, so it is replayed against one
+//! trace: `cargo run --release --example window -- 300 /home/you`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -43,9 +24,8 @@ impl ChangeSink for Trace {
     }
 }
 
-/// The windows worth asking about. The first is what the reader uses today;
-/// the last two are the engine's own commit clocks, which is the comparison
-/// that started this.
+/// The windows worth asking about: the first is what the reader uses today, the
+/// last two are the engine's own commit clocks.
 const WINDOWS: [Duration; 8] = [
     Duration::from_millis(200),
     Duration::from_millis(500),
@@ -149,11 +129,8 @@ struct Replay {
 }
 
 /// The reader's loop, on a trace that has already happened.
-///
-/// A window opens when the first event after the last one arrives — `poll`
-/// returns on it — and closes `w` later; everything inside becomes one set of
-/// distinct paths. The processing between two windows is not modelled because
-/// it is microseconds against a window of hundreds of milliseconds.
+/// A window opens when the first event after the last one arrives and closes `w`
+/// later; everything inside becomes one set of distinct paths.
 fn replay(events: &[(Instant, String)], w: Duration) -> Replay {
     let mut r = Replay::default();
     let mut seen: HashSet<&str> = HashSet::new();
