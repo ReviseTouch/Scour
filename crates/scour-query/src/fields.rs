@@ -192,7 +192,7 @@ pub const FIELDS: &[Field] = &[
         aliases: &[],
         takes: Takes::Text,
         about: "owned by this group, by name or by number",
-        example: "group:wheel",
+        example: "group:root",
     },
     Field {
         name: "depth",

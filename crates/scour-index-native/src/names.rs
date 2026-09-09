@@ -118,8 +118,9 @@ fn pack_in_place(rows: usize, blocks: &[u32], mut bytes: Vec<u8>) -> Vec<u8> {
     bytes.rotate_right(header_len);
     bytes[0..4].copy_from_slice(&(rows as u32).to_le_bytes());
     bytes[4..8].copy_from_slice(&(blocks.len() as u32).to_le_bytes());
-    for (slot, offset) in bytes[8..header_len].chunks_exact_mut(4).zip(blocks) {
-        slot.copy_from_slice(&offset.to_le_bytes());
+    let (slots, _) = bytes[8..header_len].as_chunks_mut::<4>();
+    for (slot, offset) in slots.iter_mut().zip(blocks) {
+        *slot = offset.to_le_bytes();
     }
     bytes
 }
