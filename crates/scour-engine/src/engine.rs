@@ -27,14 +27,8 @@ pub struct Explained {
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
-    /// What the walk and the watchers skip, to begin with.
-    ///
-    /// **Taken by [`Engine::new`] and not read from here again.** These are the
-    /// only options a person edits while the service runs — a rule typed into a
-    /// window has to mean something before the next restart — so the engine
-    /// keeps them behind a lock and [`Engine::set_scan_options`] replaces them.
-    /// Left in this struct it would be a second copy that stopped being true
-    /// the first time somebody saved a rule.
+    /// What the walk and the watchers skip, to begin with. Taken by [`Engine::new`]
+    /// and never read again; [`Engine::set_scan_options`] replaces the live copy.
     pub scan: ScanOptions,
     /// How long changes accumulate before a commit.
     pub commit_interval: Duration,
@@ -42,51 +36,20 @@ pub struct EngineOptions {
     pub rebuild_threshold: u64,
     /// Rows a page may hold, whatever a caller asks for.
     pub result_limit: u32,
-    /// How many unordered segments may accumulate before they are merged.
-    ///
-    /// A stream of small commits leaves one segment each, and every query pays
-    /// a fixed cost per segment — opening columns, building a scorer, holding a
-    /// file handle. Merging them costs seconds and does not reduce how many
-    /// documents the tail holds; only a rebuild does that.
+    /// How many unordered segments may accumulate before they are merged. Every
+    /// query pays a fixed cost per segment; only a rebuild shrinks the tail.
     pub compact_segments: u32,
-    /// How many changes make a commit worth a segment of its own.
-    ///
-    /// Below this a change waits for [`EngineOptions::commit_idle`] instead.
-    /// The number is small because the cost it guards against is not the write
-    /// — it is that every segment is one more thing every future query has to
-    /// open and walk.
+    /// How many changes make a commit worth a segment of its own; below this a change
+    /// waits for [`EngineOptions::commit_idle`]. The cost guarded is the segment.
     pub commit_batch: u64,
-    /// How long a handful of changes may wait before being written anyway.
-    ///
-    /// The batching bound once a change has reached the worker. Detection,
-    /// queued scans and failed writes can add delay; recovery intervals cover
-    /// changes that a source did not report.
+    /// How long a handful of changes may wait before being written anyway. Bounds
+    /// batching once a change has reached the worker, not detection or queued scans.
     pub commit_idle: Duration,
-    /// The same bound, while somebody is waiting to be told about changes.
-    ///
-    /// A search window with live results open is watching, and what it is
-    /// watching for is a file that was just created. Fifteen seconds is the
-    /// right answer for nobody-is-looking and the wrong one for somebody-is:
-    /// the point of this whole path is that a file saved a moment ago is
-    /// findable, and a bound the user can count out loud is not that.
-    ///
-    /// It costs a segment per commit on a machine that would otherwise have
-    /// batched, which is exactly what [`EngineOptions::commit_idle`] exists to
-    /// avoid — so it is paid only while a window is open and waiting, and stops
-    /// being paid the moment that window closes or is hidden.
+    /// The same bound, while somebody is waiting to be told about changes: a segment
+    /// per commit that would have batched, paid only while a window waits.
     pub commit_watched: Duration,
-    /// The point at which segments are merged **without** waiting for idle.
-    ///
-    /// Compaction normally waits for the machine to stop asking for things,
-    /// because it costs seconds and nobody should pay them mid-search. That
-    /// rests on churn arriving in bursts with gaps between — which a machine
-    /// that is compiling breaks completely: a continuous stream of changes
-    /// means the idle moment never comes, and the segments never stop
-    /// arriving. Measured here during a build: **222 segments**, and a query
-    /// that answers in 8 ms at one segment taking 13 seconds.
-    ///
-    /// Past this many, searching costs more than merging does, and waiting
-    /// for a quiet moment is waiting for the wrong thing.
+    /// The point at which segments are merged **without** waiting for idle, since a
+    /// build leaves no idle moment: 222 segments, and an 8 ms query took 13 s.
     pub compact_urgent: u32,
     /// How long the index may sit untouched before it is asked to give back
     /// whatever it was holding for writes.
@@ -95,56 +58,14 @@ pub struct EngineOptions {
     pub poll_interval: Duration,
     /// Safety pass even when a source appears quiet. Pulses are only hints.
     pub reconcile_interval: Duration,
-    /// How long a [`Change::Rescan`] waits for its neighbours before it walks.
-    ///
-    /// **Because a walk is the expensive kind of change and they arrive in
-    /// clusters.** Every fresh directory a watcher sees asks for one, and a
-    /// walk ends in a commit — a segment and a manifest fsync — however little
-    /// it found. Measured live over twelve minutes with nothing but a build
-    /// running: **157 subtree walks, 13.3 a minute, 0–1 ms each, 0–81,920
-    /// entries, and every one of them committing.** Thirty-two of those
-    /// segments held 48,829 bytes between them and cost the worker 39.4 MB of
-    /// block writes.
-    ///
-    /// [`coalesce`] already merges the walks that happen to be in one channel
-    /// batch, and that is the whole of what it can do: a `cargo build` writing
-    /// a directory every few hundred milliseconds never puts two in the same
-    /// batch. Waiting a moment for the next one is what turns a burst into a
-    /// walk of the parent.
-    ///
-    /// [`Change::Rescan`]: scour_core::Change::Rescan
+    /// How long a [`Change::Rescan`](scour_core::Change::Rescan) waits for its
+    /// neighbours: 157 walks in twelve minutes of a build, 39.4 MB of writes.
     pub walk_debounce: Duration,
-    /// The ceiling on that wait, however long the cluster keeps arriving.
-    ///
-    /// A trickle that never stops would otherwise never settle, and a walk
-    /// that never runs is a subtree the index does not have. This is the whole
-    /// of the latency the debounce can cost: a file created inside a directory
-    /// that did not exist a moment ago is findable this much later than it was,
-    /// and no later.
+    /// The ceiling on that wait, however long the cluster keeps arriving. The
+    /// whole of the latency the debounce can cost.
     pub walk_debounce_cap: Duration,
-    /// How often [`Engine::await_change`] may wake the clients waiting in it.
-    ///
-    /// **[`Status::revision`] is exact and this is not a rate limit on it** —
-    /// it is a rate limit on the push. A client that asks gets the current
-    /// number and the current counts, always; what this bounds is how often
-    /// one that is asleep is woken to ask.
-    ///
-    /// Because the revision moves faster than the index can be written and
-    /// every bump costs a client a full re-query. Measured: revision 5,259 →
-    /// 5,477 in 62 s and 5,583 → 5,757 in 28 s — 3.5 to 6.2 a second, while
-    /// commits are at most one a second — the excess being one bump per
-    /// subtree walk and one per removal batch. Against **20.5–21 ms of service
-    /// CPU per revision** for a single attached window (447 ticks over 218
-    /// revisions, 364 over 174), that is 7–13% of a core spent telling one
-    /// idle page what it already had.
-    ///
-    /// Deliberately the same number as [`EngineOptions::commit_watched`] and
-    /// deliberately not that field: what a waiter is told about arrives in a
-    /// commit, so waking faster than the commit clock cannot show anything
-    /// new — but `commit_watched` is a decision about *writing* and this is a
-    /// decision about *waking*, and one must be changeable without the other.
-    ///
-    /// Zero turns it off: every bump wakes every waiter, as it did before.
+    /// How often [`Engine::await_change`] may wake the clients waiting in it; zero
+    /// wakes on every bump. 3.5–6.2 bumps a second at 20.5–21 ms of CPU each.
     pub await_hold: Duration,
 }
 
@@ -157,30 +78,18 @@ impl Default for EngineOptions {
             result_limit: 1_000,
             commit_batch: 64,
             commit_idle: Duration::from_secs(15),
-            // The burst clock, exactly. Below it nothing would happen sooner —
-            // `commit_interval` is a floor on how often a segment is written at
-            // all — so anything smaller would be a number that reads faster
-            // than it behaves.
+            // The burst clock exactly: `commit_interval` floors how often a segment is written.
             commit_watched: Duration::from_millis(1_000),
             compact_segments: 8,
             compact_urgent: 64,
             idle_after: Duration::from_secs(20),
             poll_interval: Duration::from_secs(60),
             reconcile_interval: Duration::from_secs(1_800),
-            // Long enough to catch the cluster, short enough that nobody
-            // counts it out loud. The measured arrival rate is 13.3 walks a
-            // minute in bursts — 22 in five seconds and 58 in seven were both
-            // recorded — so half a second of quiet is a real gap and not a
-            // hopeful one.
+            // Walks arrive at 13.3 a minute in bursts of 22 in five seconds: half a second is a real gap.
             walk_debounce: Duration::from_millis(500),
-            // Three seconds is the worst a file inside a brand-new directory
-            // can wait, and it is deliberately smaller than `commit_idle`:
-            // the walk that finds it is not the slowest step on its way to
-            // being findable, and this must not become the slowest one.
+            // The worst a file in a brand-new directory waits; deliberately under `commit_idle`.
             walk_debounce_cap: Duration::from_secs(3),
-            // `commit_watched`, exactly, and for the reason given on the
-            // field: a waiter cannot be shown anything the index has not
-            // written, and it is not written more often than that.
+            // `commit_watched`, exactly: a waiter cannot be shown what has not been written.
             await_hold: Duration::from_millis(1_000),
         }
     }
@@ -201,54 +110,26 @@ struct Shared {
     sources: Vec<Arc<dyn Source>>,
     index: Arc<dyn Index>,
     opts: EngineOptions,
-    /// What the walk and the watchers skip.
-    ///
-    /// **Apart from the rest of [`EngineOptions`], and behind a lock, because
-    /// this is the one part of them a person edits while the service runs.**
-    /// It used to be read once at start-up with everything else, which was
-    /// true for as long as the only way to write a rule was a file the service
-    /// reads on start. A window can write one now, and a rule that needs a
-    /// restart to mean anything is a control that lies: the panel says the
-    /// change takes effect on the next scan, and it has to.
-    ///
-    /// An `Arc` inside the lock so a scan can take its own copy and let go —
-    /// a walk holds these for as long as it runs, and a rule saved during one
-    /// must not block on it.
+    /// What the walk and the watchers skip. Behind a lock because a person edits it
+    /// while the service runs; an `Arc` inside so a walk copies it and lets go.
     scan: RwLock<Arc<ScanOptions>>,
     status: RwLock<Status>,
     pending: AtomicU64,
     scanning: AtomicBool,
-    /// Per source: a whole-source walk is already waiting to run.
-    ///
-    /// Cleared as the walk begins rather than when it ends, so a rule saved
-    /// while one is running still queues one behind it — that walk has
-    /// something the running one does not.
+    /// Per source: a whole-source walk is already waiting to run. Cleared as the
+    /// walk begins, so a rule saved mid-walk still queues one behind it.
     queued: Vec<AtomicBool>,
     stop: AtomicBool,
-    /// The live watches, each beside the source it belongs to.
-    ///
-    /// Shared rather than held by the `Engine` because the worker needs them:
-    /// a walk of a subtree is the moment to tell the watcher that the subtree
-    /// exists, and the worker is what runs the walk. Paired with the source
-    /// index so that a second source's watcher is not asked to cover a path
-    /// that is not its business.
+    /// The live watches, each beside the source it belongs to: the worker runs the
+    /// walks, and a subtree walk is when its watcher is told the subtree exists.
     watches: Mutex<Vec<(usize, Box<dyn WatchHandle>)>>,
     /// See [`Status::revision`].
     revision: AtomicU64,
-    /// Whoever is blocked in [`Engine::await_change`].
-    ///
-    /// A mutex and a condition variable rather than a channel per client: every
-    /// waiter wants the same wake-up, and the mutex is what closes the gap
-    /// between a client reading the revision and going to sleep on it. A change
-    /// landing in that gap without it is a change nobody hears about until the
-    /// timeout, which is the one failure a live list must not have.
+    /// Whoever is blocked in [`Engine::await_change`]. The mutex closes the gap
+    /// between a client reading the revision and going to sleep on it.
     waiters: (Mutex<()>, Condvar),
-    /// When they were last woken, and whether a bump has been held since.
-    ///
-    /// See [`EngineOptions::await_hold`]. The flag is what the worker loop
-    /// reads to know it owes a wake-up: a bump held back is not a bump
-    /// dropped, and the deadline that delivers it is the one thing that makes
-    /// the difference.
+    /// When they were last woken, and whether a bump has been held since — a held
+    /// bump is owed, not dropped. See [`EngineOptions::await_hold`].
     wake_at: Mutex<Instant>,
     wake_owed: AtomicBool,
     /// The ordered hits of whichever query was asked for last.
@@ -256,20 +137,13 @@ struct Shared {
     /// When one was last asked for, so misses cannot queue one each.
     prepared_at: Mutex<Instant>,
     /// How long that one has to stand before another may be asked for, in
-    /// microseconds. Written by the preparing thread out of what its last walk
-    /// cost — see [`PREPARE_COST`] — and read by [`Engine::search`]. Atomic
-    /// rather than behind `prepared_at`'s lock because the reader is on the
-    /// path every search takes and the writer runs once a walk.
+    /// microseconds — the preparing thread's last walk times [`PREPARE_COST`].
     prepare_floor: AtomicU64,
     /// Asks the preparing thread for a query's full ordered page. Bounded and
-    /// tiny: only the newest request matters, and an older one still in the
-    /// channel is work nobody wants done.
+    /// tiny: only the newest request matters.
     prepare: Sender<Prepare>,
-    /// How many of them there are.
-    ///
-    /// Read by the commit clock, and that is the whole reason it is counted: a
-    /// change is worth writing sooner when something is waiting to be told
-    /// about it. Zero means nobody is looking and the batching stands.
+    /// How many of them there are. Read by the commit clock: zero means nobody is
+    /// looking and the batching stands.
     watchers: AtomicU32,
 }
 
@@ -281,20 +155,8 @@ struct Prepare {
     count_cap: u32,
 }
 
-/// One query's ordered hits, kept so that paging through them is free.
-///
-/// **Why this exists.** The index answers a page by asking every segment for
-/// `offset + limit` hits, merging them, sorting the lot and throwing the first
-/// `offset` away. That is honest and it is linear in how deep the page is:
-/// measured on 2.1 M entries, the first window of a broad query costs 16 ms
-/// and the window at row nineteen thousand costs 114 — for the same two
-/// hundred rows. A list being scrolled asks for one of those per window
-/// crossed, so scrolling got slower the further it went, which is exactly how
-/// it felt.
-///
-/// The order does not change while the index does not, so it is computed once.
-/// A window is then a slice, and the cost of a page stops depending on where
-/// the page is.
+/// One query's ordered hits, kept so that paging through them is free: a page
+/// otherwise costs `offset + limit` per segment, 16 ms at the top and 114 deep.
 struct Prepared {
     query: String,
     parsed: scour_core::Ast,
@@ -308,98 +170,32 @@ struct Prepared {
     capped: bool,
 }
 
-/// How many ordered hits are kept hot.
-///
-/// The window can reach twenty thousand rows and no further — beyond that a
-/// query is too broad to page through and wants narrowing instead — so this is
-/// the whole of what any page can ask for. At roughly a hundred bytes a hit it
-/// is a couple of megabytes for the query being looked at, and there is only
-/// ever one.
+/// How many ordered hits are kept hot — the ceiling on what any page may ask for.
+/// Roughly a hundred bytes a hit, and there is only ever one of these.
 const PREPARE: u32 = 20_000;
 
-/// How often an ordering may be built, at the very least.
-///
-/// A floor and not the whole rule. It used to be the whole rule, justified by
-/// "the walk costs about a tenth of a second on a broad query, so once every
-/// two seconds is at most a twentieth of a core spent on speculation" — which
-/// is true of the *stored* order and of nothing else. This file's own
-/// measurements of one window of two hundred rows span 3.2 ms sorted by
-/// modification time and 2,463.6 ms sorted by path, and a walk of twenty
-/// thousand is dearer again. At the top of that range a flat two seconds is
-/// not a twentieth of a core, it is most of one.
-///
-/// It is also work that is thrown away. `prepare_loop` drops the result if the
-/// index moved while it was walking, and a window being looked at holds
-/// `watchers > 0`, which puts the commit clock on
-/// [`EngineOptions::commit_watched`] — about a second. So a walk that takes
-/// longer than that can essentially never survive, and repeating it every two
-/// seconds is a core spent producing nothing.
-///
-/// See [`PREPARE_COST`] for what is charged instead.
+/// How often an ordering may be built, at the very least: a floor, not the whole
+/// rule — one window of two hundred rows spans 3.2 ms to 2,463.6 ms by sort key.
 const PREPARE_EVERY: Duration = Duration::from_secs(2);
 
 /// Cheap pages already meet the interactive budget. Building a much larger
 /// window for them spends memory and competes with the next keystroke.
 const PREPARE_MIN_COST: Duration = Duration::from_millis(20);
 
-/// What a walk buys the next one: it waits at least this many times what the
-/// last one took.
-///
-/// The page solved the same problem for itself and the shape is taken from it
-/// — `atMostEvery` in `page.html` charges `floor = max(ms, spent * COST)` with
-/// `COST = 10`, after a three-second count refresh on a broad query was
-/// measured at 930 ms of the service each time, "a third of a core, spent on a
-/// number nobody was reading". The same number here for the same reason: a
-/// speculative walk can then never take more than about a tenth of a machine,
-/// however dear it is, and a cheap one is unaffected because the floor above
-/// still applies.
-///
-/// Deliberately without a ceiling. A walk that costs 2.4 s backs off to
-/// twenty-four, and that is the right answer rather than a regrettable one:
-/// at that price the ordering is discarded before it lands every single time,
-/// so nothing is lost by not building it, and the deep page it would have made
-/// cheap costs the same 2.4 s either way.
+/// What a walk buys the next one: it waits at least this many times what the last
+/// took, so speculation costs at most a tenth of a machine. Deliberately uncapped.
 const PREPARE_COST: u32 = 10;
 
-/// How many of the biggest files are considered for duplication.
-///
-/// A ceiling rather than a target, and the measurement says it is a generous
-/// one: on 1,474,650 files and 493.6 GB, everything over a megabyte is 18,723
-/// files. Past that the list is dominated by build output and small files that
-/// collide on size trivially — 59.3% of files are 4 KB or smaller — and the
-/// bytes they could give back are a rounding error against the 141.8 GB above
-/// the knee.
+/// How many of the biggest files are considered for duplication. A generous
+/// ceiling: on 1,474,650 files, everything over a megabyte is 18,723 of them.
 const CANDIDATES: u32 = 200_000;
 
-/// How much CSV goes into one frame of an export.
-///
-/// **A row a frame would make the framing most of the bytes.** A frame is a
-/// line of JSON — `{"id":7,"more":true,"ok":{"result":"export_chunk","csv":…}}`
-/// — so a 60-byte row would pay 60 bytes of envelope, a `serde_json` call and
-/// a socket write for itself. At 2.24 M rows that is 2.24 M of each.
-///
-/// A whole export in one frame is the other end and is what this exists to
-/// avoid: it is the 200-odd MB nobody may hold.
-///
-/// 128 KB is roughly two thousand rows of this index, which is one write and
-/// one JSON escape per two thousand rows, and a transient allocation of about
-/// twice that while the frame is built. It is also comfortably under the
-/// megabyte the server will read back on the request side — not that a reply
-/// is subject to that ceiling, but a frame nobody could have sent in the other
-/// direction is a frame worth being suspicious of.
+/// How much CSV goes into one frame of an export. A frame is a line of JSON, so a
+/// row per frame pays an envelope and a write each; 128 KB is about two thousand.
 const EXPORT_CHUNK: usize = 128 * 1024;
 
-/// The parts of a query the parser could not read as written.
-///
-/// The service does this rather than the caller, and that is the whole point:
-/// it is the one that read the query, so it is the one that can say how. A
-/// client parsing the text a second time to find out would be a second opinion
-/// about the same string, and the day the two disagree is the day the warning
-/// is worse than nothing.
-///
-/// Measured at 0.5 µs for a query with five terms and 0.17 µs for two — cheaper
-/// than the parse that precedes it, against 160 µs for the fastest search there
-/// is. `scour-query/examples/spancost.rs`.
+/// The parts of a query the parser could not read as written. Answered here, by
+/// what read it: 0.5 µs for five terms, against 160 µs for the fastest search.
 fn misread(query: &str) -> Vec<scour_core::Span> {
     scour_query::spans(query)
         .into_iter()
@@ -408,23 +204,14 @@ fn misread(query: &str) -> Vec<scour_core::Span> {
 }
 
 impl Shared {
-    /// What the walk skips, right now.
-    ///
-    /// A pointer copy taken under the read lock, so a caller that walks for a
-    /// minute is not holding anything a saved rule has to wait behind.
+    /// What the walk skips, right now. A pointer copy under the read lock, so a
+    /// caller that walks for a minute holds nothing a saved rule waits behind.
     fn scan(&self) -> Arc<ScanOptions> {
         Arc::clone(&self.scan.read())
     }
 
-    /// A search run again could now answer differently.
-    ///
-    /// Bumped under the waiters' lock, so a client that has read the revision
-    /// and not yet gone to sleep on it is not overtaken.
-    ///
-    /// **The number moves now; the wake-up may not.** See
-    /// [`EngineOptions::await_hold`] — the revision is what anyone who asks is
-    /// told, and it stays exact, but a client that is *asleep* on it is woken
-    /// at most once per hold.
+    /// A search run again could now answer differently. Bumped under the waiters'
+    /// lock, so a client between reading and sleeping on it is not overtaken.
     fn touched(&self) {
         {
             let _held = self.waiters.0.lock();
@@ -433,13 +220,8 @@ impl Shared {
         self.announce(Instant::now());
     }
 
-    /// The same, for a change somebody asked for by name.
-    ///
-    /// An emptied trash and an explicit flush are answers to a command that
-    /// was just typed, not churn from a watcher, and the window that sent the
-    /// command is the one waiting to see it. They are also bounded by how fast
-    /// a person can ask, which is what the hold exists to bound. So they skip
-    /// it — and reset it, so the next held bump measures its second from here.
+    /// The same, for a change asked for by name: already bounded by how fast a
+    /// person can ask, so it skips the hold and resets it.
     fn touched_now(&self) {
         {
             let _held = self.waiters.0.lock();
@@ -450,14 +232,8 @@ impl Shared {
         self.waiters.1.notify_all();
     }
 
-    /// Wake the waiters, unless one was woken less than a hold ago.
-    ///
-    /// Returns whether it did. A bump that is held back sets `wake_owed`, and
-    /// the worker loop carries a deadline for exactly that: the announcement
-    /// is late, never missing. Announcing from *there* rather than from a
-    /// timer in the request thread is what keeps `watchers` above zero — a
-    /// waiter that went away to sleep would put the commit clock back on
-    /// `commit_idle`, and fifteen seconds is not a delay a live list survives.
+    /// Wake the waiters unless one was woken less than a hold ago, and say whether it
+    /// did. A held bump sets `wake_owed`, so the announcement is late, never missing.
     fn announce(&self, now: Instant) -> bool {
         let hold = self.opts.await_hold;
         let mut at = self.wake_at.lock();
@@ -508,8 +284,7 @@ impl Engine {
         // One slot: a request that has been overtaken is work nobody wants.
         let (prepare_tx, prepare_rx) = crossbeam_channel::bounded::<Prepare>(1);
         let (prepare_stop, prepare_stopped) = crossbeam_channel::bounded(1);
-        // Moved out of `opts` rather than copied from it, so there is one
-        // answer to "what does the walk skip" and not two that can drift.
+        // Moved, not copied: one answer to "what does the walk skip", never two.
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let source_count = sources.len();
         let await_hold = opts.await_hold;
@@ -529,8 +304,7 @@ impl Engine {
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(0),
             waiters: (Mutex::new(()), Condvar::new()),
-            // A hold ago, so the first change of the session is announced the
-            // moment it happens rather than a second after start-up.
+            // A hold ago, so the session's first change is announced as it happens.
             wake_at: Mutex::new(
                 Instant::now()
                     .checked_sub(await_hold)
@@ -544,8 +318,7 @@ impl Engine {
             prepare: prepare_tx,
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
-        // Bounded: a burst of filesystem events must slow the watcher down
-        // rather than accumulate without limit in memory.
+        // Bounded: a burst of events slows the watcher rather than filling memory.
         let (changes_tx, changes_rx) = crossbeam_channel::bounded::<Change>(65_536);
         let worker = {
             let shared = Arc::clone(&shared);
@@ -554,9 +327,7 @@ impl Engine {
                 .spawn(move || run(shared, jobs_rx, changes_rx))
                 .ok()
         };
-        // Its own thread rather than the worker's: the worker is where scans
-        // and commits happen, and a page has to be ready while one is running,
-        // not after it.
+        // Its own thread: a page has to be ready while a scan runs, not after it.
         let preparer = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
@@ -578,11 +349,8 @@ impl Engine {
         self.shared.sources.iter().map(|s| s.describe()).collect()
     }
 
-    /// Start watching every source that can be watched.
-    ///
-    /// Sources that cannot are not an error: a cloud bucket has no change feed
-    /// and is reconciled by rescanning instead. `Caps` says which is which, so
-    /// nothing here has to know what it is talking to.
+    /// Start watching every source that can be watched. One that cannot is not an
+    /// error: it has no change feed and is reconciled by rescanning instead.
     pub fn start_watching(&self) -> Result<u32> {
         let mut started = 0;
         let scan = self.shared.scan();
@@ -604,12 +372,8 @@ impl Engine {
         Ok(started)
     }
 
-    /// Subtrees no watcher is covering, gathered from every handle.
-    ///
-    /// Empty is the ordinary answer. When it is not, live updates are partial
-    /// and the paths are what makes that actionable — one root-owned directory
-    /// under a home directory is a thing a person can look at, and "watching
-    /// 0" is not.
+    /// Subtrees no watcher is covering, gathered from every handle. Empty is the
+    /// ordinary answer; when it is not, live updates are partial.
     pub fn unwatched(&self) -> Vec<String> {
         self.shared
             .watches
@@ -619,28 +383,8 @@ impl Engine {
             .collect()
     }
 
-    /// Watch everything, then walk it — **and the order is the whole point.**
-    ///
-    /// A walk is a snapshot; a watch is everything after it. Walking first
-    /// leaves the window between them covered by neither, and whatever is
-    /// created in it is reported by nothing and found by nothing until the next
-    /// full walk. The same race was found and fixed once for subtrees a watcher
-    /// discovers — see `a_subtree_is_watched_before_it_is_walked` — and was
-    /// still here afterwards on the biggest walk of all: 5,000 files written
-    /// into 200 fresh directories left 1,260 of them missing, in one unbroken
-    /// run rather than scattered, which is the window in which the shell loop
-    /// writing them was fastest.
-    ///
-    /// **`rescan` only queues**, and that is exactly why the order has to be
-    /// written down rather than trusted: watching a home directory installs
-    /// 342,000 watches one at a time and takes fifteen seconds, so a walk
-    /// queued first is picked up by the worker while most of the tree is still
-    /// uncovered. It lived in `scourd`'s start-up as two calls with a comment
-    /// between them, which is not something a test can hold on to.
-    ///
-    /// Returns what watching reported, so the caller can say so. Reported
-    /// *after* the walk is queued rather than between the two, and that costs
-    /// nothing: queueing is all `rescan` does.
+    /// Watch everything, then walk it — a walk is a snapshot and a watch is
+    /// everything after it, so walking first leaves a window covered by neither.
     pub fn cover_then_walk(&self, walk: bool) -> Result<(u32, Vec<String>)> {
         let started = self.start_watching()?;
         let skipped = self.unwatched();
@@ -650,18 +394,8 @@ impl Engine {
         Ok((started, skipped))
     }
 
-    /// Queue a full walk of every source, or of one subtree.
-    ///
-    /// **A whole-source walk that is already queued is not queued again.** The
-    /// job channel is unbounded and nothing downstream collapses these, so
-    /// before this the panel's switches were a way to stack walks of two
-    /// volumes one per click — five taps, five walks, each of them by then
-    /// answering a question the one before it had already answered. The flag
-    /// clears when the walk starts, so a change made *during* a walk still gets
-    /// its own: that one has something new to find.
-    ///
-    /// Subtree walks are left alone. They are cheap, they are usually about
-    /// different subtrees, and the worker already folds overlapping ones.
+    /// Queue a full walk of every source, or of one subtree. A whole-source walk
+    /// already queued is not queued again, and the flag clears when the walk starts.
     pub fn rescan(&self, subtree: Option<String>) -> Result<()> {
         match &subtree {
             Some(path) => {
@@ -692,32 +426,12 @@ impl Engine {
         }
     }
 
-    /// Look at these paths again, now, rather than when a watcher gets to them.
-    ///
-    /// **What this exists for.** A person who deletes a file from inside Scour
-    /// watches the row it was on. The watcher will notice — in three to eight
-    /// seconds on this machine, most of that the index's own write interval —
-    /// and for a change nobody is waiting on that is the right price. For this
-    /// one it is not: a row that sits there for six seconds after being sent to
-    /// the trash reads as a deletion that did not work, and the second press is
-    /// on a file that is already gone.
-    ///
-    /// It is deliberately **not** a way to change anything. Whoever moved the
-    /// file did the moving, with their own permissions; this only re-reads. The
-    /// service never gained the ability to delete, which for something that
-    /// runs in the background and has at one point been handed `CAP_SYS_ADMIN`
-    /// is worth keeping true.
-    ///
-    /// Paths outside every source are skipped rather than refused: a selection
-    /// can span a source boundary, and one path that is nobody's is not a
-    /// reason to leave the other eleven stale.
-    ///
-    /// Returns how many were looked at.
+    /// Look at these paths again, now: a watcher takes three to eight seconds, too
+    /// long for a watched row. Re-reads only; paths outside every source are skipped.
     pub fn recheck(&self, paths: &[String]) -> Result<usize> {
         let sink = Forward(self.changes.clone());
         let mut done = 0;
-        // Grouped by owner, because `recheck` is a source's method and a
-        // selection of twelve rows is usually one source's twelve rows.
+        // Grouped by owner, because `recheck` is a source's method.
         let mut by_source: std::collections::BTreeMap<usize, Vec<String>> = Default::default();
         for path in paths {
             if let Some(idx) = self.owner_of(path) {
@@ -736,8 +450,7 @@ impl Engine {
     }
 
     pub fn maintain(&self, level: Maintenance) -> Result<MaintReport> {
-        // Flush is quick and callers want its result; the heavy levels go to
-        // the worker so a request never blocks for minutes.
+        // Flush is quick and its result is wanted; heavier levels go to the worker.
         if level == Maintenance::Flush {
             let report = self.shared.index.maintain(level)?;
             self.shared.touched_now();
@@ -756,68 +469,28 @@ impl Engine {
         })
     }
 
-    /// What the walk and the watchers are skipping, right now.
-    ///
-    /// The rules in force, merged: the built-in set, the configuration's own,
-    /// and whatever a window has added, all in the one shape the engine works
-    /// in. A caller that has to show them *apart* — a panel with a switch
-    /// beside each one does — knows where each group came from and does not
-    /// ask here; this is for anyone who wants the single true answer to "what
-    /// is being skipped".
-    ///
-    /// A snapshot, not a view: [`Engine::set_scan_options`] can replace them
-    /// between one call and the next.
+    /// What the walk and the watchers are skipping, right now: built-in, configured
+    /// and window-added rules merged. A snapshot, not a view.
     pub fn scan_options(&self) -> Arc<ScanOptions> {
         self.shared.scan()
     }
 
-    /// Skip by these from now on, and tell the watchers.
-    ///
-    /// **The rules are the one part of the engine's configuration a person
-    /// edits while it runs**, and everything downstream of that has to be told
-    /// rather than restarted: a walk started after this uses the new set, and
-    /// every live watcher re-tunes to it. Without the second half a rule would
-    /// sweep a tree clean and the watcher would put it straight back, which is
-    /// the failure the rule was added to prevent.
-    ///
-    /// It does not scan. Deciding *when* the index should be brought in line
-    /// with a new rule is the caller's, because only the caller knows whether
-    /// a person just asked for this or a file changed on disk.
+    /// Skip by these from now on, and tell the watchers, or a rule would sweep a
+    /// tree clean and the watcher would put it straight back. Does not scan.
     pub fn set_scan_options(&self, opts: ScanOptions) {
         let fresh = Arc::new(opts);
         *self.shared.scan.write() = Arc::clone(&fresh);
-        // Under the same lock the worker takes to cover a subtree, so a retune
-        // and a cover cannot be inside one handle at once.
+        // Under the lock the worker covers a subtree with: never both in one handle.
         for (_, handle) in self.shared.watches.lock().iter() {
             handle.retune(&fresh);
         }
     }
 
-    /// Throw out everything the rules in force would now skip. Returns how many
-    /// subtrees were dropped.
-    ///
-    /// **A new rule does not need a walk, and paying for one is the whole point
-    /// of this.** Excluding something can only ever *remove* entries, and every
-    /// path the answer is about is already in the index — so this is a pass
-    /// over rows that are in memory, asking each source's own test, against a
-    /// walk of two volumes that would go to the disk to learn nothing new. Only
-    /// the opposite change — a rule taken away — needs a walk, because the
-    /// entries it re-admits were never indexed and cannot be recovered from
-    /// something that does not hold them.
-    ///
-    /// **Subtrees, not rows.** [`Change::RemoveSubtree`] takes a directory and
-    /// everything beneath it in one step — measured at 1.3 µs for 378,100
-    /// documents — so a directory that is now skipped costs one change rather
-    /// than one per file inside it. Whatever is below it is still walked here
-    /// and still tested, which is cheap and keeps this honest for the case the
-    /// shortcut does not cover: a `file:` rule matching something inside a
-    /// directory that stays.
+    /// Throw out everything the rules in force would now skip. No walk: excluding
+    /// only removes, and removal is by subtree — 1.3 µs for 378,100 rows.
     pub fn apply_rules(&self) -> Result<u64> {
         let opts = self.shared.scan();
-        // One test per source, built once. A source that does not do exclusions
-        // says so by returning `None`, and its rows are left alone rather than
-        // being deleted on the strength of a test that answers `false` to
-        // everything.
+        // One per source. `None` means no exclusions, and its rows are left alone.
         let tests: Vec<Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>>> = self
             .shared
             .sources
@@ -831,19 +504,12 @@ impl Engine {
         let mut doomed: Vec<String> = Vec::new();
         self.shared.index.scan(
             &scour_core::ScanRequest {
-                // No `..Default::default()`: `ScanRequest` has one field
-                // today, and a second one appearing should stop this line
-                // compiling rather than silently take a default. What a sweep
-                // walks is not somewhere to inherit a value nobody chose.
+                // No `..Default::default()`: a second field appearing must stop this compiling.
                 query: scour_query::parse(""),
             },
             &mut |hit: &Hit| {
-                // The index does not carry which source a row came from in a
-                // `Hit`, and asking every test is both correct and cheap: a
-                // path outside a source's roots is refused by that source's
-                // rules on the root check, before any rule is looked at.
-                // `is_dir` from the row, because a `dir:` rule is about
-                // directories and a file that shares the name is not one.
+                // A `Hit` does not carry its source, and a path outside a source's
+                // roots fails its root check before any rule is read.
                 if tests
                     .iter()
                     .flatten()
@@ -855,12 +521,7 @@ impl Engine {
             },
         )?;
 
-        // **Folded to the topmost path of each excluded tree.** Every row under
-        // an excluded directory matches the rule too, so without this a
-        // directory of ten thousand files is ten thousand changes that each
-        // remove a subtree of something already removed. `coalesce` is the same
-        // one the watcher's rescans go through, and its tests are the reason it
-        // is not written twice.
+        // Folded to the topmost path of each excluded tree, one removal per tree.
         let doomed = coalesce(doomed);
         if std::env::var_os("SCOUR_TRACE_RULES").is_some() {
             for p in doomed.iter().take(8) {
@@ -879,13 +540,8 @@ impl Engine {
         Ok(n)
     }
 
-    /// One page of one query.
-    ///
-    /// Served from [`Prepared`] when the same query's order is already known,
-    /// which is what makes a window at row nineteen thousand cost the same as
-    /// the one at row zero. Otherwise the index answers it, and the ordering is
-    /// asked for in the background so that the next window does not have to
-    /// wait for the same walk twice.
+    /// One page of one query. Served from [`Prepared`] when the query's order is
+    /// known, which is what makes row nineteen thousand cost what row zero does.
     pub fn search(
         &self,
         query: &str,
@@ -895,27 +551,15 @@ impl Engine {
     ) -> Result<SearchResponse> {
         let started = Instant::now();
         let mut res = self.page_of(query, sort, descending, page)?;
-        // Every answer, on every path, including the cached one — a warning
-        // that appears on a cache miss and vanishes on a hit is worse than no
-        // warning, because it teaches the reader that its absence means
-        // something.
+        // On every path, cached included: a warning that comes and goes teaches nothing.
         res.misread = misread(query);
         self.weigh_folders(&mut res);
         res.took_us = started.elapsed().as_micros() as u64;
         Ok(res)
     }
 
-    /// Fill in what each folder on this page holds.
-    ///
-    /// **Here rather than in the index's own search**, and that is the point:
-    /// the index answers about rows and this is a question about subtrees, so
-    /// keeping it out of the row loop means the search path is untouched and
-    /// the cost is one batched call somebody can see.
-    ///
-    /// Nothing at all when the page has no folders on it, which is most pages.
-    /// A failure is left as `None` — a folder with no number reads as a folder
-    /// whose size is not known, which is true, where a zero would read as an
-    /// empty one.
+    /// Fill in what each folder on this page holds, in one batched call outside the
+    /// row loop. A failure leaves `None`, where a zero would read as an empty folder.
     fn weigh_folders(&self, res: &mut SearchResponse) {
         let where_dirs: Vec<usize> = res
             .hits
@@ -954,31 +598,8 @@ impl Engine {
         if let Some(res) = self.sliced(query, sort, descending, &page, started) {
             return Ok(res);
         }
-        // Not ready, or ready for something else. Ask for it while this page is
-        // answered the long way; a full slot means a newer query is already
-        // waiting, and that one is worth more than this one.
-        //
-        // **But not on every miss.** An ordering is thrown away whenever the
-        // index moves, and a machine with a watcher on it moves the index
-        // about once a second — so a window left open on a broad query had the
-        // preparing thread walking twenty thousand hits over and over,
-        // measured at **28% of a core with nobody touching anything**. The
-        // cache is worth having when a list is being scrolled and worth
-        // nothing when it is rebuilt faster than it is read, so it is rebuilt
-        // at most this often and the ordinary path answers in between.
-        // **Only for a list somebody is paging through.** An ordering exists to
-        // make the *deep* windows cheap — 5.5 ms against 114 at row nineteen
-        // thousand — and a window sitting at the top of its results never asks
-        // for one. Preparing anyway is speculation nobody redeems, and while a
-        // scan is running it is speculation thrown away before it lands: the
-        // index moves, the ordering goes with it, and the thread starts over.
-        // Measured at 27% of a core in exactly that state.
-        // **And not until the last walk has been paid for.** The floor is what
-        // that walk cost times `PREPARE_COST`, never less than `PREPARE_EVERY`
-        // — so an ordering that is cheap to build stays as live as it was, and
-        // one that is dear is built at a bounded share of the machine instead
-        // of a fixed interval that knows nothing about the price.
-        // A page beyond the preparation's bound cannot redeem it either.
+        // Ask, and answer this page the long way. Only for a deep page, and never
+        // under a scan, which cost 27-28% of a core on orderings nothing redeemed.
         let floor = Duration::from_micros(self.shared.prepare_floor.load(Ordering::Relaxed));
         if page.offset == 0
             || page.limit == 0
@@ -1017,12 +638,8 @@ impl Engine {
         Ok(res)
     }
 
-    /// The page, if the order it belongs to is already known.
-    ///
-    /// Refuses on anything it cannot answer exactly: a different query, a
-    /// different order, a different count cap, an index that has moved since,
-    /// or a page reaching past what was prepared. A cache that guesses is worse
-    /// than none.
+    /// The page, if the order it belongs to is already known. Refuses on anything it
+    /// cannot answer exactly, including a page reaching past what was prepared.
     fn sliced(
         &self,
         query: &str,
@@ -1044,8 +661,7 @@ impl Engine {
             return None;
         }
         let offset = page.offset as usize;
-        // Short of the ceiling means the walk reached the end of the matching
-        // set, so an offset past it is genuinely empty rather than unknown.
+        // Short of the ceiling, the walk reached the end: past it is empty, not unknown.
         let complete = ready.hits.len() < PREPARE as usize;
         if offset > ready.hits.len() && !complete {
             return None;
@@ -1059,7 +675,6 @@ impl Engine {
             total: ready.total,
             capped: ready.capped,
             took_us: started.elapsed().as_micros() as u64,
-            // Nothing was walked to answer this, which is the point of it.
             fast_path: true,
             rows_visited: 0,
             rows_built: 0,
@@ -1068,22 +683,8 @@ impl Engine {
         })
     }
 
-    /// The whole matching set, as CSV, in pieces.
-    ///
-    /// **The service makes the file, not the frontend.** It was the browser
-    /// bridge's, in JavaScript's neighbourhood if not in JavaScript, and the
-    /// owner's instruction was exactly this: the Rust service gives the CSV.
-    /// What that buys is one implementation of the quoting instead of one per
-    /// frontend — the terminal had no export at all and now reaches the same
-    /// code — and it is the only arrangement in which the walk and the writing
-    /// happen in the same place, which is what makes a stream possible.
-    ///
-    /// `out` is handed each piece and returns false to stop. Stopping is
-    /// ordinary — a cancelled download — and it propagates all the way into
-    /// the index's walk, which abandons it. Nothing is held: not the rows, not
-    /// the file, not a buffer that grows with the answer.
-    ///
-    /// Returns how many rows were written.
+    /// The whole matching set, as CSV, in pieces; returns how many rows were written.
+    /// `out` returns false to stop, which abandons the walk. Nothing grows with it.
     pub fn export(
         &self,
         query: &str,
@@ -1098,18 +699,13 @@ impl Engine {
         let mut buf: Vec<u8> = Vec::with_capacity(EXPORT_CHUNK + 4096);
         sheet.header(&mut buf);
 
-        // Set when `out` refuses, because the walk below can only be stopped
-        // by returning false and the reason has to survive back to here — a
-        // caller that went away is not the same as a query that ran out of
-        // rows, and the count alone cannot tell them apart.
+        // A caller that went away is not a query that ran out of rows.
         let mut stopped = false;
         let mut flush = |buf: &mut Vec<u8>, stopped: &mut bool| {
             if buf.is_empty() {
                 return true;
             }
-            // Rows are built from `String` paths, so this is UTF-8 by
-            // construction; the lossy conversion is a refusal to panic on the
-            // day that stops being true, not an expectation that it will.
+            // UTF-8 by construction: rows are built from `String` paths.
             let text = String::from_utf8_lossy(buf).into_owned();
             buf.clear();
             if out(text) {
@@ -1136,10 +732,7 @@ impl Engine {
         )?;
         debug_assert_eq!(scanned, wrote);
         if !stopped {
-            // The tail, and the header when the query matched nothing at all.
-            // An empty result still produces a file with its heading row: a
-            // spreadsheet with no rows says "nothing matched", and a zero-byte
-            // download says the export broke.
+            // The tail, and the header alone when nothing matched.
             flush(&mut buf, &mut stopped);
         }
         Ok(wrote)
@@ -1155,12 +748,8 @@ impl Engine {
         Ok(res)
     }
 
-    /// Read a query back without running it: what it means, what its pieces
-    /// are, and what could follow the caret.
-    ///
-    /// One call rather than three because a search box wants all of it on the
-    /// same keystroke, and because the three answers have to agree with each
-    /// other — they are one reading of the query, not three.
+    /// Read a query back without running it: what it means, what its pieces are, and
+    /// what could follow the caret — one call, so the three answers agree.
     pub fn explain(&self, query: &str, cursor: Option<u32>) -> Explained {
         let ast = scour_query::parse(query);
         Explained {
@@ -1174,21 +763,11 @@ impl Engine {
         }
     }
 
-    /// One entry, from the index if it is there and from the source if not.
-    ///
-    /// Falling back matters: a file created a moment ago is on disk before it
-    /// is in the index, and answering "not found" for something the user can
-    /// see would be indefensible.
+    /// One entry, from the index if it is there and from the source if not: a file
+    /// created a moment ago is on disk before it is indexed.
     pub fn stat(&self, path: &str) -> Result<Entry> {
-        // Only a source that owns the path may answer for it.
-        //
-        // This used to fall back to source zero when nobody owned it, and that
-        // source's `stat` is a bare `symlink_metadata` with no root check — so
-        // `stat /etc/shadow` returned its size, mode and owner. No contents
-        // leaked, but the size, times and permissions of any path on the
-        // machine did, and it answered "does this exist" for all of them. The
-        // MCP server offers this to a model as read-only and scoped to what is
-        // indexed, which was not true.
+        // Only an owning source may answer: `stat` is a bare `symlink_metadata`, so
+        // any fallback would disclose every path on the machine.
         let idx = self.owner_of(path).ok_or_else(|| Error::NotFound {
             path: path.to_owned(),
         })?;
@@ -1210,15 +789,8 @@ impl Engine {
         )
     }
 
-    /// What a subtree weighs — all of it, or only the part a query names.
-    ///
-    /// Nearly straight through to the index: this is an aggregation over a
-    /// layout, and the engine has nothing to add to it but the reading of the
-    /// query. That reading belongs here for the same reason [`Engine::facets`]
-    /// does it — the parser answers to one layer, so a frontend sends the text
-    /// somebody typed and never a syntax tree it assembled itself.
-    ///
-    /// An empty query is the `du` question, answered exactly as before.
+    /// What a subtree weighs — all of it, or only the part a query names; an empty
+    /// query is the `du` question. Parsed here, so a frontend sends only typed text.
     pub fn usage(&self, path: &str, top: u32, query: &str) -> Result<scour_core::UsageResponse> {
         self.shared.index.usage(&scour_core::UsageRequest {
             path: path.to_owned(),
@@ -1227,25 +799,8 @@ impl Engine {
         })
     }
 
-    /// The same file, several times over.
-    ///
-    /// **This needed nothing new from the index**, which is worth saying
-    /// because the original plan for reports expected a `duplicates()` on the
-    /// trait and a digest column behind it. Neither is here. The candidates
-    /// are a search — `size:>N`, ordered by size — and everything after that
-    /// is `scour-dupes`, which takes paths and sizes and knows nothing about
-    /// an index. The digest column stays unbuilt until somebody wants
-    /// duplicates *below* the size where reading is affordable.
-    ///
-    /// The query is built here rather than taken from the caller, because a
-    /// caller that could pass one could ask for duplicates among directories,
-    /// and a directory has no bytes to compare.
-    ///
-    /// `index.search` directly, not [`Engine::search`]: that one clamps the
-    /// page to `result_limit`, which exists so a window cannot ask for a
-    /// million rows behind a keystroke. Nineteen thousand paths is the whole
-    /// candidate set on the measured corpus and costs about twenty
-    /// milliseconds to build.
+    /// The same file, several times over. The query is built here, not taken, so
+    /// nobody can ask for duplicate directories; `result_limit` would clamp it.
     pub fn duplicates(
         &self,
         under: &str,
@@ -1253,10 +808,7 @@ impl Engine {
     ) -> Result<scour_dupes::Report> {
         let mut query = format!("file: size:>={}", opts.min_size);
         if !under.is_empty() {
-            // Quoted, because a path can hold a space and an unquoted one
-            // would become two terms — which would silently widen the scope
-            // rather than fail, and a report about the wrong folder looks
-            // exactly like a report about the right one.
+            // Quoted: an unquoted path with a space becomes two terms.
             query.push_str(&format!(" under:\"{under}\""));
         }
         let found = self.shared.index.search(&SearchRequest {
@@ -1282,24 +834,8 @@ impl Engine {
         self.shared.index.stats()
     }
 
-    /// Wait until the index would answer differently, then say where things
-    /// stand.
-    ///
-    /// `since` is the [`Status::revision`] the caller last saw. It returns at
-    /// once when that is already stale, and otherwise sleeps until something
-    /// changes or `timeout` passes — so a client that calls this in a loop
-    /// costs one blocked thread and no requests at all while nothing happens.
-    /// Polling every second instead would be 86,400 searches a day to discover
-    /// that a desktop was idle.
-    ///
-    /// A [`Status`] rather than the number, because every caller wants the
-    /// counts beside it and asking twice would be two answers from two moments.
-    ///
-    /// **Waiting is what makes changes commit sooner**: while anyone is in
-    /// here, the engine writes on [`EngineOptions::commit_watched`] rather than
-    /// letting a trickle wait out [`EngineOptions::commit_idle`]. So the
-    /// answer to "why is a file I just saved not in the list" is not "wait
-    /// fifteen seconds" for as long as a window is open.
+    /// Wait until the index would answer differently; `since` is the last
+    /// [`Status::revision`] seen. Waiting puts commits on `commit_watched`.
     pub fn await_change(&self, since: u64, timeout: Duration) -> Status {
         let deadline = Instant::now() + timeout;
         self.shared.watchers.fetch_add(1, Ordering::Relaxed);
@@ -1335,8 +871,7 @@ impl Engine {
 
     /// Stop watching, finish what is queued, and commit.
     pub fn shutdown(&self) {
-        // Cancel an active walk before joining producers. Never hold the watch
-        // lock across a join: the consumer also takes it while draining events.
+        // Never hold the watch lock across a join: the consumer takes it too.
         {
             let _held = self.shared.waiters.0.lock();
             self.shared.stop.store(true, Ordering::Release);
@@ -1370,26 +905,16 @@ struct Forward(Sender<Change>);
 
 impl scour_core::ChangeSink for Forward {
     fn emit(&self, change: Change) {
-        // A full channel means the worker is behind. Blocking here is the
-        // point: it slows the watcher instead of growing a queue that would
-        // eventually be the whole filesystem.
+        // A full channel slows the watcher rather than queueing the whole filesystem.
         let _ = self.0.send(change);
     }
 }
 
-/// The background thread: one loop for jobs, changes and the commit clock.
-/// Keeps the ordering of whatever query was asked for last.
-///
-/// **Only the newest.** The channel holds one, and a request that arrives
-/// while another is being built simply replaces it — a query nobody is looking
-/// at any more is not worth the walk. The result is dropped if the index moved
-/// while it was being built, because an order taken from an index that has
-/// changed is an order that is wrong, and being wrong here means rows that do
-/// not exist under a scrollbar that says they do.
+/// Keeps the ordering of whatever query was asked for last. The channel holds one,
+/// and the result is dropped if the index moved while it was built.
 fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>) {
     loop {
-        // Shared owns the sender too, so waiting for disconnection would keep
-        // the entire engine and its index lock alive after Engine::drop.
+        // Shared owns the sender, so waiting on disconnection outlives `Engine::drop`.
         let job = crossbeam_channel::select_biased! {
             recv(stop) -> _ => return,
             recv(jobs) -> job => match job {
@@ -1413,11 +938,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>
                 count_cap: job.count_cap,
             },
         });
-        // **Charged whether or not it is kept.** A walk that is thrown away
-        // below cost exactly as much as one that is used, and it is the thrown
-        // away ones this is here to slow down: with a window open the index
-        // moves about once a second, so a walk longer than that never survives
-        // and would otherwise be repeated for as long as the window is open.
+        // Charged whether kept or not: a discarded walk cost as much as a used one.
         let floor = PREPARE_EVERY.max(began.elapsed() * PREPARE_COST);
         shared
             .prepare_floor
@@ -1440,28 +961,20 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>
     }
 }
 
+/// The background thread: one loop for jobs, changes and the commit clock.
 fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     let mut dirty = false;
     // Set when a walk finishes with changes already queued behind it.
     let mut overdue = false;
     // Housekeeping runs once per quiet period, not once per tick.
     let mut idle_done = false;
-    // Set by a commit, cleared by the check after it: the moment a batch of
-    // changes has just landed is the only one where merging costs nothing that
-    // was not already being paid.
+    // Set by a commit, cleared by the check after: the one moment merging is free.
     let mut dirty_settled = false;
     let mut last_commit = Instant::now();
     // When something last arrived, as opposed to when this loop last wrote.
     let mut last_busy = Instant::now();
     let mut last_compact = Instant::now();
-    // Sources whose roots were not there to be read, and when to look again.
-    //
-    // A service that starts with the session starts before the volumes it is
-    // configured to index: `/mnt/depo` is a readable, empty directory until
-    // something mounts it. Without this, the first walk finds nothing, refuses
-    // to reconcile — which is the right refusal — and then nobody ever asks
-    // again, so the volume stays as stale as it was until a person types
-    // `scour rescan`.
+    // Roots that were not there to be read: a session starts before its mounts do.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
     // Subtree walks asked for and waiting for their neighbours.
     let mut pending_walks = PendingWalks::default();
@@ -1472,63 +985,19 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     );
 
     loop {
-        // **Wait for the next thing that has to happen, not for a tick.**
-        //
-        // This was `tick(100ms)`: ten wake-ups a second, forever, owed or not
-        // — 864,000 a day on a machine where nothing changed. Measured on a
-        // small, quiet, watched source, where what is left is the loop's own
-        // pulse and nothing else: **20 ms of CPU per sixty seconds, 0.033% of
-        // a core**, and it was the floor under an idle service.
-        //
-        // Every deadline the body below acts on is known here, so the wait is
-        // the nearest of them. Idle — nothing dirty, housekeeping done, no
-        // source waiting to be retried — the only one left is the pulse at two
-        // seconds.
-        //
-        // **A deadline that has passed is not a deadline.** The first attempt
-        // at this asked for the earlier of `commit_interval` and `patience`
-        // whenever anything was dirty. One second after a commit the first is
-        // behind us, the wait is zero, and the body declines to commit because
-        // the batch is not full and the patience has not run out — so the loop
-        // asks again immediately, and again, for the whole fifteen seconds.
-        // Each deadline has to be the moment the body would actually *do*
-        // something.
-        // **The wake-up a bump was not allowed to send.**
-        //
-        // See [`EngineOptions::await_hold`]: a revision that moved during the
-        // quiet second bumped the number and did not wake anybody, and this is
-        // the other half of that — the moment the second is over, whoever is
-        // asleep is told. First thing in the turn rather than last, so a
-        // deadline that has already come due is paid here instead of being
-        // asked for again below and floored.
+        // Wait for the next thing that has to happen, not a tick: each deadline below
+        // must be a moment the body would act, or the wait is zero and the loop spins.
         let now = Instant::now();
         if shared.wake_due().is_some_and(|at| at <= now) {
             shared.announce(now);
         }
         let left = |at: Instant| at.saturating_duration_since(now);
         let mut wake = Duration::from_secs(10);
-        // Which deadline set the wake-up, when asked.
-        //
-        // A deadline that collapses onto the floor below is invisible from
-        // outside — the loop looks like it is sleeping, and the only symptom is
-        // a wake-up count. Finding the first one took stack samples and a
-        // context-switch rate; this is so the second one does not.
+        // Which deadline set the wake-up: one collapsed onto the floor is invisible.
         let trace = std::env::var_os("SCOUR_WAKE_TRACE").is_some();
         let mut who = "floor";
-        // **Every deadline that has already passed, not only the first one.**
-        //
-        // `left` saturates at zero and the comparison below is strictly less,
-        // so the first deadline to read zero takes the name and every later one
-        // that also reads zero is refused it. `pulse` is evaluated first, and
-        // it therefore wins every tie: measured over four traced runs of three
-        // minutes, **177 of 182 floored lines said "pulse"** and three said
-        // "commit" — and "commit" could only appear at all where it was
-        // *strictly* smaller than a pulse that had also expired. A commit that
-        // cannot run is the exact failure this trace was added to find, and the
-        // trace was hiding it behind the pulse.
-        //
-        // Costs nothing when the trace is off: `Vec::new` does not allocate and
-        // nothing is pushed.
+        // Every deadline that has already passed, not only the first: `left` saturates
+        // at zero and the comparison is strict, so the first zero would hide the rest.
         let mut floored: Vec<&str> = Vec::new();
         macro_rules! deadline {
             ($name:literal, $at:expr) => {
@@ -1544,9 +1013,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         }
         deadline!("pulse", pulses.next_due());
         if dirty {
-            // A full batch is held only by the interval floor; an unfull one
-            // waits out patience. More changes can fill it early, and those
-            // arrive on `changes`, which wakes this anyway.
+            // A full batch is held only by the interval floor, an unfull one by patience.
             let watched = shared.watchers.load(Ordering::Relaxed) > 0;
             let patience = if watched {
                 shared.opts.commit_watched
@@ -1565,22 +1032,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             };
             deadline!("commit", at);
         }
-        // **`&& !dirty` is not decoration — it is the difference between a
-        // deadline and a spin.** The work this wakes for is guarded by exactly
-        // that condition further down, and for a while this half was not: with
-        // changes still staged, the compaction below was skipped, so
-        // `dirty_settled` was never cleared and `last_compact` never advanced.
-        // Once `last_compact + COMPACT_EVERY` was in the past, `left` returned
-        // zero every turn, `wake` collapsed onto the twenty-millisecond floor,
-        // and the loop ran at **fifty turns a second** — five times the fixed
-        // tick this computation replaced, and measured at 69 wake-ups a second
-        // against 0.85% of a core with nothing else happening.
-        //
-        // It only showed once a second source was watched, because that is what
-        // keeps `dirty` true often enough for the two guards to disagree. A
-        // deadline for work that cannot run is not a deadline; the moment
-        // `dirty` clears, the commit that cleared it is itself a wake-up and
-        // this is recomputed there.
+        // `&& !dirty` must match the guard on the work below: with only one, the
+        // deadline stays past and the loop spins at 0.85% of a core doing nothing.
         if dirty_settled && !dirty {
             deadline!("compact", last_compact + COMPACT_EVERY);
         }
@@ -1590,28 +1043,20 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         if let Some(at) = retries.iter().map(|(_, at, _)| *at).min() {
             deadline!("retry", at);
         }
-        // The held walks. Cleared by the flush below in the same turn this
-        // fires, so it cannot be the deadline that spins: an entry that reads
-        // zero here is walked before the loop comes round again.
+        // The held walks, flushed below in the same turn, so this cannot spin.
         if let Some(at) =
             pending_walks.next_due(shared.opts.walk_debounce, shared.opts.walk_debounce_cap)
         {
             deadline!("walk", at);
         }
-        // The held wake-up. Already paid if it was due — the block above runs
-        // before this one for exactly that reason — so what is left here is
-        // always in the future.
+        // The held wake-up, already paid above if due, so this one is in the future.
         if let Some(at) = shared.wake_due() {
             deadline!("announce", at);
         }
-        // A backstop, not a schedule. If a deadline above is ever computed
-        // wrong the cost is fifty turns a second rather than a spun core, and
-        // it shows as CPU instead of as housekeeping that quietly stopped.
+        // A backstop: a deadline computed wrong costs turns a second, not a core.
         wake = wake.max(WAKE_FLOOR);
         if trace && wake <= WAKE_FLOOR {
-            // All of them, comma separated. One name would be the shortest true
-            // sentence only when exactly one deadline had passed, and the case
-            // worth finding is the other one.
+            // All of them: the case worth finding is more than one having passed.
             let who = if floored.is_empty() {
                 who.to_owned()
             } else {
@@ -1628,9 +1073,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                 Ok(Job::Scan { source, subtree }) => {
                     let whole = subtree.is_none();
                     if whole && let Some(flag) = shared.queued.get(source) {
-                        // Cleared here rather than after the walk: from this
-                        // moment a request to walk again is about something
-                        // this walk may already have passed.
+                        // From here a fresh request is about what this walk has passed.
                         flag.store(false, Ordering::Release);
                     }
                     if !scan(&shared, &mut pulses, source, subtree) {
@@ -1641,28 +1084,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     dirty = true;
                     idle_done = false;
                     last_busy = Instant::now();
-                    // **Whatever waited out the walk has waited long enough.**
-                    // A walk does not drain this channel, so a file created
-                    // while one was running has already been unwritten for as
-                    // long as the walk took — and `commit_idle` would then
-                    // charge it that again from the moment it lands. The
-                    // staleness that setting promises is measured from when
-                    // something changed, not from when the index got round to
-                    // it, so here the clock is treated as already spent.
-                    //
-                    // Measured on a start-up walk of two sources, 300 files
-                    // created into the first after it was already walked and
-                    // swept: **15.0 seconds** from the walk ending to the rows
-                    // being findable, all of it this wait — against 0.5 with
-                    // the bound turned down. One extra commit a walk, and only
-                    // when something actually queued behind it.
-                    //
-                    // Noted here and acted on where the batch lands, because
-                    // the commit at the bottom of this turn belongs to the
-                    // walk's own rows: backdating the clock here is spent on
-                    // those and the queued ones wait the full patience again.
-                    // Which is what the first version of this did, and it
-                    // measured worse than no change at all.
+                    // Whatever waited out the walk has waited long enough: a walk does
+                    // not drain this channel, and `commit_idle` would charge it twice.
                     overdue = !changes.is_empty();
                 }
                 Ok(Job::Maintain(level)) => {
@@ -1683,9 +1106,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             recv(changes) -> change => match change {
                 Ok(c) => {
                     last_busy = Instant::now();
-                    // Drain what is already queued so a burst becomes one
-                    // batch: applying a hundred changes together costs barely
-                    // more than applying one.
+                    // A burst becomes one batch: a hundred changes cost barely one.
                     let mut batch = vec![c];
                     while let Ok(more) = changes.try_recv() {
                         batch.push(more);
@@ -1693,20 +1114,13 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                             break;
                         }
                     }
-                    // Whoever these belong to has a watcher that is awake. A
-                    // handful is enough to say so — the counter this clears
-                    // only matters when a source produces *nothing at all*.
+                    // A handful is enough to prove the watcher is awake.
                     for change in batch.iter().take(64) {
                         if let Some(i) = owner_of(&shared, change.path()) {
                             pulses.saw_event(i);
                         }
                     }
-                    // The walks come out of the batch first, because they are
-                    // the expensive kind and because they overlap. Every
-                    // directory a `git clone` creates asks for one — see
-                    // `translate` — and unwound, that is one walk per
-                    // directory, each of which flushes a segment and sweeps.
-                    // Coalesced, a thousand of them are one walk of the top.
+                    // Walks come out first: a thousand from a `git clone` coalesce to one.
                     let mut walks: Vec<String> = Vec::new();
                     batch.retain(|c| match c {
                         Change::Rescan { path } => {
@@ -1718,21 +1132,14 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     if !batch.is_empty() {
                         shared.pending.fetch_add(batch.len() as u64, Ordering::Relaxed);
                         let report = shared.index.apply(&mut batch.into_iter());
-                        // **Removals count now, upserts at the commit.** An
-                        // `apply` hides what was deleted from every search
-                        // immediately — that is a promise the `Index` trait
-                        // makes — while what was created is staged and invisible
-                        // until it is written. Announcing both here would wake
-                        // every open window to show it exactly what it already
-                        // had, once per batch, on a desktop that produces
-                        // thirty to fifty changes a second.
+                        // Removals count now, upserts at the commit: `apply` hides a
+                        // deletion at once while a creation stays staged until written.
                         match report {
                             Ok(r) if r.removed + r.subtrees_removed > 0 => shared.touched(),
                             Ok(_) => {},
                             Err(e) => {
                                 scour_core::note!("scourd: changes could not be indexed: {e}");
-                                // Applying can consume only part of an iterator.
-                                // Reconcile instead of losing the unconsumed tail.
+                                // `apply` may consume only part of the iterator.
                                 for i in 0..shared.sources.len() {
                                     schedule_retry(&mut retries, &pulses, i);
                                 }
@@ -1740,22 +1147,14 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                         }
                         dirty = true;
                         idle_done = false;
-                        // These are the ones that waited out a walk. See the
-                        // note in the scan arm.
+                        // The ones that waited out a walk; see the scan arm.
                         if overdue {
                             overdue = false;
                             last_commit = Instant::now() - shared.opts.commit_idle;
                         }
                     }
-                    // A watcher that lost track becomes a walk of the subtree
-                    // it lost. Every platform loses track differently; this is
-                    // the one place that has to care.
-                    //
-                    // Held rather than run: the burst that makes these
-                    // expensive arrives spread over seconds, one request per
-                    // directory a build creates, and `coalesce` can only merge
-                    // what shares a batch. See [`PendingWalks`]; the walking
-                    // happens below, once the paths have stopped arriving.
+                    // A watcher that lost track becomes a walk of the subtree it lost,
+                    // held rather than run: `coalesce` merges only what shares a batch.
                     let now = Instant::now();
                     for path in coalesce(walks) {
                         pending_walks.add(&path, now);
@@ -1766,22 +1165,14 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             default(wake) => {}
         }
 
-        // The walks whose neighbours have stopped arriving.
-        //
-        // Here rather than in the arm that received them, because the moment
-        // they become due is usually a moment when nothing arrived at all —
-        // that is the entire point of waiting for one.
+        // The walks whose neighbours have stopped arriving — which is when nothing is.
         for path in pending_walks.take_due(
             Instant::now(),
             shared.opts.walk_debounce,
             shared.opts.walk_debounce_cap,
         ) {
-            // An empty path means "I lost track and cannot say where" —
-            // inotify exhausting its watches, a kernel buffer overflowing. It
-            // used to match no source and be dropped, which is the worst
-            // possible reading: the one message that exists to say the index is
-            // drifting was the one message thrown away, and the drift then
-            // continued silently until someone rescanned by hand.
+            // An empty path means "I lost track and cannot say where" — exhausted
+            // inotify watches, an overflowed kernel buffer — so every source is walked.
             if path.is_empty() {
                 for i in 0..shared.sources.len() {
                     if !scan(&shared, &mut pulses, i, None) {
@@ -1789,28 +1180,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     }
                 }
             } else if let Some(i) = owner_of(&shared, &path) {
-                // **Watched before it is walked, and the order is the whole
-                // point.** A walk is a snapshot; a watch is everything after
-                // it. The other way round — walk it, then watch it, because now
-                // we know it is real — leaves the gap between them covered by
-                // neither, which is the same race the walk exists to close,
-                // moved rather than removed.
-                //
-                // Measured on the live index, having got it backwards first:
-                // five thousand files written into two hundred fresh
-                // directories left **1,260 of them missing**, and not scattered
-                // — packages 32 to 82, one unbroken run, which is the window in
-                // which the shell loop was fastest. Watching first: 5,000 of
-                // 5,000.
-                //
-                // Watching something about to be walked costs a duplicate
-                // upsert at worst, and an upsert is by identity. Where the
-                // cover was rebuilt shallow this is also the only way anything
-                // below here is ever seen again; everywhere else it is a no-op.
-                //
-                // The debounce does not weaken this: covering happens when the
-                // walk does, and everything the watcher reports in the meantime
-                // still flows through `changes` as it always did.
+                // Watched before it is walked: a walk is a snapshot and a watch is
+                // everything after it. The other way round lost 1,260 files of 5,000.
                 for (src, h) in shared.watches.lock().iter() {
                     if *src == i {
                         h.cover(&path);
@@ -1825,13 +1196,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             last_busy = Instant::now();
         }
 
-        // The pulses, read outside the wait rather than inside it.
-        //
-        // As an arm of the `select!` they were only read when nothing else was
-        // ready, so a machine producing a steady stream of changes could
-        // starve them — and an unwatched volume is exactly what pulses exist
-        // to notice. `due` carries its own two-second floor, so asking on
-        // every turn of the loop costs a comparison.
+        // The pulses, read outside the wait, where a steady stream of changes would
+        // starve them. `is_due` carries the two-second floor, so asking is a compare.
         let nudges = if pulses.is_due() {
             let watched: Vec<usize> = shared
                 .watches
@@ -1852,7 +1218,6 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             }
             match job {
                 Nudge::Reconcile => {
-                    // A source nobody is watching, whose pulse moved.
                     if !scan(&shared, &mut pulses, source, None) {
                         schedule_retry(&mut retries, &pulses, source);
                     }
@@ -1861,10 +1226,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     last_busy = Instant::now();
                 }
                 Nudge::Blind => {
-                    // A source that *is* watched, whose pulse has been
-                    // moving for minutes with nothing arriving. Said
-                    // out loud because a watcher that has gone quiet
-                    // is otherwise indistinguishable from a quiet disk.
+                    // A watched source whose pulse has moved for minutes with nothing
+                    // arriving: a quiet watcher and a quiet disk look alike.
                     scour_core::note!(
                         "scourd: source {source} has changed repeatedly with no events \
                          arriving — the watch is not covering it; rescanning"
@@ -1879,54 +1242,19 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             }
         }
 
-        // A commit writes a segment, so committing two files costs a segment
-        // holding two rows — and a browser cache touching one file a second
-        // produced one segment a second for as long as the machine was on.
-        // Thirty-five of them in thirty-five seconds, on an idle desktop.
-        //
-        // So a trickle waits for the slower clock and a burst does not: enough
-        // changes, or enough time, whichever comes first. What must not happen
-        // is a change sitting unwritten indefinitely, which is why the second
-        // half of that sentence exists.
+        // A commit writes a segment, so a trickle waits and a burst does not.
         let waited = last_commit.elapsed();
         let watched = shared.watchers.load(Ordering::Relaxed) > 0;
-        // **The batch is a latency rule, so it only applies when latency has
-        // somebody to matter to.**
-        //
-        // `commit_batch` is sixty-four because a window waiting on a file it
-        // just saved should not wait for a clock. With nothing open, nobody
-        // can observe the index at all — there is no latency to protect, and
-        // the only reason left to commit is to stop the staging buffer
-        // growing. That is a memory bound, and sixty-four rows is nowhere
-        // near one.
-        //
-        // The note below already recorded that this desktop produces 30–50
-        // changes a second, which reaches sixty-four in about two: what it
-        // did not follow through on is that `commit_idle` was therefore never
-        // consulted, open window or not. Measured with nothing running: the
-        // entry count moved by **2** in sixty seconds and the revision by
-        // **14**. Fourteen commits a minute, at the ~13 ms a commit costs
-        // whatever it holds, is 180 ms — the whole of the 0.30% of a core the
-        // worker spent while nobody had asked it for anything.
-        //
-        // Kept as a ceiling rather than removed, because a burst is still
-        // real: an unpacked archive or a build tree is hundreds of thousands
-        // of changes, and holding fifteen seconds of those unstaged is the
-        // memory problem the small number was never guarding against.
+        // The batch is a latency rule, so it applies only when latency has somebody to
+        // matter to: unwatched it cost 0.30% of a core on fourteen commits a minute.
         let batch = if watched {
             shared.opts.commit_batch
         } else {
             shared.opts.commit_batch.max(IDLE_BATCH)
         };
         let enough = shared.pending.load(Ordering::Relaxed) >= batch;
-        // How long a trickle may wait, and it depends on whether anyone is
-        // watching. Nobody is: fifteen seconds, and the machine writes one
-        // segment a minute instead of one a second. Somebody is: as soon as the
-        // burst clock allows, because what they are waiting for is a file they
-        // just saved.
-        //
-        // This is not a small difference by luck. Measured here, a file created
-        // in a watched directory became findable in **0.90 s**.
+        // How long a trickle may wait: unwatched, one segment a minute rather than one
+        // a second; watched, as soon as the burst clock allows — 0.90 s to findable.
         let patience = if watched {
             shared.opts.commit_watched
         } else {
@@ -1943,21 +1271,15 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                     dirty_settled = true;
                     idle_done = false;
                 }
-                // **Still dirty, and nobody is told it changed.** The rows are
-                // back in the staging buffer; clearing `dirty` here would mean
-                // nothing ever tried to write them again, and announcing a
-                // revision would send every open window to re-read an index
-                // that did not move. The clock is reset either way so a disk
-                // that is full is retried on the same cadence rather than in a
-                // loop.
+                // Still dirty, and nobody is told: the rows are back in the staging
+                // buffer, and a revision would re-read an index that did not move.
                 Err(e) => {
                     let n = {
                         let mut st = shared.status.write();
                         st.unwritten += 1;
                         st.unwritten
                     };
-                    // Once, then every thirty tries: a service whose disk is
-                    // full should say so, not fill the log with saying so.
+                    // Once, then every thirty: a full disk should be said, not repeated.
                     if n == 1 || n % 30 == 0 {
                         scour_core::note!(
                             "scourd: the index could not be written ({n} attempts): {e}"
@@ -1996,23 +1318,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             }
         }
 
-        // Merging does not wait for a quiet moment, because the quiet moment
-        // does not come.
-        //
-        // The old rule was `compact_segments` while idle, with `compact_urgent`
-        // as an escape hatch for a machine that never goes idle. Both failed
-        // together, and measurably: idleness was counted from the last
-        // *commit*, and a desktop produces a filesystem change every few
-        // seconds, so the window never opened — while `compact_urgent` at 64
-        // was above where the index actually sat. Measured over a whole
-        // session: **56 segments**, `compact_segments` at 8, and neither path
-        // ran once.
-        //
-        // It does not need quiet any more. Since a fold builds under the read
-        // lock and only swaps the list under the write one, merging costs a
-        // search the time it takes to swap a `Vec` — the thing that made this
-        // wait was removed and the waiting was left behind. What remains is a
-        // floor on how often it is worth doing at all.
+        // Merging does not wait for quiet, which never comes: a fold builds under the
+        // read lock and costs a search one `Vec` swap. What is left is a floor.
         if dirty_settled && !dirty {
             if let Ok(stats) = shared.index.stats()
                 && (stats.segments > shared.opts.compact_urgent
@@ -2026,39 +1333,14 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             dirty_settled = false;
         }
 
-        // Housekeeping, once the machine has stopped asking for anything.
-        //
-        // Counted from the last change rather than the last commit: a commit is
-        // this loop's own footprint, and measuring quiet by it meant every
-        // commit reset the clock that was waiting for commits to stop.
-        //
-        // **No automatic rebuild here any more**, and that is a measurement
-        // rather than a simplification. The index had drifted to 851,471
-        // unsorted entries — four times `rebuild_threshold` — and rebuilding it
-        // to a single segment moved `rapor` from 26 ms to 34 and `ext:pdf` from
-        // 50 to 55, with `rows_visited` unchanged at 288,000. What a broad
-        // query pays for is the number of candidate rows, not the number of
-        // segments holding them. `scour maintain rebuild` still exists for
-        // anyone who wants the space back; spending minutes of a core on it
-        // unasked, for nothing, does not.
+        // Housekeeping, once the machine has stopped asking for anything, counted from
+        // the last change rather than the last commit — this loop's own footprint.
         if !dirty && !idle_done && last_busy.elapsed() >= shared.opts.idle_after {
-            // Whatever else happened, stop holding a write buffer. On an idle
-            // machine this is the difference between a service that costs
-            // hundreds of megabytes to leave running and one that does not.
+            // Stop holding a write buffer: on an idle machine that is hundreds of
+            // megabytes of a service left running.
             let _ = shared.index.maintain(Maintenance::Idle);
-            // And while nobody is waiting, work out what the folders weigh.
-            //
-            // **90 ms, and the only question is who pays it.** The prefix sums
-            // behind the folder-size column are built on first use, and first
-            // use is the window opening — so without this the first list
-            // anybody sees costs an extra tenth of a second, once per service
-            // start, at the moment somebody is watching. Here it is spent on a
-            // machine that has been quiet for `idle_after` and has just been
-            // asked to give its write buffer back.
-            //
-            // An empty path list builds the cache and asks nothing of it,
-            // which is exactly the shape of a warm-up. After this a commit
-            // rebuilds only the segment it changed.
+            // And while nobody is waiting, work out what the folders weigh: 90 ms of
+            // prefix sums otherwise paid by the first list a window shows.
             let _ = shared.index.subtree_sizes(&[]);
             idle_done = true;
         }
@@ -2070,17 +1352,11 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     shared.pending.store(0, Ordering::Relaxed);
 }
 
-/// Which source owns this path?
-///
-/// A prefix **and a separator**, not a prefix. `/home/hasan` does not own
-/// `/home/hasanX`, and the version of this that lived in the change loop
-/// thought it did.
+/// Which source owns this path? A prefix **and a separator**, not a prefix:
+/// `/home/hasan` does not own `/home/hasanX`.
 fn owner_of(shared: &Shared, path: &str) -> Option<usize> {
-    // **The longest root wins**, not the first one configured. A project
-    // directory configured as its own source lives inside the home directory
-    // that is also one; asking which source a path belongs to and taking
-    // whichever happened to be listed first sends the walk, and the sweep that
-    // follows it, to the wrong one.
+    // The longest root wins, not the first configured: a project directory that is
+    // its own source lives inside a home directory that is also one.
     shared
         .sources
         .iter()
@@ -2102,61 +1378,29 @@ fn owner_of(shared: &Shared, path: &str) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
-/// Reduce a set of requested walks to the ones that are not already covered.
-///
-/// Walking `/a` walks `/a/b`, so asking for both is asking twice. This matters
-/// because the requests arrive in the thousands and each one costs far more
-/// than the directory it names: a walk flushes a segment, takes a generation
-/// and sweeps every older segment afterwards.
-///
-/// The reduction itself lives in `scour-core` because the index needs the same
-/// one for removals, where getting it wrong was measured at 2.24 seconds of
-/// held write lock.
+/// Reduce a set of requested walks to the ones not already covered: walking `/a`
+/// walks `/a/b`, and a walk flushes a segment, takes a generation and sweeps.
 fn coalesce(paths: Vec<String>) -> Vec<String> {
     scour_core::PrefixSet::new(paths).into_paths()
 }
 
-/// Walks asked for and not run yet, and when each was first and last asked for.
-///
-/// **[`coalesce`] can only merge what arrived together, and the requests do not
-/// arrive together.** They arrive as a `cargo build` or a `git clone` creates
-/// directories, a few hundred milliseconds apart, so each one is its own
-/// channel batch, its own walk, its own segment and its own manifest fsync.
-/// Measured live over twelve minutes: **157 subtree walks, 13.3 a minute, 0–1
-/// ms of walking each, every one of them committing** — the walking is free and
-/// the writing is not.
-///
-/// So a walk waits [`EngineOptions::walk_debounce`] for its neighbours before
-/// it runs, and the neighbours that arrive in that window either join it or
-/// replace it with their common parent. Nothing is dropped: a request either
-/// runs or is covered by an ancestor that runs, and
-/// [`EngineOptions::walk_debounce_cap`] is the whole of the delay either can
-/// cost.
+/// Walks asked for and not run yet, with when each was first and last asked for.
+/// Each waits [`EngineOptions::walk_debounce`] for its neighbours; none is dropped.
 #[derive(Default)]
 struct PendingWalks {
-    /// Path, first asked, last asked.
-    ///
-    /// A `Vec` and a linear scan rather than a map, because the map would have
-    /// to be walked anyway to find the earliest deadline and this list is
-    /// tiny: the bursts that make the debounce worth having are 22 requests in
-    /// five seconds and 58 in seven, and they reduce to one or two paths *as
-    /// they arrive* — a request under a path already waiting never becomes an
-    /// entry of its own.
+    /// Path, first asked, last asked. A `Vec` and a linear scan: the earliest
+    /// deadline needs a full pass anyway, and a burst reduces as it arrives.
     at: Vec<(String, Instant, Instant)>,
 }
 
 impl PendingWalks {
     /// Note that `path` wants walking, merging it with what is already waiting.
     fn add(&mut self, path: &str, now: Instant) {
-        // Normalised the way `PrefixSet` normalises, so `/a/` and `/a` are one
-        // entry and `/` is the empty path — which is what the caller already
-        // reads as "walk everything".
+        // Normalised as `PrefixSet` does: `/a/` and `/a` are one entry, `/` is empty.
         let path = path.trim_end_matches('/');
         if path.is_empty() {
-            // A watcher that lost track and cannot say where. Walking every
-            // source covers every request in here by definition, and it does
-            // not wait: this is the one message that says the index is
-            // drifting, and the drift continues until it is answered.
+            // A watcher that lost track and cannot say where: walking every source
+            // covers everything waiting here, and it does not wait.
             self.at.clear();
             self.at.push((String::new(), now, now));
             return;
@@ -2166,18 +1410,13 @@ impl PendingWalks {
             .iter_mut()
             .find(|(p, _, _)| scour_core::under(path, p))
         {
-            // Already covered by a walk that is waiting — the same path, or an
-            // ancestor of it. Its clock is refreshed rather than a second entry
-            // made, because this arrival is more of the same churn and the
-            // point is to let it settle. The cap is what stops that being
-            // unbounded, and it is measured from *its* first arrival, which is
-            // no later than this one.
+            // Already covered by a waiting walk. Its clock is refreshed rather than
+            // a second entry made; the cap is measured from its own first arrival.
             e.2 = now;
             return;
         }
-        // The other direction: this path covers some of what is waiting. Those
-        // entries go, and the earliest first-asked among them comes with it, so
-        // absorbing a request cannot postpone the deadline it already had.
+        // The other direction: this path covers some of what is waiting. The
+        // earliest first-asked comes with it, so nothing's deadline is postponed.
         let mut first = now;
         self.at.retain(|(p, f, _)| {
             if scour_core::under(p, path) {
@@ -2198,11 +1437,8 @@ impl PendingWalks {
             .min()
     }
 
-    /// Take the walks that have waited long enough, reduced.
-    ///
-    /// Whatever is left that a taken path covers goes with it: the walk about
-    /// to run is that request's walk too, and leaving it behind would run the
-    /// same walk again a moment later.
+    /// Take the walks that have waited long enough, reduced. Whatever a taken path
+    /// covers goes with it, or the same walk runs again a moment later.
     fn take_due(&mut self, now: Instant, debounce: Duration, cap: Duration) -> Vec<String> {
         let mut due: Vec<String> = Vec::new();
         self.at.retain(|(p, f, l)| {
@@ -2237,20 +1473,15 @@ impl PendingWalks {
     }
 }
 
-/// Walk one source and reconcile what it holds.
-/// Walk one source, and say whether the walk could see what it came for.
-///
-/// `false` means the roots were not there to be read — a volume that has not
-/// been mounted yet, a drive pulled out, a share that dropped. The caller is
-/// expected to come back later rather than to treat it as an answer.
+/// Walk one source and reconcile what it holds, saying whether the walk could see
+/// what it came for. `false` means the roots were not there to be read.
 fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Option<String>) -> bool {
     let Some(src) = shared.sources.get(source).cloned() else {
         return true;
     };
     let began = Instant::now();
-    // A generation the index could not open is a scan that cannot reconcile:
-    // its rows would be stamped with the previous one and the sweep would then
-    // judge them by it. Reported and retried rather than run blind.
+    // A generation the index could not open cannot reconcile: its rows would carry
+    // the previous one, and the sweep would judge them by it.
     let generation = match shared.index.begin_generation() {
         Ok(g) => g,
         Err(e) => {
@@ -2275,9 +1506,8 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
         stop: Arc::clone(shared),
         failed: false,
     };
-    // Read once, here, rather than per directory: a walk has to skip by one
-    // set of rules from beginning to end. A rule saved halfway through takes
-    // effect on the scan that follows — which is the scan the save asks for.
+    // Read once, here: a walk skips by one set of rules from beginning to end, and
+    // a rule saved halfway through takes effect on the scan that follows.
     let opts = ScanOptions {
         subtree: subtree.clone(),
         ..(*shared.scan()).clone()
@@ -2289,27 +1519,8 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     sink.flush();
     let seen = sink.seen;
 
-    // Anything under the walked subtree that this pass did not stamp is gone
-    // from the filesystem. A scan can only report what it found; this is how
-    // what it did not find stops being in the index.
-    //
-    // Which is why it must not run when the walk could not look. A cancelled
-    // walk is incomplete and a walk whose root was unreadable saw nothing at
-    // all; sweeping on either deletes what is merely out of reach. The failure
-    // is silent and total — the index empties, `rescan` reports success, and
-    // the files come back only when the root does.
-    //
-    // And it must not run when the *index* could not take what the walk found,
-    // for the same reason from the other end: a batch that failed to apply is
-    // a set of files that exist and are unstamped, so a sweep would delete
-    // exactly the rows the walk was there to keep.
-    //
-    // **Only the roots the walk vouched for**, and sparing what it could not
-    // look into. One absent removable disk used to stop a home directory being
-    // reconciled at all, because the evidence was one boolean for the source;
-    // and a directory that lost its read permission after being indexed lost
-    // its files from the index too, because a walk that could not look was
-    // treated as a walk that found nothing.
+    // Anything under the walked subtree this pass did not stamp is gone. Never run
+    // where the walk could not look or the index refused: both delete living files.
     let vouched: Vec<String> = report
         .as_ref()
         .map(|r| r.vouched.clone())
@@ -2320,20 +1531,12 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
     let mut ended = true;
     if trustworthy {
-        // **One call for every root the walk vouched for.** A pass notes the
-        // rows it found unchanged so that an untouched filesystem does not
-        // have to be rewritten to prove it is still there, and those notes are
-        // the pass's rather than any one root's. Sweeping root by root, the
-        // first call consumed them and every root after it was reconciled
-        // against nothing: this source is rooted at `/usr /etc /opt /var`, and
-        // the last three were deleted on every other walk and put back on the
-        // one between — `/opt` alternating between 5,477 rows and none, about
-        // once a minute, for as long as the service was up.
+        // One call for every root the walk vouched for: the pass's notes of unchanged
+        // rows are consumed by the first call, leaving later roots reconciled to nothing.
         let gone = match shared.index.sweep(src.id(), &vouched, generation, &spare) {
             Ok(n) => n,
-            // Half a reconciliation. Saying so is all that can be done here;
-            // the retry is the caller's, and the rows that should have gone
-            // are found again by the next full scan.
+            // Half a reconciliation. The retry is the caller's; the rows that should
+            // have gone are found again by the next full scan.
             Err(e) => {
                 scour_core::note!("scourd: {vouched:?} could not be reconciled: {e}");
                 ended = false;
@@ -2343,26 +1546,15 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
                 0
             }
         };
-        // A sweep takes effect at once, like any other removal, so anyone
-        // watching should hear about it now rather than at the next commit.
-        // The walk's own upserts are staged and announce themselves then.
+        // A sweep takes effect at once, like any other removal; the walk's own
+        // upserts are staged and announce themselves at the commit.
         if gone > 0 {
             shared.touched();
         }
     } else if let Err(e) = shared.index.abandon_generation(generation) {
         ended = false;
-        // **A pass that will not be swept still has to end.** Not sweeping is
-        // the right answer here — the walk could not look, and deleting on no
-        // evidence is how a directory that lost its read permission loses its
-        // files too — but the generation was the sweep's to close, and nobody
-        // else was going to.
-        //
-        // What it cost while nothing did: the index keeps per-segment notes
-        // about rows a walk found unchanged, a noted segment cannot be folded,
-        // and the notes only go when a generation ends. One walk of a directory
-        // that had just been deleted — which a watcher asks for routinely —
-        // was enough to stop compaction for good. Measured on the live index at
-        // 241 segments, every search reading all of them.
+        // A pass that will not be swept still has to end: a segment carrying its notes
+        // cannot be folded, and one unended pass measured 241 of them.
         scour_core::note!(
             "scourd: a pass of {} could not be ended: {e}",
             src.describe().name
@@ -2388,13 +1580,8 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     !sink.failed && ended && finished && (subtree.is_some() || (could_look && all_roots))
 }
 
-/// How long to wait before looking again at a source whose roots were not there.
-///
-/// The case this exists for is a machine that has just started: the service is
-/// up before the volumes are, so the first walk of an external disk finds an
-/// empty mount point. Short enough that a disk appearing a moment later is
-/// picked up while the user is still logging in, long enough that a drive left
-/// unplugged for a week costs one directory listing an hour.
+/// How long to wait before looking again at a source whose roots were not there:
+/// catches a disk mounted after start-up, and costs an unplugged one a listing an hour.
 const RETRY_AFTER: [Duration; 5] = [
     Duration::from_secs(10),
     Duration::from_secs(30),
@@ -2414,31 +1601,16 @@ fn schedule_retry(retries: &mut Vec<(usize, Instant, usize)>, pulses: &Pulses, s
     }
 }
 
-/// The floor on how often segments are merged without being asked.
-///
-/// Not a cost of merging — a fold no longer holds anything a search needs —
-/// but a cost of *deciding*: `stats()` reads every segment's live count, and
-/// there is no point paying it on a machine whose segment count moves by one
-/// every few seconds.
+/// The floor on how often segments are merged without being asked. Not a cost of
+/// merging but of deciding: `stats()` reads every segment's live count.
 const COMPACT_EVERY: Duration = Duration::from_secs(60);
 
-/// The shortest the worker will ever sleep.
-///
-/// A backstop rather than a schedule: if a deadline is ever computed wrong the
-/// cost is fifty turns a second rather than a spun core. Named because the
-/// wake-up trace has to compare against exactly the number the sleep is
-/// clamped to — the two drifting apart is how a floored wake stops being
-/// reported as one.
+/// The shortest the worker will ever sleep: a backstop, so a deadline computed
+/// wrong costs fifty turns a second rather than a spun core.
 const WAKE_FLOOR: Duration = Duration::from_millis(20);
 
-/// The batch that stands in for `commit_batch` when nobody is watching.
-///
-/// `commit_batch` is a latency rule and sixty-four is a latency number. With
-/// nothing open there is no latency to protect, and the only reason left to
-/// commit is to keep the staging buffer bounded — so this is a memory number.
-/// It is a ceiling rather than a removal because a burst is real: an unpacked
-/// archive is hundreds of thousands of changes, and holding fifteen seconds of
-/// those unstaged is the problem the small number was never guarding against.
+/// The batch that stands in for `commit_batch` when nobody is watching: with
+/// nothing open there is no latency to protect, so this is a memory ceiling.
 const IDLE_BATCH: u64 = 4_096;
 
 const BATCH: usize = 4_096;
@@ -2449,13 +1621,8 @@ struct ToIndex {
     seen: u64,
     buffer: Vec<Change>,
     stop: Arc<Shared>,
-    /// A batch the index refused.
-    ///
-    /// **The reason a scan has to know**: what makes a walk a reconciliation is
-    /// the sweep at the end, which removes everything the walk did not stamp.
-    /// A batch that never landed is a set of files the walk *did* find and the
-    /// index does not have — so sweeping on that evidence deletes them. One
-    /// failed write would turn a scan into a deletion.
+    /// A batch the index refused. The sweep removes everything the walk did not
+    /// stamp, so one failed write would otherwise turn a scan into a deletion.
     failed: bool,
 }
 
@@ -2478,15 +1645,8 @@ impl EntrySink for ToIndex {
         self.buffer.push(Change::Upsert(entry));
         if self.buffer.len() >= BATCH {
             self.flush();
-            // **How far this walk has got, while it is still walking.** The
-            // count used to be written once, at the end — so `scanned` was
-            // zero for the whole minute a pass takes and every face that
-            // showed it showed a zero that never moved. A person who has just
-            // switched a skip rule off is watching for exactly this number,
-            // and a still one reads as nothing happening.
-            //
-            // Once a batch, not once a row: a write lock every four thousand
-            // entries against one every one.
+            // How far this walk has got, while it is still walking: written once a
+            // batch, not once a row — a write lock every four thousand entries.
             self.stop.status.write().scanned = self.seen;
         }
         if self.stop.stop.load(Ordering::Relaxed) {
@@ -2509,9 +1669,8 @@ mod tests {
     const DEBOUNCE: Duration = Duration::from_millis(500);
     const CAP: Duration = Duration::from_secs(3);
 
-    /// The clock, without one: every instant this file cares about is relative
-    /// to when the first request arrived, and a test that slept for them would
-    /// take twelve seconds to assert what a subtraction can.
+    /// The clock, without one: every instant here is relative to the first request,
+    /// and sleeping through them would take twelve seconds to assert a subtraction.
     fn at(base: Instant, ms: u64) -> Instant {
         base + Duration::from_millis(ms)
     }
@@ -2522,9 +1681,8 @@ mod tests {
 
     #[test]
     fn a_walk_of_a_parent_absorbs_every_walk_below_it() {
-        // What makes this worth doing: a `git clone` creates a directory per
-        // package and each one asks for a walk, and a walk is not cheap —
-        // it flushes a segment, takes a generation and sweeps afterwards.
+        // A `git clone` asks for a walk per package directory, and a walk flushes a
+        // segment, takes a generation and sweeps.
         assert_eq!(c(&["/a", "/a/b", "/a/b/c", "/a/d"]), vec!["/a"]);
         assert_eq!(c(&["/a/b/c", "/a/b", "/a"]), vec!["/a"]);
     }
@@ -2532,8 +1690,7 @@ mod tests {
     #[test]
     fn siblings_are_not_absorbed_and_neither_is_a_longer_name() {
         assert_eq!(c(&["/a/b", "/a/c"]), vec!["/a/b", "/a/c"]);
-        // The trap `under` has too: a sibling whose name starts with the
-        // prefix is not inside it.
+        // A sibling whose name starts with the prefix is not inside it.
         assert_eq!(c(&["/a/b", "/a/bc"]), vec!["/a/b", "/a/bc"]);
     }
 
@@ -2544,8 +1701,7 @@ mod tests {
 
     #[test]
     fn an_empty_path_means_everything_and_subsumes_the_rest() {
-        // The one message that says "I lost track and cannot say where".
-        // Walking everything covers every other request by definition.
+        // "I lost track and cannot say where": walking everything covers the rest.
         assert_eq!(c(&["/a", "", "/b"]), vec![String::new()]);
     }
 
@@ -2560,8 +1716,7 @@ mod tests {
 
     #[test]
     fn nothing_is_walked_while_the_requests_are_still_arriving() {
-        // The measured shape: a request every few hundred milliseconds as a
-        // build creates directories. Each one is its own channel batch, so
+        // A request every few hundred milliseconds is its own channel batch, so
         // `coalesce` never sees two together — this is what does.
         let t = Instant::now();
         let mut w = PendingWalks::default();
@@ -2582,9 +1737,8 @@ mod tests {
 
     #[test]
     fn a_trickle_is_walked_at_the_cap_however_long_it_goes_on() {
-        // Without this the debounce is not a delay, it is a cancellation: a
-        // build that writes a directory every hundred milliseconds for a
-        // minute would leave the subtree out of the index for the minute.
+        // Without the cap the debounce is a cancellation, not a delay: a directory
+        // written every 100 ms for a minute keeps the subtree out for the minute.
         let t = Instant::now();
         let mut w = PendingWalks::default();
         let mut walked_at = None;
@@ -2603,12 +1757,8 @@ mod tests {
 
     #[test]
     fn a_request_absorbed_by_a_parent_keeps_the_older_deadline() {
-        // The trap in merging: `/a/pkg/x` has been held since zero by a trickle
-        // of its own descendants, and at 2,900 the parent arrives and swallows
-        // it. If the merged entry took the *new* first-asked, the cap would
-        // restart and a request that had 100 ms of patience left would be given
-        // 3 s more — the debounce would be postponing without bound, which is
-        // the one thing the cap exists to prevent.
+        // A parent that swallows a held child must not take the new first-asked:
+        // that restarts the cap, and the debounce postpones without bound.
         let t = Instant::now();
         let mut w = PendingWalks::default();
         for ms in (0..2_900).step_by(100) {
@@ -2625,16 +1775,13 @@ mod tests {
 
     #[test]
     fn a_walk_that_runs_takes_the_requests_it_covers_with_it() {
-        // `/a/pkg` is due; `/a/pkg/x` arrived a moment ago and is not. Walking
-        // `/a/pkg` *is* the walk `/a/pkg/x` asked for, so leaving it behind
-        // would run the same walk twice — which is the cost this exists to
-        // remove. `/a/other` is covered by neither and must survive.
+        // Walking `/a/pkg` is the walk `/a/pkg/x` asked for, so leaving it behind
+        // runs the same walk twice; `/a/other` is covered by neither and survives.
         let t = Instant::now();
         let mut w = PendingWalks::default();
         w.add("/a/pkg", at(t, 0));
         w.add("/a/other", at(t, 400));
-        // Late enough to be swallowed rather than to hold the parent back: it
-        // is not the parent's own entry, so it does not refresh its clock.
+        // Late enough to be swallowed, not to hold the parent back.
         w.at.push(("/a/pkg/x".to_owned(), at(t, 480), at(t, 480)));
         assert_eq!(due(&mut w, t, 500), vec!["/a/pkg"]);
         assert!(
@@ -2662,8 +1809,8 @@ mod tests {
 
     #[test]
     fn a_lost_watcher_does_not_wait_and_covers_everything_waiting() {
-        // An empty path is "the index is drifting and I cannot say where".
-        // Holding it holds the only message that stops the drift.
+        // An empty path is "the index is drifting"; holding it holds the only
+        // message that stops the drift.
         let t = Instant::now();
         let mut w = PendingWalks::default();
         w.add("/a/pkg", at(t, 0));

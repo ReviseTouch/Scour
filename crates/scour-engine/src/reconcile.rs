@@ -11,23 +11,13 @@ pub(crate) enum Nudge {
     Blind,
 }
 
-/// One pulse reading per source, and the rules that turn it into work.
-///
-/// **Why the pulse is not simply believed.** It says the *filesystem* moved,
-/// not that anything this source indexes did — `/home` shares its partition
-/// with `/var/log`, so its block counter ticks while journald writes. So a
-/// moving pulse never means "rescan now"; it means "you may look, if you have
-/// not looked recently". The floors below are what keep that honest.
+/// One pulse reading per source, and the rules that turn it into work. A moving
+/// pulse says the partition moved, not this source, so it licenses a look and
+/// never a rescan; the floors below decide how often.
 pub(crate) struct Pulses {
     last: Vec<Option<u64>>,
-    /// The pulse moved and nothing has been done about it yet.
-    ///
-    /// **Remembered rather than dropped.** The floor below says how often a
-    /// source may be walked, not which movements count: a pulse that moves
-    /// inside the floor is still a change, and the first version threw it away
-    /// — so a burst of writes ten seconds after the last walk was noticed,
-    /// declined, and never mentioned again. The disk stayed quiet after that,
-    /// which meant nothing ever asked again.
+    /// The pulse moved and nothing has been done about it yet. Kept across the
+    /// floor: the floor bounds how often a source is walked, not which movements count.
     pending: Vec<bool>,
     /// When each source was last walked because of a pulse.
     walked: Vec<Instant>,
@@ -49,18 +39,15 @@ impl Pulses {
     const EVERY: Duration = Duration::from_secs(2);
     /// The least time between two walks of the same unwatched source.
     const FLOOR: Duration = Duration::from_secs(15);
-    /// How many consecutive readings may move with nothing arriving before a
-    /// watched source is called blind. At `EVERY` seconds apart, this is five
-    /// minutes of a disk changing while its watcher says nothing — long enough
-    /// that a quiet period cannot be mistaken for a fault.
+    /// How many consecutive moved readings with nothing arriving before a watched
+    /// source is called blind. At `EVERY` apart, five minutes.
     const PATIENCE: u32 = 150;
 
     pub(crate) fn new(n: usize, poll: Duration, reconcile: Duration) -> Pulses {
         Pulses {
             last: vec![None; n],
             pending: vec![false; n],
-            // Back-dated, so the first movement is acted on rather than
-            // waiting out a floor that has protected nothing yet.
+            // Back-dated: the first movement is acted on, not held by an unearned floor.
             walked: vec![Instant::now() - Self::FLOOR; n],
             pulse_floor: vec![Self::FLOOR; n],
             scan_rest: vec![Duration::ZERO; n],
@@ -73,10 +60,8 @@ impl Pulses {
         }
     }
 
-    /// When the pulses will next be worth reading.
-    ///
-    /// On an idle machine this is the only deadline left, so it is what
-    /// decides how often a service with nothing to do wakes at all.
+    /// When the pulses will next be worth reading — on an idle machine the only
+    /// deadline left, so it sets how often a service with nothing to do wakes.
     pub(crate) fn next_due(&self) -> Instant {
         self.checked + Self::EVERY
     }
@@ -109,10 +94,6 @@ impl Pulses {
     }
 
     /// The rules, with the reading already taken.
-    ///
-    /// Split out because everything interesting here is bookkeeping — a
-    /// movement remembered across a floor, a counter cleared by an event — and
-    /// none of it needs a filesystem to be wrong.
     pub(crate) fn decide(
         &mut self,
         readings: &[Option<u64>],
@@ -123,8 +104,7 @@ impl Pulses {
         let mut out = Vec::new();
         for (i, reading) in readings.iter().enumerate() {
             let now = Instant::now();
-            // A pulse is a hint, not evidence that nothing changed. A watcher
-            // can miss one subtree while continuing to report another one.
+            // A pulse is a hint: a watcher can miss one subtree while reporting another.
             let safety_due = now >= self.safety[i];
             let polling_due = !watched.contains(&i) && now >= self.fallback[i];
             if safety_due || (reading.is_none() && polling_due) {

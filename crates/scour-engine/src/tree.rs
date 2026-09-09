@@ -1,15 +1,8 @@
-//! Listing a directory from the index.
+//! Listing a directory from the index, not the filesystem: a directory holding
+//! a million entries lists as fast as one holding ten, and how much each child
+//! directory holds is known without opening it.
 //!
-//! Answered from the index rather than the filesystem, and that is the whole
-//! point. A directory holding a million files takes as long to list here as one
-//! holding ten, because the index already knows which entries name it as their
-//! parent — and it knows how many entries each *child* directory holds without
-//! opening any of them.
-//!
-//! This is the operation an assistant exploring a filesystem actually performs,
-//! and it is bounded on purpose: `limit` per level rather than in total, with
-//! `truncated` saying plainly when something was left out. A listing that
-//! silently omits half a directory is worse than one that admits it.
+//! Bounded per level by `limit`, not in total; `truncated` says what was left out.
 
 use scour_core::{Ast, Group, Index, Kind, Match, Page, Result, SearchRequest, SortKey, TreeNode};
 
@@ -39,18 +32,14 @@ fn fill(index: &dyn Index, node: &mut TreeNode, depth: u32, limit: u32) -> Resul
         return Ok(());
     }
     if depth == 0 {
-        // Still count. A directory at the depth limit reported as holding zero
-        // entries reads as empty, and a caller — a person or a model — will
-        // conclude there is nothing in it and stop looking. Counting without
-        // listing costs one query and no rows.
+        // Count without listing: `children == 0` at the depth limit would read as empty.
         node.children = count_children(index, &node.path)?;
         node.truncated = node.children > 0;
         return Ok(());
     }
     let res = index.search(&SearchRequest {
         query: one(Match::ParentIs(node.path.clone())),
-        // Directories first, then by name: the order someone reads a listing
-        // in, and stable enough to page through.
+        // By name; directories are lifted above files after the page comes back.
         sort: SortKey::Name,
         descending: false,
         page: Page {
