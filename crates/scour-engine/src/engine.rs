@@ -1230,7 +1230,7 @@ impl Engine {
     /// The same file, several times over.
     ///
     /// **This needed nothing new from the index**, which is worth saying
-    /// because the plan in `docs/REPORTS.md` expected a `duplicates()` on the
+    /// because the original plan for reports expected a `duplicates()` on the
     /// trait and a digest column behind it. Neither is here. The candidates
     /// are a search — `size:>N`, ordered by size — and everything after that
     /// is `scour-dupes`, which takes paths and sizes and knows nothing about

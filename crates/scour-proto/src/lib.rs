@@ -210,7 +210,7 @@ pub enum Request {
         under: String,
         /// Ignore anything smaller. A unique size eliminates only 6.2% of
         /// files but candidates over a megabyte are 18,723 of them holding
-        /// 141.8 GB — see `docs/REPORTS.md`.
+        /// 141.8 GB, measured on the live index.
         #[serde(default = "default_dupe_floor")]
         min_size: u64,
         /// How many bytes may be read confirming. Zero reads nothing.

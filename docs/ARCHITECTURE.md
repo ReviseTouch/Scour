@@ -1,110 +1,112 @@
-# Scour — nasıl kurulu
+# Scour — how it is put together
 
-Bu belge, depoyu ilk kez açan birinin **nereye bakacağını** ve bir şey
-eklerken **nereye koyacağını** bilmesi için. Kararların gerekçesi kodun
-kendisinde; burada olan şey haritanın kendisi.
+For somebody opening the repository for the first time: **where to look**, and
+**where a new thing goes**. The reasons behind each decision are in the code
+beside it; this is the map.
 
-Kural tek cümleyle: **içeride sıkı, aralarında gevşek.** Her crate tek bir işi
-bütün olarak yapar; aralarındaki bağ veri ve sözleşmedir, çağrı zinciri değil.
+The rule in one sentence: **tight inside, loose between.** Every crate does one
+whole job; what joins them is data and a contract, not a call chain.
 
 ---
 
-## 1. Bir bakışta
+## 1. At a glance
 
 ```
         ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-        │  sayfa   │   │ pencere  │   │ uçbirim  │   │ komut s. │   ← dört yüz
+        │   page   │   │  window  │   │ terminal │   │ command  │   ← four faces
         │scour-web │   │scour-gui │   │scour-tui │   │  scour   │
         └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘
              └──────────────┴───────┬──────┴──────────────┘
-                                    │  tek soket, tek dil
+                                    │  one socket, one protocol
                               ┌─────▼──────┐
-                              │  scourd    │   ← tek yazan, tek karar veren
+                              │  scourd    │   ← the only writer, the only decider
                               └─────┬──────┘
                     ┌───────────────┼───────────────┐
              ┌──────▼─────┐  ┌──────▼──────┐  ┌─────▼──────┐
              │scour-engine│  │scour-index- │  │scour-source│
-             │  (arama)   │  │   native    │  │   -fs      │
+             │  (search)  │  │   native    │  │   -fs      │
              └────────────┘  └─────────────┘  └────────────┘
 ```
 
-Dört yüz, **dört program değil**. Hepsi aynı servise aynı soketten bağlanır,
-aynı cevabı alır. Aralarındaki fark yalnızca çizimdir.
+Four faces, **not four programs**. All of them talk to the same service over
+the same socket and get the same answer. What differs is only the drawing.
 
 ---
 
-## 2. Katmanlar ve kural
+## 2. Layers, and the rule
 
-Bağımlılık aşağı doğru akar; yukarı doğru **hiç akmaz**.
+Dependencies flow downwards and **never** upwards.
 
-| katman | crate | ne bilir | ne bilmez |
+| layer | crate | knows | does not know |
 |---|---|---|---|
-| **veri** | `scour-core` | bir satır nedir, bir sorgu nedir, bir hata nedir | dosya sistemi, soket, arayüz |
-| **dil** | `scour-query` | yazılanı nasıl okuyacağı | indeksin nasıl saklandığı |
-| **saklama** | `scour-index-native` | sütunlar, trigramlar, klasör tablosu | sorgunun nereden geldiği |
-| **arama** | `scour-engine` | hangi satır cevaba girer, hangi sırayla | kimin sorduğu |
-| **kaynak** | `scour-source-fs`, `scour-watch` | dosya sisteminin yürünmesi ve izlenmesi | indeksin içi |
-| **taşıma** | `scour-proto`, `scour-ipc` | soru ve cevabın şekli, çerçeveleme | ikisinin de anlamı |
-| **paylaşılan sunum** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places` | her yüzün aynı cevabı vermesi gereken sorular | çizim araçları |
-| **yüzler** | `scour-web`, `scour-gui`, `scour-tui`, `scour` | çizim, tuş, fare | indeks, dosya sistemi, motor |
+| **data** | `scour-core` | what a row, a query and an error are | filesystems, sockets, interfaces |
+| **language** | `scour-query` | how to read what was typed | how the index is stored |
+| **storage** | `scour-index-native` | columns, trigrams, the directory table | where a query came from |
+| **search** | `scour-engine` | which rows answer, in what order | who is asking |
+| **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
+| **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
+| **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
+| **faces** | `scour-web`, `scour-gui`, `scour-tui`, `scour` | drawing, keys, the pointer | the index, the filesystem, the engine |
 
-**Bir yüz motoru linklemez.** Dördü de bildiği her şeyi soketten öğrenir. Bu,
-gevşek bağın nerede olduğunu söyler: yüzler ile servis arasında.
+**A face never links the engine.** All four learn everything they know over
+the socket. That is where the loose coupling lives: between the faces and the
+service.
 
 ---
 
-## 3. Paylaşılan sunum — asıl "merkezden yönetim" burası
+## 3. Shared presentation — the real "central control"
 
-Aynı cevabı dört ayrı yerde vermek, dördünün sessizce ayrışması demektir.
-Bunlar bir kez yazılır:
+Giving the same answer in four places means the four drifting apart quietly.
+These are written once:
 
-| crate | ne karara bağlar | neden orada |
+| crate | decides | why there |
 |---|---|---|
-| `scour-ui::format` | `5.356.281`, `1,44 MiB`, `636,4 MB`, `2026-08-13 00:49`, altı yaş bandı | noktalama **dilin**, platformun değil: Türkçe masaüstünde İngilizce pencere `5,356,281` yazar |
-| `scour-ui::path` | yaprak, klasör, kırıntı adımları | üç yüz üç ayrı yerde kesiyordu |
-| `scour-ui::query` | süzgeç ile yazılanın birleşmesi, basılana tekrar basınca temizlenmesi | "tek süzgeç, sona eklenir" bir dil kuralı, bir çizim kuralı değil |
-| `scour-ui` (palet, sütunlar, bantlar, tür renkleri) | `#0d1117`, sütun kimlikleri, 24 zaman bandı | CSS ile `.slint` iki kopya tutuyordu ve odak rengi çoktan ayrışmıştı |
-| `scour-ui::faces` | hangi yüzde ne var | aşağıda, §5 |
-| `scour-page` | sayfa 200 satır, LRU 32, cevabın taşıdığı ofsete yazılır, kısa sayfa iki ölçüye göre sonuçtur | altı hata pahasına öğrenildi; ikinci kez öğrenilmesin |
-| `scour-settings` | sütun genişliği, dil, düzen, **hangi yüz açılır**, atlama kuralları | dört yüzün ortak hafızası; `config.toml` elle yazılan dosya olarak kalır |
-| `scour-i18n` | katalog, **dil sırası**: seçilen → `config.toml` → masaüstü → İngilizce | `.po` dosyaları; kodda İngilizce msgid. Sıra `choose()` içinde bir kez yazılıdır; pencere kendi kopyasını tutuyordu ve `SCOUR_LANG`'i görmüyordu |
-| `scour-places` | masaüstünün kendi klasörleri, hangi bölüm okuma zamanı tutar | bir makine sorusu, bir indeks sorusu değil |
-| `scour-thumbs` | küçük resim önbelleği nerede, hangi türe hiç bakılmaz, kim üretebilir | dört `stat`'ı hangi satırın hak ettiği tek kural; sayfa ve pencere aynı soruyu soruyor |
+| `scour-ui::format` | `5.356.281`, `1,44 MiB`, `2026-08-13 00:49`, the six age bands | punctuation belongs to the **language**, not the platform: an English window on a Turkish desktop prints `5,356,281` |
+| `scour-ui::path` | leaf, folder, breadcrumb steps | three faces were cutting paths three different ways |
+| `scour-ui::query` | how a pressed filter joins the typed text, and how pressing it again clears it | "one filter, appended" is a language rule, not a drawing rule |
+| `scour-ui` (palette, columns, bands, kind colours) | `#0d1117`, the twelve columns and their widths, the time bands | CSS and `.slint` held two copies, and the focus colour had already drifted |
+| `scour-ui::faces` | what each face has | §5 |
+| `scour-page` | pages of 200 rows, an LRU of 32, an answer written at the offset *it* names, when a short page is the end | learned at the cost of six bugs; not to be learned twice |
+| `scour-settings` | columns and their order, widths, language, layout, **which face opens**, skip rules | the four faces' shared memory; `config.toml` stays the file written by hand |
+| `scour-i18n` | the catalogue, and the **order of languages**: chosen → `config.toml` → desktop → English | `.po` files; English msgids in code. The order is written once, in `choose()` |
+| `scour-places` | the desktop's own folders, which volumes record reads | a question about the machine, not about the index |
+| `scour-thumbs` | where the thumbnail cache is, which kinds are never worth a look, who may make one | the one rule that says which row earns four `stat`s; the page and the window ask the same question |
 
-Bir şey **iki yüzde birden** gerekiyorsa yeri buradadır. Üçüncü kopya yazılıyorsa
-bir şey yanlış gidiyordur.
+If something is needed by **two faces at once**, it lives here. A third copy
+being written is the sign that something has gone wrong.
 
-Aynı kural yollar için de geçerli: ayarların nerede durduğunu `Config::state_dir()`
-söyler. Üç yerde ayrı ayrı yazılıydı — servis, pencere ve uçbirim — ve biri
-ayrıştığı gün bir yüzde seçilen dil öteki yüzde görünmeden kaybolurdu.
+The same rule holds for paths: `Config::state_dir()` says where settings are.
+It was written in three places once — service, window, terminal — and the day
+one of them drifted, a language chosen in one face would vanish from the other.
 
-Metin de öyle: bir yüzün gösterdiği her kelime katalogdan gelir. Uçbirimde bunu
-denetleyen bir test var — kendi kaynağını okuyup `say(...)`'a verilen her msgid'i
-Türkçe katalogda arar, çünkü elle tutulan bir msgid listesi yazıldığı gün doğrudur.
-
----
-
-## 4. Servis: tek yazan
-
-`scourd` indeksi yazan tek süreçtir; yüzler yalnız okur ve sorar.
-
-- **Üç şerit.** `scour-ipc` tek seferde tek çağrı taşır ve `scourd` bağlantı
-  başına bir iş parçacığı açar. Bu yüzden her yüz birden çok bağlantı tutar:
-  tuş vuruşunun beklediği (arama), bekleyebileceği (facet, kural, CSV) ve
-  **uzun yoklama** (indeks değişti mi) — sonuncusu bağlantısını otuz saniye
-  tuttuğu için kendi şeridinde olmak zorunda.
-- **Kuşak (generation).** Her arama bir sayı taşır; eski bir cevap çizilmez.
-  Yavaş gelen `re` cevabının hızlı gelen `rapor` cevabının üstüne yazması, bir
-  arama kutusunun yapabileceği en kötü şeydir.
-- **Cevap ofseti taşır.** Sayfa, istenen ofsete değil, **cevabın söylediği**
-  ofsete yazılır.
+And for words: every word a face shows comes from the catalogue. The terminal
+has a test that reads its own source and looks up every msgid handed to
+`say(...)` in the Turkish catalogue, because a hand-kept list of msgids is
+correct on the day it is written.
 
 ---
 
-## 5. Yüzler arasında bağ: çizelge kodda
+## 4. The service: the only writer
 
-`scour-ui::faces` her özelliği ve dört yüzdeki durumunu tutar; `scour features`
-onu basar:
+`scourd` is the one process that writes the index; the faces only read and ask.
+
+- **Three lanes.** `scour-ipc` carries one call at a time and `scourd` opens a
+  thread per connection. So every face holds several connections: the one a
+  keystroke waits on (search), the one that can wait (facets, rules, CSV), and
+  the **long poll** (has the index moved) — the last holds its connection for
+  thirty seconds and has to be on a lane of its own.
+- **Generations.** Every search carries a number; a stale answer is never
+  drawn. A slow answer to `re` landing on top of a fast answer to `rapor` is
+  the worst thing a search box can do.
+- **The answer carries the offset.** A page is written at the offset the
+  **answer** names, not the one that was asked for.
+
+---
+
+## 5. What the faces have: the chart is in the code
+
+`scour-ui::faces` holds every feature and its state in all four faces;
+`scour features` prints it:
 
 ```
 feature         page          window        terminal      command line
@@ -113,99 +115,98 @@ language        yes           yes           yes           yes
 thumbnails      yes           no            no            —
 ```
 
-`no` ile `—` farklıdır: biri "henüz yok", öteki "orada olamaz" (komut satırında
-küçük resim). Her ikisi de **neden** olduğunu yazmak zorundadır — testi bunu
-denetler.
+`no` and `—` differ: one is "not yet", the other "cannot be there" (thumbnails
+on a command line). Both have to say **why** — a test checks that.
 
-**Yeni bir özellik çizelgeye satır eklemekle başlar.** Bir yüz geride
-kalacaksa orada `no` olarak durur; sessizce eksik kalmaz. Belge eskiyebilir,
-kod eskimez.
+**A new feature starts by adding a row to the chart.** A face that lags stays
+there as `no`; nothing goes quietly missing. A document can go stale; the code
+cannot.
 
 ---
 
-## 6. Yüzler: her biri neyi kendi yapar
+## 6. The faces: what each does for itself
 
-| yüz | çizim | kendine ait olan |
+| face | drawing | its own |
 |---|---|---|
-| **sayfa** (`scour-web`) | HTML/CSS/JS tek dosyada (`page.html`), köprü onu servis eder | tarayıcıda çalışır; `POST` yolları jeton + origin + `--no-launch` ile çevrili |
-| **pencere** (`scour-gui`) | Slint, yazılım çizici | model bir kez kurulur, yerinde güncellenir (bkz. `docs/SLINT-PLAN.md`) |
-| **uçbirim** (`scour-tui`) | ratatui, anlık kip | `--once`, `--press`, `--click`: ekranı ve tıklamayı denetlemenin tek yolu |
-| **komut satırı** (`scour`) | metin ve `--json` | tek soru, tek cevap; sayfalama yok |
+| **page** (`scour-web`) | HTML/CSS/JS in one file (`page.html`), served by the bridge | runs in a browser; `POST` routes are fenced by a token, the origin and `--no-launch` |
+| **window** (`scour-gui`) | Slint, software renderer | the model is built once and updated in place |
+| **terminal** (`scour-tui`) | ratatui, immediate mode | `--once`, `--press`, `--click`: the only way to check the screen and a click |
+| **command line** (`scour`) | text and `--json` | one question, one answer; no paging |
 
-Ortak kural: **çizen yer ile vuran yer aynı aritmetiği kullanır.** Pencerede bu
-kural iki gün yedi (panel bir yerde çiziliyor, başka yerde test ediliyordu);
-uçbirimde `spot_at` ve `draw` sabitleri paylaşır.
+The common rule: **the place that draws and the place that hits use the same
+arithmetic.** The window lost two days to breaking it (a panel drawn in one
+place and tested in another); in the terminal `spot_at` and `draw` share their
+constants.
 
 ---
 
-## 7. Doğrulama araçları
+## 7. Checking tools
 
-Ekran görüntüsü bir arayüzü doğrulamaz; iz kaydı ve sentetik olay doğrular.
+A screenshot does not verify an interface; a trace and a synthetic event do.
 
-| araç | ne yapar |
+| tool | what it does |
 |---|---|
-| `SCOUR_GUI_SNAP=/x.ppm` | pencere kendi fotoğrafını çeker |
-| `SCOUR_GUI_QUERY/PANEL/SCROLL/CLICK/HOVER` | pencereyi bir duruma sokar, sentetik olay gönderir |
-| `scour-tui --once WxH` | kareyi **metin olarak** basar |
-| `scour-tui --press`, `--click` | tuşa ve noktaya basar |
-| `SCOUR_TUI_TRACE=/tmp/log` | işleyişi dosyaya yazar (ekrana değil) |
-| `scripts/bench` | dokuz sorgu, servisin CPU/RSS'i, uçbirimin ilk karesi |
-| `examples/*.rs` (indeks) | `rankcheck`, `reachcost`, `pathcost` — iddiadan önce ölçüm |
-| `tests/smoke.rs` (indeks) | her sorgu şeklini **kaba kuvvetle** karşılaştırır |
+| `SCOUR_GUI_SNAP=/x.png` | the window photographs itself |
+| `SCOUR_GUI_QUERY/PANEL/SCROLL/CLICK/HOVER` | puts the window in a state, sends a synthetic event |
+| `scour-tui --once WxH` | prints the frame **as text** |
+| `scour-tui --press`, `--click` | presses a key, a point |
+| `SCOUR_TUI_TRACE=/tmp/log` | writes what happened to a file (not the screen) |
+| `scripts/tuishot` | photographs a terminal program without a screen: a pseudo-terminal, the ANSI replayed, drawn by a browser |
+| `scripts/bench` | nine queries, the service's CPU/RSS, the terminal's first frame |
+| `examples/*.rs` (index) | `rankcheck`, `reachcost`, `pathcost` — measure before claiming |
+| `tests/smoke.rs` (index) | every query shape against **brute force** |
 
-Ölçüm kuralı `docs/MEASUREMENTS.md`'nin başında: iki ikiliyi **dönüşümlü**
-koştur, sabahı öğleden sonrayla karşılaştırma.
-
----
-
-## 8. Bir şey eklerken
-
-1. `scour-ui::faces`'e satırı ekle — dört yüzün durumuyla.
-2. Anlamı nereye ait? İki yüzde birden gerekiyorsa paylaşılan crate'e; bir
-   yüze özgü çizimse o yüze.
-3. Servis tarafı gerekiyorsa `scour-proto`'ya soru/cevap ekle — eski istemcinin
-   yeni cevabı okuyabilmesi için alanlar `#[serde(default)]`.
-4. Ölçülebilir bir iddia varsa önce ölç (`examples/`, `scripts/bench`) ve
-   `docs/MEASUREMENTS.md`'ye komutuyla yaz.
-5. Doğruluk iddiası varsa kaba kuvvetle karşılaştır.
+The measuring rule is at the top of `docs/MEASUREMENTS.md`: run two binaries
+**alternately**; never compare a morning against an afternoon.
 
 ---
 
-## 9. Nereden okumaya başlamalı
+## 8. Adding something
 
-- **Ne yapıyor:** `README.md`, sonra `scour features`.
-- **Dil:** `crates/scour-query/src/syntax.rs` (kılavuzun kendisi).
-- **Sorgunun yolu:** `apps/scourd/src/handle.rs` → `scour-engine` →
+1. Add the row to `scour-ui::faces` — with its state in all four faces.
+2. Where does the meaning belong? Needed by two faces: the shared crate. A
+   drawing peculiar to one face: that face.
+3. If the service has to answer, add the question and answer to `scour-proto`
+   — fields `#[serde(default)]`, so an old client can read a new answer.
+4. If there is a measurable claim, measure first (`examples/`, `scripts/bench`)
+   and write it to `docs/MEASUREMENTS.md` with the command.
+5. If there is a correctness claim, compare against brute force.
+
+---
+
+## 9. Where to start reading
+
+- **What it does:** `README.md`, then `scour features`.
+- **The language:** `crates/scour-query/src/syntax.rs` — the reference itself.
+- **A query's path:** `apps/scourd/src/handle.rs` → `scour-engine` →
   `scour-index-native/src/search.rs`.
-- **Bir yüzün yolu:** `apps/scour-tui/src/main.rs` en kısası ve döngüsü
-  başında anlatılmış.
-- **Neden böyle:** `docs/MEASUREMENTS.md`, `docs/TUI-PLAN.md`,
-  `docs/SLINT-PLAN.md`.
+- **A face's path:** `apps/scour-tui/src/main.rs` is the shortest, and its loop
+  is explained at the top.
+- **Why it is this way:** `docs/MEASUREMENTS.md`.
 
 ---
 
-## 8. Önizleme paneli — üçüncü sütun
+## 10. The preview panel — a third column
 
-Listenin yanında, seçili satırı gösteren bir panel. **Bir kip, bir bakış
-değil**: açık kalır ve oklar nereye giderse oraya uyar — Everything'in preview
-pane'i budur. Pencere ile sayfa aynı paneli çiziyor:
+Beside the list, showing the selected row. **A mode, not a glance**: it stays
+open and follows wherever the arrows go — Everything's preview pane. The window
+and the page draw the same panel:
 
-| | nereden |
+| | from |
 |---|---|
-| hangi olgular, hangi sırayla | `scour_ui::preview::FACTS` — etiketler sütun başlıklarının kendi msgid'leri |
-| genişlik ve sınırları | `scour_ui::preview::PANEL_WIDE/MIN/MAX` |
-| dosyanın *ne olduğu* | servis (`Request::Preview`) — karar dosyanın ilk sekiz kilobaytını ister |
-| olgular | servis (`Request::Stat`) — dört tanesi hiçbir sütunda yok |
-| açık mı | `Settings::preview` — bir yüzde iğnelenen panel ötekinde de açılır |
+| which facts, in what order | `scour_ui::preview::FACTS` — the labels are the column headings' own msgids |
+| width and its limits | `scour_ui::preview::PANEL_WIDE/MIN/MAX` |
+| *what* the file is | the service (`Request::Preview`) — the decision needs the file's first eight kilobytes |
+| the facts | the service (`Request::Stat`) — four of them are in no column |
+| whether it is open | `Settings::preview` — a panel pinned in one face opens in the other |
 
-Resim için **küçük resim öncelikli**: 380 piksellik bir panel için kırk
-megapiksellik bir çözme yapılmaz. Yoksa servisten istenir (ızgarayla aynı
-kapı, aynı dörtlü sınır); dosya 512 KB'den küçükse doğrudan çizilir — simgeler,
-ekran görüntüleri ve küçük resim önbelleğinin kendi dosyaları bu sınıfta.
+Pictures are **thumbnail first**: a 380-pixel panel does not decode forty
+megapixels. Failing that, the service is asked (the same door as the grid, the
+same four-at-a-time limit); a file under 512 KB is drawn directly — icons,
+screenshots and the thumbnail cache's own files fall in that class.
 
-**Slint'te iki tuzak, ikisi de ölçülerek bulundu.** Bir çocuğun
-`preferred-height`'ini ebeveyninin `height`'ine bağlamak çemberdir ve Slint'in
-cevabı hiç çizmemektir. Ve beş sabit genişlikli sütunu olan liste, kendi
-asgarisi pencereden geniş olduğu için kardeşini elli piksele sıkıştırır:
-listeye `min-width: 0px` demek, "sağdan kesilebilir" demektir ve panelin
-genişliğini alabilmesinin tek yolu odur.
+**Two Slint traps, both found by measuring.** Binding a child's
+`preferred-height` to its parent's `height` is a cycle, and Slint's answer is
+to draw nothing. And a list whose own minimum is wider than the window squeezes
+its sibling to fifty pixels: `min-width: 0px` on the list means "may be cut on
+the right", and it is the only way the panel can take its width.

@@ -22,13 +22,12 @@ Everything else is an *implementation* and lives in its own crate:
 | Implementations | `scour-index-native`, `scour-source-fs`, `scour-config`, `scour-i18n` | one concrete technology each |
 | Orchestration | `scour-engine` | `Box<dyn Source>`, `Box<dyn Index>` — no concrete types |
 | Wiring | `apps/scourd` | **the only place concrete types are named** |
-| Frontends | `apps/scour`, `apps/scour-mcp`, `apps/scour-web`, `apps/scour-gui` | `scour-proto` only |
+| Frontends | `apps/scour`, `apps/scour-mcp`, `apps/scour-web`, `apps/scour-gui`, `apps/scour-tui` | `scour-proto` only |
 
 Consequences that are not negotiable:
 
 - `scour-engine` must never contain the word `notify`, `ignore`, or the name
-  of any index implementation. It had a dead `scour-index-tantivy` dependency
-  in its manifest for a while, which nothing caught because nothing checked.
+  of any index implementation.
 - Swapping the search engine must be a one-line change in `apps/scourd/src/wire.rs`.
 - If an implementation crate needs another implementation crate, the abstraction
   it actually needs is missing from `scour-core`. Add the trait; do not add the
@@ -239,13 +238,14 @@ Missing viewport pages and explicit new queries bypass that refresh rest.
   that caused it. A slow reply to `re` landing after a fast one to `rapor` is
   the most noticeable defect a search-as-you-type box can have.
 * **The frontend does not parse queries.** What a term means is `explain`'s
-  answer. The one exception is `terms_of`, which decides *which words* to
-  highlight and nothing about what they mean.
+  answer. Two narrow exceptions: `terms_of`, which decides *which words* to
+  highlight and nothing about what they mean, and `scour_query::without`,
+  which the rails call to drop their own term — the parser's judgement,
+  borrowed rather than reimplemented.
 
 Slint's `TextInput` has no range colouring — upstream #9560 puts editable text
-out of scope — so the coloured chips the mockup shows are 5.2, not a shortcut
-taken here. It has no substring either, which is why a highlighted name arrives
-as three strings.
+out of scope. It has no substring either, which is why a highlighted name
+arrives as three strings.
 
 ### Service — `scourd`
 

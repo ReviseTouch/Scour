@@ -424,7 +424,7 @@ const SHOWN_PATHS: usize = 6;
 ///
 /// A unique size eliminates only 6.2% of files, so a floor is what makes the
 /// question answerable: candidates over a megabyte are eighteen thousand of
-/// them holding 141.8 GB — see `docs/REPORTS.md`.
+/// them holding 141.8 GB, measured on the live index.
 const FLOORS: [(u64, &str); 4] = [
     (1 << 20, "1 MB+"),
     (10 << 20, "10 MB+"),

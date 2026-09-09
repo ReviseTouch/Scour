@@ -33,7 +33,7 @@ pub struct SourceId(pub u32);
 /// renaming it over the target keeps the path and changes the inode, and
 /// nothing can say "the inode that used to be here is gone" — which left 267
 /// rows at one path on a live index, one per save. See `EntryId::path_hash`
-/// and `docs/AUDIT.md` §11.
+/// — the case the 2026-08-04 audit reproduced on a live index.
 ///
 /// What remains here is vocabulary for the sources that are not filesystems.
 /// `Opaque` is what an object store's version token would be; keeping the

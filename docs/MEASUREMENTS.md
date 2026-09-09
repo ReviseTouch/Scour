@@ -337,7 +337,7 @@ awk '{print $14+$15}' /proc/<pid>/stat              # jiffies, both ends
 ## 2026-08-07 — the arena cap, and what it costs
 
 The allocator half of the decision left open in
-[`REVIEW-MEMORY.md`](REVIEW-MEMORY.md).
+the idle-memory review of 2026-08-06 (folded into this notebook's entries of that date).
 
 A service up for one hour and three quarters, having scanned both sources at
 start-up and served a window, held **589.9 MiB anonymous** against the 95.9
@@ -378,7 +378,7 @@ awk '/^Anonymous:/{a+=$2} END{print a/1024}' /proc/<pid>/smaps    # memory
 
 Release build, a reflinked copy of the live native index: **2,091,824 entries,
 55 segments**. The full attribution, commands, failed hypothesis and
-before/after tables are in [`REVIEW-MEMORY.md`](REVIEW-MEMORY.md).
+before/after tables were in the idle-memory review of 2026-08-06, now folded into the entries above.
 
 The memory was not a live half-gigabyte structure. After one `/mnt/depo`
 reconciliation, `/proc/self/smaps_rollup` reported 175.1 MiB anonymous while
@@ -504,7 +504,7 @@ After the fix, the same query on the same index: **232 ms → 80 ms.**
   `EACCES` on one unreadable directory and abandons the entire recursive
   watch. `fanotify` would not have helped: its whole-filesystem mark needs
   `CAP_SYS_ADMIN`, and unprivileged it has a *smaller* budget than inotify.
-  See `docs/ENUMERATION.md`.
+  (The filesystem survey that produced this was a separate note, since retired.)
 * 5M and 10M entries, a subtree rename, and the rebuild threshold: still
   unmeasured on this engine.
 
@@ -1407,7 +1407,7 @@ that is where they should be.
 
 ## 2026-08-03 — what a directory weighs
 
-The measurement behind `docs/REPORTS.md`. TreeSize answers this by walking the
+The measurement behind the disk-usage report. TreeSize answers this by walking the
 filesystem; everything it needs is already indexed, and directory numbers being
 handed out in sorted path order makes the rollup two sequential passes.
 
@@ -1843,7 +1843,7 @@ sudo scripts/fstest.sh
 
 Two things confirmed. Withholding `STABLE_IDS` from the FAT family is right.
 And they have no hard links at all — `ln` fails silently — which is what
-`REPORTS.md` predicts for the first tier of duplicate detection there.
+the report plan predicted for the first tier of duplicate detection there.
 
 **And one test of mine was wrong.** The first version reported every
 filesystem as case-sensitive, including vfat, by checking that `README.md` and
@@ -2192,7 +2192,7 @@ work did not get slower.
 
 ## 2026-08-04 — the disk-usage report, checked against `du`
 
-`REPORTS.md` §A argued that what TreeSize walks a filesystem for is already in
+The report plan argued that what TreeSize walks a filesystem for is already in
 the index, and predicted ~45 ms for a 1.2 M-entry disk from a single-segment
 prototype. Built, and measured against the tool it replaces.
 
@@ -4204,7 +4204,7 @@ fan, on a machine nobody was using.
 
 ## Verifying the review: the same fixes, on the machine rather than in a copy
 
-`docs/REVIEW-MEMORY.md` measures a four-row minute against a reflinked copy of
+The idle-memory review of 2026-08-06 measured a four-row minute against a reflinked copy of
 the index. This is the same daemon under systemd, one process, window shut,
 after a full scan had settled:
 

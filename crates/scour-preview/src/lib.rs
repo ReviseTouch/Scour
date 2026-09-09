@@ -73,7 +73,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 /// thumbnail into the current directory.
 ///
 /// Untested on macOS and Windows — Linux is the only platform any of this has
-/// been run on. `docs/ROADMAP.md` and the README both say so.
+/// been run on. The README says so.
 pub fn quicklook(chosen: Option<&str>) -> Option<Vec<String>> {
     if let Some(cmd) = chosen {
         let parts: Vec<String> = cmd.split_whitespace().map(str::to_owned).collect();

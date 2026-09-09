@@ -47,8 +47,8 @@ const ARENAS: libc::c_int = 2;
 /// 64 MiB. Memory freed into an arena goes back to that arena and not to the
 /// kernel, so a parallel walk that touches all of them leaves the process
 /// holding hundreds of megabytes that are free, fragmented and never handed
-/// out again. This is the "allocator or worker-pool decision" left open in
-/// `docs/REVIEW-MEMORY.md`, and it is the allocator half.
+/// out again. This is the allocator half of the "allocator or worker-pool"
+/// decision the idle-memory review of 2026-08-06 left open.
 ///
 /// **The whole curve, measured**, alternating over a 743,000-entry scan of one
 /// local source, medians of three rounds (memory) and three rounds (time):

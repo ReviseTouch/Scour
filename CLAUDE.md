@@ -75,10 +75,11 @@ Four rules, each of which was learned by breaking it:
 
 ## Reading the code
 
-`docs/ROADMAP.md` says what is left and why in that order. `docs/AUDIT.md`,
-`docs/REVIEW-MEMORY.md` and the other reviews record what was investigated and
-what was deliberately left open — a section headed "found, not fixed" means the
-decision is still yours to make, not that nobody noticed.
+`docs/ARCHITECTURE.md` says where things are and where a new thing goes.
+`docs/MEASUREMENTS.md` is the lab notebook: every number the README claims,
+with the command that produced it, in the order it was found. A section there
+headed "found, not fixed" means the decision is still yours to make, not that
+nobody noticed.
 
 Comments here carry the measurement and the reason, not a description of the
 code beside them. Match that.

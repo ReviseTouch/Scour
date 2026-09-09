@@ -20,7 +20,7 @@
 //! nothing, so [`make::can_make`] answers false and nothing is ever asked for
 //! — which is exactly the behaviour there was before any of this. Windows has
 //! its own thumbnail cache behind `IThumbnailProvider`, and reaching it is a
-//! COM story rather than a process one; `docs/ROADMAP.md` says so.
+//! COM story rather than a process one, and it is not written.
 
 pub mod cache;
 pub mod known;

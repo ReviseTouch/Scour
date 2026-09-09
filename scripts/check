@@ -15,7 +15,7 @@
 # The cross checks are `cargo check`, not `cargo test`: nothing here can run a
 # Windows binary. They prove the code still compiles for a target, which is the
 # difference between "unsupported" and "quietly rotting". What they cannot
-# prove is that it *behaves* — see docs/ROADMAP.md on what Windows still needs
+# prove is that it *behaves* — the README says what Windows still needs
 # before it is a platform rather than a compilation.
 
 set -euo pipefail
