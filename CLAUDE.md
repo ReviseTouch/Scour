@@ -81,5 +81,19 @@ with the command that produced it, in the order it was found. A section there
 headed "found, not fixed" means the decision is still yours to make, not that
 nobody noticed.
 
-Comments here carry the measurement and the reason, not a description of the
-code beside them. Match that.
+## Comments
+
+The code is read by people who did not write it. A comment is for them, and
+it is short.
+
+- A doc comment (`///`, `//!`) says **what** something is, in one or two
+  lines. Doc-tests stay; they are tests.
+- An inline comment (`//`) states an **invariant or a number** that the code
+  cannot show on its own, in one line: `// Newest first: a cap is a prefix, not a sample.`
+- **No history.** "It used to", "this cost an hour", "the page does the same",
+  "found by measuring" — none of it. Git is the archive; `docs/MEASUREMENTS.md`
+  holds the numbers with their commands.
+- No comment that restates the line below it. No Turkish.
+- `scripts/comments` reports the density. The ceiling is about **one comment
+  line per ten of code** per file; a block longer than three lines is a
+  paragraph, and a paragraph belongs in a document or nowhere.
