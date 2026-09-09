@@ -1,14 +1,8 @@
 //! The shared palette, in the terminal's terms.
 //!
-//! **Ours, imposed.** The rail's kind bars and the age stripe carry meaning in
-//! their colour — "this is a document", "this has not been touched in a year"
-//! — and a terminal's own sixteen cannot say either. So the same hex codes the
-//! window and the page use are written out as true colour here.
-//!
-//! Two ways out, both deliberate rather than a fallback nobody chose:
-//! `SCOUR_TUI_COLORS=terminal` hands the whole thing back to the terminal's
-//! palette, and a terminal that cannot do true colour is detected and dropped
-//! to its nearest.
+//! True colour, because the kind bars and the age stripe carry meaning in it.
+//! `SCOUR_TUI_COLORS=terminal` hands the palette back; a terminal without true
+//! colour is dropped to the nearest 256-colour cell.
 
 use ratatui::style::Color;
 use scour_ui::{DARK, LIGHT, Palette, Rgba};
@@ -16,8 +10,7 @@ use scour_ui::{DARK, LIGHT, Palette, Rgba};
 /// Which palette to paint with, and whether the terminal can take it.
 pub struct Theme {
     pub palette: &'static Palette,
-    /// False when `COLORTERM` says nothing and the palette has to be
-    /// approximated.
+    /// False when `COLORTERM` says nothing: the palette is approximated.
     pub truecolor: bool,
     /// True when somebody asked for the terminal's own colours instead.
     pub theirs: bool,
@@ -44,9 +37,7 @@ impl Theme {
         if self.truecolor {
             Color::Rgb(r, g, b)
         } else {
-            // The 6×6×6 cube of the 256-colour palette, which every terminal
-            // written this century has. Nearest, not dithered: this is a
-            // fallback, and a wrong shade is better than a wrong hue.
+            // Nearest cell of the 256-colour palette's 6×6×6 cube, not dithered.
             let step = |v: u8| u16::from(v).saturating_mul(5).div_euclid(255) as u8;
             Color::Indexed(16 + 36 * step(r) + 6 * step(g) + step(b))
         }
@@ -64,8 +55,7 @@ impl Theme {
     pub fn back(&self) -> Color {
         self.of(self.palette.ground)
     }
-    /// The panel colour, which the query line is drawn on so that it reads as
-    /// a field rather than as one more row of text.
+    /// The panel colour; the query line sits on it so it reads as a field.
     pub fn panel(&self) -> Color {
         self.of(self.palette.panel)
     }
@@ -79,13 +69,11 @@ impl Theme {
     pub fn key(&self) -> Color {
         self.of(self.palette.q_key)
     }
-    /// What is being looked for: a bare word. Blue, against the red of what is
-    /// being left out — see `scour_ui::Palette`.
+    /// What is being looked for: a bare word. Blue, against the red of `not`.
     pub fn term(&self) -> Color {
         self.of(self.palette.q_term)
     }
-    /// The value after a field's colon, a wildcard, and a negated term — the
-    /// other three colours the query line is read back in.
+    /// The value after a field's colon; `glob`, `not` and `bad` follow it.
     pub fn val(&self) -> Color {
         self.of(self.palette.q_val)
     }
@@ -98,8 +86,7 @@ impl Theme {
     pub fn bad(&self) -> Color {
         self.of(self.palette.q_bad)
     }
-    /// What a row goes when the pointer is over it — the same tint the window
-    /// uses, which is a shade of the panel rather than a colour of its own.
+    /// What a row goes under the pointer: a shade of the panel, not a colour.
     pub fn hover(&self) -> Color {
         self.of(self.palette.hover)
     }
@@ -107,8 +94,7 @@ impl Theme {
         self.of(self.palette.pick)
     }
 
-    /// The colour a kind is drawn in, or the quiet ink for one with no colour
-    /// of its own — which is what "nothing in particular" looks like.
+    /// The colour a kind is drawn in, or quiet ink for one with none.
     pub fn kind(&self, token: &str) -> Color {
         match scour_ui::kind_colour(token) {
             Some(c) => self.of(c),

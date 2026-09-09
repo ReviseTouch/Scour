@@ -1,25 +1,8 @@
 //! Scour in a terminal.
 //!
-//! The third face. It holds no index and walks no filesystem: it asks the same
-//! service the window and the browser page ask, over the same socket, and
-//! draws the answers.
-//!
-//! ## The loop
-//!
-//! ```text
-//!                  ┌───────────── the keyboard (a thread)
-//!    one channel ◄─┤
-//!                  └───────────── the service (a thread)
-//!         │
-//!         ▼
-//!    App::… → what changed → draw, if anything did
-//! ```
-//!
-//! **Nothing is drawn on a timer.** A loop that redraws sixty times a second
-//! keeps a core awake to show a list that has not moved; this one blocks on
-//! the channel and draws when something arrives. That is also why the caret is
-//! the terminal's own rather than a block this paints: a blinking caret drawn
-//! here would be a redraw twice a second, for ever.
+//! One of the four faces: no index, no walk, the same service over the same
+//! socket. Nothing is drawn on a timer — the loop blocks on one channel carrying
+//! the keyboard and the service, and the caret is the terminal's own.
 
 mod app;
 mod draw;
@@ -50,23 +33,13 @@ struct Args {
     query: String,
     /// Draw one frame into a buffer of this size and print it as text, then
     /// leave: `--once 120x30`.
-    ///
-    /// **The terminal's own screen cannot be photographed** — it is the
-    /// alternate screen and it is gone the moment this exits — so this is what
-    /// stands in for `SCOUR_GUI_SNAP`. It is also the only way to check what
-    /// the interface says without a person reading it.
     #[arg(long, value_name = "WxH")]
     once: Option<String>,
     /// Press these before drawing: `--press "down,down,space,f1"`.
-    ///
-    /// The keyboard cannot be reached from a test and the alternate screen
-    /// cannot be photographed, so this is how a picture of anything other than
-    /// the first frame is taken.
     #[arg(long, value_name = "KEYS")]
     press: Option<String>,
     /// Click here before drawing: `--click "5:6,110:21"` — column:row, from
-    /// the top left. The only way to check that a press lands where it looks
-    /// like it lands.
+    /// the top left.
     #[arg(long, value_name = "COL:ROW")]
     click: Option<String>,
 }
@@ -84,12 +57,8 @@ fn main() -> Result<()> {
     // One read serves both the language and the socket.
     let config = scour_config::Config::load_or_default().0;
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
-    // **What was chosen, then what was configured, then the desktop.** The
-    // language menu writes `Settings::language` — from any of the four faces —
-    // and a terminal that read only `config.toml` would have offered a menu
-    // whose answer it then ignored on the next start. The file is read here
-    // rather than asked for over the socket so that the *first* frame is in
-    // the right language; the service owns the file and this only reads it.
+    // What was chosen, then what was configured, then the desktop. Read here
+    // rather than over the socket so the first frame is in the right language.
     let kept = scour_settings::Settings::load(&config.state_dir());
     let catalogue = scour_i18n::Catalogue::for_language(&scour_i18n::choose(
         &kept.language,
@@ -100,8 +69,7 @@ fn main() -> Result<()> {
     let (beats, waiting) = channel::<Beat>();
     let (link, answers) = Link::start(addr);
     pump(&beats, answers);
-    // Where this desktop keeps things. Asked once: it is a file the desktop
-    // wrote, not something that changes while somebody searches.
+    // Where this desktop keeps things. Asked once: it does not change.
     link.later(Ask::Places);
     // And from here on, whenever the index moves.
     link.doze(Ask::Await { since: 0 });
@@ -112,9 +80,8 @@ fn main() -> Result<()> {
         words: catalogue,
         ..App::default()
     };
-    // The table's shape, from the same file and for the same reason as the
-    // language: the first frame should be the one somebody left, not the
-    // default for the instant before an answer arrives.
+    // The table's shape, for the same reason as the language: the first frame
+    // is the one somebody left, not a default that lasts an instant.
     state.columns_from(&kept.columns);
 
     if let Some(size) = args.once.clone() {
@@ -132,25 +99,15 @@ fn main() -> Result<()> {
     }
 
     let mut terminal = ratatui::init();
-    // Asked of the terminal before anything is drawn: can it put one of these
-    // glyphs in one column? See `icons`.
+    // Before anything is drawn: can the terminal put a glyph in one column?
     icons::measure();
-    // **`init` does not turn the mouse on.** Without this the terminal never
-    // sends a press and the handling for one may as well not be written —
-    // which is exactly how it was: a wheel that did nothing and a click that
-    // did nothing, with the code for both sitting there.
-    //
-    // What it costs is the terminal's own drag-to-select, which is why it is
-    // switched off again on the way out rather than left on for whatever runs
-    // next in that window. `Shift` still selects in every terminal worth
-    // using.
+    // `init` does not turn the mouse on; without this the terminal sends no
+    // press at all. It costs the terminal's own drag-to-select, which is why it
+    // is switched off again on the way out. `Shift` still selects.
     let mousing = ratatui::crossterm::execute!(
         std::io::stdout(),
         ratatui::crossterm::event::EnableMouseCapture,
-        // **Pasted text arrives as text.** Without this a paste is the
-        // characters typed one at a time, which is a search per character and
-        // a query line that fills in visibly; with it the whole thing is one
-        // event and one search.
+        // Pasted text arrives as one event, not a search per character.
         ratatui::crossterm::event::EnableBracketedPaste
     )
     .is_ok();
@@ -163,8 +120,7 @@ fn main() -> Result<()> {
         );
     }
     ratatui::restore();
-    // Let the slow lane write what was queued on it — the face to open next,
-    // a spreadsheet — before this process goes. See `Link::finish`.
+    // Let the slow lane write what was queued on it — see `Link::finish`.
     link.finish();
     outcome
 }
@@ -182,15 +138,14 @@ fn snap(
 ) -> Result<()> {
     let (w, h) = size.split_once('x').unwrap_or(("120", "30"));
     let (w, h) = (w.parse().unwrap_or(120), h.parse().unwrap_or(30));
-    // The probe cannot run against a buffer, so this reads the environment and
-    // otherwise leaves them off: `SCOUR_TUI_ICONS=on` is how a picture of the
-    // icons is taken.
+    // The probe cannot run against a buffer, so only `SCOUR_TUI_ICONS=on`
+    // turns icons on for a picture.
     icons::measure();
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h))?;
     act(state.resized(draw::room(h)), link);
     act(state.typed(), link);
     // Wait for what the first frame needs, but never for ever: a service that
-    // is not running has to produce a picture too, saying so.
+    // is not running has to produce a picture too.
     let until = std::time::Instant::now() + Duration::from_millis(2_000);
     while std::time::Instant::now() < until {
         let left = until - std::time::Instant::now();
@@ -208,9 +163,8 @@ fn snap(
                 act(state.upset(generation, why), link);
                 break;
             }
-            // **Taken, not dropped.** The rail's counts and the desktop's
-            // folders arrive on the other lane and usually first; a wait that
-            // threw them away photographed an empty rail every time.
+            // Taken, not dropped: the rail's counts arrive on the other lane
+            // and usually first, and a picture without them is an empty rail.
             Ok(Beat::Reply(Got::Facets {
                 generation,
                 age,
@@ -234,13 +188,11 @@ fn snap(
     }
     for name in press.split(',').filter(|n| !n.trim().is_empty()) {
         act(keys::press(state, named(name.trim())), link);
-        // **Everything waiting, not one answer.** Pairing a key with the next
-        // reply on the channel drifts by one the moment a key asks for
-        // nothing: the picture then shows the answer to the key before last.
+        // Everything waiting, not one answer: pairing a key with the next reply
+        // drifts by one the moment a key asks for nothing.
         settle(state, link, waiting, 400);
     }
-    // Let the rail and the strip arrive before anything is clicked on them:
-    // a click on a strip that is not there yet lands on the list instead.
+    // The rail and strip must arrive before a click on them lands on the list.
     if !click.is_empty() {
         settle(state, link, waiting, 600);
     }
@@ -264,12 +216,9 @@ fn snap(
         act(keys::mouse(state, release, (w, h)), link);
         settle(state, link, waiting, 400);
     }
-    // And a last wait, longer, for whatever the final key or press set going:
-    // sorting by size walks the whole index and takes tens of milliseconds.
-    //
-    // **Only when something was pressed.** A plain `--once` is a picture of
-    // the first frame, and a second and a half of waiting for nothing turned
-    // every measurement taken with it into a measurement of this line.
+    // A last, longer wait for whatever the final key set going: sorting by size
+    // walks the whole index. Only when something was pressed — a plain `--once`
+    // must not pay 1.5 s of waiting for nothing.
     if !press.is_empty() || !click.is_empty() {
         settle(state, link, waiting, 1_500);
     }
@@ -294,8 +243,7 @@ fn pump(beats: &Sender<Beat>, answers: Receiver<Got>) {
     let to = beats.clone();
     std::thread::spawn(move || {
         loop {
-            // Blocking, so this thread sleeps until a key is pressed. The
-            // timeout is only so that a terminal that goes away is noticed.
+            // The timeout is only so that a terminal that goes away is noticed.
             match event::poll(Duration::from_millis(500)) {
                 Ok(true) => match event::read() {
                     Ok(e) => {
@@ -325,21 +273,19 @@ fn run(
     waiting: &Receiver<Beat>,
     theme: &Theme,
 ) -> Result<()> {
-    // The first frame sizes the list, and the size is what says how many rows
-    // to ask for — so the first question goes out after it, not before.
+    // The size says how many rows to ask for, so the first question goes out
+    // after the first frame, not before.
     let size = terminal.size()?;
     act(state.resized(draw::room(size.height)), link);
     act(state.typed(), link);
     terminal.draw(|f| draw::frame(f, state, theme))?;
 
-    // **A keystroke waits for the ones after it.** Every letter used to send a
-    // search, which is right while they cost a millisecond — and a term with a
-    // slash in it is a scan of every path in the index, 1.7 s measured. Typing
-    // `Projeler/Scour` would have queued fourteen of those.
+    // A keystroke waits for the ones after it: a term with a slash in it scans
+    // every path in the index, 1.7 s measured, and typing queues one per letter.
     let quiet = Duration::from_millis(120);
     let mut pending: Option<(std::time::Instant, Want)> = None;
-    // Which query has already been sent, so that a page of the one on screen
-    // is not made to wait behind a keystroke's worth of quiet.
+    // Which query has already been sent: a page of the one on screen does not
+    // wait out the quiet.
     let mut asked = state.generation;
     loop {
         let beat = match &pending {
@@ -384,8 +330,7 @@ fn run(
                 pending = Some((std::time::Instant::now() + quiet, want));
             }
             Beat::Key(Event::Mouse(m)) => {
-                // The terminal's size, because where a press landed is the
-                // only thing that says what it meant.
+                // Where a press landed is the only thing that says what it meant.
                 let size = terminal
                     .size()
                     .map(|s| (s.width, s.height))
@@ -465,10 +410,8 @@ fn run(
                 state.rebuild_advised = stale;
                 let want = state.awake(revision);
                 act(want, link);
-                // **And a beat before waiting again.** The service answers the
-                // instant its index moves, and during a scan that is several
-                // times a second — which would be a terminal that spends its
-                // life re-reading a page nobody has scrolled.
+                // A beat before waiting again: during a scan the index moves
+                // several times a second.
                 std::thread::sleep(Duration::from_millis(250));
                 link.doze(Ask::Await {
                     since: state.revision,
@@ -588,11 +531,8 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
     KeyEvent::new(code, mods)
 }
 
-/// Do what a step asked for.
-///
-/// The rail's counts go out beside the first page of a query and on the slow
-/// lane — they walk the matching set, and a keystroke must not queue behind
-/// one.
+/// Do what a step asked for. The rail's counts go out beside the first page of
+/// a query, on the slow lane: they walk the matching set.
 fn act(want: Want, link: &Link) {
     match want {
         Want::Nothing | Want::Leave => {}
@@ -607,10 +547,8 @@ fn act(want: Want, link: &Link) {
             limit,
             cap,
         } => {
-            // **Two questions about two different sets of rows.** The kinds
-            // are about the result on screen; the strip is about the same
-            // query without its age term, or pressing a band would leave the
-            // strip with only that band on it.
+            // Two questions over different rows: the kinds are the result on
+            // screen, the strip is the query without its age term.
             if offset == 0 {
                 link.later(Ask::Facets {
                     generation,
@@ -622,16 +560,14 @@ fn act(want: Want, link: &Link) {
                     query: over,
                     age: true,
                 });
-                // **And what it comes to exactly.** The interactive count
-                // stops at a thousand, so a filter that took a result from
-                // two million rows to eight thousand still read "at least
-                // 1.000" — which is a filter that looks like it did nothing.
+                // And what it comes to exactly: the interactive count stops at
+                // a thousand, which makes any large filter look like it did
+                // nothing.
                 link.later(Ask::Count {
                     generation,
                     query: query.clone(),
                 });
-                // What the query *is*, for drawing it in colour. The parser
-                // answers this, not the index, so it costs nothing.
+                // What the query is, for colour: the parser answers, not the index.
                 link.later(Ask::Explain {
                     generation,
                     query: query.clone(),
@@ -648,8 +584,7 @@ fn act(want: Want, link: &Link) {
             });
         }
         Want::Rules => link.later(Ask::Rules),
-        // On the slow lane: nobody is waiting on it, and a keystroke must not
-        // queue behind a stat of twelve paths.
+        // On the slow lane: a keystroke must not queue behind a stat of paths.
         Want::Recheck(paths) => link.later(Ask::Recheck(paths)),
         Want::Report => {
             link.later(Ask::Stats);

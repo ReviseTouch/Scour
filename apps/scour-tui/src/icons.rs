@@ -1,16 +1,8 @@
 //! The window's icons, in a terminal — when the terminal can draw them.
 //!
-//! **A cell is one column or two and only the terminal knows which.** A glyph
-//! the font does not have, or one it draws double-width, moves every character
-//! after it: the columns stop lining up, and every press lands one place out.
-//! Which is why this asks rather than assumes.
-//!
-//! The question is asked of the terminal itself, once, at startup: put the
-//! cursor at a known column, print the glyph, and ask where the cursor is now.
-//! One means it fits, anything else means it does not.
-//!
-//! `SCOUR_TUI_ICONS=off` and `=on` answer it instead, for a terminal that lies
-//! or a font somebody is about to install.
+//! A glyph the font lacks or draws double-width shifts every column after it,
+//! so the terminal is asked once at startup: print the glyph, read the cursor
+//! column, one means it fits. `SCOUR_TUI_ICONS=off`/`=on` answer it instead.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -18,10 +10,8 @@ use ratatui::crossterm::{cursor, execute, style, terminal};
 
 static DRAWING: AtomicBool = AtomicBool::new(false);
 
-/// Ask the terminal whether one of these glyphs takes a single column.
-///
-/// Called after the alternate screen is up and before the first frame: what it
-/// prints is on a line the first draw overwrites.
+/// Ask the terminal whether one of these glyphs takes a single column. Runs
+/// after the alternate screen is up: the first frame overwrites what it prints.
 pub fn measure() {
     let forced = std::env::var("SCOUR_TUI_ICONS").ok();
     match forced.as_deref() {
@@ -34,16 +24,13 @@ pub fn measure() {
     }
     let mut out = std::io::stdout();
     let measured = (|| -> std::io::Result<u16> {
-        // **Printed through the same channel as the moves**, or the glyph
-        // sits in one buffer while the question about it goes out of another
-        // and the answer is about a cursor that has not moved yet. It read
-        // zero columns until this was changed.
+        // Printed through the same channel as the cursor moves, or the answer
+        // is about a cursor that has not seen the glyph yet.
         execute!(
             out,
             cursor::SavePosition,
             cursor::MoveTo(0, 0),
-            // The one that is drawn most: a folder. A font with any of these
-            // has this one.
+            // The most drawn glyph, and the one a font with any of these has.
             style::Print(of_kind_always("folder"))
         )?;
         let (col, _) = cursor::position()?;
@@ -55,8 +42,7 @@ pub fn measure() {
         )?;
         Ok(col)
     })()
-    // A terminal that will not answer is a terminal this cannot ask, and the
-    // safe reading of no answer is "do not draw them".
+    // No answer reads as "do not draw them".
     .unwrap_or(0);
     let fits = measured == 1;
     crate::app::trace(&format!(
@@ -90,11 +76,8 @@ fn of_kind_always(token: &str) -> &'static str {
     }
 }
 
-/// The glyph for a kind, or nothing when icons are off.
-///
-/// The same fourteen kinds the window draws, in the same order of preference.
-/// Nerd Font code points, which is what a terminal font that has icons at all
-/// has.
+/// The glyph for a kind, or nothing when icons are off. Nerd Font code points,
+/// for the same kinds the window draws.
 pub fn of_kind(token: &str) -> &'static str {
     if drawing() { of_kind_always(token) } else { "" }
 }

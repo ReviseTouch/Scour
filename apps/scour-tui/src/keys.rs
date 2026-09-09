@@ -1,13 +1,8 @@
 //! One table: what every key does, in both modes.
 //!
-//! **The help screen will be printed from this**, so that the documentation
-//! cannot drift from the behaviour — the two have to be the same list or one
-//! of them is a lie.
-//!
-//! The rule the modes follow: **a mode never quietly changes what a key
-//! means.** `Enter`, `Tab`, the arrows, anything with `Ctrl`, and the mouse do
-//! the same thing in both. What a mode decides is only where the bare letters
-//! go — into the query, or into moving.
+//! The help screen is drawn from [`MAP`], so documentation cannot drift from
+//! behaviour. A mode never changes what a key means — `Enter`, `Tab`, the
+//! arrows, `Ctrl` and the mouse are the same in both — only where letters go.
 
 use ratatui::crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -15,8 +10,7 @@ use ratatui::crossterm::event::{
 
 use crate::app::{App, Mode, Panel, Spot, Want};
 
-/// Every key, and what it does. **The help screen is printed from this**, so
-/// that what is documented and what happens cannot drift apart.
+/// Every key, and what it does. The help screen is drawn from it.
 pub const MAP: &[(&str, &str)] = &[
     ("type", "search"),
     ("↑ ↓ · PgUp PgDn · Home End", "move through the list"),
@@ -51,8 +45,7 @@ pub const MAP: &[(&str, &str)] = &[
 
 /// What a key does. Returns what to ask the service for, if anything.
 pub fn press(app: &mut App, key: KeyEvent) -> Want {
-    // Windows sends a key twice — down and up — and a terminal that acted on
-    // both would type every letter twice.
+    // Windows sends a key twice, down and up: acting on both types it twice.
     if key.kind == KeyEventKind::Release {
         return Want::Nothing;
     }
@@ -60,20 +53,16 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let page = app.room.max(1) as isize;
 
-    // The help is a panel over everything, and any key at all closes it: a
-    // panel somebody has read is a panel in the way.
+    // The help is a panel over everything, and any key at all closes it.
     if app.helping {
         app.helping = false;
         app.dirty = true;
         return Want::Nothing;
     }
 
-    // **The one panel that listens to letters.** Everywhere else a panel is
-    // open the query keeps typing — which is what lets somebody search while
-    // the skip list is up — but a question asking for a name has to take the
-    // name. `Space` is a letter here too, and it is a letter people put in
-    // file names, so this branch comes before the one that treats it as a
-    // press.
+    // The one panel that listens to letters: elsewhere the query keeps typing
+    // while a panel is open. `Space` is a letter here, so this branch comes
+    // before the one that reads it as a press.
     if app.panel == Panel::Ask && app.ask_typing {
         match key.code {
             KeyCode::Esc => {
@@ -96,8 +85,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
     }
 
-    // A panel takes the arrows and `Enter` while it is open, and nothing else
-    // about the keyboard changes: the query still types, `Ctrl+C` still leaves.
+    // A panel takes the arrows and `Enter`; the query still types under it.
     if app.panel != Panel::None {
         match key.code {
             KeyCode::Esc => {
@@ -117,8 +105,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
     }
 
-    // The report reads like a page rather than a list: the arrows walk its
-    // weighed folders, `Enter` goes into one and `Backspace` comes back out.
+    // In the report the arrows walk the weighed folders, `Enter` goes into one.
     if app.reporting && app.panel == Panel::None {
         match key.code {
             KeyCode::Up => {
@@ -135,8 +122,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
     }
 
-    // The keys that mean the same thing in both modes, first — so that nothing
-    // below can shadow them.
+    // The keys that mean the same in both modes, first: nothing shadows them.
     match key.code {
         KeyCode::Char('c' | 'q') if ctrl => {
             app.leaving = true;
@@ -146,26 +132,16 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.unpick();
             return Want::Nothing;
         }
-        // **Picking has to work while typing**, which is where somebody
-        // always is: `Space` alone is a space in a query, so the two keys
-        // every list in the world also uses are here — and `Insert` is the one
-        // that needs no modifier at all.
+        // Picking has to work while typing, where `Space` alone is a space.
         KeyCode::Char(' ') if ctrl => return app.pick(),
         KeyCode::Insert => return app.pick(),
         // The report, on the key the window uses for it.
         KeyCode::F(2) => return app.report(),
-        // The head of a file, without opening it. `F3` is what a file manager
-        // has used for this since before any of us.
+        // The head of a file, on the key file managers have long used for it.
         KeyCode::F(3) => return app.peek(),
         KeyCode::Char('r') if ctrl => return app.report(),
-        // The same menu without leaving the query line.
-        //
-        // **`F4` and not `Ctrl+M`**, which was the obvious pick and is the
-        // wrong one: `Ctrl+M` *is* carriage return, so a terminal hands it over
-        // as `Enter` and the binding would never fire — or, in the few
-        // terminals that separate them, would fire on a key somebody pressed
-        // meaning "open this file". `F3` already peeks at the row under the
-        // cursor, so the menu about that row sits next to it.
+        // The row's menu, without leaving the query line. Not `Ctrl+M`, which
+        // *is* carriage return and reaches this as `Enter`.
         KeyCode::F(4) => {
             app.open_menu();
             return Want::Nothing;
@@ -177,8 +153,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         }
         KeyCode::Char('k') if ctrl => {
             app.show(Panel::Rules);
-            // Asked when it opens rather than kept fresh: the rules change
-            // when somebody changes them, and this is the thing changing them.
+            // Asked when it opens: this panel is the only thing changing them.
             return Want::Rules;
         }
         KeyCode::Char('l') if ctrl => {
@@ -194,10 +169,8 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             return Want::Nothing;
         }
         KeyCode::Char('e') if ctrl => return app.write_sheet(),
-        // **`Ctrl+V` is usually the terminal's own**, which pastes by typing
-        // the text at us — and in the terminals that keep it for themselves
-        // (`Ctrl+Shift+V` is the paste there), it never arrives at all. So it
-        // is handled here too, by reading the clipboard directly.
+        // `Ctrl+V` is usually the terminal's own, but terminals that keep it
+        // never deliver it, so the clipboard is read directly here too.
         KeyCode::Char('v') if ctrl => {
             return match paste() {
                 Some(text) => pasted(app, &text),
@@ -208,11 +181,10 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 }
             };
         }
-        // The three things a selection can have done to it, by their letters.
+        // Two of the three selection deeds; clearing is `Ctrl+A` above.
         KeyCode::Char('y') if ctrl => return app.deed(0),
         KeyCode::Char('o') if ctrl => return app.deed(1),
-        // Sorting: left and right along the columns, up and down for the
-        // direction. `Ctrl` because the bare arrows move and always will.
+        // Sorting takes `Ctrl`: the bare arrows move and always will.
         KeyCode::Left if ctrl => return app.resort(-1),
         KeyCode::Right if ctrl => return app.resort(1),
         KeyCode::Up | KeyCode::Down if ctrl => return app.flip(),
@@ -224,7 +196,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             let to = app.cursor + 1;
             return app.pick_to(to);
         }
-        // **`Tab` decides where the arrows go**, and the footer says which.
+        // `Tab` decides where the arrows go, and the footer says which.
         KeyCode::Tab | KeyCode::BackTab => {
             app.in_rail = !app.in_rail && app.rail;
             app.dirty = true;
@@ -250,9 +222,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         KeyCode::PageDown => return app.walk(page),
         KeyCode::Home => return app.go(0),
         KeyCode::End => return app.go(usize::MAX),
-        // In the rail, `Enter` presses the filter under the cursor; in the
-        // list it opens what is under it. One key, two places, and the cursor
-        // says which — the same rule the arrows follow.
+        // One key, two places: the cursor says which, as with the arrows.
         KeyCode::Enter if app.in_rail => return app.rail_press(),
         KeyCode::Enter => return open(app, shift),
         _ => {}
@@ -260,8 +230,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
 
     match app.mode {
         Mode::Search => match key.code {
-            // Space picks only when there is nothing to type into; in search
-            // mode a space is a space, which is how two terms are separated.
+            // In search mode a space is a space: it separates two terms.
             KeyCode::Char(c) if !ctrl => app.insert(c),
             KeyCode::Backspace => app.backspace(),
             KeyCode::Left => {
@@ -280,10 +249,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 }
                 Want::Nothing
             }
-            // **`Esc` empties the query before it changes the mode.** Somebody
-            // pressing it is nearly always saying "not that" about what they
-            // typed; moving them into another mode instead would answer a
-            // question they did not ask.
+            // `Esc` empties the query before it changes the mode.
             KeyCode::Esc => {
                 if app.query.is_empty() {
                     app.mode = Mode::Move;
@@ -298,10 +264,8 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             _ => Want::Nothing,
         },
         Mode::Move => match key.code {
-            // **`m`, because a terminal has no right button.** The window and
-            // the page open this menu with one; here it is a key, and it is in
-            // the moving mode rather than always-on because a bare letter in
-            // the search mode belongs to the query.
+            // `m`, because a terminal has no right button. In move mode only:
+            // a bare letter belongs to the query while searching.
             KeyCode::Char('m') => {
                 app.open_menu();
                 Want::Nothing
@@ -333,8 +297,8 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
     }
 }
 
-/// A page still has to be asked for when the cursor moves; the peek follows
-/// it, and only one of the two can be returned.
+/// A page still has to be asked for when the cursor moves; only one of the page
+/// and the peek can be returned.
 fn follow_peek(app: &mut App, want: Want) -> Want {
     let peek = app.repeek();
     match (&want, &peek) {
@@ -357,18 +321,15 @@ fn panel_press(app: &mut App) -> Want {
         Panel::Menu => app.menu_pick(),
         Panel::Openers => app.open_with(),
         Panel::Columns => app.pick_column(),
-        // Enter on the line being typed into means yes, the same as it does
-        // in every box that takes a name.
+        // Enter on the line being typed into means yes.
         Panel::Ask if app.panel_at == 0 => app.ask_answer(2),
         Panel::Ask => app.ask_answer(app.panel_at),
         Panel::None => Want::Nothing,
     }
 }
 
-/// Text arriving in one piece — a paste rather than typing.
-///
-/// Newlines are what a paste of two paths carries and a query line has one
-/// line: they become spaces, which is also what they mean in a query.
+/// Text arriving in one piece — a paste rather than typing. Newlines become
+/// spaces, which is what they mean in a query.
 pub fn pasted(app: &mut App, text: &str) -> Want {
     let text = text.replace(['\n', '\r', '\t'], " ");
     let mut want = Want::Nothing;
@@ -399,29 +360,18 @@ fn paste() -> Option<String> {
 }
 
 /// What the mouse does: the wheel moves whatever is under it, a press acts on
-/// wherever it landed.
-///
-/// **Where it landed decides what it means**, which is the rule `Tab` follows
-/// on the keyboard: in the rail a press presses a filter, in the list it puts
-/// the cursor on a row, on the strip it narrows to that band of time.
-///
-/// The geometry has to agree with `draw`, and there is no way round that — a
-/// terminal reports a row and a column and says nothing about what is drawn
-/// there. It is kept to the three numbers here rather than spread about.
+/// wherever it landed. Where it landed decides what it means — see [`spot_at`].
 pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
     let spot = spot_at(app, m.column, m.row, size);
-    // **Everything the pointer passes over answers to it.** A terminal draws
-    // no hover of its own, so this is the whole of it: what is under the
-    // pointer is remembered, and the drawing lights it.
+    // A terminal draws no hover of its own: what is under the pointer is
+    // remembered here, and the drawing lights it.
     if app.hover != spot {
         app.hover = spot;
         app.dirty = true;
     }
     match m.kind {
         MouseEventKind::Moved => Want::Nothing,
-        // **Dragging the thumb is the one thing a press cannot be**: it goes
-        // on after the button is down and has to be followed all the way, not
-        // acted on when it is let go.
+        // A drag has to be followed while the button is down, not on release.
         MouseEventKind::Drag(MouseButton::Left) => match app.pressed {
             Spot::Bar(_) => {
                 let (_, height) = size;
@@ -459,9 +409,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
             }
             _ => app.walk(-3),
         },
-        // **Pressed, then done on the release** — which is what every button
-        // anywhere does, and it is what lets somebody press, think better of
-        // it, and slide off before letting go.
+        // Pressed, then done on the release: sliding off cancels it.
         MouseEventKind::Down(MouseButton::Left) => {
             app.pressed = spot;
             app.dirty = true;
@@ -478,10 +426,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                 return Want::Nothing;
             }
             match spot {
-                // **Click selects.** Plainly: this row and nothing else. With
-                // `Ctrl`: this one as well as what is already picked. With
-                // `Shift`: everything from the last one to this. The three
-                // every list anywhere agrees on.
+                // Plain: this row alone. `Ctrl`: this as well. `Shift`: the run.
                 Spot::Row(row) => {
                     app.in_rail = false;
                     if m.modifiers.contains(KeyModifiers::SHIFT) {
@@ -494,8 +439,7 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                         app.pick_only(row)
                     }
                 }
-                // The mark at the left is a checkbox: it adds and removes
-                // rather than replacing, whatever is held.
+                // The mark is a checkbox: it adds and removes, never replaces.
                 Spot::Tick(row) => {
                     app.in_rail = false;
                     let want = app.go(row);
@@ -541,11 +485,8 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
     }
 }
 
-/// What is drawn at this column and row.
-///
-/// The one piece of arithmetic that turns a place on the screen into a thing,
-/// and the reason there is exactly one: `draw` and this have to agree, and
-/// nothing tells you when they stop.
+/// What is drawn at this column and row. The only place the screen's geometry
+/// is read back, because nothing warns when it stops agreeing with `draw`.
 pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     use crate::draw::{LIST_TOP, QUERY_HIGH, RAIL_TOP, RAIL_WIDE};
     let (width, height) = size;
@@ -619,8 +560,7 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
             None => Spot::Nothing,
         };
     }
-    // The heading row, one above the list: which column was hit is the same
-    // arithmetic that drew them.
+    // The heading row, one above the list, measured as `draw` measured it.
     if row == LIST_TOP - 1 {
         let from = if railed { RAIL_WIDE } else { 0 };
         return match crate::draw::column_at(col.saturating_sub(from), width - from, &app.columns) {
@@ -639,9 +579,8 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     if at >= app.pages.total() {
         return Spot::Nothing;
     }
-    // The two columns at the left of a row are its mark — the age stripe and
-    // the tick. Pressing there picks the row, the way pressing a checkbox
-    // does; pressing the name puts the cursor on it.
+    // The row's first two columns are the age stripe and the tick: pressing
+    // there picks the row, pressing the name puts the cursor on it.
     let from = if railed { RAIL_WIDE } else { 0 };
     if col <= from + 1 {
         return Spot::Tick(at);
@@ -649,11 +588,8 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     Spot::Row(at)
 }
 
-/// Hand the row under the cursor to the desktop — or its folder.
-///
-/// **Detached, and nothing is waited for.** A file manager that takes two
-/// seconds to start would otherwise be two seconds of a terminal that does not
-/// answer the keyboard.
+/// Hand the row under the cursor to the desktop — or its folder. Detached: a
+/// file manager that takes seconds to start must not hold the keyboard.
 fn open(app: &mut App, folder: bool) -> Want {
     let Some(hit) = app.here() else {
         return Want::Nothing;
@@ -676,11 +612,8 @@ fn open(app: &mut App, folder: bool) -> Want {
 mod tests {
     use super::*;
 
-    /// An app with a screen to put rows on.
-    ///
-    /// `App::default()` has no room — a view that is zero rows tall answers
-    /// every question about scrolling with the same number, so every test that
-    /// is about *where the view sits* has to say how tall it is first.
+    /// An app with a screen to put rows on. `App::default()` has no room, and
+    /// a view zero rows tall answers every scrolling question the same way.
     fn app(room: usize) -> App {
         App {
             room,
@@ -825,9 +758,8 @@ mod tests {
 
     #[test]
     fn switching_a_rule_off_sends_the_whole_list_the_service_gave() {
-        // The window's data loss, which this must not repeat: a list built
-        // from what has been pressed rather than from the answer switches
-        // every other rule back on.
+        // A list built from what was pressed, rather than from the service's
+        // answer, switches every other rule back on.
         let mut app = App {
             rules: vec![
                 ("dir:target".into(), "target".into(), false, true),

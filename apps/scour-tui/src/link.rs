@@ -1,17 +1,8 @@
 //! The connection to the service, on a thread of its own.
 //!
-//! The rule this file keeps is the window's rule: **the interface never
-//! waits.** A search over three million entries is a couple of milliseconds
-//! and a facet count is twenty, but a cold service is a connection that has to
-//! be retried — and any of that on the drawing thread is a terminal that stops
-//! answering the keyboard.
-//!
-//! So the work happens here and the answers arrive as events, on the same
-//! channel the keyboard arrives on. One lane to start with: the terminal asks
-//! for a page at a time and nothing else yet. When the rail and the report
-//! land this grows a second connection, exactly as the window has, because
-//! `scour-ipc` is one call at a time and a twenty-millisecond facet count
-//! sitting in front of the next keystroke is what that split exists to stop.
+//! The interface never waits: requests go out on worker threads and answers
+//! arrive as events on the keyboard's channel. Three lanes, because `scour-ipc`
+//! is one call at a time and a 20 ms facet count must not queue before a key.
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
@@ -20,23 +11,19 @@ use scour_core::{FacetBy, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
-/// How many matches an interactive search counts before it stops.
-///
-/// A thousand is more than anybody reads and enough for a meter to say "at
-/// least this many". The exact figure follows when the typing settles.
+/// How many matches an interactive search counts before it stops; the exact
+/// figure follows once the typing settles.
 pub const TYPING_CAP: u32 = 1_000;
 
-/// **Not boxed**: one per user action, crossing a channel once.
+/// What the terminal asks for. Not boxed: one per user action, crossing a
+/// channel once.
 #[allow(clippy::large_enum_variant)]
-/// What the terminal asks for.
 pub enum Ask {
     /// Look at these paths again, now — this program moved them.
     Recheck(Vec<String>),
     Search {
         /// Which keystroke this belongs to. An answer to an older one is
-        /// dropped rather than drawn: a slow reply to `re` landing after a
-        /// fast one to `rapor` is the list going backwards under somebody's
-        /// hands, which is the worst defect a search-as-you-type box has.
+        /// dropped, or the list goes backwards under somebody's hands.
         generation: u64,
         query: String,
         sort: SortKey,
@@ -45,18 +32,13 @@ pub enum Ask {
         limit: u32,
         cap: u32,
     },
-    /// What the rail shows: the kinds, and the time strip's bands.
-    ///
-    /// **A lane of its own**, because a facet count walks the matching set and
-    /// a keystroke must not queue behind one. The window learned this the same
-    /// way: twenty milliseconds in front of every search is a search box that
-    /// feels broken.
+    /// What the rail shows: the kinds, and the time strip's bands. On a lane of
+    /// its own: a facet count walks the matching set, and a keystroke must not
+    /// queue behind those 20 ms.
     Facets {
         generation: u64,
         query: String,
-        /// Which of the two questions this is. They are asked separately
-        /// because they are asked *about different rows* — see `App::asking`
-        /// and the note on the strip in `App::strip_over`.
+        /// Which of the two questions this is; they count over different rows.
         age: bool,
     },
     /// Where this desktop keeps things.
@@ -69,10 +51,8 @@ pub enum Ask {
     Usage { path: String },
     /// What can be shown of a file, and the head of it when that is text.
     Preview { path: String },
-    /// The query read back: which run of it is what.
-    ///
-    /// **Beside every search**, because the colouring has to keep up with the
-    /// typing — and it is cheap: the parser, not the index.
+    /// The query read back: which run of it is what. Sent beside every search;
+    /// it costs the parser, not the index.
     Explain { generation: u64, query: String },
     /// Exactly how many match, once the typing has stopped.
     Count { generation: u64, query: String },
@@ -92,10 +72,8 @@ pub enum Ask {
 
 /// What comes back.
 pub enum Got {
-    /// A page of a search, with the offset it was for — **carried by the
-    /// answer**, because two offsets of one query are both current and filing
-    /// a page at the offset last asked for puts it a page from where it
-    /// belongs the moment somebody scrolls.
+    /// A page of a search, with the offset it was asked for: two offsets of one
+    /// query are both current, so the answer carries its own.
     Search {
         generation: u64,
         offset: u32,
@@ -105,18 +83,13 @@ pub enum Got {
     /// The rail's counts, or the strip's.
     Facets {
         generation: u64,
-        /// Which of the two was asked. Both groups come back in either reply
-        /// — see the request — so without this each answer would repaint the
-        /// other half from a query that is not the other half's.
+        /// Which of the two was asked; both groups come back in either reply.
         age: bool,
         reply: Box<scour_core::FacetResponse>,
     },
-    /// The desktop's own folders.
-    /// The desktop's folders, and where the volumes are.
-    ///
-    /// The mounts are for one column: `Accessed` on a `noatime` volume is a
-    /// creation time under the wrong heading, and the table says so with a
-    /// dash rather than saying something false.
+    /// The desktop's folders, and where the volumes are. The mounts are for the
+    /// `Accessed` column: on a `noatime` volume it holds a creation time, and
+    /// the table draws a dash instead.
     Places(Vec<(String, String)>, Vec<scour_places::Mount>),
     /// What the index holds: rows, directories, bytes on disk, sources.
     Stats(Box<scour_core::IndexStats>),
@@ -130,8 +103,7 @@ pub enum Got {
         waste: u64,
     },
     /// The skip rules: three groups of `(kind, value)`, and the ids switched
-    /// off. The groups are kept apart because only the first can be deleted
-    /// and a flat list said none of that.
+    /// off. Kept apart because only the first group can be deleted.
     Rules {
         added: Vec<(String, String)>,
         config: Vec<(String, String)>,
@@ -145,31 +117,17 @@ pub enum Got {
         generation: u64,
         spans: Vec<scour_core::Span>,
     },
-    /// The index moved, and what it moved to.
-    /// The index moved: its revision, and how far a walk has got when one is
-    /// running. **Both, because a wait is answered with the whole status** —
-    /// the second is free and is the only thing a person watching a rule they
-    /// just switched off has to go on.
-    ///
-    /// The third is whether the index has grown an unsorted tail worth
-    /// rebuilding. Also free, and it had been reaching the command line and
-    /// nowhere else — a week of ordinary use takes ordering by path from
-    /// 1.9 ms to 21.5, and nothing in a terminal said so.
+    /// The index moved: its revision, how far a walk has got when one is
+    /// running, and whether the index has grown an unsorted tail worth
+    /// rebuilding — a week of use takes ordering by path from 1.9 ms to 21.5.
     Awake(u64, Option<u64>, bool),
-    /// A spreadsheet is being written, and how much of it so far.
-    ///
-    /// **Because a screen that does not move looks like one that has died.**
-    /// The whole index is four hundred thousand rows and a hundred megabytes;
-    /// during that the terminal had nothing new to draw and somebody
-    /// reasonably read it as a crash.
+    /// A spreadsheet is being written, and how much of it so far: the whole
+    /// index is 400,000 rows and 100 MB, and a still screen reads as a crash.
     Writing(u64),
     /// A spreadsheet was written, and where.
     Wrote(String),
-    /// Something that is not about a search went wrong.
-    ///
-    /// **Not a `Trouble`**, which carries the keystroke it belongs to and is
-    /// dropped when that keystroke is old — which is right for a page and
-    /// silently wrong for a file that failed to be written.
+    /// Something that is not about a search went wrong. Not a `Trouble`, which
+    /// is dropped when its keystroke is old — wrong for a file that failed.
     Failed(String),
     /// The service could not be reached, or said no.
     Trouble { generation: u64, why: String },
@@ -180,13 +138,9 @@ pub struct Link {
     asks: Sender<Ask>,
     slow: Sender<Ask>,
     wait: Sender<Ask>,
-    /// The slow lane's thread, so that what was queued on it can be waited
-    /// for.
-    ///
-    /// **Only that one.** The fast lane answers before anybody could leave and
-    /// the long poll is asleep in a thirty-second call; this is the lane that
-    /// carries the two things somebody might quit immediately after asking
-    /// for — a preference, and a spreadsheet being written.
+    /// The slow lane's thread, so what was queued on it can be waited for. Only
+    /// this one: it carries a preference and an export, either of which somebody
+    /// may quit immediately after asking for.
     slow_thread: std::sync::Mutex<Option<thread::JoinHandle<()>>>,
 }
 
@@ -201,11 +155,8 @@ impl Link {
         let fast_addr = addr.clone();
         let fast_out = gots.clone();
         thread::spawn(move || serve(&fast_addr, &inbox, &fast_out));
-        // Three connections, because `scour-ipc` is one call at a time and
-        // `scourd` is a thread per connection. The third exists because the
-        // long poll *holds* its connection for thirty seconds: on either of
-        // the others it would be thirty seconds of a terminal that answers
-        // nothing.
+        // Three connections, because `scour-ipc` is one call at a time and the
+        // long poll holds its own for thirty seconds.
         let slow_addr = addr.clone();
         let slow_out = gots.clone();
         let slow_thread = thread::spawn(move || serve(&slow_addr, &waiting, &slow_out));
@@ -223,8 +174,7 @@ impl Link {
 
     /// What a keystroke needs.
     pub fn send(&self, ask: Ask) {
-        // A closed channel means the thread is gone, which happens only while
-        // shutting down. Nothing to report to anybody who could act on it.
+        // A closed channel means the thread is gone, which is shutdown only.
         let _ = self.asks.send(ask);
     }
 
@@ -238,17 +188,9 @@ impl Link {
         let _ = self.wait.send(ask);
     }
 
-    /// Let the slow lane finish what it was given, then go.
-    ///
-    /// **A queued request is not a sent one.** Switching to another face
-    /// writes which face to open next and then quits; the write is a message
-    /// on a channel, and a process that exits the moment after leaves it
-    /// there. So do quitting after an export, and the file is a file that was
-    /// never written.
-    ///
-    /// Bounded, because a lane whose service has gone away must not keep a
-    /// terminal on screen: half a second is more than a socket write and less
-    /// than anybody notices.
+    /// Let the slow lane finish what it was given, then go: a queued export or
+    /// preference is not a sent one. Bounded at 500 ms, which is more than a
+    /// socket write and less than anybody notices.
     pub fn finish(&self) {
         let _ = self.slow.send(Ask::Done);
         let _ = self.asks.send(Ask::Done);
@@ -265,10 +207,7 @@ impl Link {
 }
 
 /// Write the whole result to a file, in the pieces the service sends it in.
-///
-/// **Not through `call`.** This is the one request answered in more than one
-/// frame, and reading only the first would leave the rest in the buffer for
-/// the next question to be answered by.
+/// Not through `call`: it is the one request answered in more than one frame.
 fn export(link: &mut Client, query: &str, to: &str, out: &Sender<Got>) -> Result<(), String> {
     use std::io::Write;
     let mut file =
@@ -285,8 +224,7 @@ fn export(link: &mut Client, query: &str, to: &str, out: &Sender<Got>) -> Result
             Response::ExportChunk { csv } => match file.write_all(csv.as_bytes()) {
                 Ok(()) => {
                     bytes += csv.len() as u64;
-                    // Every megabyte, which is often enough to look alive and
-                    // seldom enough to cost nothing.
+                    // Every megabyte: often enough to look alive, cheap enough.
                     if bytes - said > 1_000_000 {
                         said = bytes;
                         let _ = out.send(Got::Writing(bytes));
@@ -315,10 +253,8 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
         if matches!(ask, Ask::Done) {
             return;
         }
-        // **Reconnect on every failure rather than once at startup.** The
-        // service is restarted far more often than this is — a rebuild, a
-        // config change, `systemctl restart` — and an interface that dies with
-        // it is one somebody has to notice and restart by hand.
+        // Reconnect on every failure rather than once at startup: the service
+        // is restarted far more often than the terminal is.
         if client.is_none() {
             client = Client::connect(addr).ok();
         }
@@ -330,10 +266,8 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             _ => 0,
         };
         let Some(link) = client.as_mut() else {
-            // A msgid rather than a sentence: `App::upset` puts it through
-            // the catalogue. The socket it failed on is in `SCOUR_TUI_TRACE`
-            // and in the config; what a reader needs on this line is that
-            // there is nothing to search.
+            // A msgid, not a sentence: `App::upset` puts it through the
+            // catalogue. The socket it failed on is in `SCOUR_TUI_TRACE`.
             let _ = out.send(Got::Trouble {
                 generation,
                 why: "the service cannot be reached — is scourd running?".into(),
@@ -360,16 +294,9 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     count_cap: cap,
                 },
             },
-            // **Both groups in both requests, and that is not laziness.**
-            // The scan cap is chosen from the questions asked: a distribution
-            // cannot be sampled, so asking for one lifts the cap for
-            // everything read in the same walk. Asking for the kinds alone —
-            // the obvious way to write this — quietly moves the rail onto the
-            // sampled path, where the sample is not proportional but simply
-            // the first two hundred thousand rows the walk reaches. The rail
-            // then disagrees with the same rail in the window by a sixth,
-            // and neither says which is right. The extra group is close to
-            // free: the walk is the cost, the counting is not.
+            // Both groups in both requests: the scan cap follows the questions
+            // asked, so asking for kinds alone samples the first 200,000 rows
+            // the walk reaches — a rail off by a sixth. The walk is the cost.
             Ask::Facets { query, .. } => Request::Facets {
                 query,
                 by: vec![
@@ -381,24 +308,20 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             },
             Ask::Explain { query, .. } => Request::Explain {
                 query,
-                // No caret in a terminal's own idea of the query line — the
-                // completions this could return are not drawn yet.
+                // No caret: the completions this could return are not drawn.
                 cursor: None,
             },
             Ask::Count { query, .. } => Request::Count {
                 query,
-                // **The whole answer, whatever it costs.** This is the number
-                // that says a filter did something, and it goes out once the
-                // typing has stopped rather than on every keystroke — where
-                // an uncapped count was measured at eighteen milliseconds of a
-                // thirty-seven millisecond keystroke.
+                // The whole answer, whatever it costs: uncapped counting is
+                // 18 ms of a 37 ms keystroke, so it waits for the typing to
+                // stop.
                 cap: u32::MAX,
             },
             Ask::Await { since } => Request::Await {
                 since,
-                // Long enough that an idle terminal is nearly silent — two
-                // requests a minute — and short enough that a service
-                // restarted underneath is noticed.
+                // Two requests a minute when idle, and short enough that a
+                // service restarted underneath is noticed.
                 timeout_ms: 30_000,
             },
             Ask::Places => Request::Places {},
@@ -411,9 +334,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             },
             Ask::Dupes => Request::Duplicates {
                 under: String::new(),
-                // The service's own floor and budget: the report is the same
-                // report in every face, and a terminal that asked for a
-                // different one would answer a different question.
+                // The service's own floor and budget: one report in every face.
                 min_size: 1_048_576,
                 read_budget: 64 * 1_048_576,
                 top: 12,
@@ -428,8 +349,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
             },
             Ask::Remember(change) => Request::SetSettings { change },
             Ask::Export { query, to } => {
-                // The one request answered in pieces, so it cannot go through
-                // `call` — see `Client::stream`.
+                // Answered in pieces, so not through `call` — `Client::stream`.
                 match export(link, &query, &to, out) {
                     Ok(()) => {
                         let _ = out.send(Got::Wrote(to));
@@ -504,8 +424,7 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                     off,
                 });
             }
-            // Settings come back as the whole object; nothing here reads it,
-            // and asking again is how anything checks what took.
+            // Nothing here reads the settings object; asking again is the check.
             Ok(Response::Settings(_)) => {}
             Ok(Response::Explain { spans, .. }) => {
                 let _ = out.send(Got::Explained { generation, spans });
@@ -559,10 +478,8 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
                 });
             }
             Err(e) => {
-                // **A refused query and a dead socket arrive the same way**, so
-                // the connection is dropped either way: reconnecting costs a
-                // hundred microseconds and keeping a dead one costs every
-                // question after it.
+                // A refused query and a dead socket arrive the same way, so the
+                // connection goes either way: reconnecting is ~100 µs.
                 client = None;
                 let _ = out.send(Got::Trouble {
                     generation,

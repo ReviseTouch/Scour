@@ -2,25 +2,21 @@
 //!
 //! One struct, no drawing, no sockets: what happened goes in, what to ask the
 //! service for comes out. That split is what makes this testable without a
-//! terminal and without a service — the window has to photograph itself to
-//! check anything, and this does not.
+//! terminal and without a service.
 
 use scour_core::{Hit, SortKey};
 use scour_page::{Change, Pages};
 
 use crate::link::TYPING_CAP;
 
-/// A line of working out, when `SCOUR_TUI_TRACE` is set.
-///
-/// To standard error, which the alternate screen does not cover: run it with
-/// `2>/tmp/log` and read the log while it is up.
+/// A line of working out, when `SCOUR_TUI_TRACE` is set: to the file it names,
+/// or to standard error.
 pub fn trace(what: &str) {
     let Some(where_to) = std::env::var_os("SCOUR_TUI_TRACE") else {
         return;
     };
-    // **A path, when one is given.** Standard error is the terminal this is
-    // drawing on: a line written there lands in the middle of the frame. Set
-    // it to a file and the working out can be read while the thing is up.
+    // A path, when one is given: standard error is the screen being drawn on,
+    // so a line written there lands in the middle of the frame.
     let line = format!("tui: {what}\n");
     match where_to.to_str() {
         Some(path) if path.starts_with('/') => {
@@ -49,12 +45,8 @@ const KINDS_LEAST: usize = 4;
 /// More places than this is a list of somebody's whole home directory.
 const PLACES_MOST: usize = 6;
 
-/// What the pointer is over, if anything that answers to it.
-///
-/// **One value, computed once**, and both the drawing and the click use it —
-/// so a row that lights up under the pointer is the row a press would take.
-/// Two functions with the same arithmetic in them would drift the first time
-/// a line was added anywhere above the list.
+/// What the pointer is over, if anything that answers to it. One value, used by
+/// both the drawing and the press, so what lights is what a press takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Spot {
     #[default]
@@ -83,10 +75,8 @@ pub enum Spot {
     Bar(u16),
 }
 
-/// What is over the list, if anything.
-///
-/// One at a time, and the same rule the window follows: a second panel behind
-/// the first is a panel nobody can reach.
+/// What is over the list, if anything. One at a time: a second panel behind the
+/// first is a panel nobody can reach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     None,
@@ -96,41 +86,22 @@ pub enum Panel {
     Language,
     /// Window, terminal, browser.
     Faces,
-    /// What can be done with the row the cursor is on.
-    ///
-    /// **The same list the window and the page draw** — `scour-ui::menu` holds
-    /// it, and this face renders it as a panel because a terminal has no right
-    /// button to press. `m` opens it, the arrows walk it, `Enter` picks.
+    /// What can be done with the row the cursor is on: the list in
+    /// `scour-ui::menu`, drawn as a panel because a terminal has no right button.
     Menu,
-    /// Which of the programs that claim this kind of file to start.
-    ///
-    /// **The menu becomes this list rather than growing a submenu.** A
-    /// terminal has no room for a menu beside a menu, and a submenu is one
-    /// more thing to learn how to leave; `Esc` closes this the same way it
-    /// closes the menu it replaced.
+    /// Which of the programs that claim this kind of file to start. The menu
+    /// becomes this list rather than growing a submenu beside itself.
     Openers,
-    /// Which columns the table shows.
-    ///
-    /// **A list of switches, not of actions.** Every column the table can
-    /// offer, with a tick against the ones that are on, and one line at the
-    /// bottom that puts them all back. The window and the page have the same
-    /// list behind a `⋮`; a terminal has no `⋮` to press, so it has a key.
+    /// Which columns the table shows: every column with a tick against the ones
+    /// that are on, and a last line that puts them all back.
     Columns,
-    /// The question that comes before something that changes files.
-    ///
-    /// Two lines, and the cursor starts on the safe one. A terminal cannot dim
-    /// what is behind a dialog, so the thing that has to be unmistakable is
-    /// where the cursor is when the panel opens.
+    /// The question that comes before something that changes files. The cursor
+    /// starts on the safe answer: a terminal cannot dim what is behind it.
     Ask,
 }
 
-/// Which of the two the bare letters go to.
-///
-/// **Search is where it starts, and that is the whole argument for having
-/// modes at all being a small one.** Everything opens a terminal expecting to
-/// type; a normal mode nobody asked for would meet them with a beep. So the
-/// keys that move are always available with the arrows, and the letters that
-/// move are a mode somebody chooses.
+/// Which of the two the bare letters go to. Search is where it starts: the keys
+/// that move are always on the arrows, and letters that move are a choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     /// Letters go into the query.
@@ -139,16 +110,11 @@ pub enum Mode {
     Move,
 }
 
-/// **Not boxed**: one per key press, returned up one frame.
+/// What a step wants done about the service. Returned rather than done, so that
+/// the state machine can be stepped in a test; not boxed, one per key press.
 #[allow(clippy::large_enum_variant)]
-/// What a step wants done about the service.
-///
-/// Returned rather than done, for the reason [`scour_page::Change`] is: the
-/// event loop owns the socket, and a state machine that reached for it could
-/// not be stepped in a test.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
-    /// Nothing.
     Nothing,
     /// A page of the current query.
     Page {
@@ -166,8 +132,7 @@ pub enum Want {
         limit: u32,
         cap: u32,
     },
-    /// Look at these paths again, now — something outside the index moved
-    /// them, and the thing that moved them was this program.
+    /// Look at these paths again, now: this program moved them.
     Recheck(Vec<String>),
     /// Ask what the walk skips.
     Rules,
@@ -187,12 +152,8 @@ pub enum Want {
     Leave,
 }
 
-/// The whole state of the terminal.
-/// Hand a path to the desktop, and forget about it.
-///
-/// The same three lines `keys::open` runs, put where more than one caller can
-/// reach them — a menu opens files and folders too, and a second copy of a
-/// spawn is a second place for the redirections to be forgotten.
+/// Hand a path to the desktop, and forget about it: detached, with every
+/// standard stream closed.
 fn launch(path: &str) {
     let _ = std::process::Command::new("xdg-open")
         .arg(path)
@@ -202,12 +163,8 @@ fn launch(path: &str) {
         .spawn();
 }
 
-/// One drawn line of the menu.
-///
-/// **A flattened `scour_ui::menu::Item`, not a reference to one.** The panel
-/// drawing takes strings, the labels are already translated and already carry
-/// their count, and holding a borrow of a static table across the frame that
-/// might rebuild it is a lifetime for no gain.
+/// One drawn line of the menu: a flattened `scour_ui::menu::Item`, its label
+/// already translated and already carrying its count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuLine {
     /// Sent back when it is picked. Never translated.
@@ -222,6 +179,7 @@ pub struct MenuLine {
     pub heavy: bool,
 }
 
+/// The whole state of the terminal.
 pub struct App {
     /// What has been typed, and where the caret is in it (in bytes).
     pub query: String,
@@ -233,22 +191,11 @@ pub struct App {
     pub pages: Pages<Hit>,
     /// The row the cursor is on, in the whole result.
     pub cursor: usize,
-    /// Whether somebody has put the cursor somewhere.
-    ///
-    /// **An untouched cursor belongs to the list, not to a file.** Sorted by
-    /// date, the top row is "the newest thing on this machine" and that is a
-    /// place, not a row: a cursor that stuck to whatever happened to be there
-    /// when the window opened walked down the screen as files were saved —
-    /// three rows to ten in twelve seconds, measured — and dragged the view
-    /// with it. Once somebody chooses a row, it is that row they mean.
+    /// Whether somebody has put the cursor somewhere. An untouched one belongs
+    /// to the list, not to a file: the top row is a place.
     pub anchored: bool,
-    /// What that row *is*.
-    ///
-    /// **A row number is not an identity.** Sorted by date, a file saved
-    /// anywhere on the machine appears at the top and pushes every row down
-    /// one — so a cursor that remembers only its number is pointing at the
-    /// row below the one somebody left it on, and `Enter` opens the wrong
-    /// file. The number is where to draw; this is what to keep.
+    /// What that row *is*. A row number is not an identity: one file saved
+    /// anywhere pushes every row down, and `Enter` would open the wrong one.
     pub cursor_at: Option<String>,
     /// The first row drawn, which the cursor pushes along.
     pub top: usize,
@@ -263,34 +210,23 @@ pub struct App {
     pub capped: bool,
     /// Something to say instead of the counts.
     pub trouble: String,
-    /// The rows somebody has picked, by path, and what they weigh.
-    ///
-    /// **By path rather than by row number.** A row number means nothing
-    /// across a re-sort or a new query, and a selection that survives neither
-    /// is not a selection anybody can act on.
+    /// The rows somebody has picked, by path, and what they weigh. By path,
+    /// because a row number means nothing across a re-sort.
     pub picked: std::collections::BTreeMap<String, i64>,
     /// Where a run of `Shift` presses started.
     pub anchor: usize,
-    /// The head of the file under the cursor, when somebody asked for it.
-    ///
-    /// **Asked for, not kept up with.** Reading the first kilobytes of every
-    /// row somebody arrows past is a disk kept busy for a panel nobody opened.
+    /// The head of the file under the cursor, when somebody asked for it. Asked
+    /// for, not kept up with: every row arrowed past would be a disk read.
     pub peek: Option<scour_preview::Look>,
     /// True while the peek panel is open.
     pub peeking: bool,
-    /// True while the report is being read instead of the list.
-    ///
-    /// **A tab rather than a panel**, like the window and the page: the report
-    /// is about the same query and is read for as long as a list is, not
-    /// glanced at and dismissed.
+    /// True while the report is being read instead of the list. A tab rather
+    /// than a panel: it is read for as long as a list is.
     pub reporting: bool,
     /// What the index holds, for the report.
     pub stats: Option<scour_core::IndexStats>,
-    /// The folder the report is weighing, and what came back.
-    ///
-    /// **Walked, not searched.** A folder's weight is a question about a
-    /// subtree, so the report keeps a place in it: pressing a child asks about
-    /// that child, and the trail back is the path itself.
+    /// The folder the report is weighing, and what came back. Walked, not
+    /// searched: pressing a child asks about that child.
     pub weighing: String,
     pub usage: Option<scour_core::UsageResponse>,
     /// Which of the weighed children the cursor is on.
@@ -303,18 +239,11 @@ pub struct App {
     pub panel: Panel,
     /// Where the cursor is inside the open panel.
     pub panel_at: usize,
-    /// Which columns the table shows, in the order it shows them.
-    ///
-    /// **The same setting all three faces read.** Arrange the table in the
-    /// window and the terminal opens arranged; a terminal that kept its own
-    /// list would be a fourth answer to a question that already has one.
+    /// Which columns the table shows, in the order it shows them — the setting
+    /// every face reads, so a table arranged in one opens arranged in the rest.
     pub columns: Vec<&'static scour_ui::Column>,
-    /// The menu as it stands, built when it is opened.
-    ///
-    /// Held rather than recomputed per frame because the row under the cursor
-    /// can move while the menu is open — a watcher is running — and a menu
-    /// that changed its own items between opening and pressing would be a menu
-    /// that did something else.
+    /// The menu as it stands, built when it is opened. Held rather than rebuilt
+    /// per frame: the row under it can move while it is up.
     pub menu: Vec<MenuLine>,
     /// What a pending question is about: the item id, and the paths it was
     /// asked about. Taken when the question is answered, whichever way.
@@ -331,22 +260,16 @@ pub struct App {
     /// The word on the button that says yes. A rename does not *move*
     /// anything, and a button that says so is a button that lies.
     pub ask_yes: String,
-    /// The skip rules, as the service last reported them: three groups and
-    /// what is switched off. **Kept from the answer**, because deleting one
-    /// means sending the list without it, and a window that has not been told
-    /// what is in the list cannot take anything out of it.
+    /// The skip rules as the service last reported them, kept from the answer:
+    /// switching one off means sending back the whole list.
     pub rules: Vec<(String, String, bool, bool)>,
     /// What was said about the last thing done — a file written, a language
     /// changed. Cleared by the next keystroke.
     pub note: String,
     /// What the index looked like when the pages in hand were read.
     pub revision: u64,
-    /// What the pointer is over, and what it is holding down.
-    ///
-    /// A terminal has no idea what is drawn where, so these are the whole of
-    /// what makes it feel like something is being touched: the thing under the
-    /// pointer lights, and the thing being pressed is brighter still until the
-    /// button comes back up.
+    /// What the pointer is over, and what it is holding down. A terminal draws
+    /// no hover of its own, so these two are the whole of it.
     pub hover: Spot,
     pub pressed: Spot,
     /// True while the key list is over everything.
@@ -364,37 +287,25 @@ pub struct App {
     pub strip: Vec<(u32, u64)>,
     /// Which filter is in force, if any — `kind:code`, `under:"…"`, `dm:7d`.
     pub filter: Option<String>,
-    /// Whether the rail is on screen. Off under eighty columns, where it
-    /// would take a third of the list.
+    /// Whether the rail is on screen. Off under a hundred columns, where its
+    /// twenty-four would leave the name too narrow to read.
     pub rail: bool,
     /// True while the arrows move in the rail rather than the list.
     pub in_rail: bool,
     /// Which line of the rail the cursor is on.
     pub rail_at: usize,
-    /// How far a walk of the index has got, when one is running.
-    ///
-    /// **Beside the counts, because that is where somebody looks for proof
-    /// that pressing something did anything.** Switching a skip rule off
-    /// starts a scan and nothing else visibly happens for a minute; a word
-    /// would not settle it, and this number climbs several times a second.
+    /// How far a walk of the index has got, when one is running. Drawn beside
+    /// the counts: nothing else on screen moves while a scan runs.
     pub scanning: Option<u64>,
-    /// Whether the index has grown an unsorted tail worth rebuilding.
-    ///
-    /// Every query reads that tail, so this is the difference between the
-    /// speed this was built for and the speed it drifts to. It reached the
-    /// command line and nowhere else until now.
+    /// Whether the index has grown an unsorted tail worth rebuilding: every
+    /// query reads that tail, so it is what the search drifts to.
     pub rebuild_advised: bool,
-    /// Set when a redraw is owed. **Nothing is drawn without one** — a
-    /// terminal that redraws on a timer burns a core doing nothing.
+    /// Set when a redraw is owed. Nothing is drawn without one: a terminal that
+    /// redraws on a timer burns a core doing nothing.
     pub dirty: bool,
     pub leaving: bool,
-    /// The words this interface speaks.
-    ///
-    /// **In the state rather than in a constant**, because picking a language
-    /// has to change what is on the screen now: immediate mode redraws every
-    /// cell from this struct, so swapping the catalogue here is the whole of
-    /// what a language switch is. The window took a longer road to the same
-    /// place — it has properties to reset — and the terminal has none.
+    /// The words this interface speaks. Here rather than in a constant: every
+    /// cell is redrawn from this struct, so swapping it is the whole switch.
     pub words: scour_i18n::Catalogue,
 }
 
@@ -466,22 +377,15 @@ impl Default for App {
 }
 
 impl App {
-    /// This string, in the reader's language.
-    ///
-    /// The msgid is the English, so a string with no entry in the catalogue
-    /// comes back as itself — which is why every call site reads as the
-    /// sentence it draws rather than as a key.
+    /// This string, in the reader's language. The msgid is the English, so one
+    /// with no entry in the catalogue comes back as itself.
     pub fn say<'a>(&'a self, msgid: &'a str) -> std::borrow::Cow<'a, str> {
         use scour_core::Catalog;
         self.words.get(msgid)
     }
 
     /// How this language punctuates numbers: the thousands mark, then the
-    /// decimal one.
-    ///
-    /// **Asked of the catalogue rather than of the desktop.** A Turkish
-    /// desktop showing an English interface writes `5,356,281`, and the only
-    /// thing that knows which language is being *spoken* is the catalogue.
+    /// decimal one. Off the catalogue, not the desktop, which may differ.
     pub fn mark(&self) -> (char, char) {
         (
             scour_ui::format::group_mark(self.words.language()),
@@ -490,10 +394,8 @@ impl App {
     }
 }
 
-/// The keys a column can be sorted by, in the order the columns are drawn.
-///
-/// The same five the window's headings offer, so that a list sorted in one
-/// face and then opened in another is in the same order.
+/// The keys the arrow keys cycle through, in the order the columns are drawn —
+/// the same the window's headings offer, so a re-sort travels between faces.
 pub const SORTS: [(SortKey, &str); 4] = [
     (SortKey::Name, "name"),
     (SortKey::Path, "where"),
@@ -501,11 +403,8 @@ pub const SORTS: [(SortKey, &str); 4] = [
     (SortKey::Size, "size"),
 ];
 
-/// The engine's own key behind a column's `sort` word.
-///
-/// **The shared table names it and the protocol spells it the same**, so this
-/// is one match rather than a second list to keep level. `None` is a column
-/// that cannot be sorted by, which the table also says by leaving it empty.
+/// The engine's own key behind a column's `sort` word. `None` is a column that
+/// cannot be sorted by, which the shared table says by leaving it empty.
 pub fn sort_key(name: &str) -> Option<SortKey> {
     Some(match name {
         "name" => SortKey::Name,
@@ -525,11 +424,8 @@ pub fn sort_key(name: &str) -> Option<SortKey> {
 }
 
 impl App {
-    /// What the sort is called, for the meter — as a msgid, not as words.
-    ///
-    /// **The word is looked up where it is drawn.** These double as the
-    /// column headings, and a heading and a footer that spelled the same sort
-    /// two ways would be two vocabularies for one thing.
+    /// What the sort is called, for the meter — as a msgid, not as words: the
+    /// word is looked up where it is drawn.
     pub fn sort_name(&self) -> &'static str {
         SORTS
             .iter()
@@ -539,15 +435,10 @@ impl App {
     }
 
     /// Sort by a column, or turn it round when it is the one already sorted by.
-    ///
-    /// **What a heading does everywhere**: the first press sorts, the second
-    /// reverses. Newest first to begin with, because that is what a date
-    /// column is for.
+    /// The first press sorts, the second reverses, and it starts descending.
     pub fn sort_by(&mut self, column: usize) -> Want {
-        // **What the heading was drawn for, not what the fourth heading used
-        // to be.** Which columns are on screen is a person's answer now, so
-        // the key comes off the column at that position rather than off a
-        // fixed list that happened to agree with it.
+        // The key comes off the column drawn at that position, not off a fixed
+        // list: which columns are on screen is somebody's own arrangement.
         let Some(key) = self.columns.get(column).and_then(|c| sort_key(c.sort)) else {
             return Want::Nothing;
         };
@@ -566,11 +457,8 @@ impl App {
             .position(|c| sort_key(c.sort) == Some(self.sort))
     }
 
-    /// Sort by the next column along, or the previous one.
-    ///
-    /// **The query stays and the selection stays**; only the order changes.
-    /// Re-asking is unavoidable — the order is the service's — but a re-sort
-    /// that emptied the selection would make sorting something people avoid.
+    /// Sort by the next column along, or the previous one. The query and the
+    /// selection stay; only the order changes.
     pub fn resort(&mut self, by: isize) -> Want {
         let at = SORTS.iter().position(|(key, _)| *key == self.sort);
         let next = match at {
@@ -597,13 +485,8 @@ impl App {
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
     }
 
-    /// Pick this row and nothing else — what a plain click does everywhere.
-    ///
-    /// **A click is a selection, not a cursor move.** It was only moving the
-    /// cursor here, so the bar of things to do with a selection could not be
-    /// reached with the mouse at all: somebody clicked a row, nothing
-    /// appeared, and the way to a selection was a key they had not been told
-    /// about.
+    /// Pick this row and nothing else — what a plain click does everywhere. A
+    /// click is a selection, not a cursor move: the deed bar depends on it.
     pub fn pick_only(&mut self, row: usize) -> Want {
         let want = self.go(row);
         self.picked.clear();
@@ -678,9 +561,8 @@ impl App {
         // The old colouring belongs to the old text; drawing it over the new
         // one is worse than drawing none.
         self.spans.clear();
-        // **A new question, a new selection.** What was picked belongs to the
-        // rows that were on screen; carrying it into a different result means
-        // acting later on files somebody cannot see.
+        // A new question, a new selection: carrying one over means acting on
+        // files nobody can see.
         self.picked.clear();
         self.dirty = true;
         self.ask(0, scour_page::SPAN as u32, TYPING_CAP)
@@ -694,8 +576,8 @@ impl App {
         limit: u32,
         reply: scour_core::SearchResponse,
     ) -> Want {
-        // **An answer to an older keystroke is dropped, not drawn.** It is the
-        // list going backwards under somebody's hands otherwise.
+        // An answer to an older keystroke is dropped: the list would go
+        // backwards under somebody's hands.
         if generation != self.generation {
             return Want::Nothing;
         }
@@ -705,9 +587,8 @@ impl App {
         self.trouble.clear();
         let page = Pages::<Hit>::page_of(offset as usize);
         let arrived = reply.hits.len();
-        // A page short of both what was asked for and the most this service
-        // has ever given is the end of the result. Both conditions, because
-        // the first page of a new query is deliberately short.
+        // A page short of both what was asked for and the largest page seen is
+        // the end: both, because a new query's first page is short on purpose.
         let total = self.pages.length(page, arrived, limit as usize);
         let total = total.max(reply.total as usize);
         let first = reply
@@ -736,21 +617,16 @@ impl App {
         self.dirty = true;
     }
 
-    /// Show the report, or go back to the list.
-    ///
-    /// Asked for when it opens rather than kept fresh: duplicates read files
-    /// to be sure, and doing that behind a list nobody is looking at is a
-    /// terminal that spins a disk for nothing.
+    /// Show the report, or go back to the list. Asked for when it opens rather
+    /// than kept fresh: finding duplicates reads files.
     pub fn report(&mut self) -> Want {
         self.reporting = !self.reporting;
         self.dirty = true;
         if !self.reporting {
             return Want::Nothing;
         }
-        // **It opens on the home directory.** Weighing everything indexed
-        // answers with one child — the filesystem root — which is a panel that
-        // opens on a dead end. Home is where the things somebody can act on
-        // are, and `Backspace` still walks out of it.
+        // It opens on the home directory: weighing everything indexed answers
+        // with one child, the filesystem root. `Backspace` still walks out.
         if self.usage.is_none() {
             self.weighing = std::env::var("HOME").unwrap_or_default();
         }
@@ -835,12 +711,8 @@ impl App {
         self.weigh(up)
     }
 
-    /// The rail's counts arrived.
-    ///
-    /// `age` says which of the two questions this answers. Both groups come
-    /// back in either reply — the request asks for both so that neither walk
-    /// is sampled — and taking the other one would count the rail over the
-    /// strip's query, or the other way round.
+    /// The rail's counts arrived. `age` says which of the two questions this
+    /// answers: both groups come back in either reply, over different queries.
     pub fn counted(&mut self, generation: u64, age: bool, reply: scour_core::FacetResponse) {
         if generation != self.generation {
             return;
@@ -848,12 +720,8 @@ impl App {
         for group in reply.groups {
             match group.by {
                 scour_core::FacetBy::Kind if !age => {
-                    // **Every kind, including the ones with none.** A kind
-                    // that vanishes when a query has none of it takes the rest
-                    // of the rail with it — every line below moves — and it
-                    // answers a question nobody asked: "are there any
-                    // videos?" is answered by `video 0`, not by silence where
-                    // the row used to be.
+                    // Every kind, including the ones with none: `video 0` is an
+                    // answer, and a vanishing row moves every line below it.
                     let counted: std::collections::HashMap<String, u64> =
                         group.facets.into_iter().map(|f| (f.key, f.count)).collect();
                     let mut kinds: Vec<(String, u64)> = scour_core::Kind::OFFERED
@@ -864,21 +732,14 @@ impl App {
                             (token, count)
                         })
                         .collect();
-                    // Largest first, and the empty ones fall to the bottom
-                    // where a short rail drops them first.
+                    // Largest first, so a short rail drops the empty ones.
                     kinds.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
                     self.kinds = kinds;
                 }
                 scour_core::FacetBy::Age { .. } if age => {
-                    // **Every band, including the empty ones.** The answer
-                    // leaves out bands nothing fell into, and a strip built
-                    // from what came back has a different number of bars for
-                    // every query — so the axis stops meaning anything and two
-                    // strips cannot be compared. The bands are ours to begin
-                    // with; the answer only fills them.
-                    //
-                    // `older` is the overflow and is not a bar: it is
-                    // everything before the axis starts.
+                    // Every band, including the empty ones the answer leaves
+                    // out: a strip with a different bar count per query has no
+                    // axis. `older` is the overflow, not a bar.
                     let counts: std::collections::HashMap<u32, u64> = group
                         .facets
                         .into_iter()
@@ -897,12 +758,8 @@ impl App {
         self.dirty = true;
     }
 
-    /// How many kinds and how many places the rail has room for.
-    ///
-    /// **Counted from the terminal rather than fixed.** Five was what fitted a
-    /// twenty-four-line window, and on a fifty-line one it left two thirds of
-    /// the rail empty while the list showed a hundred kinds' worth of rows.
-    /// Both the drawing and the hit test ask this, so they cannot disagree.
+    /// How many kinds and how many places the rail has room for, counted from
+    /// the terminal's height. Both the drawing and the hit test ask this.
     pub fn rail_room(&self) -> (usize, usize) {
         // The rail spans the heading line as well as the list.
         let lines = (self.room + 1).saturating_sub(RAIL_FIXED);
@@ -911,18 +768,13 @@ impl App {
             .kinds
             .len()
             .min(lines.saturating_sub(places).max(KINDS_LEAST));
-        // A short terminal gives the kinds their floor and takes it out of the
-        // places: what is in the index matters more than where it is kept.
+        // A short terminal takes the kinds' floor out of the places.
         let places = places.min(lines.saturating_sub(kinds));
         (kinds, places)
     }
 
     /// Everything the rail offers, in the order it is drawn: what it says and
-    /// what pressing it asks for.
-    ///
-    /// **One list rather than three sections walked separately**, because the
-    /// cursor moves down all of it and a section boundary is a blank line, not
-    /// a place to get stuck.
+    /// what pressing it asks for. One list, because the cursor walks all of it.
     pub fn rail_lines(&self) -> Vec<(String, String)> {
         let (kinds, places) = self.rail_room();
         let mut out: Vec<(String, String)> = self
@@ -945,12 +797,8 @@ impl App {
         out
     }
 
-    /// Which of the rail's offers is drawn on this line of it, if any.
-    ///
-    /// The rail has headings and blank lines between its sections, and they
-    /// are not stops — a press on `KIND` should do nothing rather than press
-    /// whatever is nearest. The shape has to agree with `draw::side`, and this
-    /// is the one place that knows it.
+    /// Which of the rail's offers is drawn on this line of it, if any. Headings
+    /// and blanks are not stops; the shape here has to agree with `draw::side`.
     pub fn rail_hit(&self, line: usize) -> Option<usize> {
         let (kinds, places) = self.rail_room();
         let sizes = scour_ui::query::SIZES.len();
@@ -994,25 +842,16 @@ impl App {
     }
 
     /// The tools, in the order they are drawn, and the key that also does it.
-    ///
-    /// **Said in words rather than drawn as glyphs.** The window has `⇄ 文 ⊘ ⤓
-    /// ?` and can measure them; a terminal cell is one column or two depending
-    /// on the font, and a row of icons that is a column wider than it thinks
-    /// puts every press one place out.
-    /// The labels are msgids; [`crate::draw::tool_spans`] looks them up, and
-    /// it does so because it is the same function that says where a press
-    /// lands — a translated word is a different width.
+    /// The labels are msgids: [`crate::draw::tool_spans`] measures and looks up.
     pub fn tools(&self) -> [(&'static str, &'static str); 7] {
         [
             ("faces", "^U"),
             ("lang", "^L"),
             ("skips", "^K"),
-            // Where the window has a `⋮` at the end of the header row. A
-            // terminal has no room for one and nothing to press it with.
+            // Where the window has a `⋮` at the end of the header row.
             ("columns", "^T"),
             ("csv", "^E"),
-            // Next to the peek key it belongs beside: both are about the row
-            // the cursor is on.
+            // Beside the peek key: both are about the row the cursor is on.
             ("menu", "F4"),
             ("keys", "F1"),
         ]
@@ -1050,10 +889,8 @@ impl App {
         }
     }
 
-    /// What can be done with a selection, in the order the bar shows them.
-    ///
-    /// The same three the window offers, and the same words — a person who
-    /// has used one of these should not have to learn the other.
+    /// What can be done with a selection, in the order the bar shows them — the
+    /// same three the window offers, in the same words.
     pub fn deeds(&self) -> [(&'static str, char); 3] {
         [("copy paths", 'y'), ("open folders", 'o'), ("clear", 'x')]
     }
@@ -1064,9 +901,8 @@ impl App {
             0 => {
                 let paths: Vec<String> = self.picked.keys().cloned().collect();
                 let n = paths.len();
-                // **Nothing picked, nothing done.** Copying an empty selection
-                // put an empty string on the clipboard — which is not "no
-                // change", it is somebody's clipboard emptied.
+                // Nothing picked, nothing done: copying an empty selection
+                // empties somebody's clipboard rather than leaving it alone.
                 if n == 0 {
                     self.note = self.say("nothing picked").into_owned();
                     self.dirty = true;
@@ -1123,10 +959,8 @@ impl App {
     /// Press a filter in the rail, or press the one in force to clear it.
     pub fn press_filter(&mut self, term: &str) -> Want {
         self.filter = scour_ui::query::pressed(self.filter.as_deref(), term);
-        // **The rail keeps what it is showing until new counts arrive.**
-        // Emptying it moves every line under the cursor, so the next press
-        // lands on something nobody aimed at — and a rail that blinks empty
-        // after every press is one people stop trusting.
+        // The rail keeps what it shows until new counts arrive: emptying it
+        // moves every line, so the next press lands where nobody aimed.
         self.typed()
     }
 
@@ -1140,15 +974,8 @@ impl App {
         self.dirty = true;
     }
 
-    /// The index moved.
-    ///
-    /// **Marked, not thrown away.** Every page in hand is now a little out of
-    /// date and the one being looked at is re-read at once; the others are
-    /// left until somebody looks at them, or an index that changes every
-    /// second would have this fetching every page it has ever seen.
-    ///
-    /// Returns what to ask for, and the caller waits again either way — a
-    /// timeout that ran out looks the same as an index that did not move.
+    /// The index moved: the pages in hand are marked stale, and only the one on
+    /// screen is re-read. The caller waits again either way.
     pub fn awake(&mut self, revision: u64) -> Want {
         if revision == self.revision {
             return Want::Nothing;
@@ -1162,8 +989,7 @@ impl App {
         self.revision = revision;
         self.pages.mark(revision);
         self.dirty = true;
-        // Refreshing, not re-querying: the row under the cursor stays where it
-        // is and the count is asked again with it.
+        // Refreshing, not re-querying: the row under the cursor stays put.
         let first = self.top;
         let last = (self.top + self.room).saturating_sub(1);
         match self.pages.next_page(first, last, false, true) {
@@ -1181,11 +1007,8 @@ impl App {
             return Want::Nothing;
         }
         self.pages.forget_asking();
-        // **Through the catalogue on the way in.** Two things send trouble:
-        // this program, which sends a msgid, and the service, which sends
-        // whatever went wrong in English. A msgid that is in the catalogue is
-        // translated and one that is not comes back as itself, so both are
-        // handled by the same line.
+        // Through the catalogue on the way in: this program sends msgids and
+        // the service sends English, and the lookup handles both.
         self.trouble = self.say(&why).into_owned();
         self.dirty = true;
         Want::Nothing
@@ -1195,8 +1018,8 @@ impl App {
     pub fn follow(&mut self) -> Want {
         let first = self.top;
         let last = (self.top + self.room).saturating_sub(1);
-        // Speculating is free here in a way it is not in the window: a page is
-        // two hundred rows and the terminal holds thirty-two of them.
+        // Speculating is cheap: a page is two hundred rows and the terminal
+        // holds thirty-two pages.
         match self.pages.next_page(first, last, true, false) {
             Some(page) => {
                 let offset = (page * scour_page::SPAN) as u32;
@@ -1211,36 +1034,16 @@ impl App {
         scour_ui::query::compose(&self.query, self.filter.as_deref())
     }
 
-    /// What the **kinds** are counted over.
-    ///
-    /// The rail has the same trap the strip had: pressing `archive` narrows
-    /// the result to archives, and the kind counts — taken from that result —
-    /// then say `archive 68.658` and nothing else. Every other kind vanishes
-    /// and there is no way to press one. So a section is counted over the
-    /// query *without the filter that belongs to that section*: press a kind
-    /// and the kinds stay, press a place and the kinds reflect it.
+    /// What the **kinds** are counted over: the query without its own kind
+    /// term, or pressing one kind would leave the rail with only that kind on it.
     pub fn kinds_over(&self) -> String {
         let filter = self.filter.as_deref().filter(|f| !f.starts_with("kind:"));
         let typed = scour_query::without(&self.query, &["kind"]);
         scour_ui::query::compose(typed.as_deref().unwrap_or(&self.query), filter)
     }
 
-    /// What the **strip** is asked about, which is not the same rows.
-    ///
-    /// **A control cannot filter itself out of existence.** Pressing the band
-    /// for twenty-seven days narrows the result to files touched since then —
-    /// and the strip, drawn from that result, then has nothing in any older
-    /// band. Every bar to the left vanished and there was no way back to them
-    /// except clearing the filter, which is not something the strip said it
-    /// had done. So the bars are always the distribution of the query
-    /// *without* its age term: the shape stays, and pressing another band
-    /// moves the filter rather than shrinking the strip.
-    ///
-    /// **Typed or pressed, it is the same term.** This dropped only what the
-    /// strip itself had set, so somebody who typed `dm:7d` got a strip with
-    /// one bar on it and no way back — the same dead control, reached by the
-    /// other door. The browser had it right and the window and the terminal
-    /// did not.
+    /// What the **strip** is asked about, which is not the same rows: the query
+    /// without its age term, typed or pressed, or it filters itself to one bar.
     pub fn strip_over(&self) -> String {
         let filter = self.filter.as_deref().filter(|f| !f.starts_with("dm:"));
         let typed = scour_query::without(&self.query, &["dm"]);
@@ -1264,8 +1067,7 @@ impl App {
 
     /// Move the cursor by `by` rows, and the view with it.
     pub fn walk(&mut self, by: isize) -> Want {
-        // Somebody moved it, so from here it is about a file rather than a
-        // place in the list.
+        // Moved by hand: from here the cursor is about a file, not a place.
         self.anchored = true;
         let total = self.pages.total();
         if total == 0 {
@@ -1277,12 +1079,8 @@ impl App {
         self.follow()
     }
 
-    /// Take the list to where the scrollbar was dragged.
-    ///
-    /// `at` is which row of the bar's own track the pointer is on, out of
-    /// `high`. **The thumb follows the pointer rather than the pointer moving
-    /// the thumb by a step**, which is what makes a scrollbar a scrollbar: a
-    /// press halfway down a two-million-row result is the millionth row.
+    /// Take the list to where the scrollbar was dragged: `at` is which row of
+    /// the track the pointer is on, out of `high`. The thumb follows the pointer.
     pub fn drag_bar(&mut self, at: u16, high: u16) -> Want {
         let total = self.pages.total();
         let last = total.saturating_sub(self.room);
@@ -1291,8 +1089,7 @@ impl App {
         }
         self.top = (at as usize * last) / high.max(1) as usize;
         self.top = self.top.min(last);
-        // The cursor comes along rather than being left off screen, where
-        // every arrow key afterwards would scroll back to it.
+        // The cursor comes along, or the next arrow key scrolls back to it.
         self.cursor = self.cursor.clamp(self.top, self.top + self.room - 1);
         self.dirty = true;
         self.follow()
@@ -1300,8 +1097,7 @@ impl App {
 
     /// Put the cursor at a row outright: `Home`, `End`, a mouse press.
     pub fn go(&mut self, row: usize) -> Want {
-        // Somebody moved it, so from here it is about a file rather than a
-        // place in the list.
+        // Moved by hand: from here the cursor is about a file, not a place.
         self.anchored = true;
         let total = self.pages.total();
         if total == 0 {
@@ -1312,19 +1108,11 @@ impl App {
         self.follow()
     }
 
-    /// Follow the row the cursor was on, wherever it went.
-    ///
-    /// Called when a page lands: the rows in hand may be a different set from
-    /// the ones that were there. Only what is held is looked through — at most
-    /// thirty-two pages — because a row that has moved out of that is a row
-    /// nobody is looking at.
-    ///
-    /// **The view moves with it**, so the row stays under the eye rather than
-    /// the list appearing to jump by one every time a file is saved.
+    /// Follow the row the cursor was on, wherever it went. Only the pages held
+    /// are searched: a row outside them is one nobody is looking at.
     fn refollow(&mut self) {
         if !self.anchored {
-            // Nobody has chosen a row: the cursor stays where it is in the
-            // list, which is where the newest things arrive.
+            // Nobody chose a row: the cursor keeps its place in the list.
             return;
         }
         let at_cursor = self.pages.at(self.cursor).map(|h| h.path.clone());
@@ -1335,8 +1123,7 @@ impl App {
             self.cursor_at.as_deref().unwrap_or("—")
         ));
         let Some(want) = self.cursor_at.clone() else {
-            // Chosen, but the row it was chosen on had not arrived yet — a
-            // click lands before its page sometimes. Take it now.
+            // Chosen before its page arrived, which a click can do. Take it now.
             self.cursor_at = at_cursor;
             return;
         };
@@ -1352,12 +1139,8 @@ impl App {
                         "found it at {row}, was {}; the view stays at {}",
                         self.cursor, self.top
                     ));
-                    // **The row moves, the view does not.** Moving both kept
-                    // the row on the same line of the screen, which is a row
-                    // pinned in place — and then a file arriving above it is
-                    // invisible. Left alone, the list holds still, the new row
-                    // appears at the top of it, and the chosen row slides down
-                    // one with its tick still on it.
+                    // The row moves, the view does not: moving both pins the
+                    // row to its line and hides whatever arrived above it.
                     self.cursor = row;
                     self.settle();
                     return;
@@ -1367,14 +1150,10 @@ impl App {
         trace("not in any page held — the cursor stays where it is");
     }
 
-    /// Keep the cursor on screen, moving the view the least it can.
-    ///
-    /// **Not centred.** A list that recentres on every step makes the text
-    /// move while the cursor stands still, which is much harder to read than
-    /// the other way round.
+    /// Keep the cursor on screen, moving the view the least it can. Not
+    /// centred: text that moves under a still cursor is harder to read.
     fn settle(&mut self) {
-        // What the cursor is on, noted whenever it moves — but only once
-        // somebody has put it somewhere. See [`App::anchored`].
+        // What the cursor is on, noted only once somebody has moved it.
         if self.anchored {
             self.cursor_at = self.pages.at(self.cursor).map(|h| h.path.clone());
         }
@@ -1411,9 +1190,8 @@ impl App {
         if self.caret == 0 {
             return Want::Nothing;
         }
-        // Character by character, not byte by byte: `Değişiklik` is ten
-        // characters and thirteen bytes, and cutting a byte off the end of one
-        // of them is a panic.
+        // Character by character, not byte by byte: cutting a byte off a
+        // multi-byte character is a panic.
         let at = self.query[..self.caret]
             .char_indices()
             .next_back()
@@ -1445,11 +1223,8 @@ impl App {
         self.dirty = true;
     }
 
-    /// Switch the rule under the panel's cursor off, or back on.
-    ///
-    /// Returns the whole switched-off list to send: the service replaces it
-    /// outright, and a list built from what this window has pressed rather
-    /// than from what the service said would switch every other rule on.
+    /// Switch the rule under the panel's cursor off, or back on. Returns the
+    /// whole switched-off list: the service replaces it outright.
     pub fn toggle_rule(&mut self) -> Option<Vec<String>> {
         let (_, _, off, _) = self.rules.get_mut(self.panel_at)?;
         *off = !*off;
@@ -1475,12 +1250,8 @@ impl App {
         self.dirty = true;
     }
 
-    /// Does this path sit on a volume that has stopped recording reads?
-    ///
-    /// **The deepest mount wins**, which is the only rule that gets a second
-    /// volume right when `/` is mounted too. With nothing known the answer is
-    /// no: showing a timestamp that might be stale beats showing a dash that
-    /// certainly is wrong.
+    /// Does this path sit on a volume that has stopped recording reads? The
+    /// deepest mount wins, and nothing known answers no.
     pub fn frozen_atime(&self, path: &str) -> bool {
         let mut owner: Option<&scour_places::Mount> = None;
         for m in &self.mounts {
@@ -1492,10 +1263,8 @@ impl App {
         owner.is_some_and(|m| !m.reads)
     }
 
-    /// The line the cursor is on in the column panel: switch it, and keep it.
-    ///
-    /// **The panel stays open.** Turning three columns on is three presses,
-    /// and a panel that closed after each of them would be three trips back.
+    /// The line the cursor is on in the column panel: switch it, and keep the
+    /// panel open — turning three columns on is three presses.
     pub fn pick_column(&mut self) -> Want {
         match scour_ui::COLUMNS.get(self.panel_at) {
             Some(c) => {
@@ -1517,10 +1286,7 @@ impl App {
     }
 
     /// Take the saved column list, dropping anything this build does not have.
-    ///
-    /// **An empty list is the one answer that cannot be right** — a table of no
-    /// columns is not a smaller table — so the default stands where nothing
-    /// usable was saved.
+    /// An empty result leaves the default: a table of no columns is not a table.
     pub fn columns_from(&mut self, saved: &[String]) {
         let shown: Vec<&'static scour_ui::Column> =
             saved.iter().filter_map(|id| scour_ui::column(id)).collect();
@@ -1529,11 +1295,8 @@ impl App {
         }
     }
 
-    /// Switch one column on or off.
-    ///
-    /// Put back where its neighbours expect it, without moving the ones
-    /// already there: rebuilding in table order would throw away an
-    /// arrangement somebody had made, every time they showed one more column.
+    /// Switch one column on or off, putting it back where its neighbours expect
+    /// it without moving them: rebuilding in table order loses an arrangement.
     pub fn toggle_column(&mut self, id: &str) {
         let showing = self.columns.iter().any(|c| c.id == id);
         if showing && self.columns.len() == 1 {
@@ -1555,13 +1318,8 @@ impl App {
         self.columns.insert(at, col);
     }
 
-    /// Build the menu for the row the cursor is on, and open it.
-    ///
-    /// **A terminal has no right button**, so the gesture is a key. What is in
-    /// the menu is not this face's decision: `scour-ui::menu` holds the list
-    /// for all of them, and the only thing decided here is that a terminal can
-    /// put a file on the clipboard, which is why `Face::Terminal` is what the
-    /// table is asked about.
+    /// Build the menu for the row the cursor is on, and open it. What is in it
+    /// is `scour-ui::menu`'s decision, asked as `Face::Terminal`.
     pub fn open_menu(&mut self) {
         let Some(hit) = self.here().cloned() else {
             return;
@@ -1730,17 +1488,16 @@ impl App {
                 self.ask_typing = true;
                 self.pending = Some(("rename".into(), vec![first.clone()]));
                 self.panel = Panel::Ask;
-                // The cursor sits on *Cancel*, and the letters go into the line
-                // above it — a terminal has one keyboard and the question has
-                // to say which of the two is listening.
+                // The cursor sits on *Cancel* while the letters go into the
+                // line above it: one keyboard, two places it could be typing.
                 self.panel_at = 1;
                 self.dirty = true;
                 Want::Nothing
             }
 
             "trash" | "open-all" => {
-                // Eight names and then how many are left. A list that runs off
-                // the panel is a list nobody read before pressing yes.
+                // Eight names and then how many are left: a list that runs off
+                // the panel is one nobody read before pressing yes.
                 let mut names: Vec<String> = rows.iter().take(8).map(|p| leaf(p)).collect();
                 if rows.len() > 8 {
                     names.push(format!("… +{}", rows.len() - 8));
@@ -1752,9 +1509,8 @@ impl App {
                 self.ask_typing = false;
                 self.pending = Some((line.id.clone(), rows));
                 self.panel = Panel::Ask;
-                // **The cursor starts on "no".** A terminal cannot dim what is
-                // behind a question, so where the cursor sits when it opens is
-                // the only thing saying which answer is the safe one.
+                // The cursor starts on "no": a terminal cannot dim what is
+                // behind a question, so the cursor is what marks the safe answer.
                 self.panel_at = 1;
                 self.dirty = true;
                 Want::Nothing
@@ -1789,7 +1545,8 @@ impl App {
         Want::Nothing
     }
 
-    /// Answer the question that is up. `0` is no, `1` is yes.
+    /// Answer the question that is up: `0` is the line being typed into, `1` is
+    /// *Cancel*, and only `2` is yes.
     pub fn ask_answer(&mut self, which: usize) -> Want {
         self.panel = Panel::None;
         self.dirty = true;
@@ -1868,19 +1625,14 @@ impl App {
         self.dirty = true;
     }
 
-    /// Speak this language from now on: 0 is Turkish, 1 is English.
-    ///
-    /// **Remembered rather than applied here.** The catalogue is read once at
-    /// startup and the strings in this interface are few and English; what
-    /// this changes is what every face opens in next.
+    /// Speak this language from now on, by its place in `scour_i18n::LANGUAGES`:
+    /// 0 is English, 1 is Turkish. Applied now and remembered for every face.
     pub fn speak(&mut self, which: usize) -> Want {
         let Some((tag, endonym)) = scour_i18n::LANGUAGES.get(which) else {
             return Want::Nothing;
         };
-        // **The words change now, not on the next start.** Immediate mode
-        // redraws every cell from this struct, so a new catalogue here is the
-        // whole of the switch — including how numbers are punctuated, which
-        // comes off the catalogue's language rather than off the desktop's.
+        // The words change now, not on the next start: immediate mode redraws
+        // every cell from this struct, digits and their punctuation included.
         self.words = scour_i18n::Catalogue::for_language(tag);
         self.panel = Panel::None;
         self.note = (*endonym).to_string();
@@ -1891,11 +1643,8 @@ impl App {
         })
     }
 
-    /// Start another face, and remember that it is the one to open.
-    ///
-    /// 0 is the window, 1 is this, 2 is the browser. **Through the launcher**,
-    /// which owns the list of terminals and the rule about which face opens by
-    /// default.
+    /// Start another face, and remember that it is the one to open: 0 is the
+    /// window, 1 is this, 2 is the browser. Through `scour-open`.
     pub fn run_face(&mut self, which: usize) -> Want {
         let face = match which {
             0 => "window",
@@ -1915,9 +1664,7 @@ impl App {
         match command.spawn() {
             Ok(_) => {
                 self.note = self.say("starting…").into_owned();
-                // **And this one goes.** Switching is moving, not opening a
-                // second one: two interfaces onto the same index, both live,
-                // is not what anybody meant by "switch to the window".
+                // And this one goes: switching is moving, not opening a second.
                 self.leaving = true;
             }
             Err(e) => self.note = format!("scour-open: {e}"),
@@ -1930,11 +1677,8 @@ impl App {
         })
     }
 
-    /// Write the whole result to a spreadsheet in the download folder.
-    ///
-    /// **Where downloads go, and said outright.** A file appearing silently in
-    /// somebody's home is a file they find a week later; the window learned
-    /// that one the same way.
+    /// Write the whole result to a spreadsheet in the download folder, and say
+    /// where it went: a file that appears silently is one nobody finds.
     pub fn write_sheet(&mut self) -> Want {
         let home = std::env::var("HOME").unwrap_or_default();
         let dir = scour_places::downloads()
@@ -1963,11 +1707,8 @@ impl App {
 mod tests {
     use super::*;
 
-    /// An app with a screen to put rows on.
-    ///
-    /// `App::default()` has no room — a view that is zero rows tall answers
-    /// every question about scrolling with the same number, so every test that
-    /// is about *where the view sits* has to say how tall it is first.
+    /// An app with a screen to put rows on. `App::default()` has no room, and
+    /// a view zero rows tall answers every scrolling question the same way.
     fn app(room: usize) -> App {
         App {
             room,
@@ -2062,9 +1803,8 @@ mod tests {
         assert_eq!(app.pages.total(), 5_000);
     }
 
-    /// **A row number is not an identity.** This is the test for the thing
-    /// that made a saved file move somebody's cursor: the list shifts down by
-    /// one and the cursor has to shift with it.
+    /// A row number is not an identity: the list shifts down by one and the
+    /// cursor has to shift with it.
     #[test]
     fn the_cursor_stays_on_the_file_when_the_list_moves_under_it() {
         let mut app = app(10);
@@ -2085,20 +1825,14 @@ mod tests {
             Some("/x/3"),
             "and it is the same file"
         );
-        // **The view stays where it is**, so the row visibly slides down a
-        // line and the file that arrived is drawn above it. Moving the view
-        // with it would pin the row to its line and hide the arrival.
+        // The view stays where it is, so the row slides down a line and the
+        // file that arrived is drawn above it.
         assert_eq!(app.top, 0);
         assert_eq!(app.cursor - app.top, 4, "one line further down the screen");
     }
 
-    /// **An untouched cursor stays at the top of the list.**
-    ///
-    /// The other half of the rule, and the one that was wrong: a cursor
-    /// nobody had moved stuck to whatever row zero happened to be when the
-    /// window opened, so every file saved anywhere walked it down the screen
-    /// and dragged the view with it — three rows to ten in twelve seconds on
-    /// a machine doing nothing in particular.
+    /// An untouched cursor stays at the top of the list: the other half of the
+    /// rule, without which every file saved walks it down the screen.
     #[test]
     fn a_cursor_nobody_moved_belongs_to_the_list_rather_than_to_a_file() {
         let mut app = app(10);
@@ -2130,18 +1864,8 @@ mod tests {
     }
 }
 
-/// Put text on the clipboard from inside a terminal.
-///
-/// **The desktop's own tool first, and the terminal's escape only when there
-/// is no desktop.** OSC 52 is the elegant answer — the terminal takes the
-/// text, so it works over ssh — and it is answered by *some* terminals: VTE,
-/// which is what ptyxis and GNOME Terminal are built on, does not implement
-/// clipboard writes at all. Writing the escape there succeeds and nothing
-/// reaches the clipboard, which is what happened: this said `copied
-/// (terminal)` and the clipboard still held whatever it had before.
-///
-/// So a tool is used when one is here, and the escape is the fallback for the
-/// case it was written for — a terminal on the other end of a connection.
+/// Put text on the clipboard from inside a terminal: the desktop's own tool
+/// first, OSC 52 second — VTE accepts the escape and drops the text.
 fn copy(text: &str) -> Result<&'static str, String> {
     use std::io::Write;
     let desktop =
@@ -2163,14 +1887,12 @@ fn copy(text: &str) -> Result<&'static str, String> {
                 Err(_) => continue,
             };
             let wrote = match child.stdin.take() {
-                // Taken and dropped here: the tool reads until the pipe
-                // closes, and one held open is a tool that never finishes.
+                // Dropped here: the tool reads until the pipe closes.
                 Some(mut pipe) => pipe.write_all(text.as_bytes()).is_ok(),
                 None => false,
             };
             if wrote {
-                // `wl-copy` forks and holds the selection; the process that
-                // exits is not the one keeping it.
+                // `wl-copy` forks: the process that exits is not the holder.
                 let _ = child.wait();
                 return Ok(tool);
             }
@@ -2179,8 +1901,7 @@ fn copy(text: &str) -> Result<&'static str, String> {
     let coded = base64(text.as_bytes());
     let mut out = std::io::stdout();
     if write!(out, "\x1b]52;c;{coded}\x07").is_ok() && out.flush().is_ok() {
-        // **"Sent", not "copied".** Whether it arrived is the terminal's
-        // business and it does not answer.
+        // "Sent", not "copied": the terminal does not say whether it arrived.
         return Ok("sent to the terminal");
     }
     Err("no clipboard".into())
@@ -2206,28 +1927,12 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// Every word this interface says, checked against the catalogue.
-///
-/// **The list is read out of the source, not kept beside it.** A hand-written
-/// list of msgids is a list that is right on the day it is written: somebody
-/// adds a panel, the panel says something new, and the only thing that would
-/// have caught it is the thing nobody remembered to update. This reads the
-/// files themselves, so a string added anywhere in the terminal is a string
-/// this test is already asking about.
-///
-/// What it cannot check is that a translation is *good* — only that one is
-/// there. A msgid with no entry falls back to the English, which is a correct
-/// answer and an untranslated one, and is exactly the state this is here to
-/// notice.
+/// Every word this interface says, checked against the catalogue. The list is
+/// read out of the source, so a string added anywhere is already asked about.
 #[cfg(test)]
 mod words {
     /// Every string handed to [`App::say`] in the terminal, plus the tables
-    /// whose entries are looked up by value rather than written at the call
-    /// site.
-    ///
-    /// It scans its own file among the others, so a msgid written in a comment
-    /// here would be picked up as one this interface says — which is why this
-    /// paragraph does not spell the pattern it looks for.
+    /// looked up by value. It scans its own file: a msgid in a comment counts.
     fn asked_for() -> Vec<String> {
         const SOURCE: [&str; 6] = [
             include_str!("app.rs"),
@@ -2266,11 +1971,8 @@ mod words {
         out.push("relevance".into());
         for (key, what) in crate::keys::MAP {
             out.push(what.to_string());
-            // The left column is mostly keycaps, which are the same in every
-            // language and are deliberately absent from the catalogue. A word
-            // that is all lowercase letters is prose rather than a keycap:
-            // `type` and `click the ✓ column` are asked about, `Ctrl+A` and
-            // `↑ ↓ · PgUp PgDn` are not.
+            // Keycaps are the same in every language and are not in the
+            // catalogue; an all-lowercase word marks the few that are prose.
             if key
                 .split_whitespace()
                 .any(|w| w.len() > 1 && w.chars().all(|c| c.is_ascii_lowercase()))
@@ -2297,11 +1999,8 @@ mod words {
         );
     }
 
-    /// A placeholder that survives the translation, or a number lands nowhere.
-    ///
-    /// `{n} klasör açılıyor` is right; `{} klasör açılıyor` is a sentence with
-    /// the count missing, and the substitution is a plain `replace` that would
-    /// say nothing about it.
+    /// A placeholder that survives the translation, or a number lands nowhere:
+    /// substitution is a plain `replace`, which reports nothing when it misses.
     #[test]
     fn a_translation_keeps_the_holes_the_english_had() {
         use scour_core::Catalog;
