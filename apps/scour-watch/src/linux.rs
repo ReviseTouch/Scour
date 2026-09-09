@@ -208,7 +208,7 @@ fn mark(fd: libc::c_int, sb: &Sb) -> bool {
     let ok = rc == 0;
     if ok {
         println!(
-            "  isaretlendi  {:<14} {:<7} {}",
+            "  marked       {:<14} {:<7} {}",
             sb.source,
             sb.fstype,
             if temp.is_some() {
