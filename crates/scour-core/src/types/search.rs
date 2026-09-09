@@ -4,19 +4,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{Ast, Entry, EntryId, Kind, Meta};
 
-/// How results are ordered.
-///
-/// One order is privileged and the rest are not, which is a property of the
-/// index rather than a preference: documents are stored newest-first, so
-/// `Modified` descending can be answered by walking the postings and stopping
-/// at the first page, while every other order has to visit every match. An
-/// index is free to accelerate more of these; none may return the wrong order.
+/// How results are ordered. One order is privileged by the index rather than by
+/// preference: documents are stored newest-first, so `Modified` descending stops at
+/// the first page while every other order has to visit every match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
-    /// How well the name answers the query, rather than any property of the
-    /// file. Only meaningful for a query with text in it; with none, every row
-    /// scores the same and the order falls back to the stored one.
+    /// How well the name answers the query. Only meaningful with text in the query:
+    /// with none, every row scores alike and the stored order shows through.
     Relevance,
     Name,
     Path,
@@ -39,28 +34,15 @@ pub enum SortKey {
 pub struct Page {
     pub offset: u32,
     pub limit: u32,
-    /// Stop counting matches at this many.
-    ///
-    /// With early termination, an exact total is the only remaining piece of
-    /// work proportional to the number of hits — on a one-letter query that was
-    /// measured at 18.1 ms of a 37 ms keystroke, against 0.88 ms once capped.
-    /// A caller that genuinely needs an exact number asks for one by raising
-    /// the cap, and pays for it knowingly.
+    /// Stop counting matches at this many. An exact total is the last remaining cost
+    /// proportional to hits: 18.1 ms of a 37 ms keystroke on a one-letter query,
+    /// 0.88 ms capped. A caller needing an exact number raises the cap.
     pub count_cap: u32,
 }
 
-/// Rows in a page, and the smallest page a service may serve.
-///
-/// Two facts in one number, and they have to be one number. It is what a
-/// caller gets by default, and it is the floor `scourd` puts under a
-/// configured `result_limit` — so a client that asks for exactly this many is
-/// answered in full, whatever the configuration says.
-///
-/// A window that pages through a long result depends on that. It fetches a
-/// page around wherever the eye is, and if the service quietly served fewer
-/// rows than were asked for, the last page could never reach the end of the
-/// list: the rows down there would be asked for, drawn blank, asked for again,
-/// for as long as somebody looked at them.
+/// Rows in a page, and the floor `scourd` puts under a configured `result_limit`:
+/// a client asking for exactly this many is answered in full, or a paging window's
+/// last page never reaches the end of the list.
 pub const PAGE_ROWS: u32 = 200;
 
 impl Default for Page {
@@ -102,26 +84,15 @@ impl Default for SearchRequest {
     }
 }
 
-/// Every row a query matches, asked for once.
-///
-/// **A query and nothing else, and the two missing fields are the point.**
-/// There is no page, because the whole set is what this asks for and bounding
-/// it is what [`SearchRequest`] is for. And there is no sort: see
-/// [`Index::scan`], which explains why an order is a different problem from a
-/// stream and who is expected to solve it.
-///
-/// [`Index::scan`]: crate::Index::scan
+/// Every row a query matches, asked for once. No page — bounding is what
+/// [`SearchRequest`] is for — and no sort; see [`Index::scan`](crate::Index::scan).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanRequest {
     pub query: Ast,
 }
 
-/// One result row, complete.
-///
-/// Nothing is projected away. Materialising a full row from the index's
-/// document store was measured at 0.32 µs, so withholding fields would save
-/// nothing and would force every caller to ask twice. Frontends that care
-/// about payload size — the MCP server, mainly — trim on the way out.
+/// One result row, complete: nothing is projected away. Materialising a full row
+/// costs 0.32 µs, so withholding fields would only make every caller ask twice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hit {
     pub id: EntryId,
@@ -129,18 +100,9 @@ pub struct Hit {
     pub is_dir: bool,
     pub kind: Kind,
     pub meta: Meta,
-    /// For a directory: what everything under it comes to.
-    ///
-    /// **Not folded into `meta.size`, deliberately.** A directory's `size` is
-    /// its own entry table, it is what the `Size` column holds, and it is what
-    /// `sort:size` orders by — so overwriting it here would put a number on
-    /// screen that the ordering beside it disagrees with, which is the sort of
-    /// wrongness that looks like a sorting bug for weeks.
-    ///
-    /// `None` for files, and for an index whose layout cannot answer it
-    /// cheaply. See [`Index::subtree_sizes`].
-    ///
-    /// [`Index::subtree_sizes`]: crate::Index::subtree_sizes
+    /// For a directory: what everything under it comes to. Not folded into
+    /// `meta.size`, which is the directory's own entry table and what `sort:size`
+    /// orders by. `None` for files and where the layout cannot answer it cheaply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under: Option<Subtree>,
 }
@@ -148,8 +110,7 @@ pub struct Hit {
 /// What a folder holds, totalled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subtree {
-    /// Space on disk, hard links counted once — the same arithmetic the
-    /// disk-usage report does, because the two are printed beside each other.
+    /// Space on disk, hard links counted once, as the disk-usage report counts them.
     pub disk: u64,
     pub files: u64,
 }
@@ -162,16 +123,8 @@ impl Hit {
         }
     }
 
-    /// The folder it sits in — the same answer [`Entry::parent`] gives.
-    ///
-    /// **Here because every frontend was deriving it.** A row is shown as a
-    /// name and a location, so a list without this needs each frontend to cut
-    /// the path itself; the browser bridge had its own `parent_of`, four lines
-    /// long and a duplicate of the one on `Entry`. One missing method, one
-    /// copy per frontend, and three chances to disagree about what the parent
-    /// of `/x` is.
-    ///
-    /// [`Entry::parent`]: crate::Entry::parent
+    /// The folder it sits in — the same answer [`Entry::parent`](crate::Entry::parent)
+    /// gives, so no frontend cuts the path itself and disagrees about `/x`.
     pub fn parent(&self) -> &str {
         match self.path.rfind('/') {
             Some(0) => "/",
@@ -189,8 +142,7 @@ impl From<&Entry> for Hit {
             is_dir: e.is_dir,
             kind: e.kind(),
             meta: e.meta,
-            // An entry is one row. What is under it is a question about the
-            // index, and this conversion has no index.
+            // What is under an entry is a question about the index, and this has none.
             under: None,
         }
     }
@@ -204,45 +156,21 @@ pub struct SearchResponse {
     /// True when counting stopped at the cap, so `total` is a floor.
     pub capped: bool,
     pub took_us: u64,
-    /// Whether the index answered by early termination or had to visit every
-    /// match. Reported rather than hidden, because a design whose fast path is
-    /// silently not being taken looks exactly like one that is.
+    /// Whether the index answered by early termination or visited every match.
+    /// Reported, because a fast path silently not taken looks like one that is.
     pub fast_path: bool,
-    /// Rows the index had to look at, when it can say. Zero when it cannot.
-    ///
-    /// Reported for the same reason as `fast_path`: an index that has quietly
-    /// stopped skipping looks exactly like one that never could, and the number
-    /// is what tells them apart. It is also what turns "why is this query slow"
-    /// from a guess into a subtraction.
+    /// Rows the index had to look at, when it can say; zero when it cannot. An index
+    /// that has quietly stopped skipping looks like one that never could.
     #[serde(default)]
     pub rows_visited: u64,
-    /// Rows whose path was reconstructed, including the ones then skipped to
-    /// reach `offset`.
-    ///
-    /// The number that makes deep paging diagnosable instead of merely slow.
-    /// Reaching offset 200,000 means building 200,200 paths and discarding all
-    /// but two hundred of them — measured at 225 ms against 0.54 ms for the
-    /// first page, and multiplied again by the number of segments, because each
-    /// one is asked for the whole prefix. A client that can see this can tell
-    /// "the query is expensive" from "you asked for page a thousand".
+    /// Rows whose path was reconstructed, including those skipped to reach `offset`.
+    /// Offset 200,000 builds 200,200 paths — 225 ms against 0.54 ms for the first
+    /// page — which is how deep paging is told apart from an expensive query.
     #[serde(default)]
     pub rows_built: u64,
-    /// Terms the parser could not read as written, as offsets into the query
-    /// that was sent.
-    ///
-    /// **The parser never fails, and that is what makes this necessary.** A
-    /// term it cannot read is searched for as its own text, so `dm:yarin`
-    /// quietly becomes a name search and `ext:` becomes an extension filter
-    /// nothing can satisfy. Both answer `0 of 0`, which is indistinguishable
-    /// from a query that was understood and matched nothing — and of those two
-    /// readings, the wrong one is the one anybody draws.
-    ///
-    /// A search box shows this while it is being typed, out of `explain`. The
-    /// surfaces with no search box — a command line, a model — get one answer
-    /// and do not ask a second question, so the warning has to travel with it.
-    /// Only [`Role::is_warning`] roles appear here; empty is the ordinary case.
-    ///
-    /// [`Role::is_warning`]: crate::Role::is_warning
+    /// Terms the parser could not read as written, as offsets into the query sent.
+    /// The parser never fails, so `dm:yarin` becomes a name search answering `0 of 0`,
+    /// which reads as a query that matched nothing. Warning roles only; empty is usual.
     #[serde(default)]
     pub misread: Vec<crate::Span>,
 }
@@ -261,16 +189,9 @@ pub enum FacetBy {
         path: String,
         top: u32,
     },
-    /// How old the matching files are, counted into caller-chosen bands.
-    ///
-    /// `edges` are ages in **days**, ascending; a file lands in the first band
-    /// whose edge it is not older than, and anything older than the last edge
-    /// lands in an overflow band keyed `older`. The bands are the caller's
-    /// because the shape of a histogram is a presentation choice — a chart of
-    /// twenty-four logarithmic bars and a list of six named periods want
-    /// different edges out of the same rows, and neither belongs in here.
-    ///
-    /// The keys are the edges as text, so a reply is self-describing.
+    /// How old the matching files are, in caller-chosen bands. `edges` are ages in
+    /// **days**, ascending; a file lands in the first band whose edge it is not older
+    /// than, anything past the last in one keyed `older`. Keys are the edges as text.
     Age {
         edges: Vec<u32>,
     },
@@ -279,9 +200,7 @@ pub enum FacetBy {
 /// One question's answer, beside the question.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FacetGroup {
-    /// What the keys mean. Echoed back for the same reason `FacetResponse::by`
-    /// is: a renderer that has to remember what it asked in order to draw the
-    /// answer is a renderer that will get the two out of step.
+    /// What the keys mean, echoed back so a renderer need not remember what it asked.
     pub by: FacetBy,
     pub facets: Vec<Facet>,
 }
@@ -289,8 +208,7 @@ pub struct FacetGroup {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FacetRequest {
     pub query: Ast,
-    /// The questions, all of them about the same rows. See
-    /// [`FacetResponse::groups`] for why this is a list.
+    /// The questions, all about the same rows and answered in one walk.
     pub by: Vec<FacetBy>,
 }
 
@@ -302,46 +220,25 @@ pub struct Facet {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FacetResponse {
-    /// One per question asked, in the order they were asked.
-    ///
-    /// **Several, because they are all answers about the same rows.** The
-    /// sidebar wants a count, a breakdown by kind and a distribution by age,
-    /// and asking for them one at a time walks the matching set three times to
-    /// produce three views of it. Measured on 2.1 M entries, the three
-    /// together were 100–200 ms behind a keystroke; one walk is one third of
-    /// that by construction.
+    /// One per question asked, in the order asked. Several, because they are answers
+    /// about the same rows: asked separately, three of them walk the matching set
+    /// three times, which on 2.1 M entries ran 100–200 ms behind a keystroke.
     #[serde(default)]
     pub groups: Vec<FacetGroup>,
-    /// How many rows matched, from the same walk.
-    ///
-    /// Exact unless `capped`. The count is free here — the walk has to visit
-    /// every matching row anyway — where asking for it separately is a second
-    /// pass over the whole set.
+    /// How many rows matched, from the same walk. Exact unless `capped`, and free:
+    /// the walk visits every matching row anyway.
     #[serde(default)]
     pub total: u64,
     pub facets: Vec<Facet>,
-    /// What the keys mean, echoed back.
-    ///
-    /// Without it a client has to remember what it asked in order to render
-    /// the answer, and the two things that need to know — is this key a
-    /// `kind:` token to be translated, or an extension to be printed as it is
-    /// — are exactly the ones that get out of step.
+    /// What the keys mean, echoed back: whether a key is a `kind:` token to translate
+    /// or an extension to print as it is.
     #[serde(default)]
     pub by: FacetBy,
     /// The scan stopped at its cap, so the counts are a lower bound.
-    ///
-    /// `SearchResponse` has said this from the start and a facet could not,
-    /// which meant the rail understated at scale with no way to tell. A count
-    /// that is quietly wrong is worse than one that says it is incomplete.
     #[serde(default)]
     pub capped: bool,
     pub took_us: u64,
-    /// Terms the parser could not read as written. See
-    /// [`SearchResponse::misread`].
-    ///
-    /// A grouping of the wrong set of rows is the same lie as a count of it,
-    /// told one level up: every bar has a plausible height and the whole
-    /// picture is of files nobody asked about.
+    /// Terms the parser could not read as written. See [`SearchResponse::misread`].
     #[serde(default)]
     pub misread: Vec<crate::Span>,
 }
@@ -352,13 +249,9 @@ pub struct ApplyReport {
     pub upserted: u64,
     pub removed: u64,
     pub subtrees_removed: u64,
-    /// Entries the index already held exactly as they arrived.
-    ///
-    /// A walk reports what it saw rather than what changed, so on an untouched
-    /// filesystem this is nearly all of them. Counted because it is the
-    /// difference between a rescan that costs nothing and one that rewrites the
-    /// index — and because a number that is suddenly zero is how a bug in
-    /// deciding "unchanged" would announce itself.
+    /// Entries the index already held exactly as they arrived. A walk reports what it
+    /// saw rather than what changed, so on an untouched filesystem this is nearly all
+    /// of them; suddenly zero means the "unchanged" test is broken.
     pub unchanged: u64,
 }
 
@@ -377,19 +270,12 @@ impl ApplyReport {
 pub struct IndexStats {
     pub entries: u64,
     pub dirs: u64,
-    /// Sum of file lengths in the index directory, including an in-flight or
-    /// orphaned file that no published segment names yet.
-    ///
-    /// This is the index's logical byte footprint, not allocated filesystem
-    /// blocks: sparse files and transparent compression can make `du` differ.
+    /// Sum of file lengths in the index directory, in-flight and orphaned files
+    /// included. Logical bytes, not allocated blocks, so `du` can differ.
     pub bytes_on_disk: u64,
     pub segments: u32,
-    /// Entries indexed since the last rebuild.
-    ///
-    /// These live outside the ordered part of the index and have to be scanned
-    /// in full on every query, so this number is the reason a rebuild exists.
-    /// When it grows past the configured threshold, searches slow down
-    /// measurably and a rebuild is due.
+    /// Entries indexed since the last rebuild. They live outside the ordered part and
+    /// are scanned in full on every query, which is what a rebuild folds them into.
     pub unsorted_entries: u64,
     /// Entries hidden but not yet erased, waiting for the next commit.
     pub pending_removals: u64,
@@ -404,14 +290,9 @@ pub enum Maintenance {
     /// Flush pending changes. Milliseconds.
     #[default]
     Flush,
-    /// No writes are expected soon: give back whatever was being held for
-    /// them.
-    ///
-    /// Separate from `Flush` because they happen at different rates. Flushing
-    /// is what a burst of changes needs every second; this is what a machine
-    /// sitting idle overnight needs once. An index that holds a large write
-    /// buffer — which is most of them — is otherwise a process that costs
-    /// hundreds of megabytes to leave running.
+    /// No writes are expected soon: give back whatever was being held for them.
+    /// Separate from `Flush`, which a burst needs every second, where this is what an
+    /// idle machine needs once.
     Idle,
     /// Reclaim space from deleted entries. Seconds.
     Compact,
@@ -444,9 +325,8 @@ mod tests {
         );
     }
 
-    /// The two must agree: a row and an entry are the same file, and a list
-    /// that shows one location while `stat` reports another is a list nobody
-    /// can check.
+    /// A row and an entry are the same file: a list showing one location while `stat`
+    /// reports another is a list nobody can check.
     #[test]
     fn a_hit_and_an_entry_cut_a_path_the_same_way() {
         for path in ["/a/b/c.txt", "/x", "bare", "/deep/er/still/f", ""] {
@@ -476,12 +356,8 @@ mod tests {
     }
 }
 
-/// How old the bytes in a directory are.
-///
-/// Six bands: today, this week, this month, six months, this year, older. The
-/// thing no disk-usage tool shows and the one that decides what to delete —
-/// twenty-five gigabytes matters less than twenty-five gigabytes nothing has
-/// touched in a year.
+/// How old the bytes in a directory are: today, this week, this month, six months,
+/// this year, older.
 pub const AGE_BANDS: usize = 6;
 
 /// What one directory weighs, including everything below it.
@@ -490,51 +366,26 @@ pub struct DirUsage {
     pub path: String,
     /// Logical size, in bytes.
     pub bytes: u64,
-    /// Space actually allocated. Smaller for a sparse file, larger for a tiny
-    /// one. Reported beside `bytes` rather than instead of it, because showing
-    /// the logical size and calling it disk usage is the standard lie.
+    /// Space actually allocated: smaller for a sparse file, larger for a tiny one.
+    /// Reported beside `bytes`, not instead of it.
     pub disk: u64,
     pub files: u64,
     /// `bytes` split by [`AGE_BANDS`].
     pub age: [u64; AGE_BANDS],
 }
 
-/// What a subtree weighs.
-///
-/// **A hard-linked file is counted once**, the way `du` counts it and `du -l`
-/// does not — and that is not a choice made here, it is what the index holds.
-/// A source with stable identities gives every name of one inode the same
-/// [`EntryId`], so the index has one row for it however many names it has.
-/// 489,373 files on the corpus this was measured against have more than one.
-///
-/// The corollary is worth knowing: those bytes are attributed to *one* of the
-/// directories the file appears in, whichever name was written last. `du` is
-/// arbitrary here too — it credits whichever it reaches first — but the two
-/// can disagree about where the weight sits while agreeing about the total.
-///
-/// [`EntryId`]: crate::types::EntryId
+/// What a subtree weighs. A hard-linked file counts once, as `du` counts it: every
+/// name of one inode has the same [`EntryId`](crate::types::EntryId), so the index
+/// holds one row, credited to whichever of its names was written last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageRequest {
     /// The subtree to weigh. Empty means every root the index holds.
     pub path: String,
     /// How many children to name.
     pub top: u32,
-    /// Weigh only the files this matches. Empty — the default — weighs all of
-    /// them, which is the `du` question and the one this answered first.
-    ///
-    /// **A filtered total is not a disk-usage figure and must not be shown as
-    /// one.** It is what the matching files come to, arranged by folder: an
-    /// answer to "where do my photos sit", not to "what is on this disk". A
-    /// frontend that applies this owes its reader a word saying so.
-    ///
-    /// Asking is cheaper than not asking, but by less than it looks like it
-    /// should be. The rollup walks the rows a search walks rather than all of
-    /// them — and that is only the first of its two passes. The second one
-    /// builds the folder tree, which is the same tree whatever was asked, so
-    /// a query matching *nothing* still costs two thirds of the whole report.
-    /// Measured over 2.2 M rows: 376 ms unfiltered, 243 ms for a query nothing
-    /// answers, 224–332 ms for the rest. Scoping is the lever that works —
-    /// the same numbers under one folder are 57 ms and 13.6 ms.
+    /// Weigh only the files this matches; empty — the default — weighs all of them.
+    /// A filtered total is not a disk-usage figure and must not be shown as one, and
+    /// it saves little: the folder tree costs two thirds of the report either way.
     #[serde(default)]
     pub query: Ast,
 }

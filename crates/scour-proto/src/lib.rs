@@ -1,15 +1,8 @@
-//! What a client and the service say to each other.
+//! What a client and the service say to each other: types and nothing else — no
+//! socket, no threads, no serialisation format chosen.
 //!
-//! Types and nothing else — no socket, no threads, no serialisation format
-//! chosen. That separation is what lets the same vocabulary carry over a local
-//! socket, inside one process, and, when a phone eventually wants to talk to a
-//! desktop, over something else entirely. It is also what lets the MCP server
-//! be a thin mapping rather than a second implementation of everything.
-//!
-//! Queries cross as **text**, not as a parsed tree. The service parses. A model
-//! or a script writing `ext:rs size:>1mb` should not have to know the shape of
-//! an `Ast`, and every caller parsing for itself would be three chances for
-//! the language to mean three things.
+//! Queries cross as **text**, not as a parsed tree. The service parses, so the
+//! language cannot come to mean three things in three callers.
 
 use scour_core::{
     Completion, Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
@@ -29,26 +22,14 @@ pub struct Call {
     pub request: Request,
 }
 
-/// One frame of one answer.
-///
-/// Almost every request is answered by exactly one of these. The exception is
-/// [`Request::Export`], which is answered by a run of them — see `more`.
+/// One frame of one answer. Almost every request is answered by exactly one; see
+/// `more` for [`Request::Export`], which is answered by a run of them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub id: u64,
-    /// Another frame with this id follows.
-    ///
-    /// **The whole of the streaming change to the wire.** The framing was
-    /// already one JSON object per line with a request id on it; what it could
-    /// not say was "this is a piece". Without a marker, a client that asked for
-    /// something answered in pieces would read the first piece as the answer
-    /// and leave the rest in its buffer, and the *next* request on that
-    /// connection would be answered by the leftovers — a desynchronised stream
-    /// that reports the wrong file rather than an error.
-    ///
-    /// Defaulted and omitted when false, so a frame written by a service that
-    /// predates this is read unchanged, and a client that predates it ignores
-    /// the field on the frames it will never ask for.
+    /// Another frame with this id follows. Without the marker a client reading one
+    /// line per answer takes the first piece as the whole and leaves the rest for the
+    /// next request. Defaulted and omitted when false, so old frames read unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub more: bool,
     #[serde(flatten)]
@@ -79,9 +60,8 @@ impl Reply {
     }
 }
 
-/// **Not boxed.** One of these exists per request, and the large variant is
-/// the answer itself — the allocation boxing would add is one more than the
-/// reply already made, to save copying it once.
+/// **Not boxed.** One of these exists per request and the large variant is the answer
+/// itself, so boxing would add an allocation to save one copy.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,47 +84,15 @@ pub enum Request {
         #[serde(default)]
         page: Page,
     },
-    /// The whole matching set, as a spreadsheet, in pieces.
-    ///
-    /// **The only request answered by more than one frame.** Everything else
-    /// here is a page or a summary and fits in one; this is the whole answer,
-    /// which on this index is 2.24 M rows and a couple of hundred megabytes,
-    /// and there is no size at which holding all of it was ever the plan.
-    ///
-    /// ## Why it is a request rather than something the caller assembles
-    ///
-    /// It was the latter, in the browser bridge, and paging is what made it
-    /// impossible. A page costs what it takes to walk to its offset — 2.1 ms
-    /// at the start of this index, 25.3 at a hundred thousand, 65.5 at half a
-    /// million, 117.6 at a million — so a caller stitching pages together pays
-    /// a cost that is linear per page and therefore quadratic in total. The
-    /// whole of this index wrote 1.4 M lines in ten minutes and had not
-    /// finished. The endpoint stopped at half a million and said so in the
-    /// file, and the owner asked for no limit.
-    ///
-    /// A keyset cursor is the usual escape from an offset and cannot be
-    /// written here: the query language takes a date and not a time.
-    /// `dm:<=2026-03-07` parses; `dm:<=1770000000` and `dm:<2026-03-07T18:25:13`
-    /// do not — checked, not assumed — so a cursor could only step a day, and
-    /// one package install stamps a hundred thousand files in a day.
-    ///
-    /// So the walk happens once, in the service, and the rows leave as they
-    /// are produced.
-    ///
-    /// ## The order, which is the index's and not the caller's
-    ///
-    /// There is no `sort` here, and its absence is the honest version of a
-    /// field that would have to be ignored. Rows arrive in the order the index
-    /// holds them: newest-first within a segment, which is the layout the whole
-    /// search path is built on. See [`Response::ExportDone`] and the note in
-    /// `scour-index-native`'s `scan` for what an ordered export would take and
-    /// why it is not this change.
+    /// The whole matching set, as a spreadsheet, in pieces — the only request answered
+    /// by more than one frame. Stitching pages cannot substitute: a page costs a walk
+    /// to its offset, 117.6 ms at a million. No `sort` — rows arrive as the index holds
+    /// them, newest-first within a segment.
     Export {
         #[serde(default)]
         query: String,
-        /// Column ids, in the order they are wanted. Empty means the five the
-        /// window shows out of the box. Named by the caller because they are
-        /// what the reader chose — see `scour_export::Sheet`.
+        /// Column ids, in the order they are wanted. Empty means the five the window
+        /// shows out of the box; see `scour_export::Sheet`.
         #[serde(default)]
         columns: Vec<String>,
     },
@@ -154,21 +102,14 @@ pub enum Request {
         #[serde(default = "default_cap")]
         cap: u32,
     },
-    /// Group the matching set — by kind, by extension, by folder, by age.
-    ///
-    /// A **list**, because they are all questions about the same rows and the
-    /// index answers them from one walk of it. A sidebar asking for three
-    /// separately walked the matching set three times.
+    /// Group the matching set — by kind, by extension, by folder, by age. A list,
+    /// because the index answers them all from one walk of the matching rows.
     Facets {
         query: String,
         by: Vec<FacetBy>,
     },
-    /// List a directory from the index.
-    ///
-    /// The operation an assistant exploring a filesystem actually performs, and
-    /// the reason it is a request of its own rather than a search: it is
-    /// bounded per level, so a directory holding a million files answers in the
-    /// same time as one holding ten.
+    /// List a directory from the index. A request of its own rather than a search
+    /// because it is bounded per level: a million children answer as fast as ten.
     Tree {
         path: String,
         #[serde(default = "one")]
@@ -180,37 +121,27 @@ pub enum Request {
     Stat {
         path: String,
     },
-    /// What a directory weighs, and which of its children weigh the most.
-    ///
-    /// The question every disk-usage tool answers by walking the filesystem,
-    /// which takes minutes. Here it is two passes over data already in memory.
+    /// What a directory weighs, and which of its children weigh the most: two passes
+    /// over data already in memory, where a disk-usage tool walks the filesystem.
     Usage {
         /// Empty means every root the index holds.
         #[serde(default)]
         path: String,
         #[serde(default = "default_usage_top")]
         top: u32,
-        /// Weigh only the files this matches. Empty weighs all of them, which
-        /// is the `du` question and what this answered before the field
-        /// existed — defaulted, so a caller written against that version still
-        /// asks it.
+        /// Weigh only the files this matches. Empty — the default — weighs all of
+        /// them, which is the `du` question.
         #[serde(default)]
         query: String,
     },
-    /// The same file, several times over.
-    ///
-    /// Ordered by what deleting the copies would give back, largest first,
-    /// because that is the question — a count of duplicates is not something
-    /// anybody wanted. `read_budget` of zero answers from the sizes alone,
-    /// which costs nothing and is already the answer to "where might my disk
-    /// be going".
+    /// The same file, several times over, ordered by what deleting the copies would
+    /// give back, largest first. `read_budget` of zero answers from the sizes alone.
     Duplicates {
         /// Empty means everything indexed.
         #[serde(default)]
         under: String,
-        /// Ignore anything smaller. A unique size eliminates only 6.2% of
-        /// files but candidates over a megabyte are 18,723 of them holding
-        /// 141.8 GB, measured on the live index.
+        /// Ignore anything smaller. A unique size eliminates only 6.2% of files, but
+        /// candidates over a megabyte are 18,723 of them holding 141.8 GB.
         #[serde(default = "default_dupe_floor")]
         min_size: u64,
         /// How many bytes may be read confirming. Zero reads nothing.
@@ -219,39 +150,19 @@ pub enum Request {
         #[serde(default = "default_dupe_top")]
         top: u32,
     },
-    /// What this person's frontends remember: columns, widths, order, the
-    /// queries they have run.
-    ///
-    /// **Held by the service because it is the only thing all the frontends
-    /// talk to.** The window kept these in `localStorage`, which a browser
-    /// writes on a clean shutdown and loses when it is killed — measured both
-    /// ways — and which a terminal interface cannot read at all.
+    /// What this person's frontends remember: columns, widths, order, the queries they
+    /// have run. Held by the service, the only thing all the frontends talk to.
     Settings {},
-    /// Change some of them.
-    ///
-    /// **Not the whole object, and it was.** The reasoning written here said
-    /// *a frontend that sent one field would have to know what the others
-    /// currently are anyway* — which is only true if it has to send them. It
-    /// does not: what a change does not name, it does not touch. That is what
-    /// lets a terminal and a window be open at once without each erasing what
-    /// the other understands, and what lets a field be added to
-    /// [`scour_settings::Settings`] without every frontend learning about it
-    /// first.
+    /// Change some of them. What a change does not name, it does not touch, so a
+    /// terminal and a window can both be open without erasing each other, and a field
+    /// can be added to [`scour_settings::Settings`] before any frontend knows it.
     SetSettings {
         #[serde(default)]
         change: scour_settings::Change,
     },
-    /// Read a query back — as a sentence, as coloured pieces, and as what
-    /// could be typed next. Nothing is run.
-    ///
-    /// The parser is forgiving by design: a mistyped field is searched for as
-    /// literal text rather than rejected. This is how a caller checks what its
-    /// query was actually understood to mean.
-    ///
-    /// It is also what a search box calls on every keystroke, which is why the
-    /// colouring lives here and not in the frontend. A frontend that tokenised
-    /// the query itself would be a second parser, and the day the two
-    /// disagreed the box would be confidently colouring a lie.
+    /// Read a query back — as a sentence, as coloured pieces, and as what could be
+    /// typed next. Nothing is run. A mistyped field is searched for as literal text,
+    /// so this is how a caller checks what its query was understood to mean.
     Explain {
         query: String,
         /// Where the caret is, as a byte offset, when completions are wanted.
@@ -259,94 +170,34 @@ pub enum Request {
         #[serde(default)]
         cursor: Option<u32>,
     },
-    /// What can be shown of one file — and, when that is text, the head of it.
-    ///
-    /// **The decision, not the bytes.** Deciding needs the file's first eight
-    /// kilobytes and a table of extensions, and getting it wrong is invisible:
-    /// a frontend guessing from the name calls `notes.bak` unreadable and
-    /// `model.safetensors` text. Moving the bytes as well would be worse than
-    /// useless — a browser asks for a video a piece at a time and cannot seek
-    /// without ranged HTTP, so whoever speaks to the browser has to serve
-    /// them. A terminal interface needs nothing but this reply.
-    ///
-    /// Fenced like `stat`: only a path the index holds.
+    /// What can be shown of one file — and, when that is text, the head of it. The
+    /// decision, not the bytes: deciding needs the first eight kilobytes and a table of
+    /// extensions. Fenced like `stat`: only a path the index holds.
     Preview {
         path: String,
     },
-    /// Where this person keeps things, and what the volumes under them record.
-    ///
-    /// **Asked of the service because it runs where the files are.** Both
-    /// halves were worked out in the browser bridge — `user-dirs.dirs` parsed
-    /// there, `/proc/self/mounts` read there — which is one frontend's copy of
-    /// a rule that four are meant to share. The same guess had already been
-    /// wrong a layer higher: the page shipped with `/home/hasan` written into
-    /// it. A frontend draws what it is told now.
-    /// What the walk is told to skip, and what a person may change about it.
-    ///
-    /// **Two lists, kept apart on purpose.** The exclusions that do the work
-    /// are a built-in set — `target`, `node_modules`, `.cargo/registry` and the
-    /// rest — plus whatever the configuration adds. Only the second can be
-    /// edited, so handing back one merged list would offer a window entries it
-    /// cannot remove. A rail that lies about what a button does is worse than
-    /// no button.
-    ///
-    /// The counts are not here and cannot be: what a rule excludes is *not in
-    /// the index*, so the only way to know how many files it holds is to walk
-    /// the disk. That is a separate, deliberate act — measured at nine minutes
-    /// for `target` on this machine — and it is not something an answer to
-    /// "what are the rules" should quietly do.
+    /// What the walk is told to skip, and what a person may change about it. The
+    /// built-in and configured exclusions cannot be edited, so they stay apart from
+    /// what a window added. No counts: what a rule excludes is not in the index.
     Rules {},
+    /// Where this person keeps things, and what the volumes under them record. Asked
+    /// of the service because it runs where the files are.
     Places {},
-    /// Make the pictures this desktop has not made yet.
-    ///
-    /// **Asked of the service because the bound is about the machine.** A
-    /// thumbnail is produced by a separate process doing image or video
-    /// decoding, and how many of those may run at once is one number for the
-    /// whole desktop. A bridge that bounded itself to four, a window that
-    /// bounded itself to four and a terminal that bounded itself to four would
-    /// each be reasonable and the machine would be running twelve. There is one
-    /// [`scour_thumbs::Maker`], in `scourd`, for the same reason there is one
-    /// index.
-    ///
-    /// It follows the split `Preview` already made: the *decision and the
-    /// work* cross the wire, the *bytes* do not. What comes back is which
-    /// paths have a picture now — the caller then reads it out of the shared
-    /// cache the way it already read the ones that were already there.
-    ///
-    /// **This one is allowed to take its time**, like `await` and unlike
-    /// everything else: it is seconds of somebody else's decoding. A caller
-    /// that cannot afford to wait must not put it where waiting matters —
-    /// `scour-web` gives it a connection of its own so a search never queues
-    /// behind one.
-    ///
-    /// Fenced like `stat` and for a much better reason than `preview`: this
-    /// **runs a program on the file**. Only a path the index holds.
+    /// Make the pictures this desktop has not made yet. How many decoders may run at
+    /// once is one number for the whole machine: one [`scour_thumbs::Maker`], in
+    /// `scourd`. It **runs a program on the file**, so it is fenced like `stat`.
     Thumbnails {
-        /// At most [`scour_thumbs::Maker::BATCH`]; the rest are ignored. A
-        /// frontend is not a fence, so the cap is applied here as well as
-        /// there.
+        /// At most [`scour_thumbs::Maker::BATCH`]; the rest are ignored. A frontend is
+        /// not a fence, so the cap is applied here too.
         files: Vec<String>,
     },
     /// The configured sources and what each can do.
     Sources {},
     Status {},
     Stats {},
-    /// Do not answer until the index would answer differently.
-    ///
-    /// The one request that is allowed to take its time. `since` is the
-    /// [`Status::revision`] the caller last saw; the reply is a [`Status`],
-    /// either because something changed or because `timeout_ms` ran out — and
-    /// the revision in it says which.
-    ///
-    /// This is how a list stays live without polling. The alternative, a client
-    /// asking every second whether anything happened, is 86,400 searches a day
-    /// to discover that a desktop was idle; this is one blocked thread and no
-    /// requests at all until something moves. It is also what tells the service
-    /// that somebody is looking, which is what makes a change worth committing
-    /// sooner than it would be for nobody.
-    ///
-    /// [`Status`]: scour_core::Status
-    /// [`Status::revision`]: scour_core::Status::revision
+    /// Do not answer until the index would answer differently. `since` is the
+    /// [`Status::revision`](scour_core::Status::revision) the caller last saw; the reply
+    /// is a `Status`, whether something changed or `timeout_ms` ran out.
     Await {
         #[serde(default)]
         since: u64,
@@ -358,19 +209,9 @@ pub enum Request {
         #[serde(default)]
         path: Option<String>,
     },
-    /// Look at these paths again, now — one `stat` each, no tree walked.
-    ///
-    /// **The answer to "the row is still there".** Something outside the index
-    /// changed these files a moment ago, and the caller is the one that changed
-    /// them: a face that has just sent a file to the trash, renamed one, or
-    /// moved one. A watcher finds that out on its own schedule, which is right
-    /// for a change nobody is waiting on and wrong for this one.
-    ///
-    /// It changes nothing on disk. Whoever moved the file did the moving, with
-    /// their own permissions; the service only re-reads. That distinction is
-    /// the reason this is a separate request rather than a `Delete`: a
-    /// background service that indexes a filesystem should not also be able to
-    /// empty one, and it still cannot.
+    /// Look at these paths again, now — one `stat` each, no tree walked. For a change
+    /// the caller itself just made and must not wait on the watcher to see. It changes
+    /// nothing on disk: the service only re-reads.
     Recheck {
         paths: Vec<String>,
     },
@@ -413,11 +254,8 @@ fn default_dupe_top() -> u32 {
     50
 }
 
-/// Files that are, or may be, the same file.
-///
-/// A wire type of its own rather than `scour_dupes::Group` reaching this far:
-/// `scour-dupes` has no dependencies and no serde, deliberately, and a
-/// protocol crate is exactly the wrong place to force one on it.
+/// Files that are, or may be, the same file. A wire type of its own so that
+/// `scour-dupes`, which takes no dependencies, is not made to grow serde.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DupGroup {
     /// What each of them weighs.
@@ -425,26 +263,19 @@ pub struct DupGroup {
     pub paths: Vec<String>,
     /// What deleting all but one would give back.
     pub waste: u64,
-    /// `size`, `edges` or `content` — how far the checking got. **Only
-    /// `content` means read end to end and compared**, and the difference
-    /// decides whether a caller may say "identical" or only "the same size".
+    /// `size`, `edges` or `content` — how far the checking got. Only `content` means
+    /// read end to end, which is "identical" rather than "the same size".
     pub certainty: String,
 }
-/// How long an unqualified [`Request::Await`] waits.
-///
-/// Long enough that a quiet machine costs one round trip a minute, short
-/// enough that a client which has lost its connection finds out without
-/// anybody restarting anything.
+/// How long an unqualified [`Request::Await`] waits: a quiet machine costs one round
+/// trip a minute, and a client that has lost its connection finds out.
 fn default_wait_ms() -> u32 {
     25_000
 }
 
-/// Internally tagged, which constrains the shapes allowed here: a variant may
-/// hold a struct (its fields are flattened alongside the tag) or its own named
-/// fields, but **not** a bare string or a sequence — serde cannot merge a tag
-/// into those, and the failure appears at run time as a serialisation error
-/// rather than at compile time. `Sources` and `Text` are named-field variants
-/// for exactly that reason.
+/// Internally tagged, which constrains the shapes here: a variant may hold a struct or
+/// its own named fields, but **not** a bare string or a sequence — serde cannot merge a
+/// tag into those, and it fails when sending. `Sources` and `Text` are named-field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Response {
@@ -453,18 +284,12 @@ pub enum Response {
         total: u64,
         /// The count stopped at the cap, so this is a floor.
         capped: bool,
-        /// Terms the parser could not read as written. See
-        /// [`SearchResponse::misread`] — a count is the answer most likely to
-        /// be believed without a second look, so it is the one that can least
-        /// afford to drop the warning on its way out.
+        /// Terms the parser could not read as written. See [`SearchResponse::misread`];
+        /// a count is the answer most likely to be believed without a second look.
         #[serde(default)]
         misread: Vec<scour_core::Span>,
-        /// What the count cost, in microseconds.
-        ///
-        /// **Every other answer carries this and these two did not**, which is
-        /// how a hundred milliseconds hid in `tree`: nothing that reads
-        /// `took_us` could see it, so nothing reported it, so nobody looked.
-        /// Defaulted, so an older client reading a newer reply is unaffected.
+        /// What the count cost, in microseconds. Defaulted, so an older client reading
+        /// a newer reply is unaffected.
         #[serde(default)]
         took_us: u64,
     },
@@ -473,43 +298,26 @@ pub enum Response {
         /// Files considered at all.
         candidates: u64,
         /// Everything the groups could give back, **including any left out of
-        /// `groups`** — a total that shrank when the list was truncated would
-        /// be a total nobody could act on.
+        /// `groups`**: a total that shrank on truncation could not be acted on.
         waste: u64,
-        /// How much of `waste` was read and compared rather than guessed.
-        /// The two are different questions: 39.36 GiB by size against 18.29
-        /// GiB once read, measured here. Printing only the first tells
-        /// somebody they can delete files that were never copies.
+        /// How much of `waste` was read and compared rather than guessed: 39.36 GiB by
+        /// size against 18.29 GiB once read, measured here.
         #[serde(default)]
         proven: u64,
         /// Bytes read confirming.
         read: u64,
-        /// Groups the read budget did not reach. Said rather than left to be
-        /// inferred: a partial answer that looks complete is what gets files
-        /// deleted on the strength of a guess.
+        /// Groups the read budget did not reach. Said rather than inferred: a partial
+        /// answer that looks complete gets files deleted on a guess.
         unconfirmed: u64,
     },
-    /// A piece of an export: CSV text, whole lines, ready to write.
-    ///
-    /// **Whole lines**, so that a relay never has to buffer a partial one and
-    /// a reader that stops mid-export stops on a row boundary. The first piece
-    /// carries the byte-order mark and the heading row.
-    ///
-    /// Sized by the service — see `EXPORT_CHUNK` in `scour-engine` — rather
-    /// than being one row a frame: a frame is a line of JSON with a `{"id":…}`
-    /// on it, and paying that per row would make the framing most of the
-    /// bytes on the wire.
+    /// A piece of an export: CSV text, whole lines, so a relay never buffers a partial
+    /// one. The first piece carries the byte-order mark and the heading row. Sized by
+    /// the service — see `EXPORT_CHUNK` in `scour-engine` — not one row a frame.
     ExportChunk {
         csv: String,
     },
-    /// The export finished, and how many rows it wrote.
-    ///
-    /// **A count the caller can check.** An export that stops early because
-    /// the service failed halfway is otherwise indistinguishable from one that
-    /// ran out of rows, and a truncated spreadsheet read as complete is a
-    /// wrong conclusion about a disk. A failure arrives as `Outcome::Error`
-    /// instead of this, so a reader that never sees either knows the answer is
-    /// incomplete.
+    /// The export finished, and how many rows it wrote — a count the caller can check.
+    /// A failure arrives as `Outcome::Error` instead of this frame.
     ExportDone {
         rows: u64,
     },
@@ -517,35 +325,17 @@ pub enum Response {
     Facets(FacetResponse),
     Tree {
         root: TreeNode,
-        /// What listing it cost, in microseconds. See [`Response::Count`] —
-        /// this is the one where it mattered most: a depth-one listing of
-        /// fifty children measured 112 ms, because the count under each child
-        /// is a query of its own, and no dashboard could see any of it.
+        /// What listing it cost, in microseconds. A depth-one listing of fifty children
+        /// measured 112 ms: the count under each child is a query of its own.
         #[serde(default)]
         took_us: u64,
     },
     Stat(Entry),
     Usage(UsageResponse),
-    /// See [`Request::Rules`]. Three groups, because they are three different
-    /// kinds of thing and only one of them a window may change:
-    ///
-    /// * `builtin_*` — code. Not editable anywhere.
-    /// * `config_*` — `config.toml`, written by hand and left alone. Shown so
-    ///   a person can see why something is missing, not offered for deletion:
-    ///   rewriting that file through a serialiser would destroy the comments
-    ///   and measurements that are most of its value.
-    /// * `added_*` — what a window wrote, kept beside the index like the
-    ///   column widths. This is the group a write replaces.
-    ///
-    /// And `off`, which cuts across all three: the ids of rules that are listed
-    /// but not applied. **A switched-off rule is still reported in its own
-    /// group**, because that is where it lives and switching it back on has to
-    /// be possible — a panel built from what the engine is enforcing would
-    /// watch the rule disappear rather than see it switch. This is what makes
-    /// the two groups nobody can delete — code, and a hand-written file —
-    /// something a person can nonetheless turn off. See
-    /// [`scour_settings::rule_id`] for how an id is spelled; a frontend builds
-    /// the same string to compare.
+    /// See [`Request::Rules`]. `builtin_*` is code and `config_*` is `config.toml`,
+    /// neither editable; `added_*` is what a window wrote and what a write replaces.
+    /// `off` cuts across all three, keyed by [`scour_settings::rule_id`], and a
+    /// switched-off rule is still listed in its own group.
     Rules {
         builtin_paths: Vec<String>,
         builtin_dirs: Vec<String>,
@@ -568,13 +358,8 @@ pub enum Response {
         description: String,
         /// True when the query asks for document contents.
         needs_content: bool,
-        /// The query cut into runs, in order, covering every byte of it.
-        ///
-        /// A frontend maps a [`Role`] to a colour and does nothing else. Two
-        /// of the roles say *this is not what you think it is*, which is the
-        /// only way a forgiving parser can be honest about what it did.
-        ///
-        /// [`Role`]: scour_core::Role
+        /// The query cut into runs, in order, covering every byte of it. A frontend
+        /// maps a [`Role`](scour_core::Role) to a colour and does nothing else.
         #[serde(default)]
         spans: Vec<Span>,
         /// What could be typed at `cursor`. Empty unless one was given.
@@ -595,30 +380,17 @@ pub enum Response {
 }
 
 impl Request {
-    /// Does this request change anything?
-    ///
-    /// **This is the MCP server's read-only promise**, and it is a promise
-    /// rather than a description: `scour-mcp` refuses anything that answers
-    /// `true` before the request reaches the socket, so the server is
-    /// read-only because writes are stopped, not because the tools that could
-    /// write were never written.
-    ///
-    /// Written as an exhaustive `match` on purpose. `matches!` would let a new
-    /// variant default to harmless and be waved through, which is exactly the
-    /// mistake this guards: whoever adds the next request has to say which
-    /// side it is on, because nothing compiles until they do.
+    /// Does this request change anything? `scour-mcp` refuses everything answering
+    /// `true` before it reaches the socket, so this is a security boundary. Exhaustive
+    /// on purpose: a new variant must not default to harmless.
     pub fn is_mutating(&self) -> bool {
         match self {
             Request::Rescan { .. }
             | Request::Recheck { .. }
             | Request::Maintain { .. }
             | Request::SetSettings { .. }
-            // **It starts programs and writes files.** Nothing about the index
-            // changes, so this is the looser reading of "mutating" — but this
-            // predicate is the MCP server's security boundary rather than a
-            // classification, and "a model may cause this machine to run a
-            // handful of image decoders on files it chose" is not something to
-            // arrive at by leaving a variant on the quiet side of a match.
+            // It starts programs and writes files. Nothing about the index changes,
+            // but this predicate is a security boundary, not a classification.
             | Request::Thumbnails { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
@@ -642,17 +414,9 @@ impl Request {
         }
     }
 
-    /// Is this answered by a run of frames rather than by one?
-    ///
-    /// **A client has to know before it asks.** `Client::call` reads exactly
-    /// one line; asking it for something answered in pieces would leave the
-    /// rest of them in the buffer for the next request to mistake for its own
-    /// answer. So this is checked at the door — see `scour_ipc::Client::call`,
-    /// which refuses rather than desynchronises.
-    ///
-    /// Exhaustive for the same reason [`Request::is_mutating`] is: whoever
-    /// adds the next streaming request has to say so here, because nothing
-    /// compiles until they do.
+    /// Is this answered by a run of frames rather than by one? A client has to know
+    /// before it asks: `scour_ipc::Client::call` reads one line and refuses these
+    /// rather than desynchronise. Exhaustive, like [`Request::is_mutating`].
     pub fn streams(&self) -> bool {
         match self {
             Request::Export { .. } => true,
@@ -719,19 +483,15 @@ mod tests {
 
     #[test]
     fn what_changes_something_is_named_one_by_one() {
-        // The MCP server refuses everything this calls mutating, so the list
-        // is a security boundary rather than a classification. Named one by
-        // one: `is_mutating` is exhaustive, so a new variant cannot be
-        // forgotten — but an existing one could be quietly moved to the other
-        // side, and that is what this catches.
+        // Named one by one: `is_mutating` is exhaustive, so a new variant cannot be
+        // forgotten, but an existing one could be quietly moved to the other side.
         let mutating: Vec<Request> = vec![
             Request::Rescan { path: None },
             Request::Maintain {
                 level: Maintenance::Compact,
             },
             Request::Shutdown {},
-            // Not a write to the index — a write to the desktop's thumbnail
-            // cache, and a handful of processes started to fill it.
+            // A write to the desktop's thumbnail cache, and processes started for it.
             Request::Thumbnails { files: Vec::new() },
         ];
         for r in &mutating {
@@ -765,9 +525,8 @@ mod tests {
 
     #[test]
     fn a_minimal_search_request_needs_only_a_query() {
-        // Everything a caller can reasonably leave out has a default, because
-        // the most common caller is a person typing JSON by hand or a model
-        // filling in a schema.
+        // Everything a caller can reasonably leave out has a default: the common
+        // caller is a person typing JSON or a model filling in a schema.
         let call: Call =
             serde_json::from_str(r#"{"id":1,"op":"search","query":"rapor"}"#).expect("parse");
         assert_eq!(call.id, 1);
@@ -853,12 +612,8 @@ mod tests {
         assert_eq!(names.len(), n, "every request needs its own name");
     }
 
-    /// Every response shape, serialised and read back.
-    ///
-    /// The guard this exists to be: an internally tagged enum cannot carry a
-    /// bare string or a sequence, and serde reports that when the message is
-    /// *sent*, not when it is written. Without this, the failure surfaces as a
-    /// client whose connection silently closes.
+    /// Every response shape, serialised and read back: an internally tagged enum
+    /// cannot carry a bare string or a sequence, and serde says so only when sending.
     #[test]
     fn every_response_round_trips() {
         let all = [
@@ -938,12 +693,9 @@ mod tests {
         assert_eq!(e.code(), "query_too_short");
     }
 
-    /// A whole answer says nothing about being one, and a piece says it.
-    ///
-    /// The asymmetry is deliberate and is what makes the field free: a service
-    /// written before streaming existed emits exactly the frames this reads as
-    /// whole, and a client written before it reads a whole frame unchanged.
-    /// Only the frames nobody used to ask for carry the extra key.
+    /// A whole answer says nothing about being one, and a piece says it. That
+    /// asymmetry is what makes the field free: only the frames nobody used to ask for
+    /// carry the extra key.
     #[test]
     fn only_a_piece_of_an_answer_says_that_more_follows() {
         let whole = serde_json::to_string(&Reply::whole(1, Outcome::Ok(Response::Accepted)))
@@ -965,8 +717,7 @@ mod tests {
         assert!(back.more);
         assert_eq!(back.id, 1);
 
-        // Read back as false when absent, which is what every existing frame
-        // on the wire looks like.
+        // Read back as false when absent, as every older frame on the wire is.
         let old: Reply =
             serde_json::from_str(r#"{"id":4,"ok":{"result":"accepted"}}"#).expect("parse");
         assert!(!old.more);
@@ -1008,9 +759,8 @@ mod tests {
         let Request::Await { since, timeout_ms } = call.request else {
             panic!("expected a wait");
         };
-        // Zero is "I have seen nothing", so a service that has already applied
-        // anything answers at once rather than making a new client wait out a
-        // timeout to learn what it could have been told immediately.
+        // Zero is "I have seen nothing", so a service that has applied anything
+        // answers at once rather than making a new client wait out the timeout.
         assert_eq!(since, 0);
         assert_eq!(timeout_ms, 25_000);
     }

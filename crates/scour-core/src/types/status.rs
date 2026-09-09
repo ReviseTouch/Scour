@@ -4,14 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{Kind, SourceId};
 
-/// A snapshot of the running service.
-///
-/// Every field is a number or a flag. Nothing here is a sentence, because
-/// three frontends in several languages have to describe the same state and
-/// only one of them should be choosing the words.
+/// A snapshot of the running service. Every field is a number or a flag: several
+/// frontends describe the same state, and only one of them chooses the words.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Status {
-    /// A scan is running.
     pub scanning: bool,
     /// Which source, when one is being scanned.
     pub scanning_source: Option<SourceId>,
@@ -19,52 +15,31 @@ pub struct Status {
     pub scanned: u64,
     /// How long the last completed scan took.
     pub last_scan_ms: u64,
-    /// Changes accepted but not yet committed.
-    ///
-    /// Non-zero is normal: commits are batched because they cost tens of
-    /// milliseconds each. Growing without bound is not.
+    /// Changes accepted but not yet committed. Non-zero is normal — commits cost
+    /// tens of milliseconds and are batched — growing without bound is not.
     pub pending: u64,
     /// Sources currently being watched for changes.
     pub watching: u32,
-    /// Sources configured.
     pub sources: u32,
     pub entries: u64,
     pub index_bytes: u64,
-    /// Entries outside the ordered part of the index.
-    ///
-    /// Every query reads all of them, so this is what decides when a rebuild
-    /// is due — and [`Status::rebuild_advised`] says when it is.
+    /// Entries outside the ordered part of the index. Every query reads all of them,
+    /// which is what [`Status::rebuild_advised`] is decided from.
     pub unsorted: u64,
     pub rebuild_advised: bool,
     /// The index has never been built.
     pub cold: bool,
-    /// Commits that have failed in a row.
-    ///
-    /// Zero is the only good value. Non-zero means the changes are still held
-    /// in memory and the index on disk is behind — a full disk, a permission
-    /// change, a volume that went away underneath it. It is a count rather than
-    /// a message because three frontends have to describe the same state, and
-    /// because the number is what says whether it is a blip or a wall.
+    /// Commits that have failed in a row. Non-zero means the changes are still in
+    /// memory and the index on disk is behind; the count says blip or wall.
     pub unwritten: u32,
-    /// What the index would answer, as a number.
-    ///
-    /// It changes whenever a search run again could come back different — a
-    /// commit landing, a delete taking effect, a scan sweeping. It is not a
-    /// count of anything and the arithmetic on it is `!=`: a restarted service
-    /// starts from zero, and a client holding a larger number has to notice
-    /// that too.
-    ///
-    /// This is what makes live results possible without polling. A client
-    /// holds the last one it saw and hands it back to `Await`, which does not
-    /// answer until the number is different.
+    /// What the index would answer, as a number: it moves whenever a repeated search
+    /// could come back different. Compared with `!=`, never `>`, since a restarted
+    /// service starts from zero. `Await` returns when it differs from a client's.
     pub revision: u64,
 }
 
-/// One node of a directory listing.
-///
-/// Answered from the index rather than the filesystem, which is what makes it
-/// instant and what makes it usable on a directory holding a million files:
-/// `children` is a count the index already knows, not a read.
+/// One node of a directory listing, answered from the index rather than the
+/// filesystem: `children` is a count the index already holds, not a read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeNode {
     pub name: String,

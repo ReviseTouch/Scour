@@ -1,14 +1,8 @@
-//! Typed failures.
+//! Typed failures. The core never composes a sentence for a human: it returns a
+//! variant, and each frontend turns that into words in the user's language.
 //!
-//! The core never composes a sentence for a human. It returns a variant, and
-//! the frontend — CLI, MCP server, user interface — turns that variant into
-//! words in the user's language. That is the only way three frontends and
-//! several locales can describe the same failure without three copies of the
-//! wording drifting apart.
-//!
-//! `Display` is implemented anyway, in English, because the English text is
-//! also the message id: a frontend with no catalogue entry falls back to it and
-//! is still correct, just untranslated.
+//! `Display` is English, and that English is also the message id: a frontend with
+//! no catalogue entry falls back to it and is still correct, just untranslated.
 
 use std::fmt;
 
@@ -26,10 +20,8 @@ pub enum Error {
         at: usize,
         expected: String,
     },
-    /// A substring index cannot answer a term this short.
-    ///
-    /// The index is built on trigrams, so two characters have nothing to match
-    /// against. Saying so is better than returning everything or nothing.
+    /// A substring index cannot answer a term this short: it is built on trigrams,
+    /// so two characters have nothing to match against.
     QueryTooShort {
         need: usize,
     },
@@ -37,10 +29,8 @@ pub enum Error {
     ContentNotIndexed,
     /// No index exists yet. The first scan has not finished.
     NotIndexed,
-    /// Another writer holds the index.
-    ///
-    /// `detail` says which directory and is optional so that an older client
-    /// deserialising a newer reply still reads the variant.
+    /// Another writer holds the index. `detail` names the directory and defaults, so
+    /// an older client deserialising a newer reply still reads the variant.
     IndexBusy {
         #[serde(default)]
         detail: String,
@@ -49,13 +39,8 @@ pub enum Error {
     IndexCorrupt {
         detail: String,
     },
-    /// The index was written by an older version and has to be built again.
-    ///
-    /// Separate from [`Error::IndexCorrupt`] because nothing is damaged and
-    /// nothing was lost: an index is derived from the filesystem in its
-    /// entirety, so this is a wait, not a loss. The two read the same to a
-    /// program and could not be more different to a person watching a rebuild
-    /// that takes minutes.
+    /// The index was written by an older version and has to be built again. Not
+    /// [`Error::IndexCorrupt`]: nothing is damaged, and it is a wait, not a loss.
     IndexOutdated {
         found: u32,
         expected: u32,
@@ -108,10 +93,8 @@ impl Error {
         }
     }
 
-    /// A short, stable identifier for this failure.
-    ///
-    /// Machine-facing: it is what the MCP server reports and what a catalogue
-    /// keys on. It never changes for a given variant, unlike the English text.
+    /// A short, stable identifier for this failure: what the MCP server reports and
+    /// what a catalogue keys on. Never changes for a variant; the English text may.
     pub fn code(&self) -> &'static str {
         match self {
             Error::QuerySyntax { .. } => "query_syntax",

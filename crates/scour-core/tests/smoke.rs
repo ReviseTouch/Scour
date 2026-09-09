@@ -1,8 +1,5 @@
-//! The contract, exercised from outside.
-//!
-//! These tests are written against the public API only, because that is what
-//! every other crate in the workspace sees. A refactor that keeps the internals
-//! working but breaks a re-export is exactly the kind of thing this catches.
+//! The contract, exercised from outside: the public API only, which is what every
+//! other crate in the workspace sees, so a broken re-export shows up here.
 
 use std::io::Read;
 
@@ -36,8 +33,7 @@ fn the_public_surface_is_reachable() {
 
 #[test]
 fn folding_is_reachable_through_the_trait_object() {
-    // The engine holds a `&dyn Folder`; if that stops working, indexing and
-    // querying can no longer be guaranteed to agree.
+    // The engine holds a `&dyn Folder`: without it, indexing and querying may differ.
     let f: &dyn Folder = &DefaultFolder;
     assert_eq!(f.fold("İSTANBUL"), "istanbul");
     assert_eq!(f.fold("ısparta"), "isparta");
@@ -45,8 +41,7 @@ fn folding_is_reachable_through_the_trait_object() {
 
 #[test]
 fn an_ast_round_trips_through_json() {
-    // The wire protocol and the MCP server both carry this tree as JSON. A
-    // variant that does not survive the trip is a silently broken query.
+    // Carried as JSON on the wire: a variant that does not survive is a broken query.
     let req = SearchRequest::default();
     let json = serde_json::to_string(&req).expect("serialise");
     let back: SearchRequest = serde_json::from_str(&json).expect("deserialise");
@@ -69,8 +64,8 @@ fn changes_round_trip_through_json() {
     }
 }
 
-/// A source that produces two entries and supports nothing else — enough to
-/// prove the trait can actually be implemented outside this crate.
+/// A source that produces two entries and supports nothing else — enough to prove the
+/// trait can be implemented outside this crate.
 #[derive(Debug)]
 struct TinySource;
 
@@ -158,8 +153,7 @@ fn a_source_can_be_implemented_and_driven() {
 
 #[test]
 fn a_sink_can_stop_a_walk() {
-    // Backpressure is the reason `push` returns `Flow` at all: a bounded query
-    // must not pay for a million entries to show a hundred.
+    // `push` returns `Flow` so a bounded query need not pay for a million entries.
     let mut sink = Collect {
         stop_after: 1,
         ..Default::default()
@@ -173,8 +167,7 @@ fn a_sink_can_stop_a_walk() {
 
 #[test]
 fn unsupported_operations_say_so_rather_than_panicking() {
-    // `Box<dyn Read>` is not `Debug`, so the Ok side cannot be unwrapped for a
-    // message — match instead of reaching for `unwrap_err`.
+    // `Box<dyn Read>` is not `Debug`, so `unwrap_err` is unavailable here.
     let Err(err) = TinySource.open(&EntryId::path_hash(SourceId(0), "/x")) else {
         panic!("a source without Caps::CONTENT must refuse to open");
     };

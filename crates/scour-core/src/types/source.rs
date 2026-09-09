@@ -6,22 +6,15 @@ use serde::{Deserialize, Serialize};
 use super::SourceId;
 
 bitflags! {
-    /// What a source is capable of.
-    ///
-    /// Capabilities are declared rather than assumed so that the engine can
-    /// adapt without knowing what it is talking to. Nothing above a source ever
-    /// asks "is this NTFS"; it asks whether there is a journal, whether ids
-    /// survive renames, whether one watch covers a subtree.
+    /// What a source is capable of. Declared rather than assumed: nothing above a
+    /// source asks "is this NTFS", only whether there is a journal or whether one
+    /// watch covers a subtree.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct Caps: u32 {
         /// Can report changes as they happen.
         const WATCH = 1 << 0;
-        /// One watch covers a whole subtree.
-        ///
-        /// True on Windows and macOS, false on Linux, where inotify needs one
-        /// watch per directory and runs out. The difference decides whether
-        /// the engine walks the tree to install watches or not — which is the
-        /// single largest piece of platform-shaped code in a naive design.
+        /// One watch covers a whole subtree; when it is off, the engine walks the
+        /// tree to install watches.
         const RECURSIVE_WATCH = 1 << 1;
         /// Has a durable change journal that can be replayed from a stored
         /// position after a restart: NTFS's USN journal, macOS's FSEvents
@@ -61,12 +54,8 @@ pub struct ScanOptions {
     /// Include entries the platform considers hidden.
     pub hidden: bool,
     pub follow_symlinks: bool,
-    /// Skip the per-entry `stat`.
-    ///
-    /// A directory read already knows each name and whether it is a directory;
-    /// everything else costs an extra syscall per entry. Scanning without it
-    /// and filling the rest in afterwards gets a usable index far sooner on a
-    /// cold cache.
+    /// Skip the per-entry `stat`. A directory read already knows each name and
+    /// whether it is a directory; the rest costs a syscall each, filled in later.
     pub skip_metadata: bool,
     /// Worker threads; zero means "decide from the hardware".
     pub threads: usize,
@@ -78,14 +67,9 @@ pub struct ScanOptions {
     pub exclude_files: Vec<String>,
     /// Paths that override the exclusions above.
     pub allow: Vec<String>,
-    /// Paths that nothing overrides, [`ScanOptions::allow`] included.
-    ///
-    /// One thing needs this and it is not a preference: the index's own
-    /// directory. A user's allow rule that happens to cover it turns the
-    /// service into something that indexes what it is writing while it writes
-    /// it — measured, before the exclusion existed, at 36% and 26% of two
-    /// cores feeding each other. A rule the user can write must not be able to
-    /// switch that back on by accident.
+    /// Paths that nothing overrides, [`ScanOptions::allow`] included. The index's own
+    /// directory needs it: a user rule covering that makes the service index what it
+    /// is writing while it writes it, at roughly 60% of two cores.
     pub deny: Vec<String>,
     /// Restrict the walk to this subtree instead of the source's roots.
     pub subtree: Option<String>,
@@ -119,28 +103,12 @@ pub struct ScanReport {
     pub took_ms: u64,
     /// True when the walk stopped early because the sink asked it to.
     pub cancelled: bool,
-    /// The roots this walk is willing to be reconciled against.
-    ///
-    /// **A sweep is a claim** — "I walked this and those rows were not there" —
-    /// and it deletes on the strength of it. The claim holds only where the
-    /// walk really could look, at the same filesystem, for the whole walk. This
-    /// is where a source says which of its roots that was true of.
-    ///
-    /// It used to be one boolean for the source, which was wrong in both
-    /// directions: one absent removable disk stopped a home directory being
-    /// reconciled at all, and a volume that disappeared *during* the walk was
-    /// still swept, because the check was a single `read_dir` before it
-    /// started.
-    ///
-    /// Empty is not a failure to report — it is a walk nothing may be deleted
-    /// on.
+    /// The roots this walk is willing to be reconciled against: those it could look
+    /// at, on the same filesystem, for the whole walk. Empty is not a missing report
+    /// but a walk nothing may be deleted on.
     pub vouched: Vec<String>,
-    /// Subtrees the walk could not look inside.
-    ///
-    /// Ordinary — a home directory here has 191 of them, mostly permissions —
-    /// and the reason they are named rather than counted: a directory that
-    /// became unreadable *after* it was indexed still holds its files, and a
-    /// sweep that does not know to spare it deletes every one of them. The
-    /// walk cannot say they are gone, because it could not look.
+    /// Subtrees the walk could not look inside — ordinary, mostly permissions. Named
+    /// rather than counted so a sweep can spare them: their rows are not evidence of
+    /// deletion, because the walk never looked.
     pub blind: Vec<String>,
 }

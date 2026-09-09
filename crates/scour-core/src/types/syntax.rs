@@ -1,17 +1,8 @@
-//! Query text, cut into coloured pieces.
+//! Query text, cut into coloured pieces by the parser itself, so that a search
+//! box never reimplements the lexer: a frontend maps a [`Role`] to a colour.
 //!
-//! A search box that colours what is being typed has to agree with the parser
-//! about what the words mean, and the only way to guarantee that is for the
-//! parser to say so. So this is not a lexer for a frontend to reimplement: it
-//! is the shape the engine hands back after reading a query, and a frontend's
-//! whole job is to map a [`Role`] to a colour.
-//!
-//! The roles that matter most are the two that say *this is not what you think
-//! it is*. Scour's parser never fails — an unreadable term becomes a search for
-//! its own text — which is what keeps a half-typed query usable and is also the
-//! one way it can silently answer the wrong question. `kind:zurna` finds files
-//! called "kind:zurna". [`Role::UnknownField`] and [`Role::BadValue`] exist so
-//! that a user can see that happening instead of discovering it in the results.
+//! The parser never fails — `kind:zurna` becomes a search for the text
+//! "kind:zurna" — which [`Role::UnknownField`] and [`Role::BadValue`] mark.
 
 use serde::{Deserialize, Serialize};
 
@@ -47,28 +38,15 @@ pub enum Role {
     Or,
     /// The separator inside a multi-valued field: `ext:rs;toml`.
     Sep,
-    /// What separates two terms: whitespace, or a `;` written instead of it.
-    ///
-    /// **`;` is a space somebody typed without pressing space.** It has been
-    /// a literal character and it has been `|`, and each rule was replaced
-    /// because a query came back wrong: as a character `OPUS ; SONNET` found
-    /// neither word, and as `|` `hasan;genel` found every file called
-    /// `hasan`. Between terms it now means what a space means, which is
-    /// *both*. Inside a field's value it goes on meaning "any of these" —
-    /// [`Role::Sep`] — and that is not one mark used two ways: a list of
-    /// extensions can only ever be an "any", and two terms are a different
-    /// thing from two values.
+    /// What separates two terms: whitespace, or a `;` written instead of it. Between
+    /// terms `;` means what a space means, which is *both*; inside a field's value it
+    /// goes on meaning "any of these" — [`Role::Sep`].
     Space,
 }
 
 impl Role {
-    /// Every role, so that a frontend's tests can walk them.
-    ///
-    /// A colour scheme is a table with one row per role, and the way it goes
-    /// wrong is a role that has no row: nothing fails, the run is drawn in
-    /// whatever the layer's own colour is, and the day it matters is the day
-    /// somebody types `kind:zurna`. See the test below for what keeps this
-    /// list complete.
+    /// Every role, so that a frontend's tests can walk them. A colour table missing a
+    /// row fails silently: the run is drawn in whatever the layer's own colour is.
     pub const ALL: [Role; 14] = [
         Role::Text,
         Role::Glob,
@@ -86,31 +64,15 @@ impl Role {
         Role::Space,
     ];
 
-    /// Is this run something the engine could not use as written?
-    ///
-    /// The two warning roles are worth naming together, because a frontend
-    /// almost always wants to treat them alike — both mean "this term is not
-    /// doing what its spelling suggests".
+    /// Is this run something the engine could not use as written? Both warning roles
+    /// mean "this term is not doing what its spelling suggests".
     pub fn is_warning(self) -> bool {
         matches!(self, Role::UnknownField | Role::BadValue)
     }
 
-    /// Does this run mean the query is worth reading back?
-    ///
-    /// A search box can say what it understood, in words — "extension is .rs
-    /// and not name contains cache" — and for `ext:rs !cache` that is worth a
-    /// line. For `hasan` it reads the word back and is furniture.
-    ///
-    /// So the rule is a property of the query rather than a preference: if
-    /// anything in it is more than a plain word, the reading appears, and its
-    /// being there is then a signal in itself. The case it exists for is
-    /// `HASAN;DENEME !ama ;deneme` — four things that look like four AND-ed
-    /// words and are three, one of them an `or` with the exclusion inside it,
-    /// which is why the answer was the whole disk.
-    ///
-    /// A [`Role::Value`] is not in the list and does not need to be: it never
-    /// occurs without the field and colon in front of it, both of which are.
-    /// Nor is [`Role::Sep`], for the same reason.
+    /// Does this run mean the query is worth reading back in words? True of anything
+    /// more than a plain word: `HASAN;DENEME !ama ;deneme` looks like four AND-ed words
+    /// and is three. [`Role::Value`] and [`Role::Sep`] never occur without a field.
     pub fn is_telling(self) -> bool {
         matches!(
             self,
@@ -127,14 +89,9 @@ impl Role {
         )
     }
 
-    /// Is this run punctuation rather than something the user typed to search
-    /// for?
-    ///
-    /// What a caret sitting next to one of these will delete is a piece of
-    /// *syntax*, and the meaning of the query changes rather than its wording:
-    /// backspacing over the `:` in `ext:pdf` turns a filter into a search for
-    /// the text "extpdf". A frontend can mark the character the caret is
-    /// touching so that is visible before the key is pressed rather than after.
+    /// Is this run punctuation rather than something the user typed to search for?
+    /// Deleting one changes the query's meaning rather than its wording: without its
+    /// `:`, `ext:pdf` is a search for the text "extpdf".
     pub fn is_syntax(self) -> bool {
         matches!(
             self,
@@ -143,30 +100,16 @@ impl Role {
     }
 }
 
-/// A run of query text with one role.
-///
-/// Offsets are **byte** offsets into the query as it was sent, so a frontend
-/// slicing UTF-8 gets valid boundaries. Spans are in order, never overlap, and
-/// together cover the whole string — a frontend can concatenate them and expect
-/// the original back.
+/// A run of query text with one role. Offsets are **byte** offsets into the query
+/// as sent; spans are in order, never overlap, and concatenate back to the original.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
     pub len: u32,
     pub role: Role,
-    /// Is this run part of a term that must **not** match?
-    ///
-    /// A query line answers two questions — what is being looked for, and what
-    /// is being kept out — and [`Role`] answers neither: `pdf` in `!ext:pdf`
-    /// is a `Value` exactly as it is in `ext:pdf`. [`Role::Not`] covers the
-    /// `!` alone, one character wide, so a frontend colouring roles put the
-    /// whole excluded term in the colour of the thing being *sought*.
-    ///
-    /// Working the extent out from the spans is a frontend's second parser —
-    /// the thing the rest of this file exists to prevent — and it is not a
-    /// one-liner either: `!` may prefix a bare word, a field term, or one
-    /// alternative of a `|` group, and a list carries it across the spaces
-    /// inside `!ext:rs; toml`. So the parser says it, once.
+    /// Is this run part of a term that must **not** match? [`Role`] does not say it:
+    /// `pdf` is a `Value` in `!ext:pdf` as in `ext:pdf`, and [`Role::Not`] covers the
+    /// `!` alone, which may carry across a `|` group and across `!ext:rs; toml`.
     #[serde(default)]
     pub not: bool,
 }
@@ -194,31 +137,21 @@ impl Span {
         query.get(start..end).unwrap_or("")
     }
 
-    /// The whole term this span sits in, given the query it came from.
-    ///
-    /// For colouring, a span is exactly the right extent. For *telling someone
-    /// what went wrong*, it is not: [`Role::BadValue`] covers the value alone,
-    /// so `size:>abc` reports `>abc` — and a value with no field in front of it
-    /// does not say who refused it, which is the only thing the reader needs.
-    ///
-    /// A term is a run of non-space, which is what the tokeniser means by one.
-    /// The two warning roles cannot occur inside a quoted phrase — a phrase is
-    /// literal all the way through — so there is no quoted case to widen past.
+    /// The whole term this span sits in, given the query it came from. For reporting
+    /// a fault: [`Role::BadValue`] covers `>abc` alone, which does not name the field
+    /// that refused it. A term is a run of non-space, as the tokeniser means it.
     pub fn term_of<'a>(&self, query: &'a str) -> &'a str {
         let start = (self.start as usize).min(query.len());
         let end = (start + self.len as usize).min(query.len());
-        // Only ASCII space is cut on, so both edges stay on a char boundary
-        // wherever the term itself is.
+        // Only ASCII space is cut on, so both edges stay on a char boundary.
         let from = query[..start].rfind(' ').map_or(0, |i| i + 1);
         let to = query[end..].find(' ').map_or(query.len(), |i| end + i);
         query.get(from..to).unwrap_or("")
     }
 }
 
-/// Something the user could type next.
-///
-/// Completions come from the same table the parser reads, so a field that
-/// exists is offered and a field that does not cannot be.
+/// Something the user could type next, from the same table the parser reads, so a
+/// field that does not exist cannot be offered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Completion {
     /// What to insert, complete: `ext:`, `kind:image`, `dm:7d`.
@@ -247,11 +180,8 @@ pub enum CompletionKind {
 mod tests {
     use super::*;
 
-    /// [`Role::ALL`] is all of them.
-    ///
-    /// The match is exhaustive, so a role added to the enum stops this
-    /// compiling — and the arm that has to be written is right next to the
-    /// list that also has to be added to.
+    /// [`Role::ALL`] is all of them: the match is exhaustive, so a new role stops this
+    /// compiling next to the list it also has to be added to.
     #[test]
     fn every_role_is_in_the_list() {
         fn place(role: Role) -> usize {
@@ -294,10 +224,8 @@ mod tests {
         assert_eq!(span(">abc ext:rs", ">abc").term_of(">abc ext:rs"), ">abc");
     }
 
-    /// Cutting on spaces must not cut inside a character.
-    ///
-    /// Byte offsets and multi-byte text is the pairing that produces a panic
-    /// rather than a wrong answer, and every path in this file is byte offsets.
+    /// Cutting on spaces must not cut inside a character: every offset here is a byte
+    /// offset, and multi-byte text panics rather than answering wrong.
     #[test]
     fn a_term_beside_letters_that_are_not_one_byte_is_still_a_term() {
         let q = "değiştirme kind:zurna öğe";

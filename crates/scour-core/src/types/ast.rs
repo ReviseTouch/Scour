@@ -1,12 +1,6 @@
-//! What a query means, once the syntax is gone.
-//!
-//! The parser lives in `scour-query`; the shape it produces lives here, because
-//! both the parser and every [`Index`] implementation have to agree on it. An
-//! index lowers this tree into whatever its engine actually speaks — tantivy
-//! phrase queries, SQL, a linear scan — and nothing above it needs to know
-//! which.
-//!
-//! [`Index`]: crate::traits::Index
+//! What a query means, once the syntax is gone. The parser lives in `scour-query`;
+//! the shape it produces lives here, because the parser and every
+//! [`Index`](crate::traits::Index) implementation have to agree on it.
 
 use serde::{Deserialize, Serialize};
 
@@ -58,28 +52,20 @@ pub enum TimeField {
 }
 
 /// One condition.
-// Externally tagged, which for these shapes is both the most compact JSON and
-// the most readable: `{"name_contains": "report"}`, `{"size": ["gt", 1048576]}`.
+// Externally tagged: `{"name_contains": "report"}`, `{"size": ["gt", 1048576]}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Match {
     /// Substring of the case-folded name. The everyday case.
     NameContains(String),
-    /// Wildcard pattern over the case-folded name, anchored end to end —
-    /// `*.rs` matches the whole name, not a fragment of it. This is Everything's
-    /// behaviour and users rely on it.
+    /// Wildcard pattern over the case-folded name, anchored end to end as Everything
+    /// anchors it: `*.rs` matches the whole name, not a fragment of it.
     NameGlob(String),
     /// Substring of the case-folded path.
     PathContains(String),
-    /// Anywhere below this directory.
-    ///
-    /// Not a substring test: the index holds every ancestor directory of every
-    /// entry as its own token, so scoping a search to a folder is one term
-    /// rather than a scan. `/a` does not match `/ab`, and the directory itself
-    /// is not among its own descendants.
-    ///
-    /// The value is a path and is compared as the filesystem stores it, not
-    /// case-folded — unlike a name, which is.
+    /// Anywhere below this directory. Not a substring test: every ancestor is its own
+    /// token, `/a` does not match `/ab`, and a directory is not its own descendant.
+    /// The value is compared as the filesystem stores it, not case-folded.
     Under(String),
     /// Directly inside this directory, one level down.
     ParentIs(String),
@@ -87,67 +73,31 @@ pub enum Match {
     Ext(Vec<String>),
     IsDir(bool),
     Size(Cmp, i64),
-    /// Any one of these kinds.
-    ///
-    /// A list rather than one kind, because a single word names several:
-    /// `kind:media` has to go on meaning audio *or* video *or* the retired
-    /// discriminant an older index still holds, and `kind:text` names four at
-    /// once. See [`Kind::from_name`].
+    /// Any one of these kinds — a list because one word names several: `kind:media`
+    /// is audio or video, `kind:text` names four. See [`Kind::from_name`].
     Kind(Vec<Kind>),
     Time(TimeField, Cmp, i64),
-    /// Substring of the *contents* of a document.
-    ///
-    /// Parsed and represented from the first day so that the shape of the
-    /// language does not have to change when content indexing arrives. An index
-    /// that was not built with content enabled rejects it with
-    /// [`Error::ContentNotIndexed`], which is a far better answer than silently
-    /// returning nothing.
-    ///
-    /// [`Error::ContentNotIndexed`]: crate::types::Error::ContentNotIndexed
+    /// Substring of the *contents* of a document. An index built without content
+    /// rejects it with [`Error::ContentNotIndexed`](crate::types::Error::ContentNotIndexed)
+    /// rather than answering nothing.
     ContentContains(String),
-    /// How many components the path has, counted from the root.
-    ///
-    /// `find -maxdepth` counts from where the walk started; an index has no
-    /// start, so this counts `/`. `/home` is 1 and `/home/u/a.rs` is 3, which
-    /// makes `under:/home/u depth:<=3` the way to say "not below this folder".
+    /// How many components the path has, counted from `/` rather than from where a
+    /// walk started: `/home` is 1, `/home/u/a.rs` is 3.
     Depth(Cmp, i64),
-    /// The name matches this regular expression.
-    ///
-    /// Anchored nowhere: `regex:^main` and `regex:rs$` both say what they look
-    /// like, exactly as `grep -E` does. Matched against the **folded** name,
-    /// so it is case-insensitive like everything else — including for Turkish
+    /// The name matches this regular expression, anchored nowhere, as `grep -E` is.
+    /// Matched against the folded name, so it is case-insensitive — including for
     /// dotted and dotless i, which no `(?i)` flag gets right.
     Regex(String),
     /// How many characters the name has. Everything spells it `len:`.
     NameLen(Cmp, i64),
-    /// The name contains this, **spelled exactly like this**.
-    ///
-    /// Everything's `case:`. The index keeps both the name as written and the
-    /// folded one, so this is a comparison against the first rather than a
-    /// second index — the only cost is that it reads the arena the folded
-    /// search would have skipped.
+    /// The name contains this, **spelled exactly like this**: Everything's `case:`.
+    /// Compared against the name as written, which the index keeps beside the folded one.
     NameContainsCased(String),
     /// A stored number compared to a value: `uid:1000`, `gid:>100`.
-    ///
-    /// The index has held these columns since the first version and nothing
-    /// could ask about them. They cost nothing to keep — a column that barely
-    /// varies packs to almost zero — so the only thing missing was a way to
-    /// say it.
     Num(NumField, Cmp, i64),
-    /// A stored number masked and compared: permissions, and the type bits.
-    ///
-    /// One variant for the whole family because that is what it is. `find`
-    /// spells the three cases `-perm 644`, `-perm -200` and `-perm /222`, and
-    /// they are exactly *equal after masking*, *all of these bits*, and *any
-    /// of these bits*:
-    ///
-    /// | query | mask | want | any |
-    /// |---|---|---|---|
-    /// | `perm:644` | `0o7777` | `0o644` | false |
-    /// | `perm:-200` | `0o200` | `0o200` | false |
-    /// | `perm:/222` | `0o222` | — | true |
-    /// | `type:l` | `0o170000` | `0o120000` | false |
-    /// | `suid:` | `0o4000` | `0o4000` | false |
+    /// A stored number masked and compared, covering `find`'s three forms: `perm:644`
+    /// is mask `0o7777` want `0o644`; `perm:-200` is mask and want `0o200`; `perm:/222`
+    /// is mask `0o222` with `any`. `type:l` is mask `0o170000` want `0o120000`.
     Bits {
         field: NumField,
         mask: i64,
@@ -157,11 +107,8 @@ pub enum Match {
     },
 }
 
-/// A column a query can ask a number about.
-///
-/// Deliberately not every column. `DirId` is an implementation detail and
-/// `Source` is one the user did not choose; these are the ones a person or a
-/// script has a reason to name.
+/// A column a query can ask a number about. Not every column: `DirId` is an
+/// implementation detail and `Source` is not something the user chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NumField {
@@ -204,11 +151,8 @@ impl Ast {
             .any(|m| matches!(m, Match::ContentContains(_)))
     }
 
-    /// The plain positive name terms, at least `min_chars` characters long.
-    ///
-    /// These are the terms an index can use to *narrow* before evaluating the
-    /// rest — a term that is negated, or one of several alternatives, cannot
-    /// narrow anything, so it is not offered.
+    /// The plain positive name terms, at least `min_chars` characters long: a negated
+    /// term, or one of several alternatives, narrows nothing and is not offered.
     pub fn narrowing_terms(&self, min_chars: usize) -> Vec<&str> {
         self.groups
             .iter()

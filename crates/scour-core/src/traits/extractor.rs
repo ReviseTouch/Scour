@@ -1,20 +1,8 @@
-//! Turning a file's bytes into text an index can hold.
+//! Turning a file's bytes into text an index can hold. Nothing implements this
+//! yet; the trait fixes the schema field and the `content:` term in advance.
 //!
-//! Nothing in this workspace implements this yet, and that is deliberate. The
-//! trait exists now so that the shape of everything around it — the schema
-//! field, the `content:` query term, the configuration table, the error variant
-//! for asking a content-free index about contents — is settled while it is
-//! cheap to settle. Adding a PDF reader later should be a new crate and a
-//! cargo feature, not a change to the index format and the query language.
-//!
-//! Two constraints are already known and should be honoured by the first
-//! implementation:
-//!
-//! * **Extractors run untrusted input through parsers.** Every one of them will
-//!   eventually panic or hang on a malformed file. They belong behind a
-//!   timeout and a memory bound, or in a separate process — not inline in a
-//!   daemon that must stay responsive.
-//! * **Never trust the extension.** Sniff the leading bytes.
+//! Extractors parse untrusted input: run them under a timeout and a memory
+//! bound, and sniff the leading bytes rather than trusting the extension.
 
 use std::fmt::Debug;
 use std::io::Read;
@@ -31,17 +19,12 @@ pub struct MediaHint {
     pub size: i64,
 }
 
-/// Where extracted text goes.
-///
-/// A sink rather than a returned `String` because a large document should be
-/// streamed into the index instead of assembled in memory first, and because
-/// an extractor that finds structure — headings, tables, page numbers — should
-/// be able to say so without every caller having to care.
+/// Where extracted text goes: a sink rather than a returned `String`, so a large
+/// document streams into the index instead of being assembled in memory.
 pub trait ContentSink {
     fn text(&mut self, chunk: &str);
 
-    /// Optional structure. The default implementation ignores it, so an
-    /// extractor can always emit it and a simple index can always ignore it.
+    /// Optional structure. Defaults to plain text, so a simple index may ignore it.
     fn heading(&mut self, text: &str) {
         self.text(text);
     }

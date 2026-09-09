@@ -1,29 +1,8 @@
-//! A set of paths, asked "is anything under you?"
-//!
-//! Two places need the same answer about the same kind of list, and both of
-//! them get the list in the thousands. Deleting a tree reports a path per file
-//! and a path per directory, and every one of them has to be checked against
-//! every row of an index and against every entry waiting to be written. Done
-//! one prefix at a time that is a product, and the product is what a `rm -rf`
-//! turned into **2.24 seconds of held write lock** at four thousand paths.
-//!
-//! Two halves make it cheap.
-//!
-//! The list is **reduced**: a path under another path in the same list is
-//! dropped, because removing or walking the ancestor covers it anyway. On a
-//! real delete that is most of them.
-//!
-//! And the question is asked **from the path rather than from the list**. A
-//! path has one parent, one grandparent and so on — a dozen or so ancestors,
-//! however many thousand members the set has — so "is any ancestor a member"
-//! is a dozen lookups and does not grow with the set at all.
-//!
-//! The obvious shape, sorting and binary-searching for the greatest member not
-//! after the path, is *wrong*, and the test below is what said so. Sort order
-//! does not put an ancestor next to its descendant: with `/pkg/lib` and
-//! `/pkg/lib-old` both present, `/pkg/lib/deep/f.rs` sorts after `/pkg/lib-old`
-//! — because `-` is below `/` — so the one comparison lands on the member that
-//! does not match and misses the one that does.
+//! A set of paths, asked "is anything under you?" The list is reduced — a member
+//! under another member is dropped — and the question is asked from the path's
+//! dozen ancestors rather than from the set, so cost does not grow with it.
+//! Sorting and binary-searching is wrong: `-` sorts below `/`, so `/pkg/lib/f`
+//! lands past `/pkg/lib-old` and the one comparison misses `/pkg/lib`.
 
 use std::collections::HashSet;
 
@@ -46,20 +25,16 @@ impl PrefixSet {
         set
     }
 
-    /// Add more paths and reduce again.
-    ///
-    /// Appending is cheap and the reduction is one sort, so this is called once
-    /// per batch rather than once per path — which is also what keeps it from
-    /// being the quadratic thing it exists to prevent.
+    /// Add more paths and reduce again. Once per batch, not once per path: the
+    /// reduction is a sort.
     pub fn extend(&mut self, paths: impl IntoIterator<Item = String>) {
         self.paths.extend(paths);
         self.reduce();
     }
 
     fn reduce(&mut self) {
-        // Normalised on the way in, so a lookup can be an exact comparison.
-        // `/` becomes the empty string, which is what `under` already treats it
-        // as: everything is below the root.
+        // Normalised here so a lookup is an exact comparison; `/` becomes the empty
+        // string, which `under` already reads as "everything".
         for p in &mut self.paths {
             let trimmed = p.trim_end_matches('/');
             if trimmed.len() != p.len() {
@@ -68,9 +43,8 @@ impl PrefixSet {
         }
         self.paths.sort_unstable();
         self.paths.dedup();
-        // Sorted, so an ancestor is always before its descendants — and is
-        // always the last one kept when the first descendant is reached,
-        // because anything between them is under it too.
+        // Sorted, so an ancestor precedes its descendants and is the last one kept
+        // when the first of them is reached.
         let mut kept: Vec<String> = Vec::with_capacity(self.paths.len());
         for p in self.paths.drain(..) {
             if kept.last().is_none_or(|k| !under(&p, k)) {
@@ -86,22 +60,14 @@ impl PrefixSet {
     pub fn covers(&self, path: &str) -> bool {
         match self.paths.len() {
             0 => false,
-            // Below the point where hashing a dozen ancestors is worth it, and
-            // this is the common case by far: nothing pending, or one folder
-            // removed.
+            // Below four members, hashing a dozen ancestors costs more than scanning.
             1..=4 => self.paths.iter().any(|p| under(path, p)),
             _ => ancestors(path).any(|a| self.lookup.contains(a)),
         }
     }
 
-    /// Drop one path, if it is a member in its own right.
-    ///
-    /// What a file coming back needs: it was reported gone, it has been
-    /// reported again, and the pending removal must stop applying to it before
-    /// anyone searches. Only an exact member goes — a path that is merely
-    /// *under* a removed directory stays covered, because the directory is
-    /// still pending removal and the walk that follows is what re-establishes
-    /// what is inside it.
+    /// Drop one path, if it is a member in its own right. A path merely *under* a
+    /// member stays covered: that directory is still pending removal.
     pub fn forget(&mut self, path: &str) -> bool {
         let path = path.trim_end_matches('/');
         if !self.lookup.remove(path) {
@@ -133,10 +99,8 @@ impl PrefixSet {
     }
 }
 
-/// A path, then its parent, then its parent's parent, down to the empty string.
-///
-/// The empty string is deliberately the last one rather than skipped: it is
-/// what a member of `/` normalises to, and it means "everything".
+/// A path, then its parent, and so on down to the empty string — last rather than
+/// skipped, because that is what a member of `/` normalises to.
 fn ancestors(path: &str) -> impl Iterator<Item = &str> {
     let path = path.trim_end_matches('/');
     std::iter::successors(Some(path), |p| {
@@ -144,11 +108,8 @@ fn ancestors(path: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-/// Is `path` at or below `prefix`?
-///
-/// A separator, not merely a prefix: `/home/u/Projeler-414` is not inside
-/// `/home/u/Projeler`, and every place in Scour that has got this wrong has got
-/// it wrong in exactly that way.
+/// Is `path` at or below `prefix`? A separator boundary, not a string prefix:
+/// `/home/u/Projeler-414` is not inside `/home/u/Projeler`.
 pub fn under(path: &str, prefix: &str) -> bool {
     let p = prefix.trim_end_matches('/');
     if p.is_empty() {
@@ -197,12 +158,8 @@ mod tests {
 
     #[test]
     fn the_fast_answer_agrees_with_the_slow_one() {
-        // Past four members `covers` stops looking at every path, and the two
-        // ways of answering have to give the same one.
-        //
-        // `lib` beside `lib-old` is the pair that killed the first attempt: `-`
-        // sorts below `/`, so `/pkg0/lib/deep/f.rs` lands after `/pkg0/lib-old`
-        // and a single binary-search comparison misses `/pkg0/lib` entirely.
+        // Past four members `covers` switches strategy, and both must answer alike;
+        // `lib` beside `lib-old` is the pair an ordered search gets wrong.
         let members: Vec<String> = (0..64)
             .flat_map(|i| {
                 [

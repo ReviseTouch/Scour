@@ -1,9 +1,6 @@
-//! What an entry is.
-//!
-//! One `stat` yields every field of [`Meta`] at once — size, three timestamps,
-//! permission bits, owner, and the blocks actually allocated on disk. Adding a
-//! column therefore costs nothing at scan time: it means reading one more field
-//! of a syscall that was already made.
+//! What an entry is. One `stat` yields every field of [`Meta`] at once, so adding a
+//! column costs nothing at scan time: it reads one more field of a syscall already
+//! made.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,32 +10,9 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct SourceId(pub u32);
 
-/// How a source names an entry so it can be found again.
-///
-/// This is deliberately not "a row id". Different sources can identify things
-/// only in different ways, and pretending otherwise is how an indexer ends up
-/// with filesystem assumptions baked into places that have no business holding
-/// them:
-///
-/// * A POSIX filesystem has `(dev, ino)`, which survives a rename — so a moved
-///   file can be *updated* rather than deleted and re-added.
-/// * FAT and most network mounts have nothing stable; the path is the identity,
-///   so a rename is genuinely a delete plus an add.
-/// * An object store has neither: the key is the name and the version is an
-///   opaque token.
-///
-/// **The filesystem source no longer uses any of this**, and the capability
-/// that used to select between them is gone. A row is a *name*, so its
-/// identity is its path: an editor that saves by writing a temporary file and
-/// renaming it over the target keeps the path and changes the inode, and
-/// nothing can say "the inode that used to be here is gone" — which left 267
-/// rows at one path on a live index, one per save. See `EntryId::path_hash`
-/// — the case the 2026-08-04 audit reproduced on a live index.
-///
-/// What remains here is vocabulary for the sources that are not filesystems.
-/// `Opaque` is what an object store's version token would be; keeping the
-/// shape costs nothing and means the day one exists, this type does not have
-/// to change underneath everything that reads it.
+/// How a source names an entry so it can be found again: `(dev, ino)` on POSIX, the
+/// path where nothing else is stable, a version token for an object store. The
+/// filesystem source uses `PathHash` — a row is a *name*, and its identity is its path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Key {
     /// POSIX inode identity. Survives rename and move within a device.
@@ -73,18 +47,9 @@ impl EntryId {
     }
 }
 
-/// A stable 64-bit digest of a source and a path.
-///
-/// FxHash's finaliser, inlined rather than depended on — this crate takes no
-/// dependencies, and the hash only has to be stable and well spread within one
-/// index, not cryptographic. **Eight bytes at a time**, which is not a detail:
-/// an index keyed on the path hashes every path it writes, and a
-/// byte-at-a-time loop is a chain of dependent multiplies as long as the path.
-///
-/// One definition, used by the identity above and by the index's row table, so
-/// that "the same path" means the same thing in both. It is written into a
-/// file, so changing it invalidates every index on disk — which is what the
-/// format version is for.
+/// A stable 64-bit digest of a source and a path: FxHash's finaliser inlined, since
+/// this crate takes no dependencies. Eight bytes at a time, not one. It reaches the
+/// index file, so changing it invalidates every index on disk.
 pub fn path_digest(source: SourceId, path: &str) -> u64 {
     const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
     let mut h: u64 = u64::from(source.0);
@@ -103,9 +68,8 @@ pub struct Meta {
     pub size: i64,
     /// Modification time, unix epoch seconds.
     pub mtime: i64,
-    /// Status-change time on unix; creation time on Windows. The two are not
-    /// the same thing, and the query language names it `dc:` on both, which is
-    /// a compromise the user interface has to explain rather than hide.
+    /// Birth time where the filesystem keeps one and `st_ctime` where it does not;
+    /// creation time on Windows. The query language names it `dc:` on both.
     pub ctime: i64,
     /// Last access time. Most Linux systems mount with `relatime`, so this may
     /// lag by up to a day.
@@ -117,33 +81,13 @@ pub struct Meta {
     /// Space *allocated* on disk. Smaller than `size` for sparse files, larger
     /// for tiny ones because of block rounding.
     pub disk: i64,
-    /// Entries directly inside a directory; `-1` for files and when unknown.
-    ///
-    /// **Nothing writes anything else yet**, so it is `-1` on every row of
-    /// every real index — `Meta::from_std` has one `stat` and a `stat` does not
-    /// count children. The walk cannot fill it either: `ignore` emits entries
-    /// one at a time, so a directory's row is built before its children are
-    /// seen, and knowing the count would take a second pass or a different
-    /// walker.
-    ///
-    /// The column stays because it costs nothing — it is a varint of `-1` in a
-    /// block that is already there — and because the day the walk can count,
-    /// this is where the number goes. What did **not** stay is the language
-    /// around it: `items:` was in the field table and the syntax reference,
-    /// was offered as a completion, and answered every query with nothing at
-    /// all, silently, because `-1` is not `0` and not `>= 5`. A field that
-    /// cannot be answered is worse than a field that does not exist, since the
-    /// second one says so.
+    /// Entries directly inside a directory; `-1` for files and when unknown. Nothing
+    /// writes anything else yet: one `stat` does not count children, and the walk
+    /// builds a directory's row before it has seen them.
     pub items: i64,
-    /// Names this file has — `st_nlink`. One for almost everything.
-    ///
-    /// Kept for one reason: a file with four names is four rows now that a row
-    /// is a name, and a disk-usage report that sums rows counts its blocks four
-    /// times. Each row carries its share, `disk / links`, so the total over a
-    /// tree is the space the tree actually occupies. That is not what `du`
-    /// does — `du` charges the whole file to whichever name it meets first —
-    /// but it agrees with `du` on the total and does not depend on the order a
-    /// walk happened to take.
+    /// Names this file has — `st_nlink`, one for almost everything. A file with four
+    /// names is four rows, so each carries `disk / links` and a sum over a tree is the
+    /// space it occupies; that agrees with `du` on the total, not on which name pays.
     pub links: i64,
 }
 
@@ -162,12 +106,7 @@ impl Meta {
         links: 1,
     };
 
-    /// Convert from `std::fs::Metadata`. `size` is meaningless for directories,
-    /// so it is forced to zero.
     /// When the file came into being, if anything recorded it.
-    ///
-    /// Separate from [`Meta::from_std`] so the fallback is one line there and
-    /// the reasoning is here.
     #[cfg(unix)]
     fn birth(md: &std::fs::Metadata) -> Option<i64> {
         md.created()
@@ -177,6 +116,7 @@ impl Meta {
             .map(|d| d.as_secs() as i64)
     }
 
+    /// Convert from `std::fs::Metadata`. `size` is forced to zero for a directory.
     pub fn from_std(md: &std::fs::Metadata, is_dir: bool) -> Self {
         #[cfg(unix)]
         {
@@ -184,24 +124,9 @@ impl Meta {
             Self {
                 size: if is_dir { 0 } else { md.size() as i64 },
                 mtime: md.mtime(),
-                // **Birth time when the filesystem keeps one**, and `st_ctime`
-                // only when it does not.
-                //
-                // These are different facts and the difference is visible:
-                // this file's birth is the second of August and its
-                // status-change is the twelfth, because it was edited. Reading
-                // `st_ctime` and calling the column "created" therefore
-                // answered a question nobody asked — and answered it with
-                // *almost* the modification time, since for a file written
-                // once and left alone the two are the same. Measured on this
-                // machine: 95% of a sample had `ctime == mtime`, which is what
-                // made sorting by creation look like it did nothing.
-                //
-                // `Metadata::created` is `statx(STATX_BTIME)` on Linux and
-                // fails where there is none — older filesystems, kernels
-                // without `statx`. Falling back to `st_ctime` there keeps the
-                // column populated with the nearest true thing rather than
-                // with a zero.
+                // Birth time where the filesystem keeps one, `st_ctime` only where it
+                // does not: `st_ctime` equalled `mtime` on 95% of a sample here, which
+                // is what made sorting by creation look dead.
                 ctime: Self::birth(md).unwrap_or_else(|| md.ctime()),
                 atime: md.atime(),
                 mode: md.mode() as i64,
@@ -228,8 +153,8 @@ impl Meta {
                 mode: 0,
                 uid: 0,
                 gid: 0,
-                // Not the allocated size: getting that on Windows needs
-                // GetCompressedFileSizeW, which belongs in the source, not here.
+                // Not the allocated size: that needs GetCompressedFileSizeW, which
+                // belongs in the source rather than here.
                 disk: if is_dir { 0 } else { md.len() as i64 },
                 items: -1,
                 links: 1,
@@ -238,11 +163,9 @@ impl Meta {
     }
 }
 
-/// One entry as a source produces it.
-///
-/// `path` is always `/`-separated, including on Windows, so that everything
-/// above this — ancestor tokens, the query language, the wire protocol — has a
-/// single separator to reason about. Converting back is the source's job.
+/// One entry as a source produces it. `path` is always `/`-separated, on Windows too,
+/// so everything above has one separator to reason about; converting back is the
+/// source's job.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     pub id: EntryId,
@@ -269,16 +192,9 @@ impl Entry {
         }
     }
 
-    /// Lowercase extension without the dot. A directory has none.
-    ///
-    /// The name rule and the directory rule are two different questions and
-    /// [`ext_of`] only answers the first, because most of its callers have a
-    /// name and nothing else. Here there is a row, so the second is answered
-    /// too: `Trabzon 2. Grup` is a folder, not a file of type ` grup`, and
-    /// `TRABZON.MÜZEKKERE.CEVABI` is not one of type `cevabi`. Both are real,
-    /// off a volume written from Windows, where a dot in a folder name is
-    /// ordinary — 81 of the 200 rows one query returned were directories and
-    /// six of them had been given an extension out of their own name.
+    /// Lowercase extension without the dot. A directory has none — [`ext_of`] answers
+    /// only the name question, and `Trabzon 2. Grup` is a folder, not a file of type
+    /// ` grup`. A dot in a folder name is ordinary on a volume written from Windows.
     pub fn ext(&self) -> String {
         if self.is_dir {
             return String::new();
@@ -291,17 +207,9 @@ impl Entry {
     }
 }
 
-/// The coarse category a row is drawn and filtered by.
-///
-/// The numeric values are part of the on-disk index format.
-///
-/// **Never renumber a variant and never reuse a discriminant.** A retired kind
-/// keeps its number forever and stays decodable; new kinds are appended. When
-/// the *meaning* of an existing number changes, `FORMAT` in
-/// `scour-index-native` is bumped and every index is rebuilt.
-///
-/// The lines between these are argued from measurement in `docs/TAXONOMY.md`,
-/// which is where a proposal to move an extension belongs before it moves.
+/// The coarse category a row is drawn and filtered by. The numeric values are part of
+/// the on-disk index format: never renumber a variant, never reuse a discriminant, and
+/// bump `FORMAT` in `scour-index-native` when a number's meaning changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 #[serde(rename_all = "lowercase")]
@@ -318,15 +226,13 @@ pub enum Kind {
     Doc = 5,
     /// Machine code the OS can load and run.
     Exec = 6,
-    /// **Retired**, and kept only so that a `media` search still reads an
-    /// index written before [`Kind::Audio`] and [`Kind::Video`] existed.
-    /// Never produced by [`kind_of`].
+    /// **Retired**, kept so a `media` search still reads an index written before
+    /// [`Kind::Audio`] and [`Kind::Video`]. Never produced by [`kind_of`].
     Media = 7,
     Audio = 8,
     Video = 9,
-    /// Machine-produced and tool-regenerable. Deleting it costs time, not
-    /// information — and on a developer's machine it is half of every file
-    /// there is, which is why it exists.
+    /// Machine-produced and tool-regenerable: deleting it costs time, not information.
+    /// Half of every file on a developer's machine.
     Build = 10,
     /// Structured machine-readable content: serialisation, tabular data,
     /// schemas, databases, model weights, logs.
@@ -382,10 +288,8 @@ impl Kind {
         Kind::ALL.get(v as usize).copied()
     }
 
-    /// The English message id for this kind. Not a display string: the
-    /// frontend passes it through a [`Catalog`] to get the user's language.
-    ///
-    /// [`Catalog`]: crate::text::Catalog
+    /// The English message id for this kind, not a display string: a frontend passes
+    /// it through a [`Catalog`](crate::text::Catalog) to get the user's language.
     pub fn msgid(self) -> &'static str {
         match self {
             Kind::File => "File",
@@ -405,13 +309,8 @@ impl Kind {
         }
     }
 
-    /// How this kind is spelled in a `kind:` term.
-    ///
-    /// Separate from [`Kind::msgid`] because the two answer different
-    /// questions and conflating them was a real defect: a facet rail built its
-    /// query out of the label, and `Executable` folds to a word the parser
-    /// does not take, so clicking that one row searched for the literal text.
-    /// A label can be two words and can be translated; a token can be neither.
+    /// How this kind is spelled in a `kind:` term. Never [`Kind::msgid`]: a label may
+    /// be two words and be translated, a token may be neither.
     pub fn token(self) -> &'static str {
         match self {
             Kind::File => "file",
@@ -431,16 +330,9 @@ impl Kind {
         }
     }
 
-    /// Parse the value of a `kind:` query term into the kinds it stands for.
-    ///
-    /// A set rather than one kind, and not for tidiness: `media` has to keep
-    /// matching rows in indexes written before it was split, so it means
-    /// *audio, video, or the retired 7*. `text` is a group alias with no
-    /// discriminant of its own. Everything accepted before is accepted still.
-    ///
-    /// Turkish spellings sit beside English on purpose: this tool is used in
-    /// Turkish, and `kind:klasör` should work next to `kind:folder`. The input
-    /// is expected to be already case-folded.
+    /// Parse the value of a `kind:` query term into the kinds it stands for. A set,
+    /// because `media` means audio, video or the retired 7, and `text` is a group alias
+    /// with no discriminant of its own. The input is expected already case-folded.
     pub fn from_name(folded: &str) -> Option<&'static [Kind]> {
         Some(match folded {
             "dir" | "folder" | "klasor" | "klasör" => &[Kind::Dir],
@@ -470,22 +362,9 @@ impl Kind {
     }
 }
 
-/// Every extension that means one thing, and what it means.
-///
-/// One sorted table rather than a list per kind, for two reasons. A binary
-/// search is nine comparisons where scanning six lists was up to three hundred,
-/// and this runs once per entry on a scan of a million. And an extension can
-/// only appear once, so the question "which kind is `.jar`" has a single place
-/// to be answered and a test can prove there is no second one.
-///
-/// **Sorted, and `ext_table_is_sorted_and_unique` enforces it.**
-///
-/// The rule for what belongs here: *an extension goes in the table when it
-/// means one thing.* `.o` means one thing. `.ts` means TypeScript and MPEG
-/// transport stream, and on any machine that has both the first outnumbers the
-/// second by orders of magnitude, so it is Code and the ambiguity is written
-/// down rather than split. `.obj` is left out entirely — MSVC object files and
-/// Wavefront meshes, and no frequency argument saves it.
+/// Every extension that means one thing, and what it means. Sorted and binary
+/// searched, which `the_tables_are_sorted_and_hold_each_extension_once` enforces. An
+/// extension belongs here only when it means one thing; `.obj` is left out.
 const EXT_TABLE: &[(&str, Kind)] = &[
     ("1", Kind::Doc), // man page
     ("3gp", Kind::Video),
@@ -786,17 +665,11 @@ const EXT_TABLE: &[(&str, Kind)] = &[
     ("zst", Kind::Archive),
 ];
 
-/// `.bin` is the documented exception to the rule above.
-///
-/// It means at least three things — a firmware blob, a disk image, a cache —
-/// and it is [`Kind::Build`] only because 65,569 of them on the corpus this was
-/// measured against were checked by name and were all compiler or tool caches.
-/// An exception to be recorded as one, not a pattern to copy.
+/// `.bin` is the documented exception to the rule above: it means three things, and
+/// is [`Kind::Build`] because 65,569 on the measured corpus were all tool caches.
 const BIN_IS_BUILD: (&str, Kind) = ("bin", Kind::Build);
 
-/// Names with no extension at all, exactly as spelled.
-///
-/// **Sorted**, same as [`EXT_TABLE`], and tested the same way.
+/// Names with no extension at all, exactly as spelled. Sorted, like [`EXT_TABLE`].
 const NAME_TABLE: &[(&str, Kind)] = &[
     (".bash_profile", Kind::Config),
     (".bashrc", Kind::Config),
@@ -828,10 +701,8 @@ const NAME_TABLE: &[(&str, Kind)] = &[
     ("vagrantfile", Kind::Code),
 ];
 
-/// Names with no extension that only *begin* a known word.
-///
-/// `license-mit`, `license-apache`, `readme.old`, `changelog-2024`. Checked
-/// after the exact table and in this order, so a longer prefix wins.
+/// Names with no extension that only *begin* a known word: `license-mit`,
+/// `readme.old`. Checked after the exact table; the first match in this order wins.
 const NAME_PREFIX: &[(&str, Kind)] = &[
     ("changelog", Kind::Doc),
     ("changes", Kind::Doc),
@@ -843,9 +714,7 @@ const NAME_PREFIX: &[(&str, Kind)] = &[
     ("readme", Kind::Doc),
 ];
 
-/// Generated documentation pages that carry no dot in their stem.
-///
-/// javadoc's fixed filenames. Sorted, and tested with the others.
+/// javadoc's fixed filenames: generated pages with no dot in their stem. Sorted.
 const GENERATED_PAGES: &[&str] = &[
     "allclasses",
     "allclasses-frame",
@@ -870,23 +739,15 @@ const GENERATED_PAGES: &[&str] = &[
     "type-search-index",
 ];
 
-/// Extension of a file name: case-folded, without the dot.
-///
-/// A name that *starts* with a dot (`.bashrc`) has no extension. Folding rather
-/// than lowercasing matters because the `ext:` query term is folded too, so the
-/// Turkish `İ`/`I`/`ı`/`i` distinction has to disappear identically on both
-/// sides or `ext:JPG` misses `photo.jpg` in a Turkish locale.
+/// Extension of a file name: case-folded, without the dot; a name starting with a dot
+/// has none. Folded rather than lowercased because `ext:` is folded too, or `ext:JPG`
+/// misses `photo.jpg` in a Turkish locale.
 pub fn ext_of(name: &str) -> String {
     crate::text::DefaultFolder::of(ext_str(name))
 }
 
-/// The same extension, as it is spelled and without allocating.
-///
-/// Separate because an index tests `ext:` once a row and folding into a fresh
-/// `String` a million times a query is the kind of cost that does not show up
-/// anywhere except the total. Callers that can fold into a buffer of their own
-/// use this and stay identical to [`ext_of`] by construction — the rule for
-/// what counts as an extension lives here and only here.
+/// The same extension, as spelled and without allocating, for a caller folding into
+/// its own buffer. The rule for what counts as an extension lives here and only here.
 pub fn ext_str(name: &str) -> &str {
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && ext.len() <= 12 => ext,
@@ -894,19 +755,9 @@ pub fn ext_str(name: &str) -> &str {
     }
 }
 
-/// Is this HTML page one a documentation tool wrote?
-///
-/// Measured, because it is a heuristic and deserved to be: of 189,785 HTML
-/// files on the corpus this was built against, **161,115 — 84.9% — have a dot
-/// inside the stem**, and every one sampled was rustdoc (`struct.Foo.html`,
-/// `mod.rs.html`) or dartdoc. Nothing hand-written turned up among them; a page
-/// somebody writes is `index.html` or `about.html`. javadoc's pages have no dot
-/// and are listed by name instead.
-///
-/// This hard-codes three toolchains' conventions and it is an interim: when the
-/// scanner grows a `derived` bit, set on entering `target/` and `build/` and
-/// friends, delete this and the whole question becomes a property of location,
-/// which is what it always was.
+/// Is this HTML page one a documentation tool wrote? A dot inside the stem says so:
+/// 84.9% of 189,785 HTML files on the measured corpus had one, all sampled rustdoc or
+/// dartdoc. javadoc's pages have no dot and are listed by name instead.
 fn is_generated_page(name: &str, ext_len: usize) -> bool {
     let stem = &name[..name.len() - ext_len - 1];
     stem.contains('.')
@@ -922,24 +773,9 @@ fn table_lookup(table: &[(&str, Kind)], folded: &str) -> Option<Kind> {
         .map(|i| table[i].1)
 }
 
-/// Classify an entry.
-///
-/// The order below is the whole design and every step of it was paid for by a
-/// mistake somewhere:
-///
-/// 1. **`is_dir` first, always.** On macOS `.app`, `.xcodeproj`, `.framework`
-///    and `.lproj` are *directories*. Classifying them by extension files
-///    directories under `Exec`.
-/// 2. The extension, with generated documentation caught before the lookup so
-///    that `.html` can mean both a page someone wrote and a page rustdoc did.
-/// 3. For a name with no extension, the name itself — exactly, then by prefix.
-/// 4. **The executable bit last, and it never overrides an extension.** Not
-///    theoretical: 17,073 files on the measured corpus carry `u+x`, among them
-///    3,408 `.png` and 46 `.rs` — the residue of NTFS mounts and loose umasks.
-///    On Windows `mode` is 0, so this step never fires and no false `Exec`
-///    appears there.
-///
-/// `mode` of zero means unknown, which is what Windows reports.
+/// Classify an entry, in this order: `is_dir` first — on macOS `.app` and `.xcodeproj`
+/// are directories — then the extension, then the bare name exactly and by prefix, then
+/// the executable bit, which never overrides an extension. `mode` of zero is unknown.
 pub fn kind_of(is_dir: bool, name: &str, mode: i64) -> Kind {
     if is_dir {
         return Kind::Dir;
@@ -973,27 +809,9 @@ pub fn kind_of(is_dir: bool, name: &str, mode: i64) -> Kind {
     Kind::File
 }
 
-/// Would *opening* this start a program rather than show it?
-///
-/// **A different question from [`kind_of`], and it has to be asked here.** A
-/// shell script is `Code` and would still run; a `.desktop` file is a text
-/// file the desktop executes. So this is not "what sort of thing is it" — it
-/// is "what happens if somebody double-clicks it", which is the question a
-/// frontend has to answer before it hands the path to the desktop.
-///
-/// **The execute bit only counts when the name says nothing**, which is what
-/// [`kind_of`] already does and what the frontend asking this did not. A
-/// bridge deciding by `mode & 0o111` alone treated every file on an `ntfs3`
-/// volume as a program, because `fmask=0022` gives all of them the bit —
-/// measured on this machine: every file under `/mnt/depo` is `0755`, so
-/// double-clicking a PDF there tried to *execute* it and failed with an exec
-/// format error. Half an index that could not be opened, from the one window
-/// built to open it.
-///
-/// The list below is the other half of the answer: names a desktop will run
-/// whatever the bit says. Being wrong towards "run" costs somebody a program
-/// they did not ask for; being wrong towards "show" costs a click. It is
-/// written to be wrong towards showing.
+/// Would *opening* this start a program rather than show it? Not [`kind_of`]: a shell
+/// script is `Code` and still runs. The execute bit counts only where the name says
+/// nothing — on an `ntfs3` mount with `fmask=0022` every file carries it.
 pub fn runs_when_opened(name: &str, mode: i64) -> bool {
     if kind_of(false, name, mode) == Kind::Exec {
         return true;
@@ -1014,19 +832,9 @@ pub enum Owner {
     Group,
 }
 
-/// The name behind a numeric id, from this machine.
-///
-/// Read once and kept: an export of two million rows asks two million times,
-/// and `/etc/passwd` does not change between them. The number is the answer
-/// when there is no name for it — a file owned by a user who was deleted still
-/// has to say something, and `1000` is truer than a blank.
-///
-/// Absent files give an empty table and every id answers as itself, which is
-/// what happens on Windows and is the right answer there.
-///
-/// **Here rather than in each program.** The bridge and the exporter had a
-/// copy each, identical down to the comment, and the preview panel would have
-/// made a third.
+/// The name behind a numeric id, from this machine. Read once and kept: an export of
+/// two million rows asks two million times. An id with no name answers as itself,
+/// which is also what happens where the tables are absent, as on Windows.
 pub fn owner_name(which: Owner, id: i64) -> String {
     use std::collections::HashMap;
     use std::sync::OnceLock;
@@ -1153,8 +961,7 @@ mod tests {
         // The permission bit is how an extensionless binary is recognised.
         assert_eq!(kind_of(false, "scourd", 0o100755), Kind::Exec);
         assert_eq!(kind_of(false, "stderr", 0o100644), Kind::File);
-        // And it never overrides an extension. 3,408 executable `.png` files
-        // were counted on the corpus this was measured against.
+        // And it never overrides an extension: 3,408 executable `.png` files counted.
         assert_eq!(kind_of(false, "photo.png", 0o100755), Kind::Image);
         // With an unknown mode — Windows — the extension still decides.
         assert_eq!(kind_of(false, "setup.exe", 0), Kind::Exec);
@@ -1166,8 +973,7 @@ mod tests {
 
     #[test]
     fn the_tables_are_sorted_and_hold_each_extension_once() {
-        // Both are binary-searched, so an unsorted row is not a tidiness
-        // problem — it is an extension that silently stops being recognised.
+        // Binary-searched: an unsorted row is an extension that stops being found.
         for (what, table) in [("ext", EXT_TABLE), ("name", NAME_TABLE)] {
             for pair in table.windows(2) {
                 assert!(
@@ -1186,16 +992,8 @@ mod tests {
         assert!(table_lookup(EXT_TABLE, BIN_IS_BUILD.0).is_none());
     }
 
-    /// **The bug this was written for is a mount option.**
-    ///
-    /// `/mnt/depo` on the author's machine is `ntfs3` with `fmask=0022`, so
-    /// every file on it is `0755` — a PDF, a zip, a Word document, all with
-    /// the execute bit. A frontend deciding "would opening this run something"
-    /// by that bit alone answered yes for all of them, and the window then
-    /// tried to *execute* a PDF and failed with an exec format error. Half an
-    /// index that could not be opened from the window built to open it.
-    ///
-    /// So the bit is the answer only where the name does not give one.
+    /// The execute bit answers only where the name does not: an `ntfs3` mount with
+    /// `fmask=0022` gives every file on it `0755`, PDFs included.
     #[test]
     fn an_execute_bit_on_a_document_does_not_make_it_a_program() {
         for name in [
@@ -1210,15 +1008,13 @@ mod tests {
                 "{name} at 0755 must still be something to open, not to run"
             );
         }
-        // Where the name says nothing, the bit is all there is — and it is
-        // enough. This is the same rule `kind_of` uses for `Kind::Exec`.
+        // Where the name says nothing, the bit is all there is — as in `kind_of`.
         assert!(runs_when_opened("scourd", 0o755));
         assert!(!runs_when_opened("LICENSE", 0o644));
     }
 
-    /// Anything the list calls a program is something opening would run, and
-    /// the two must not drift: the type column is drawn from one and the
-    /// double-click decided by the other.
+    /// The type column and the double-click are decided by different functions, and
+    /// they must not drift.
     #[test]
     fn every_executable_kind_runs_when_opened() {
         for name in [
@@ -1233,9 +1029,8 @@ mod tests {
             assert_eq!(kind_of(false, name, 0o644), Kind::Exec, "{name}");
             assert!(runs_when_opened(name, 0o644), "{name}");
         }
-        // And the ones that are not `Exec` and run anyway — without the bit,
-        // which is why this is a separate question rather than a field on
-        // `Kind`. A script is `Code` and a launcher is a text file.
+        // And the ones that are not `Exec` and run anyway, without the bit: a script
+        // is `Code` and a launcher is a text file.
         for name in ["setup.sh", "start.desktop", "build.ps1", "thing.lnk"] {
             assert_ne!(kind_of(false, name, 0o644), Kind::Exec, "{name}");
             assert!(runs_when_opened(name, 0o644), "{name}");
@@ -1244,9 +1039,8 @@ mod tests {
 
     #[test]
     fn every_kind_can_be_asked_for_by_its_own_token() {
-        // The defect this exists to prevent: a facet rail built its query out
-        // of `msgid()`, and `Executable` folds to a word the parser does not
-        // take, so clicking that row searched for literal text.
+        // A query built out of `msgid()` searches for literal text: `Executable`
+        // folds to a word the parser does not take.
         for k in Kind::ALL {
             let token = crate::text::DefaultFolder::of(k.token());
             let got = Kind::from_name(&token)
@@ -1296,11 +1090,9 @@ mod tests {
 
     #[test]
     fn a_version_number_is_not_an_extension_even_though_it_looks_like_one() {
-        // `ext_str` takes the rightmost dot, so `license-apache-2.0` has
-        // extension `0` and a facet list can read `0: 2,031`. Purely numeric
-        // extensions are 0.458% of this corpus and every one is a version.
-        // They land in `File`, which is right by accident — but write the test,
-        // because the next person to see it will assume it is a bug.
+        // `ext_str` takes the rightmost dot, so `license-apache-2.0` has extension
+        // `0`. Purely numeric extensions are 0.458% of this corpus, all versions, and
+        // they land in `File`, which is right by accident.
         assert_eq!(ext_str("license-apache-2.0"), "0");
         assert_eq!(kind_of(false, "license-apache-2.0", 0), Kind::File);
         assert_eq!(kind_of(false, "2.2.20", 0), Kind::File);
@@ -1328,19 +1120,9 @@ mod tests {
 mod birth_tests {
     use super::Meta;
 
-    /// `dc:` is when the file was born, not when it last changed.
-    ///
-    /// **The two are different and the difference is what made sorting by
-    /// creation look broken.** `st_ctime` is *status change* — it moves when
-    /// permissions change, when the file is renamed, when a link is made — so
-    /// for a file that was written once and left alone it is simply the
-    /// modification time under another name. Measured on this machine: 95% of
-    /// a sample had the two equal, so "sort by created" and "sort by modified"
-    /// produced the same list and the column looked dead.
-    ///
-    /// `chmod` is the cheapest way to move one and not the other, which is
-    /// exactly what this needs: nothing about the file's content changes, and
-    /// a reading that follows `st_ctime` jumps while the birth stays put.
+    /// `dc:` is when the file was born, not when it last changed. `st_ctime` moves on
+    /// a chmod, a rename or a new link, so for a file written once it is the
+    /// modification time again — 95% of a sample here had the two equal.
     #[test]
     fn changing_a_file_does_not_change_when_it_was_created() {
         use std::os::unix::fs::PermissionsExt;
@@ -1349,9 +1131,7 @@ mod birth_tests {
         std::fs::write(&path, b"hello").expect("write");
         let born = Meta::from_std(&std::fs::metadata(&path).expect("stat"), false).ctime;
 
-        // A second, because these are whole seconds. Without the wait the
-        // status change lands inside the same one and the test passes whatever
-        // the code does.
+        // A second, because these are whole seconds: inside one, nothing moves.
         std::thread::sleep(std::time::Duration::from_millis(1_100));
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 
@@ -1359,9 +1139,8 @@ mod birth_tests {
         let now = Meta::from_std(&after, false).ctime;
         let _ = std::fs::remove_file(&path);
 
-        // Only where the filesystem keeps a birth time. Where it does not,
-        // `st_ctime` is the fallback and moving is correct — so the test says
-        // what it checked rather than failing on a filesystem it cannot ask.
+        // Only where the filesystem keeps a birth time; where it does not, `st_ctime`
+        // is the fallback and moving is correct.
         if Meta::birth(&after).is_none() {
             eprintln!("no birth time here; `st_ctime` is the fallback and it moved, as it should");
             return;
