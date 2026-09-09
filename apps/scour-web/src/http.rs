@@ -1,10 +1,8 @@
-//! Enough HTTP/1.1 to serve one page and answer four routes.
+//! Enough HTTP/1.1 to serve one page and answer its routes.
 //!
-//! Not a web framework and not trying to be one. It reads a request line and
-//! its headers, hands them over, and writes a response with a length. What it
-//! deliberately does not do is as much as what it does: no chunked encoding, no
-//! keep-alive negotiation beyond closing, no compression, no ranges. A browser
-//! on the same machine asking for 40 rows of JSON needs none of it.
+//! Reads a request line and its headers, hands them over, writes a response.
+//! No chunked encoding, no keep-alive, no compression, no ranges: a browser on
+//! the same machine asking for 40 rows of JSON needs none of it.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -19,12 +17,7 @@ pub struct Req {
     pub headers: HashMap<String, String>,
     /// What a `POST` carried, when it carried anything.
     ///
-    /// **One route needs this and the rest never will.** Everything else here
-    /// says what it wants in the query string, and that was enough until a
-    /// request had to name a screenful of files at once: thirty-two paths
-    /// percent-encoded is several kilobytes, [`MAX_HEAD`] is sixteen, and a
-    /// request line that runs past it is *silently cut* — the truncation
-    /// arrives as a 404 for a path nobody asked for, which is a bad hour.
+    /// Paths go here, not in the query: a request line past [`MAX_HEAD`] is cut.
     pub body: String,
 }
 
@@ -42,16 +35,12 @@ impl Req {
 
 /// How much of a request line and its headers will be read before giving up.
 ///
-/// A bound rather than trust: this listens on a port, and a peer that never
-/// sends a newline must not be able to grow a buffer until the process dies.
+/// A peer that never sends a newline must not be able to grow the buffer.
 const MAX_HEAD: usize = 16 * 1024;
 
 /// And how much of a body. The same bound and the same reason.
 ///
-/// Big enough for [`scour_thumbs::Maker::BATCH`] paths at any length a
-/// filesystem allows — thirty-two times four kilobytes is a hundred and
-/// twenty-eight — and small enough that a peer cannot make this process hold a
-/// megabyte per connection.
+/// [`scour_thumbs::Maker::BATCH`] paths at the longest a filesystem allows.
 const MAX_BODY: usize = 192 * 1024;
 
 pub fn read_request(stream: &TcpStream) -> Option<Req> {
@@ -85,10 +74,7 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
         }
     }
 
-    // Exactly what was announced and not a byte more: reading to end of stream
-    // would hang on a browser that keeps its socket open, and reading past the
-    // length would eat the next request on a connection this happens not to
-    // reuse today.
+    // Exactly what was announced: reading to end of stream hangs on an open socket.
     let length = headers
         .get("content-length")
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -146,8 +132,7 @@ fn percent_decode(s: &str) -> String {
 }
 
 pub fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) {
-    // `no-store` because every one of these answers is about a filesystem that
-    // is being watched: a cached page is a page that stopped being true.
+    // `no-store`: these answers describe a filesystem that is being watched.
     let head = format!(
         "HTTP/1.1 {status}\r\n\
          Content-Type: {kind}\r\n\
@@ -164,11 +149,7 @@ pub fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) {
 
 /// A response the browser may keep.
 ///
-/// For icons and nothing else. Everything else this serves is about a
-/// filesystem that is being watched, where a cached answer is one that has
-/// stopped being true — but a theme's drawing of "document" does not change
-/// while a window is open, and re-fetching it per row is what makes a list
-/// scroll badly.
+/// Thumbnails only; every other answer here goes stale as the filesystem moves.
 pub fn cached(stream: &mut TcpStream, kind: &str, body: &[u8]) {
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
@@ -186,18 +167,9 @@ pub fn cached(stream: &mut TcpStream, kind: &str, body: &[u8]) {
 
 /// Headers for an answer whose length is not known when it starts.
 ///
-/// **No `Content-Length`, and that is the point.** An export walks the whole
-/// matching set — two million rows here — and the only way to know its length
-/// in advance is to build it all in memory first, which is the thing being
-/// avoided. HTTP/1.1 allows a body that ends when the connection does, and
-/// `Connection: close` is already what this server says, so the browser reads
-/// until EOF. Chunked encoding would work too and buys nothing here: there is
-/// no keep-alive to preserve.
-///
-/// `filename` turns it into a download rather than something the browser tries
-/// to display. It is quoted and stripped of the two characters that could end
-/// the header early; everything else a filesystem allows is legal in it.
+/// No `Content-Length`: an export is not built in memory, so the body ends at close.
 pub fn attachment(stream: &mut TcpStream, kind: &str, filename: &str) {
+    // Anything that could end the header early; the rest of a filename is legal.
     let safe: String = filename
         .chars()
         .filter(|c| *c != '"' && *c != '\r' && *c != '\n')
@@ -222,13 +194,7 @@ pub fn json(stream: &mut TcpStream, value: &serde_json::Value) {
     );
 }
 
-/// A refusal, in the status line as well as in the body.
-///
-/// It used to go out through [`json`], which answered a request carrying the
-/// wrong token with `200 OK` and the refusal buried in the body. Nothing
-/// leaked — the answer was still a refusal — but a status line that says the
-/// opposite of what happened is a lie to everything that reads one, and here
-/// it was the fence around the index doing the lying.
+/// A refusal, in the status line as well as in the body: never a `200 OK`.
 pub fn fail(stream: &mut TcpStream, status: &str, detail: &str) {
     respond(
         stream,
@@ -251,8 +217,7 @@ mod tests {
         assert_eq!(percent_decode("ext%3Ars"), "ext:rs");
         // Turkish, which is the whole reason this cannot be byte-wise.
         assert_eq!(percent_decode("k%C3%BCt%C3%BCphane"), "kütüphane");
-        // A stray percent is text, not an error: the query is a filename and
-        // filenames contain percent signs.
+        // A stray percent is text, not an error: filenames contain them.
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%zz"), "%zz");
     }

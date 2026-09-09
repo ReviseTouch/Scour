@@ -1,44 +1,8 @@
-//! Scour in a browser.
+//! Scour in a browser: a bridge from HTTP to the service's Unix socket.
 //!
-//! A bridge, and only a bridge. The service speaks [`scour_proto`] over a Unix
-//! socket; a browser cannot open one, and neither can a browser extension —
-//! an extension's way in is a native-messaging host, which is a local process
-//! talking to the socket, which is this with a different mouth. So the shape
-//! of the answer is the same either way and only the transport differs, which
-//! is why the page reaches the service through one small object it can swap.
-//!
-//! ## What listens, and why that is the part to be careful about
-//!
-//! The socket the service uses is protected by the filesystem: it lives in the
-//! user's own runtime directory and nothing else can open it. A TCP port has
-//! none of that, and what is behind this one is an index of every file the user
-//! owns — where things are, what they are called, when they changed. So:
-//!
-//! * **127.0.0.1 only**, never `0.0.0.0`, and there is no flag to change it.
-//! * **A token**, generated per run and printed with the URL. Without it every
-//!   route answers 403. This is what stops another program on the machine —
-//!   and any web page that guesses the port — from reading the index.
-//! * **Origin checked** on every request, because a page on the internet can
-//!   make a browser send one here. Same-origin or nothing.
-//! * **Read-only, with one exception, and the exception is the careful part.**
-//!   `rescan` and `maintain` are not routed — a page in a browser does not get
-//!   to make the service work. `/api/open` is the exception, because a file
-//!   search that cannot open a file is half a tool, and it is fenced: `POST`
-//!   only, so a link, an image or a prefetch cannot reach it, and the path must
-//!   be one the *index* holds.
-//!
-//!   **And it runs executables.** That was a refusal once — the folder was
-//!   opened instead — and it is not any more, because a search box that finds a
-//!   program and then sends you elsewhere to start it has not finished the job.
-//!   The honest accounting, since a security note that flatters itself is worse
-//!   than none: this does not widen who may ask, only what an asker may do.
-//!   Loopback, token, origin and method are all still in the way, and getting
-//!   past them means holding a token that is new every run and lives in the
-//!   window's own URL. What changes is that such a holder can now start a
-//!   binary directly, where before they could `xdg-open` a `.desktop` file or a
-//!   script and have the desktop start it for them. A door widened rather than
-//!   opened, and still a door: `--no-run` closes it and says so on screen,
-//!   `--no-launch` removes the route altogether.
+//! Behind this port is an index of every file the user owns: 127.0.0.1 only
+//! with no flag to change it, a per-run token without which every route is
+//! 403, an `Origin` that must be ours, and `POST` for everything that acts.
 
 mod http;
 mod icons;
@@ -53,45 +17,26 @@ use scour_core::{Catalog, DirUsage, FacetBy, Owner, Page, SortKey};
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
-/// The page, built in.
-///
-/// Compiled in rather than read from disk so that the binary is the whole of
-/// the program: a file path is one more thing to get wrong at install time,
-/// and there is nothing here a user would want to edit separately.
+/// The page, built in, so that the binary is the whole of the program.
 const PAGE: &str = include_str!("page.html");
 
-/// The page with its palette written in.
-///
-/// **The colours are not in `page.html` any more.** They were, and so were the
-/// same colours in `theme.slint`, and keeping the two the same was somebody
-/// remembering to — which had already failed once: the light scheme's focus
-/// ring said `#4a9eff` here and `#2f6ba3` there, and nothing could tell.
-/// [`scour_ui`] holds them now and both windows are written from it.
-///
-/// Built once. The page is served on every window open and this is a few
-/// hundred bytes of formatting that would otherwise be redone each time.
+/// The page with its palette and its menu written in, built once. The colours
+/// live in [`scour_ui`], so this page and `theme.slint` cannot drift.
 fn page() -> &'static str {
     static PAGE_WITH_THEME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     PAGE_WITH_THEME.get_or_init(|| {
         let dark = scour_ui::css_vars(&scour_ui::DARK);
         let light = scour_ui::css_vars(&scour_ui::LIGHT);
         let metrics = scour_ui::css_metrics();
-        // Four blocks, and each is load-bearing. The bare `:root` is what a
-        // browser with no opinion gets. The media query is the system
-        // preference. The two `[data-theme]` rules are the language menu's
-        // override and have to win over the media query, which is why they
-        // come last and repeat what the blocks above them already said.
+        // The `[data-theme]` rules come last: the menu's override must win.
         let theme = format!(
             ":root {{\n{dark}{metrics}  }}\n\n               @media (prefers-color-scheme: light) {{\n    :root {{\n{light}    }}\n  }}\n               :root[data-theme=\"light\"] {{\n{light}  }}\n               :root[data-theme=\"dark\"] {{\n{dark}  }}\n"
         );
-        // The menu, from the one table every face reads. `id` and `key` are
-        // not translated; `msgid` is the catalogue key the page looks up.
+        // `msgid` is the catalogue key the page looks up; `id` and `key` are not.
         let menu = serde_json::Value::Array(
             scour_ui::menu::ITEMS
                 .iter()
-                // What this face cannot do is left out here rather than drawn
-                // and disabled: a browser will never put a file on the
-                // clipboard, and an item greyed for ever is a promise.
+                // Left out rather than greyed for ever: a browser cannot.
                 .filter(|i| !i.except.contains(&scour_ui::faces::Face::Page))
                 .map(|i| {
                     serde_json::json!({
@@ -138,64 +83,32 @@ struct Args {
     /// Refuse `/api/open` entirely, so the page can only look.
     #[arg(long)]
     no_launch: bool,
-    /// Open the folder of an executable rather than running it.
-    ///
-    /// **The default is to run it**, because a search box that finds a
-    /// program and then refuses to start it is a search box that sends you
-    /// somewhere else to finish the job — which is what a person asked for and
-    /// what Everything does. The flag is here because it is a real capability
-    /// and not everyone wants it: with it, this bridge can start any binary
-    /// it can see, for anybody holding the token. The token is new every run
-    /// and the socket is loopback, and `xdg-open` could already run a
-    /// `.desktop` file or a script — so this widens a door rather than
-    /// opening one. It is still a door.
+    /// Open the folder of an executable rather than running it. The default
+    /// is to run it: anyone holding the token can start any binary it can see.
     #[arg(long)]
     no_run: bool,
     /// The command that opens the desktop's own quick-look, if the detected
-    /// one is wrong or there is none to detect.
-    ///
-    /// The file's path is appended. `--quicklook "gwenview"` on KDE, or
-    /// `--quicklook "imv"` under a compositor that has no such thing. Empty
-    /// means detect: `qlmanage -p` on macOS, `sushi` where it is installed,
-    /// and nothing anywhere else — the button is only offered when there is
-    /// something behind it.
+    /// one is wrong or there is none to detect. The file's path is appended.
     #[arg(long, value_name = "CMD")]
     quicklook: Option<String>,
-    /// Refuse `/api/preview`, so the page never receives a file's contents.
-    ///
-    /// The preview panel reads files the index holds, which is the user's own
-    /// home. That is a door widened rather than opened — the same loopback,
-    /// token, origin and method fences are in front of it, and the path must
-    /// be one the index holds — but it does turn "open this in an editor" into
-    /// one GET, and somebody who would rather it did not should be able to say
-    /// so. With this the panel shows what the index knows and nothing else.
+    /// Refuse `/api/preview`, so the page never receives a file's contents:
+    /// the panel then shows what the index knows and nothing else.
     #[arg(long)]
     no_preview: bool,
-    /// Never ask the desktop to make a thumbnail it has not made yet.
-    ///
-    /// Pictures already in the cache are still shown — reading them is a
-    /// `stat` and this is about the making, which is separate processes doing
-    /// image and video decoding on files the page happened to scroll past.
-    /// The same reasoning as `--no-preview`: a door widened rather than
-    /// opened, and somebody who would rather it stayed shut should be able to
-    /// say so. The person using the window has their own switch for it; this
-    /// is the one that means the route is not there at all.
+    /// Never ask the desktop to make a thumbnail it has not made yet. Pictures
+    /// already in the cache are still shown; this is about the making.
     #[arg(long)]
     no_thumbnails: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    // One read for both, and the language half is why it is no longer thrown
-    // away: `ui.language` is a machine's answer for a person who has not opened
-    // a menu, and reading the file again per request to find it would be a file
-    // read on every `/api/kinds`.
+    // Read once: per request it would be a file read on every `/api/kinds`.
     let config = scour_config::Config::load_or_default().0;
     let _ = CONFIGURED_LANGUAGE.set(config.ui.language.clone());
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
 
-    // Fail here rather than in the browser: a page that loads and then says
-    // "no service" is a worse error than a command that does not start.
+    // Fail here rather than in the browser, which has no command to blame.
     let client = Client::connect(&addr).with_context(|| {
         format!("no Scour service is listening on {addr}. Start one with `scourd`.")
     })?;
@@ -214,8 +127,7 @@ fn main() -> Result<()> {
 
     eprintln!("scour-web: {url}");
     eprintln!("scour-web: the token is per run — restarting invalidates the link");
-    // Said, because its absence is the ordinary case on three desktops out of
-    // five and looks like a fault otherwise.
+    // Said because having none is the ordinary case and looks like a fault.
     match QUICKLOOK.get().and_then(|q| q.as_ref()) {
         Some(cmd) => eprintln!("scour-web: system preview: {}", cmd.join(" ")),
         None => eprintln!(
@@ -227,9 +139,7 @@ fn main() -> Result<()> {
         open(&url);
     }
 
-    // Kept beside the shared connection because `/api/wait` may not use that
-    // one: it blocks for half a minute at a time, and the lock it would be
-    // holding is the lock every keystroke needs.
+    // `/api/wait` blocks for half a minute, so it opens its own connection.
     let addr: Arc<str> = Arc::from(addr.as_str());
 
     for stream in listener.incoming() {
@@ -244,24 +154,19 @@ fn main() -> Result<()> {
             pictures: !args.no_thumbnails,
         };
         // A thread a connection, and the connection closes after one exchange.
-        // A browser opens a handful; there is nothing here to pool.
         std::thread::spawn(move || serve(stream, &client, &addr, &token, doing));
     }
     Ok(())
 }
 
-/// A token nobody can guess, from the one source of randomness every platform
-/// agrees on.
+/// A token nobody can guess.
 fn token() -> String {
     let mut bytes = [0u8; 16];
-    // `getrandom` through the standard library's hasher would be indirect;
-    // reading the OS source directly is one line and says what it means.
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         use std::io::Read;
         let _ = f.read_exact(&mut bytes);
     }
-    // A pid and a clock, folded in, so that a platform without `/dev/urandom`
-    // still does not produce the same token twice.
+    // A pid and a clock: a platform with no `/dev/urandom` still cannot repeat.
     let salt = std::process::id().to_le_bytes();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -291,16 +196,11 @@ struct Doing {
     run: bool,
     /// `/api/preview` at all — hand the *contents* of a file to the page.
     preview: bool,
-    /// `/api/thumb` at all — ask the desktop to *make* pictures it has not
-    /// made. Reading the ones that exist is not behind this.
+    /// `/api/thumb` at all. Reading pictures that exist is not behind this.
     pictures: bool,
 }
 
-/// The desktop's quick-look command, resolved once at start.
-///
-/// Once, because it is a `PATH` walk and the answer cannot change while the
-/// process runs — and because a lookup per request would be a lookup per
-/// keystroke on a list somebody is arrowing through.
+/// The desktop's quick-look command, resolved once: it is a `PATH` walk.
 static QUICKLOOK: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
 
 fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, doing: Doing) {
@@ -308,10 +208,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         return;
     };
 
-    // A page on the internet can make a browser send a request here, and the
-    // browser will attach nothing that proves otherwise. What it cannot do is
-    // forge `Origin`, so anything carrying one that is not ours is refused
-    // before it is looked at.
+    // A browser cannot forge `Origin`: a foreign one is refused unread.
     if let Some(origin) = req.header("origin")
         && !origin.ends_with(&format!(
             ":{}",
@@ -321,12 +218,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         http::fail(&mut stream, "403 Forbidden", "cross-origin");
         return;
     }
-    // Reading is `GET`, doing is `POST`, and the split is not decoration: it
-    // is what keeps a link, a prefetch or a history entry from opening a file.
-    // `/api/thumb` is on the doing side because it starts programs. It is also
-    // the one route here whose GET form would look completely harmless — an
-    // `<img src>` that quietly makes a machine decode a video — which is
-    // exactly the shape this split exists to stop.
+    // Reading is `GET`, doing is `POST`: an `<img src>` must not open a file.
     let acting = req.path == "/api/open"
         || req.path == "/api/trash"
         || req.path == "/api/rename"
@@ -342,9 +234,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         );
         return;
     }
-    // Constant work regardless of how much of the token is right. The
-    // comparison is not the expensive part of a search, so there is no reason
-    // to leak how far a guess got.
+    // Constant work whatever the guess, so nothing leaks about how far it got.
     let given = req.param("t").unwrap_or_default();
     if given.len() != token.len()
         || given
@@ -391,10 +281,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
             "403 Forbidden",
             "previewing is off (--no-preview)",
         ),
-        // Starting the other faces of the same program. Fenced by what
-        // starting anything is fenced by here — `POST`, the token, the origin,
-        // and `--no-launch` — because "run a program on this machine" is one
-        // capability whatever the program is.
+        // Starting a face is starting a program: behind `--no-launch`.
         "/api/face" if doing.launch => api_face(&mut stream, client, &req),
         "/api/face" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
@@ -409,25 +296,15 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
 }
 
 /// One call to the service, with the lock held only for as long as it takes.
-///
-/// **Reconnects once on failure**, because the service is restarted far more
-/// often than this is — a rebuild, a config change, a `systemctl restart` —
-/// and a bridge that dies with it means every open page has to be reloaded
-/// with a new token. The connection is one socket held for the process's life,
-/// so losing it is a broken pipe on the next call and nothing more.
+/// Reconnects once: the service is restarted far more often than this is.
 fn call(client: &Mutex<Link>, request: Request) -> Result<Response, String> {
-    // The mutex is held only long enough to take a connection out, never for
-    // the call itself. That distinction is the whole point of the pool.
     let (mut link, addr) = {
         let mut guard = client.lock().map_err(|_| "the bridge lost its client")?;
         (guard.idle.pop(), guard.addr.clone())
     };
 
     if let Some(mut open) = link.take() {
-        // A failure here is the service having been restarted under it. The
-        // connection is dropped rather than returned, and a fresh one is
-        // opened below — which is why a `systemctl restart` does not make
-        // every open page reload with a new token.
+        // A failure here is the service restarted underneath: drop, reconnect.
         if let Ok(r) = open.call(request.clone()) {
             put_back(client, open);
             return Ok(r);
@@ -451,19 +328,8 @@ fn put_back(client: &Mutex<Link>, open: Client) {
     }
 }
 
-/// The connections, and where to open another one.
-///
-/// **One socket was a queue.** The service gives every connection a thread of
-/// its own, but this held a single one behind a mutex, so every request the
-/// page made waited for the one in front of it — and one of them is a walk of
-/// the whole matching set at 130 ms. A screenful of rows queued behind that
-/// arrives 130 ms late for no reason but the plumbing; measured on a busy
-/// index, one call in forty took **1,056 ms** while the rest took two.
-///
-/// So: several, handed out one at a time and put back when the call is done.
-/// A connection to a Unix socket costs microseconds, and the depth is what a
-/// page can have outstanding — four windows, a facet walk, a status — with
-/// room over. `wait` is not in here; a long poll has always opened its own.
+/// The connections, and where to open another one. Several, because one behind
+/// a mutex queued keystrokes: one request in forty took 1,056 ms, the rest two.
 #[derive(Debug)]
 struct Link {
     idle: Vec<Client>,
@@ -471,9 +337,7 @@ struct Link {
 }
 
 impl Link {
-    /// The depth. More than the page can ask for at once, so nothing queues;
-    /// small enough that a runaway client cannot make the service spawn
-    /// threads without limit.
+    /// More than the page can have outstanding, and a bound on service threads.
     const POOL: usize = 8;
 }
 
@@ -488,19 +352,9 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         .param("offset")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    // **A keystroke does not pay for an exact count.**
-    //
-    // The scrollbar needs the real total — a bar sized by what has loaded so
-    // far grows a thumb that shrinks as you scroll, which is the one thing a
-    // scrollbar must not do. But counting to the end is not free, and the
-    // first reading of this was wrong: measured on 2.1 M entries, warm,
-    // exact against a cap of 10,000, `rapor` is 47.9 ms against 6.6 and
-    // `ext:rs` is 96.8 against 12.7. Four to eight times, on the path that
-    // runs once per keypress.
-    //
-    // So the rows come back at typing speed under a cap, and `/api/count`
-    // fetches the exact one afterwards for the bar to settle on. Two
-    // questions, asked separately, because they have different deadlines.
+    // A keystroke does not pay for an exact count: on 2.1 M entries, exact
+    // against a cap of 10,000, `rapor` is 47.9 ms against 6.6. `/api/count`
+    // fetches the exact total afterwards for the scrollbar to settle on.
     let cap: u32 = req
         .param("cap")
         .and_then(|s| s.parse().ok())
@@ -521,21 +375,9 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 .hits
                 .iter()
                 .map(|h| {
-                    // Everything the index holds about the row, because the
-                    // page decides which of it to show and asking again for a
-                    // column that was switched on would be a second request
-                    // for rows already sent.
-                    //
-                    // **The full path is not one of them.** It was sent beside
-                    // `dir` and `name`, which spell it — and the page throws
-                    // the wire field away on arrival (`fromService` lays
-                    // `path: row.dir` over the spread) and rebuilds
-                    // `dir + "/" + name` where it wants the whole thing.
-                    // Measured on 200-row windows it was 19-29% of the bytes
-                    // (77-157 B of 397-548 B a row), refetched 32-43 windows
-                    // in fifty seconds during a scan. Nothing else reads this
-                    // route: the CSV has its own writer, and the TUI, the
-                    // window and the MCP server speak the protocol, not HTTP.
+                    // Everything the index holds, because the page decides
+                    // which columns to show — but not the full path, which
+                    // `dir` and `name` spell and which cost 19-29% of a window.
                     serde_json::json!({
                         "name": h.name(),
                         "dir": h.parent(),
@@ -551,23 +393,13 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                         "user": owner_name(Owner::User, h.meta.uid),
                         "group": owner_name(Owner::Group, h.meta.gid),
                         "items": h.meta.items,
-                        // What the folder holds, when the index could say. A
-                        // folder with no number is a folder whose size is not
-                        // known — which is true — where a zero would read as
-                        // an empty one.
+                        // Absent rather than zero: unknown is not empty.
                         "under": h.under.map(|u| serde_json::json!({
                             "disk": u.disk, "files": u.files
                         })),
-                        // Whether a picture of this file already exists, so
-                        // the page asks for the ones that do rather than for
-                        // two hundred that mostly do not.
+                        // So the page asks only for the pictures that exist.
                         "thumb": icons::has_thumbnail(&h.path, h.kind),
-                        // And whether one *could* be made — the third state a
-                        // blank tile was missing. Nothing has ever previewed
-                        // this file, but the machine declares a thumbnailer
-                        // for its type, so it is worth asking for once it
-                        // stops moving. Free: two hash lookups and no syscall,
-                        // and it answers no for almost every row.
+                        // And whether one could be: two lookups, no syscall.
                         "make": icons::may_thumbnail(&h.path, h.kind),
                     })
                 })
@@ -588,20 +420,10 @@ fn api_search(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// The thumbnail somebody has already made for a file.
-///
-/// **Cacheable, unlike everything else here.** The rest of these routes are
-/// about a filesystem being watched, where a cached answer is an answer that
-/// stopped being true; a thumbnail is a file in a cache directory, and the one
-/// picture on a page that a row genuinely has to fetch.
-///
-/// It answered for *type* icons too until the page learned to draw those
-/// itself — see `icons` for why that was a Linux answer to a question every
-/// platform asks. What is left takes a path and nothing else, so the route no
-/// longer has a branch where a missing parameter still produces a picture.
+/// The thumbnail somebody has already made for a file. Cacheable, unlike every
+/// other route: a file in a cache, not an answer about a watched filesystem.
 fn api_icon(stream: &mut TcpStream, req: &http::Req) {
-    // A path is only ever hashed, never opened: what comes back is a file in
-    // the thumbnail cache or nothing. See `icons`.
+    // A path is only ever hashed, never opened. See `icons`.
     let picture = match req.param("p") {
         Some(path) if !path.is_empty() => icons::thumbnail(path),
         _ => None,
@@ -612,29 +434,11 @@ fn api_icon(stream: &mut TcpStream, req: &http::Req) {
     }
 }
 
-/// Ask the desktop for the pictures it has not made yet.
-///
-/// **This route carries no bytes.** It says which paths have a picture now,
-/// and the page then fetches them from `/api/icon` exactly as it fetches the
-/// ones that were already there. That is deliberate: the reading half was made
-/// cheap and cacheable and there was no reason to grow a second way to do it.
-///
-/// **Its own connection to the service, like `/api/wait`.** The shared pool is
-/// eight and a batch of thumbnails is seconds of somebody else's video
-/// decoding; a search that queued behind one would be the exact failure this
-/// whole design is arranged around — nothing on the path a keystroke takes.
-/// Opening a socket costs microseconds next to what is about to happen on the
-/// other end of it.
-///
-/// The service is where the bound and the fence are. Nothing here decides how
-/// many may run, or whether a path may be touched.
+/// Ask the desktop for the pictures it has not made yet. Carries no bytes: it
+/// says which paths have one now, and the page fetches those from `/api/icon`.
 fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
-    // **In the body, not the query.** A screenful of paths percent-encoded is
-    // several kilobytes and the request line is bounded at sixteen; over that
-    // it is cut rather than refused, which surfaces as a 404 for a path
-    // nobody asked for. Newline-separated because `\n` is the one byte a
-    // filename on any of these platforms cannot hold, and because a body needs
-    // no escaping to survive the trip.
+    // In the body, not the query: a request line past 16 KiB is cut rather
+    // than refused. Newline-separated, the one byte a filename cannot hold.
     let files: Vec<String> = req
         .body
         .split('\n')
@@ -646,6 +450,7 @@ fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
         http::json(stream, &serde_json::json!({ "ready": [], "ran": 0 }));
         return;
     }
+    // Its own connection: a batch is seconds of somebody else's video decoding.
     let mut client = match Client::connect(addr) {
         Ok(c) => c,
         Err(e) => {
@@ -656,10 +461,7 @@ fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
     match client.call(Request::Thumbnails { files }) {
         Ok(Response::Thumbnails(made)) => http::json(
             stream,
-            // `ran` is the number the design has to be judged on — how many
-            // processes a screenful of unseen files actually starts. Sent to
-            // the page so that the claim can be read out of a running window
-            // rather than argued about.
+            // `ran` is how many processes a screenful of unseen files started.
             &serde_json::json!({ "ready": made.ready, "ran": made.ran }),
         ),
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
@@ -667,24 +469,8 @@ fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
     }
 }
 
-/// The kinds a frontend should offer, in the order to show them, in the
-/// user's language.
-///
-/// Sent rather than hard-coded, and the page had hard-coded them: its rail
-/// came from the mockup and listed `package`, `db` and `other`, which are not
-/// tokens the engine has, while omitting `exec`, `config` and `file`, which
-/// are. So executables — every extensionless binary in `~/.local/bin`, found
-/// perfectly well by `kind:exec` — had no row to appear in, and three rows
-/// were permanently zero.
-///
-/// `Kind::OFFERED` exists for exactly this and says so in its own doc comment.
-///
-/// **`?lang=` rather than one language for the life of the process.** The
-/// catalogue used to be built once from the environment, which was right while
-/// the language could only be changed by restarting. It can be changed from a
-/// menu now, and the labels here are the one part of the rail the page does not
-/// hold a msgid for — so a switch that did not reach this route would leave
-/// thirteen rows in the old language under a window that had changed.
+/// The kinds a frontend should offer, in order, in the user's language.
+/// `?lang=`: these labels are the one part of the rail with no msgid in the page.
 fn api_kinds(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let cat = catalogue_for(client, req);
     let kinds: Vec<serde_json::Value> = scour_core::Kind::OFFERED
@@ -699,22 +485,8 @@ fn api_kinds(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     http::json(stream, &serde_json::json!({ "kinds": kinds }));
 }
 
-/// The whole catalogue, for the one frontend that cannot link it.
-///
-/// Every other frontend calls `scour-i18n` directly; a browser cannot, so the
-/// words come over the wire once and the page looks them up with the same rule
-/// [`Catalog::get`] implements — present means translated, absent means the
-/// msgid it already holds is the answer. That is why this hands over a map and
-/// not a list of rendered labels: rendering them here would mean this file
-/// knowing every string the page shows, which is a second copy of the page's
-/// vocabulary and exactly the shape that put thirteen kinds in the engine and
-/// eight in the rail.
-///
-/// The English answer is an empty map, and that is the correct amount rather
-/// than a failure: the msgid *is* the English.
-///
-/// `languages` travels with it so the menu is built from what is shipped. A
-/// page with its own list would offer a language nobody wrote a catalogue for.
+/// The whole catalogue, for the one frontend that cannot link `scour-i18n`. A
+/// map, by [`Catalog::get`]'s rule: absent means the msgid is the answer.
 fn api_strings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let cat = catalogue_for(client, req);
     let strings: serde_json::Map<String, serde_json::Value> = cat
@@ -735,68 +507,30 @@ fn api_strings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     );
 }
 
-/// `ui.language` from the config file, read once.
-///
-/// Once, because the alternative is a file read per request and this is asked
-/// on every `/api/kinds`. The service is the thing that would notice a config
-/// change, and it does not notice this one either — editing `config.toml` has
+/// `ui.language` from the config file, read once: editing `config.toml` has
 /// always meant restarting.
 static CONFIGURED_LANGUAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// The catalogue this request should answer in.
-///
-/// `?lang=` when the page names one, because a page that has just been switched
-/// must not have to wait for its own `POST` to land before the next route
-/// agrees with it — the settings write and the re-fetch are two requests, and
-/// between them the service still holds the old answer.
-///
-/// Otherwise the shared order in [`scour_i18n::choose`]: what was chosen, then
-/// the config file, then the environment. Asking the service for the setting
-/// costs one round trip on a socket, which is measured in tens of microseconds
-/// and happens twice on load.
+/// The catalogue this request should answer in: `?lang=` when the page names
+/// one — the settings write and the re-fetch are two requests — else
+/// [`scour_i18n::choose`]: what was chosen, the config file, the environment.
 fn catalogue_for(client: &Mutex<Link>, req: &http::Req) -> scour_i18n::Catalogue {
     if let Some(tag) = req.param("lang").filter(|t| !t.is_empty()) {
         return scour_i18n::Catalogue::for_language(tag);
     }
     let chosen = match call(client, Request::Settings {}) {
         Ok(Response::Settings(s)) => s.language,
-        // A service that cannot be asked is not a reason to fall over; the
-        // environment is still a usable answer and the page still draws.
+        // A service that cannot be asked still leaves the environment.
         _ => String::new(),
     };
     let configured = CONFIGURED_LANGUAGE.get().map_or("", String::as_str);
     scour_i18n::Catalogue::for_language(&scour_i18n::choose(&chosen, configured))
 }
 
-/// Where this person keeps things, so the page does not have to guess.
-///
-/// **It guessed, and it guessed the author's home directory.** The sidebar's
-/// scope shortcuts were four literal paths under `/home/hasan` and the path
-/// shortener replaced that same string with `~`. On anyone else's machine the
-/// shortcuts point at folders that are not there and no path ever shortens —
-/// the two most visible things in the window, both wrong, for everybody but
-/// one person.
-///
-/// The names come from the XDG user directories, which is where a desktop
-/// records what its owner calls Documents and Downloads in their own language,
-/// and only the ones that exist are offered. A machine with no `user-dirs.dirs`
-/// gets the home directory and nothing else, which is honest rather than four
-/// dead links.
-/// What this person's frontends remember.
-///
-/// **The second thing on this bridge that writes**, and the accounting is the
-/// same as `/api/open`'s: `POST` only when it is setting, so a link or a
-/// prefetch cannot change somebody's columns, and the token and the origin are
-/// still in front of it. What it can write is a column list — not a file.
-///
-/// It lives in the service rather than in the browser because a browser loses
-/// it. `localStorage` is flushed on a clean shutdown and dropped when the
-/// process is killed — measured both ways — and a terminal interface cannot
-/// read it at all. See `scour-settings`.
+/// What this person's frontends remember. `POST` only when it is setting, and
+/// what it writes is a column list, not a file. See `scour-settings`.
 fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    // What arrives is a **change** — the fields the page set — not the whole
-    // object. Everything it does not name belongs to whoever put it there,
-    // which on a machine with a terminal interface open is somebody else.
+    // A change, not the whole object: what it omits belongs to another frontend.
     let request = match req.param("set") {
         Some(text) => match serde_json::from_str(text) {
             Ok(change) => Request::SetSettings { change },
@@ -821,22 +555,8 @@ fn api_settings(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// Where this person keeps things, and what the volumes under them record.
-///
-/// **Asked, not worked out.** Both halves used to be here: `user-dirs.dirs`
-/// parsed in this file, `/proc/self/mounts` read in this file. That is one
-/// frontend's copy of a rule four are meant to share — a terminal interface
-/// would parse the same file again, and the day one of them got the quoting
-/// wrong its sidebar would point at folders that are not there. The same guess
-/// was wrong once already at a higher layer: the page shipped with
-/// `/home/hasan` written into it, and the fix then moved the guess from
-/// JavaScript into this bridge rather than into the service. It is in the
-/// service now, in `scour-places`, where every frontend can reach it.
-/// What the walk skips, in two lists.
-///
-/// The built-in set and the configured one are kept apart all the way to the
-/// browser, because only the second can be edited and a panel that offers a
-/// remove button for the first would be lying. See `Request::Rules`.
+/// What the walk skips, in two lists: built-in and configured stay apart all
+/// the way to the browser, because only the second can be edited.
 fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Rules {}) {
         Ok(Response::Rules {
@@ -860,9 +580,7 @@ fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
                             "files": config_files, "allow": config_allow },
                 "added": { "paths": added_paths, "dirs": added_dirs,
                            "files": added_files, "allow": added_allow },
-                // Ids, flat, across all three groups — the page marks a row
-                // rather than moving it, because a rule that is off is still
-                // where somebody wrote it.
+                // Ids across all three groups: an off rule stays where written.
                 "off": off,
             }),
         ),
@@ -871,6 +589,8 @@ fn api_rules(stream: &mut TcpStream, client: &Mutex<Link>) {
     }
 }
 
+/// Where this person keeps things, so the page does not have to guess. The XDG
+/// user directories, from `scour-places`; only the ones that exist are offered.
 fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Places {}) {
         Ok(Response::Places(p)) => match serde_json::to_value(&p) {
@@ -882,40 +602,9 @@ fn api_places(stream: &mut TcpStream, client: &Mutex<Link>) {
     }
 }
 
-/// The whole result set, as a spreadsheet.
-///
-/// **A pipe now, and it used to be the author.** The URL, the headers and the
-/// bytes are unchanged; what left is the loop that made them. This paged the
-/// service — `offset`, `offset + 10_000`, and so on — and a page costs what it
-/// takes to walk to its offset: 2.1 ms at the start of this index, 25.3 at a
-/// hundred thousand, 65.5 at half a million, 117.6 at a million. Linear per
-/// page is quadratic in total, so the whole index wrote 1.4 M lines in ten
-/// minutes without finishing, and the endpoint stopped at half a million and
-/// said so in a trailer. The owner asked for no limit; there is none now,
-/// because the service walks the set once and these bytes are what it produced.
-///
-/// Three things went with the loop, and each is worth naming because each was
-/// load-bearing before:
-///
-/// * **The `CEILING`**, and the `# scour: stopped at N rows` trailer under it.
-///   There is nothing left to stop for, so a file that said it had stopped
-///   would be a lie. A short file now means a failure, and it carries no
-///   trailer either — the connection simply ends, which is what a truncated
-///   download looks like to everything that reads one.
-/// * **The quoting, the byte-order mark and the date format.** They live in
-///   `scour_export`, in the service. Not moved for tidiness: this bridge is
-///   one frontend of four, the terminal writes the same file now with `scour
-///   export`, and two implementations of RFC 4180 quoting is two chances for a
-///   spreadsheet to open and be quietly wrong.
-/// * **`sort` and `desc`.** The service streams in the index's own order and
-///   cannot be asked for another — see `Request::Export`. The parameters are
-///   still accepted and now do nothing, which is said here rather than
-///   pretended about; a spreadsheet sorts itself in one click.
-///
-/// **The set no longer moves while this runs.** Paging a live index meant a
-/// row written during the export shifted everything after it, so a file could
-/// appear twice or not at all — documented here as inherent, and it was
-/// inherent to *paging*. One walk under one read lock is a consistent snapshot.
+/// The whole result set, as a spreadsheet: one walk in the service under one
+/// read lock, so there is no ceiling, no trailer and no row seen twice. `sort`
+/// and `desc` are accepted and do nothing; the quoting is `scour_export`'s.
 fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let columns: Vec<String> = req
         .param("cols")
@@ -931,13 +620,8 @@ fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         columns,
     };
 
-    // **A connection of its own, not one from the pool.** An export holds its
-    // connection for as long as it takes to walk the index, and a pooled one
-    // would be one the rest of the page cannot use for that whole time — with
-    // `POOL` at eight, a handful of concurrent downloads would starve the
-    // keystrokes. It is not returned afterwards either: a stream the reader
-    // abandons leaves frames in flight, which is the state `Client::stream`
-    // refuses to reuse a connection after.
+    // Its own connection, held for the whole walk and not returned: an
+    // abandoned stream leaves frames in flight.
     let addr = match client.lock() {
         Ok(guard) => guard.addr.clone(),
         Err(_) => {
@@ -957,31 +641,20 @@ fn api_csv(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         }
     };
 
-    // The headers go out before the first row, so there is nowhere left to put
-    // a status code if the walk fails after this line. That is the trade the
-    // whole endpoint is built on — see `http::attachment` — and it is why the
-    // two failures above are checked *before* it.
+    // Past this line there is nowhere to put a status code.
     http::attachment(stream, "text/csv; charset=utf-8", "scour.csv");
     let result = link.stream(request, |piece| match piece {
         Response::ExportChunk { csv } => stream.write_all(csv.as_bytes()).is_ok(),
-        // Not a piece of an export. Ignored rather than taken as the end: a
-        // service newer than this bridge may have something to add, and a
-        // download that keeps its rows is better than one that stops on a
-        // frame it did not recognise.
+        // Not a piece of an export: ignored rather than taken as the end.
         _ => true,
     });
-    // Nothing to say and nowhere to say it. A reader that went away is the
-    // ordinary case — a cancelled download — and an export that failed leaves
-    // a short file, which is the only signal HTTP has left once a body has
-    // begun.
+    // A short file is the only signal left once a body has begun.
     let _ = result;
     let _ = stream.flush();
 }
 
-/// How many match, exactly, however long that takes.
-///
-/// Separate from the search because the two have different deadlines: the rows
-/// have to be on screen before the next keystroke and this does not.
+/// How many match, exactly, however long that takes. Separate from the search,
+/// whose rows have to be on screen before the next keystroke.
 fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Count {
         query: req.param("q").unwrap_or_default().to_owned(),
@@ -991,11 +664,7 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             .unwrap_or(u32::MAX),
     };
     match call(client, request) {
-        // `misread` is dropped here on purpose. This page asks `explain` on
-        // every keystroke and colours the offending run inside the query line,
-        // which says it earlier and in a better place than a note beside the
-        // count. The surfaces that keep the warning are the ones with no
-        // search box to colour.
+        // `misread` is dropped: the query line colours the offending run.
         Ok(Response::Count {
             total,
             capped,
@@ -1010,37 +679,9 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// Everything the sidebar needs, from one walk.
-///
-/// `by=kind,age` asks both; the reply carries a group per question in the
-/// order asked, plus the exact total, which the walk produces for free. The
-/// page used to make three requests for this — a count, a rail and a chart —
-/// and each of them walked the matching set again.
-/// What a folder weighs, and which of its children weigh the most.
-///
-/// The report tab drew this from a table of twenty-four folders written into
-/// the page when it was a mockup — real numbers once, measured against a home
-/// directory in August, and frozen ever since. It sat three inches from a
-/// sidebar that says *"Aşağısı canlı"*, which made it the one place in the
-/// interface that showed somebody invented figures about their own disk.
-///
-/// The engine has answered this the whole time: `Request::Usage` ships, `scour
-/// du` uses it, and it is 96 ms over 658,360 files because the sizes and the
-/// parent links are already in the index and nothing has to touch the disk.
-/// Only the route between them was missing.
-///
-/// `top` is how many children come back, heaviest first; `child_count` says
-/// how many there were before the cut, so the page can say what it is not
-/// showing rather than quietly showing less.
-/// The same file, several times over, under one folder.
-///
-/// **Scoped by the same term the rest of the report is scoped by.** Changing
-/// directory in the report changes `under:` and every panel recomputes; this
-/// is one more panel and needs no new mechanism.
-///
-/// Reads nothing unless asked. The free answer — sizes only — is 84 ms over
-/// thirty thousand candidates and is what the panel opens with; confirming
-/// costs real disk and is a button somebody presses.
+/// The same file, several times over, under one folder. Scoped by the report's
+/// `under:` term; sizes only is 84 ms over thirty thousand candidates, and
+/// confirming reads disk, on a button.
 fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let mb = |k: &str, d: u64| -> u64 {
         req.param(k).and_then(|s| s.parse().ok()).unwrap_or(d) * 1024 * 1024
@@ -1066,9 +707,7 @@ fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                     "size": g.size,
                     "waste": g.waste,
                     "paths": g.paths,
-                    // The page shows this rather than deciding for itself:
-                    // "identical" and "the same length" are different claims
-                    // and the difference is what somebody deletes on.
+                    // "Identical" and "the same length" are different claims.
                     "certainty": g.certainty,
                 })).collect::<Vec<_>>(),
                 "candidates": candidates,
@@ -1083,12 +722,13 @@ fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
+/// What a folder weighs, and which of its children weigh the most. `top` come
+/// back, heaviest first; `child_count` is how many there were before the cut.
 fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Usage {
         path: req.param("path").unwrap_or_default().to_owned(),
         top: req.param("top").and_then(|s| s.parse().ok()).unwrap_or(24),
-        // Absent and empty mean the same thing here, which is why the page can
-        // send the box's contents without looking at them first.
+        // Absent and empty mean the same, so the page can send the box unread.
         query: req.param("q").unwrap_or_default().to_owned(),
     };
     match call(client, request) {
@@ -1117,6 +757,8 @@ fn api_usage(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
+/// Everything the sidebar needs, from one walk: `by=kind,age` asks both, and a
+/// group per question comes back in the order asked, with the exact total.
 fn api_facets(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let edges: Vec<u32> = req
         .param("edges")
@@ -1183,8 +825,7 @@ fn api_status(stream: &mut TcpStream, client: &Mutex<Link>) {
     }
 }
 
-/// The same answer either route produces, so a page that has been told to wait
-/// gets everything the one that asked outright would have.
+/// The same answer either route produces, waited for or asked outright.
 fn status_json(s: &scour_core::Status) -> serde_json::Value {
     serde_json::json!({
         "entries": s.entries,
@@ -1194,30 +835,16 @@ fn status_json(s: &scour_core::Status) -> serde_json::Value {
         "pending": s.pending,
         "index_bytes": s.index_bytes,
         "revision": s.revision,
-        // **What decides whether searching is as fast as it was built to be.**
-        //
-        // Every query reads the unsorted tail, so a week of ordinary use makes
-        // ordering by path eleven times slower — measured, 1.9 ms against 21.5
-        // — and one rebuild puts it back. The engine already works out when
-        // that is due; it was reaching the command line and nowhere else, so
-        // the one person who could act on it was the one least likely to look.
+        // Every query reads the unsorted tail: a week of ordinary use makes
+        // ordering by path 1.9 ms against 21.5, and one rebuild puts it back.
         "unsorted": s.unsorted,
         "rebuild_advised": s.rebuild_advised,
     })
 }
 
-/// Hold the request open until the index changes.
-///
-/// **Its own connection, deliberately.** Every other route shares one socket
-/// behind a mutex, which is right when a call takes a millisecond and wrong
-/// when it takes half a minute: a page waiting here would be holding the lock
-/// that the next keystroke needs. A connect costs tens of microseconds and
-/// happens once per wait, which on a quiet machine is twice a minute.
-///
-/// The page's side of this is a `fetch` with no timeout of its own, so the
-/// reply arriving *is* the notification. What comes back is a status either
-/// way — the revision in it says whether anything actually happened, and a
-/// timeout is not an error.
+/// Hold the request open until the index changes. Its own connection: half a
+/// minute on the shared one is half a minute of keystrokes. A timeout is not
+/// an error, and a status comes back either way.
 fn api_wait(stream: &mut TcpStream, addr: &str, req: &http::Req) {
     let since: u64 = req.param("rev").and_then(|s| s.parse().ok()).unwrap_or(0);
     let timeout_ms: u32 = req
@@ -1239,11 +866,8 @@ fn api_wait(stream: &mut TcpStream, addr: &str, req: &http::Req) {
     }
 }
 
-/// What the query means and what could follow the caret.
-///
-/// The colouring lives in the service on purpose — a frontend that tokenised
-/// for itself would be a second parser, and the day the two disagreed the box
-/// would be confidently colouring a lie.
+/// What the query means and what could follow the caret. Tokenised in the
+/// service: a second parser here would colour a lie the day the two disagreed.
 fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let request = Request::Explain {
         query: req.param("q").unwrap_or_default().to_owned(),
@@ -1256,18 +880,9 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             completions,
             needs_content,
         }) => {
-            // **Serialised whole, not field by field.** This listed the
-            // three fields it knew about, so `Span::not` — which says the
-            // difference between what is being searched for and what is being
-            // kept out — never reached the page at all: the whole of `!tmp`
-            // was drawn in the colour of a thing being looked for, with one
-            // red character in front of it. A field added to the engine now
-            // arrives here without this file being touched.
-            //
-            // The names are serde's, and that matters: `Role::UnknownField`
-            // debug-prints as `UnknownField`, which lowercases to
-            // `unknownfield` — and the page, matching the `snake_case` the
-            // protocol actually uses, quietly matched none of them.
+            // Serialised whole, not field by field, so a field added to the
+            // engine arrives without this file being touched. The names are
+            // serde's `snake_case`, which is what the page matches on.
             let spans = serde_json::to_value(&spans).unwrap_or_default();
             let completions = serde_json::to_value(&completions).unwrap_or_default();
             http::json(
@@ -1285,28 +900,11 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// Open a path, or the folder holding it.
-///
-/// **The index is the fence.** The path is looked up through the service
-/// first, and a path the index does not hold is refused — so this cannot be
-/// pointed at `/etc/shadow`, at a path assembled by a page, or at anything
-/// outside the roots the user configured. `stat` already refuses a path no
-/// source owns, and that refusal is the whole check.
-///
-/// The second fence is what "open" means. `xdg-open` on a `.desktop` file
-/// executes it; on an executable a file manager offers to run it. Those get
-/// their folder revealed instead, which is what someone searching for them
-/// wanted. There is no flag to override it.
-/// Start the window or the terminal, once a person has asked for it.
-///
-/// **Two names, not a path.** The page says which face it wants and this
-/// decides what that is; taking a program name from the page would make a
-/// route that runs anything on the machine out of one that switches between
-/// two known things.
+/// Start the window or the terminal, once a person has asked for it. Two
+/// names, not a path: a program name from the page would run anything.
 fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let which = req.param("face").unwrap_or_default();
-    // The terminal goes through the launcher: it needs a tty, and which
-    // terminal to open is one list, in `scripts/scour-open`.
+    // The terminal needs a tty; which one to open is `scripts/scour-open`'s list.
     let program = match which {
         "window" => "scour-gui",
         "tui" => "scour-open",
@@ -1329,20 +927,12 @@ fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     } else {
         &[][..]
     });
-    // In a process group of its own, or whatever closes this server closes
-    // what it just opened. See `scour_ui::faces::detach`.
+    // Its own process group, or closing this server closes what it opened.
     scour_ui::faces::detach(&mut command);
     match command.spawn() {
-        // Detached and not waited for: this server outlives the click and the
-        // program outlives this server.
         Ok(_) => {
-            // **Switching is also choosing**, the same as in the window: what
-            // the desktop entry and the hotkey open is whichever face somebody
-            // last moved to. Best effort — the face is already starting, and
-            // failing to write a preference is not a reason to say it did not.
-            // Built as JSON rather than as a `Change`, because this bridge
-            // does not depend on the settings crate: it passes changes through
-            // from the page and this is one more of them.
+            // Switching is also choosing: the desktop entry opens the last
+            // face moved to. Best effort — the face is already up.
             if let Ok(change) = serde_json::from_value(serde_json::json!({ "face": which })) {
                 let _ = call(client, Request::SetSettings { change });
             }
@@ -1352,20 +942,10 @@ fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 "application/json",
                 b"{\"started\":true,\"closing\":true}",
             );
-            // **And this face closes.** Switching is moving, not opening a
-            // second one — the window and the terminal both go when they start
-            // another, and a browser face that stayed would leave a port open
-            // and a list nobody is reading.
-            //
-            // A tab cannot close itself: `window.close()` is refused for a
-            // page the script did not open, and this one was opened by a
-            // browser being pointed at a URL. So the *server* goes and the page
-            // says the tab can be shut, which is the honest half of it.
-            //
-            // After the reply is on the wire and after a beat: the launcher
-            // has an `exec` to get through, and a process that exits while its
-            // child is still starting takes the child with it on some
-            // desktops.
+            // And this face closes: switching is moving, not opening a second
+            // one. A tab cannot close itself, so the server goes and the page
+            // says the tab can be shut — after a beat, because a process that
+            // exits while its child is still starting takes the child with it.
             std::thread::spawn(|| {
                 std::thread::sleep(std::time::Duration::from_millis(700));
                 std::process::exit(0);
@@ -1395,12 +975,8 @@ fn beside_or_path(name: &str) -> Option<std::path::PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Which programs on this machine will take this file.
-///
-/// A read, so a `GET`: it starts nothing and changes nothing. The list is what
-/// `Open with…` shows, and the chosen one — whatever the desktop's own
-/// association says — is marked rather than moved, so a person who is looking
-/// for the second entry finds it where it was last time.
+/// Which programs on this machine will take this file. A read, so a `GET`; the
+/// desktop's own association is marked rather than moved.
 fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1427,11 +1003,8 @@ fn api_openers(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     http::json(stream, &serde_json::json!({ "openers": list }));
 }
 
-/// Start one of them.
-///
-/// **Behind `--no-launch` with everything else that runs a program.** The list
-/// above is a read and stays available; this is the half that starts a process
-/// and belongs on the same switch as `/api/open`.
+/// Start one of them, behind `--no-launch` with everything else that runs a
+/// program. The list above is a read and stays available.
 fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let (Some(path), Some(id)) = (
         req.param("path").filter(|p| !p.is_empty()),
@@ -1462,17 +1035,13 @@ fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) 
             Ok(()) => http::json(stream, &serde_json::json!({ "started": chosen.name })),
             Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
         },
-        // The list the page was shown is a moment old, and a program can be
-        // uninstalled in that moment.
+        // The list the page was shown is a moment old.
         None => http::fail(stream, "404 Not Found", "no such program any more"),
     }
 }
 
-/// Give a file a different name, and tell the index straight away.
-///
-/// Behind the same fence as opening and trashing: a path is renameable only if
-/// the index knows it. What a name may be is `scour-name`'s to decide, so that
-/// the three faces refuse the same names for the same stated reasons.
+/// Give a file a different name, and tell the index straight away. Renameable
+/// only if the index holds the path; what a name may be is `scour-name`'s.
 fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let (Some(path), Some(name)) = (
         req.param("path").filter(|p| !p.is_empty()),
@@ -1496,8 +1065,7 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     match scour_name::rename(std::path::Path::new(&path), name) {
         Ok(now) => {
             let now = now.to_string_lossy().into_owned();
-            // Both ends: the old path is gone and the new one has appeared, and
-            // the index has heard of neither until it is told.
+            // Both ends: the old path is gone and the new one has appeared.
             let _ = call(
                 client,
                 Request::Recheck {
@@ -1506,25 +1074,14 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             );
             http::json(stream, &serde_json::json!({ "path": now }));
         }
-        // The refusal is a sentence rather than a code, and it is a catalogue
-        // key: the page looks it up in the reader's language.
+        // The refusal is a catalogue key, looked up in the reader's language.
         Err(why) => http::json(stream, &serde_json::json!({ "refused": why.msgid() })),
     }
 }
 
-/// Send rows to the wastebasket, and tell the index straight away.
-///
-/// **Behind the same fence as opening.** A path is trashable only if the index
-/// knows it, which is the check `api_open` makes and for the same reason: the
-/// page may ask for anything, and what it may ask *about* is what has already
-/// been indexed under a configured root. A page that could name
-/// `/etc/shadow` here would be a page that could move it.
-///
-/// The move itself is this process's, with this user's permissions — the
-/// service never gains the ability to delete. What goes to the service
-/// afterwards is [`Request::Recheck`], which only re-reads: without it the row
-/// sits on screen until a watcher gets round to it, and a deletion that leaves
-/// its row behind reads as one that failed.
+/// Send rows to the wastebasket, and tell the index straight away. Trashable
+/// only if the index holds the path; the move is this process's, with this
+/// user's permissions, and [`Request::Recheck`] only re-reads.
 fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no paths");
@@ -1553,9 +1110,7 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         }
     }
 
-    // Even a partial success is worth telling the index about, and a failed
-    // one is worth rechecking too: the reason it could not be trashed is
-    // sometimes that somebody else already removed it.
+    // A failure is worth rechecking too: sometimes it is already gone.
     if !asked.is_empty() {
         let _ = call(client, Request::Recheck { paths: asked });
     }
@@ -1566,6 +1121,9 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     );
 }
 
+/// Open a path, or the folder holding it. The index is the fence: the service
+/// is asked first, so this cannot be pointed at `/etc/shadow`. An executable
+/// is run unless `--no-run`.
 fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1582,8 +1140,7 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
             http::fail(stream, "502 Bad Gateway", "unexpected reply");
             return;
         }
-        // Not in the index, or under no configured root. Either way, not ours
-        // to open.
+        // Not in the index, or under no configured root: not ours to open.
         Err(e) => {
             http::fail(stream, "404 Not Found", &e);
             return;
@@ -1592,14 +1149,8 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
 
     let p = std::path::Path::new(&entry.path);
 
-    // The desktop's own quick-look, when there is one and it was asked for.
-    //
-    // A launch like any other on this route, and fenced by the same things —
-    // `POST`, the token, the origin, and a path the index holds. What makes it
-    // *not* like the others is that it is a viewer rather than a handler: the
-    // point of pressing this is to see the file without whatever program owns
-    // the extension deciding to open, and that is worth its own verb rather
-    // than a heuristic on top of "open".
+    // The desktop's own quick-look: a viewer rather than the handler the
+    // extension names, which is why it is its own verb rather than a heuristic.
     if req.param("what") == Some("preview")
         && let Some(cmd) = QUICKLOOK.get().and_then(|q| q.as_ref())
     {
@@ -1621,19 +1172,9 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     }
 
     let want_folder = req.param("what") == Some("folder") || entry.is_dir;
-    /* **Asked of the entry, not of the disk, and asked once.**
-     *
-     * This called a second rule that lived in this bridge, which re-`stat`ed
-     * the file for a mode bit the `Entry` above already carries, and which
-     * decided by that bit alone. Every file on an `ntfs3` volume mounted with
-     * `fmask=0022` has it — all of `/mnt/depo` on this machine is `0755` — so
-     * double-clicking a PDF there tried to *execute* it and came back as a 500.
-     *
-     * `scour_core::runs_when_opened` is the rule now, beside `kind_of`, which
-     * is where the knowledge about extensions already was. */
+    // Asked of the entry, not the disk: every file on an `ntfs3` mount with
+    // `fmask=0022` is 0755, so the mode bit alone would try to run a PDF.
     let runnable = !want_folder && scour_core::runs_when_opened(entry.name(), entry.meta.mode);
-    // Running it is the file's own answer to "open"; showing where it lives is
-    // what is left when that is not allowed.
     let run = runnable && may_run;
     let target = if want_folder || (runnable && !run) {
         p.parent().unwrap_or(p).to_path_buf()
@@ -1641,8 +1182,7 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
         p.to_path_buf()
     };
 
-    // A program is started in the directory it lives in, because that is where
-    // whatever it reads beside itself is.
+    // Started in the directory it lives in, beside what it reads.
     let mut cmd = if run {
         let mut c = std::process::Command::new(&target);
         c.current_dir(target.parent().unwrap_or(&target));
@@ -1662,10 +1202,7 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
             stream,
             &serde_json::json!({
                 "opened": target.to_string_lossy(),
-                // Said rather than done silently: a double-click that quietly
-                // does something else is worse than one that explains. And a
-                // program that was *started* says so, because nothing else on
-                // the screen will.
+                // Said, because nothing else on screen will say it was run.
                 "instead": if run {
                     Some(format!("çalıştırıldı: {}", target.file_name().unwrap_or_default().to_string_lossy()))
                 } else if runnable {
@@ -1679,21 +1216,9 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     }
 }
 
-/// The contents of one file, if it is something a browser can draw.
-///
-/// **Fenced exactly as `/api/open` is, and for the same reason.** The path is
-/// not opened as it arrives: the *service* is asked for it first, and a path
-/// the index does not hold is refused — so this cannot be pointed at
-/// `/etc/shadow`, at a path a page assembled, or at anything outside the roots
-/// the user configured. `stat` already refuses a path no source owns, and that
-/// refusal is the whole check. `..` needs no special handling because of it: a
-/// traversal that escapes the roots lands somewhere the index has never heard
-/// of, and a traversal that does not escape them names a file that was already
-/// reachable by its ordinary path.
-///
-/// What comes back and under what headers is [`preview`]'s business, and the
-/// headers are the careful part — this is the one route that answers with
-/// bytes this program did not write.
+/// The contents of one file, if it is something a browser can draw. Fenced as
+/// `/api/open` is, so `..` needs no handling: a traversal that escapes the
+/// roots lands somewhere the index has never heard of.
 fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1710,8 +1235,7 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             http::fail(stream, "502 Bad Gateway", "unexpected reply");
             return;
         }
-        // Not in the index, or under no configured root. Either way, not ours
-        // to read.
+        // Not in the index, or under no configured root: not ours to read.
         Err(e) => {
             http::fail(stream, "404 Not Found", &e);
             return;
@@ -1721,19 +1245,10 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let p = std::path::Path::new(&entry.path);
     let shape = scour_preview::shape_of(p, entry.is_dir);
 
-    // The probe. A page cannot tell that `notes.bak` is readable and
-    // `model.safetensors` is not — that is decided by looking at the bytes,
-    // which happens in `scour-preview` — and it must not find out by fetching
-    // a four-gigabyte video into memory to read its content type. So it asks
-    // first, and then points an `<img>` or a `<video>` at the same URL, which
-    // streams and seeks the way the browser wants to.
+    // The probe: a page must not learn a file is unshowable by fetching four
+    // gigabytes of it. It asks, then points an `<img>` at the same URL.
     if req.param("meta") == Some("1") {
-        // **Asked, not decided here.** Whether a file can be shown needs its
-        // first eight kilobytes read and a table of extensions consulted, and
-        // this bridge was doing both — so a terminal interface or a Slint
-        // window would each have had their own idea of what `notes.bak` is.
-        // The service answers now; what stays here is the two facts that are
-        // about *this* frontend, and the bytes, which a browser wants ranged.
+        // Asked, not decided here: one answer for all four frontends.
         let look = match call(
             client,
             Request::Preview {
@@ -1756,36 +1271,22 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
                 "shape": look.shape,
                 "type": look.kind,
                 "size": entry.meta.size,
-                // The picture somebody's file manager already made. It is what
-                // the panel falls back to for the formats a browser cannot
-                // open at all — a `.docx`, a `.psd`, a video in a codec it
-                // does not have — and for those it is the only thing there is.
+                // The fallback for formats a browser cannot open at all.
                 "thumb": icons::has_thumbnail(&entry.path, entry.kind()),
-                // Whether there is a system previewer to hand this to, so the
-                // page offers the button only where it leads somewhere. On
-                // KDE, under Hyprland and on Windows there is nothing to
-                // offer, and a button that quietly does nothing is worse than
-                // no button.
+                // Whether there is a previewer, so the button leads somewhere.
                 "native": QUICKLOOK.get().and_then(|q| q.as_ref()).is_some(),
             }),
         );
         return;
     }
 
-    // **The framing is here and the bytes are not**, which is the split: only
-    // this file knows it is speaking HTTP, and `scour-preview` knows nothing
-    // about a socket. The three headers below are what keep somebody else's
-    // file from becoming this page's script, and they are the reason a preview
-    // route is more careful than every other route here — every other one
-    // answers with JSON this program wrote.
+    // The framing is here and the bytes are not: the one route answering with
+    // bytes this program did not write.
     let result = match shape {
         scour_preview::Shape::Text => send_text(stream, p),
         scour_preview::Shape::Whole(kind) => send_whole(stream, p, kind),
         scour_preview::Shape::Streamed(kind) => send_stream(stream, p, kind, req.header("range")),
-        // 415 rather than 404: the file is there, and this is a statement
-        // about what can be shown of it. That lets the panel say "no preview"
-        // instead of "not found" — two different things to be told about a
-        // file you can see in the list.
+        // 415 rather than 404: the file is there, and cannot be shown.
         scour_preview::Shape::Nothing => {
             http::fail(stream, "415 Unsupported Media Type", "nothing to show");
             return;
@@ -1793,26 +1294,16 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     };
     match result {
         Ok(true) => {}
-        // Refused by size, and the number is the answer: a picture has no
-        // useful partial rendering, so past the ceiling the panel says how big
-        // it is rather than spending fifty megabytes to say the same thing.
+        // Refused by size: a picture has no useful partial rendering.
         Ok(false) => http::fail(stream, "413 Payload Too Large", "too big to show"),
-        // Every path that can fail before a header has been written fails
-        // here, so a status line is still the right answer.
+        // No header has been written yet, so a status line still answers.
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
     }
 }
 
-/// The headers every preview carries.
-///
-/// `no-store` for the same reason as everywhere else here — the file is being
-/// watched and a cached copy is one that stopped being true. The other two are
-/// what keep somebody else's bytes from becoming this page's script:
-/// `nosniff`, so a browser does not overrule a `text/plain` it disagrees with,
-/// and `sandbox`, which does nothing to an `<img>` or a `<video>` and
-/// everything to a top-level navigation. An SVG opened straight at its URL
-/// lands in an opaque origin with scripts off, and that is what makes serving
-/// SVG as a picture safe rather than merely convenient.
+/// The headers every preview carries: `nosniff` so a browser cannot overrule a
+/// `text/plain`, and `sandbox` so an SVG opened at its own URL lands in an
+/// opaque origin with scripts off.
 const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
      X-Content-Type-Options: nosniff\r\n\
      Content-Security-Policy: sandbox; default-src 'none'\r\n\
@@ -1820,10 +1311,7 @@ const PREVIEW_HEADERS: &str = "Cache-Control: no-store\r\n\
 
 fn send_text(stream: &mut TcpStream, p: &std::path::Path) -> std::io::Result<bool> {
     let (text, whole, len) = scour_preview::text_head(p)?;
-    // The page has to know it is looking at the beginning of something rather
-    // than the whole of it, and a header says so without touching the bytes.
-    // Appending a note to the body would put it *inside* the file being
-    // previewed, where it reads as part of the file.
+    // A header, not a note in the body, which would read as part of the file.
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: text/plain; charset=utf-8\r\n\
@@ -1889,25 +1377,12 @@ fn send_stream(
 }
 
 /// The name behind a numeric id, from this machine.
-///
-/// [`scour_core::owner_name`]'s answer. The copy that used to be here was
-/// identical to the exporter's, comment included.
 fn owner_name(which: Owner, id: i64) -> String {
     scour_core::owner_name(which, id)
 }
 
-/// The order a column header asked for.
-///
-/// **Every key the engine has**, and it did not used to be: six of the
-/// fourteen were mapped here, so clicking `Erişim`, `İzinler`, `Sahip`, `Grup`
-/// or `Diskte` did nothing at all. The engine could sort by all of them the
-/// whole time — the page simply had no name to send, and a header that does
-/// nothing when clicked reads as a broken sort rather than as a missing
-/// mapping.
-///
-/// `Relevance` is here for completeness and is what an unrecognised name falls
-/// back to nowhere: the default stays `Modified`, because a list nobody has
-/// ordered is a list of what changed last.
+/// The order a column header asked for; every key the engine has. An
+/// unrecognised name is `Modified`, which is what changed last.
 fn sort_of(s: Option<&str>) -> SortKey {
     match s.unwrap_or("modified") {
         "relevance" => SortKey::Relevance,
@@ -1938,36 +1413,14 @@ mod tests {
 
     #[test]
     fn an_unknown_sort_key_is_the_default_rather_than_an_error() {
-        // A URL is typed by people and generated by an older page; a sort key
-        // nobody recognises should show the list, not a 400.
+        // A sort key nobody recognises shows the list, not a 400.
         assert_eq!(sort_of(Some("zurna")), SortKey::Modified);
         assert_eq!(sort_of(None), SortKey::Modified);
         assert_eq!(sort_of(Some("size")), SortKey::Size);
     }
 
-    /// How long the list is, and whether it says "nothing matched", move together.
-    ///
-    /// **A structural test, on purpose.** The rule it guards is a rule about
-    /// the *page*, and the page is JavaScript compiled in as a string —
-    /// nothing in this toolchain runs it and there is no browser in the suite
-    /// to run it in. So what can be checked from here is that the shape which
-    /// makes the bug impossible is still the shape.
-    /// `every_kind_the_engine_names_has_a_glyph_in_the_page` in `icons.rs` is
-    /// the same trade for the same reason.
-    ///
-    /// What it stands in for: `LIST.total` was moved by four things — the
-    /// search that lands on a keystroke, a window of rows carrying a total the
-    /// count cap did not cut, going offline, and the count refresh. Three of
-    /// them also wrote `empty.hidden`; the count refresh did not. Whenever it
-    /// got there first — which is what happens while the rows are on a long
-    /// leash, and `atMostEvery` gives them `cost x COST` — the branch in
-    /// `fillWindow` that hides the message was then skipped for having nothing
-    /// left to change, and "Eşleşme yok" stayed on screen over a list with a
-    /// row in it. Measured in the running window: the count said `1` at
-    /// 13.6 s, the row was drawn at 14.9 s, and the message was still there
-    /// thirty seconds later. See docs/MEASUREMENTS.md.
-    ///
-    /// So: one writer each. A second one is how this happened.
+    /// Structural: the page is a compiled-in string that nothing here runs, so
+    /// what is checkable is that each field has one writer, and it is `setTotal`.
     #[test]
     fn the_length_of_the_list_and_the_empty_message_have_one_writer() {
         for (what, needle) in [
@@ -1982,8 +1435,7 @@ mod tests {
                  each of them has to move the others, so they belong in `setTotal`"
             );
         }
-        // And that the one place is `setTotal`, rather than the three lines
-        // having ended up somewhere only half the callers pass through.
+        // And that the one place is `setTotal`.
         let at = PAGE
             .find("function setTotal(")
             .expect("page.html has no `setTotal`");
@@ -1993,9 +1445,7 @@ mod tests {
             "LIST.total =",
             "LIST.exact =",
             "empty.hidden =",
-            // The two sweeps decide what the cache may still be trusted for
-            // once the length has moved, which is the same fact. A caller that
-            // had to remember them separately is the caller that forgot.
+            // The two sweeps say what the cache is good for at the new length.
             "dropBeyond()",
             "dropShort()",
         ] {
@@ -2003,31 +1453,18 @@ mod tests {
         }
     }
 
-    /// Every role the engine can send is a rule in the style sheet.
-    ///
-    /// **The one thing the colouring exists for had never worked.** The sheet
-    /// was keyed on `.r-bad` and `.r-unknown`; the page writes the role out
-    /// exactly as it arrives, which is `bad_value` and `unknown_field`. So
-    /// `kind:zurna` — a filter that is really a text search, the case the
-    /// whole feature is for — was drawn as ordinary text for as long as the
-    /// spans have come over the wire, and nothing said so: a class with no
-    /// rule is not an error in CSS, it is a run in the layer's own colour.
-    ///
-    /// Two roles have no rule on purpose. `text` **is** the layer's colour —
-    /// the thing being looked for — and `space` has nothing to draw.
+    /// A class with no rule is not an error in CSS but a run in the layer's own
+    /// colour. `text` and `space` have none on purpose: `text` is that colour.
     #[test]
     fn every_role_the_engine_can_send_has_a_colour() {
         for role in scour_core::Role::ALL {
-            // The name as it goes on the wire, from serde rather than from a
-            // list here: a second spelling of the same fourteen words is how
-            // the two came apart in the first place.
+            // From serde: a second spelling of the same words is how they part.
             let wire = serde_json::to_string(&role).expect("a role serialises");
             let wire = wire.trim_matches('"');
             if matches!(role, scour_core::Role::Text | scour_core::Role::Space) {
                 continue;
             }
-            // A whole selector, not a prefix of one: `.r-not` must not be
-            // answered by `.r-not_a_role`.
+            // A whole selector: `.r-not` must not answer for `.r-not_a_role`.
             let named = PAGE.match_indices(&format!(".r-{wire}")).any(|(at, m)| {
                 PAGE[at + m.len()..]
                     .chars()
@@ -2042,11 +1479,8 @@ mod tests {
         }
     }
 
-    /// The page and the engine agree on what makes a query worth reading back.
-    ///
-    /// Both windows show the same sentence under the same rule, and the rule
-    /// lives in `Role::is_telling`. The page keeps its own set because it is
-    /// a set of strings in a script; this is what stops the two drifting.
+    /// The rule is `Role::is_telling`; the page keeps its own set of strings,
+    /// and this is what stops the two drifting.
     #[test]
     fn the_page_and_the_engine_agree_on_which_roles_are_telling() {
         let at = PAGE
@@ -2086,15 +1520,8 @@ mod tests {
         );
     }
 
-    /// The menu the page draws is the one `scour-ui` holds.
-    ///
-    /// **Two ways this breaks, and neither shows up on screen as itself.** The
-    /// marker can be renamed in the page, in which case the injection silently
-    /// does nothing and every right-click draws an empty box. Or an item can be
-    /// added to the table and the page can go on drawing the same list, because
-    /// the table it read was compiled into a binary that was not rebuilt. The
-    /// first is what this test is really for; the second is what having one
-    /// table at all is for.
+    /// A renamed marker makes the injection silently do nothing, and every
+    /// right-click then draws an empty box.
     #[test]
     fn the_page_is_served_with_the_menu_the_shared_crate_holds() {
         let served = page();
@@ -2126,26 +1553,8 @@ mod tests {
         }
     }
 
-    /// The page's script parses.
-    ///
-    /// **A whole-page failure wearing the clothes of a typo.** The page is a
-    /// single `<script>`, so one `SyntaxError` anywhere in it means *none* of
-    /// it runs: no translation, no search, no rail — a window that looks like a
-    /// broken service. It has now happened twice, and the second time was a
-    /// rules panel declaring `KINDS`, a name the kind rail already had. Every
-    /// one of the 43 translated strings came back empty and every Rust test in
-    /// this file still passed, because none of them ask whether the script is a
-    /// program.
-    ///
-    /// **Asked of a JavaScript engine, because nothing less actually answers
-    /// it.** The first version of this test looked for two-space indentation
-    /// and called that the top level; it reported six redeclarations that are
-    /// nested blocks, in a page that runs. A test that cries wolf about a file
-    /// that works is worse than no test — it gets muted.
-    ///
-    /// Skipped where there is no `node`, and it says so rather than passing
-    /// quietly: a check that is silently not running is the other way this
-    /// class of bug gets through.
+    /// The page is a single `<script>`, so one `SyntaxError` anywhere means
+    /// none of it runs. Skipped where there is no `node`, and it says so.
     #[test]
     fn the_page_script_parses() {
         let script = PAGE
@@ -2171,20 +1580,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The page's palette is written from `scour-ui`, not from the page.
-    ///
-    /// **This is the guard on a class of bug that had already happened.** The
-    /// colours were declared twice — here and in `theme.slint` — and staying
-    /// equal was somebody remembering to. The light scheme's focus ring had
-    /// drifted apart, `#4a9eff` on this side and `#2f6ba3` on the other, and
-    /// nothing anywhere could tell.
-    ///
-    /// Two things are checked, and the second is the one that matters: that
-    /// the marker was actually replaced (a served page carrying `@THEME@`
-    /// would have no colours at all), and that a variable the page *uses* is
-    /// present with the value the shared crate holds. Delete the injection and
-    /// this fails; change a colour in one place only and it cannot happen,
-    /// because there is only one place.
+    /// That the marker was replaced — a page still carrying `@THEME@` has no
+    /// colours at all — and that a variable it uses holds the crate's value.
     #[test]
     fn the_page_takes_its_palette_from_the_shared_crate() {
         let served = super::page();
@@ -2204,17 +1601,9 @@ mod tests {
                 "the served page does not carry `{want}`"
             );
         }
-        // **And the served route actually calls it.** The first version of
-        // this test checked `page()` and passed happily with the route still
-        // handing out the raw `PAGE` — a page with a `@THEME@` comment where
-        // its colours should be. Verified by breaking it: the assertion above
-        // did not move. Reading this file back is blunt, and it is the only
-        // thing here that fails when the wiring is undone rather than when the
-        // formatting is.
-        //
-        // **Spelled in two pieces**, because the first attempt at this looked
-        // for the whole call and found it — in its own source, three lines up.
-        // A test that reads the file it is written in matches itself.
+        // And that the route calls it, which is the only check here that
+        // fails when the wiring is undone rather than the formatting. Spelled
+        // in two pieces: this reads the file it is written in.
         let me = include_str!("main.rs");
         let call = concat!("page()", ".as_bytes()");
         assert!(
@@ -2222,9 +1611,7 @@ mod tests {
             "the `/` route no longer serves `page()`, so the palette is not injected"
         );
 
-        // And the light scheme reaches the two blocks that override the media
-        // query — the language menu writes `data-theme`, and a block missing
-        // there is a switch that half works.
+        // Both blocks that override the media query, or the switch half works.
         let light = scour_ui::LIGHT.panel.css();
         assert_eq!(
             served.matches(&format!("--panel: {light};")).count(),
@@ -2234,14 +1621,8 @@ mod tests {
         );
     }
 
-    /// The page's columns are the ones `scour-ui` names, at its widths.
-    ///
-    /// **The page still paints its own cells** — a `<td>` is not a `Text` and
-    /// the writers here know about thumbnails, permissions and owner lookups
-    /// that the native window does not. What is shared is the list: which
-    /// columns exist, what they are called, what sorting one asks the service
-    /// for, and how wide it starts. A column added on one side and not the
-    /// other is two programs.
+    /// Shared is the list, not the painting: which columns exist, their labels,
+    /// their sort keys and their widths.
     #[test]
     fn the_page_shows_the_columns_the_shared_crate_names() {
         for c in scour_ui::COLUMNS {
@@ -2266,9 +1647,7 @@ mod tests {
                 "`{}` starts at a different width here: {line}",
                 c.id
             );
-            // And the three numbers the layout is worked out from. A floor
-            // that differs by a pixel is a column that survives a narrow
-            // window in one frontend and vanishes from the other.
+            // A floor a pixel out is a column that vanishes in one face only.
             for (word, want) in [
                 ("min", c.min),
                 ("near", u32::from(c.near)),
@@ -2284,31 +1663,14 @@ mod tests {
         }
     }
 
-    /// **The page's own arithmetic, run and compared against the Rust it was
-    /// copied from.**
-    ///
-    /// The numbers being equal is checked above; this checks that the two
-    /// *do the same thing with them*, which is the half that a table cannot
-    /// state. Sharing out what is left over and taking back what does not fit
-    /// are two passes with a floor and a ceiling each, and a `Math.floor`
-    /// forgotten on one side is a column a pixel out at some widths and not
-    /// others — the kind of difference nobody finds by looking.
-    ///
-    /// A dragged width is pinned in the harness, because that is the half the
-    /// two sides most recently disagreed about — the page kept a dragged column
-    /// out of the budget after the crate had stopped doing so.
-    ///
-    /// The three functions are lifted out of the page and run under `node`
-    /// against every width from the floor to well past a wide screen. No node,
-    /// no check — the same as `the_page_script_parses`, and for the same
-    /// reason: this is a guard, not a dependency.
+    /// The numbers being equal is checked above; this runs the page's own
+    /// arithmetic under `node` and compares it. No node, no check.
     #[test]
     fn the_page_shares_the_row_out_exactly_as_the_shared_crate_does() {
         let from = PAGE
             .find("  const NARROW = 700, WIDE = 1900;")
             .expect("the page has no NARROW/WIDE");
-        // The two anchors are written out in both places, so check they say
-        // the same thing before trusting anything computed from them.
+        // Written out in both places: check they agree before trusting either.
         assert_eq!(
             (scour_ui::NARROW, scour_ui::WIDE),
             (700, 1900),
@@ -2351,8 +1713,7 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
         let text = String::from_utf8_lossy(&out.stdout);
-        // Parsed by hand rather than with serde: the shape is a list of lists
-        // of integers and a dependency to read it would outlive the reason.
+        // Parsed by hand: a list of lists of integers needs no dependency.
         let rows: Vec<Vec<u32>> = text
             .trim()
             .trim_start_matches('[')
@@ -2379,14 +1740,7 @@ mod tests {
         assert!(n > 400, "only {n} widths were compared");
     }
 
-    /// **Nor on the catalogue**, which is the same property one layer out.
-    ///
-    /// The taxonomy and the words now arrive together — `loadLanguage` asks for
-    /// both, so that a language switch cannot leave the rail's thirteen labels
-    /// a frame behind the headings. That put the kinds request inside a
-    /// function, which is what this test used to look for by name; what it is
-    /// actually about has not moved. The first page of rows must not wait for
-    /// either, and neither may start a second search when it lands.
+    /// Neither the words nor the taxonomy starts a second search when it lands.
     #[test]
     fn the_first_search_does_not_wait_for_the_kind_taxonomy() {
         let boot = PAGE
@@ -2404,8 +1758,7 @@ mod tests {
             "the first search is still gated on the words and the taxonomy"
         );
 
-        // And what arrives repaints rather than searching again: the rows did
-        // not change, only the word for their kind and the format of a number.
+        // What arrives repaints rather than searching: the rows did not change.
         let at = PAGE
             .find("  function applyLanguage() {")
             .expect("the page has no applyLanguage");
@@ -2438,11 +1791,8 @@ mod tests {
             ),
             "every ordering change still schedules the facet walk"
         );
-        // The same guard the negated form used to spell. It reads the sidebar's
-        // own generation and the box, and neither moves for a re-sort; it is
-        // written once and shared because there are now up to three answers to
-        // admit or drop rather than one, and three copies of a staleness test
-        // is how two of them drift.
+        // One staleness test: the sidebar's generation and the box, neither of
+        // which moves for a re-sort.
         assert!(
             PAGE.contains("const current = () => ours === sidebarGeneration && text === q.value;"),
             "facet answers are still invalidated by sort-only generations"
@@ -2454,14 +1804,8 @@ mod tests {
     }
 
     /// A rail counts what switching to one of its rows would give, so it is
-    /// counted with its own term taken out.
-    ///
-    /// Reported as "selecting one filter zeroes the counts of all the others",
-    /// and it did: the service answers a facet with the keys that matched and
-    /// no others, so under `kind:image` the kind group came back as one key and
-    /// the other twelve rows read `0`. Reproduced in the window — twelve of
-    /// thirteen rows at zero — and worse on the age chart, where `dm:27d` left
-    /// 21 of 24 bars flat, erasing the control for widening the range.
+    /// counted with its own term taken out: a facet answers with the keys that
+    /// matched and no others, so otherwise every row but one reads zero.
     #[test]
     fn a_rail_is_not_counted_through_its_own_filter() {
         for needle in [
@@ -2473,58 +1817,30 @@ mod tests {
                 "the sidebar no longer strips a rail's own term before counting it: {needle}"
             );
         }
-        // Only its OWN term. A scope or a size is somebody else's filter and
-        // switching kind under it really does give the narrowed count.
+        // Only its own term: kind under a scope does give the narrowed count.
         assert!(
             !PAGE.contains("without(text, [\"under\"]")
                 && !PAGE.contains("without(text, [\"size\"]"),
             "a rail is stripping a filter that is not its own"
         );
-        // **Both groups on every call, and this is not decoration.**
-        // `NativeIndex::facets` chooses `AGE_SCAN_CAP` (unbounded) when an age
-        // band is asked for and `FACET_SCAN_CAP` (200_000 rows) when it is not,
-        // so asking the stripped query for `by=kind` alone moves the rail onto
-        // the sampled path. That sample is the first 200,000 rows the walk
-        // reaches, not a proportional one: measured on the empty query, images
-        // came back 210,551 exact against 1,430 sampled, and video 3.1x
-        // overstated. Thirteen plausible wrong numbers is worse than thirteen
-        // honest zeros, which is the whole reason this assertion is here.
+        // Both groups on every call: `by=kind` alone puts the walk on
+        // `FACET_SCAN_CAP` (200,000 rows), and that sample is the first rows
+        // reached, not a proportional one — images 1,430 against 210,551.
         assert!(
             PAGE.contains("by: \"kind,age\""),
             "the sidebar asks for one facet group, which puts the rail on the \
              capped scan path and makes its numbers a biased sample"
         );
-        // The meter under the list counts what is in the list, so it reads the
-        // query in force rather than the broader one a rail was counted with.
+        // The meter reads the query in force, not a rail's broader one.
         assert!(
             PAGE.contains("const total = inForce.then((res) => {"),
             "the total no longer comes from the query actually in force"
         );
     }
 
-    /// The page knows every kind the engine does, and no kind it does not.
-    ///
-    /// **The rail above depends on this and nothing said so.** `without` only
-    /// strips a `kind:` term it believes is one, and what it believes comes
-    /// from the page's own copy of the query grammar — `KIND_VALUES` plus
-    /// `KIND_ALIASES`, read by `accepts`. That copy was the mockup's eight
-    /// values and had never been told that `Kind` gained Audio, Video, Build,
-    /// Data, Config and Font. So for five of the thirteen kinds `without`
-    /// found nothing to strip, the rail was counted through its own filter
-    /// after all, and twelve of thirteen rows read zero — the exact defect
-    /// [`a_rail_is_not_counted_through_its_own_filter`] was written to prevent,
-    /// arrived at by a route that test could not see.
-    ///
-    /// Reproduced in the window on `kind:data`, `kind:config`, `kind:audio`,
-    /// `kind:font` and `kind:build`; `kind:image` and `kind:doc` were fine
-    /// because they were in the mockup's list, and `kind:video` was fine by
-    /// accident because the word is the same in Turkish.
-    ///
-    /// Both directions, because both are drift. A token the page does not know
-    /// is a rail of zeros. A spelling the page accepts and the engine does not
-    /// is the opposite mistake: `without` would strip a term the engine reads
-    /// as plain text, and the rail would then be counted over a wider set than
-    /// the one the box describes.
+    /// The rail above depends on it: `without` strips a `kind:` term only if
+    /// the page's copy of the grammar knows the value. Both directions are
+    /// drift — an unknown token is a rail of zeros, an extra one strips text.
     #[test]
     fn the_page_takes_the_engines_kind_vocabulary() {
         fn values(name: &str) -> Vec<String> {
@@ -2543,8 +1859,6 @@ mod tests {
         let offered = values("KIND_VALUES");
         let aliases = values("KIND_ALIASES");
 
-        // Every kind the rail offers can be typed, because the rail's own
-        // buttons put exactly these tokens in the box.
         let engine: Vec<&str> = scour_core::Kind::OFFERED
             .iter()
             .map(|k| k.token())
@@ -2554,7 +1868,6 @@ mod tests {
             "the page's kind values are not Kind::OFFERED through Kind::token"
         );
 
-        // And nothing here is a spelling the engine has never heard of.
         for v in offered.iter().chain(aliases.iter()) {
             assert!(
                 scour_core::Kind::from_name(v).is_some(),
@@ -2571,28 +1884,11 @@ mod tests {
         );
     }
 
-    /// Every msgid in the page, exactly as the page writes it.
-    ///
-    /// Four spellings, because a msgid reaches the catalogue four ways and all
-    /// four are literals on purpose:
-    ///
-    /// * `T("…")` — a lookup in the script.
-    /// * `data-t`, `data-t-html`, `data-t-title`, `data-t-aria`, `data-t-ph`
-    ///   — a lookup written into the markup, so the element can be empty and
-    ///   the key is not duplicated as its own content.
-    /// * `msgid: "…"` — a column heading or an age band, resolved by two
-    ///   readers each.
-    /// * `about: "…"` — a query field's one-line description.
-    ///
-    /// **Literal-only, and that is the design rather than a limitation of this
-    /// function.** `T` is never handed an expression and a msgid is never
-    /// built by concatenation, because a msgid a test cannot see is a msgid
-    /// that can fall out of the catalogue with nothing failing — which is what
-    /// happened to the kind taxonomy twice in one week, in the other
-    /// direction.
+    /// Every msgid in the page, exactly as the page writes it: `T("…")`, the
+    /// `data-t*` attributes, `msgid:` and `about:`. Literals only, by design —
+    /// a msgid built by concatenation is one no test can see.
     fn page_msgids() -> Vec<String> {
-        /// The escapes a msgid can carry, and no more. A `\u{...}` in one
-        /// would be a msgid nobody could read in the `.po` either.
+        /// The escapes a msgid can carry, and no more.
         fn unescape(s: &str) -> String {
             let mut out = String::with_capacity(s.len());
             let mut chars = s.chars();
@@ -2612,8 +1908,7 @@ mod tests {
             out
         }
 
-        /// The string literal starting at `from`, up to the first unescaped
-        /// closing quote.
+        /// The string literal in `rest`, up to the first unescaped `quote`.
         fn literal(rest: &str, quote: char) -> Option<String> {
             let mut out = String::new();
             let mut escaped = false;
@@ -2658,8 +1953,8 @@ mod tests {
             while let Some(found) = PAGE[at..].find(open) {
                 let start = at + found + open.len();
                 if let Some(text) = literal(&PAGE[start..], quote) {
-                    // Attribute values are HTML: the markup a sentence carries
-                    // is written `&lt;code&gt;` there and `<code>` in the `.po`.
+                    // Attribute values are HTML: `&lt;code&gt;` there is
+                    // `<code>` in the `.po`.
                     push(if entity {
                         text.replace("&lt;", "<")
                             .replace("&gt;", ">")
@@ -2676,25 +1971,13 @@ mod tests {
         out
     }
 
-    /// **The page says nothing the catalogue has not heard of.**
-    ///
-    /// The binding this whole change turns on. The words moved out of the page
-    /// and into `lang/tr/LC_MESSAGES/scour.po`, and the mechanism that makes
-    /// that safe — a missing entry degrades to correct English rather than to
-    /// a bare key — is also the mechanism that would let the whole window drift
-    /// back into English one string at a time with nothing complaining.
-    ///
-    /// So the two are pinned together the way
-    /// `the_page_takes_the_engines_kind_vocabulary` pins the rail to
-    /// `Kind::OFFERED`, and for the same reason: the last two defects in this
-    /// file were both a list here disagreeing with a list somewhere else, and
-    /// neither was visible from either end.
+    /// A missing entry degrades to English rather than to a bare key, so a
+    /// window could drift back into English with nothing else complaining.
     #[test]
     fn the_page_says_nothing_the_catalogue_has_not_heard_of() {
         let ids = page_msgids();
-        // A floor rather than an exact count, so that adding a string is not a
-        // test change — but not zero either, because a regex that silently
-        // stopped matching would otherwise pass loudly.
+        // A floor rather than a count: adding a string is not a test change,
+        // and an extraction that stopped matching still fails.
         assert!(
             ids.len() > 140,
             "only {} msgids found; the extraction is broken, not the page",
@@ -2716,29 +1999,13 @@ mod tests {
         }
     }
 
-    /// **No Turkish left in the page outside the query grammar.**
-    ///
-    /// The point of the exercise, asserted rather than eyeballed. What may
-    /// still carry a Turkish letter, and why:
-    ///
-    /// * `KIND_ALIASES`, `FIELDS[].alias`, `TIME_RE` and `MISTAKEN` — spellings
-    ///   the *engine* parses. `tür:görsel` has to keep finding images in an
-    ///   English window, so these are grammar and not vocabulary. They are
-    ///   copied from `Kind::from_name` and `fields.rs`, and the test above
-    ///   already checks the engine agrees with them.
-    /// * `fold`, which collapses the Turkish dotted and dotless i for every
-    ///   query in every locale — `DefaultFolder`'s rule, not the window's.
-    /// * Comments: characters used as examples of what a byte offset does to
-    ///   `İ`, and verbatim quotes of what was reported. A translated quote is
-    ///   not a quote.
-    ///
-    /// Everything else is a string somebody reads, and there are none left.
+    /// No Turkish left in the page outside the query grammar. Exempt: comments,
+    /// and the spellings the engine parses, which a query still needs.
     #[test]
     fn no_turkish_is_left_where_a_reader_would_see_it() {
         const TURKISH: [char; 12] = ['ç', 'ğ', 'ı', 'ö', 'ş', 'ü', 'Ç', 'Ğ', 'İ', 'Ö', 'Ş', 'Ü'];
 
-        // Comments first: `/* … */`, `// …` and `<!-- … -->` are for whoever
-        // maintains this, not for whoever uses it.
+        // Comments first: they are for whoever maintains this.
         let mut code = String::with_capacity(PAGE.len());
         let mut rest = PAGE;
         loop {
@@ -2805,7 +2072,7 @@ mod tests {
             .find("function render() {")
             .expect("no render function");
         let end = PAGE[start..]
-            .find("\n  /* The service has answered.")
+            .find("\n  function draw(text, p, hits, res) {")
             .map(|at| start + at)
             .expect("render function has no end marker");
         let render = &PAGE[start..end];
@@ -2825,15 +2092,8 @@ mod tests {
         );
     }
 
-    /// **The tile the page counts by is the tile the style sheet draws.**
-    ///
-    /// The grid's whole arithmetic rests on one number per shape: the
-    /// scrollable extent is `lines * pitch` and `pitch` is `TILE[…].h`. The
-    /// style sheet has to declare the same height, because `.sizer` is the
-    /// only thing in the scroller that reaches that far and the tiles have to
-    /// fit under what it claims. Two numbers, in two languages, in one file —
-    /// the exact shape of the last two defects here, so they are pinned
-    /// together rather than eyeballed.
+    /// The scrollable extent is `lines * pitch` and `pitch` is `TILE[…].h`, so
+    /// the style sheet has to declare the same height.
     #[test]
     fn the_tile_the_page_draws_is_the_tile_it_counts() {
         /// `h: 104` out of the `TILE` table, for one shape.
@@ -2876,28 +2136,20 @@ mod tests {
         }
     }
 
-    /// **One place writes the scroll position, and it is not the painter.**
-    ///
-    /// The extent is stated rather than summed precisely so that a paint can
-    /// never move the position: an extent that moves makes the browser correct
-    /// the position, a correction fires a scroll, a scroll paints — eight
-    /// hundred steps in five seconds, recorded in the note above
-    /// `paintWindow`. A second shape meant adding the first legitimate write
-    /// of `scrollTop` in this file, from a click, and this is what keeps it
-    /// the only one.
+    /// The extent is stated rather than summed so that a paint cannot move the
+    /// position: a moved extent is corrected, a correction scrolls, that paints.
     #[test]
     fn nothing_on_the_painting_path_moves_the_scroll_position() {
-        // The two writes that are allowed are both from something a person
-        // did: a new query goes back to the top, and changing shape keeps the
-        // item that was at the top. Neither runs from a frame.
+        // The two allowed writes are both from something a person did, and
+        // neither runs from a frame.
         for (open, close) in [
             (
                 "function paintWindow() {",
-                "\n  /* One row, rewritten in place.",
+                "\n  function writeRow(tr, f, cols, parsed, marks) {",
             ),
             ("function repaint(rowsChanged) {", "\n  const onScroll ="),
             ("function fillWindow() {", "\n  let paintQueued"),
-            ("function visibleRange() {", "\n  /* Draw the window"),
+            ("function visibleRange() {", "\n  let pool = [];"),
         ] {
             let at = PAGE
                 .find(open)
@@ -2912,11 +2164,9 @@ mod tests {
             );
         }
 
-        // **And the extent is not read back off the element it was written
-        // to.** Chromium re-serialises a CSS length to six significant
-        // figures, so `1146724px` — a narrow window with large tiles — comes
-        // back as `1.14672e+06px`, the guard misses, and the height of the one
-        // element that *is* the scrollable extent is rewritten on every frame.
+        // And the extent is never read back off the element: Chromium
+        // re-serialises `1146724px` as `1.14672e+06px`, so the guard misses
+        // and the height is rewritten on every frame.
         for asking in [
             "sizer.style.height !==",
             "firstElementChild.style.height !==",
@@ -2939,8 +2189,8 @@ mod tests {
             .find("sizer.style.height")
             .expect("applyMode no longer states the extent");
         let moved = body.find("scrollEl.scrollTop =").expect("checked above");
-        // Stated before written, or the browser clamps the new position to the
-        // extent the shape that is going away needed.
+        // Stated before written, or the browser clamps the new position to
+        // the outgoing shape's extent.
         assert!(
             sized < moved,
             "applyMode writes the scroll position before it states the extent"
@@ -3031,9 +2281,8 @@ mod tests {
         let guard = body
             .find("if (text !== q.value) return Promise.resolve();")
             .expect("sidebar has no preflight query guard");
-        // Not the argument by name: the query asked for is no longer always
-        // the one in force — a rail is counted with its own term stripped —
-        // so what matters here is that no call of any shape precedes the guard.
+        // Not the argument by name: a rail is counted with its own term
+        // stripped, so what matters is that no call precedes the guard.
         let call = body
             .find("SERVICE.sidebar(")
             .expect("sidebar service call is absent");
@@ -3057,7 +2306,7 @@ mod tests {
             .find("SERVICE.get(\"places\", {})")
             .expect("places request is absent");
         let end = PAGE[start..]
-            .find("* The language, and changing it")
+            .find("\n  function applyLanguage() {")
             .map(|at| start + at)
             .expect("places request has no end marker");
         let places = &PAGE[start..end];

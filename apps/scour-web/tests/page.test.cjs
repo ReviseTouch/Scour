@@ -36,7 +36,7 @@ const turns = async () => { for (let i = 0; i < 8; i++) await Promise.resolve();
 
 test('expensive refreshes never overlap and keep the final update', async () => {
   const c = context();
-  vm.runInContext(section('  function atMostEvery(fn, ms) {', '\n  /* The highlight marks'), c);
+  vm.runInContext(section('  function atMostEvery(fn, ms) {', '\n  function armFresh() {'), c);
   let calls = 0, release;
   const refresh = c.atMostEvery(() => { calls++; return new Promise(r => { release = r; }); }, 100);
   refresh();
@@ -57,7 +57,7 @@ function listContext() {
     arrivals: new Map(), fullPath: f => `${f.path}/${f.name}`, armFresh() {},
     reach: () => c.LIST.total, range: [0, 60], visibleRange: () => c.range,
   });
-  vm.runInContext(section('  function putRows(start, rows, mark) {', '  /* **The one way to say how long the list is.**'), c);
+  vm.runInContext(section('  function putRows(start, rows, mark) {', '\n  function setTotal('), c);
   vm.runInContext(section('  function nextMissing(from, to) {', '\n  function fillWindow()'), c);
   return c;
 }
@@ -94,7 +94,7 @@ test('hidden pages start no window requests', async () => {
   const c = listContext();
   c.document = { hidden: true }; c.HANDED_OVER = false;
   c.LIST.query = ''; c.SERVICE = { search() { assert.fail('hidden search'); } };
-  vm.runInContext(section('  function fillWindow() {', '\n  /* **One door into the painter'), c);
+  vm.runInContext(section('  function fillWindow() {', '\n  let paintQueued = false;'), c);
   await c.fillWindow();
 });
 
@@ -109,7 +109,7 @@ function transportContext() {
     } },
   });
   Object.assign(c.LIST, { query: 'first', sort: 'name', desc: false, cost: 100, since: 0 });
-  vm.runInContext(section('  function fillWindow() {', '\n  /* **One door into the painter'), c);
+  vm.runInContext(section('  function fillWindow() {', '\n  let paintQueued = false;'), c);
   const answer = (name) => ({ rows: [{ path: '/data', name }], capped: true, total: 20000, took_us: 100000 });
   return { c, sent, answer };
 }
