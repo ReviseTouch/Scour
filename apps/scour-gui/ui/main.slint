@@ -1029,6 +1029,10 @@ export component MainWindow inherits Window {
     // row below it are laid out from one list and cannot disagree about how
     // many columns there are.
     in-out property <[HeadInfo]> heads;
+    /// Whether the kind's icon is drawn at the front of each row: only while
+    /// the name is the first column, because the icon is the name's and the
+    /// room it takes is the name's.
+    out property <bool> iconed: root.heads.length > 0 && root.heads[0].id == "name";
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
@@ -3084,7 +3088,15 @@ export component MainWindow inherits Window {
                             // Tinted rather than drawn in colour: the files are
                             // the page's own, black on nothing, and the hue is
                             // `scour-ui`'s so the two windows agree.
-                            VerticalLayout {
+                            // **Only while the name is the first column.** The
+                            // icon is the name's, and its 15px and the gap after
+                            // it come out of the name's width — see the loop
+                            // below. A conditional rather than a zero width,
+                            // because a zero-width child still takes the row's
+                            // spacing, and eight pixels is exactly the kind of
+                            // drift that put every cell a little to the right
+                            // of its heading.
+                            if root.iconed: VerticalLayout {
                                 alignment: center;
                                 width: 15px;
                             // **No picture here, and that is the owner's
@@ -3206,14 +3218,20 @@ export component MainWindow inherits Window {
                             // width so that a row is never wider than the
                             // header above it.
                             for c[ci] in here.cells: HorizontalLayout {
-                                width: root.cw[ci];
+                                // **The cell is as wide as its heading, icon
+                                // included.** The first version gave this the
+                                // full width and the name inside it the width
+                                // less the icon — so the icon's room was paid
+                                // twice, and every column after the name sat
+                                // 23px to the right of the heading above it.
+                                width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 23px : 0px));
 
                                 if c.id == "name": Marked {
                                     pre: c.pre;
                                     hit: c.hit;
                                     post: c.post;
                                     colour: here.is-dir ? Theme.q-key : Theme.ink;
-                                    width: max(0px, root.cw[ci] - 15px - 8px);
+                                    width: parent.width;
                                 }
 
                                 if c.id != "name": Text {
