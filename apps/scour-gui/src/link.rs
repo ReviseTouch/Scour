@@ -1,16 +1,7 @@
-//! The connection to the service, on a thread of its own.
-//!
-//! The rule this file exists to keep: **the window never waits.** A search on
-//! three million entries is a few milliseconds and a facet count is twenty,
-//! but a rebuild is seconds and a cold service is a connection that has to be
-//! retried — and any of those on the UI thread is a frozen window.
-//!
-//! So the work happens here and the answers arrive as events. Two connections
-//! rather than one, because `scour-ipc` is one call at a time with no
-//! cancellation and `scourd` is thread-per-connection: an interactive lane for
-//! what a keystroke needs, and a background lane for what a keystroke can wait
-//! for. Without the split a twenty-millisecond facet count sits in front of the
-//! next search.
+//! The connection to the service, on threads of its own: the window never
+//! waits, and answers arrive as events. Three lanes, because `scour-ipc` is one
+//! call at a time with no cancellation — interactive, background, and one for
+//! `Await`, which is meant to block.
 
 use std::sync::{
     Arc,
@@ -21,22 +12,15 @@ use std::sync::{
 use scour_ipc::Client;
 use scour_proto::{Request, Response};
 
-/// How many matches an interactive search counts before it stops.
-///
-/// A thousand is more than a person reads and enough for a meter to say
-/// "at least this many". The exact figure follows once the query settles.
+/// How many matches an interactive search counts before it stops. Enough for a
+/// meter to say "at least this many"; the exact figure follows.
 pub const TYPING_CAP: u32 = 1_000;
 
-/// **Not boxed**: one per user action, crossing a channel once.
+/// What the window asks for. Not boxed: one per user action, one channel hop.
 #[allow(clippy::large_enum_variant)]
-/// What the window asks for.
 pub enum Ask {
-    /// A search, tagged with the interaction that caused it.
-    ///
-    /// The tag is what makes a stale answer droppable. Without it a slow reply
-    /// to `re` arrives after a fast one to `rapor` and the list goes backwards
-    /// under the user's hands — which is the single most noticeable defect a
-    /// search-as-you-type box can have.
+    /// A search, tagged with the interaction that caused it. The tag is what
+    /// makes a stale answer droppable, so the list never goes backwards.
     Search {
         generation: u64,
         query_revision: u64,
@@ -46,32 +30,22 @@ pub enum Ask {
         offset: u32,
         limit: u32,
     },
-    /// The rail's kinds and the ribbon's ages.
-    ///
-    /// **Two questions, and usually one walk.** Each is counted over the query
-    /// with its own term taken out, and those are the same string whenever the
-    /// query names neither a kind nor an age — which is nearly every query.
-    /// Then this is one request answering both. When the query does name one,
-    /// two go out and `half` says which is which.
+    /// The rail's kinds and the ribbon's ages. Each is counted over the query
+    /// with its own term taken out; when those two strings are equal — nearly
+    /// always — one request answers both, and `half` says so.
     Facets {
         query_revision: u64,
         query: String,
         half: Half,
     },
-    /// How many match, exactly, once the typing has stopped.
-    /// Read the query back: the runs, and what each one is.
-    ///
-    /// Sent beside every search, because the colouring has to keep up with the
-    /// typing. It goes on the fast lane *and* is allowed to coalesce — the
-    /// newest query is the only one whose colours anybody will see.
+    /// Read the query back: the runs, and what each one is. Sent beside every
+    /// search, on the slow lane, since only the newest colouring is ever seen.
     Explain {
         query_revision: u64,
         query: String,
     },
-    /// What a folder weighs, and which of its children weigh the most.
-    ///
-    /// The report tab's whole first screen: the scope's own total, its
-    /// children heaviest first, and each one's bytes split by age.
+    /// What a folder weighs, and which of its children weigh the most: the
+    /// scope's own total, its children heaviest first, each split by age.
     Usage {
         path: String,
     },
@@ -91,64 +65,36 @@ pub enum Ask {
     },
     /// What the walk skips, in three groups.
     Rules,
-    /// Wait until the index is no longer at `since`, then say so.
-    ///
-    /// This is what makes the list live: the service answers when something it
-    /// holds has changed, the window searches again, and asks to wait once
-    /// more. Without it a window shows what was true when it was opened.
+    /// Wait until the index is no longer at `since`, then say so. This is what
+    /// makes the list live: the window searches again and asks to wait once more.
     Await {
         since: u64,
     },
-    /// How big the index is, how many sources, how many watched.
-    ///
-    /// Asked once: these move slowly, and a meter that re-asked on every
-    /// keystroke would be paying for a number nobody watches change.
+    /// How big the index is, how many sources, how many watched. Asked once.
     Status,
-    /// Keep a choice: the language, the view shape, a column width.
-    ///
-    /// Fire and forget — the reply is `Accepted` and there is nothing to do
-    /// with it. What matters is that it goes to the service rather than to a
-    /// file this window owns, so the browser page opens in the same language.
+    /// Keep a choice: the language, the view shape, a column width. Fire and
+    /// forget, and kept by the service so every face reads the same settings.
     Remember {
         change: scour_settings::Change,
     },
-    /// What can be shown of this file.
-    ///
-    /// **The service decides what a file *is*** — a picture, some text,
-    /// neither — because deciding needs its first eight kilobytes and a table
-    /// of extensions, and a window guessing from the name calls `notes.bak`
-    /// unreadable and `model.safetensors` text.
+    /// What can be shown of this file. The service decides what a file is: that
+    /// needs its first eight kilobytes, not a guess from the name.
     Peek {
         path: String,
     },
-    /// Everything known about one file, for the preview panel's fact list.
-    ///
-    /// **Not off the row.** A row carries what the list draws; the panel shows
-    /// four things no column does — when it was created, when it was last
-    /// read, its mode and its owner — and those live in the index beside the
-    /// rest of its metadata.
+    /// Everything known about one file, for the preview panel's fact list. Not
+    /// off the row: created, read, mode and owner are in no column.
     PeekFacts {
         path: String,
     },
-    /// Make thumbnails for these files, if the desktop declares something
-    /// that can.
-    ///
-    /// **Asked of the service, which is where the bound and the fence are.**
-    /// This window could run the thumbnailers itself — it is on the same
-    /// desktop — and that is exactly the arrangement the design refuses: four
-    /// at once *on the machine*, not four per face, and one place deciding
-    /// which paths may be touched. The browser page takes the same route for
-    /// the same reason.
+    /// Make thumbnails for these files, if the desktop declares something that
+    /// can. Asked of the service, which holds the bound — four at once on the
+    /// machine, not four per face — and decides which paths may be touched.
     Thumbnails {
         files: Vec<String>,
     },
-    /// This desktop's own folders, asked once at start-up.
-    ///
-    /// **Of the service, not of `scour-places` directly**, even though the
-    /// window runs on the same desktop and could read `user-dirs.dirs` itself.
-    /// That is the rule the whole architecture rests on: a frontend asks, and
-    /// the four of them get the same answer. The browser page cannot read that
-    /// file at all, which is what made the rule visible in the first place.
+    /// This desktop's own folders, asked once at start-up. Of the service, not
+    /// of `scour-places`: a frontend asks, and all four get the same answer.
     Places,
     Count {
         query_revision: u64,
@@ -161,13 +107,8 @@ pub enum Ask {
 pub enum Got {
     Search {
         generation: u64,
-        /// Where the page this answers begins.
-        ///
-        /// **Carried, not remembered.** A page fetch does not advance the
-        /// generation, so two searches for the same query at different offsets
-        /// are both current; a window that read "which offset did I last ask
-        /// for" off its own state put the first answer at the second answer's
-        /// place, and drew rows a hundred lines from where they belong.
+        /// Where the page this answers begins. Carried, not remembered: a page
+        /// fetch does not advance the generation, so two offsets are both current.
         offset: u32,
         /// How many rows were asked for, so a page that comes back short can
         /// be told from one that came back full.
@@ -176,11 +117,8 @@ pub enum Got {
     },
     Facets {
         query_revision: u64,
-        /// Which half of this answer the window asked for. Both groups are
-        /// always in the reply — asking for the kinds alone would put the
-        /// walk on the sampled path, see `AGE_SCAN_CAP` — so without this a
-        /// kind answer would also repaint the ribbon, with the wrong query
-        /// behind it.
+        /// Which half of this answer the window asked for. Both groups are always
+        /// in the reply — asking for kinds alone samples, see `AGE_SCAN_CAP`.
         half: Half,
         reply: Box<Response>,
     },
@@ -218,13 +156,8 @@ pub enum Got {
         query_revision: u64,
         reply: Box<Response>,
     },
-    /// The service answered, and the answer was no.
-    ///
-    /// Distinct from [`Got::Down`] because the two want opposite handling: a
-    /// refused query — a term too short for the substring index, a field the
-    /// engine cannot serve — leaves a perfectly good connection open, and
-    /// throwing it away and reconnecting on every keystroke of `ra` would be
-    /// a reconnect storm caused by nothing.
+    /// The service answered, and the answer was no. Distinct from [`Got::Down`]:
+    /// a refused query leaves a perfectly good connection open.
     Refused {
         revision: ReplyRevision,
         why: String,
@@ -235,11 +168,8 @@ pub enum Got {
     Up,
 }
 
-/// The freshness domain of a rejected request.
-///
-/// Ordering changes advance a search generation without changing the matching
-/// set. Keeping that generation separate from the query revision prevents a
-/// late facet/count error from being mistaken for the current search error.
+/// The freshness domain of a rejected request. Ordering advances a search
+/// generation without changing the query revision, so the two stay apart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReplyRevision {
     Search(u64),
@@ -249,20 +179,14 @@ pub enum ReplyRevision {
 pub struct Link {
     fast: Sender<Ask>,
     slow: Sender<Ask>,
-    /// **A lane of its own, because it is the one request that is meant to
-    /// block.** `Await` sits on the socket until the index moves or the
-    /// timeout runs out; on either of the other two lanes it would hold every
-    /// keystroke behind it for up to a minute.
+    /// A lane of its own: `Await` sits on the socket until the index moves or
+    /// the timeout runs out, and would hold every keystroke behind it.
     wait: Sender<Ask>,
     freshness: Freshness,
 }
 
-/// The newest work the UI can still use.
-///
-/// Dropping a stale reply protects correctness but saves no work. These two
-/// counters are visible to both lanes, so a request waiting behind one slow
-/// call can be discarded before it reaches the service. At most the call that
-/// was already in flight when a key was pressed remains unavoidable.
+/// The newest work the UI can still use. Visible to every lane, so a request
+/// queued behind a slow call is discarded before it reaches the service.
 #[derive(Clone, Default)]
 struct Freshness {
     search: Arc<AtomicU64>,
@@ -280,14 +204,8 @@ impl Freshness {
                 self.search.fetch_max(*generation, Ordering::Release);
                 self.query.fetch_max(*query_revision, Ordering::Release);
             }
-            // **Everything that carries a revision, not only the search.**
-            // This counter meant "the newest revision any *search* has asked
-            // for", and the colouring goes out a moment *before* its search
-            // does — so a lane that happened to be idle dequeued the
-            // `Explain`, compared it against the revision before it and threw
-            // it away. Typing quickly, the reading for the last keystroke was
-            // the one lost every time, which is the only one anybody reads:
-            // `hasan;genel` was read back as `hasan;ge`.
+            // Everything carrying a revision, not only the search: `Explain`
+            // goes out a moment before its search, and would look stale.
             Ask::Explain { query_revision, .. }
             | Ask::Facets { query_revision, .. }
             | Ask::Count { query_revision, .. } => {
@@ -305,8 +223,7 @@ impl Freshness {
             | Ask::Explain { query_revision, .. } => {
                 *query_revision == self.query.load(Ordering::Acquire)
             }
-            // Asked once and never superseded: there is no newer answer to
-            // what this desktop's folders are called.
+            // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
             | Ask::Status
@@ -316,9 +233,7 @@ impl Freshness {
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
             | Ask::Thumbnails { .. }
-            // Answered whatever has happened since, and dropped on arrival if
-            // the selection has moved — the reply carries its path, the way a
-            // report answer carries its folder.
+            // Dropped on arrival instead: the reply carries its path.
             | Ask::Peek { .. }
             | Ask::PeekFacts { .. }
             | Ask::Dupes { .. } => true,
@@ -353,22 +268,13 @@ impl Link {
     }
 
     pub fn send(&self, ask: Ask) {
-        // Publish the new generation before enqueueing it. A worker looking at
-        // an older queued request can then skip it even if the router has not
-        // forwarded the new message yet.
+        // Published before enqueueing, so a worker can skip an older queued
+        // request before the new one has reached it.
         self.freshness.note(&ask);
         let lane = match &ask {
             Ask::Await { .. } => &self.wait,
-            // **Not the fast lane, and this cost an hour.** That lane
-            // coalesces — it takes the newest queued request and drops the
-            // rest, which is exactly right for keystrokes and exactly wrong
-            // for anything asked once: `Places` went in and the search that
-            // followed it a microsecond later swallowed it, every time, with
-            // no error anywhere.
-            // `Explain` joins them for the same reason `Places` did: the fast
-            // lane keeps only the newest queued request, and a search sent a
-            // microsecond later takes the colouring with it. Every one of
-            // these is cheap enough that the slow lane is not slow for them.
+            // Never the fast lane: it coalesces to the newest queued request,
+            // which swallows anything asked once. All of these are cheap.
             Ask::Facets { .. }
             | Ask::Count { .. }
             | Ask::Places
@@ -379,9 +285,7 @@ impl Link {
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
             | Ask::Dupes { .. }
-            // **Never the fast lane.** One of these is several processes
-            // decoding video; a keystroke queued behind it would be the one
-            // failure this whole arrangement exists to prevent.
+            // Several processes decoding video; nothing may queue behind it.
             | Ask::Thumbnails { .. }
             // And this one reads the head of a file off a disk.
             | Ask::Peek { .. }
@@ -389,8 +293,7 @@ impl Link {
             | Ask::Explain { .. } => &self.slow,
             _ => &self.fast,
         };
-        // A closed channel means the lane died, and the window finds out from
-        // the `Down` event rather than from a panic here.
+        // A closed channel means the lane died; the `Down` event says so.
         let _ = lane.send(ask);
     }
 }
@@ -403,13 +306,9 @@ impl Drop for Link {
     }
 }
 
-/// Which part of the sidebar a facet question is for.
-///
-/// The rail beside the results and the ribbon under them are counted over two
-/// different queries — each without the term it sets, so pressing a bar moves
-/// the filter rather than emptying the chart. Those two strings are equal
-/// unless the query itself names a kind or an age, and when they are equal
-/// this is `Both`: one walk, one answer, both halves painted from it.
+/// Which part of the sidebar a facet question is for. The rail and the ribbon
+/// are each counted without the term they set, so pressing a bar moves the
+/// filter rather than emptying the chart; equal strings mean `Both`, one walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Half {
     Both,
@@ -480,9 +379,7 @@ fn spawn_lane(
             if !freshness.accepts(&ask) {
                 continue;
             }
-            // Reconnect lazily rather than on a timer: the only moment the
-            // window cares whether the service is up is when it has something
-            // to ask.
+            // Reconnect lazily: the window only cares when it has something to ask.
             if client.is_none() {
                 match Client::connect(&addr) {
                     Ok(c) => {
@@ -501,16 +398,14 @@ fn spawn_lane(
                     }
                 }
             }
-            // Connecting can take longer than a key interval. Recheck at the
-            // last point before the service call so that work superseded while
-            // reconnecting is not paid for either.
+            // Connecting can outlast a key interval, so recheck freshness at the
+            // last point before the call.
             if !freshness.accepts(&ask) {
                 continue;
             }
             let Some(c) = client.as_mut() else { continue };
-            // Which folder a report answer is about, taken before the match
-            // consumes the request: a slow answer for a folder nobody is
-            // looking at any more is dropped rather than drawn.
+            // Taken before the match consumes the request: an answer for a folder
+            // nobody is looking at any more is dropped rather than drawn.
             let weighed = match &ask {
                 Ask::Usage { path }
                 | Ask::Kinds { path }
@@ -519,8 +414,7 @@ fn spawn_lane(
                 | Ask::PeekFacts { path } => path.clone(),
                 _ => String::new(),
             };
-            // Which half of the sidebar this answer is for, taken before the
-            // match consumes the request — the same reason as `weighed`.
+            // Taken before the match consumes the request, as `weighed` is.
             let half = match ask {
                 Ask::Facets { half, .. } => half,
                 _ => Half::Both,
@@ -543,17 +437,10 @@ fn spawn_lane(
                         page: scour_core::Page {
                             offset,
                             limit,
-                            // **Small, and this is the single largest thing a
-                            // keystroke used to cost.** The cap is how many
-                            // matches the walk counts before it stops, and
-                            // reaching 100,000 of them for `ra` meant visiting
-                            // 1,208,951 rows — 23.1 ms — against 35,743 and
-                            // 0.9 ms at a thousand. Twenty-five times, to
-                            // print a total nobody reads while still typing.
-                            //
-                            // The exact number arrives separately, after the
-                            // typing stops. Until then the meter says `1000+`,
-                            // which is true.
+                            // How many matches the walk counts before it stops.
+                            // At 100,000 `ra` visits 1,208,951 rows (23.1 ms);
+                            // at a thousand, 35,743 (0.9 ms). The meter says
+                            // `1000+` until the exact count arrives.
                             count_cap: TYPING_CAP,
                         },
                     },
@@ -565,11 +452,8 @@ fn spawn_lane(
                     half: _,
                 } => (
                     query_revision,
-                    // **Both in one request.** The rail's kinds and the
-                    // ribbon's ages are the same walk over the same matching
-                    // set; asking twice would pay for it twice, and the two
-                    // answers could then disagree about a query that changed
-                    // between them.
+                    // Both in one request: the same walk over the same matching
+                    // set, and two walks could disagree about a changing query.
                     Request::Facets {
                         query,
                         by: vec![
@@ -597,10 +481,8 @@ fn spawn_lane(
                     0,
                     Request::Usage {
                         path: path.clone(),
-                        // What the page asks for: enough children that the
-                        // heaviest handful is never a lie by omission, few
-                        // enough that a folder of ten thousand subfolders is
-                        // still one screen.
+                        // Enough children that the heaviest handful is honest,
+                        // few enough that ten thousand of them fit a screen.
                         top: 24,
                         query: String::new(),
                     },
@@ -610,15 +492,10 @@ fn spawn_lane(
                     0,
                     Request::Facets {
                         query: under(path),
-                        // **The age is asked for and thrown away**, and that
-                        // is not waste: a kind count on its own is capped at
-                        // two hundred thousand rows, and because rows are
-                        // stored newest-first a cap is not a sample — it is
-                        // the recent end of the index. The report would have
-                        // said a quarter of a million files where the rail
-                        // beside it says two and a half million. Asking for a
-                        // distribution too lifts the cap, and both are columns
-                        // read in the same walk.
+                        // The age is asked for and thrown away: a kind count
+                        // alone is capped at 200,000 rows, and rows are stored
+                        // newest first, so a cap is a prefix and not a sample.
+                        // Asking for a distribution too lifts the cap.
                         by: vec![
                             scour_core::FacetBy::Kind,
                             scour_core::FacetBy::Age {
@@ -631,12 +508,8 @@ fn spawn_lane(
                 Ask::Biggest { ref path } => (
                     0,
                     Request::Search {
-                        // **`file:` and not `!is:dir`.** Sorted by size a
-                        // folder is ordered by what is *under* it, so a list
-                        // of the largest without this is a list of the
-                        // heaviest folders showing their own size — every row
-                        // reading 0,0 MB beside a name that holds a hundred
-                        // gigabytes.
+                        // `file:` and not `!is:dir`: sorted by size a folder is
+                        // ordered by what is under it, not by its own size.
                         query: match under(path).as_str() {
                             "" => "file:".to_owned(),
                             scope => format!("{scope} file:"),
@@ -646,9 +519,8 @@ fn spawn_lane(
                         page: scour_core::Page {
                             offset: 0,
                             limit: 8,
-                            // Nothing here reads the total, and counting is
-                            // the one piece of work proportional to how many
-                            // match.
+                            // Nothing here reads the total, and counting is the
+                            // one cost proportional to how many match.
                             count_cap: 1,
                         },
                     },
@@ -677,9 +549,8 @@ fn spawn_lane(
                     0,
                     Request::Await {
                         since,
-                        // Long enough that an idle window is nearly silent —
-                        // one request a minute — and short enough that a
-                        // service restarted underneath is noticed.
+                        // Long enough that an idle window is nearly silent, short
+                        // enough that a service restarted underneath is noticed.
                         timeout_ms: 30_000,
                     },
                     Lane::Await,
@@ -698,11 +569,8 @@ fn spawn_lane(
                 ),
                 Ask::Stop => break,
             };
-            // The page this request asked for, read back off the request
-            // itself so the answer can say where it goes. See `Got::Search`.
-            // Which folder a usage answer is about, read back off the
-            // request so a slow one for a folder nobody is looking at any
-            // more can be dropped rather than drawn.
+            // The page this request asked for, read back off the request so the
+            // answer can say where it goes. See `Got::Search`.
 
             let (offset, limit) = match &request {
                 Request::Search { page, .. } => (page.offset, page.limit),
@@ -756,11 +624,8 @@ fn spawn_lane(
                     });
                 }
                 Err(e) => {
-                    // Two failures that look alike and are not. A transport
-                    // error means the connection is gone and the next call has
-                    // to make a new one; anything else is the service saying
-                    // no to this particular question, and the connection is
-                    // fine.
+                    // A transport error means the connection is gone; anything
+                    // else is the service saying no, with the connection fine.
                     if matches!(
                         e,
                         scour_core::Error::Unreachable { .. } | scour_core::Error::Io { .. }
@@ -795,11 +660,8 @@ fn spawn_lane(
     });
 }
 
-/// Collapse the interactive backlog to its last intent.
-///
-/// The atomic guard catches a newer search that has not reached this channel
-/// yet. Draining here handles the ordinary case in one pass and releases the
-/// superseded query strings immediately.
+/// Collapse the interactive backlog to its last intent. The atomic guard covers
+/// a newer search that has not reached this channel yet.
 fn newest_queued(mut ask: Ask, rx: &Receiver<Ask>) -> Ask {
     while let Ok(next) = rx.try_recv() {
         let stop = matches!(next, Ask::Stop);
@@ -811,11 +673,8 @@ fn newest_queued(mut ask: Ask, rx: &Receiver<Ask>) -> Ask {
     ask
 }
 
-/// A folder as a query term, and nothing at all for the whole index.
-///
-/// Quoted, because a path can hold a space and an unquoted term would end at
-/// it — leaving a scope that is a prefix of what was asked for, which reads as
-/// a correct answer to a different question.
+/// A folder as a query term, and nothing at all for the whole index. Quoted: a
+/// path can hold a space, and an unquoted term would end at it.
 fn under(path: &str) -> String {
     if path.is_empty() {
         String::new()
@@ -894,13 +753,8 @@ mod tests {
         }));
     }
 
-    /// The reading is not thrown away for being newer than the search.
-    ///
-    /// `send_search` sends the `Explain` and *then* the `Search`. If the
-    /// counter only moves for a search, an idle lane can dequeue the
-    /// colouring in between, find a revision one ahead of the counter, and
-    /// drop it — which is what happened to the last keystroke of every query
-    /// somebody typed at speed.
+    /// The reading is not thrown away for being newer than the search:
+    /// `send_search` sends the `Explain` first, so the counter must move for it.
     #[test]
     fn a_reading_sent_before_its_search_is_still_fresh() {
         let freshness = Freshness::default();

@@ -1,52 +1,33 @@
-// The window.
-//
-// Everything here is driven from Rust: the rows arrive as a model, the counts
-// arrive as properties, and every decision that needs the query language —
-// what a term means, what colour it is, how a name should be highlighted — is
-// made on the other side and handed over already answered. A `.slint` file
-// that reasons about queries is a second parser, and two parsers drift.
+// The window. Everything here is driven from Rust: rows arrive as a model,
+// counts as properties, and every decision that needs the query language is
+// made on the other side and handed over already answered.
 
 import { Theme, Fonts } from "theme.slint";
 
-// Re-exported for the generated Rust API; its colours follow Slint's platform
-// palette directly.
+// Re-exported for the generated Rust API.
 export { Theme, Fonts }
 import { ListView, ScrollView } from "std-widgets.slint";
 
-// One result. Flat, and deliberately: a struct of strings is what crosses the
-// language boundary cheaply, and the formatting was done in Rust where the
-// catalogue and the size units already live.
-/// One cell of one row, already formatted by Rust.
-///
-/// **Text, not a value.** Every column the table can show — a size in binary
-/// units, a date in the person's own zone, a mode as `rwxr-xr-x` — is written
-/// out on the Rust side, where the language, the decimal mark and the clock's
-/// offset all live. This carries the result and what is needed to *draw* it,
-/// which is not the same thing: an alignment, a colour band, and the three
-/// pieces a name is cut into.
+/// One cell of one row, already formatted by Rust: text plus what is needed to
+/// draw it — an alignment, a colour band, the three pieces of a name.
 export struct Cell {
-    // Which column this is. The two that are not plain text — the name, which
-    // has the match picked out of it, and the icon that sits inside it — are
-    // found by this rather than by position, because position is now a thing
-    // somebody chooses.
+    // Which column this is. The name and its icon are found by this rather
+    // than by position, which somebody chooses.
     id: string,
     text: string,
-    // The name in three pieces: before the match, the match, after it. Empty
-    // for every column but `name`.
+    // Before the match, the match, after it. Empty for every column but `name`.
     pre: string,
     hit: string,
     post: string,
-    // Which age band a time column falls in, 0 (minutes) to 5 (older).
-    // **-1 for everything else**, which is what says "do not colour this".
+    // Age band of a time column, 0 (minutes) to 5 (older); -1 means no colour.
     age: int,
     // Numbers read right-aligned; words do not.
     right: bool,
-    // A monospaced column: sizes, dates, modes, owners. The name and the kind
-    // are the two that are not.
+    // A monospaced column: sizes, dates, modes, owners.
     mono: bool,
-    // Drawn in the quiet ink: a value the volume does not actually record.
+    // Drawn in the quiet ink: a value the volume does not record.
     dim: bool,
-    // Hover text, where the column has more to say than fits. Empty otherwise.
+    // Hover text, where the column has more to say than fits.
     hint: string,
 }
 
@@ -60,105 +41,60 @@ export struct HeadInfo {
 }
 
 export struct Row {
-    // One per shown column, in the order they are shown.
-    //
-    // **Formatted in Rust, and cut up there too.** Slint has no way to take a
-    // substring, so the match inside a name could never have been picked out
-    // here — and that turns out to be the right place anyway: the offsets come
-    // out of folded text, Turkish folding changes byte lengths, and mapping
-    // them back to the original spelling is `scour-core`'s job.
-    //
-    // The list is rebuilt when the chosen columns change, which is the only
-    // time it has to be: widths travel separately, in `cw`, so dragging an
-    // edge does not touch a single row.
+    // One per shown column, in the order they are shown. Rebuilt only when the
+    // chosen columns change; widths travel separately in `cw`.
     cells: [Cell],
-    // The whole name, whether or not the name column is being shown.
-    //
-    // **The tiles have no columns at all**, so what they draw cannot come out
-    // of the cell list: somebody who hides the name column in the table has
-    // not asked for nameless tiles.
+    // The whole name, whether or not the name column is shown: the tiles have
+    // no columns, so what they draw cannot come out of the cell list.
     name: string,
-    // The whole path. Not drawn — it is what opening, revealing and copying
-    // the row read, and it lives on the row so that those can never be looking
-    // at a different row from the one under the pointer.
+    // The whole path. Not drawn; it is what opening and copying the row read.
     path: string,
-    // Arrived since the last answer. The list updates itself while it is open,
-    // and a list that changes under you without saying so is one you stop
-    // trusting — so what arrived is shown arriving, and then stops being
-    // shown: this marks the event, not the row.
+    // Arrived since the last answer. Marks the event, not the row: it is shown
+    // arriving and then stops being shown.
     fresh: bool,
-    // The kind's own token — `folder`, `code`, `build` — used to pick the icon
-    // and its colour. Separate from `kind` below, which is the translated word
-    // a person reads: one is vocabulary, the other is language.
+    // The kind's own token — `folder`, `code`, `build` — never translated; it
+    // picks the icon and its colour.
     ktoken: string,
     tint: brush,
     is-dir: bool,
     // Which age band the row falls in, 0 (minutes) to 5 (older).
     age: int,
-    // In the selection. Several rows can be, and what is done with them is
-    // done to all of them at once — see the bar under the list.
+    // In the selection; several rows can be, and an action takes all of them.
     picked: bool,
-    // The desktop's own thumbnail of this file, when one has been made.
-    //
-    // Filled in after the row lands, not with it: see `pictures` in `main.rs`.
-    // A page is two hundred rows and decoding two hundred PNGs to draw thirty
-    // of them is thirty milliseconds of somebody's scroll.
+    // The desktop's own thumbnail, when one has been made. Filled in after the
+    // row lands, not with it: a page is two hundred rows and the eye is on thirty.
     thumb: image,
-    // Whether `thumb` holds one, said as a flag.
-    //
-    // **Asking the image itself was measured and is not free.** The fifteen
-    // glyph conditions on every row each asked an `image` for its width, and
-    // an idle window with a list on screen went from 22% of a core to 49%. A
-    // flag beside it duplicates something only in the sense that costs
-    // nothing to keep and something to ask for.
+    // Whether `thumb` holds one, said as a flag: asking the `image` its width
+    // once per glyph condition per row took an idle window from 22% to 49%.
     shot: bool,
 }
 
-/// One line of the preview panel's fact list: a label and a value.
-///
-/// Built in Rust, because every value in it is formatted — a size in binary
-/// units, a date in the reader's punctuation, a mode as `rwxr-xr-x` — and a
-/// `.slint` file that formatted any of them would be a second implementation
-/// of something `scour-ui` already has. Which facts, and in what order, is
-/// `scour_ui::preview::FACTS`; the browser page lists the same ones.
+/// One line of the preview panel's fact list: a label and a value, both already
+/// formatted. Which facts, and in what order, is `scour_ui::preview::FACTS`.
 export struct Fact {
     label: string,
     value: string,
 }
 
-// One facet of the rail: a kind, its count, and the token that filters by it.
 // One bar of the time ribbon: how many files fall in it, and which of the six
-// age bands it belongs to — the same band the rows' dates are painted with, so
-// a bar and the rows it stands for are the same colour.
+// age bands it is — the same band the rows' dates are painted with.
 export struct Bar {
     count: int,
-    // The bar's upper bound in days, and `0` for the oldest — which has no
-    // bound, so pressing it would select everything.
+    // Upper bound in days; `0` for the oldest, which has none.
     days: int,
     band: int,
-    // What the bar covers, already worded: "up to 38 days", "older than 730".
+    // What the bar covers, already worded.
     about: string,
 }
 
-// One skip rule: what it is, whether it is in force, and whether this window
-// is allowed to delete it.
-//
-// **Off is a note, not a deletion**, and that is what lets the two groups this
-// window cannot edit — the program's own set and a hand-written `config.toml`
-// — still be switched off. The note is kept beside the index; neither the file
-// nor the binary is touched.
-// One line of the right-click menu, as `scour-ui::menu` holds it.
-//
-// **The window does not know what any of these mean.** It draws a label, a
-// shortcut and a rule above the first item of each group, and sends `id` back
-// when one is pressed. The list, its order and its wording come from the
-// shared table — the browser page reads the same one, and the terminal will.
+// One line of the right-click menu, as `scour_ui::menu` holds it. The window
+// does not know what any of these mean: it draws them and sends `id` back.
 export struct MenuItem {
     // Sent back on press. Never translated.
     id: string,
-    // Already translated, and already carrying the count where there is one.
+    // Already translated, and carrying the count where there is one.
     label: string,
-    // Printed at the right, quietly. Empty where there is none.
+    // Printed at the right, quietly.
     key: string,
     // Draw a rule above this one: it starts a new group.
     rule: bool,
@@ -166,14 +102,14 @@ export struct MenuItem {
     careful: bool,
     // Starts more programs than there are hands, and asks first — drawn dim.
     heavy: bool,
-    // Shown with a tick: this is a switch rather than an action. Only the
-    // column picker uses it.
+    // Shown with a tick: a switch rather than an action.
     on: bool,
-    // Cannot be pressed. The last column standing is this: a table of no
-    // columns is not a smaller table, it is a broken one.
+    // Cannot be pressed — the last column standing is this.
     off: bool,
 }
 
+// One skip rule. Off is a note kept beside the index, not a deletion, so the
+// groups this window cannot edit can still be switched off.
 export struct Rule {
     id: string,
     value: string,
@@ -184,10 +120,6 @@ export struct Rule {
 
 // One folder in the report: what it weighs, what share of its parent that is,
 // and how those bytes are spread over the six age bands.
-//
-// The bands are six fields rather than an array because the bar that draws
-// them is six rectangles, and six named widths read better at the point of use
-// than an index into a model would.
 export struct Kid {
     name: string,
     path: string,
@@ -202,12 +134,8 @@ export struct Kid {
     a5: float,
 }
 
-// One group of files that might be the same file.
-//
-// `certainty` is the engine's own word for how far the checking got, and
-// `proven` is whether that word is `content` — read end to end and compared.
-// The two are separate because only the second licenses the word "duplicate":
-// being the same size is not being the same file.
+// One group of files that might be the same file. `proven` is whether the
+// checking got as far as reading them: only then is "duplicate" the word.
 export struct Dupe {
     size: string,
     times: string,
@@ -216,46 +144,32 @@ export struct Dupe {
     paths: string,
 }
 
-// One coloured run of the query, as the engine cut it.
-//
-// **The engine cuts it, not this window.** A frontend that tokenised the query
-// itself would be a second parser, and the day the two disagreed the box would
-// be confidently colouring a lie. `Request::Explain` returns the runs; all
-// that is left here is a role and a colour.
+// One coloured run of the query, as `Request::Explain` cut it. A window that
+// tokenised the query itself would be a second parser.
 export struct Span {
     text: string,
     // 0 nothing in particular · 1 field, comparison, `or` · 2 value or phrase
     // 3 wildcard · 4 exclusion · 5 read as text · 6 the word being looked for
     // 7 the syntax between terms, said quietly
     role: int,
-    // Is this run part of a term that must NOT match? The role does not say:
-    // `pdf` in `!ext:pdf` is a value exactly as it is in `ext:pdf`, and the
-    // exclusion role covers the `!` alone. The engine works the extent out
-    // and sends it — see `scour_core::Span::not`.
+    // Part of a term that must NOT match. The role does not say: `pdf` in
+    // `!ext:pdf` is a value, and the exclusion role covers the `!` alone.
     not: bool,
-    // How many CHARACTERS of the query come before this run. The wire counts
-    // bytes; the arithmetic that places this run counts characters, and in
-    // Turkish the two part company at the first word.
+    // CHARACTERS of the query before this run, not bytes.
     at: int,
 }
 
 export struct Facet {
-    // How tall this row's bar is, 0..1 of the largest count in its section.
-    // Computed in Rust: a max over a model is a loop per row per frame.
+    // Bar height, 0..1 of the largest count in the section. Computed in Rust:
+    // a max over a model is a loop per row per frame.
     share: float,
     label: string,
     token: string,
     count: string,
 }
 
-// The age used to be a dot beside the date. It is the date's own colour now —
-// the page's answer, and the better one: the eye is already at the stamp to
-// find out *when*, so when and how-long-ago are one glance rather than two.
-// `Theme.t0`-`t5` are the six bands; `rows::band` decides which.
 
-// One tab. Small capitals, and the selected one carries the line under it —
-// the page's shape, where the underline is the only mark and it is the accent
-// colour rather than a heavier weight.
+// One tab. Small capitals; the selected one carries the accent line under it.
 component Tab inherits Rectangle {
     in property <string> label;
     in property <bool> on;
@@ -266,9 +180,8 @@ component Tab inherits Rectangle {
             root.clicked();
         }
     }
-    // The width comes from the word plus its padding — asking the text for
-    // the box's width while the box asks the text for its own is a binding
-    // loop, which Slint refuses at compile time rather than at run time.
+    // The width comes from the word plus its padding: asking the text for the
+    // box's width while the box asks the text for its own is a binding loop.
     HorizontalLayout {
         padding-left: 14px;
         padding-right: 14px;
@@ -291,11 +204,7 @@ component Tab inherits Rectangle {
 }
 
 // One row of the rail: a word, a count, and a bar behind them showing what
-// share of the matching set it is.
-//
-// The bar sits *behind* the text rather than beside it, which is the page's
-// shape: a rail 186px wide cannot spare a lane for a bar, and the eye reads a
-// length without being given one.
+// share of the matching set it is. Behind, because a 186px rail has no lane.
 component FacetRow inherits Rectangle {
     in property <string> label;
     in property <string> count;
@@ -304,15 +213,12 @@ component FacetRow inherits Rectangle {
     callback clicked();
 
     height: 24px;
-    // The pressed row is tinted *and* keeps its ink, because in the light
-    // scheme a translucent blue over cream is close enough to the hover that
-    // the two were telling the reader nothing apart.
+    // Tinted and keeping its ink: in the light scheme the tint alone is too
+    // close to the hover to tell apart.
     background: root.on ? Theme.selection : touch.has-hover ? Theme.hover : transparent;
 
-    // Inset two pixels top and bottom and squared off at the left, exactly as
-    // the page draws it — and at full strength, not at half. Half an opacity
-    // over `line` is invisible in both schemes, which is a bar that is drawn,
-    // measured, and telling nobody anything.
+    // Inset two pixels top and bottom, at full strength: half an opacity over
+    // `line` is invisible in both schemes.
     if root.share > 0: Rectangle {
         x: 0;
         y: 2px;
@@ -340,10 +246,7 @@ component FacetRow inherits Rectangle {
             horizontal-stretch: 1;
         }
 
-        // **A width of its own, and the name gives way to it.** Without one
-        // the two share what is left over, and on a machine whose text is a
-        // shade larger than this one's the name takes it all and the count —
-        // the thing the row is *for* — is the part that goes. Elide a name;
+        // A width of its own, so the name gives way to it: elide a name,
         // never a number.
         Text {
             text: root.count;
@@ -357,21 +260,15 @@ component FacetRow inherits Rectangle {
     }
 }
 
-// One of the window's own controls. Square, 18px, the page's size — and the
-// same shape as the view switch beside it, because they are the same kind of
-// thing: something done to the window rather than to what it is looking at.
-// A panel over the window: help, the rules, the languages.
-//
-// One component because all three are the same thing — a card that opens over
-// the list, closes on Escape or on a click outside, and does not move what is
-// under it. The page's `.sheet`, at the page's size.
+// A panel over the window: help, the rules, the languages. One component,
+// because all three are a card that opens over the list, closes on Escape or
+// on a click outside, and does not move what is under it.
 component Sheet inherits Rectangle {
     in property <string> title;
     in property <bool> open;
 
-    // Placed by whoever puts it in the window: a component cannot read its
-    // own parent's size in Slint, and hard-coding one here would be a panel
-    // that only fits the window it was written against.
+    // Placed by whoever puts it in the window: a component cannot read its own
+    // parent's size in Slint.
     in property <length> room-w;
     in property <length> room-h;
 
@@ -382,34 +279,19 @@ component Sheet inherits Rectangle {
     x: root.room-w - self.width - 20px;
     y: 64px;
     width: min(400px, root.room-w - 40px);
-    // **As tall as what is in it, not as tall as it is allowed to be.** It was
-    // 560px whatever it held, so the help panel — the longest of the three —
-    // ran off its own bottom edge and sat over the ribbon with no way to
-    // scroll or to see the rest. The ceiling is still there for the day
-    // something genuinely long goes in one.
-    // **Measured from what is inside the scroller, not from the scroller.**
-    // A `ScrollView` asks for very little — that is its job — so reading its
-    // height collapsed the panel to two lines with a bar beside them. The
-    // content knows how tall it wants to be; the ceiling decides whether it
-    // gets it, and the scroller carries whatever is left over.
+    // As tall as what is in it, up to a ceiling. Measured from inside the
+    // scroller: a `ScrollView` asks for very little, which collapses the panel.
     height: min(root.room-h - 120px, sheet-body.preferred-height + 76px);
     background: Theme.panel;
     border-width: 1px;
     border-color: Theme.line;
     border-radius: 4px;
-    // **No `z`.** It was here to put the panel over the list, which it did —
-    // and Slint hoists an element with a `z` into a pass of its own, where the
-    // hit test does not follow it. The panel drew on top and every press went
-    // through it to whatever was underneath: not one tick, × or button in any
-    // of the three panels had ever worked. Being the last child is what puts
-    // it on top, and the panels are the window's last three children.
+    // No `z`: Slint hoists an element with one into a pass the hit test does
+    // not follow, so every press goes through it. Last child is what wins.
     
 
-    // **A way out that is visible.** Escape closed it and nothing said so —
-    // a panel with no × reads as something that got stuck, and this one
-    // covers the list while it is up. Drawn over the layout rather than in
-    // it, so the title keeps the full width and the glyph sits in the corner
-    // where a person looks for it.
+    // A way out that is visible. Drawn over the layout rather than in it, so
+    // the title keeps the full width.
     shut := TouchArea {
         x: parent.width - 30px;
         y: 10px;
@@ -444,17 +326,8 @@ component Sheet inherits Rectangle {
             height: 20px;
         }
 
-        // **Scrolls, so the panel can never clip what is in it again.**
-        //
-        // The first shape was 560px whatever it held and the help ran off the
-        // bottom with no way to reach the rest. Sizing to the content fixed
-        // that and introduced the opposite: a panel long enough to fill the
-        // window whenever somebody adds a line. Both are the same bug — a box
-        // whose height and whose contents are decided in different places.
-        //
-        // With a scroller the height is free to be whatever fits, and the
-        // ceiling below stops it taking the window. Nothing is ever cut off:
-        // it is either shown or reachable.
+        // Scrolls, so what is in the panel is either shown or reachable: the
+        // height is free to be whatever fits, and the ceiling above caps it.
         ScrollView {
             vertical-stretch: 1;
             viewport-height: sheet-body.preferred-height;
@@ -467,6 +340,8 @@ component Sheet inherits Rectangle {
     }
 }
 
+// One of the window's own controls. Square, 18px, and the same shape as the
+// view switch beside it: something done to the window, not to what it shows.
 component Tool inherits Rectangle {
     in property <string> glyph;
     in property <bool> on;
@@ -494,10 +369,8 @@ component Tool inherits Rectangle {
     }
 }
 
-/// A button with a word on it, for the selection bar.
-///
-/// The page's own: quiet until the pointer is over it, and the one that opens
-/// several windows turns the colour of a question while it is asking.
+/// A button with a word on it, for the selection bar. Quiet until hovered; it
+/// turns the colour of a question while `asking`.
 component Push inherits Rectangle {
     in property <string> label;
     in property <bool> asking;
@@ -527,16 +400,8 @@ component Push inherits Rectangle {
     }
 }
 
-/// One line of the skip list: a box that says whether it is in force, the
-/// thing being skipped, and — where this window is allowed to — a way to
-/// delete it.
-/// One way of running Scour, and what choosing it would do.
-///
-/// **The doing is a second press.** Two of the three start something — a
-/// terminal, a program that listens on a port — and a list where one press
-/// starts a listener is a list nobody can read safely. So a press arms the
-/// row and says what will happen; the button beside the sentence is the
-/// thing that does it.
+/// One way of running Scour, and what choosing it would do. The doing is a
+/// second press: a press arms the row, the button beside it acts.
 component FaceRow inherits Rectangle {
     in property <string> label;
     in property <string> note;
@@ -590,8 +455,7 @@ component FaceRow inherits Rectangle {
             }
         }
 
-        // The sentence and the button appear together, because the sentence is
-        // what the button is asking permission for.
+        // Sentence and button together: the sentence is what it asks for.
         if root.armed: HorizontalLayout {
             spacing: 8px;
             padding-left: 20px;
@@ -640,9 +504,7 @@ component RuleRow inherits Rectangle {
         padding-right: 4px;
         spacing: 8px;
 
-        // The box is the whole row's business, so the row is the target: these
-        // are short strings and a thirteen-pixel box beside them is a hard
-        // thing to hit.
+        // The row is the target, not the box: twelve pixels is hard to hit.
         VerticalLayout {
             alignment: center;
             Rectangle {
@@ -711,16 +573,11 @@ component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
     in property <string> sorted-by;
-    // **What the scrollbar is about.** The model is a window of about forty
-    // rows that slides; a view sized from the model describes the window, so
-    // five million rows read as forty. These two say how long the list really
-    // is and where the window sits in it.
     in property <int> total-rows;
     in property <int> window-offset;
     in property <length> w;
     // Which column this is, for remembering what it was dragged to. Not `id`,
-    // which Slint keeps for element names, and not `col`, which the grid loop
-    // below already uses.
+    // which Slint keeps for element names.
     in property <string> which;
     callback dragged(string, length);
     /// Double-clicked: that column goes back to deciding for itself.
@@ -731,14 +588,11 @@ component Head inherits Rectangle {
     in property <bool> last;
     callback clicked(string);
 
-    // A width, not a stretch: the numbers are worked out once by the window
-    // so that every row and this header agree on them.
+    // A width, not a stretch: every row and this heading share one number.
     width: root.w;
 
-    // **The grip is the edge, and it is 7px wide.** Narrower than that and it
-    // is a target people miss; wider and it eats the heading beside it. The
-    // page uses the same idea and the same feel: the column follows the
-    // pointer while the button is down, and what it lands on is kept.
+    // The grip is the edge, 7px: narrower is a target people miss, wider eats
+    // the heading beside it.
     grip := TouchArea {
         x: parent.width - 4px;
         width: 7px;
@@ -753,23 +607,11 @@ component Head inherits Rectangle {
         double-clicked => { root.reset(root.which); }
     }
 
-    // **The line between two headings, and it is always drawn.**
-    //
-    // It used to appear only under the pointer, which left a table of five
-    // columns with nothing to say where one ended and the next began: the
-    // headings floated in a band, columns of text ran into each other on a
-    // narrow window, and the grip was a target you found by feel. Drawn in
-    // the gap rather than inside the heading, so it stands midway between two
-    // words instead of crowding the one on its left.
-    //
-    // Not after the last column. There is nothing on the other side of it but
-    // the scrollbar's lane, and a line there reads as the edge of a column
-    // that is not on screen — which is the thing this window was just fixed
-    // for pretending.
+    // The line between two headings, always drawn, and in the gap rather than
+    // inside the heading. Never after the last: there is no column beyond it.
     if !root.last: Rectangle {
         x: parent.width + 3px;
-        // Under the hand it thickens and runs the full height, so that what
-        // is about to move is unmistakable before the button goes down.
+        // Thickens under the hand, before the button goes down.
         y: grip.has-hover || grip.pressed ? 0px : 5px;
         width: grip.has-hover || grip.pressed ? 2px : 1px;
         height: parent.height - 2 * self.y;
@@ -780,9 +622,8 @@ component Head inherits Rectangle {
         clicked => { root.clicked(root.sort); }
         Text {
             width: parent.width;
-            // The arrow is drawn in the text rather than beside it: a
-            // separate glyph has to be laid out, and a heading that shifts
-            // sideways when it becomes the sort is a heading that flickers.
+            // In the text, not beside it: a separate glyph shifts the heading
+            // sideways when it becomes the sort.
             text: root.sorted-by == root.sort ? root.text + " ▾" : root.text;
             color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
             font-size: 10px;
@@ -795,9 +636,8 @@ component Head inherits Rectangle {
     }
 }
 
-// A name with the match picked out. Monospace, like the page: a file name is
-// read character by character — an `l` against a `1`, a run of digits — and a
-// proportional face makes that work.
+// A name with the match picked out. Monospace: a file name is read character
+// by character, an `l` against a `1`.
 component Marked inherits HorizontalLayout {
     in property <string> pre;
     in property <string> hit;
@@ -815,15 +655,12 @@ component Marked inherits HorizontalLayout {
     }
 
     // Not a conditional element: one of those is left out of the parent's
-    // `spacing` and the name would shift sideways the moment a match appears.
-    // An empty `Text` costs a layout slot and draws nothing.
+    // `spacing`, so the name shifts sideways the moment a match appears.
     Rectangle {
         background: root.hit == "" ? transparent : Theme.mark;
         border-radius: 2px;
         width: label.preferred-width;
-        // Kept to the text's own height: left to itself the wash filled the
-        // layout slot and stood taller than the row it is in, which reads as
-        // a box drawn over the name rather than under it.
+        // The text's own height: the layout slot is taller than the row.
         height: label.preferred-height;
         y: (parent.height - self.height) / 2;
         label := Text {
@@ -844,8 +681,7 @@ component Marked inherits HorizontalLayout {
         vertical-alignment: center;
     }
 
-    // Eats the rest of the width so the name stays left and the columns after
-    // it do not float.
+    // Eats the rest of the width so the name stays left.
     Rectangle { }
 }
 
@@ -866,8 +702,8 @@ export component MainWindow inherits Window {
     in property <string> scope-heading;
     in property <string> size-heading;
     in property <[Bar]> bars;
-    // The tallest bar, so every other one is drawn as a share of it. Computed
-    // in Rust: a max over a Slint model is a loop per bar per frame.
+    // The tallest bar, so every other is a share of it. Computed in Rust: a
+    // max over a Slint model is a loop per bar per frame.
     in property <int> bar-peak: 1;
     in property <string> ribbon-label;
     in property <string> ribbon-hint;
@@ -881,62 +717,38 @@ export component MainWindow inherits Window {
     in property <string> meter-count;
     in property <string> meter-ms;
     in property <string> meter-rows;
-    /// `taranıyor 1.240.000`, while the index is being walked. **Beside the
-    /// counts, because that is where somebody looks for proof that pressing
-    /// something did anything** — a note in the corner is a note nobody reads
-    /// while waiting.
+    /// How far the walk has got, while the index is being built. Drawn beside
+    /// the counts, where somebody waiting is already looking.
     in property <string> scanning;
     in property <string> holding;
-    /// Something the window did, said until the next keystroke.
-    ///
-    /// Not the meter, which every answer rewrites — with a live list that is
-    /// several a second, and the line saying where a file was written was gone
-    /// before it could be read. Not the hint either: that is the query box's
-    /// placeholder and is invisible the moment anything is typed.
+    /// Something the window did, said until the next keystroke. Not the meter,
+    /// which every answer rewrites, nor the hint, which typing hides.
     in property <string> note;
     in property <string> hint;
     in property <bool> busy;
     in property <string> scope-label;
 
-    // The columns, handed in from `scour-ui` so that this window and the
-    // browser page cannot disagree about what they are called or how wide
-    // they start. See `dress()` in `main.rs`.
-    // **The grid counts lines, not rows.** A tile view puts several results on
-    // one scrolled line, so everything the virtual list rests on — how many
-    // fit, which one is on top, how far a page moves — is counted in lines and
-    // converted at the edges. Getting this wrong does not look wrong; it
-    // scrolls wrong, which is harder to notice and worse to use.
+    // The grid counts lines, not rows: a tile view puts several results on one
+    // scrolled line, and the conversion happens at the edges.
     out property <bool> grid: root.view-mode != "detail";
     out property <length> tile-w: root.view-mode == "large" ? 132px : 96px;
     out property <length> tile-h: root.view-mode == "large" ? 172px : 104px;
     out property <length> pic: root.view-mode == "large" ? 110px : 52px;
     out property <int> per-line: max(1, Math.floor(
         (root.width - root.chrome - 40px) / root.tile-w));
-    /// The tiles, a line at a time.
-    ///
-    /// **A model of models, and that is the whole of the lesson.** The first
-    /// tile view laid itself out by looping over a *count* and indexing into
-    /// the rows — which builds every element at once, so `ListView` stopped
-    /// being lazy and the list stopped fetching. A line is a model now, so
-    /// the view asks for the lines it is about to draw and nothing else.
+    /// The tiles, a line at a time. A model of models: a `for` over a count
+    /// builds every element at once, and a `ListView` stops being lazy.
     in property <[[Row]]> lines;
 
-    // ----------------------------------------------------------------
-    // The preview panel: a third column holding one row.
-    //
-    // **A mode, not a glance.** It stays open and follows whatever the
-    // selection lands on, which is Everything's preview pane; the browser
-    // page's is the same panel with the same facts in the same order. What
-    // is drawn in it depends on what the service says the file *is* — a
-    // picture, the head of some text, or a line saying neither.
-    // ----------------------------------------------------------------
+    // The preview panel: a third column holding one row. A mode, not a glance
+    // — it stays open and follows the selection. What is drawn in it is what
+    // the service says the file is: a picture, some text, or neither.
     in-out property <bool> peeking;
     in property <string> peek-name;
     in property <string> peek-path;
     /// The picture, when the file is one and it could be read.
     in property <image> peek-shot;
-    /// Whether `peek-shot` holds one — asked as a flag rather than of the
-    /// image, for the reason in `Row::shot`.
+    /// Whether `peek-shot` holds one, as a flag: see `Row::shot`.
     in property <bool> peek-has-shot;
     /// The head of the file, when it is text.
     in property <string> peek-text;
@@ -948,128 +760,60 @@ export component MainWindow inherits Window {
 
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
-    // **What the scrollbar is about.** The model is a window of about forty
-    // rows that slides; a view sized from the model describes the window, so
-    // five million rows read as forty. These two say how long the list really
-    // is and where the window sits in it.
+    // How long the list really is and where the shown window sits in it: a
+    // view sized from the model would describe the window, not the result.
     in property <int> total-rows;
     in property <int> window-offset;
 
-    // **The widths are computed once, here, and every row is handed the same
-    // numbers.** A `HorizontalLayout` per row works out its own stretch from
-    // its own content, so a wide name in row three pushed that row's kind
-    // column right while row four's stayed put — a table whose columns do not
-    // line up is not a table. The browser page gets this from `<table>`; here
-    // it has to be said.
-    //
-    // Three columns keep the width `scour-ui` gives them. What is left over
-    // goes to the two that hold text, and the location gets more of it because
-    // a path is longer than a name and elides worse.
-    // **Worked out from the window's own width, not the list's.** Asking the
-    // list how wide it is makes the rows' widths depend on a layout that
-    // depends on the rows' widths, and Slint refuses that at build time. The
-    // pieces between the window edge and the list are all fixed and known: the
-    // card's 20px margins, its 1px border, the 186px rail with its divider,
-    // and the list's own 12px padding on each side.
-    // **And the scrollbar's own lane.** It is drawn over the list rather than
-    // beside it, so without a gutter it sits on top of the last column — the
-    // size column, whose digits are the ones that must not be cut. The page
-    // says `scrollbar-gutter: stable` for the same reason; here it is 14px
-    // taken off the width the columns divide up, and the header loses it too
-    // so the two stay in line.
-    // **Worked out from the window's own width, not the list's.** Asking the
-    // list how wide it is makes the rows' widths depend on a layout that
-    // depends on the rows' widths, and Slint refuses that at build time. The
-    // pieces between the window edge and the list are all fixed and known: the
-    // card's 20px margins, its 1px border, the 186px rail with its divider,
-    // and the list's own 12px padding on each side.
-    //
-    // **And the scrollbar's own lane.** It is drawn over the list rather than
-    // beside it, so without a gutter it sits on top of the last column — the
-    // size column, whose digits are the ones that must not be cut. The page
-    // says `scrollbar-gutter: stable` for the same reason; here it is 14px
-    // taken off the width the columns divide up, and the header loses it too
-    // so the two stay in line.
+    // Everything between the window edge and the list — 20px card margins, 1px
+    // border, the 186px rail and divider, 12px list padding, 14px of scrollbar
+    // gutter. The columns are sized from this, not from the list: that is a loop.
     property <length> chrome: 40px + 2px + 186px + 1px + 24px + 14px;
     // One gap between each pair of headings, and one more before the picker.
-    // **Counted, not fixed at four**, because how many columns there are is
-    // something a person decides now.
+    // Counted, because how many columns there are is a choice.
     property <length> gaps: 8px * max(1, root.heads.length);
     /// The ⋮ at the end of the header row, which is a column's worth of room
     /// that the columns themselves may not have.
     property <length> picker-w: 16px;
-    // **The preview panel is part of the furniture too**, and leaving it out
-    // was most of why the date and the size went off the right-hand edge. It
-    // takes 380 pixels off the list and the columns were still being sized
-    // against the whole window, so opening it pushed the last two columns
-    // past the edge — drawn, fetched, and nowhere a person could see them.
+    // The preview panel is furniture too: 380px the columns may not divide up.
     property <length> peek-w: root.peeking ? 380px : 0px;
 
     /// What there is for the columns to divide up.
     out property <length> lane: max(0px,
         root.width - root.chrome - root.gaps - root.picker-w - root.peek-w);
     /// Divide it up again — in `scour_ui::lay_out`, which the page uses too.
-    ///
-    /// **Rust rather than a binding here.** Sharing out what is left over and
-    /// then taking back what does not fit is two passes with a per-column
-    /// floor and ceiling, and neither is something a declarative expression
-    /// says without saying it five times, once per column, subtly differently.
+    /// Rust, not a binding: it is two passes with a per-column floor and ceiling.
     callback relayout(length);
     changed lane => { root.relayout(root.lane); }
 
-    // **What a person dragged wins over what was computed.** Zero means "not
-    // chosen", which is how the settings file says it too — a width of zero is
-    // not a column somebody wanted, it is a column nobody has touched.
-    // The widths every row and the header are handed, worked out together so
-    // that they add up to `lane` exactly. The defaults are `scour-ui`'s own,
-    // so a window that somehow drew a frame before the first `relayout` shows
-    // a sane table rather than five columns of nothing.
+    // The widths every row and the heading are handed, adding up to `lane`
+    // exactly. A dragged width wins over a computed one; zero means untouched.
     in-out property <[length]> cw: [240px, 110px, 320px, 120px, 90px];
-    // The headings, in the order they are shown, so the header row and every
-    // row below it are laid out from one list and cannot disagree about how
-    // many columns there are.
+    // The headings in shown order, handed in from `scour-ui` by `dress()` in
+    // `main.rs`, so the header row and every row below it use one list.
     in-out property <[HeadInfo]> heads;
     /// Whether the kind's icon is drawn at the front of each row: only while
-    /// the name is the first column, because the icon is the name's and the
-    /// room it takes is the name's.
+    /// the name is the first column, since the room it takes is the name's.
     out property <bool> iconed: root.heads.length > 0 && root.heads[0].id == "name";
     // The two tab words, from the catalogue like every other visible string.
     in property <string> tab-search;
     in property <string> tab-report;
-    /// How many rows would fit, plus a little to scroll into.
-    ///
-    /// Reported by the window rather than guessed by Rust, because only the
-    /// window knows how tall it is — and it changes when somebody drags the
-    /// edge. Every row fetched costs a path rebuilt in the engine and six
-    /// strings allocated here, so asking for two hundred to draw twenty was
-    /// paying nine tenths of that for nothing.
-    // **Counted in rows in both views**, because what fetches them counts in
-    // rows: a line of tiles is `per-line` results, and the arithmetic that
-    // converts is here rather than in six places that would each get it right
-    // separately.
+    /// How many rows would fit, plus a little to scroll into. Only the window
+    /// knows its height, and a fetched row costs a path rebuilt in the engine.
+    /// Counted in rows in both views: a line of tiles is `per-line` results.
     out property <int> visible-rows: root.grid
         ? (Math.floor(tiles.height / root.tile-h) + 2) * root.per-line
         : max(20, Math.floor(list.height / Theme.row-height) + 12);
     // --- the scrollbar ----------------------------------------------------
-    //
-    // **Drawn by this window, in a lane of its own.** The style's own bar is a
-    // two-pixel hairline drawn *over* the list, and both halves of that were
-    // wrong here: it is invisible against a dark panel, and it sits on the
-    // size column — whose digits are the ones that must not be covered. A
-    // gutter cannot fix the second half, because a column somebody has dragged
-    // wider makes the rows wider than the list and the overlay lands on them
-    // wherever the gutter is.
-    //
-    // So the list gives up 14px and the bar gets them. The arithmetic is the
-    // flickable's own: how far there is to scroll, how much of it is on
-    // screen, and where in it the viewport currently sits.
+    // Drawn by this window in a lane of its own: the style's is a hairline over
+    // the list, invisible on a dark panel and sitting on the size column. The
+    // list gives up 14px; the arithmetic below is the flickable's own.
     property <length> sb-inset: 4px;
     property <length> sb-reach: root.grid ? tiles.viewport-height : list.viewport-height;
     property <length> sb-shown: root.grid ? tiles.visible-height : list.visible-height;
     property <length> sb-span: max(0px, root.sb-reach - root.sb-shown);
     property <length> sb-track: root.sb-shown - 2 * root.sb-inset;
-    /// Never shorter than this, however long the result is. Two and a half
-    /// million rows would otherwise put a thumb on screen too small to hit.
+    /// Never shorter than 36px: millions of rows put the thumb below hitting size.
     property <length> sb-thumb: root.sb-span <= 0px ? 0px
         : max(36px, root.sb-track * root.sb-shown / root.sb-reach);
     property <length> sb-travel: max(0px, root.sb-track - root.sb-thumb);
@@ -1085,50 +829,30 @@ export component MainWindow inherits Window {
         root.scroll-to(root.sb-span * min(1.0, max(0.0, (y - root.sb-inset) / root.sb-travel)));
     }
 
-    /// Put the list back to the top, or a measured distance down it.
-    ///
-    /// **A function rather than a property aliased to `viewport-y`.** The
-    /// scroll position is the `ListView`'s to keep — it corrects it as it
-    /// measures rows, clamps it at both ends, and hands it to the scrollbar.
-    /// Two-way binding it out to the window put a second owner on it; setting
-    /// it is a thing the window does twice, and only ever on purpose.
+    /// Put the list back to the top, or a measured distance down it. A function
+    /// rather than a binding: the scroll position is the `ListView`'s to keep.
     public function scroll-to(down: length) {
         list.viewport-y = 0px - down;
         tiles.viewport-y = 0px - down;
         paper.viewport-y = 0px - down;
     }
-    /// The first row of the result the list is showing.
-    ///
-    /// **What the window polls.** The model can say "I was asked for a row I
-    /// do not hold", but only if the view draws that row — and once a page has
-    /// landed somewhere the eye is not, it never does, which is a list that
-    /// loads its first page and then stops. This is the position itself, read
-    /// off the viewport, so the fetch decision never depends on a miss being
-    /// reported.
-    /// Scroll the rail from outside, for `SCOUR_GUI_RAIL` — which is how
-    /// "can the scopes be reached" is checked without a hand on a wheel.
+    /// Scroll the rail from outside, for `SCOUR_GUI_RAIL`.
     public function scroll-rail(down: length) {
         railview.viewport-y = 0px - down;
     }
+    /// The first row of the result the list is showing, read off the viewport
+    /// so the fetch decision never depends on the model reporting a miss.
     out property <int> first-row: root.grid
         ? max(0, Math.floor((0px - tiles.viewport-y) / root.tile-h)) * root.per-line
         : max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
-    /// The list moved by at least one row.
-    ///
-    /// **Why a change handler and not only the timer.** A timer that polls
-    /// often enough to be invisible is a timer that wakes the process sixty
-    /// times a second for the rest of the day; one that is cheap enough to
-    /// leave running adds its own period to every fetch, and at 100ms that is
-    /// most of the wait. This fires only while somebody is scrolling, and it
-    /// fires at once. The timer stays as the backstop for everything that
-    /// changes what is visible without moving the list — a resize, a window
-    /// that grew.
+    /// The list moved by at least one row. Fires only while scrolling, and at
+    /// once; the timer stays as the backstop for a resize.
     callback moved();
     changed first-row => {
         root.moved();
     }
-    // The query as Rust folded it back — set only when Rust changes the text
-    // itself (a facet click), never on every keystroke, or the caret jumps.
+    // Set only when Rust changes the text itself (a facet click), never on
+    // every keystroke, or the caret jumps.
     in-out property <string> query;
     in-out property <int> selected: 0;
     in-out property <string> active-facet;
@@ -1138,12 +862,8 @@ export component MainWindow inherits Window {
     callback activated(int);
     callback reveal(int);
     // --- the right-click menu -------------------------------------------
-    //
-    // **Three properties and two callbacks, and the window owns none of the
-    // meaning.** Rust fills `menu` from the shared table when a row is
-    // right-clicked, and answers `menu-pick` with the id that comes back. What
-    // the items say, which of them a folder gets, and where the rules fall is
-    // decided in one place for all the faces — see `scour-ui::menu`.
+    // The window owns none of the meaning: Rust fills `menu` from
+    // `scour_ui::menu` and answers `menu-pick` with the id that comes back.
     in property <[MenuItem]> menu;
     in-out property <bool> menu-open: false;
     in-out property <length> menu-x;
@@ -1157,21 +877,15 @@ export component MainWindow inherits Window {
     callback column-toggled(string);
 
     // --- asking before something that changes files ----------------------
-    //
-    // **A window with no dialog cannot offer a delete.** The menu's rule is
-    // that what it offers is safe to press, and moving to the wastebasket is
-    // safe because it can be undone — but "safe to undo" is not "meant", and
-    // twelve rows going at once is worth a sentence and a pause.
+    // The menu only offers what can be undone, but "safe to undo" is not
+    // "meant": twelve rows going at once is worth a sentence and a pause.
     in-out property <bool> ask-open: false;
     in property <string> ask-title;
     in property <string> ask-body;
     in property <string> ask-yes;
     in property <string> ask-no;
-    /// The question takes a line of text rather than only a yes.
-    ///
-    /// One property rather than a second overlay: a rename asks exactly what a
-    /// deletion asks — *this thing, yes or no* — with a name in the middle of
-    /// the sentence. Two sheets would be two sets of the same three buttons.
+    /// The question takes a line of text rather than only a yes: a rename is
+    /// the same overlay with a name in the middle of the sentence.
     in-out property <bool> ask-typing: false;
     in-out property <string> ask-text;
     /// True for yes. Sent once, whichever way it goes.
@@ -1183,10 +897,7 @@ export component MainWindow inherits Window {
     callback view-clicked(string);
     in-out property <string> view-mode: "detail";
     // --- the report -------------------------------------------------------
-    //
-    // The second tab: what a folder weighs, where the weight sits, and how old
-    // it is. Every number in it is the service's — this window formats and
-    // draws, and computes nothing about a disk.
+    // Every number in it is the service's: this window formats and draws.
     in-out property <string> tab: "search";
     /// The scope, one segment a button, so any ancestor is one press away.
     in property <[Facet]> crumb;
@@ -1239,14 +950,13 @@ export component MainWindow inherits Window {
     callback dupes-read();
     in property <string> head-folder;
     in property <string> head-age;
-    // Still its own property: the report has a header of its own, and it is
-    // not the table's — the table's headings travel in `heads` now.
+    // The report's own heading; the table's travel in `heads`.
     in property <string> head-size;
     in property <string> head-share;
     in property <string> head-files;
     callback report-open(string);
 
-    // Which panel is open, if any: "", "help", "language", "rules".
+    // Which panel is open, if any: "", "help", "faces", "language", "rules".
     in-out property <string> panel: "";
     in property <string> help-title;
     in property <string> help-body;
@@ -1263,19 +973,9 @@ export component MainWindow inherits Window {
     in property <string> rules-config-note;
     in property <string> rules-builtin-title;
     in property <string> rules-builtin-note;
-    /// The last rule text short enough to draw.
-    ///
-    /// **A cap, kept as a property because Slint cannot cut a string.** The
-    /// software renderer places glyphs at `i16` coordinates, so a single line
-    /// past 32 767 physical pixels is a panic rather than a line that
-    /// scrolls — and this field is a paste target like any other. There is no
-    /// `max-length` in Slint and no way to take the first n characters of a
-    /// string, so the field refuses the edit instead of trimming it: anything
-    /// over the cap puts back the last text that was under it.
-    ///
-    /// Four hundred characters is about two thousand eight hundred pixels of
-    /// this font, inside the ceiling at four times scale, and longer than any
-    /// path this rule could name.
+    /// The last rule text short enough to draw. Slint can neither cut a string
+    /// nor cap a field, so an over-long edit is put back from here; the software
+    /// renderer places glyphs at `i16`, and 400 characters stays inside that.
     private property <string> rule-kept: "";
     in property <string> rules-hint;
     in property <string> rules-add;
@@ -1285,16 +985,11 @@ export component MainWindow inherits Window {
     callback language-picked(string);
     callback rule-toggled(string);
     // --- the selection ----------------------------------------------------
-    //
-    // Several rows at once, and what is done with them is done to all of them:
-    // the same thing the browser page does, and the same words for it. The
-    // sentence is written in Rust because it is three counts and a size in a
-    // language's own word order, and this window does not spell any of those.
+    // Several rows at once, and an action takes all of them. The sentence is
+    // written in Rust: counts and a size in a language's own word order.
     in property <int> picked;
-    // The sentence in three pieces, because the count is drawn brighter than
-    // the words around it and Slint has no rich text. The pieces come from
-    // the catalogue's own `{n} selected`, split where the number goes — so a
-    // language that puts the number last still gets it in the right place.
+    // Three pieces, because the count is drawn brighter and Slint has no rich
+    // text. Split at `{n}`, so a language may put the number last.
     in property <string> picked-pre;
     in property <string> picked-n;
     in property <string> picked-post;
@@ -1302,7 +997,8 @@ export component MainWindow inherits Window {
     in property <string> pick-folders;
     in property <string> pick-drop;
     in property <bool> pick-asking;
-    /// row, adding, and taking the run from the last one picked.
+    /// A row was picked: which, whether to add to the selection, and whether
+    /// to take the run from the last one picked.
     callback pick(int, bool, bool);
     callback pick-copied();
     callback pick-opened();
@@ -1311,69 +1007,49 @@ export component MainWindow inherits Window {
     callback column-dragged(string, length);
     /// Double-clicked an edge: that column stretches with the window again.
     callback column-reset(string);
-    /// The ⋮ at the end of the header row: which columns to show. Carries
-    /// where it is, because the menu opens under it and Rust cannot see where
-    /// a heading ended up.
+    /// The ⋮ at the end of the header row: which columns to show. Carries where
+    /// it is, since the menu opens under it.
     callback columns-clicked(length, length);
-    // **No page callbacks.** The list is a model whose length is the whole
-    // result, so there is no window for the view to slide and no anchor for it
-    // to keep: it scrolls, and the window fetches what scrolled into sight.
+    // No page callbacks: the model's length is the whole result, so the view
+    // just scrolls and the window fetches what scrolled into sight.
 
     public function focus-query() {
         input.focus();
     }
 
-    // **What was searched before.** The list the chevron opens, already
-    // filtered by what is typed — a hundred past queries is not a list
-    // anybody reads, so the box narrows it the way the browser one does.
+    // What was searched before, already filtered by what is typed.
     in property <[string]> past;
     in-out property <bool> past-open;
     in-out property <int> past-picked;
-    // Whether there is a past at all. An arrow that opens an empty list is a
-    // promise of something that is not there.
+    // Whether there is a past at all: no arrow when there is nothing to open.
     in property <bool> has-past;
     callback past-toggled();
     callback past-taken(string);
-    // A query somebody *meant*, rather than one they were halfway through
-    // typing. The box searches per keystroke, so what was searched is `r`,
-    // `ra`, `rap`; what goes in the history is what was committed to.
+    // A query somebody meant, not one they were halfway through typing: the
+    // box searches per keystroke, the history takes only what was committed.
     callback query-committed();
 
-    // What the engine made of the query, as a sentence, and whether anything
-    // in it is a misreading. Empty when the query says nothing worth reading
-    // back — see the line itself for the rule.
+    // What the engine made of the query, as a sentence, and whether any of it
+    // is a misreading. Empty when there is nothing worth reading back.
     in property <string> reading;
     in property <bool> reading-warn;
 
-    // Print what the two layers of the query field measure, on every caret
-    // move. They have to agree character for character — that is the whole
-    // trick — and the only way to know whether they do is to ask both.
-    // `SCOUR_TRACE=1` turns it on.
+    // `SCOUR_TRACE=1`: print what the two layers of the query field measure on
+    // every caret move. They have to agree character for character.
     in property <bool> trace: false;
 
-    /// Put the caret at the end of what is typed.
-    ///
-    /// Used by `Enter` on a suggestion and by `SCOUR_GUI_END`, which is how a
-    /// screenshot reaches the one state a long query has that a short one does
-    /// not: scrolled. Nothing outside this window can press a key, and a field
-    /// whose text is set from Rust leaves the caret at nought.
+    /// Put the caret at the end of what is typed. Used by `Enter` on a
+    /// suggestion and by `SCOUR_GUI_END`: text set from Rust leaves it at nought.
     public function caret-to-end() {
-        // **Byte offsets, and Slint does not say so in the name.**
-        // `set-selection-offsets` clamps to the length of the text and snaps
-        // to a character boundary, so anything past the end *is* the end —
-        // and the character count is short of it: `değiştirme` is ten
-        // characters and twelve bytes, so the caret landed two characters
-        // early on every query with a Turkish letter in it. There is no
-        // count in this language that gives a byte length, so: past the end.
+        // `set-selection-offsets` takes BYTE offsets and clamps, and Slint has
+        // no byte count, so anything past the end is the end.
         input.set-selection-offsets(1000000000, 1000000000);
     }
 
     forward-focus: input;
 
-    // **The window is a card on a ground, not a full-bleed panel.** Measured
-    // off the browser one: 20px of ground all round, a 1px line, a 3px corner.
-    // The shadow the page draws is left out — a compositor draws the window's
-    // own, and two shadows read as a border.
+    // A card on a ground: 20px all round, a 1px line, a 3px corner. No shadow —
+    // the compositor draws the window's own, and two read as a border.
     Rectangle {
         x: 20px;
         y: 20px;
@@ -1388,37 +1064,17 @@ export component MainWindow inherits Window {
     VerticalLayout {
         spacing: 0px;
 
-        // ------------------------------------------------------------------
-        // The query line.
-        //
-        // One `TextInput`, one colour, and that is not a shortcut: Slint's
-        // text input has no range colouring at all — upstream #9560 puts
-        // editable text out of scope — so the coloured chips the mockup shows
-        // need a second layer that does not exist yet.
-        //
-        // **And one colour is all there is.** This said the field was "painted
-        // by the *kind* of what is in it instead, which is one property from
-        // Rust" — there is no such property and never was; `input.color` is
-        // `Theme.ink` whatever is typed. A mistyped field is searched for as
-        // text and this window says nothing about it, where the browser one
-        // marks it. Written down because a comment claiming a feature is how a
-        // gap stops being looked for.
-        // ------------------------------------------------------------------
+        // The query line. Slint's `TextInput` has no range colouring (upstream
+        // #9560 puts editable text out of scope), so the colours are a second
+        // layer under a transparent input.
         Rectangle {
-            // 63px, and the numbers under it are the page's: 16px above the
-            // box, 12px below, the box itself 26px of 20px monospace. The
-            // query line is the largest text in either window on purpose —
-            // it is the one thing a person is always looking at.
-            //
-            // Taller when the query is read back to you — see `reading`.
+            // 16px above the box, 12px below, the box 26px of 20px monospace.
+            // Taller when the query is read back — see `reading`.
             height: root.reading == "" ? 63px : 82px;
             background: Theme.panel;
 
-            // The line between the query and what is under it. **It used to
-            // brighten when the field had focus**, which was the only thing
-            // saying so while the field had no edge of its own. The field has
-            // one now, and two things saying "the keyboard is here" is one
-            // more than a person can read: this went back to being a rule.
+            // The line between the query and what is under it. A plain rule:
+            // the field's own border is what says where the keyboard is.
             Rectangle {
                 y: parent.height - 1px;
                 height: 1px;
@@ -1433,13 +1089,11 @@ export component MainWindow inherits Window {
                 spacing: 5px;
 
             HorizontalLayout {
-                // The box's own height, so that adding the reading under it
-                // moves nothing about the box itself.
+                // The box's own height, so the reading under it moves nothing.
                 height: 35px;
                 spacing: 12px;
 
-                // The mark. Letter-spaced small capitals, the same as the page:
-                // a name that sits still while everything beside it moves.
+                // The mark. Letter-spaced small capitals.
                 mark := Text {
                     text: "SCOUR";
                     color: Theme.ink-3;
@@ -1449,17 +1103,9 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                // The box and its placeholder, stacked. Slint's `TextInput`
-                // has no placeholder of its own, so the hint is drawn under it
-                // and hidden the moment anything is typed — which is how the
-                // page does it too, and why the two look the same when empty.
-                // **A box, because a line of text is not one.** The query was
-                // twenty-pixel type on the window's own background with a rule
-                // under the whole row: it read as a heading that happened to be
-                // editable. A ground a shade off the panel, a border, and a
-                // corner is the least that says "type here" — and the border
-                // is where focus is said, which is the other half of what was
-                // missing.
+                // The box and its placeholder, stacked: Slint's `TextInput` has
+                // no placeholder, so the hint is drawn under it and hidden the
+                // moment anything is typed.
                 field := Rectangle {
                     horizontal-stretch: 1;
                     // Or the scrolled text paints across the window.
@@ -1469,77 +1115,27 @@ export component MainWindow inherits Window {
                     border-width: 1px;
                     border-color: input.has-focus ? Theme.focus : Theme.line;
                     animate border-color { duration: 120ms; }
-                    // **One number, used by all three layers.** The coloured
-                    // text, the placeholder and the invisible input have to
-                    // line up character for character — that is what makes the
-                    // colouring work — so where they start is a property
-                    // rather than a figure written three times.
+                    // One number for all three layers: the coloured text, the
+                    // placeholder and the input must start at the same place.
                     property <length> pad: 9px;
-                    // What is visible inside the padding, and how far the text
-                    // has been pushed left to keep the caret in it.
-                    //
-                    // **The three layers scroll together or not at all.** The
-                    // coloured text is a layer of its own and the box that
-                    // takes the typing is another; a `TextInput` narrower than
-                    // its text scrolls *itself*, and then the letters a person
-                    // sees and the caret they are typing at are two different
-                    // strings. Past a boxful the query was simply cut off on
-                    // the right while the caret went on moving.
-                    //
-                    // So the input is never narrower than its text — it cannot
-                    // scroll — and this one number moves all three.
-                    // The chevron sits inside the box, so the text stops
-                    // short of it — an arrow with a letter under it is an
-                    // arrow nobody can read.
-                    // **Never negative.** Before the field has been given
-                    // a width this is `0 - 18px`, and negative room is not a
-                    // smaller box — `cursor-position-changed` derives `shift`
-                    // from it, so it places the text to the left of where it
-                    // belongs for as long as that lasts.
+                    // What is visible inside the padding, minus the chevron's
+                    // room. Never negative: `cursor-position-changed` derives
+                    // `shift` from it, and all three layers move by `shift`.
                     property <length> room: max(0px, field.width - field.pad * 2
                         - (root.has-past ? 24px : 0px));
                     property <length> shift: 0px;
-                    // **One character's width, measured rather than assumed.**
-                    // The coloured runs are separate elements and a layout
-                    // gives each of them a whole number of pixels, so a face
-                    // whose character is 12.04 px wide is drawn 12 px wide —
-                    // once per run, all of it in the same direction. Sixteen
-                    // runs and the colours sit a character to the left of the
-                    // letters they belong to.
-                    //
-                    // So the runs are placed by arithmetic instead: character
-                    // offset times the width of a character. Measured over
-                    // forty of them, because measuring one rounds badly at a
-                    // fractional width — the browser page does exactly this,
-                    // and says so in `charWidth`.
-                    // The same limit the page's `charWidth` has: one width
-                    // for every character. A face that draws Han twice as
-                    // wide would slide, and neither window has an answer for
-                    // that yet.
+                    // One character's width, measured over forty because a
+                    // layout rounds each run to whole pixels and the error
+                    // accumulates. Runs are placed by offset times this. One
+                    // width for every character: a double-width face slides.
                     property <length> advance: ruler.preferred-width / 40;
                     // Where the caret is, and whether it is in its lit half.
-                    // See the caret below for why this window draws its own.
                     property <length> caret-x: field.pad;
                     property <bool> caret-lit: true;
 
-                    // **This window draws its own caret, and it has to.**
-                    // Slint draws one — in `TextInput::color`, which here is
-                    // `transparent`, because what a reader sees is the
-                    // coloured layer underneath. A transparent caret is not a
-                    // caret, and the comment on `color` used to claim the
-                    // opposite: "the caret is drawn by the input itself and is
-                    // not affected". It is affected; on Linux the two are the
-                    // same colour by construction — `items/text.rs`, where
-                    // `cursor_color` falls back to `text_color.color()` on
-                    // everything that is not Android or Apple.
-                    //
-                    // So: two pixels in the query's own key colour, where the
-                    // input says the caret is, blinking on a timer. Shown only
-                    // while the field has the keyboard, which is also what
-                    // makes it the second thing saying so.
-                    // A second and a bit off, the same on: the rate every
-                    // terminal and every text box on this desktop uses, near
-                    // enough that a person does not notice it as a difference.
+                    // This window draws its own caret: on Linux Slint's takes
+                    // its colour from `TextInput::color`, which is transparent
+                    // here. 530ms is the desktop's own blink rate.
                     blink := Timer {
                         interval: 530ms;
                         running: input.has-focus;
@@ -1548,14 +1144,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // **The colours are a layer under a transparent box.**
-                    // Slint has no range colouring for editable text — the
-                    // upstream issue puts it out of scope — and this is the
-                    // browser page's own answer to the same limit: draw the
-                    // query again, in colour, exactly under the real one, and
-                    // let the caret and the selection show through. Both are
-                    // the same monospace at the same size, so the two line up
-                    // character for character.
+                    // Forty characters of the query's face, to measure one.
                     ruler := Text {
                         text: "0000000000000000000000000000000000000000";
                         font-family: Fonts.mono;
@@ -1570,20 +1159,13 @@ export component MainWindow inherits Window {
                             text: sp.text;
                             font-family: Fonts.mono;
                             font-size: 20px;
-                            // The operators are heavier, as on the page: an
-                            // `!` or an `|` changes what the whole term means
-                            // and is one character wide.
+                            // Operators are heavier: one character that changes
+                            // what a whole term means.
                             font-weight: sp.role == 1 || sp.role == 4 ? 700 : 600;
                             vertical-alignment: center;
-                            // Blue for what is being looked for, red for what
-                            // is being left out. See `scour_ui::Palette`.
-                            //
-                            // **A misreading is said before a polarity, and
-                            // an exclusion before a role.** `!kind:zurna` is
-                            // both excluded and unreadable, and the second is
-                            // what a person needs to know; `!ext:pdf` is a
-                            // field term all the way through and every piece
-                            // of it is left out.
+                            // A misreading is said before a polarity, and an
+                            // exclusion before a role: `!kind:zurna` is both,
+                            // and unreadable is what matters.
                             color: sp.role == 5 ? Theme.q-bad
                                  : sp.not ? Theme.q-not
                                  : sp.role == 1 ? Theme.q-key
@@ -1595,20 +1177,9 @@ export component MainWindow inherits Window {
                                  : Theme.ink;
                     }
 
-                    // **Hidden when there is anything to read, not when the
-                    // box is empty.** Pressing a rail row puts its term in the
-                    // filter slot rather than in the text, so the box stayed
-                    // "empty" while the coloured layer under it said `dm:17d`
-                    // — and the placeholder sat on top of it.
-                    // **What stands in until the colours arrive.** The
-                    // coloured runs come from the service, so between a
-                    // keystroke and its answer there is a moment with nothing
-                    // to draw — and the box that holds the text is
-                    // transparent by construction. Without this, that moment
-                    // showed the *placeholder* over what was being typed: the
-                    // longer the answer took, the longer a person watched
-                    // their own query be invisible. The terminal has always
-                    // drawn the plain text in the gap and says why.
+                    // What stands in between a keystroke and the runs the
+                    // service sends back: the input itself is transparent, so
+                    // without this the gap shows nothing at all.
                     if root.spans.length == 0 && root.query != "": Text {
                         x: field.pad + field.shift;
                         width: max(parent.width - field.pad * 2, self.preferred-width);
@@ -1633,34 +1204,19 @@ export component MainWindow inherits Window {
                     }
 
                 input := TextInput {
-                    // **The whole box, not the width of what is typed.** A
-                    // child of a `Rectangle` gets its *preferred* size unless
-                    // it is given one, and a text input's preferred width is
-                    // its text — so this was a few characters wide, sitting at
-                    // the left of a field that looked like a field. Everything
-                    // that reads as broken about a text box followed from it:
-                    // no pointer over the empty part, therefore no I-beam;
-                    // nothing to click, therefore no way to put the caret
-                    // anywhere; and clicking what looked like the field did
-                    // nothing at all. Slint sets the I-beam itself when the
-                    // pointer is over a `TextInput` — it simply was not over
-                    // one.
+                    // A child of a `Rectangle` gets its preferred size, and a
+                    // text input's preferred width is its text — which leaves
+                    // most of the field with nothing to click.
                     x: field.pad + field.shift;
-                    // **Never narrower than what is in it**, so it never
-                    // scrolls itself — and never narrower than the box, so
-                    // there is something to click and something for the
-                    // pointer to be over across the whole field.
+                    // Never narrower than its text, so it never scrolls itself,
+                    // and never narrower than the box, so all of it is clickable.
                     width: max(field.room, self.preferred-width);
                     height: parent.height;
                     text <=> root.query;
-                    // **Where the caret is, so this window can draw one.**
-                    // Slint draws its own in `color`, and `color` here is
-                    // `transparent` — see below.
+                    // Where the caret is, so this window can draw one.
                     cursor-position-changed(p) => {
-                        // Keep the caret inside the visible part, and no
-                        // further left than the start of the text. The second
-                        // half is what brings a scrolled field back when the
-                        // query is cleared.
+                        // Keep the caret inside the visible part, and no further
+                        // left than the start of the text.
                         if (p.x + field.shift < 0px) {
                             field.shift = -p.x;
                         }
@@ -1679,34 +1235,27 @@ export component MainWindow inherits Window {
                                 + "  selection " + self.anchor-position-byte-offset
                                 + ".." + self.cursor-position_byte-offset);
                         }
-                        // Typing restarts the lit half: a caret that blinks
-                        // *while* letters arrive reads as a dropped keystroke.
+                        // Typing restarts the lit half: a caret blinking while
+                        // letters arrive reads as a dropped keystroke.
                         field.caret-lit = true;
                         blink.restart();
                     }
                     // Invisible ink: what the reader sees is the coloured layer
-                    // underneath. The caret is drawn by the input itself and is
-                    // not affected, which is the whole reason this works.
+                    // underneath. This takes Slint's own caret with it, which
+                    // is why the window draws one of its own.
                     color: transparent;
                     font-size: 20px;
                     font-weight: 600;
                     font-family: Fonts.mono;
                     single-line: true;
                     vertical-alignment: center;
-                    // **Two pixels, and said here.** The default comes from a
-                    // style, and this window links none — a caret that is
-                    // sometimes a hairline and sometimes nothing is not a
-                    // thing to leave to a default. At twenty pixels of
-                    // monospace, one pixel is a caret you look for.
+                    // Said here: the default comes from a style, and this
+                    // window links none.
                     text-cursor-width: 2px;
                     selection-background-color: Theme.selection;
-                    // **Invisible ink for the selection too.** This was
-                    // `Theme.ink`, and the ink is the one thing about this
-                    // input that must never be visible: selecting the query
-                    // drew the real text, opaque, over the coloured layer —
-                    // so `Ctrl+A` looked like the colours had been thrown
-                    // away. The selection is said by its wash, which is
-                    // translucent and lets the colours through.
+                    // Invisible for the selection too, or selecting draws the
+                    // real text opaquely over the coloured layer. The
+                    // translucent wash is what says a selection.
                     selection-foreground-color: transparent;
 
                     edited => {
@@ -1715,21 +1264,15 @@ export component MainWindow inherits Window {
 
 
                     // Down and up move through the results without leaving the
-                    // field, which is the whole interaction: type, glance,
-                    // press Enter. Taking focus away to a list and back is what
-                    // makes a launcher feel slow.
+                    // field: type, glance, press Enter.
                     key-pressed(e) => {
-                        // **`Alt+↓` opens what was searched before** — the
-                        // combo box gesture, and the one the chevron beside
-                        // it stands for. Plain `↓` still walks into the
-                        // results, which is the more common move and should
-                        // not be taken from it.
+                        // `Alt+↓` opens what was searched before; plain `↓`
+                        // still walks into the results.
                         if (e.text == Key.DownArrow && e.modifiers.alt) {
                             root.past-toggled();
                             return accept;
                         }
-                        // While the list is open the arrows belong to it, and
-                        // Enter takes what is under them.
+                        // While the list is open the arrows belong to it.
                         if (root.past-open && e.text == Key.DownArrow) {
                             root.past-picked = min(root.past-picked + 1, root.past.length - 1);
                             return accept;
@@ -1762,11 +1305,7 @@ export component MainWindow inherits Window {
                             }
                             return accept;
                         }
-                        // **A screenful at a time, and the ends.** The arrows
-                        // were the only way down a two-million-row list from
-                        // the keyboard; the terminal has had these since it
-                        // was written and the window is the one that was
-                        // behind.
+                        // A screenful at a time, and the ends.
                         if (e.text == Key.PageDown || e.text == Key.PageUp) {
                             root.selected = clamp(
                                 root.selected + (e.text == Key.PageDown ? root.visible-rows : -root.visible-rows),
@@ -1784,23 +1323,18 @@ export component MainWindow inherits Window {
                             return accept;
                         }
                         if (e.text == Key.Return) {
-                            // What was committed to, which is what belongs in
-                            // the history — not the `r`, `ra`, `rap` the box
-                            // searched for on the way here.
+                            // What was committed to is what the history takes.
                             root.query-committed();
                             root.activated(root.selected);
                             return accept;
                         }
                         if (e.text == Key.Escape && root.panel != "") {
-                            // A panel first: Escape closes what is on top,
-                            // which is the one thing every window agrees on.
+                            // A panel first: Escape closes what is on top.
                             root.panel = "";
                             return accept;
                         }
                         if (e.text == Key.Escape && root.picked > 0) {
-                            // Then the selection, before the query: dropping
-                            // what is picked is the smaller undo, and the one
-                            // somebody pressing Escape usually means.
+                            // Then the selection, before the query: the smaller undo.
                             root.pick-dropped();
                             return accept;
                         }
@@ -1816,15 +1350,9 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                    // **A shortcut nobody can see is a feature nobody has.**
-                    // `Alt+↓` is the combo box gesture, and this is what says
-                    // so — the same chevron an address bar has had for thirty
-                    // years. Shown only when there is a past: an arrow that
-                    // opens nothing is worse than no arrow.
-                    //
-                    // Inside the field at its trailing edge, over the text
-                    // rather than beside it, because the box stretches and a
-                    // button outside it would move with every resize.
+                    // What says `Alt+↓` is there. Inside the field at its
+                    // trailing edge, because the box stretches and a button
+                    // outside it would move with every resize.
                     if root.has-past: Rectangle {
                         x: field.width - 26px;
                         width: 22px;
@@ -1841,8 +1369,7 @@ export component MainWindow inherits Window {
                         }
                         chevron := TouchArea {
                             // The pointer, not the click: by the time a click
-                            // lands the field has lost the keyboard and a
-                            // list that closes on blur has already gone.
+                            // lands, the list has already closed on blur.
                             pointer-event(e) => {
                                 if (e.kind == PointerEventKind.down) {
                                     root.past-toggled();
@@ -1851,9 +1378,7 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // Painted last, so it is over the text rather than under
-                    // it: a caret between two letters that a letter covers is
-                    // a caret that vanishes in the middle of a word.
+                    // Painted last, so a letter cannot cover it.
                     Rectangle {
                         x: field.caret-x;
                         y: (field.height - 24px) / 2;
@@ -1866,17 +1391,9 @@ export component MainWindow inherits Window {
                 }
             }
 
-                // **What the engine read, in words.** The colours say *what*
-                // each piece is; this says *why* the answer is what it is —
-                // `HASAN;DENEME !ama ;deneme` looks like four AND-ed words
-                // and is three, one of them an `or` with the exclusion inside
-                // it, which is the difference between a narrow answer and the
-                // whole disk. The page has had this line from the start; this
-                // window read the query back nowhere.
-                //
-                // Shown only when the query has something in it worth saying
-                // — `Role::is_telling`, decided in Rust and shared with the
-                // page. Its being there is then a signal in itself.
+                // What the engine read, in words: the colours say what each
+                // piece is, this says why the answer is what it is. Shown only
+                // when there is something worth saying — `Role::is_telling`.
                 if root.reading != "": Text {
                     text: root.reading;
                     color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
@@ -1888,12 +1405,9 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ------------------------------------------------------------------
         // What is true of the whole window: how many, how long, how big the
-        // index is. **Above the list, not below it**, which is where the page
-        // puts it — the numbers answer "is this everything?" and that question
-        // is asked before reading, not after.
-        // ------------------------------------------------------------------
+        // index is. Above the list, because "is this everything?" is asked
+        // before reading rather than after.
         Rectangle {
             height: 30px;
             background: Theme.panel;
@@ -1909,16 +1423,9 @@ export component MainWindow inherits Window {
                 padding-right: 20px;
                 spacing: 10px;
 
-                // **The engine's work, in the page's colours.** Three
-                // claims of different weight: how many out of how many is the
-                // answer and is drawn as one, what it cost is the number this
-                // program is about and wears the "today" hue, and how much of
-                // the index was walked is context and stays quiet. One `Text`
-                // in one ink said all three in the same voice.
-                //
-                // `meter` is what is left for the sentences that are not
-                // numbers — connecting, refused, the service is not running —
-                // and one or the other is showing, never both.
+                // Three claims of different weight: the count is the answer,
+                // the cost wears the "today" hue, the walk stays quiet. `meter`
+                // holds the sentences that are not numbers; never both at once.
                 if root.meter-count != "": HorizontalLayout {
                     spacing: 6px;
 
@@ -1961,8 +1468,7 @@ export component MainWindow inherits Window {
                         font-size: 11.5px;
                         vertical-alignment: center;
                     }
-                    // In the query's own key colour and not the quiet ink: it
-                    // is the one thing on this line that is about to change.
+                    // The key colour: the one thing on this line still moving.
                     Text {
                         text: root.scanning;
                         color: Theme.q-key;
@@ -1980,8 +1486,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                // What the service is holding, quieter than what it just
-                // answered: one is about this query, the other about the index.
+                // What the service is holding, not what it just answered.
                 Text {
                     text: root.holding == "" ? "" : "  ·  " + root.holding;
                     color: Theme.ink-3;
@@ -2007,11 +1512,8 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                // The window's own controls, in the page's order: the two that
-                // change what the index *is*, then the one that takes it
-                // elsewhere, then help. A rule separates them from the view
-                // switch — the only control here that changes what you are
-                // reading rather than what the program is doing.
+                // The window's own controls, then a rule, then the switches for
+                // what is being read rather than what the program is doing.
                 Rectangle { width: 10px; }
 
                 VerticalLayout {
@@ -2039,11 +1541,8 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
-                        // **With the view switch, not with the tools.** The
-                        // rule beside these separates the controls that change
-                        // what the program is doing from the ones that change
-                        // what you are reading, and a preview panel is the
-                        // second kind.
+                        // With the view switch: a preview panel changes what is
+                        // being read, not what the program is doing.
                         Tool {
                             glyph: "◫";
                             on: root.peeking;
@@ -2077,10 +1576,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ------------------------------------------------------------------
-        // Search and report. The second one is not built yet and says so by
-        // being unclickable rather than by opening something empty.
-        // ------------------------------------------------------------------
+        // Search and report, the window's two tabs.
         Rectangle {
             height: 29px;
             background: Theme.panel;
@@ -2108,8 +1604,7 @@ export component MainWindow inherits Window {
                     on: root.tab == "report";
                     clicked => {
                         root.tab = "report";
-                        // Asked for when it is looked at, not before: weighing
-                        // a folder is a walk of everything under it.
+                        // Asked for when looked at: weighing a folder is a walk.
                         root.report-open("");
                     }
                 }
@@ -2117,35 +1612,20 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ------------------------------------------------------------------
-        // The report. What a folder weighs, where the weight sits, and how old
-        // it is — the second tab, and the other half of what this program is
-        // for: a search answers "where is it", this answers "what is all this".
-        //
-        // Capped to nothing while the search tab is showing, for the reason
-        // the two lists are: an id inside an `if` is out of scope, and the
-        // window has to be able to reach both.
-        // ------------------------------------------------------------------
-        // **One scrolling document**, the way the page's report is: the
-        // panels and the duplicate list are below the fold on any window
-        // shorter than a desk, and a report you cannot reach the bottom of is
-        // a report with the answer cut off.
+        // The report: what a folder weighs, where the weight sits, how old it
+        // is. One scrolling document, and capped to nothing rather than put in
+        // an `if`, because an id inside one is out of scope.
         paper := ScrollView {
             visible: root.tab == "report";
             max-height: root.tab == "report" ? 100000px : 0px;
             min-height: 0px;
-            // **Said, not inferred.** A `ScrollView` does not learn how tall
-            // its content is from a layout inside it: without this the
-            // viewport is the view, there is no overflow, and the panels below
-            // the fold are unreachable rather than merely off screen.
+            // Said, not inferred: a `ScrollView` does not learn its content's
+            // height from a layout inside it, so there would be no overflow.
             viewport-height: sheet.preferred-height;
 
             sheet := VerticalLayout {
-            // **Its natural height, not the view's.** A layout inside a
-            // `ScrollView` stretches to fill it like any other child, so the
-            // report was being squeezed into one screen — the panels cut off
-            // at the bottom and nothing to scroll to, because there was no
-            // overflow to scroll.
+            // Its natural height: a layout inside a `ScrollView` otherwise
+            // stretches to fill it, and there is nothing to scroll.
             height: self.preferred-height;
             padding-left: 20px;
             padding-right: 20px;
@@ -2219,8 +1699,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // The children, heaviest first. The engine ordered them; this
-            // draws what it was handed and sorts nothing.
+            // The children, heaviest first. The engine ordered them.
             Rectangle {
                 height: 24px;
                 background: Theme.panel;
@@ -2285,10 +1764,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // At most two dozen of them — `top` in the request says so — so
-            // this is a plain repeater and the report scrolls as one document,
-            // the way the page's does. A `ListView` here would be a second
-            // scrolling thing inside the first.
+            // At most two dozen — `top` in the request says so — so a plain
+            // repeater: a `ListView` would scroll inside the report's scroll.
             VerticalLayout {
                 spacing: 0px;
 
@@ -2315,15 +1792,9 @@ export component MainWindow inherits Window {
                             width: 34%;
                         }
 
-                        // The bytes by age, as one bar. The same six colours
-                        // the rows' dates and the ribbon use, so a wall of
-                        // orange means the same thing everywhere in the window.
-                        //
-                        // **Placed, not laid out.** Six widths taken from the
-                        // width of the thing that holds them is a binding
-                        // loop, and Slint refuses it at build time: a layout
-                        // asks its children how wide they want to be, and they
-                        // were answering "as wide as you are".
+                        // The bytes by age, as one bar, in the six colours the
+                        // rows and the ribbon use. Placed rather than laid out:
+                        // widths taken from the parent's width are a binding loop.
                         VerticalLayout {
                             alignment: center;
                             width: root.age-bar;
@@ -2436,9 +1907,8 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Three panels, the page's own: what kinds the weight is in, the
-            // heaviest files under here, and the way from this folder into a
-            // search scoped to it.
+            // Three panels: what kinds the weight is in, the heaviest files
+            // under here, and the way into a search scoped to this folder.
             HorizontalLayout {
                 spacing: 12px;
 
@@ -2447,9 +1917,8 @@ export component MainWindow inherits Window {
                     border-width: 1px;
                     border-color: Theme.line-soft;
                     border-radius: 3px;
-                    // Even thirds, and none of them narrower than the page's
-                    // own floor: a panel that gives way to its neighbour ends
-                    // up eliding the words it exists to show.
+                    // Even thirds, with a floor: a panel that gives way to its
+                    // neighbour elides the words it exists to show.
                     horizontal-stretch: 1;
                     min-width: 215px;
 
@@ -2468,9 +1937,7 @@ export component MainWindow inherits Window {
                         for kind[i] in root.report-kinds: Rectangle {
                             height: 19px;
 
-                            // The bar behind the words, as the page has it: a
-                            // share is read from a length before it is read
-                            // from a number.
+                            // Behind the words: a share reads as a length first.
                             Rectangle {
                                 x: 0;
                                 width: parent.width * kind.share;
@@ -2510,9 +1977,8 @@ export component MainWindow inherits Window {
                     border-width: 1px;
                     border-color: Theme.line-soft;
                     border-radius: 3px;
-                    // Even thirds, and none of them narrower than the page's
-                    // own floor: a panel that gives way to its neighbour ends
-                    // up eliding the words it exists to show.
+                    // Even thirds, with a floor: a panel that gives way to its
+                    // neighbour elides the words it exists to show.
                     horizontal-stretch: 1;
                     min-width: 215px;
 
@@ -2560,9 +2026,8 @@ export component MainWindow inherits Window {
                     border-width: 1px;
                     border-color: Theme.line-soft;
                     border-radius: 3px;
-                    // Even thirds, and none of them narrower than the page's
-                    // own floor: a panel that gives way to its neighbour ends
-                    // up eliding the words it exists to show.
+                    // Even thirds, with a floor: a panel that gives way to its
+                    // neighbour elides the words it exists to show.
                     horizontal-stretch: 1;
                     min-width: 215px;
 
@@ -2620,8 +2085,7 @@ export component MainWindow inherits Window {
             }
 
             // The same file, several times over. Not run unasked: it is a walk
-            // of every candidate, and looking at what a folder weighs should
-            // not start one.
+            // of every candidate.
             HorizontalLayout {
                 spacing: 10px;
                 height: 30px;
@@ -2733,17 +2197,11 @@ export component MainWindow inherits Window {
             visible: root.tab != "report";
             max-height: root.tab == "report" ? 0px : 100000px;
 
-            // --------------------------------------------------------------
-            // The rail: what the matching set consists of.
-            //
-            // Every row is a `kind:` term and clicking one adds it to the
-            // query rather than filtering behind the query's back — so what
-            // is on screen is always exactly what the text says.
-            // --------------------------------------------------------------
+            // The rail: what the matching set consists of. Clicking a row adds
+            // its term to the query rather than filtering behind its back.
             Rectangle {
-                // 186px and a shade darker than the list, both measured off
-                // the page. The rail is a fixed track: it carries counts that
-                // must not reflow while the list beside it does.
+                // A fixed track: it carries counts that must not reflow while
+                // the list beside it does.
                 width: 186px;
                 background: Theme.panel-2;
 
@@ -2753,17 +2211,10 @@ export component MainWindow inherits Window {
                     background: Theme.line;
                 }
 
-                // **Scrolled, because it is taller than the window.** Three
-                // sections and thirteen kinds do not fit at 700px, and a rail
-                // that simply grew pushed the time ribbon off the bottom of
-                // the window — drawn, laid out, and nowhere to be seen.
+                // Scrolled: three sections and thirteen kinds do not fit at
+                // 700px, and a rail that grew would push the ribbon off.
                 railview := ScrollView {
-                    // **And it has to be told how tall it is.** A `ScrollView`
-                    // does not learn that from a layout inside it: the
-                    // viewport stayed the height of the view, so there was no
-                    // overflow to scroll and the sections below the fold —
-                    // the scopes, the sizes — were not cut off so much as
-                    // unreachable. The same two lines the report needed.
+                    // Told how tall it is, or there is no overflow to scroll.
                     viewport-height: rail.preferred-height;
 
                     rail := VerticalLayout {
@@ -2775,15 +2226,8 @@ export component MainWindow inherits Window {
                     spacing: 1px;
                     alignment: start;
 
-                    // Letter-spaced small capitals, 10px — the page's section
-                    // heading, and the only text in the window smaller than
-                    // the counts it introduces.
-                    // **Indented by a layout, not by an `x`.** Moving the
-                    // text right while the box it is in stays where it was
-                    // leaves the first glyph sitting on the edge that clips —
-                    // the `T` of `Tür` came out with the left arm of its
-                    // crossbar shaved off, which is a thing you see and cannot
-                    // name until you know where to look.
+                    // Indented by a layout, not by an `x`: moving the text
+                    // right inside a box that stays put clips the first glyph.
                     HorizontalLayout {
                         padding-left: 14px;
                         padding-right: 14px;
@@ -2808,10 +2252,8 @@ export component MainWindow inherits Window {
                         clicked => { root.facet-clicked(f.token); }
                     }
 
-                    // **Where, not what.** The scopes are this desktop's own
-                    // folders — the service answers `places` because it runs
-                    // where the files are, and a window guessing at
-                    // `~/Documents` would be wrong in every language but one.
+                    // Where, not what: the scopes are this desktop's own folders,
+                    // answered by the service, which runs where the files are.
                     Rectangle { height: 12px; }
 
                     HorizontalLayout {
@@ -2838,9 +2280,8 @@ export component MainWindow inherits Window {
                         clicked => { root.facet-clicked(sc.token); }
                     }
 
-                    // Three bands rather than a histogram: a size filter
-                    // answers "what is taking the room" and "what is empty",
-                    // and everything between is served better by sorting.
+                    // Three bands rather than a histogram: a size filter answers
+                    // "what is taking the room" and "what is empty".
                     Rectangle { height: 12px; }
 
                     HorizontalLayout {
@@ -2871,29 +2312,17 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // --------------------------------------------------------------
             // The results.
-            // --------------------------------------------------------------
             VerticalLayout {
                 spacing: 0px;
-                // **Allowed to be narrower than its columns.** The five column
-                // widths add up to more than a window, so this layout's own
-                // minimum is wider than the space it is in — and a sibling
-                // asking for three hundred and eighty pixels got fifty. The
-                // list has always been free to be cut off on the right; saying
-                // so is what lets the preview panel have its width.
+                // Allowed to be narrower than its columns, which is what lets
+                // the preview panel take its 380px from the list.
                 min-width: 0px;
 
-                // Column headers, and each is a sort.
-                //
-                // **Five columns, the widths handed in from `scour-ui`.** The
-                // browser page shows exactly these five in exactly this order,
-                // and the order is the order of the question a person is
-                // asking: what is it called, what kind of thing is it, where
-                // does it live, when did it change, how big is it.
+                // Column headings, each of them a sort. Which columns and how
+                // wide are `heads` and `cw`, both handed in from `scour-ui`.
                 Rectangle {
-                    // 31px, off the page. Taller than a row on purpose: the
-                    // header is a fixed edge the eye returns to.
+                    // Taller than a row: a fixed edge the eye returns to.
                     height: 31px;
                     background: Theme.panel;
 
@@ -2913,10 +2342,7 @@ export component MainWindow inherits Window {
                             text: h.label;
                             sort: h.sort;
                             align-right: h.right;
-                            // The last heading has no line after it: there is
-                            // nothing on the other side but the scrollbar's
-                            // lane, and a line there reads as the edge of a
-                            // column that is not on screen.
+                            // No line after the last: there is no column beyond it.
                             last: i == root.heads.length - 1;
                             w: root.cw[i];
                             sorted-by: root.sorted-by;
@@ -2925,11 +2351,8 @@ export component MainWindow inherits Window {
                             clicked(k) => { root.sort-by(k); }
                         }
 
-                        // **Where a column would be, which is where the eye
-                        // already is** when the question "why is this column
-                        // here" comes up. The page puts it in the same place
-                        // and the room it takes is counted out of the lane —
-                        // see `PICKER_W` in `relayout`.
+                        // Where a column would be. Its room is taken out of the
+                        // lane — see `picker-w`.
                         Rectangle {
                             width: 16px;
                             TouchArea {
@@ -2953,69 +2376,38 @@ export component MainWindow inherits Window {
                 list := ListView {
                     // The window draws its own, in the lane below. See `sb-`.
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-                    // Capped to nothing while the tiles are showing, rather
-                    // than put behind an `if`: an id inside a conditional is
-                    // out of scope for everything that has to read the list's
-                    // position, and both views have to be readable.
+                    // Capped to nothing rather than put behind an `if`: an id
+                    // inside a conditional is out of scope, and both views must
+                    // stay readable by name.
                     visible: !root.grid;
-                    // **And `min-height` with it.** A `ScrollView` asks for
-                    // fifty pixels whatever it holds, so capping the height
-                    // alone left the view that is not showing occupying a
-                    // band of empty panel above the one that is.
+                    // With `max-height`: a `ScrollView` asks for fifty pixels
+                    // whatever it holds, so capping the height alone leaves a band.
                     min-height: 0px;
                     max-height: root.grid ? 0px : 100000px;
 
-                    // **Over the model, not over a count.** A `for` on an
-                    // integer builds every element at once, which took the
-                    // virtualisation out of the list the moment the grid was
-                    // added: two hundred rows became two hundred live
-                    // elements, and scrolling stopped fetching. The model is
-                    // what `ListView` knows how to be lazy about.
-                    // **The view pulls.** `root.rows` is a model whose
-                    // `row_count` is the whole result, so `ListView` sizes
-                    // itself and its scrollbar from the real length and asks
-                    // for exactly the rows it is about to draw. Nothing here
-                    // places a row or moves a viewport any more.
+                    // Over the model, not over a count: a `for` on an integer
+                    // builds every element at once and `ListView` stops being
+                    // lazy. `row_count` is the whole result, so the view sizes
+                    // its scrollbar from the real length and asks for what it draws.
                     for here[i] in root.rows: Rectangle {
                         height: Theme.row-height;
-                        // **Only in the table.** A line of tiles holds several
-                        // results, so painting the line for one of them lit up
-                        // everything beside it — the selection has to be the
-                        // tile, and it is, below.
-                        //
-                        // **And not animated.** This used to carry the arrival
-                        // wash as well, on one `animate` of 1.6 seconds — so
-                        // pressing a row faded the selection in over a second
-                        // and a half, and running down the list with the arrows
-                        // left a comet tail of half-lit rows behind the one
-                        // actually selected. Selecting is not an event that
-                        // happened *to* the list; it is where you are, and
-                        // where you are is not a thing to animate. The browser
-                        // page never did: its wash is a keyframe animation and
-                        // its selection is a plain background.
+                        // Never animated: selecting is where you are, not an
+                        // event that happened to the list. The arrival wash is
+                        // a separate layer with its own clock, below.
                         background: (here.picked || i == root.selected) ? Theme.selection
                             : rowtouch.has-hover ? Theme.hover
                             : transparent;
 
-                        // The wash, on its own layer and its own clock. It
-                        // fades rather than staying — a permanent badge would
-                        // still be there tomorrow — and it is translucent, so
-                        // a row that is both new and selected shows both.
+                        // The arrival wash: translucent, so a row that is both
+                        // new and selected shows both, and it fades away.
                         Rectangle {
                             background: here.fresh ? Theme.t0.with-alpha(0.22) : transparent;
                             animate background { duration: 1600ms; easing: ease-out; }
                         }
 
-                        // **Where the keyboard is, which is not the same
-                        // question as what is selected.** Pick three rows and
-                        // all three fill blue; without this, the one the
-                        // arrows will move from looks exactly like the two
-                        // that will not. A ring rather than a fourth shade of
-                        // the same blue — a shade says "more selected", which
-                        // is not a thing, and this says "here".
-                        //
-                        // The focus colour, because that is what it is: the
-                        // query field underlines itself in the same one.
+                        // Where the keyboard is, which is not what is selected:
+                        // a ring, because a fourth shade of blue would read as
+                        // "more selected", which is not a thing.
                         if i == root.selected: Rectangle {
                             background: transparent;
                             border-width: 1px;
@@ -3031,10 +2423,8 @@ export component MainWindow inherits Window {
                                 root.selected = i;
                                 root.activated(i);
                             }
-                            // **Picking is a press, not a click**, because a
-                            // click carries no modifiers here: plain replaces
-                            // the selection, `Ctrl` adds one, `Shift` takes
-                            // the run from the last one picked.
+                            // A press, not a click: a click carries no modifiers
+                            // here, and `Ctrl` and `Shift` change what it means.
                             pointer-event(e) => {
                                 if (e.kind == PointerEventKind.down
                                     && e.button == PointerEventButton.left) {
@@ -3045,10 +2435,9 @@ export component MainWindow inherits Window {
                                 if (e.button == PointerEventButton.right
                                     && e.kind == PointerEventKind.down) {
                                     root.selected = i;
-                                    // **Right-clicking outside the selection selects what was
-                                    // right-clicked.** The page does the same, and for the same
-                                    // reason: a menu about rows the pointer is not on is how
-                                    // somebody copies eleven paths while looking at a twelfth.
+                                    // Right-clicking outside the selection selects what
+                                    // was right-clicked: a menu must be about what is
+                                    // under the pointer.
                                     root.menu-at(i, self.absolute-position.x + self.mouse-x,
                                         self.absolute-position.y + self.mouse-y);
                                 }
@@ -3057,12 +2446,8 @@ export component MainWindow inherits Window {
 
                         Rectangle {
                             x: 0;
-                            // **A fixed 3px.** It grew to 5 while a row was
-                            // new, which put two marks for one event on top of
-                            // each other and made a list of arrivals look like
-                            // a list with a ragged edge. The arrival is the
-                            // wash behind the row; the stripe is the age, and
-                            // the age did not change.
+                            // Fixed: the stripe is the age, and an arrival does
+                            // not change it. The wash behind the row says that.
                             width: 3px;
                             height: parent.height;
                             background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
@@ -3075,39 +2460,15 @@ export component MainWindow inherits Window {
                             padding-right: 12px;
                             spacing: 8px;
 
-                            // **The kind's icon, and it has to be spelled out
-                            // one kind at a time.** `@image-url` is resolved at
-                            // build time, so there is no way to index into a
-                            // set of them from a property — the alternative is
-                            // loading fourteen SVGs at run time and handing
-                            // each row an `image`, which is fourteen decodes
-                            // and a cache to get wrong. Fourteen `if`s are
-                            // fourteen comparisons per visible row, which at
-                            // thirty rows is nothing.
-                            //
-                            // Tinted rather than drawn in colour: the files are
-                            // the page's own, black on nothing, and the hue is
-                            // `scour-ui`'s so the two windows agree.
-                            // **Only while the name is the first column.** The
-                            // icon is the name's, and its 15px and the gap after
-                            // it come out of the name's width — see the loop
-                            // below. A conditional rather than a zero width,
-                            // because a zero-width child still takes the row's
-                            // spacing, and eight pixels is exactly the kind of
-                            // drift that put every cell a little to the right
-                            // of its heading.
+                            // The kind's icon, spelled out one kind at a time:
+                            // `@image-url` is resolved at build time. Tinted
+                            // from `scour-ui`. A conditional rather than a zero
+                            // width, which would still take the row's spacing.
                             if root.iconed: VerticalLayout {
                                 alignment: center;
                                 width: 15px;
-                            // **No picture here, and that is the owner's
-                            // call.** A detail row is read as a name, a place
-                            // and a date; fifteen pixels of photograph beside
-                            // them is a thing to look at where nobody is
-                            // looking. The grid is where a picture answers the
-                            // question being asked, and that is where `thumb`
-                            // is drawn — the browser page still puts one in
-                            // its list, which is the one place these two
-                            // deliberately differ.
+                            // No thumbnail in a detail row: `thumb` is drawn in
+                            // the grid, where a picture is the question.
                             if here.ktoken == "folder": Image {
                                 width: 15px;
                                 height: 15px;
@@ -3194,36 +2555,12 @@ export component MainWindow inherits Window {
                             }
                             }
 
-                            // The name, with the match picked out. A folder is
-                            // drawn in the query's key colour, which is what
-                            // the page does: the one distinction worth a
-                            // colour in a list of names is "this one opens".
-                            // **The icon's 15px and its gap come out of this
-                            // column, not out of the row.** They were an extra
-                            // child beside the five the headings describe, so
-                            // every row was 23px wider than the header above
-                            // it: the list scrolled sideways under a bar
-                            // nobody asked for, and each heading sat 23px to
-                            // the left of the column it names. The page puts
-                            // the icon inside the name cell for the same
-                            // reason.
-                            // **One loop over the cells, not five named
-                            // ones.** Which columns are shown is a person's
-                            // choice now, so the row cannot know at compile
-                            // time what its third cell holds. Two of them are
-                            // still not plain text and are found by `id`
-                            // rather than by position: the name, which has
-                            // the match picked out of it, and — with it —
-                            // the icon, which lives inside the name's own
-                            // width so that a row is never wider than the
-                            // header above it.
+                            // One loop over the cells: which columns are shown
+                            // is a person's choice. The name is found by `id`,
+                            // and the icon's room comes out of the name's width.
                             for c[ci] in here.cells: HorizontalLayout {
-                                // **The cell is as wide as its heading, icon
-                                // included.** The first version gave this the
-                                // full width and the name inside it the width
-                                // less the icon — so the icon's room was paid
-                                // twice, and every column after the name sat
-                                // 23px to the right of the heading above it.
+                                // As wide as its heading, icon included: taking
+                                // the icon off twice shifts every later column.
                                 width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 23px : 0px));
 
                                 if c.id == "name": Marked {
@@ -3237,20 +2574,14 @@ export component MainWindow inherits Window {
                                 if c.id != "name": Text {
                                     width: root.cw[ci];
                                     text: c.text;
-                                    // **The age is the date's colour, not a
-                                    // dot beside it.** The page paints the
-                                    // stamp itself and it reads better: the
-                                    // eye is already there to find out when,
-                                    // so the answer and how-long-ago are one
-                                    // glance rather than two. `-1` is a
-                                    // column that is not a time at all.
+                                    // The age is the stamp's own colour; `-1` is
+                                    // a column that is not a time at all.
                                     color: c.dim ? Theme.ink-3
                                          : c.age < 0 ? (c.right ? Theme.ink-2 : Theme.ink-3)
                                          : c.age == 0 ? Theme.t0 : c.age == 1 ? Theme.t1
                                          : c.age == 2 ? Theme.t2 : c.age == 3 ? Theme.t3
                                          : c.age == 4 ? Theme.t4 : Theme.t5;
-                                    // An empty family is the window's own, which is what the name and
-                                    // the kind are set in.
+                                    // An empty family is the window's own.
                                     font-family: c.mono ? Fonts.mono : "";
                                     font-size: c.mono ? 11.5px : Fonts.small;
                                     horizontal-alignment: c.right ? right : left;
@@ -3261,16 +2592,10 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
-                // ------------------------------------------------------
-                // The same results as tiles, when that is what was asked for.
-                //
-                // **A second list rather than a second shape for the first.**
-                // A `ListView` lays out one repeater; two `for`s inside one of
-                // them is not a thing it can be lazy about. So there are two,
-                // each over its own model, and the one that is not showing is
-                // capped to no height — which leaves both reachable by name,
-                // where an `if` would put the active one's id out of scope.
-                // ------------------------------------------------------
+                // The same results as tiles. A second list rather than a second
+                // shape for the first: a `ListView` is lazy about one repeater.
+                // The one not showing is capped to no height rather than put in
+                // an `if`, which would take its id out of scope.
                 tiles := ListView {
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                     visible: root.grid;
@@ -3288,12 +2613,8 @@ export component MainWindow inherits Window {
                             for cell[c] in line: Rectangle {
                                 width: root.tile-w;
                                 height: root.tile-h;
-                                // **The tile is the selection, not the line.**
-                                // A line holds several results, so painting the
-                                // line for one of them lights up everything
-                                // beside it.
-                                // Instant, for the reason the table's rows are:
-                                // see the comment there.
+                                // The tile is the selection, not the line: a line
+                                // holds several results.
                                 background: (cell.picked || (i * root.per-line + c) == root.selected)
                                     ? Theme.selection
                                     : tiletouch.has-hover ? Theme.hover
@@ -3346,12 +2667,8 @@ export component MainWindow inherits Window {
                                     spacing: 4px;
                                     alignment: center;
 
-                                    // **The picture where there is one, the
-                                    // kind's colour where there is not.** A
-                                    // wall of squares is read by hue before it
-                                    // is read by name; a wall of photographs
-                                    // is read by the photographs, which is the
-                                    // reason a tile view exists at all.
+                                    // The picture where there is one, the kind's
+                                    // colour where there is not.
                                     Rectangle {
                                         height: root.pic;
                                         if cell.shot: Image {
@@ -3360,11 +2677,8 @@ export component MainWindow inherits Window {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                             source: cell.thumb;
-                                            // The whole picture, not a crop:
-                                            // in a grid the shape of a
-                                            // photograph is part of what
-                                            // identifies it, and a cropped
-                                            // wall of squares gives that up.
+                                            // The whole picture: its shape is
+                                            // part of what identifies it.
                                             image-fit: contain;
                                         }
                                         if cell.shot == false: Rectangle {
@@ -3395,15 +2709,12 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // --------------------------------------------------------------
-            // The scrollbar's lane. Beside the list, never over it — see the
-            // `sb-` properties for why, and for the arithmetic.
-            // --------------------------------------------------------------
+            // The scrollbar's lane. Beside the list, never over it; the
+            // arithmetic is in the `sb-` properties.
             VerticalLayout {
                 width: 14px;
 
-                // Level with the column headings, and carrying their rule
-                // across so the line under them does not stop short.
+                // Level with the column headings, carrying their rule across.
                 Rectangle {
                     height: 31px;
                     background: Theme.panel;
@@ -3423,7 +2734,7 @@ export component MainWindow inherits Window {
                         y: root.sb-y;
                         height: root.sb-thumb;
                         border-radius: 3px;
-                        // Quiet until it is wanted, like the page's own.
+                        // Quiet until it is wanted.
                         background: grab.pressed ? Theme.ink-2
                             : grab.has-hover ? Theme.ink-3 : Theme.line;
                         visible: root.sb-span > 0px;
@@ -3437,9 +2748,7 @@ export component MainWindow inherits Window {
                         pointer-event(e) => {
                             if (e.kind == PointerEventKind.down) {
                                 // A press on the track takes the thumb to the
-                                // pointer; a press on the thumb picks it up
-                                // where it is. Either way the drag continues
-                                // from there.
+                                // pointer; on the thumb it picks it up as it is.
                                 if (self.mouse-y < thumb.y
                                     || self.mouse-y > thumb.y + thumb.height) {
                                     root.scroll-thumb-to(self.mouse-y - thumb.height / 2);
@@ -3455,22 +2764,11 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // --------------------------------------------------------------
-            // The preview panel.
-            //
-            // **Three hundred and eighty pixels, and shut by default.** Most
-            // of what a list like this is used for is finding a path and
-            // getting out of the way, and a panel that is always there costs
-            // the list a third of its width to say something about one row.
-            // The width and the bounds are `scour_ui::preview`'s, so the
-            // browser page's panel is this one.
-            // --------------------------------------------------------------
+            // The preview panel: 380px, shut by default, and the width and the
+            // bounds are `scour_ui::preview`'s so every face agrees.
             if root.peeking: Rectangle {
-                // **Min and max, not `width`.** The list beside it is five
-                // columns of fixed width, so its own minimum is wider than the
-                // window: a `width` here is a preference the layout is free to
-                // squeeze, and it squeezed this to fifty pixels. A minimum is
-                // not a preference.
+                // Min and max, not `width`: the list's own minimum is wider than
+                // the window, and a `width` is a preference the layout squeezes.
                 min-width: 380px;
                 max-width: 380px;
                 horizontal-stretch: 0;
@@ -3487,10 +2785,8 @@ export component MainWindow inherits Window {
                     padding-left: 1px;
                     spacing: 0px;
 
-                    // The name, and the way out. The name **wraps rather than
-                    // truncating**: the end of a name is what tells
-                    // `rapor-v2.pdf` from `rapor-v3.pdf`, and a header has room
-                    // for two lines. The page learned this the same way.
+                    // The name, and the way out. Wrapped rather than truncated:
+                    // the end of a name is what tells two versions apart.
                     Rectangle {
                         height: 46px;
                         background: Theme.panel-2;
@@ -3541,9 +2837,8 @@ export component MainWindow inherits Window {
                             x: 12px;
                             y: 12px;
                             source: root.peek-shot;
-                            // The whole picture: a preview is being looked at
-                            // to decide whether this is the right file, and a
-                            // crop can remove the part that answers it.
+                            // The whole picture: a crop can remove the part being
+                            // looked for.
                             image-fit: contain;
                         }
 
@@ -3576,15 +2871,9 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    // The facts. Below the picture rather than beside it,
-                    // because a fact is read after the thing it is about.
-                    // **Its own height, taken from what is in it.** A path
-                    // wraps to four lines as readily as one, and a box sized
-                    // by counting rows cut the last fact off. Asking the
-                    // layout inside for its height is the way — asking a named
-                    // child for `preferred-height` from its own parent is a
-                    // circle, and Slint's answer to a circle is a panel that
-                    // does not draw at all.
+                    // The facts, below the picture. Its own height, because a
+                    // path wraps to four lines as readily as one; asking a named
+                    // child for `preferred-height` from its parent is a circle.
                     Rectangle {
                         vertical-stretch: 0;
                         background: Theme.panel;
@@ -3626,13 +2915,8 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ------------------------------------------------------------------
-        // What is selected, and what can be done with it.
-        //
-        // Absent when nothing is: a bar that is always there is a strip of
-        // window spent on a question nobody asked. The page puts it in the
-        // same place and words it the same way.
-        // ------------------------------------------------------------------
+        // What is selected, and what can be done with it. Absent when nothing
+        // is selected.
         if root.picked > 0 && root.tab != "report": Rectangle {
             height: 38px;
             background: Theme.panel-2;
@@ -3642,10 +2926,8 @@ export component MainWindow inherits Window {
                 background: Theme.line;
             }
 
-            // **What is selected on the left, what can be done with it on the
-            // right.** Not packed together at one end: the count is read and
-            // the buttons are aimed at, and a reader's eye should not have to
-            // travel past three buttons to find out how many.
+            // The count on the left, the buttons on the right: one is read,
+            // the others are aimed at.
             HorizontalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
@@ -3712,15 +2994,9 @@ export component MainWindow inherits Window {
             }
         }
 
-        // ------------------------------------------------------------------
-        // The time ribbon. 107px, off the page.
-        //
-        // Twenty-four bars on a logarithmic scale, so the last day, the last
-        // week and the last year all have room on one screen — a linear one
-        // spends twenty-three of them on "older than a month", which is the
-        // part nobody is looking for. The edges come from `scour-ui`, which is
-        // also where the page gets them.
-        // ------------------------------------------------------------------
+        // The time ribbon. Twenty-four bars on a logarithmic scale, so the last
+        // day, week and year all have room on one screen. The edges are
+        // `scour_ui::bar_edges`, shared with every other face.
         Rectangle {
             visible: root.tab != "report";
             min-height: root.tab == "report" ? 0px : 107px;
@@ -3760,9 +3036,7 @@ export component MainWindow inherits Window {
 
                 Rectangle { height: 4px; }
 
-                // **The bars take what is left, the axis keeps its line.**
-                // Fixed at 42px they filled the ribbon and pushed the axis out
-                // of it — drawn, laid out, and clipped by the height above.
+                // The bars take what is left; the axis keeps its line.
                 HorizontalLayout {
                     spacing: 3px;
                     alignment: stretch;
@@ -3770,12 +3044,9 @@ export component MainWindow inherits Window {
                     for b[i] in root.bars: Rectangle {
                         horizontal-stretch: 1;
 
-                        // A bar is a filter, the same as a rail row: clicking
-                        // it adds a `dm:` term to the *text*, so what is on
-                        // screen is always exactly what the query says. The
-                        // oldest bar has no upper bound — `dm:730d` would
-                        // select everything — so it does nothing and says so
-                        // by not lighting up.
+                        // A bar is a filter: clicking adds a `dm:` term to the
+                        // text. The oldest has no upper bound, so it does
+                        // nothing and says so by not lighting up.
                         bartouch := TouchArea {
                             mouse-cursor: b.days > 0 ? pointer : default;
                             clicked => {
@@ -3784,35 +3055,29 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
-                        // Bottom-aligned: the bars grow up from a shared floor,
-                        // which is what makes twenty-four of them readable as
-                        // one shape rather than twenty-four rectangles.
+                        // Bottom-aligned, so twenty-four bars read as one shape.
                         VerticalLayout {
                             alignment: end;
                             Rectangle {
                                 // A fixed ceiling, not a share of the parent:
-                                // asking the row how tall it is while the row
-                                // is sized by its tallest bar is a loop Slint
-                                // rejects at build time. 36px is what leaves
-                                // the axis its line inside the page's 107.
+                                // that is a binding loop. 36px leaves the axis
+                                // its line inside the ribbon's 107.
                                 height: b.count == 0 ? 2px
                                     : max(4px, 36px * b.count / max(1, root.bar-peak));
                                 background: b.count == 0 ? Theme.line
                                     : b.band == 0 ? Theme.t0 : b.band == 1 ? Theme.t1
                                     : b.band == 2 ? Theme.t2 : b.band == 3 ? Theme.t3
                                     : b.band == 4 ? Theme.t4 : Theme.t5;
-                                // Lighter under the pointer, so a bar that can
-                                // be pressed says so before it is.
+                                // Lighter under the pointer: a bar that can be
+                                // pressed says so before it is.
                                 opacity: bartouch.has-hover && b.days > 0 ? 0.75 : 1.0;
                             }
                         }
                     }
                 }
 
-                // The axis. Five marks rather than twenty-four: the scale is
-                // logarithmic and labelling every bar would be a wall of
-                // numbers, where the question is only ever "how far back am I
-                // looking".
+                // The axis. Five marks rather than twenty-four: the question is
+                // only ever "how far back am I looking".
                 HorizontalLayout {
                     padding-top: 3px;
 
@@ -3858,18 +3123,10 @@ export component MainWindow inherits Window {
 
     }
 
-        // ------------------------------------------------------------------
-        // **What was searched before**, under the box it was typed in.
-        //
-        // Drawn here rather than inside the query row: a list has to hang
-        // *over* what is under it, and that row is one cell of a layout with
-        // a height of its own. Placed at the field's own left edge — the mark
-        // beside it has no fixed width, so the figure is taken from the thing
-        // rather than written down twice.
-        // ------------------------------------------------------------------
-        // Pressing anywhere else puts it away. A list that will not go away
-        // is worse than one that never opened; behind the list itself, so a
-        // press on a line still reaches the line.
+        // What was searched before, hanging over what is under the query row —
+        // which is why it is drawn here and not inside that row. Placed at the
+        // field's own left edge, since the mark beside it has no fixed width.
+        // This area puts it away; behind the list, so a press on a line lands.
         if root.past-open: TouchArea {
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down) {
@@ -3882,9 +3139,8 @@ export component MainWindow inherits Window {
             x: 20px + mark.width + 12px;
             y: 55px;
             width: min(520px, parent.width - self.x - 20px);
-            // Sized to what is in it. The cap is on the *list* rather than
-            // on the box — a layout gives its parent a minimum height, so a
-            // shorter box would simply be overflowed by its own rows.
+            // Sized to what is in it: a layout gives its parent a minimum
+            // height, so a shorter box would be overflowed by its own rows.
             height: root.past.length * 26px + 8px;
             background: Theme.panel-2;
             border-width: 1px;
@@ -3925,11 +3181,8 @@ export component MainWindow inherits Window {
 
         }
 
-        // ------------------------------------------------------------------
-        // The panels. Drawn last so they are over the list, and only one of
-        // them is ever open — a second card behind the first is a card nobody
-        // can reach.
-        // ------------------------------------------------------------------
+        // The panels. Drawn last so they are over the list, and only ever one
+        // open at a time.
         Sheet {
             title: root.help-title;
             open: root.panel == "help";
@@ -4013,10 +3266,8 @@ export component MainWindow inherits Window {
             dismissed => { root.panel = ""; }
             room-w: root.width - 40px;
             room-h: root.height - 40px;
-            // **The field takes the focus when the panel opens.** Clicking it
-            // does not: the window hands focus to the query line whenever it
-            // is activated, so a click that both raises the window and lands
-            // in the field ends with the caret back in the query.
+            // The field takes the focus when the panel opens: clicking it does
+            // not, because activating the window hands focus to the query line.
             changed open => {
                 if (self.open) {
                     fresh.focus();
@@ -4025,22 +3276,14 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // **No scroller here: `Sheet` is one already.** This panel had
-            // its own, which put a `ScrollView` inside a `ScrollView` — and
-            // the outer one sizes itself from what its child asks for, while
-            // a scroller by design asks for almost nothing. So the panel
-            // opened as a box four lines tall with the rules inside it out of
-            // reach. The same collapse the `Sheet` comment describes, one
-            // level further in.
+            // No scroller here: `Sheet` is one, and a `ScrollView` inside a
+            // `ScrollView` collapses the outer one to four lines.
             VerticalLayout {
                 spacing: 4px;
                 alignment: start;
 
-                // **Three groups, because they are three different kinds
-                // of thing** — what somebody added here, what a file says,
-                // and what the program itself skips — and only the first
-                // can be deleted. A flat list said none of that, and there
-                // was no way to tell a rule in force from one switched off.
+                // Three groups: what somebody added here, what a file says, and
+                // what the program skips. Only the first can be deleted.
                 Text {
                     text: root.rules-added-title;
                     color: Theme.ink;
@@ -4068,11 +3311,8 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                // A rule is added as a *name* whatever it looks like,
-                // because that is the rule people mean: matched wherever
-                // it appears. One that starts with a slash is a path, and
-                // guessing between them by anything subtler would be a
-                // rule nobody was told about.
+                // A rule is added as a name unless it starts with a slash, in
+                // which case it is a path. Nothing subtler is guessed at.
                 Rectangle { height: 4px; }
 
                 HorizontalLayout {
@@ -4112,10 +3352,8 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        // The placeholder sits *under* the field rather
-                        // than beside it: a layout owns its children's
-                        // positions, and this one has to start where the
-                        // text does.
+                        // Under the field, not beside it: a layout owns its
+                        // children's positions, and this starts where the text does.
                         if fresh.text == "": Text {
                             text: root.rules-hint;
                             color: Theme.ink-3;
@@ -4189,12 +3427,8 @@ export component MainWindow inherits Window {
         }
 
     // --- the question that comes before a change --------------------------
-    //
-    // Same shape as the menu overlay above and for the same reasons: last
-    // child so it is on top, a sheet under it so the click that answers does
-    // not also land on the list. Unlike the menu, this one dims what is behind
-    // it — the reader is being asked to stop, and a page that carries on
-    // looking normal underneath does not say so.
+    // Same shape as the menu overlay: a full-window sheet so the click that
+    // answers does not also land on the list. This one dims what is behind it.
     if root.ask-open: Rectangle {
         x: 0;
         y: 0;
@@ -4203,8 +3437,7 @@ export component MainWindow inherits Window {
         background: #00000066;
 
         TouchArea {
-            // Clicking away is "no". The safe answer is the one a stray press
-            // lands on, which is the whole reason to have a default at all.
+            // Clicking away is "no": a stray press lands on the safe answer.
             clicked => {
                 root.ask-open = false;
                 root.ask-answer(false);
@@ -4223,8 +3456,7 @@ export component MainWindow inherits Window {
             drop-shadow-blur: 26px;
             drop-shadow-color: #00000080;
 
-            // Swallows the click so it does not reach the sheet behind and
-            // answer "no" while somebody is reading.
+            // Swallows the click, or the sheet behind answers "no".
             TouchArea { }
 
             ask-sheet := VerticalLayout {
@@ -4263,8 +3495,7 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             selection-background-color: Theme.selection;
                             selection-foreground-color: Theme.ink;
-                            // Enter is yes, which is what a text box in a
-                            // question means everywhere else.
+                            // Enter is yes.
                             accepted => {
                                 root.ask-open = false;
                                 root.ask-answer(true);
@@ -4328,15 +3559,9 @@ export component MainWindow inherits Window {
     }
 
     // --- the right-click menu --------------------------------------------
-    //
-    // **Last child of the window, because that is what puts it on top.** Slint
-    // draws siblings in the order they are declared and there is no z-index to
-    // reach for; a menu declared beside the list is a menu behind it.
-    //
-    // The sheet under it is not decoration either. Without something that
-    // takes the whole window, the click that dismisses the menu also lands on
-    // whatever is beneath — a row gets selected, a heading re-sorts, and the
-    // menu closes as though the press had done two things.
+    // Last child of the window, which is what puts it on top: Slint draws
+    // siblings in declaration order and has no z-index. The full-window sheet
+    // under it stops the dismissing click reaching a row or a heading.
     if root.menu-open: Rectangle {
         x: 0;
         y: 0;
@@ -4370,10 +3595,8 @@ export component MainWindow inherits Window {
                 padding: 5px;
 
                 for it[i] in root.menu: VerticalLayout {
-                    // A rule where the group changes. Seven pixels of space
-                    // with a hairline through the middle of it — the gap is
-                    // what a hand travelling down the list stops at, and the
-                    // one above the wastebasket is why the rules are here.
+                    // A rule where the group changes: the gap is what a hand
+                    // travelling down the list stops at.
                     if it.rule: Rectangle {
                         height: 7px;
                         Rectangle {
@@ -4397,11 +3620,8 @@ export component MainWindow inherits Window {
                             padding-right: 10px;
                             spacing: 12px;
 
-                            // **A lane for the tick, kept even when it is
-                            // empty.** The column picker is a list of
-                            // switches, and switches whose labels shuffle
-                            // sideways as they are turned on are switches
-                            // nobody can aim at twice.
+                            // A lane for the tick, kept even when empty, so a
+                            // label does not shuffle sideways when switched on.
                             if root.menu-columns: Text {
                                 text: it.on ? "✓" : "";
                                 color: Theme.q-key;
@@ -4421,8 +3641,8 @@ export component MainWindow inherits Window {
                                 overflow: elide;
                             }
 
-                            // The shortcut, pushed right and quieter than the
-                            // label: it is there to be learned, not read.
+                            // The shortcut, quieter than the label: it is there
+                            // to be learned, not read.
                             Text {
                                 text: it.key;
                                 color: Theme.ink-3;
@@ -4433,10 +3653,8 @@ export component MainWindow inherits Window {
                             }
                         }
 
-                        // **Declared after the text, so it is above it.** A
-                        // `Text` does not take pointer events, but the order is
-                        // the thing that decides here and leaving it to luck is
-                        // how the rules panel lost its clicks once already.
+                        // Declared after the text, so it is above it: order is
+                        // what decides which element takes the press.
                         hit := TouchArea {
                             clicked => {
                                 root.menu-open = false;

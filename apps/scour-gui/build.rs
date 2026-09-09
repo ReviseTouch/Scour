@@ -3,27 +3,11 @@ fn main() {
     old_glibc_math();
 }
 
-/// Ask libm for the maths it has always had, not the maths it added last month.
+/// Pin `acosf`/`atan2f` to GLIBC_2.2.5 so the window runs on older glibc.
 ///
-/// **This is what makes the window runnable on somebody else's computer.**
-/// Two calls decide it: Slint reaches `f32::acos` and `f32::atan2`, which are
-/// `acosf` and `atan2f` in libm — and glibc 2.43 added a second, correctly
-/// rounded version of each. The linker binds an unversioned reference to the
-/// *newest* version it can see, so a binary built on a machine with glibc 2.43
-/// demands 2.43 wherever it is copied. Measured on an Ubuntu 24.04 guest
-/// (glibc 2.39): `scour`, `scourd`, `scour-tui`, `scour-web` and `scour-watch`
-/// all ran; the window alone died with
-/// `libm.so.6: version 'GLIBC_2.43' not found`. Two symbols out of thousands,
-/// and they cost the whole desktop face.
-///
-/// So the reference is pinned to the version that has been in every x86-64
-/// glibc since 2002. The old and new implementations differ in the last bit of
-/// a rounding, which is a distinction a mouse cursor's angle does not have.
-///
-/// A wrapper rather than a bare `.symver` on the import, because the calls
-/// come from Slint's object files rather than this one: a definition here wins
-/// for every reference in the executable, and forwards. `-fno-builtin` so the
-/// compiler does not recognise the name and turn the forward into a self-call.
+/// Slint reaches `f32::acos`/`f32::atan2`; the linker would otherwise bind them
+/// to the correctly rounded versions glibc 2.43 added. A wrapper rather than a
+/// `.symver` on the import, because the calls come from Slint's object files.
 fn old_glibc_math() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
         || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu")
@@ -53,10 +37,7 @@ float atan2f(float y, float x) { return scour_atan2f(y, x); }
         .arg("-o")
         .arg(&obj)
         .status();
-    // **A missing compiler is not a build failure.** Everything here is about
-    // where the result can be copied to; a machine building for itself does
-    // not need it, and refusing to build without a C compiler would be a new
-    // requirement bought for nothing.
+    // A missing C compiler only costs portability, not this build.
     match run {
         Ok(s) if s.success() => {}
         _ => {

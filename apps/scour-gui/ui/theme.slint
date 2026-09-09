@@ -1,23 +1,10 @@
-// The palette, in one place — and that place is `crates/scour-ui`.
-//
-// **The colours are not written here any more.** They were, and the same
-// colours were written in `page.html`, and the two staying equal was somebody
-// remembering to. That had already failed: the light scheme's focus ring said
-// `#2f6ba3` here and `#4a9eff` there, and nothing anywhere could tell.
-//
-// `main.rs` fills the two schemes at start-up from `scour_ui::DARK` and
-// `scour_ui::LIGHT`. This file keeps what is genuinely Slint's: which scheme
-// applies, and the names the rest of the window uses.
-//
-// Slint receives the platform colour scheme from its window backend. Binding
-// to that avoids a synchronous `gsettings` process at start and keeps an open
-// window in step when the desktop changes — which is also why the *choice*
-// stays here rather than being made in Rust and pushed in.
+// Theme names for the window. `main.rs` fills both schemes at start-up from
+// `scour_ui::DARK` and `scour_ui::LIGHT`; which one applies is bound here to
+// the backend's colour scheme, so an open window follows the desktop.
 
 import { Palette } from "std-widgets.slint";
 
-// One scheme's worth of colour. Mirrors `scour_ui::Palette`; the generated
-// Rust struct is what `main.rs` builds.
+// One scheme's worth of colour. Field-for-field with `scour_ui::Palette`.
 export struct Scheme {
     ground: brush,
     panel: brush,
@@ -52,39 +39,30 @@ export global Theme {
     in property <Scheme> dark-scheme;
     in property <Scheme> light-scheme;
 
-    // The one place the choice is made. Everything below reads through it, so
-    // a window already open re-colours itself when the desktop switches.
+    // The one place the choice is made; everything below reads through it.
     out property <Scheme> c: dark ? dark-scheme : light-scheme;
 
-    // --- surfaces ---------------------------------------------------------
     out property <brush> ground: c.ground;
     out property <brush> panel: c.panel;
     out property <brush> panel-2: c.panel-2;
     out property <brush> line: c.line;
     out property <brush> line-soft: c.line-soft;
 
-    // --- text -------------------------------------------------------------
     out property <brush> ink: c.ink;
     out property <brush> ink-2: c.ink-2;
     out property <brush> ink-3: c.ink-3;
 
-    // --- accents ----------------------------------------------------------
     out property <brush> mark: c.mark;
     out property <brush> mark-ink: c.mark-ink;
     out property <brush> focus: c.focus;
     out property <brush> hover: c.hover;
-    // The one item in a menu that changes something. Not an error colour:
-    // nothing has gone wrong, the reader is being told which item it is.
+    // Marks the one menu item that changes something. Not an error colour.
     out property <brush> danger: c.danger;
-    // What a selected row is tinted with. **`pick`, and translucent**, which is
-    // the browser's answer: a row can be selected *and* hold a match at once,
-    // and an opaque fill would bury the match wash under it.
+    // Selected-row tint, translucent: an opaque fill would bury the match wash.
     out property <brush> selection: c.pick;
 
     // --- age, oldest last -------------------------------------------------
-    //
-    // Six steps rather than a gradient, because the question they answer is
-    // ordinal: is this from today, this week, or before I started.
+    // Six ordinal steps, not a gradient: today, this week, or long ago.
     out property <brush> t0: c.t0;
     out property <brush> t1: c.t1;
     out property <brush> t2: c.t2;
@@ -93,9 +71,6 @@ export global Theme {
     out property <brush> t5: c.t5;
 
     // --- the query line ---------------------------------------------------
-    //
-    // Five roles and no more. Two of them say *this is not what you think it
-    // is*, which is the only reason the colouring earns its place.
     out property <brush> q-key: c.q-key;
     out property <brush> q-val: c.q-val;
     out property <brush> q-glob: c.q-glob;
@@ -104,10 +79,7 @@ export global Theme {
     out property <brush> q-bad: c.q-bad;
 
     // --- metrics ----------------------------------------------------------
-    //
-    // Filled from `scour_ui::METRICS` for the same reason the colours are: the
-    // row pitch is what both virtual lists are built on, and two windows
-    // disagreeing about it is two windows scrolling differently.
+    // Filled from `scour_ui::METRICS`; both virtual lists are built on the pitch.
     in property <length> unit: 4px;
     in property <length> row-height: 30px;
     in property <length> radius: 6px;
@@ -116,7 +88,6 @@ export global Theme {
 export global Fonts {
     in property <string> mono: "monospace";
     in property <length> size: 13px;
-    // Not shared: a second text size is this window's own typography, and the
-    // page has several rather than one.
+    // Not shared with the other faces: this window's own second text size.
     out property <length> small: 11px;
 }

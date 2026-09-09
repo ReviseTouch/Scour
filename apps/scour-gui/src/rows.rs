@@ -1,32 +1,19 @@
 //! Turning a reply into what the window draws.
 //!
-//! Everything here is formatting, and it is all on this side of the language
-//! boundary on purpose. A `.slint` file that formats a size has to know about
-//! binary units; one that computes a highlight has to fold Turkish text. Both
-//! would be a second implementation of something that
-//! already exists in `scour-core`, and the two would drift.
+//! All formatting stays on this side of the language boundary: a `.slint` file
+//! that sized bytes or folded Turkish text would be a second copy of what
+//! `scour-core` already has.
 
-// `Cell` here is the interior-mutability one; the table's is `crate::Cell`,
-// and the two meet in this file more than anywhere else.
+// `Cell` here is the interior-mutability one; the table's is `crate::Cell`.
 use std::cell::{Cell as Flag, RefCell};
 
 use scour_core::{Hit, Kind, text::Folder};
 
 use crate::{Cell, Row};
 
-/// The picture a row has when it has none.
-///
-/// **Not `Image::default()`, and this was expensive.** Slint's `PartialEq` for
-/// an image has no arm for two empty ones — `ImageInner::None` against
-/// `ImageInner::None` falls through to `_ => false` — so a row whose picture
-/// was the default compared unequal *to itself*. Every row of every frame then
-/// looked like a row that had changed, and an idle window with a list on
-/// screen went from 25% of a core to 49%.
-///
-/// One pixel of nothing, made once and cloned into every row, is equal to
-/// itself: the clone shares the buffer, and that is what the comparison reads.
-/// Nothing draws it — [`crate::Row`]'s `shot` decides what is drawn — it only
-/// has to be a value that can be compared.
+/// The picture a row has when it has none. Not `Image::default()`: two empty
+/// Slint images compare unequal, so every row looks changed every frame and an
+/// idle window goes from 25% to 49% of a core. One shared pixel equals itself.
 pub fn blank() -> slint::Image {
     thread_local! {
         static BLANK: slint::Image = {
@@ -39,20 +26,14 @@ pub fn blank() -> slint::Image {
 }
 
 /// Which of the six age bands a row falls in — the stripe down its left.
-/// [`scour_ui::format::band`] is the one that decides; this is the cast the
-/// generated Slint struct wants.
+/// The cast the generated Slint struct wants; [`scour_ui::format::band`] decides.
 pub fn band(now: i64, mtime: i64) -> i32 {
     scour_ui::format::band(now, mtime) as i32
 }
 
 /// A name cut into what precedes the match, the match, and what follows.
-///
-/// Split here rather than in the interface, and not only because Slint has no
-/// substring: the search runs on **folded** text, and Turkish folding changes
-/// byte lengths — `İ` is two bytes and folds to one — so an offset found in
-/// folded text cannot be applied to the original spelling. `fold_indexed` is
-/// the function that maps it back, it lives in `scour-core`, and its doc
-/// comment says this is what it is for.
+/// The search runs on folded text and Turkish folding changes byte lengths, so
+/// an offset goes back through `fold_indexed` before it touches the original.
 pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str, &'a str) {
     let folder = scour_core::text::DefaultFolder;
     let (folded, back) = folder.fold_indexed(name);
@@ -63,8 +44,7 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
             continue;
         }
         if let Some(at) = folded.find(&needle) {
-            // The earliest match, and the longest among those: a query of two
-            // terms should light up the one the eye lands on first.
+            // The earliest match, longest among ties: the eye lands on it first.
             let end = at + needle.len();
             let cand = (at, end);
             if best.is_none_or(|(b_at, b_end)| (at, end - at) < (b_at, b_end - b_at)) {
@@ -75,9 +55,8 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
     let Some((from, to)) = best else {
         return (name, "", "");
     };
-    // Folded byte offset → the same place in the original spelling. Clamped
-    // and pushed to a character boundary, because a slice that lands mid
-    // character is a panic and a name is arbitrary bytes from a disk.
+    // Folded offset back to the original spelling, pushed to a char boundary:
+    // a name is arbitrary bytes from a disk and a mid-character slice panics.
     let mut a = (back.get(from).copied().unwrap_or(0) as usize).min(name.len());
     let mut b = (back.get(to).copied().unwrap_or(name.len() as u32) as usize).min(name.len());
     while a > 0 && !name.is_char_boundary(a) {
@@ -92,9 +71,8 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
     (&name[..a], &name[a..b], &name[b..])
 }
 
-/// One hit, formatted.
 /// The colour a kind's icon is drawn in, or the window's quiet ink when the
-/// kind has none — a plain file is not a category worth a hue.
+/// kind has none.
 fn tint_of(token: &str) -> slint::Brush {
     match scour_ui::kind_colour(token) {
         Some(c) => {
@@ -108,18 +86,14 @@ fn tint_of(token: &str) -> slint::Brush {
     }
 }
 
-/// What a row needs that is not on the row: which columns, and what the
-/// machine calls things.
-///
-/// **Read once per page, not once per cell.** Translating `Modified` and
-/// asking the mount table whether a volume records reads are both answers that
-/// are the same for every row in a reply, and a page is two hundred rows.
+/// What a row needs that is not on the row: which columns, and what the machine
+/// calls things. Built once per page, not once per cell — every answer in it is
+/// the same for all two hundred rows of a reply.
 pub struct Shape<'a> {
     /// The chosen columns, in the order they are shown.
     pub columns: &'a [&'static scour_ui::Column],
     /// Where volumes are and whether they record reads, for the `Accessed`
-    /// column. Empty is "nothing known", which shows the timestamp rather
-    /// than a dash: a guess in the confident direction is the wrong one here.
+    /// column. Empty means nothing is known, and shows the timestamp.
     pub mounts: &'a [scour_places::Mount],
     /// The kind's own word, already translated.
     pub kind: &'a str,
@@ -129,11 +103,8 @@ pub struct Shape<'a> {
 }
 
 /// Does this path sit on a volume that has stopped recording reads?
-///
-/// **The deepest mount wins**, which is the only rule that gets `/mnt/depo`
-/// right when `/` is mounted too. A `noatime` volume's access times are frozen
-/// at whenever the file was made, so the column would be showing a number that
-/// means nothing at all — the page says so with a dash and so does this.
+/// The deepest mount wins, which is what gets `/mnt/depo` right when `/` is
+/// mounted too. A `noatime` volume's access times mean nothing, so: a dash.
 fn frozen_atime(path: &str, mounts: &[scour_places::Mount]) -> bool {
     let mut owner: Option<&scour_places::Mount> = None;
     for m in mounts {
@@ -145,11 +116,8 @@ fn frozen_atime(path: &str, mounts: &[scour_places::Mount]) -> bool {
     owner.is_some_and(|m| !m.reads)
 }
 
-/// One cell, for one column, of one row.
-///
-/// Everything the table can show is written out here — the language, the
-/// decimal mark and the clock's offset all live on this side — and what goes
-/// back is text plus the little that decides how to *draw* it.
+/// One cell, for one column, of one row. The language, the decimal mark and the
+/// clock's offset are all applied here; what goes back is text and how to draw it.
 fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
     let text = |t: String| Cell {
         id: id.into(),
@@ -202,12 +170,8 @@ fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
                 when(h.meta.atime)
             }
         }
-        // **A folder's size is what is under it, and it is marked.** The
-        // column was blank for folders, which is what every file manager does
-        // and what makes "which of these is eating the disk" a question you
-        // have to leave the list to answer. The `~` is not decoration: the
-        // number is the size of what *this index holds* under that folder,
-        // and the scan rules leave things out.
+        // A folder's size is what the index holds under it, and the `~` says so:
+        // the scan rules leave things out.
         "size" => num(match (h.is_dir, h.under.as_ref()) {
             (true, Some(u)) => format!("~{}", scour_ui::format::size(u.disk, decimal())),
             (true, None) => String::new(),
@@ -222,8 +186,7 @@ fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
         "perm" => mono(scour_core::mode_string(h.meta.mode)),
         "user" => mono(scour_core::owner_name(scour_core::Owner::User, h.meta.uid)),
         "group" => mono(scour_core::owner_name(scour_core::Owner::Group, h.meta.gid)),
-        // A column the table offers and this does not write is a bug, but it
-        // is not a reason to draw nothing where a row should be.
+        // An unwritten column is a bug, but not a reason to lose the row.
         _ => text(String::new()),
     }
 }
@@ -244,9 +207,7 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         is_dir: h.is_dir,
         age: band(shape.now, h.meta.mtime),
         picked: false,
-        // Empty, and filled in after the row is on screen — see
-        // [`Rows::look_for_pictures`]. A page is two hundred rows and the eye
-        // is on thirty of them.
+        // Empty; filled in after the row is on screen by `look_for_pictures`.
         thumb: blank(),
         shot: false,
     }
@@ -269,9 +230,8 @@ mod tests {
 
     #[test]
     fn the_split_lands_on_the_original_spelling_not_the_folded_one() {
-        // `Değişiklik` is ten characters and thirteen bytes. An offset taken
-        // from the folded text and used unchanged would cut somewhere else —
-        // and could cut a character in half, which is a panic.
+        // `Değişiklik` is ten characters and thirteen bytes: a folded offset
+        // used unchanged cuts elsewhere, possibly mid-character.
         let (pre, hit, post) = split_at_match("Değişiklik Raporu.txt", &["raporu".into()]);
         assert_eq!(pre, "Değişiklik ");
         assert_eq!(hit, "Raporu");
@@ -309,8 +269,7 @@ mod tests {
         assert_eq!(format!("{pre}{hit}{post}"), odd);
     }
 
-    /// The bands themselves are `scour-ui`'s and tested there; this is the
-    /// cast, which is the part that could quietly go wrong here.
+    /// The bands are `scour-ui`'s and tested there; this covers the cast.
     #[test]
     fn the_band_a_row_carries_is_the_shared_one() {
         let now = 1_800_000_000;
@@ -323,16 +282,11 @@ mod tests {
 }
 
 /// Rows in one page, and the size of every request the list makes.
-///
-/// [`scour_page`] owns the number and the rules that go with it; this is the
-/// name this window has always used for it.
+/// [`scour_page`] owns the number and the rules that go with it.
 pub use scour_page::SPAN;
 
-/// A row and what it weighs.
-///
-/// The column holds `1.30 MiB`; a selection has to add them up, and adding up
-/// strings is not a thing. Beside the row rather than on it because Slint's
-/// numbers are 32-bit and a file is not.
+/// A row and what it weighs. The byte count sits beside the row rather than on
+/// it because Slint's numbers are 32-bit and a file's size is not.
 pub struct Kept {
     pub row: Row,
     pub bytes: i64,
@@ -340,14 +294,8 @@ pub struct Kept {
     pub pic: Pic,
 }
 
-/// What is known about a row's thumbnail.
-///
-/// **The memory of "already looked" lives on the row, not in a set beside the
-/// list.** A window that stats the visible rows on every tick is four hundred
-/// syscalls a second asking a question whose answer does not change; a set of
-/// paths that remembers the answer has to be bounded, and then it is a cache
-/// with an eviction policy to get wrong. A page carries this and it dies with
-/// the page, which is exactly the lifetime the answer is good for.
+/// What is known about a row's thumbnail. Kept on the row, so "already looked"
+/// dies with the page and needs no bounded cache beside the list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pic {
     /// Nobody has looked yet.
@@ -373,9 +321,8 @@ pub struct Pick {
 impl Pick {
     /// The directory it sits in — what "open their folders" opens.
     pub fn folder(&self) -> &str {
-        // `.` where the shared one says nothing, because this answer is handed
-        // to a file manager: a name with no path in it is in the working
-        // directory, and an empty string is not somewhere to open.
+        // `.` where the shared one says nothing: this goes to a file manager,
+        // and an empty string is not somewhere to open.
         match scour_ui::path::folder(&self.path) {
             "" => ".",
             up => up,
@@ -383,38 +330,11 @@ impl Pick {
     }
 }
 
-/// The list, as a model the view pulls from rather than a vector it is handed.
-///
-/// **Why this shape.** A `VecModel` holds every row the view can show, so a
-/// window over five million results has to be a sliding window — and then the
-/// scrollbar measures the window, scrolling past its edge shows blank, and
-/// every fetch has to move the viewport back to where the eye was.
-///
-/// `Model` inverts it: `row_count` is the real total, so the view sizes itself
-/// and its scrollbar correctly and asks for exactly the rows it is about to
-/// draw. `row_data` answers from the pages in hand, and a row that has not
-/// arrived is drawn empty for one frame rather than left as a hole.
-///
-/// Taken from `Hukuk-Dosyalar`'s `RowsModel`, which does the same thing over a
-/// store that is already in memory — and this is as close to that as a list
-/// whose rows live in another process can get. What that one never does is
-/// wait, so this one keeps [`scour_page::KEPT`] pages and asks for the next one before
-/// anybody reaches it: waiting is then only for somewhere nobody has been.
-///
-/// ## What the notifications have to be
-///
-/// This model is refreshed while somebody is looking at it — every time the
-/// index moves, and every time a page arrives — and **how** it says so decides
-/// whether the list stays still. [`slint::ModelNotify::reset`] means *the
-/// whole thing changed*: the view throws its elements away, rebuilds them, and
-/// re-clamps a viewport it has just re-measured. Doing that on every reply is
-/// what made scrolling jump, flash, and land back at the top.
-///
-/// So a reset happens for one reason only — the list got longer or shorter, so
-/// the view really does have to re-measure. A page landing in a list of
-/// unchanged length is [`slint::ModelNotify::row_changed`] over the rows that
-/// actually differ, which leaves the viewport, the scrollbar and every element
-/// outside those rows exactly where they were.
+/// The list, as a model the view pulls from rather than a vector it is handed:
+/// `row_count` is the real total, so the view sizes its scrollbar and asks only
+/// for the rows it draws, and [`scour_page::KEPT`] pages are kept. A reset is
+/// only ever for a length change — a page landing in a list of the same length
+/// is `row_changed` over the rows that differ, which leaves the viewport still.
 pub struct Rows {
     /// The pages, and every rule about which ones to have. See [`scour_page`].
     pages: RefCell<scour_page::Pages<Kept>>,
@@ -423,22 +343,11 @@ pub struct Rows {
     touched: Flag<usize>,
     /// A row the view asked for and this could not answer.
     want: Flag<Option<usize>>,
-    /// How many times the view has been told the list changed length.
-    ///
-    /// Kept because it is the number the scrolling bug was made of: it should
-    /// move when the result's length changes and at no other time.
+    /// How many times the view has been told the list changed length. Moves on a
+    /// length change and at no other time.
     resets: Flag<u64>,
-    /// How many rows in hand nobody has looked for a picture for.
-    ///
-    /// **So that the ten-a-second sweep can decide not to run.** Once every
-    /// row on screen has been settled there is nothing for it to find, and
-    /// walking the visible range to learn that is work done forty times a
-    /// second for an answer that has not changed.
-    ///
-    /// It is allowed to be too high and never too low: a page dropped from the
-    /// window takes its unlooked-at rows with it and this does not hear about
-    /// it, which costs one sweep that finds nothing. Too low would lose a
-    /// picture.
+    /// How many rows in hand nobody has looked for a picture for; zero lets the
+    /// sweep skip a tick. May be too high, never too low: too low loses a picture.
     unlooked: Flag<usize>,
     notify: slint::ModelNotify,
 }
@@ -463,25 +372,13 @@ impl Rows {
     }
 
     /// Hand over a page: which one, its rows, and how long the whole result is.
-    ///
-    /// Returns whether anything in it is new, which is what arms the arrival
-    /// wash.
+    /// Returns whether anything in it is new, which arms the arrival wash.
     pub fn put(&self, page: usize, mut rows: Vec<Row>, bytes: Vec<i64>, total: usize) -> bool {
-        // **New means new *here*.** A row is an arrival when this page has
-        // been read before and did not have it; a page nobody had read yet has
-        // no arrivals in it at all.
-        //
-        // What it was: every row whose path was not in the *previous answer*,
-        // whichever page that was for. So dragging the scrollbar washed the
-        // whole list orange at every stop — two hundred files that had not
-        // changed since 2019, announcing themselves as changes.
+        // New means new *here*: a row is an arrival only when this page has been
+        // read before and did not hold it.
         let mut arrived = false;
-        // **What this page already knew about its rows, kept by path.** Two
-        // things survive a refetch: whether a row is an arrival, and the
-        // picture it was drawn with. The second is not a nicety — the list is
-        // live, so during a scan a page comes back several times a second, and
-        // a version that started every row from nothing re-`stat`ed and
-        // re-decoded the same pictures on every one of them.
+        // What this page already knew, by path. Two things survive a refetch:
+        // whether a row is an arrival, and the picture it was drawn with.
         let mut known: std::collections::HashMap<String, Pic> = std::collections::HashMap::new();
         let mut drawn: std::collections::HashMap<String, slint::Image> =
             std::collections::HashMap::new();
@@ -517,10 +414,7 @@ impl Rows {
                 }
                 Kept {
                     bytes: bytes.get(i).copied().unwrap_or(0),
-                    // A row that had no picture and was never looked at is
-                    // still unlooked-at; one that was found to have none stays
-                    // found, until the page is dropped and the whole question
-                    // is asked again.
+                    // A verdict survives a refetch; it dies with the page.
                     pic,
                     row,
                 }
@@ -543,35 +437,21 @@ impl Rows {
                     self.notify.row_changed(row);
                 }
             }
-            // Preserve the viewport on subsequent growth. A reset throws
-            // its layout state away with its elements, and what it rebuilds
-            // from is the top — so a list that grew while somebody was reading
-            // row nine thousand put them back at row one.
+            // Added/removed rather than reset: a reset rebuilds from the top,
+            // losing the viewport of anybody reading row nine thousand.
             scour_page::Change::Length { was, now, rows } => {
                 self.resets.set(self.resets.get() + 1);
                 if was == 0 {
-                    // Slint 1.16's repeater inserts `count` placeholder slots
-                    // for row_added(0, count), even in a ListView. An empty
-                    // model has no viewport to preserve: reset lets layout
-                    // instantiate only the visible rows of a million hits.
+                    // Slint 1.16's repeater allocates `count` slots for
+                    // `row_added(0, count)`; an empty model has no viewport to keep.
                     self.notify.reset();
                 } else if now > was {
                     self.notify.row_added(was, now - was);
                 } else {
                     self.notify.row_removed(now, was - now);
                 }
-                // **And the rows the page brought with it.**
-                //
-                // Without this the list stopped updating whenever the result
-                // was also growing or shrinking — which is whenever anything
-                // is being scanned or watched. The page arrived, its rows were
-                // replaced in hand, and the view was told only that the list
-                // was a different length: nothing said the rows it was already
-                // drawing now held different values, so it went on drawing the
-                // old ones. Dates that had moved kept their old date on screen.
-                //
-                // Clamped to the new length, because a row past the end of the
-                // model is a row the view has just been told does not exist.
+                // A length change does not imply the rows it brought changed, so
+                // say both. Clamped: a row past the new end no longer exists.
                 if let Some((from, to)) = rows {
                     for row in from..to.min(now) {
                         self.notify.row_changed(row);
@@ -581,11 +461,8 @@ impl Rows {
         }
     }
 
-    /// The length changed and nothing else did.
-    ///
-    /// The interactive search counts only to its cap, so the first answer to
-    /// `a` says a thousand and the exact count arrives a moment later. Without
-    /// this the list stays a thousand rows tall over an index of millions.
+    /// The length changed and nothing else did. The interactive search counts
+    /// only to its cap; the exact total arrives a moment later.
     pub fn set_total(&self, total: usize) {
         // Never shorter than what is already loaded: a list that says it holds
         // fewer rows than it is holding cannot draw the ones it has.
@@ -601,21 +478,14 @@ impl Rows {
         self.want.set(None);
     }
 
-    /// The index has moved past what these pages were read at.
-    ///
-    /// **Marked, not thrown away.** A page that is a second out of date is far
-    /// better than a blank one: it is drawn at once and corrected when its
-    /// answer arrives.
+    /// The index has moved past what these pages were read at. Marked, not
+    /// dropped: a stale page draws at once and is corrected when its answer lands.
     pub fn mark(&self, revision: u64) {
         self.pages.borrow_mut().mark(revision);
     }
 
-    /// Take the arrival flags off the rows that are held.
-    ///
-    /// **Only the ones that are held**, which is the whole point. This used to
-    /// walk the whole result asking the model for every row: seconds of frozen
-    /// window on a large index, and every one of those millions of misses
-    /// looked to the model like the view asking for a row it could not see.
+    /// Take the arrival flags off the rows that are held — only those, never a
+    /// walk of the whole result.
     pub fn clear_fresh(&self) {
         let mut cleared = Vec::new();
         {
@@ -648,11 +518,8 @@ impl Rows {
         self.want.set(None);
     }
 
-    /// Forget that a page was asked for, because its answer is not coming.
-    ///
-    /// A refused query and a service that went away both leave a request
-    /// unanswered, and without this the window would sit behind a page that
-    /// will never land and never ask for another.
+    /// Forget that a page was asked for, because its answer is not coming: a
+    /// refused query or a service that went away leaves a request unanswered.
     pub fn forget_asking(&self) {
         self.pages.borrow_mut().forget_asking();
     }
@@ -696,11 +563,8 @@ impl Rows {
         })
     }
 
-    /// Paint the rows a selection holds, and unpaint the rest.
-    ///
-    /// Walks what is in hand rather than what is on screen, because a row
-    /// scrolled past and back has to come back still selected — and the pages
-    /// are where it went in the meantime.
+    /// Paint the rows a selection holds, and unpaint the rest. Walks what is in
+    /// hand, not what is on screen: a row scrolled away comes back selected.
     pub fn mark_picked(&self, picked: &std::collections::HashSet<String>) {
         let mut changed = Vec::new();
         {
@@ -724,18 +588,9 @@ impl Rows {
         }
     }
 
-    /// Look up the pictures for the rows in sight, and draw the ones that are
-    /// already on disk.
-    ///
-    /// Returns `(drawn, worth asking for)`: the rows whose picture was found
-    /// and set, and the paths the service could be asked to make one for.
-    ///
-    /// **Bounded three ways, because this runs on the drawing thread.** Only
-    /// rows in the range given, only rows nobody has looked at yet, and only
-    /// `batch` of them per call — a page is two hundred rows and a `stat`
-    /// storm on a tick is the thing this whole design is arranged to avoid.
-    /// What it costs per row is at most four `stat` calls and one PNG decode,
-    /// and the kind rules most rows out before either.
+    /// Look up the pictures for the rows in sight and draw the ones on disk.
+    /// Returns `(drawn, worth asking for)`. On the drawing thread, so bounded to
+    /// the range, to unlooked rows and to `batch`: four `stat` calls each.
     pub fn look_for_pictures(&self, from: usize, to: usize, batch: usize) -> (usize, Vec<String>) {
         if self.unlooked.get() == 0 {
             return (0, Vec::new());
@@ -749,8 +604,7 @@ impl Rows {
             while row < to && looked < batch {
                 let page = Self::page_of(row);
                 let Some(rows) = pages.rows_mut(page) else {
-                    // A page nobody has fetched yet: skip to the next one
-                    // rather than asking about every row it would hold.
+                    // A page nobody has fetched: skip it whole, not row by row.
                     row = (page + 1) * SPAN;
                     continue;
                 };
@@ -766,11 +620,8 @@ impl Rows {
                 self.unlooked.set(self.unlooked.get().saturating_sub(1));
                 let path = kept.row.path.to_string();
                 let token = kept.row.ktoken.to_string();
-                // **The kind first, and it is not a tidiness question.**
-                // `existing` is four `stat` calls when the answer is no, and
-                // the answer is no for nearly every row; `never_for` is a
-                // match on a word. Asked the other way round, this put four
-                // syscalls on every source file that scrolled past.
+                // Kind first: `never_for` matches a word, `existing` is four
+                // `stat` calls, and for nearly every row the answer is no.
                 let found = if scour_thumbs::never_for(&token) {
                     None
                 } else {
@@ -784,9 +635,7 @@ impl Rows {
                             kept.pic = Pic::Shown;
                             drawn.push(row);
                         }
-                        // A file in the cache that will not decode is not
-                        // worth asking the service to remake: the desktop put
-                        // it there and something else is wrong with it.
+                        // A cached file that will not decode is not worth remaking.
                         Err(e) => {
                             crate::trace(&format!("{} would not decode: {e}", picture.display()));
                             kept.pic = Pic::Nothing;
@@ -807,11 +656,8 @@ impl Rows {
         (drawn.len(), ask)
     }
 
-    /// The service has made these; look at them again on the next tick.
-    ///
-    /// **Marked rather than loaded here.** Loading is a decode per row and it
-    /// belongs on the same bounded path everything else takes, so this only
-    /// undoes the "already looked" mark — the tick that follows finds them.
+    /// The service has made these; look at them again on the next tick. Only the
+    /// mark is undone here, so the decode stays on the bounded path.
     pub fn made_pictures(&self, ready: &[String]) {
         if ready.is_empty() {
             return;
@@ -834,12 +680,8 @@ impl Rows {
         self.unlooked.set(self.unlooked.get() + again);
     }
 
-    /// The path of a row, if its page is in hand.
-    /// The path and whether it is a directory, in one look.
-    ///
-    /// **Two questions, one borrow.** The menu needs both — which items a row
-    /// gets depends on the second — and asking twice means taking the page
-    /// lock twice for a row that could have been replaced in between.
+    /// Path, directory flag and weight of a row, in one borrow: the menu needs
+    /// all three, and a row can be replaced between two separate looks.
     pub fn what_at(&self, row: usize) -> Option<(String, bool, i64)> {
         let pages = self.pages.borrow();
         pages
@@ -848,6 +690,7 @@ impl Rows {
             .filter(|(p, _, _)| !p.is_empty())
     }
 
+    /// The path of a row, if its page is in hand.
     pub fn path_at(&self, row: usize) -> Option<String> {
         let pages = self.pages.borrow();
         pages
@@ -904,13 +747,11 @@ impl slint::Model for Rows {
     }
 
     fn row_data(&self, row: usize) -> Option<Row> {
-        // The borrow ends with this statement, because what comes next takes a
-        // mutable one — and a `Ref` still alive at that point is a panic, not
-        // a compile error.
+        // The borrow must end with this statement: what follows takes a mutable
+        // one, and a live `Ref` there is a panic rather than a compile error.
         let drawn = self.pages.borrow().at(row).map(|k| k.row.clone());
         if let Some(drawn) = drawn {
-            // Only when the eye crosses into another page, so drawing a screen
-            // is not thirty rewrites of the same list.
+            // Only when the eye crosses a page boundary, not once per row drawn.
             let page = Self::page_of(row);
             if self.touched.get() != page {
                 self.touched.set(page);
@@ -918,9 +759,8 @@ impl slint::Model for Rows {
             }
             return Some(drawn);
         }
-        // Not in hand. Remember the first such row — the view asks for a run
-        // of them and they all want the same page — and give back a blank so
-        // the list keeps its shape while it arrives.
+        // Not in hand. Remember the first such row — a run of misses wants one
+        // page — and give back a blank so the list keeps its shape.
         if self.want.get().is_none() {
             self.want.set(Some(row));
         }
@@ -932,18 +772,12 @@ impl slint::Model for Rows {
     }
 }
 
-/// The same results, a line at a time, for the tile views.
-///
-/// **A model over a model, which is the whole reason the tile view came back.**
-/// The first one laid itself out by looping over a count and indexing into the
-/// rows — and a `for` over an integer builds every element at once, so the list
-/// stopped being lazy and stopped fetching. Here a line *is* a model: the view
-/// asks for the lines it is about to draw, each of those asks [`Rows`] for its
-/// tiles, and a tile that has not arrived records the same miss a row does.
+/// The same results, a line at a time, for the tile views. A line must itself be
+/// a model: a `for` over an integer builds every element at once, which is a list
+/// that has stopped being lazy and stopped fetching.
 pub struct Lines {
     rows: std::rc::Rc<Rows>,
-    /// Tiles on a line, and zero while the table is showing — a model nobody
-    /// is looking at should not be building anything.
+    /// Tiles on a line; zero while the table is showing, so nothing is built.
     per: Flag<usize>,
     /// The length this last told the view about. See [`Lines::sync`].
     shown: Flag<usize>,
@@ -964,19 +798,14 @@ impl Lines {
     pub fn per_line(&self, per: usize) {
         if per != self.per.get() {
             self.per.set(per);
-            // Every line holds different results now, not merely a different
-            // number of them, so this one really is a reset.
+            // Every line holds different results now, so this one is a reset.
             self.shown.set(self.lines());
             self.notify.reset();
         }
     }
 
-    /// Tell the view if the result has changed length under it.
-    ///
-    /// Checked rather than announced, because the length is the row count
-    /// divided by the tiles on a line and both of those move — the window is
-    /// resized, the count arrives, a page lands past the end. One comparison
-    /// on a timer is cheaper than four callers remembering to say so.
+    /// Tell the view if the result has changed length under it. Checked on a
+    /// timer: both the row count and the tiles per line move on their own.
     pub fn sync(&self) {
         self.stretch();
     }
@@ -1000,7 +829,7 @@ impl Lines {
     }
 
     /// A different number of lines, said as an addition or a removal — see
-    /// [`Rows::resized`] for why not a reset.
+    /// [`Rows`] for why not a reset.
     fn stretch(&self) {
         let was = self.shown.get();
         let now = self.lines();
@@ -1069,9 +898,7 @@ mod model_tests {
         assert_eq!(rows.held(), SPAN);
     }
 
-    // Observe the actual notifications delivered to Slint's model peer. This
-    // is tied to the pinned Slint version, whose repeater eagerly allocates
-    // `count` placeholder slots for row_added(0, count) on an empty list.
+    // The notifications actually delivered to Slint's model peer.
     #[derive(Default)]
     struct Notifications(RefCell<Vec<(char, usize, usize)>>);
 
@@ -1118,9 +945,8 @@ mod model_tests {
 
     #[test]
     fn a_page_landing_in_place_does_not_make_the_view_re_measure() {
-        // The live refresh: the same query, the same length, new rows. A reset
-        // here is a rebuilt list and a re-clamped viewport, which is what the
-        // scrolling jump was.
+        // The live refresh: same query, same length, new rows. A reset here
+        // rebuilds the list and re-clamps the viewport.
         let rows = Rows::default();
         rows.put(0, page(SPAN), Vec::new(), 10_000);
         let after_first = rows.resets();
@@ -1139,8 +965,7 @@ mod model_tests {
 
     #[test]
     fn the_exact_count_lengthens_the_list_it_does_not_reload_it() {
-        // The search counts to its cap; the exact total follows a moment
-        // later. Until this existed the list stayed as long as the cap.
+        // The search counts to its cap; the exact total follows a moment later.
         let rows = Rows::default();
         rows.put(0, page(SPAN), Vec::new(), 1_000);
         rows.set_total(2_481_902);
@@ -1192,9 +1017,8 @@ mod model_tests {
 
     #[test]
     fn nothing_is_guessed_at_while_a_page_is_expensive() {
-        // Deep in a long result a page costs the service a walk of everything
-        // above it. What is on screen is still fetched; what somebody might
-        // scroll to is not.
+        // Deep in a result a page costs a walk of everything above it, so only
+        // what is on screen is fetched.
         let rows = Rows::default();
         rows.put(9, page(SPAN), Vec::new(), 4_000_000);
         assert_eq!(rows.next_page(9 * SPAN, 9 * SPAN + 24, false, true), None);
@@ -1219,21 +1043,18 @@ mod model_tests {
         assert_eq!(rows.next_page(0, 24, true, true), Some(0));
         rows.asking(0, 7);
         rows.put(0, page(SPAN), Vec::new(), 10_000);
-        // Off screen: left alone. An index that moves every second would
-        // otherwise have this window fetching every page it has ever seen.
+        // Off screen: left alone, or a moving index refetches every page seen.
         assert_eq!(rows.next_page(0, 24, true, true), None);
     }
 
     #[test]
     fn scrolling_back_over_something_already_seen_asks_for_nothing() {
-        // The whole point of keeping pages: a request is what somebody sees as
-        // a stutter, and going back over what you have just read makes none.
+        // The point of keeping pages: going back over what was read asks nothing.
         let rows = Rows::default();
         for p in 0..8 {
             rows.put(p, page(SPAN), Vec::new(), 10_000);
         }
-        // Page 7 still wants the one after it — that is the fetch that runs
-        // ahead of the eye, not a re-read of anything.
+        // Page 7 still wants the one after it: the fetch ahead of the eye.
         assert_eq!(rows.next_page(7 * SPAN, 7 * SPAN + 24, true, true), Some(8));
         for p in (0..7).rev() {
             let first = p * SPAN;
@@ -1270,10 +1091,8 @@ mod model_tests {
 
     #[test]
     fn a_page_nobody_had_read_holds_no_arrivals() {
-        // Dragging the scrollbar washed the whole list orange at every stop:
-        // two hundred files that had not changed in years, each announcing
-        // itself as a change, because "new" was measured against whichever
-        // page had been fetched last rather than against this one.
+        // "New" is measured against this page's own last read, not against
+        // whichever page was fetched last.
         let rows = Rows::default();
         assert!(
             !rows.put(0, named(&["/a", "/b"]), Vec::new(), 10_000),
@@ -1311,9 +1130,8 @@ mod model_tests {
 
     #[test]
     fn a_selection_knows_what_it_holds_and_what_it_weighs() {
-        // The size column holds `1.30 MiB`; a selection has to add them up,
-        // and adding up strings is not a thing — so the weights come with the
-        // page and never go through Slint, whose numbers are 32-bit.
+        // Weights come with the page and never go through Slint, whose numbers
+        // are 32-bit; the size column holds text like `1.30 MiB`.
         let rows = Rows::default();
         rows.put(
             3,
@@ -1333,9 +1151,7 @@ mod model_tests {
 
     #[test]
     fn what_is_picked_stays_picked_while_it_scrolls_away_and_back() {
-        // The selection is by path, and the rows it paints come and go with
-        // the pages — so what marks them has to walk what is in hand rather
-        // than what is on screen.
+        // The selection is by path; the rows it paints come and go with pages.
         let rows = Rows::default();
         rows.put(0, named(&["/a", "/b", "/c"]), Vec::new(), 10_000);
         let picked: std::collections::HashSet<String> = ["/b".to_string()].into_iter().collect();
@@ -1353,8 +1169,8 @@ mod model_tests {
 
     #[test]
     fn the_row_a_list_of_millions_calls_four_thousand_is_the_right_file() {
-        // Reading it out of a page as though the page began at row zero is
-        // what opened a file two hundred rows away.
+        // A page index read as though the page began at row zero opens the
+        // wrong file, two hundred rows away.
         let rows = Rows::default();
         rows.put(
             20,
