@@ -207,18 +207,12 @@ impl From<Level> for Maintenance {
 /// summary line stays on screen, and a fixed forty when piped, because output
 /// that varies with an attached terminal cannot be scripted against.
 fn fits() -> u32 {
+    use std::io::IsTerminal;
     const PIPED: u32 = 40;
     const SHOWN: u32 = 5;
-    #[cfg(unix)]
-    {
-        // SAFETY: `isatty` only reads a descriptor number.
-        if unsafe { libc::isatty(libc::STDOUT_FILENO) } == 1 {
-            return SHOWN;
-        }
-        PIPED
-    }
-    #[cfg(not(unix))]
-    {
+    if std::io::stdout().is_terminal() {
+        SHOWN
+    } else {
         PIPED
     }
 }

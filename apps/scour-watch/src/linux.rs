@@ -297,9 +297,7 @@ fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
     let uid: u32 = match asked {
         Some(uid) => uid,
         None => std::env::var("SUDO_UID")
-            .map_err(|_| {
-                "nobody to drop to — run under sudo or pass --as <uid>".to_string()
-            })?
+            .map_err(|_| "nobody to drop to — run under sudo or pass --as <uid>".to_string())?
             .parse()
             .map_err(|_| "SUDO_UID is not a number".to_string())?,
     };

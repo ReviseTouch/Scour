@@ -574,8 +574,8 @@ mod tests {
         // The shape the bulk-ASCII path has to survive: runs of every length,
         // broken by non-ASCII at every position, including both ends.
         let alphabet: &[&str] = &[
-            "a", "Z", "9", "-", ".", " ", "_",
-            "ı", "İ", "I", "i", "ş", "Ş", "ğ", "Ğ", "ç", "Ç", "ö", "Ö", "ü", "Ü",
+            "a", "Z", "9", "-", ".", " ", "_", "ı", "İ", "I", "i", "ş", "Ş", "ğ", "Ğ", "ç", "Ç",
+            "ö", "Ö", "ü", "Ü",
             // Two-byte, three-byte, four-byte, and one folding to two.
             "é", "Ω", "д", "中", "🙂", "ẞ", "\u{0307}",
         ];

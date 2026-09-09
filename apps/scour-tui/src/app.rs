@@ -147,7 +147,10 @@ pub enum Want {
     /// Remember a preference.
     Remember(scour_settings::Change),
     /// Write the whole result to this file.
-    Export { query: String, to: String },
+    Export {
+        query: String,
+        to: String,
+    },
     /// Close the terminal.
     Leave,
 }
