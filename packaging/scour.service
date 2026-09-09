@@ -16,7 +16,7 @@
 # packaging/install-service.sh; the user unit must be off, or two writers race
 # for the index lock:  systemctl --user disable --now scourd.service
 Description=Scour file index
-Documentation=https://github.com/hasantr/Scour
+Documentation=https://github.com/ReviseTouch/Scour
 # After the session, not at boot: the socket lives in /run/user/@UID@, which
 # logind creates at login.
 After=local-fs.target user@@UID@.service

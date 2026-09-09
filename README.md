@@ -11,7 +11,7 @@ Written in Rust, and nothing here is a wrapper around anything else.
 
 **[revisetouch.com/scour](https://revisetouch.com/scour)** ·
 **[Documentation](https://revisetouch.com/en/docs/scour/introduction)** ·
-**[Releases](https://github.com/hasantr/Scour/releases)**
+**[Releases](https://github.com/ReviseTouch/Scour/releases)**
 
 > **Alpha.** Used daily on Linux against 4.8 million entries and measured
 > there; the Windows build has had one afternoon on one machine and macOS has

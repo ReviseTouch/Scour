@@ -20,7 +20,7 @@
 #   systemctl --user enable --now scourd.service
 #
 Description=Scour file index
-Documentation=https://github.com/hasantr/Scour
+Documentation=https://github.com/ReviseTouch/Scour
 After=graphical-session.target
 
 [Service]

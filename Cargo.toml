@@ -43,7 +43,7 @@ version      = "0.2.0-alpha.1"
 edition      = "2024"
 rust-version = "1.88"          # rmcp's MSRV, the highest of any dependency
 license      = "MIT OR Apache-2.0"
-repository   = "https://github.com/hasantr/Scour"
+repository   = "https://github.com/ReviseTouch/Scour"
 publish      = false
 
 [workspace.dependencies]
