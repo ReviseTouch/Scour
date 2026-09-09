@@ -1,12 +1,8 @@
 //! A segment on disk.
 //!
-//! A segment is written once and never edited. That is not a simplification to
-//! be undone later — it is what lets the files be mapped and read without a
-//! lock, by any number of threads, while writing continues elsewhere.
-//!
-//! One thing does change: which rows are still live. That is a bit a row, it is
-//! held in memory and written back beside the segment, and it is the only
-//! mutable part of an index on disk. Deleting a million files touches 125 KB.
+//! Written once and never edited, so the files are mapped and read without a
+//! lock while writing continues elsewhere. One thing changes: which rows are
+//! live — a bit a row, so deleting a million files touches 125 KB.
 
 use std::path::{Path, PathBuf};
 
@@ -28,17 +24,9 @@ use crate::trigram::TrigramIndex;
 /// The pieces a segment is made of, and the extension each is stored under.
 const PARTS: [&str; 7] = ["names", "cols", "dirs", "ids", "tgrams", "tpost", "fnames"];
 
-/// The persisted row orders a segment may be without.
-///
-/// **Absent means older, not damaged**, and that distinction is the whole
-/// reason these are not in [`PARTS`]. Each is independently optional: a search
-/// whose segment lacks its order builds keys the way it always did. So an old
-/// or partly compacted index is not thrown away and rescanned; each segment
-/// gains the current files the next time it is folded.
-///
-/// What is *not* tolerated is a file that is there and wrong. A length that
-/// does not match the rows is refused at [`Live::assemble`], exactly as a short
-/// live bitmap is, because both are written whole.
+/// The persisted row orders a segment may be without. Absent means older, not
+/// damaged: a search without one builds keys instead, so an old index is not
+/// rescanned. Present and the wrong length is refused at [`Live::assemble`].
 const PORDER: &str = "porder";
 const NORDER: &str = "norder";
 const EORDER: &str = "eorder";
@@ -47,18 +35,9 @@ fn part_path(dir: &Path, number: u64, ext: &str) -> PathBuf {
     dir.join(format!("seg-{number:08}.{ext}"))
 }
 
-/// One piece of a segment: mapped from a file, or held in memory.
-///
-/// **The second case is what lets a change be searchable before it is
-/// durable.** Those were the same thing here, and the cost of conflating them
-/// was measured: a search could not see a new file until a commit, and a commit
-/// writes and syncs a whole segment — 22.5 ms whether it carries one row or a
-/// hundred and twenty-eight. Freshness was therefore
-/// bought in units of a whole segment write, and at a five-second clock that
-/// was the single largest thing an idle service did.
-///
-/// Nothing downstream can tell the difference: every reader takes a `&[u8]`,
-/// and both arms give it one.
+/// One piece of a segment: mapped from a file, or held in memory. The second
+/// case lets a change be searchable before it is durable — a segment write and
+/// sync is 22.5 ms whatever it carries. Every reader takes a `&[u8]` either way.
 #[derive(Debug)]
 enum Part {
     Mapped(Mmap),
@@ -79,10 +58,8 @@ impl std::ops::Deref for Part {
 #[derive(Debug)]
 pub struct Live {
     pub number: u64,
-    /// The reconciliation pass this segment was written during.
-    ///
-    /// Kept per segment rather than per row because [`crate::NativeIndex`]
-    /// flushes when a generation begins, so a segment never spans two.
+    /// The reconciliation pass this segment was written during. Per segment,
+    /// not per row: a flush begins each generation, so no segment spans two.
     pub generation: u64,
     maps: Vec<Part>,
     /// The rows in path order, for a segment written since [`PORDER`] existed.
@@ -95,29 +72,13 @@ pub struct Live {
     eorder: Option<Part>,
     alive: Vec<u8>,
     rows: usize,
-    /// How many of those rows are directories.
-    ///
-    /// Counted once, here, because the alternative was counting it on every
-    /// call to `stats()` — which walks a column of every row, and which the
-    /// engine came to call once a second to decide whether to compact. On a
-    /// 2.1 M-entry index that was a whole core, every second, to answer a
-    /// question about the *segment count*.
-    ///
-    /// The number is the total, not the live one: rows die after this is
-    /// computed and `live_rows` is what says how many. A directory count that
-    /// drifts by the number of deleted folders is a status line being slightly
-    /// stale; recomputing it was a service being unusable.
+    /// How many of those rows are directories, counted once at open: `stats()`
+    /// runs once a second and this walks a column of every row. The total, not
+    /// the live count — it drifts by the number of folders deleted since.
     dirs: usize,
-    /// How many rows this segment has lost since it was opened.
-    ///
-    /// **A stamp, not a statistic.** Anything derived from a segment's *live*
-    /// rows is valid only while the alive bits are the ones it was built from,
-    /// and this says so in `O(1)` where counting the bits again is a pass over
-    /// a quarter of a megabyte. A segment's bytes never change; only which of
-    /// its rows still count does, and this is exactly that.
-    ///
-    /// It starts at zero every time the segment is opened, which is right: a
-    /// derived table does not survive a restart either.
+    /// How many rows this segment has lost since it was opened: a stamp, not a
+    /// statistic. Anything derived from live rows is valid only while this is
+    /// unchanged, in `O(1)`. Zero at open, as a derived table is too.
     deaths: u64,
 }
 
@@ -133,16 +94,13 @@ impl Live {
             &bytes.tri_post,
             &bytes.fnames,
         ];
-        // Synced, not merely written: the manifest is about to name these
-        // files, and a manifest that survives a crash while its segments do
-        // not is an index that cannot be opened.
+        // Synced: a manifest surviving a crash its segments did not is an
+        // index that cannot be opened.
         for (ext, blob) in PARTS.iter().zip(blobs) {
             write_synced(&part_path(dir, number, ext), blob)?;
         }
-        // Written only when there is one. An empty blob is what a segment whose
-        // directory table would not open produces, and writing a file that
-        // says nothing is worse than not writing one: absent is a state with a
-        // meaning, and this is it.
+        // Written only when there is one: absent is a meaningful state, and an
+        // empty blob is what an unreadable directory table produces.
         if !bytes.porder.is_empty() {
             write_synced(&part_path(dir, number, PORDER), &bytes.porder)?;
         }
@@ -161,15 +119,13 @@ impl Live {
         for ext in PARTS {
             let p = part_path(dir, number, ext);
             let f = std::fs::File::open(&p).map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
-            // Safe as long as nobody rewrites the file underneath us, which
-            // nothing does: a segment is written once and then only deleted.
+            // SAFETY: a segment is written once and then only deleted, so no
+            // one rewrites the file underneath the mapping.
             let m = unsafe { Mmap::map(&f) }.map_err(|e| Error::io(&e, &p.to_string_lossy()))?;
             maps.push(Part::Mapped(m));
         }
-        // **Missing is allowed here and nowhere else.** See [`PORDER`]. Only
-        // `NotFound` means older, though: a directory that cannot be read or a
-        // file that cannot be mapped is a failure and is reported as one, or an
-        // index would quietly get slower on a machine with a real problem.
+        // Missing is allowed here and nowhere else (see [`PORDER`]), and only
+        // `NotFound` means older — any other error is reported.
         let p = part_path(dir, number, PORDER);
         let porder = match std::fs::File::open(&p) {
             Ok(f) => Some(Part::Mapped(
@@ -199,12 +155,9 @@ impl Live {
         Live::assemble(number, generation, maps, porder, norder, eorder, alive)
     }
 
-    /// A segment that was never written, and may never be.
-    ///
-    /// The same bytes `write` would have put in segment files, kept in memory
-    /// instead. It is a real segment to every reader — same format, same
-    /// trigram filter, same zone maps — and the only thing it is not is
-    /// durable. See [`Part`] for why that distinction had to be made.
+    /// A segment that was never written, and may never be: the bytes `write`
+    /// would have stored, kept in memory. A real segment to every reader; the
+    /// only thing it is not is durable.
     pub fn in_memory(number: u64, generation: u64, bytes: &SegmentBytes) -> Result<Live> {
         let maps = vec![
             Part::Owned(bytes.names.clone()),
@@ -230,11 +183,8 @@ impl Live {
     }
 
     /// Check the pieces agree with each other and count what a search needs.
-    ///
-    /// Shared by both ways in, so an in-memory segment is validated exactly as
-    /// hard as one read off a disk. A bug that built a short bitmap would
-    /// otherwise be caught in one path and silently answer "nothing matched" in
-    /// the other.
+    /// Shared by both ways in, so an in-memory segment is validated as hard as
+    /// one read off a disk.
     fn assemble(
         number: u64,
         generation: u64,
@@ -249,11 +199,8 @@ impl Live {
                 detail: format!("seg-{number:08}.names is unreadable"),
             })?
             .rows();
-        // **A short bitmap is not "these rows are dead".** It reopened as a
-        // segment whose every row was gone — a truncated write, a full disk, a
-        // half-copied index directory, all of them silently answering "nothing
-        // matched" for as long as the segment lived. The bitmap is one bit a
-        // row and is written whole; a length that does not say so is damage.
+        // A short bitmap is not "these rows are dead": it is one bit a row,
+        // written whole, so a length saying otherwise is damage.
         let want = rows.div_ceil(8);
         if alive.len() != want {
             return Err(Error::IndexCorrupt {
@@ -263,20 +210,10 @@ impl Live {
                 ),
             });
         }
-        // **A path order for the wrong number of rows is damage**, on exactly
-        // the argument the bitmap above is refused on: this file is written
-        // whole, one entry a row, so a length that says otherwise is a
-        // truncated write or a half-copied directory. Reading it anyway would
-        // produce a page that is in order, plausible, and missing whatever the
-        // file stopped short of — the failure this crate keeps a brute-force
-        // reference to catch.
-        //
-        // The contents are not checked beyond that, which is the same standard
-        // every other part is held to: nothing here is checksummed, and a
-        // walk of the whole file to prove it is a permutation would touch nine
-        // megabytes at open for a class of damage no other part guards against.
-        // What *is* guaranteed is that a bad entry cannot be read as a row —
-        // see [`PathOrder::at`].
+        // A path order of the wrong length is damage, refused on the bitmap's
+        // argument. Contents are not checked further — nothing here is
+        // checksummed — but a bad entry cannot be read as a row: see
+        // [`PathOrder::at`].
         if let Some(p) = &porder {
             match PathOrder::open(p) {
                 Some(o) if o.rows() == rows => {}
@@ -365,26 +302,12 @@ impl Live {
         }
     }
 
-    /// Which of these entries this segment already holds, exactly as they are.
-    ///
-    /// **The question a rescan asks two million times.** A walk hands over
-    /// every entry it saw, changed or not, and writing them all again costs
-    /// three seconds and twenty segments of an index that was already right.
-    ///
-    /// Shaped like [`Live::kill_paths`] and for the same reason. Asked one
-    /// entry at a time it is a binary search per entry per segment, and a bulk
-    /// pass makes both numbers large at once — measured at 3.04 s to 5.23 s on
-    /// a two-million-row rescan, which is slower than not asking. Sorting the
-    /// batch once puts it in the order the id table is already in and the check
-    /// becomes one sequential pass; the probing branch stays for the batch of
-    /// three a watcher hands over, where a full walk of the table would be the
-    /// expensive shape instead.
-    ///
-    /// `keys` must be sorted by [`IdMap::key_of`], and each `.1` indexes
-    /// `staged`. **A row this segment claims settles the question here**,
-    /// matching or not: `decided` is set either way, so a stale copy of the
-    /// same path in an older segment cannot answer for it. Only matches reach
-    /// `out`, as `(index into staged, row)`.
+    /// Which of these entries this segment already holds, exactly as they are —
+    /// what a rescan asks two million times. Two strategies as in
+    /// [`Live::kill_paths`]: a merge for a bulk pass, probes for a watcher's
+    /// handful. `keys` must be sorted by [`IdMap::key_of`], each `.1` indexing
+    /// `staged`. A row this segment claims sets `decided` whether it matches or
+    /// not, so an older segment cannot answer for it; matches reach `out`.
     pub fn spare_paths(
         &self,
         keys: &[(u32, u32)],
@@ -418,9 +341,8 @@ impl Live {
                     std::cmp::Ordering::Less => i += 1,
                     std::cmp::Ordering::Greater => j += 1,
                     std::cmp::Ordering::Equal => {
-                        // A run of equal hashes on each side. Both are tiny —
-                        // a collision in a 32-bit key is rare and a repeated
-                        // identity is a bug — so the cross product is cheap.
+                        // A run of equal hashes each side: both are tiny, so
+                        // the cross product is cheap.
                         let mut i2 = i;
                         while i2 < ids.len() && ids.at(i2).0 == h {
                             i2 += 1;
@@ -523,9 +445,8 @@ impl Live {
         }
         let was = self.is_alive(row);
         self.alive[row / 8] &= !(1 << (row % 8));
-        // Every route to a dead row comes through here — `kill_paths`, the
-        // sweep, a commit that replaces one — so one counter covers all of
-        // them, and anything that adds a fourth route gets it for free.
+        // Every route to a dead row comes through here, so one counter covers
+        // `kill_paths`, the sweep and a commit that replaces a row.
         self.deaths += u64::from(was);
         was
     }
@@ -535,20 +456,13 @@ impl Live {
         self.deaths
     }
 
-    /// The row holding this path, if the segment has it and it is live.
-    ///
-    /// The candidate list from the id table is confirmed against the directory
-    /// and name the row actually carries, so a digest collision costs one extra
-    /// comparison and cannot produce a wrong answer.
+    /// The row holding this path, if the segment has it and it is live. The id
+    /// table's candidates are confirmed against the row's directory and name,
+    /// so a digest collision costs a comparison and never a wrong answer.
     pub fn find(&self, source: SourceId, path: &str) -> Result<Option<usize>> {
-        // The identity table first, and the segment view only if it says there
-        // is something to confirm.
-        //
-        // A commit probes every entry it writes against every existing segment,
-        // and almost every one of those probes finds nothing — so what the
-        // probe costs *when it finds nothing* is the whole cost. Opening the
-        // view parses four headers; doing that before the binary search made
-        // indexing ten million entries quadratic in the segment count.
+        // The identity table first, the view only if there is something to
+        // confirm: almost every probe finds nothing, and opening the view
+        // parses four headers.
         let mut dirs = std::collections::HashMap::new();
         let rows: Vec<usize> = self
             .ids()?
@@ -565,27 +479,11 @@ impl Live {
             .find(|&row| seg.is_at(&mut dirs, row, source, path)))
     }
 
-    /// Kill the rows holding any of these paths. Returns how many died.
-    ///
-    /// `wanted` must be sorted by [`IdMap::key_of`].
-    ///
-    /// **Two strategies, chosen by size, and the second one was missing.** A
-    /// merge walks both sides once, which is right when a bulk pass hands over
-    /// a hundred thousand identities: doing that one at a time is quadratic in
-    /// the segment count and was measured at a hundred seconds to index ten
-    /// million entries, almost all of it in probes that found nothing.
-    ///
-    /// But a merge is `O(rows in the segment)` *however few* identities are
-    /// wanted, because it advances through the table until it passes the last
-    /// of them. A watcher commit carries three. Measured on the live index:
-    /// **a commit with 3 to 13 staged entries held the write lock for 44 to
-    /// 74 ms**, once a second, with every search queued behind it — to check
-    /// three identities against 2.1 M rows.
-    ///
-    /// So below the crossover it is a binary search per identity, which is
-    /// what the table is sorted for. The crossover is where `wanted × log
-    /// rows` stops being cheaper than `rows`, and `log2` of a two-million-row
-    /// table is about 21.
+    /// Kill the rows holding any of these paths, `wanted` sorted by
+    /// [`IdMap::key_of`]. Returns how many died. Two strategies: a merge is
+    /// `O(rows)` however few paths are wanted — 44 to 74 ms of held write lock
+    /// for a watcher's three — so below `wanted × log rows < rows` it is a
+    /// binary search each, which is what the table is sorted for.
     pub fn kill_paths(&mut self, wanted: &[(u32, SourceId, &str)]) -> Result<u64> {
         if wanted.is_empty() || self.rows == 0 {
             return Ok(0);
@@ -593,10 +491,8 @@ impl Live {
         let victims: Vec<usize> = {
             let ids = self.ids()?;
             let mut pairs: Vec<(usize, usize)> = Vec::new();
-            // The small case: probe for each path rather than sweep the
-            // table. `ids.len().ilog2()` is the cost of one probe, so this is
-            // the point where probing everything stops being cheaper than
-            // walking everything.
+            // `ids.len().ilog2()` is one probe, so this is where probing every
+            // path stops being cheaper than walking the table.
             if !ids.is_empty()
                 && wanted
                     .len()
@@ -642,9 +538,8 @@ impl Live {
                     std::cmp::Ordering::Less => i += 1,
                     std::cmp::Ordering::Greater => j += 1,
                     std::cmp::Ordering::Equal => {
-                        // A run of equal hashes on each side. Both are tiny —
-                        // a collision in a 32-bit key is rare and a repeated
-                        // identity is a bug — so the cross product is cheap.
+                        // A run of equal hashes each side: both are tiny, so
+                        // the cross product is cheap.
                         let mut i2 = i;
                         while i2 < ids.len() && ids.at(i2).0 == h {
                             i2 += 1;
@@ -701,30 +596,22 @@ impl Live {
         }))
     }
 
-    /// A copy of the live bits, to be written once the lock is released.
-    ///
-    /// 262 KB at two million rows, against an `fsync` — measured at **13 ms a
-    /// segment**, three or four segments a commit, once a second, with every
-    /// search waiting. Copying is the cheap half of that by two orders of
-    /// magnitude.
+    /// A copy of the live bits, to be written once the lock is released. 262 KB
+    /// at two million rows against a 13 ms `fsync` a segment, several a commit.
     pub fn alive_snapshot(&self) -> (u64, Vec<u8>) {
         (self.number, self.alive.clone())
     }
 
-    /// Write bits taken by [`Live::alive_snapshot`], with no lock held.
-    ///
-    /// A crash between the snapshot and this leaves the older bitmap on disk,
-    /// which is what a crash before the write always did: the removed rows
-    /// come back until the next sweep takes them. Nothing new is risked by
-    /// moving it out.
+    /// Write bits taken by [`Live::alive_snapshot`], with no lock held. A crash
+    /// in between leaves the older bitmap, so removed rows come back until the
+    /// next sweep — the same as a crash before the write.
     pub fn write_alive(dir: &Path, number: u64, bits: &[u8]) -> Result<()> {
         replace_synced(&part_path(dir, number, "alive"), bits)
     }
 
     pub fn save_alive(&self, dir: &Path) -> Result<()> {
-        // Replaced rather than overwritten: this file is read whole at open
-        // time, and a half-written one turns every row in the segment into a
-        // coin flip between alive and dead.
+        // Replaced, not overwritten: read whole at open, so a half-written one
+        // makes every row a coin flip between alive and dead.
         replace_synced(&part_path(dir, self.number, "alive"), &self.alive)
     }
 }
@@ -743,13 +630,8 @@ mod memory_segment {
         }
     }
 
-    /// A segment held in memory has to be the same segment, not a near one.
-    ///
-    /// Written and unwritten are the same bytes by construction, so the thing
-    /// worth asserting is that both arrive at the same *reader* — same row
-    /// count, same names, same directory table. If they ever diverge, a search
-    /// would answer differently depending on whether a commit had happened,
-    /// which is exactly the bug this split exists to remove.
+    /// Both ways in must reach the same *reader* — same rows, names and
+    /// directory table — or a search answers differently before a commit.
     #[test]
     fn an_unwritten_segment_reads_the_same_as_a_written_one() {
         let rows = [

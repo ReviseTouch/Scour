@@ -1,35 +1,18 @@
 //! Reaching a row instead of walking to it.
 //!
-//! A page deep in a result used to cost what it took to *pass* every row above
-//! it: 105 ms and 2,080,974 rows visited for the two hundred at offset two
-//! million, none of which the answer contains. Everything needed to skip that
-//! is already in the segment, and this is the arithmetic that uses it.
-//!
-//! Two facts, both measured rather than assumed — see `examples/rankcheck.rs`,
-//! which checks the first over every row of a real index and times the second:
-//!
-//! * **`Mtime` never rises with the row number.** Rows are stored newest-first
-//!   — the whole search path is built on it — so "the first row not newer than
-//!   *t*" is a binary search over a column, not a walk.
-//! * **A rank over the live bitmap is cheap to build.** One popcount per eight
-//!   rows: 2.6 M rows in tens of microseconds, against the 105 ms it replaces.
-//!   Built per request rather than kept, because a kept one would have to be
-//!   invalidated on every commit — and a rank that is quietly one deletion
-//!   stale returns a page from the wrong place.
+//! `Mtime` never rises with the row number, so "the first row not newer than
+//! *t*" is a binary search over a column, not a walk. The live rank is one
+//! popcount per eight rows, built per request: a stale one pages from nowhere.
 
-/// Rows between two entries of the prefix.
-///
-/// Small enough that the popcounts after the last entry are a handful, large
-/// enough that the table is nothing: 512 rows an entry is 4 bytes per 512
-/// rows, about 20 KB for this index.
+/// Rows between two entries of the prefix: 4 bytes per 512 rows, about 20 KB
+/// for this index, and a handful of popcounts after the last entry.
 const STRIDE: usize = 512;
 
 /// How many rows are live before each `STRIDE`-th row.
 pub struct LiveRank {
     prefix: Vec<u32>,
     rows: usize,
-    /// An absent bitmap means nothing has ever been deleted, which
-    /// [`crate::Segment::is_alive`] reads as every row being live.
+    /// An absent bitmap means nothing was ever deleted; every row is live.
     all_live: bool,
 }
 
@@ -114,12 +97,9 @@ fn bit(alive: &[u8], row: usize) -> bool {
     }
 }
 
-/// The first row whose value is not above `bound`, in a column that never
-/// rises with the row number.
-///
-/// Which is every row when the column starts below the bound, and `rows` when
-/// none of them is. `at` reads the column; it is a closure so that this owes
-/// nothing to how a segment is opened and can be tested on an array.
+/// The first row whose value is not above `bound`, in a column that never rises
+/// with the row number; `rows` when none is. `at` is a closure so this owes
+/// nothing to how a segment is opened.
 pub fn first_at_or_below(rows: usize, bound: i64, at: impl Fn(usize) -> i64) -> usize {
     let mut lo = 0usize;
     let mut hi = rows;
@@ -150,8 +130,7 @@ mod tests {
 
     #[test]
     fn a_rank_counts_what_a_walk_would() {
-        // Every row, against the obvious answer, over a span longer than one
-        // stride — which is where the prefix stops being the whole answer.
+        // Longer than one stride, where the prefix stops being the whole answer.
         let rows = STRIDE * 3 + 137;
         let bits: Vec<bool> = (0..rows).map(|i| i % 3 != 0).collect();
         let alive = bitmap(&bits);
@@ -167,8 +146,7 @@ mod tests {
 
     #[test]
     fn an_absent_bitmap_means_nothing_has_died() {
-        // What `Segment::is_alive` does with an empty slice, and the rank has
-        // to agree with it or a fresh segment pages from the wrong row.
+        // The rank must agree with `Segment::is_alive` on an empty slice.
         let rank = LiveRank::build(&[], 1_000);
         assert_eq!(rank.upto(&[], 0), 0);
         assert_eq!(rank.upto(&[], 640), 640);
@@ -185,9 +163,7 @@ mod tests {
 
     #[test]
     fn the_boundary_is_the_first_row_not_above_it() {
-        // A column that never rises, with a group of equal values in it —
-        // which is what a checkout leaves behind and where an off-by-one
-        // shows up as a page starting one row late.
+        // Equal values in a run: an off-by-one here starts the page one row late.
         let column = [90i64, 80, 70, 70, 70, 60, 50];
         let at = |i: usize| column[i];
         assert_eq!(first_at_or_below(column.len(), 100, at), 0);

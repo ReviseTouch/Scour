@@ -1,9 +1,8 @@
 //! Isolated directory-table and segment build costs, without filesystem I/O.
 //!
-//! Build the same example before and after a change, then alternate binaries:
 //! `cargo run --release -p scour-index-native --example build_cost -- dirs 300000`
 //! `cargo run --release -p scour-index-native --example build_cost -- segment 1000000`
-//! RSS is the entire process peak (Linux KiB), not a live-allocation counter.
+//! RSS is the whole process peak (Linux KiB), not a live-allocation counter.
 
 use scour_core::{Entry, EntryId, Meta, SourceId};
 use scour_index_native::{DirWriter, build_sorted};

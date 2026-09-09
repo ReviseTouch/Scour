@@ -1,9 +1,4 @@
-//! Variable-length integers, and bit packing.
-//!
-//! Both are forty lines and both were measured against the alternatives on the
-//! real corpus before being chosen. `stream-vbyte` offers nothing a hand-rolled
-//! varint does not, and its last release was 2023; `elias-fano` on crates.io
-//! has fifty-three downloads and stopped in 2019.
+//! Variable-length integers, and frame-of-reference bit packing.
 
 /// Append `v` as a LEB128-style varint.
 pub fn put(out: &mut Vec<u8>, mut v: u64) {
@@ -19,8 +14,7 @@ pub fn get(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut v = 0u64;
     let mut shift = 0u32;
     for (i, &b) in bytes.iter().enumerate() {
-        // Ten bytes is the most a u64 can need; beyond that the input is
-        // corrupt and shifting would be undefined rather than merely wrong.
+        // Ten bytes is the most a u64 can need; past that the shift is undefined.
         if shift > 63 {
             return None;
         }
@@ -33,12 +27,8 @@ pub fn get(bytes: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
-/// How many bits are needed to hold every value in `vals` once the smallest
-/// has been subtracted.
-///
-/// This is the "frame of reference" in frame-of-reference coding: store the
-/// block's minimum once, then each value as an offset from it. On a block of
-/// timestamps that span an hour, that is sixteen bits instead of sixty-four.
+/// How many bits hold every value in `vals` once the smallest is subtracted.
+/// A block of timestamps spanning an hour needs sixteen bits, not sixty-four.
 pub fn width_for(vals: &[i64]) -> (i64, u32) {
     let Some(&min) = vals.iter().min() else {
         return (0, 0);
@@ -72,11 +62,8 @@ pub fn pack(out: &mut Vec<u8>, vals: &[i64], min: i64, bits: u32) {
     }
 }
 
-/// The `i`-th value of a packed block.
-///
-/// Random access rather than bulk decode, because a filter usually rejects a
-/// row on the first column it reads and there is no reason to have decoded the
-/// other ten.
+/// The `i`-th value of a packed block. Random access rather than bulk decode: a
+/// filter usually rejects a row on the first column it reads.
 pub fn unpack_one(bytes: &[u8], min: i64, bits: u32, i: usize) -> i64 {
     if bits == 0 {
         return min;
@@ -98,12 +85,8 @@ pub fn unpack_one(bytes: &[u8], min: i64, bits: u32, i: usize) -> i64 {
     min.wrapping_add(raw as i64)
 }
 
-/// Bytes a packed block of `n` values at `bits` each occupies.
-///
-/// Part of the format's arithmetic rather than of any hot path — a reader
-/// finds a block through its offset, not by adding these up. It stays because
-/// the round-trip tests check `pack` against it, which is how a packing bug
-/// would be caught rather than merely suspected.
+/// Bytes a packed block of `n` values at `bits` each occupies. Not on any read
+/// path — a reader finds a block by its offset; the round-trip tests use it.
 #[allow(dead_code)]
 pub fn packed_len(n: usize, bits: u32) -> usize {
     (n * bits as usize).div_ceil(8)
@@ -182,8 +165,7 @@ mod tests {
 
     #[test]
     fn a_block_of_one_repeated_value_costs_nothing() {
-        // The case that makes uid and gid free on a single-user machine, and
-        // that made the measured total 8.85 bytes for eleven numbers.
+        // What makes uid and gid free on a single-user machine.
         let vals = vec![1000i64; 128];
         let (min, bits) = width_for(&vals);
         assert_eq!((min, bits), (1000, 0));
@@ -193,8 +175,7 @@ mod tests {
 
     #[test]
     fn sorted_values_pack_tightly() {
-        // Why `mtime` costs 0.29 bytes an entry: the rows are already in its
-        // order, so a block of 128 spans a narrow range.
+        // Why `mtime` costs 0.29 bytes an entry: rows are already in its order.
         let base = 1_785_000_000i64;
         let vals: Vec<i64> = (0..128).map(|i| base - i * 3).collect();
         let (_, bits) = width_for(&vals);

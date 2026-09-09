@@ -1,9 +1,7 @@
 //! What a commit costs when it deletes one file out of a large index.
 //!
-//! The number this exists to produce is a *slope*, not a point: the old
-//! write-back copied and rewrote the whole live bitmap, so the cost of
-//! recording one deletion grew with how much had been indexed rather than with
-//! how much had changed. Run it at two sizes and the shape is the answer.
+//! The number is a *slope*, not a point: run it at two sizes to see whether
+//! recording one deletion grows with how much is indexed.
 //!
 //!   cargo run --release -p scour-index-native --example alive -- [rows] [commits]
 
@@ -12,15 +10,9 @@ use std::time::Instant;
 use scour_core::{Change, Entry, EntryId, Index, Meta, SourceId};
 use scour_index_native::NativeIndex;
 
-/// One row.
-///
-/// **The mtime is not decoration.** Rows are stored newest-first, so entries
-/// that all share a timestamp fall back to path order — and a path-ordered
-/// index clusters every directory's rows into a few blocks, which is the best
-/// case for anything that skips blocks by directory number and is not what a
-/// real index looks like. `SCOUR_BENCH_SCATTER=1` gives each row an unrelated
-/// mtime, which is the real shape: one directory's rows spread over every
-/// block.
+/// One row. The mtime is not decoration: rows are stored newest-first, so a
+/// shared timestamp falls back to path order and clusters each directory into
+/// a few blocks. `SCOUR_BENCH_SCATTER=1` spreads a directory over every block.
 fn entry(i: usize, scatter: bool) -> Entry {
     let path = format!("/corpus/{:04}/file{i:08}.txt", i % 4096);
     let mut meta = Meta::UNKNOWN;
@@ -53,12 +45,9 @@ fn main() {
             "esit (yol sirali)"
         }
     );
-    // **Where the index sits decides what is being measured.** `tempdir` lands
-    // in `/tmp`, which is tmpfs here, and an `fsync` to memory costs nothing —
-    // so a commit measured there is the work and not the write. That is the
-    // right choice for anything CPU-bound and the wrong one for the commit
-    // clock, which is `fsync` almost all the way down. `SCOUR_BENCH_DIR` puts
-    // it on a real filesystem.
+    // Where the index sits decides what is measured: `tempdir` lands on tmpfs,
+    // where an `fsync` costs nothing — right for anything CPU-bound and wrong
+    // for the commit clock. `SCOUR_BENCH_DIR` puts it on a real filesystem.
     let held;
     let dir: &std::path::Path = match std::env::var_os("SCOUR_BENCH_DIR") {
         Some(d) => {
@@ -88,10 +77,8 @@ fn main() {
     println!("kuruldu    : {rows} satir, {built:.2?}");
     println!("canlilik   : {} bayt ({} satir)", bitmap, stats.entries);
 
-    // **What a start-up costs when nothing changed.** The walk hands the
-    // index every entry it saw, unchanged or not, so a rescan of an untouched
-    // filesystem writes the whole index again. This is the number any fix has
-    // to beat.
+    // What a start-up costs when nothing changed: the walk hands the index
+    // every entry it saw, so a rescan of an untouched filesystem rewrites it.
     let _g = index.begin_generation().expect("generation");
     let t = Instant::now();
     let mut again = (0..rows).map(|i| Change::Upsert(entry(i, scatter)));
@@ -108,9 +95,8 @@ fn main() {
         st.segments, st.unsorted_entries
     );
 
-    // Two kinds of commit, the same size, so the difference is the work and
-    // not the write. An upsert of a path that is already there and a removal
-    // of one file both change exactly one row.
+    // Two kinds of commit, the same size, so the difference is the work and not
+    // the write. An upsert of an existing path and a removal each change a row.
     let timed = |what: &str, mut make: Box<dyn FnMut(usize) -> Change>| {
         let mut worst = std::time::Duration::ZERO;
         let t = Instant::now();
@@ -138,10 +124,8 @@ fn main() {
             path: format!("/corpus/{:04}/file{:08}.txt", c % 4096, c),
         }),
     );
-    // The other shape of the same call, and the one block skipping cannot
-    // help: a whole directory, whose rows are spread over every block because
-    // rows are stored newest-first rather than by directory. If the skip costs
-    // anything, it costs it here.
+    // The shape block skipping cannot help: a whole directory, whose rows are
+    // spread over every block because rows are stored newest-first.
     timed(
         "subtree",
         Box::new(|c| Change::RemoveSubtree {

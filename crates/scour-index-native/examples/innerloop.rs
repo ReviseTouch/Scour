@@ -2,25 +2,9 @@
 //!
 //! `cargo run --release -p scour-index-native --example innerloop <index-dir> [term]`
 //!
-//! The question this exists to answer is not "is it fast" but "**what is the
-//! floor**". A search walks candidate rows and does three things to each one:
-//! reads the name out of the arena, folds it, and looks for the term in it.
-//! Everything else — the columns, the scoring, the page — is paid per *match*
-//! rather than per candidate, and there are two orders of magnitude fewer
-//! matches than candidates.
-//!
-//! So the four numbers below bracket the answer. If reading the names alone is
-//! most of the total, the layout is the ceiling and no amount of clever
-//! filtering helps. If folding is most of it, the fold is worth attacking —
-//! and storing names already folded becomes an obvious trade.
-//!
-//! Point it at a **copy** of the index directory: the service holds a writer
-//! lock on the real one, which is the whole point of that lock.
-//!
-//! **Read the second run of each figure, not the first.** The files are mapped,
-//! so the first `run()` in a process pays a page fault per page it touches and
-//! reports two to four times what the same call costs warm — which is how
-//! relevance came to be blamed for 88 ns a row it does not cost.
+//! A search reads each candidate's name, folds it and looks for the term; the
+//! four numbers below bracket that floor. Point it at a **copy**, and read the
+//! second run of each figure: the first pays a page fault per mapped page.
 
 use std::time::Instant;
 
@@ -88,10 +72,7 @@ fn main() {
     let searched = t.elapsed();
 
     // --- 4. the same search on names that were already folded -------------
-    //
-    // What the query would cost if the arena held a folded copy. Built here in
-    // memory rather than on disk, so the number says what the trade is worth
-    // before anybody pays for it.
+    // What the query would cost with a folded arena, built here in memory.
     let mut flat: Vec<u8> = Vec::with_capacity(bytes + rows);
     let mut ends: Vec<u32> = Vec::with_capacity(rows);
     seg.names.walk(0, |_, name| {
@@ -111,11 +92,8 @@ fn main() {
     let prefolded = t.elapsed();
 
     // --- 5. what `run` actually costs, same segment, same term -----------
-    //
-    // The four above are the inner loop in isolation. This is the engine
-    // around it: the plan, the trigram narrowing, the block walk, the
-    // scoring and the page. The gap between them is the overhead, and it is
-    // the number that says whether the loop or the machinery is the problem.
+    // The engine around the loop: plan, trigram narrowing, block walk, scoring
+    // and page. The gap from the four above is the overhead.
     let plan =
         scour_index_native::Plan::compile(&scour_query::parse_at(&term, 1_785_000_000), &seg)
             .expect("plan");
@@ -156,10 +134,8 @@ fn main() {
     );
 
     // --- 5b. the same walk under other full-walk sorts ---------------------
-    //
-    // Size and name also have to see every match before they know the page, so
-    // they pay the same walk. What they do *not* pay is `relevance`, which
-    // makes the three of them a subtraction rather than a guess.
+    // Size and name pay the same walk without paying `relevance`, which makes
+    // the three a subtraction rather than a guess.
     for (label, key) in [
         ("run(), by size", scour_core::SortKey::Size),
         ("run(), by name", scour_core::SortKey::Name),
@@ -179,11 +155,8 @@ fn main() {
     }
 
     // --- 6. the candidate rows, with nothing but the needle ---------------
-    //
-    // The same block set `run` walks, walked by hand with only the substring
-    // test. What is left between this and `run` is the machinery: the alive
-    // bit, the clause dispatch, the scoring, the page. Splitting them says
-    // whether the remaining nanoseconds are the loop or the frame around it.
+    // The same block set walked by hand with only the substring test; what is
+    // left against `run` is the alive bit, clause dispatch, scoring and page.
     let mut candidate_rows = 0usize;
     let t = Instant::now();
     let mut bare_hits = 0usize;

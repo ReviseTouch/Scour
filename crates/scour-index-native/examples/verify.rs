@@ -1,21 +1,9 @@
 //! Does the index still say what the disk says?
 //!
-//! **The question the architecture turns on, and nobody had asked it.** Keeping
-//! an index across restarts means reconciling it — generations, sweeps, the
-//! notes a walk leaves about rows it did not rewrite — and that machinery
-//! produced three separate faults in one day. Throwing it away and building a
-//! fresh index on every start would remove all of it, measured at five more
-//! core-seconds and 186 MB of writes each time.
+//! Counts the disagreements both ways: **ghosts**, rows the index holds for
+//! files that are not there, and **missing**, files on the disk with no row.
+//! Read-only, and it will not touch a running service — point it at a copy:
 //!
-//! Which of those is right depends entirely on whether the kept index actually
-//! drifts. So this counts the disagreements, both directions:
-//!
-//! * **ghosts** — rows the index holds for files that are not there
-//! * **missing** — files on the disk with no row
-//!
-//! Read-only, and it will not touch a running service: point it at a copy.
-//!
-//!   cp -a ~/.local/share/scour/index /tmp/idx-copy
 //!   cargo run --release -p scour-index-native --example verify -- \
 //!       /tmp/idx-copy/native /home/hasan /mnt/depo
 
@@ -53,9 +41,8 @@ fn main() {
 
     let index = NativeIndex::open_or_create(std::path::Path::new(&dir)).expect("indeks acilamadi");
 
-    // The disk, walked exactly as the service walks it — same rules, same
-    // allowances. A rule that differs here invents drift that is not there,
-    // which is the one way this measurement can lie.
+    // The disk, walked exactly as the service walks it. A rule that differs
+    // here invents drift that is not there.
     let (def_paths, def_dirs, def_files) = scour_source_fs::platform_defaults();
     let opts = ScanOptions {
         hidden: true,
@@ -66,12 +53,9 @@ fn main() {
         exclude_dirs: def_dirs,
         exclude_files: def_files,
         allow: vec!["target/release".into(), "target/debug".into()],
-        // **Everything Scour writes about itself**, which is what the service
-        // denies — not just the index. The web window is a browser and its
-        // profile lives under the data directory; leaving it in reported 6,192
-        // "missing" files in one Chromium cache directory and none of them were
-        // drift. A verification whose rules differ from the service's measures
-        // the difference between the two rule sets.
+        // Everything Scour writes about itself, which is what the service
+        // denies — the web window's browser profile lives under the data
+        // directory, and leaving it in reported 6,192 false "missing" files.
         deny: vec![
             dir.clone(),
             scour_config::data_dir().to_string_lossy().into_owned(),
@@ -119,10 +103,8 @@ fn main() {
         })
         .expect("segmentler okunamadi");
 
-    // The missing ones by name, because *which* they are decides what the
-    // number means: a burst in one directory is churn since the copy, a whole
-    // tree is a rule this walk does not share with the service, and a scatter
-    // is drift.
+    // The missing ones by name: a burst in one directory is churn since the
+    // copy, a whole tree is a rule this walk does not share, a scatter is drift.
     let mut missing_paths: Vec<String> = Vec::new();
     for root in &roots {
         let src = FsSource::new(SourceId(0), "verify", vec![root.into()]);

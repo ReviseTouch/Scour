@@ -1,8 +1,8 @@
 //! Measure cold folder totals against a private index copy on Linux.
 //!
-//! Does not modify rows. Opening acquires the writer lock, so use a private copy:
+//! Does not modify rows, but opening takes the writer lock, so use a copy:
 //! `cargo run --release -p scour-index-native --example folder_memory -- <copy>`.
-//! The sampler reads anonymous memory every 2 ms; this is not a whole-system peak.
+//! The sampler reads anonymous memory every 2 ms; not a whole-system peak.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

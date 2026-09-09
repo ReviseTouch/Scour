@@ -7,13 +7,9 @@ use parking_lot::Mutex;
 
 /// A cached logical byte count for one index directory.
 ///
-/// A segment is several files and may be written by one of the background
-/// builders while the index is answering queries. Caching only the sizes of
-/// published segments would be cheaper, but it would silently change the
-/// meaning of `IndexStats::bytes_on_disk`: partial and orphan files have always
-/// counted too. Instead every index-controlled mutation marks this value dirty.
-/// The first reader after the writers leave refreshes it; quiet readers do one
-/// directory metadata check and no per-file metadata calls.
+/// Counts partial and orphan files too, which is what `IndexStats::bytes_on_disk`
+/// means. Every index-controlled mutation marks the value dirty; a quiet reader
+/// does one directory metadata check and no per-file ones.
 #[derive(Debug)]
 pub(crate) struct DirectoryBytes {
     dir: PathBuf,
@@ -50,10 +46,7 @@ impl DirectoryBytes {
     pub(crate) fn get(&self) -> u64 {
         let mut state = self.state.lock();
         if state.active_writers != 0 {
-            // Do not cache a half-written segment. The old implementation also
-            // walked concurrently with builders, so this preserves that
-            // best-effort snapshot while guaranteeing the next quiet read is
-            // exact.
+            // Do not cache a half-written segment; the next quiet read is exact.
             drop(state);
             return dir_size(&self.dir);
         }
@@ -74,11 +67,8 @@ impl DirectoryBytes {
         bytes
     }
 
-    /// Run one filesystem mutation and invalidate the quiet cached value.
-    ///
-    /// The guard makes both errors and panics safe: a partial file left behind
-    /// is still counted by the next read, and an active writer can never remain
-    /// stuck in the state after unwinding.
+    /// Run one filesystem mutation and invalidate the quiet cached value. The
+    /// guard releases the writer count on unwinding as well as on return.
     pub(crate) fn changing<T>(&self, change: impl FnOnce() -> T) -> T {
         {
             let mut state = self.state.lock();
@@ -98,18 +88,13 @@ impl Drop for Writer<'_> {
     fn drop(&mut self) {
         let mut state = self.bytes.state.lock();
         state.active_writers -= 1;
-        // `dirty` was set before the write began and deliberately remains set:
-        // refreshing here would turn every commit into an extra directory
-        // walk even when nobody asks for status.
+        // `dirty` stays set: refreshing here would walk the directory on every
+        // commit even when nobody asks for status.
     }
 }
 
-/// Measure the directory and retain the stamp from after the walk.
-///
-/// Index-controlled writers cannot start while a caller holds `state`, and an
-/// already active writer never reaches this function through the cached path.
-/// The after-stamp additionally makes an external create or unlink invalidate
-/// this value on the next call.
+/// Measure the directory and retain the stamp from after the walk, so that an
+/// external create or unlink invalidates the value on the next call.
 fn measure(dir: &Path) -> (u64, Option<SystemTime>) {
     (dir_size(dir), directory_modified(dir))
 }
@@ -133,8 +118,7 @@ pub(crate) fn dir_size(dir: &Path) -> u64 {
 mod tests {
     use super::*;
 
-    /// Reproduces the per-file metadata work removed from `Index::stats`.
-    /// Kept ignored because it is a measurement, not a timing assertion.
+    /// A measurement of walk against cache, not a timing assertion.
     #[test]
     #[ignore = "manual performance measurement"]
     fn cached_directory_byte_cost() {

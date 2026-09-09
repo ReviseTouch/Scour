@@ -1,17 +1,8 @@
 //! What the folder-size column adds to a page of results.
 //!
-//! The index answers a page of two hundred rows in well under a millisecond,
-//! and the same page measured through the service takes forty to ninety. The
-//! difference is what the engine does *around* the search, and the largest
-//! piece of that is [`subtree_sizes`]: every folder on the page is asked what
-//! it holds, one call for the page.
-//!
-//! This measures the two halves apart — the search, then the weighing of
-//! whatever folders that search turned up — because "the list got slow" and
-//! "the size column got slow" are the same sentence from outside and need
-//! separating from inside.
-//!
-//! Read-only. Point it at a copy:
+//! The search and the weighing of whatever folders it turned up, measured
+//! apart: "the list got slow" and "the size column got slow" are one sentence
+//! from outside. Read-only; point it at a copy:
 //!
 //!   cargo run --release -p scour-index-native --example foldercost -- /tmp/idx/native
 

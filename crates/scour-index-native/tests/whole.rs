@@ -1,15 +1,8 @@
 //! The index as a whole, checked against the truth.
 //!
-//! [`crate::smoke`](../smoke.rs) checks one segment. This checks the thing the
-//! rest of Scour actually holds: several segments, removals that have not been
-//! written yet, a generation sweep, a rebuild, and a restart — with every
-//! answer compared against [`scour_mock::brute_force`], which looks at every
-//! entry and cannot take a shortcut.
-//!
-//! Almost everything that can go wrong here is invisible to a benchmark. A
-//! second segment that is searched but not merged, a removal that is hidden but
-//! never erased, a re-upsert that leaves the old row alive — each of those
-//! returns a fast, plausible answer.
+//! `smoke.rs` checks one segment; this checks several, plus unwritten removals,
+//! a generation sweep, a rebuild and a restart, every answer compared against
+//! [`scour_mock::brute_force`], which cannot take a shortcut.
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -113,9 +106,8 @@ fn entry(path: &str, mtime: i64, ino: u64) -> Entry {
 
 #[test]
 fn many_segments_answer_exactly_what_one_would() {
-    // Eight segments. Everything a search does across them — the merge, the
-    // page, the count — has to produce the same list as a single pass over the
-    // entries would.
+    // Eight segments: the merge, the page and the count must give the same
+    // list a single pass over the entries would.
     let f = Fixture::new(16_000, 2_000);
     assert!(
         f.index.stats().expect("stats").segments >= 8,
@@ -158,25 +150,9 @@ fn many_segments_answer_exactly_what_one_would() {
     );
 }
 
-/// Ordering by path is a stored order now, and it has to be the same order.
-///
-/// **The change this is the gate for.** A segment lists its rows in path order
-/// when it is written, so a page ordered by path is a read of two hundred
-/// positions instead of a key built for every match — measured on 2,235,402
-/// rows, whole table, page of two hundred: **291 ms becomes 0.8**, and the peak
-/// resident size of the same benchmark falls from 184 MB to 120 because the
-/// discarded keys were two million strings.
-///
-/// What could go wrong is not subtle and is completely invisible to that
-/// measurement: a stored order that is not the order. So every query that
-/// reaches it is checked against brute force, in both directions, and at an
-/// offset — a stored order that is right at the front and wrong further in is
-/// exactly what a page of the first fifty would not show.
-///
-/// The queries are the ones that reach it: none reads a name, because the
-/// folded arena is walked sequentially and positions are not sequential. Every
-/// text query narrows through the trigram filter instead and keeps the walk it
-/// always had.
+/// Ordering by path is a stored order, and it has to be the same order.
+/// Checked in both directions and at an offset — right at the front and wrong
+/// further in is what a page of the first fifty would not show.
 #[test]
 fn the_stored_path_order_is_the_order_brute_force_gives() {
     let f = Fixture::new(16_000, 2_000);
@@ -192,9 +168,8 @@ fn the_stored_path_order_is_the_order_brute_force_gives() {
     ] {
         for desc in [false, true] {
             f.check(q, SortKey::Path, desc);
-            // Deep enough to be past the first page and its boundary. The
-            // reference is asked for the whole prefix and sliced, because
-            // `brute_force` takes a limit and not an offset.
+            // Past the first page and its boundary. The reference takes a
+            // limit and not an offset, so it is asked for the whole prefix.
             let whole = brute_force(&f.entries, &parse_at(q, NOW), SortKey::Path, desc, 400);
             if whole.len() > 300 {
                 let want: Vec<String> = whole[300..].iter().map(|h| h.path.clone()).collect();
@@ -207,10 +182,8 @@ fn the_stored_path_order_is_the_order_brute_force_gives() {
         }
     }
 
-    // And the point of it: the walk stops. Without the stored order this
-    // visits every row of every segment to find out which two hundred paths
-    // come first, and the answer is identical either way — which is why the
-    // cost has to be asserted and not just the list.
+    // And the point of it: the walk stops. Without the stored order the answer
+    // is identical and every row of every segment is visited.
     let res = f
         .index
         .search(&SearchRequest {
@@ -232,12 +205,8 @@ fn the_stored_path_order_is_the_order_brute_force_gives() {
     );
 }
 
-/// Ordering by name is a stored order too, and its shortcut is held to the
-/// public reference rather than to another implementation detail.
-///
-/// These are exactly the queries that may stream the order: none has to read a
-/// name to decide whether a row matches. Text queries keep the sequential name
-/// walk after the trigram filter narrows their blocks.
+/// Ordering by name is a stored order too. These are the queries that may
+/// stream it: none has to read a name to decide whether a row matches.
 #[test]
 fn the_stored_name_order_is_the_order_brute_force_gives() {
     let f = Fixture::new(16_000, 2_000);
@@ -286,10 +255,8 @@ fn the_stored_name_order_is_the_order_brute_force_gives() {
     );
 }
 
-/// Extension order is persisted for the broad list shown by the GUI.
-///
-/// Extensions have only a modest number of values, so most rows tie. The
-/// order therefore has to preserve both the primary extension and the public
+/// Extension order is persisted for the broad list the GUI shows. Extensions
+/// have few values, so the order must hold both the primary key and the public
 /// newest-first/path-first tie order while still stopping after a page.
 #[test]
 fn the_stored_extension_order_is_the_order_brute_force_gives() {
@@ -340,10 +307,7 @@ fn the_stored_extension_order_is_the_order_brute_force_gives() {
 }
 
 /// Reversing a name order must not reverse the rows that share one name.
-///
-/// The primary direction changes, while ties remain newest-first and then
-/// path-first. Names tie often enough that this is not a corner case: files
-/// such as `Cargo.toml`, `index.js`, and `README` occur throughout a tree.
+/// `Cargo.toml`, `index.js` and `README` tie throughout a real tree.
 #[test]
 fn descending_stored_name_order_keeps_the_public_tie_order() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -463,10 +427,9 @@ fn descending_stored_extension_order_keeps_the_public_tie_order() {
 fn folded_extension_rules_survive_a_multi_segment_merge() {
     use scour_core::text::{DefaultFolder, Folder};
 
-    // Both are twelve bytes before folding and eighteen afterwards. Their
-    // first sixteen folded bytes are identical, so a merge that treats the
-    // `Head` as exact — or resolves it with the whole name — gets the page
-    // boundary wrong.
+    // Both are twelve bytes before folding and eighteen after, agreeing on
+    // their first sixteen folded bytes, so a merge treating the `Head` as
+    // exact — or resolving it with the whole name — gets the boundary wrong.
     let common = "Ⱥ".repeat(5);
     let grown_a = format!("{common}Ⱥ");
     let grown_b = format!("{common}Ⱦ");
@@ -477,9 +440,8 @@ fn folded_extension_rules_survive_a_multi_segment_merge() {
     assert_eq!(&folded_a.as_bytes()[..16], &folded_b.as_bytes()[..16]);
     assert_ne!(folded_a, folded_b);
 
-    // Seven dotless i characters contract from fourteen raw bytes to seven.
-    // They remain ineligible; an ASCII suffix with the same folded spelling is
-    // eligible and lets the extension filter expose any post-fold decision.
+    // Seven dotless i characters contract from fourteen raw bytes to seven and
+    // stay ineligible; an ASCII suffix folding the same way is eligible.
     let contracted = "ı".repeat(7);
     let eligible = "iiiiiii";
     let mut entries = Vec::new();
@@ -564,23 +526,9 @@ fn folded_extension_rules_survive_a_multi_segment_merge() {
 }
 
 /// Oldest-first is the same answer as before, now that it is a different walk.
-///
-/// **The gap this closes is why it went unnoticed.** The agreement test above
-/// checks `Modified` *descending* against brute force and every other key in
-/// both directions — but never `Modified` ascending, which is precisely the
-/// order that has just stopped visiting every match and started walking the
-/// stored one backwards.
-///
-/// Two things are checked and the second is the delicate one:
-///
-/// * the same queries agree with brute force, oldest-first;
-/// * a corpus where **thousands of files share one second** pages correctly.
-///   A backwards walk yields dates in order and paths *reversed* inside a
-///   date, because inside a segment the row number is the path order. A page
-///   whose edge falls inside such a group would otherwise be handed the last
-///   paths to choose from rather than the first, which is wrong in a way that
-///   looks entirely reasonable — the right dates, plausible names, and
-///   nothing in the page to say it is not the answer.
+/// A backwards walk yields dates in order and paths *reversed* inside a date,
+/// so a page whose edge falls in a group of files sharing one second would be
+/// handed the last paths to choose from rather than the first.
 #[test]
 fn oldest_first_is_the_answer_brute_force_gives() {
     let f = Fixture::new(16_000, 2_000);
@@ -641,15 +589,9 @@ fn oldest_first_is_the_answer_brute_force_gives() {
         );
     }
 
-    /* **And the walk's own answer, not only the merge's.**
-     *
-     * `run_with` is public and has two ways out: the merge takes `ranked` and
-     * orders it itself, and a single-segment caller takes `hits` already
-     * ordered. Everything above goes through the first, so the second was
-     * uncovered — removing its sort changed nothing any test could see, which
-     * is how a guard becomes a hope. Its rows arrive in date order with the
-     * paths reversed inside a date, so without that sort a tie group comes
-     * back backwards.
+    /* And the walk's own answer, not only the merge's: `run_with` has two ways
+     * out, and a single-segment caller takes `hits` already ordered. Its rows
+     * arrive in date order with paths reversed inside a date.
      */
     let one = Fixture::new(600, 600);
     // Folded into one, because this half is about the path a single segment
@@ -684,31 +626,10 @@ fn oldest_first_is_the_answer_brute_force_gives() {
     );
 }
 
-/// A page that ends inside a tie on sixteen bytes is still the page.
-///
-/// **The one group a bounded selection cannot drop.** Ordering by name no
-/// longer keeps a candidate per match — the walk holds a page's worth and
-/// rejects the rest as it goes — and the name key is the first *sixteen* bytes
-/// of the folded name, an abbreviation. So two rows that tie on it are not
-/// equal, and which of them wins is decided later against the full name. A
-/// selection that keeps only the best `need` returns a page that is
-/// deterministic, plausible, and not the one brute force gives, the moment its
-/// edge falls inside such a group.
-///
-/// Nothing above forces that. `many_segments_answer_exactly_what_one_would`
-/// compares every key against brute force, but on generated names the boundary
-/// landing inside a sixteen-byte tie is luck. Here two hundred names agree on
-/// their first sixteen bytes and differ afterwards, twenty sort before them and
-/// twenty after, and the page is asked for at every edge of the group.
-///
-/// Written in the reverse of the order they sort in, so a selection that keeps
-/// whichever row it met first cannot pass by accident. Split across segments,
-/// because the group is then resolved by the merge comparator in `index.rs` as
-/// well as by `narrow` — the two are the same rule written twice, and the
-/// second is hardcoded to compare folded *names*.
-///
-/// Sorted by path as well, where the key is exact and the group must **not** be
-/// kept: `key_is_exact` has had `Path` added to it once already.
+/// A page that ends inside a tie on sixteen bytes is still the page: the name
+/// key abbreviates, so two rows tying on it are not equal. Two hundred names
+/// agree here, written in reverse of their sort order and split across segments
+/// so the merge comparator is exercised as well as `narrow`.
 #[test]
 fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -719,8 +640,7 @@ fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
         all.push(entry(&format!("/t/zzz_{i:03}.rs"), NOW - 5_000, 20_000 + i));
     }
     // `sozlesme_arsivi_` is sixteen bytes exactly, so the key sees that and
-    // nothing else. The dates repeat every third file, so the tie-break behind
-    // the name is exercised too.
+    // nothing else; dates repeat every third file, exercising the tie-break.
     for i in 0..200u64 {
         let n = 199 - i;
         all.push(entry(
@@ -730,8 +650,7 @@ fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
         ));
     }
     // The same names spelled differently, in another directory: the key is over
-    // the *folded* name, so these join the group and half of them tie with a
-    // lowercase one exactly.
+    // the *folded* name, so these join the group.
     for i in 0..50u64 {
         let n = 49 - i;
         all.push(entry(
@@ -779,25 +698,10 @@ fn a_page_that_ends_inside_a_tie_on_sixteen_bytes_is_still_the_page() {
     }
 }
 
-/// A numeric order stops opening blocks, and stops at the right place.
-///
-/// **The failure this guards is a plausible page.** Ordering by a number no
-/// longer visits every match: a block carries the range of every column, so
-/// the blocks are opened in the order of what each can reach and abandoned
-/// once the page is beyond all of them. Three things decide whether that is
-/// still the same list, and each has its own half of this test.
-///
-/// * **The tie group at the edge.** Sizes and dates tie in the thousands on a
-///   real disk, and the page breaks a tie on the row — so a block that can
-///   only *equal* the worst row held may still displace it, when its rows come
-///   first. Here every value is shared by a thousand files whose names sort
-///   the opposite way from the order they were written in, so nothing can pass
-///   by luck.
-/// * **The count**, which is a separate obligation. Deciding the page says
-///   nothing about the total printed beside it, and a cap allowed to stop the
-///   selection returns "the largest forty among the first hundred" — the
-///   mistake this engine has already made once.
-/// * **The offset**, because the list pages to twenty thousand.
+/// A numeric order stops opening blocks, and stops at the right place. Three
+/// halves to it: the tie group at the edge, where a block that can only *equal*
+/// the worst row held may still displace it; the count, which a cap may bound
+/// while the page may not be; and the offset, out to twenty thousand.
 #[test]
 fn a_numeric_order_stops_where_the_page_really_ends() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -810,9 +714,8 @@ fn a_numeric_order_stops_where_the_page_really_ends() {
             path: format!("/t/{:05}.bin", 3_999 - i),
             is_dir: false,
             meta: Meta {
-                // Four sizes, seven creation dates, three block counts, and
-                // one kind for all of them — every one a tie group wider than
-                // a page.
+                // Four sizes, seven creation dates, three block counts and one
+                // kind — every one a tie group wider than a page.
                 size: (n % 4) * 4_096,
                 ctime: NOW - (n % 7) * 1_000,
                 disk: (n % 3) * 4_096,
@@ -852,9 +755,8 @@ fn a_numeric_order_stops_where_the_page_really_ends() {
     }
 
     // The cap bounds the total and never the page. `ext:bin` rather than the
-    // empty query on purpose: an empty one takes the total from the segment's
-    // own live count and never hands the cap to the walk at all, which is
-    // exactly where this would look fine while being wrong.
+    // empty query: an empty one takes its total from the segment's live count
+    // and never hands the cap to the walk at all.
     let want = f.expected("ext:bin", SortKey::Size, true, 40);
     for cap in [1u32, 40, 100, 10_000_000] {
         let res = f
@@ -880,15 +782,10 @@ fn a_numeric_order_stops_where_the_page_really_ends() {
     }
 }
 
-/// A folder still sorts by what is under it once blocks are being skipped.
-///
-/// **The trap the block order sets for `sort:size`.** A directory sorts by its
-/// rollup and not by its `Size` column, so the column's range is not a bound
-/// on what the block can reach — and a block ordered by a range that does not
-/// cover its own rows is a block that gets skipped. Here the largest folder in
-/// the index sits in a block of nothing but tiny files, so a bound taken from
-/// the column alone would put that block last and drop the folder off a page
-/// it should be leading.
+/// A folder still sorts by what is under it once blocks are being skipped: a
+/// directory sorts by its rollup, not its `Size` column, so that column's range
+/// is not a bound on what the block can reach. The largest folder here sits in
+/// a block of tiny files.
 #[test]
 fn the_largest_folder_survives_a_walk_that_skips_blocks() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -983,9 +880,8 @@ fn the_largest_folder_survives_a_walk_that_skips_blocks() {
 
 #[test]
 fn paging_across_segments_reconstructs_the_list() {
-    // The offset belongs to the merged list, not to any one segment. Applying
-    // it per segment would drop a row from each and quietly return a page that
-    // is short in a way nothing reports.
+    // The offset belongs to the merged list, not to any one segment: applying
+    // it per segment drops a row from each and returns a short page.
     let f = Fixture::new(6_000, 500);
     let mut got = f.paged("ext:rs", SortKey::Name, false, 0, 20);
     got.extend(f.paged("ext:rs", SortKey::Name, false, 20, 20));
@@ -993,26 +889,10 @@ fn paging_across_segments_reconstructs_the_list() {
     assert_eq!(got, f.expected("ext:rs", SortKey::Name, false, 60));
 }
 
-/// A page deep in the list is the same rows the list has there.
-///
-/// **The guard over what a deep offset is allowed to become.** Reaching row
-/// 100,000 costs 1.43 s and 401,438 reconstructed paths to return sixty, because
-/// every segment materialises `offset + limit` rows and the merge throws all but
-/// the window away. Anything that fixes that changes where the offset is
-/// applied — which is exactly the change that can quietly return *a* page
-/// instead of *the* page.
-///
-/// So: every order, both directions, offsets that land inside a segment and
-/// across a boundary.
-///
-/// The reference is the index's **own** full answer rather than brute force,
-/// and that is the point rather than a weakening. Paging is a statement about
-/// self-consistency: whatever order the index chose, the window at 900 has to
-/// be that order's rows 900 to 960. Brute force cannot say — where a sort ties,
-/// two orders are both right, and `ext:rs` sorted by relevance ties on every
-/// row, because a filter gives relevance nothing to score. Comparing against it
-/// there fails on a disagreement that is not an error, and the tests that do
-/// compare orders against brute force already exist.
+/// A page deep in the list is the same rows the list has there, in every order,
+/// both directions, at offsets inside a segment and across a boundary. The
+/// reference is the index's own full answer: paging is self-consistency, and
+/// where a sort ties — `ext:rs` by relevance — two orders are both right.
 #[test]
 fn a_page_deep_in_the_list_holds_the_rows_the_list_holds_there() {
     // Twelve segments, so an offset of 900 is several boundaries in.
@@ -1027,9 +907,8 @@ fn a_page_deep_in_the_list_holds_the_rows_the_list_holds_there() {
         SortKey::Ext,
         SortKey::Kind,
     ];
-    // The empty query is what a window opens on and the one that pages
-    // furthest; the other two page across a filtered list, where the offset
-    // counts matches rather than rows.
+    // The empty query is what a window opens on and pages furthest; the other
+    // two page a filtered list, where the offset counts matches, not rows.
     for q in ["", "ext:rs", "size:>1k"] {
         for sort in ORDERS {
             for desc in [true, false] {
@@ -1050,12 +929,9 @@ fn a_page_deep_in_the_list_holds_the_rows_the_list_holds_there() {
     }
 }
 
-/// Asking for one row at a time gives the same list as asking for all of them.
-///
-/// The same invariant from the other side, and it catches what a slice
-/// comparison cannot: an offset applied per segment loses a row per segment
-/// rather than shifting the window, so every page is subtly different but each
-/// one on its own looks reasonable.
+/// Asking for one row at a time gives the same list as asking for all of them:
+/// an offset applied per segment loses a row per segment rather than shifting
+/// the window, so every page differs subtly and each looks reasonable.
 #[test]
 fn a_list_read_one_row_at_a_time_is_the_list() {
     let f = Fixture::new(2_000, 200);
@@ -1070,16 +946,9 @@ fn a_list_read_one_row_at_a_time_is_the_list() {
 
 #[test]
 fn saving_over_a_file_leaves_one_row_however_the_source_names_it() {
-    // **The duplicate bug, pinned.** Everything that saves carefully writes a
-    // temporary file and renames it over the target: the path survives and
-    // whatever the filesystem called the object does not. When the index keyed
-    // rows on the source's identity, each save added a row and nothing removed
-    // the old one — 267 rows at one path on the live index, growing for as
-    // long as the service ran.
-    //
-    // So each round here hands over a *different* identity for the same path,
-    // which is precisely what a rename-over produces, and the index has to
-    // answer with one row every time.
+    // A save writes a temporary file and renames it over the target, so the
+    // path survives and the object identity does not. Each round hands over a
+    // different identity for one path; the index must answer with one row.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let path = "/home/u/Belgeler/rapor-2026.md";
@@ -1121,15 +990,9 @@ fn saving_over_a_file_leaves_one_row_however_the_source_names_it() {
 
 #[test]
 fn a_commit_that_cannot_be_written_keeps_what_it_was_carrying() {
-    // **The failure that used to be silent and total.** The staged rows are
-    // lifted out of the buffer before anything is written and are the only
-    // copy; a full disk, a permission change or a volume going away used to
-    // drop them on the floor while the engine was told the commit had
-    // succeeded. Everything written since the last commit, gone, with a status
-    // line saying all was well.
-    //
-    // A directory nothing may write to is the deterministic way to produce an
-    // I/O failure; `ENOSPC` and `EIO` take the same path.
+    // The staged rows are lifted out of the buffer before anything is written
+    // and are the only copy, so a failed write used to drop them while
+    // reporting success. An unwritable directory is the deterministic ENOSPC.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     index
@@ -1172,11 +1035,9 @@ fn a_commit_that_cannot_be_written_keeps_what_it_was_carrying() {
     assert_eq!(hits.total, 1);
 }
 
-/// A failed bitmap replacement must leave enough state for the next commit.
-///
-/// The first attempt has already killed the row in memory, so asking the same
-/// removal to run again reports zero. Without a separate dirty-bitmap stamp,
-/// the retry then writes nothing and a restart resurrects the file.
+/// A failed bitmap replacement must leave enough state for the next commit: the
+/// first attempt already killed the row in memory, so the retry reports zero and
+/// without a separate dirty-bitmap stamp writes nothing.
 #[test]
 fn a_failed_alive_write_retries_the_pending_removal() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -1307,8 +1168,7 @@ fn forget_retries_a_failed_alive_write_and_survives_reopen() {
 }
 
 /// A failed sweep must restore its unchanged-row stamps as well as its dirty
-/// bitmap. Otherwise retrying deletes both the missing row and the row the walk
-/// explicitly saw.
+/// bitmap, or retrying deletes the row the walk explicitly saw.
 #[test]
 fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
     fn all_paths(index: &NativeIndex) -> Vec<String> {
@@ -1379,10 +1239,8 @@ fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
 
 #[test]
 fn one_source_cannot_sweep_away_another_source_rows() {
-    // Two sources whose roots overlap — a home directory and a project
-    // directory inside it, which is a configuration people really write. A
-    // scan of one says "I walked here and did not find these rows"; that is a
-    // statement about its own rows, and it was being applied to everyone's.
+    // Two sources whose roots overlap. A scan of one says "I walked here and
+    // did not find these rows" — a statement about its own rows only.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let at = |source: u32, path: &str| Entry {
@@ -1428,9 +1286,8 @@ fn one_source_cannot_sweep_away_another_source_rows() {
 
 #[test]
 fn a_removal_is_invisible_before_it_is_written() {
-    // The one thing that may not wait for a commit. Deleting a file and still
-    // seeing it reads as a broken program, so the removal takes effect in the
-    // overlay first and in the files afterwards.
+    // The one thing that may not wait for a commit: a removal takes effect in
+    // the overlay first and in the files afterwards.
     let f = Fixture::new(20_000, 20_000);
     let victim = f
         .entries
@@ -1602,9 +1459,8 @@ fn re_indexing_a_file_replaces_it_instead_of_doubling_it() {
 
 #[test]
 fn a_sweep_removes_what_a_rescan_did_not_find() {
-    // The case a rescan cannot report: a file deleted while nothing was
-    // watching. The scan finds three of four; the fourth is only identifiable
-    // as the one carrying an older stamp.
+    // The case a rescan cannot report: a file deleted while nothing watched.
+    // The fourth is identifiable only by carrying an older stamp.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let originals = vec![
@@ -1656,15 +1512,9 @@ fn a_sweep_removes_what_a_rescan_did_not_find() {
 
 #[test]
 fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
-    // The sweep used to answer this by rebuilding a path for every row that the
-    // directory scope did not already accept and comparing strings. That is a
-    // `String` per row per sweep — bearable when a sweep followed a full
-    // rescan, and not bearable now that creating a folder queues a walk. What
-    // replaces it has to give the same two answers:
-    //
-    //   * the swept directory's **own** row goes, even though it lives in its
-    //     parent and carries the parent's number, so the range check misses it;
-    //   * a sibling whose name merely starts with the same letters stays.
+    // The sweep must give the same two answers as rebuilding a path per row
+    // did: the swept directory's own row goes, though it lives in its parent
+    // and carries the parent's number; a sibling merely sharing a prefix stays.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let dir = |path: &str, ino: u64| {
@@ -1720,16 +1570,10 @@ fn a_sweep_takes_the_walked_directory_itself_and_spares_its_neighbour() {
 
 #[test]
 fn deleting_a_tree_gives_the_same_answer_however_it_is_reported() {
-    // A delete arrives as one removed path per file and one per directory, and
-    // a commit lands once a second, so a few thousand of them are in one batch.
-    // The obvious loop asks every row about every path, which on a million rows
-    // was **2.24 seconds** of held write lock at four thousand paths — with a
-    // search queued behind it for every one of those seconds.
-    //
-    // What the replacement must not do is change the answer. Reporting a
-    // subtree as one prefix and reporting it as every path inside it are two
-    // descriptions of the same delete, so the index has to end up in the same
-    // place either way.
+    // A few thousand removed paths land in one batch. Asking every row about
+    // every path was 2.24 s of held write lock at four thousand paths. What
+    // replaces it must not change the answer: a subtree reported as one prefix
+    // and as every path inside it are two descriptions of one delete.
     let tree = || -> Vec<Entry> {
         let mut v = Vec::new();
         for pkg in 0..40 {
@@ -1814,13 +1658,9 @@ fn deleting_a_tree_gives_the_same_answer_however_it_is_reported() {
 
 #[test]
 fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
-    // A segment swept empty is both *touched* — its bitmap changed — and
-    // *gone*, and the commit that erases it writes the bitmaps after releasing
-    // the lock. So the file came back, for a segment nothing would ever open
-    // and nothing would ever remove. Counted on the live index: **182 orphan
-    // segments against 55 real ones**, almost all a lone `.alive`, and because
-    // `bytes_on_disk` is the size of the directory the status line counted
-    // them.
+    // A segment swept empty is both *touched* — its bitmap changed — and gone,
+    // and a commit writes bitmaps after releasing the lock, so the `.alive`
+    // file came back for a segment nothing would open: 182 orphans against 55.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let first: Vec<Entry> = (0..200)
@@ -1831,10 +1671,8 @@ fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
         .expect("apply");
     index.commit().expect("commit");
 
-    // Remove every one of them, so the commit both *touches* that segment —
-    // its bitmap changed — and *empties* it. `commit` is the path that matters:
-    // it erases the files under the lock and writes the bitmaps after
-    // releasing it.
+    // Remove every row, so the commit both touches that segment and empties it.
+    // `commit` erases files under the lock and writes bitmaps after releasing.
     index
         .apply(
             &mut [
@@ -1847,9 +1685,8 @@ fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
     index.commit().expect("commit");
     assert_eq!(index.stats().expect("stats").entries, 1);
 
-    // Checked against the files rather than the manifest, because `.names` is
-    // what `Live::open` reads first: a segment number with any other part but
-    // no `.names` is a number nothing can open.
+    // Checked against the files, not the manifest: `Live::open` reads `.names`
+    // first, so any other part without it is a number nothing can open.
     let files = segment_files(tmp.path());
     let real: std::collections::HashSet<&str> = files
         .iter()
@@ -1877,11 +1714,9 @@ fn segment_files(dir: &std::path::Path) -> Vec<String> {
 
 #[test]
 fn an_index_forgets_files_the_manifest_never_named() {
-    // The other way orphans appear, and the one no ordering fixes: a segment is
-    // nine files written one at a time, and a kill in the middle leaves a
-    // partial set. Safe to remove because the manifest is written before
-    // anything is unlinked and rewritten before anything is added, so a file it
-    // does not name is a file nothing can reach.
+    // A segment is nine files written one at a time, so a kill in the middle
+    // leaves a partial set. Safe to remove: the manifest is written before
+    // anything is unlinked, so a file it does not name is unreachable.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     for (path, ino) in [("/w/a.rs", 1u64), ("/w/b.rs", 2)] {
@@ -1914,15 +1749,10 @@ fn an_index_forgets_files_the_manifest_never_named() {
 
 #[test]
 fn a_rebuild_finishes_even_while_the_index_is_being_written_to() {
-    // A fold releases the lock while it builds — that is what makes it safe
-    // against searches — so a commit lands during it and appends a segment to
-    // the very generation just folded. The rebuild loop saw a group of two
-    // again and folded the whole index a second time, and a third. Measured on
-    // 2.1 M entries: `scour maintain rebuild` ran for **over ten minutes** and
-    // was still at 38 segments when it was given up on.
-    //
-    // The work is decided once now, so this has to finish while a writer is
-    // going as hard as it can.
+    // A fold releases the lock while it builds, so a commit lands during it and
+    // appends a segment to the generation just folded — which had the rebuild
+    // loop folding the whole index again, over ten minutes at 2.1 M entries.
+    // The work is decided once now, so this finishes under a hard writer.
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1982,19 +1812,9 @@ fn a_rebuild_finishes_even_while_the_index_is_being_written_to() {
     );
 }
 
-/// Folding a segment a walk has marked must not lose the files it marked.
-///
-/// **The invariant behind the guard in `fold`, and it had none.** A walk that
-/// finds a row unchanged does not rewrite it; it marks it instead, and the mark
-/// is keyed on the number of the segment the row is in. A fold consumes
-/// segments and writes one with a *new* number — so folding a marked segment
-/// leaves every one of its marks pointing at a segment that no longer exists.
-/// The sweep that follows then cannot tell those rows were seen, and deletes
-/// files that are on the disk. Silently, reporting success.
-///
-/// Checked by removal: with the guard taken out entirely this test fails and
-/// `a_generation_is_never_folded_into_another_one` — which sounds like it
-/// covers this and does not — still passes.
+/// Folding a segment a walk has marked must not lose the files it marked: marks
+/// are keyed on segment numbers and a fold writes a new number, so the sweep
+/// deletes files that are on disk. Removing the guard fails only this test.
 #[test]
 fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     let f = Fixture::new(6_000, 500);
@@ -2011,9 +1831,8 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     f.index.apply(&mut again).expect("apply");
     f.index.commit().expect("commit");
 
-    // Housekeeping, arriving in the middle of it. This is not contrived — the
-    // engine compacts on the commit boundary and a walk of a real disk holds a
-    // generation open for seconds.
+    // Housekeeping arriving in the middle: the engine compacts on the commit
+    // boundary and a real walk holds a generation open for seconds.
     f.index
         .maintain(Maintenance::Compact)
         .expect("compaction should decline, not fail");
@@ -2030,24 +1849,10 @@ fn folding_a_marked_segment_does_not_delete_what_it_marked() {
     );
 }
 
-/// Two paths that hash to the same key are still two files.
-///
-/// **Not a hypothetical.** The identity table is keyed on half a digest — 32
-/// bits — and the birthday bound on 2.2 million entries puts the expected
-/// number of colliding pairs at about **576**. There are hundreds of them in
-/// the index on this machine right now, and the only thing that makes them
-/// harmless is that a probe answers with *candidates* which `Segment::is_at`
-/// then confirms against the directory and the spelled name the row carries.
-///
-/// Deleting any of those three confirmations — name, directory, source — leaves
-/// the whole suite passing, because a fixture never produces a collision by
-/// accident. So this produces one on purpose: a short search over generated
-/// paths until two of them agree on the key, which takes a few tens of
-/// thousands of tries.
-///
-/// What it would look like if the confirmation went: a search finds a file and
-/// hands back a different file's row. Not a crash, not a missing result — a
-/// wrong one.
+/// Two paths that hash to the same key are still two files: 32 bits over 2.2 M
+/// entries expect about 576 colliding pairs, harmless only because
+/// `Segment::is_at` confirms a candidate against the row's directory, name and
+/// source. A fixture never collides by accident, so this searches for one.
 #[test]
 fn two_paths_that_collide_on_the_key_are_still_two_files() {
     let key = |p: &str| (scour_core::path_digest(SourceId(0), p) >> 32) as u32;
@@ -2082,11 +1887,8 @@ fn two_paths_that_collide_on_the_key_are_still_two_files() {
         "a collision must not merge two files into one row"
     );
 
-    // **Saving over one of them must not take the other.** This is where the
-    // confirmation earns its place: replacing a row means finding the old one
-    // by identity, the identity table answers with *both* of these, and only
-    // the name and directory comparison says which. Without it the wrong row
-    // dies and a file disappears from the index while it is still on the disk.
+    // Saving over one of them must not take the other: the identity table
+    // answers with both, and only the name and directory comparison says which.
     let mut again = entry(&a, NOW + 50, 1);
     again.meta.size = 999;
     index
@@ -2125,16 +1927,9 @@ fn two_paths_that_collide_on_the_key_are_still_two_files() {
     }
 }
 
-/// Two colliding paths that share a name are told apart by their directory.
-///
-/// The narrower half of the same guard. When a collision happens between two
-/// paths with different names, comparing the name settles it — and that is the
-/// common case, so a test that only covers it leaves the directory comparison
-/// untested, which it was. This forces the case the name cannot settle: same
-/// basename, different folder, same 32-bit key.
-///
-/// A search tool that answers `rapor.pdf` with the wrong `rapor.pdf` is worse
-/// than one that answers nothing.
+/// Two colliding paths that share a name are told apart by their directory —
+/// the case a differing name would otherwise settle, which left the directory
+/// comparison untested. Same basename, different folder, same 32-bit key.
 #[test]
 fn colliding_paths_with_one_name_are_told_apart_by_their_folder() {
     let key = |p: &str| (scour_core::path_digest(SourceId(0), p) >> 32) as u32;
@@ -2196,13 +1991,9 @@ fn colliding_paths_with_one_name_are_told_apart_by_their_folder() {
     assert_eq!(hits[1].meta.size, 999, "and the saved one took the new one");
 }
 
-/// The same path under two sources stays two rows when one is saved over.
-///
-/// Written to cover the source comparison in `Segment::is_at`, and what it
-/// found instead is that the comparison cannot change an answer — see the note
-/// there. Kept because the *behaviour* is worth pinning whatever enforces it:
-/// two volumes holding the same path is ordinary, and a save on one taking the
-/// other's row would be a file vanishing from the index.
+/// The same path under two sources stays two rows when one is saved over. The
+/// source comparison in `Segment::is_at` cannot change an answer (see the note
+/// there); the behaviour is pinned whatever enforces it.
 #[test]
 fn one_path_under_two_sources_is_two_rows() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -2239,17 +2030,9 @@ fn one_path_under_two_sources_is_two_rows() {
     );
 }
 
-/// A pass that is never swept still lets housekeeping run afterwards.
-///
-/// **The leak behind the 241 segments, pinned at its source.** A walk that
-/// could not look must not sweep — deleting on no evidence is how a directory
-/// that lost its read permission loses its files too — but the sweep was the
-/// only thing that ended a generation. So the pass stayed open, the notes it
-/// made about unchanged rows stayed with it, and a noted segment cannot be
-/// folded. One walk of a directory a watcher had just seen deleted was enough
-/// to stop compaction for good.
-///
-/// The fix is that ending a pass and reconciling it are two things.
+/// A pass that is never swept still lets housekeeping run afterwards. A walk
+/// that could not look must not sweep, but the sweep was the only thing ending a
+/// generation, so the pass stayed open and a noted segment cannot be folded.
 #[test]
 fn a_pass_that_is_never_swept_does_not_block_compaction() {
     let f = Fixture::new(8_000, 800);
@@ -2278,20 +2061,10 @@ fn a_pass_that_is_never_swept_does_not_block_compaction() {
     assert_eq!(after.entries, started.entries, "and it lost nothing");
 }
 
-/// Compaction still folds when every segment has a generation of its own.
-///
-/// **The shape a real machine produces, and the one nothing tested.** A walk
-/// bumps the generation, a commit writes a segment, and a watcher on a busy
-/// disk puts a walk between almost every pair of commits — so each segment ends
-/// up alone in its own generation. Grouping candidates *by* that number then
-/// never finds three to fold, and compaction dies: measured on the live index
-/// at **241 segments across 205 generations, largest group 2**, against a
-/// threshold of three. Every search opened all 241.
-///
-/// It is a one-way trap. Once the stamps are spread there is no state the index
-/// can reach on its own where three of them agree again, so the count only ever
-/// goes up. The existing compaction tests all build their fixture in one
-/// generation, which is the one shape that cannot show it.
+/// Compaction still folds when every segment has a generation of its own — what
+/// a watcher produces by putting a walk between almost every pair of commits.
+/// Grouping by generation then never finds three: 241 segments across 205
+/// generations, largest group 2. One-way; nothing brings them back together.
 #[test]
 fn compaction_still_folds_when_every_segment_has_its_own_generation() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -2331,20 +2104,10 @@ fn compaction_still_folds_when_every_segment_has_its_own_generation() {
     assert_eq!(after.entries, 12, "and it lost nothing doing it");
 }
 
-/// A compaction that is not allowed to fold still ends.
-///
-/// **This one spun a core on the live index for as long as a generation stayed
-/// open.** Folding is refused while a walk has marked rows as seen — the marks
-/// are keyed on segment numbers and folding renumbers them — and the refusal
-/// returned `Ok(())`, which the caller could not tell from having done the
-/// work. `maintain(Compact)` is `while let Some(head) = next_head() { fold }`
-/// and it ends because a folded group stops qualifying, so a refusal that
-/// changed nothing handed back the same group for ever: 99.7% of a core with
-/// nothing happening, 224 segments that would not come down.
-///
-/// The assertion is that it *returns*. Before the fix this test does not fail,
-/// it hangs — so it runs on its own thread with a deadline, and the failure is
-/// a sentence rather than a timeout nobody can read.
+/// A compaction that is not allowed to fold still ends. The refusal returned
+/// `Ok(())`, indistinguishable from having done the work, so `maintain(Compact)`
+/// handed back the same group for ever — 99.7% of a core, 224 segments. Before
+/// the fix this hangs rather than fails, so it runs on a thread with a deadline.
 #[test]
 fn a_compaction_that_may_not_fold_still_finishes() {
     use std::sync::mpsc;
@@ -2385,9 +2148,8 @@ fn a_compaction_that_may_not_fold_still_finishes() {
 
 #[test]
 fn a_compaction_folds_the_head_and_leaves_the_body() {
-    // What a search pays for is the number of segments, so a compaction only
-    // has to get that number down — and rewriting the body to do it would cost
-    // a pass over the whole index for nothing.
+    // A search pays for the number of segments, so a compaction only has to get
+    // that down; rewriting the body would cost a pass over the index.
     let f = Fixture::new(8_000, 800);
     let before = f.search("ext:rs", SortKey::Modified, true, 60);
     let started = f.index.stats().expect("stats");
@@ -2411,9 +2173,8 @@ fn a_compaction_folds_the_head_and_leaves_the_body() {
 
 #[test]
 fn a_generation_is_never_folded_into_another_one() {
-    // The merged segment can only carry one stamp. Folding across a boundary
-    // would give old rows a new one, and the next sweep would walk straight
-    // past exactly the rows it exists to remove.
+    // The merged segment carries one stamp, so folding across a boundary would
+    // give old rows a new one and the next sweep would walk past them.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     for i in 0..4u64 {
@@ -2464,10 +2225,8 @@ fn a_generation_is_never_folded_into_another_one() {
     assert_eq!(left.len(), 4);
     assert!(left.iter().all(|p| p.contains("new")), "{left:?}");
 
-    // And the generation the sweep emptied folds to nothing rather than to an
-    // empty segment. An empty one would be permanent: no rows means no dead
-    // rows, so it would never qualify to be folded again — which is how a real
-    // index ended up reporting three segments where one held everything.
+    // The generation the sweep emptied folds to nothing rather than to an empty
+    // segment: no rows means no dead rows, so it would never qualify again.
     index.maintain(Maintenance::Rebuild).expect("rebuild");
     assert_eq!(index.stats().expect("stats").segments, 1);
 }
@@ -2493,11 +2252,9 @@ fn a_rebuild_folds_everything_into_one_segment_and_changes_no_answer() {
 
 #[test]
 fn two_sources_fold_into_one_segment_once_both_have_settled() {
-    // The defect this exists to prevent, found on a real index rather than
-    // reasoned about: a rebuild folded within a generation, each source's scan
-    // takes its own, and a second source therefore meant two segments that no
-    // amount of rebuilding could merge. 2,951,074 entries, 1,441,890 of them
-    // unsorted, and `rapor` at 125 ms.
+    // A rebuild folds within a generation and each source's scan takes its own,
+    // so a second source meant two segments no rebuild could merge: 2,951,074
+    // entries, 1,441,890 unsorted, and `rapor` at 125 ms.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
 
@@ -2657,8 +2414,7 @@ fn an_index_reopened_from_disk_answers_the_same_way() {
 #[test]
 fn the_stored_order_still_stops_early_with_several_segments() {
     // The claim the layout rests on has to survive fragmentation: each segment
-    // is in date order, so each can stop at its own page and the merge picks
-    // the winners.
+    // is in date order, so each stops at its own page and the merge picks.
     let f = Fixture::new(40_000, 5_000);
     let res = f
         .index
@@ -2682,15 +2438,10 @@ fn the_stored_order_still_stops_early_with_several_segments() {
         "stopping early must not change which forty"
     );
 
-    // And so does an order the row layout says nothing about, for the other
-    // reason: the blocks are opened in the order of the largest size each one
-    // holds, so once forty rows beat everything the next block could contain
-    // there is nothing left to open.
-    //
-    // **This assertion used to be the opposite**, and read "an order it cannot
-    // serve says so rather than pretending". It was true then. What has to
-    // stay true either way is the line below it: a cap may bound the total,
-    // never the result.
+    // And an order the row layout says nothing about: blocks are opened by the
+    // largest size each holds, so once forty rows beat everything the next
+    // block could contain there is nothing left to open. A cap may bound the
+    // total, never the result.
     let res = f
         .index
         .search(&SearchRequest {
@@ -2828,11 +2579,9 @@ fn an_empty_index_answers_nothing_rather_than_failing() {
 
 #[test]
 fn a_segment_a_sweep_emptied_stops_costing_anything() {
-    // The bug this exists for, found on a real index rather than in a test: a
-    // rescan stamps a new generation, the sweep kills every row of the old one,
-    // and the emptied segment stays in the list. Every query then reads it end
-    // to end — 1,204,270 rows to produce nothing — until a rebuild happens to
-    // remove it.
+    // A rescan stamps a new generation, the sweep kills every row of the old
+    // one, and the emptied segment stays in the list — 1,204,270 rows read end
+    // to end to produce nothing, until a rebuild happens to remove it.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let first: Vec<Entry> = (0..2_000)
@@ -2876,9 +2625,8 @@ fn a_segment_a_sweep_emptied_stops_costing_anything() {
 
 #[test]
 fn deleted_rows_stop_being_walked_before_they_are_erased() {
-    // The same idea one level down: a block with no live row is skipped on the
-    // strength of sixteen bytes of the bitmap, whether or not the segment as a
-    // whole still has something in it.
+    // The same one level down: a block with no live row is skipped on sixteen
+    // bytes of the bitmap, whether or not its segment still holds anything.
     let f = Fixture::new(8_000, 8_000);
     let doomed: Vec<String> = f
         .entries
@@ -2919,10 +2667,9 @@ fn deleted_rows_stop_being_walked_before_they_are_erased() {
 
 #[test]
 fn an_index_from_another_version_is_outdated_and_not_damaged() {
-    // The difference matters to whoever is watching: nothing is lost, because
-    // an index is derived from the filesystem in its entirety. The service
-    // acts on it by discarding and rescanning, and this is the machinery that
-    // lets it — `IndexCorrupt` would be a lie and would look like one.
+    // Nothing is lost: an index is derived from the filesystem in its entirety,
+    // and the service acts on this by discarding and rescanning. `IndexCorrupt`
+    // would be a lie and would look like one.
     let tmp = tempfile::tempdir().expect("tmpdir");
     {
         let index = NativeIndex::open_or_create(tmp.path()).expect("create");
@@ -2966,24 +2713,9 @@ fn an_index_from_another_version_is_outdated_and_not_damaged() {
 }
 
 /// An index written before the path order existed is read, not thrown away.
-///
-/// **The format decision, tested from the outside.** The path order is the one
-/// part of a segment that may be missing, and that is what lets an existing
-/// index keep working: a rescan of two million files across two volumes is a
-/// long time to be without a search box, and nothing about the seven files that
-/// were already there has changed meaning. So the version is not bumped, the
-/// old segments are read exactly as they were, and each one gains the file the
-/// next time it is folded — which is a read of the index rather than of the
-/// disk.
-///
-/// Simulated by deleting what an older build would never have written. Both
-/// halves are asserted, and the second is the one that says the fallback is
-/// really being taken rather than the file quietly reappearing:
-///
-/// * every answer is the same as with the order present, and the same as brute
-///   force;
-/// * the walk visits every row again, because without the order there is
-///   nothing to stop it.
+/// Simulated by deleting what an older build never wrote. Both halves: every
+/// answer matches brute force, and the walk visits every row again — which is
+/// what says the fallback is really being taken.
 #[test]
 fn an_index_written_without_a_path_order_answers_the_same_way() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -3054,10 +2786,8 @@ fn an_index_written_without_a_path_order_answers_the_same_way() {
     }
 }
 
-/// Name-order files are an optional acceleration, independently per segment.
-///
-/// An upgrade therefore has three ordinary states: all current segments,
-/// current and legacy segments mixed, and an entirely legacy index. Every one
+/// Name-order files are an optional acceleration, independently per segment, so
+/// an upgrade has three states: all current, mixed, and entirely legacy. All
 /// must answer identically; only the number of rows visited may change.
 #[test]
 fn segments_with_and_without_a_name_order_answer_one_name_list() {
@@ -3311,16 +3041,10 @@ fn an_extension_order_that_does_not_describe_the_segment_is_refused() {
     assert_eq!(index.stats().expect("stats").entries, 200);
 }
 
-/// Half the segments having a path order is the ordinary state, not a corner.
-///
-/// **What an existing index looks like for as long as it takes to compact.**
-/// The old segments have no order and the ones a watcher commits do, so a
-/// search hands the merge candidates chosen two different ways — streamed out
-/// of a stored order in one segment, keyed per match in the next — and it has
-/// to be unable to tell. It is, by construction: positions never leave the
-/// segment that holds them, and what every segment hands over is the whole
-/// path either way. Construction is what the last three attempts on this file
-/// were also confident about, so it is measured against brute force instead.
+/// Half the segments having a path order is the ordinary state until a
+/// compaction finishes: the merge is handed candidates chosen two ways and must
+/// be unable to tell. True by construction — positions never leave their
+/// segment — and measured against brute force anyway.
 #[test]
 fn segments_with_and_without_a_path_order_merge_into_one_list() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -3391,14 +3115,9 @@ fn segments_with_and_without_a_path_order_merge_into_one_list() {
     }
 }
 
-/// A path order that is there and wrong is damage, not an older index.
-///
-/// The two are told apart by one thing — whether the file exists — so the case
-/// that has to be nailed down is the file that exists and does not describe the
-/// segment. Reading it anyway would produce a page that is ordered, plausible
-/// and short of whatever the file stopped before, which is the class of failure
-/// this crate keeps a brute-force reference to catch. It is refused instead,
-/// and as damage rather than as a version, because nothing about it is old.
+/// A path order that is there and wrong is damage, not an older index. Reading
+/// it anyway gives a page that is ordered, plausible and short of whatever the
+/// file stopped before. Refused as damage rather than as a version.
 #[test]
 fn a_path_order_that_does_not_describe_the_segment_is_refused() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -3434,16 +3153,10 @@ fn a_path_order_that_does_not_describe_the_segment_is_refused() {
 
 #[test]
 fn relevance_puts_the_near_copy_first_however_many_segments_there_are() {
-    // Relevance is the one order `brute_force` does not model — scoring belongs
-    // to the index — so this is where the two halves of it are checked against
-    // each other. A segment reads a directory's distance from a table built
-    // when it was written; the merge across segments recomputes it from the
-    // path, because a `Hit` carries no directory number. Those are two
-    // implementations of one number, and nothing else would notice them
-    // drifting apart.
-    //
-    // Every one of these is named `main.rs`, so the name score is identical and
-    // the distance is the whole ordering.
+    // Relevance is the one order `brute_force` does not model. A segment reads
+    // a directory's distance from its table; the merge recomputes it from the
+    // path, a `Hit` carrying no directory number. Every name here is `main.rs`,
+    // so the distance is the whole ordering.
     let want = [
         "/home/u/Projeler/app/main.rs",
         "/home/u/Projeler/app/deeper/still/main.rs",
@@ -3492,10 +3205,8 @@ fn relevance_puts_the_near_copy_first_however_many_segments_there_are() {
 
 #[test]
 fn a_file_with_two_names_is_not_two_files_worth_of_disk() {
-    // Both names are rows — that is what makes them findable, and it is right.
-    // What must not follow is that the disk report counts the blocks twice.
-    // `usage.rs` said no work was needed here because an inode was one row;
-    // identity became the path and that premise went with it.
+    // Both names are rows, which is what makes them findable. What must not
+    // follow is the disk report counting the blocks twice.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let linked = |path: &str| Entry {
@@ -3542,12 +3253,10 @@ fn a_file_with_two_names_is_not_two_files_worth_of_disk() {
 
 #[test]
 fn a_directory_is_not_a_file_of_type_grup() {
-    // Real names, off a volume written from Windows, where a dot inside a
-    // folder name is ordinary. `ext:` asks what kind of file a row is, and a
-    // folder is not one — asked of `Trabzon 2. Grup` the old answer was that
-    // it was a file of type ` grup`. But `*.rs` asks about the *name*, and a
-    // folder called `mod.rs` has that name, so the two part company here and
-    // the test is what keeps them apart.
+    // Real names off a volume written from Windows, where a dot inside a folder
+    // name is ordinary. `ext:` asks what kind of file a row is and a folder is
+    // not one, while `*.rs` asks about the name — so a folder called `mod.rs`
+    // matches the second and not the first.
     let tmp = tempfile::tempdir().expect("tmpdir");
     let index = NativeIndex::open_or_create(tmp.path()).expect("create");
     let entries: Vec<Entry> = [
@@ -3598,15 +3307,9 @@ fn a_directory_is_not_a_file_of_type_grup() {
 
 #[test]
 fn the_empty_query_counts_what_is_live_without_walking_for_it() {
-    // Nothing to test means every live row matches, and how many that is is a
-    // number each segment already keeps. The walk was visiting all of them to
-    // arrive at it: 1.233 s on a 2.09 M-row index, for the query a window
-    // shows the moment it opens.
-    //
-    // What this has to get right is *live*, not stored. A removed row is
-    // still in the segment, and reading a total off the wrong counter would
-    // be a fast wrong answer — the worst kind, and invisible until somebody
-    // notices the number is bigger than the list.
+    // Nothing to test means every live row matches, and each segment already
+    // keeps that number; the walk was visiting all of them for it, 1.233 s on
+    // 2.09 M rows. *Live*, not stored: a removed row is still in the segment.
     let f = Fixture::new(4_000, 500);
     let live = f.entries.len() as u64;
 
@@ -3628,9 +3331,8 @@ fn the_empty_query_counts_what_is_live_without_walking_for_it() {
 
     assert_eq!(count(&f.index, u32::MAX).0, live, "every row, and no more");
 
-    // Take four leaves away and ask again. Leaves, because
-    // on a directory takes everything under it — which is correct, and would
-    // make this test about something else.
+    // Take four leaves away and ask again. Leaves, because a removal on a
+    // directory takes everything under it.
     let doomed: Vec<String> = f
         .entries
         .iter()
@@ -3665,12 +3367,8 @@ fn the_empty_query_counts_what_is_live_without_walking_for_it() {
 }
 
 /// A removal that arrives before anything was ever indexed must not vanish.
-///
-/// `kill_leaves` keys its lookup on a source, and an index that has been
-/// handed no rows this session knows none — reopening is exactly that state.
-/// The path has to fall through to the walk rather than be dropped between
-/// the two. The first version dropped it, and nothing failed: the file simply
-/// stayed in the index for ever.
+/// `kill_leaves` keys on a source, and a reopened index knows none, so the path
+/// has to fall through to the walk rather than be dropped between the two.
 #[test]
 fn a_removal_before_the_first_upsert_still_takes_the_row() {
     fn row(path: &str) -> Entry {
@@ -3726,19 +3424,10 @@ fn a_removal_before_the_first_upsert_still_takes_the_row() {
     assert_eq!(found(&index, "keepme"), 1, "and take nothing else");
 }
 
-/// A rescan that changed nothing writes nothing either.
-///
-/// The other half of the pair below. That one says an untouched rescan must not
-/// *remove* anything; this one says it must not *add* anything — and the two
-/// failures look nothing alike. Recognising the unchanged rows and then writing
-/// what is left anyway is the shape the first version had: the batch that
-/// overflowed the buffer was almost all rows the index already held, and the
-/// two or three survivors still became a segment. A walk of 870,000 entries
-/// left nine of them, one a batch, doubling what every search reads and owing
-/// a compaction for the rest.
-///
-/// The segment count, not the entry count, because the entry count was right
-/// the whole time.
+/// A rescan that changed nothing writes nothing either — the other half of the
+/// pair below, which says it must not *remove* anything. Recognising the
+/// unchanged rows and writing what is left anyway left nine segments from a
+/// walk of 870,000 entries. The segment count, not the entry count.
 #[test]
 fn a_rescan_that_changed_nothing_adds_no_segment() {
     let f = Fixture::new(6_000, 500);
@@ -3760,12 +3449,9 @@ fn a_rescan_that_changed_nothing_adds_no_segment() {
         f.entries.len() as u64,
         "and every row is still there"
     );
-    // **Nothing new was written, and the count that says so arrives late.**
     // Sparing happens when a batch is flushed; this batch fitted in the buffer,
-    // so nothing flushed it until the commit — after `apply` had returned its
-    // report. The number therefore reaches whoever calls next, which is the
-    // documented shape of `ApplyReport::unchanged` and is pinned here because a
-    // drain that stopped working would otherwise be invisible.
+    // so nothing flushed it until the commit, after `apply` had returned. The
+    // number reaches whoever calls next — the shape of `ApplyReport::unchanged`.
     assert_eq!(report.unchanged, 0, "this batch had not been flushed yet");
     let mut one = std::iter::once(Change::Upsert(f.entries[0].clone()));
     let later = f.index.apply(&mut one).expect("apply");
@@ -3776,16 +3462,10 @@ fn a_rescan_that_changed_nothing_adds_no_segment() {
     );
 }
 
-/// A scan that finds every file exactly as it left it must delete nothing.
-///
-/// **This is the guard on the most dangerous path in the index.** A sweep
-/// decides a row is gone because the walk did not stamp it, and stamping is
-/// per segment — so any change that lets an unchanged file skip being written
-/// has to keep it stamped some other way, or a rescan that found nothing wrong
-/// empties the index and reports success. The failure is silent and total.
-///
-/// Written before the optimisation it guards, and it passes both before and
-/// after by construction: what it asserts is the behaviour, not the mechanism.
+/// A scan that finds every file exactly as it left it must delete nothing: a
+/// sweep deletes a row the walk did not stamp, and stamping is per segment, so
+/// letting an unchanged file skip being written must keep it stamped some other
+/// way. What this asserts is the behaviour, not the mechanism.
 #[test]
 fn a_rescan_that_finds_nothing_changed_removes_nothing() {
     fn row(path: &str, mtime: i64) -> Entry {
@@ -3899,14 +3579,10 @@ fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
     );
 }
 
-/// A folder's size agrees with the report, and keeps agreeing.
-///
-/// **The two must never drift**, because the interface prints them beside each
-/// other: the column comes from prefix sums over directory numbers and the
-/// report comes from `usage.rs`'s rollup, which are two entirely different
-/// routes to one number. This holds them together across everything that can
-/// move the answer — several segments, a hard-linked file, a removal, and a
-/// compaction that renumbers the segments the cache is keyed on.
+/// A folder's size agrees with the report, and keeps agreeing: the column comes
+/// from prefix sums over directory numbers and the report from `usage.rs`'s
+/// rollup, two routes to one number printed side by side. Held together across
+/// segments, a hard link, a removal, and a compaction that renumbers.
 #[test]
 fn a_folder_weighs_what_the_report_says_it_weighs() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -3928,9 +3604,8 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
         id: EntryId::inode(SourceId(0), 66_310, ino),
         path: path.into(),
         is_dir: true,
-        // A directory's own `st_size` is its entry table, and counting it
-        // would report bookkeeping as content. Made large here so that a
-        // version which counted it could not pass.
+        // A directory's own `st_size` is its entry table; made large here so a
+        // version counting it as content could not pass.
         meta: Meta {
             mtime: NOW,
             size: 99_000,
@@ -3939,9 +3614,8 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
         },
     };
 
-    // Two commits, so the answer has to be summed across segments — and the
-    // sibling that sorts *between* a folder and its children, because `-` is
-    // 0x2D and `/` is 0x2F.
+    // Two commits, so the answer is summed across segments — and the sibling
+    // that sorts between a folder and its children, `-` being 0x2D.
     let first = vec![
         dir("/p", 1),
         dir("/p/a", 2),
@@ -3991,22 +3665,17 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
     };
 
     let fresh = agree("when fresh");
-    // The numbers themselves, so that "they agree" cannot mean "both wrong".
-    // /p holds 1,000 + 2,000 + 4,000 + 3,000 + 3,000 — the last two being the
-    // two halves of the hard-linked six.
+    // The numbers themselves, so that "they agree" cannot mean "both wrong":
+    // /p holds 1,000 + 2,000 + 4,000 + 3,000 + 3,000, the last two halves of
+    // the hard-linked six.
     assert_eq!(fresh[0], (13_000, 5), "/p");
     assert_eq!(fresh[1], (12_000, 4), "/p/a");
     assert_eq!(fresh[2], (8_000, 1), "/p-yedek");
 
     // A removal moves the alive bits without changing a byte of the segment,
-    // which is exactly the case the cache stamp exists for. Without the stamp
-    // this still answers 13,000.
-    //
-    // **The commit is not incidental.** A removal takes effect for *searches*
-    // at once — `hidden_prefixes` — but the rows stay alive until they are
-    // written away, so until then a subtree still weighs what it weighed. The
-    // report does the same, which is what matters here: the two agree at every
-    // step, and the window they are both stale in is one commit interval.
+    // which is what the cache stamp exists for; without it this answers 13,000.
+    // The commit matters: rows stay alive until written away, so both the
+    // column and the report are stale for one commit interval, together.
     index
         .apply(&mut std::iter::once(Change::RemoveSubtree {
             path: "/p/one".into(),
@@ -4028,14 +3697,9 @@ fn a_folder_weighs_what_the_report_says_it_weighs() {
     assert_eq!(folded[0], (12_000, 4));
 }
 
-/// The report can be asked about part of a folder rather than all of it.
-///
-/// A query narrows *which rows are weighed* and changes nothing else: the tree
-/// is the same tree, a folder with no match is still in it, and the children
-/// still come to the root. That last one is the property worth a test —
-/// dropping the folders that hold no match would leave a match's bytes rolled
-/// into some grandparent, so the headline would count what no row beneath it
-/// admitted to, and every part of that reads as a bug in the totals.
+/// The report can be asked about part of a folder. A query narrows which rows
+/// are weighed and nothing else: a folder with no match is still in the tree,
+/// or a match's bytes roll into a grandparent that no row admits to.
 #[test]
 fn the_report_weighs_what_a_query_names_and_still_adds_up() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -4053,9 +3717,8 @@ fn the_report_weighs_what_a_query_names_and_still_adds_up() {
             ..Meta::UNKNOWN
         },
     };
-    // Made large, so that a version counting a directory's own row could not
-    // pass — and one of these folders is *named* for the query below, which is
-    // how that row reaches the rollup at all.
+    // Made large, so a version counting a directory's own row could not pass —
+    // and one folder is named for the query below, which is how it is reached.
     let dir = |path: &str, ino: u64| Entry {
         id: EntryId::inode(SourceId(0), 66_310, ino),
         path: path.into(),
@@ -4105,9 +3768,8 @@ fn the_report_weighs_what_a_query_names_and_still_adds_up() {
     let all = weigh("");
     assert_eq!((all.root.disk, all.root.files), (63_000, 6), "no filter");
 
-    // The same folder, asked only about its logs. The extension filter and the
-    // bare word have to land on the same number: `log` matches three file names
-    // *and* the directory called `log`, whose 99,000 is not content.
+    // The same folder, asked only about its logs: `log` matches three file names
+    // and the directory called `log`, whose 99,000 is not content.
     for query in ["ext:log", "log"] {
         let some = weigh(query);
         assert_eq!(
@@ -4140,14 +3802,10 @@ fn the_report_weighs_what_a_query_names_and_still_adds_up() {
     assert_eq!(weigh("ext:yok").root.disk, 0, "no match, no bytes");
 }
 
-/// Sorting by size puts a folder where its number says it is.
-///
-/// **The failure this guards made folders vanish.** A directory's `Size`
-/// column is its own entry table — about four kilobytes — so ordering by it
-/// put every folder behind every file larger than a block. On a page of two
-/// hundred rows out of two million, that is not "mis-sorted", it is gone: a
-/// size-sorted list had no folders in it at all, while the column beside it
-/// said one of them held thirteen gigabytes.
+/// Sorting by size puts a folder where its number says it is. A directory's
+/// `Size` column is its entry table, about four kilobytes, so ordering by it put
+/// every folder behind every file larger than a block — on a page of two hundred
+/// out of two million, gone entirely.
 #[test]
 fn a_folder_sorts_by_the_number_it_shows() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -4213,8 +3871,7 @@ fn a_folder_sorts_by_the_number_it_shows() {
     };
 
     // Cold: nothing has asked for a folder size, so the table is not built and
-    // the folder sorts by its own column — the old behaviour, on purpose,
-    // because building it here would put ninety milliseconds in a keystroke.
+    // the folder sorts by its own column. Building it here costs 90 ms.
     let cold = by_size(&index);
     assert!(
         cold.iter().position(|p| p == "/big").unwrap()
@@ -4310,18 +3967,10 @@ fn reported_disk_bytes_follow_publication_erasure_and_rebuild() {
     );
 }
 
-/// The scan reaches every row a search would, across every segment.
-///
-/// **The set, not the order.** `Index::scan` streams and does not sort, so
-/// this compares against the *set* brute force produces — both sides sorted
-/// here, so that two lists of the same paths compare equal whatever order they
-/// arrived in.
-///
-/// What it guards is a class of bug paging never had: a segment walked but not
-/// merged, a hidden removal the walk still emits, a block the zone map skipped
-/// that held a match. Each returns a plausible file that is short of the truth
-/// by a few thousand rows, and nothing but a comparison against every entry
-/// notices.
+/// The scan reaches every row a search would, across every segment — the set,
+/// not the order: `Index::scan` streams and does not sort, so both sides are
+/// sorted here. Guards a segment walked but not merged, a hidden removal still
+/// emitted, a block the zone map skipped that held a match.
 #[test]
 fn a_scan_reaches_every_row_a_search_would() {
     let f = Fixture::new(16_000, 2_000);
@@ -4368,11 +4017,8 @@ fn a_scan_reaches_every_row_a_search_would() {
     }
 }
 
-/// A scan and a count answer the same number.
-///
-/// The one thing an export's reader can check without this repository, so it
-/// is the one that must not drift: `scour count` and the row count of `scour
-/// export` are the same walk asked two ways.
+/// A scan and a count answer the same number — the one thing an export's reader
+/// can check without this repository, so the one that must not drift.
 #[test]
 fn a_scan_counts_what_a_search_counts() {
     let f = Fixture::new(8_000, 1_000);
@@ -4404,11 +4050,8 @@ fn a_scan_counts_what_a_search_counts() {
     }
 }
 
-/// A reader that stops is obeyed at once, and the count says where.
-///
-/// A cancelled download, seen from the bottom of the stack. What must not
-/// happen is the walk running to the end anyway: on the owner's machine that
-/// is two million rows of front-coded paths rebuilt for somebody who has gone.
+/// A reader that stops is obeyed at once, and the count says where. What must
+/// not happen is the walk running to the end for somebody who has gone.
 #[test]
 fn a_scan_that_is_stopped_stops() {
     let f = Fixture::new(8_000, 1_000);
@@ -4428,11 +4071,10 @@ fn a_scan_that_is_stopped_stops() {
     assert_eq!(seen, 10);
     assert_eq!(counted, 10, "the count is what the caller was given");
 
-    // And the index is untouched by having been abandoned: no lock kept, no
-    // state left behind, the next question answered in full. Against
-    // `f.entries` rather than the 8,000 asked for — the generator makes
-    // directories as well as files, and a number typed here would be a fact
-    // about the generator rather than about the scan.
+    // And the index is untouched: no lock kept, no state left, the next question
+    // answered in full. Against `f.entries` rather than the 8,000 asked for —
+    // the generator makes directories too, so a number typed here would be a
+    // fact about the generator.
     assert_eq!(
         f.index
             .scan(
@@ -4446,13 +4088,9 @@ fn a_scan_that_is_stopped_stops() {
     );
 }
 
-/// A removal that has not been written yet must not be exported.
-///
-/// It is hidden from searches the moment it is applied and erased at the next
-/// commit, and between those two moments the row is still in the segment and
-/// still matches. A scan reading the segment directly would export files that
-/// are gone — worse in an export than on a page, because a spreadsheet is
-/// acted on later, when the difference is no longer there to see.
+/// A removal that has not been written yet must not be exported. It is hidden
+/// from searches when applied and erased at the next commit; between those the
+/// row still matches, and an export is acted on when the difference is gone.
 #[test]
 fn a_scan_does_not_export_what_a_pending_removal_took() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -4491,16 +4129,10 @@ fn a_scan_does_not_export_what_a_pending_removal_took() {
     assert_eq!(got, ["/a/keep.txt".to_owned()]);
 }
 
-/// A page **reached** rather than walked to, checked against the truth.
-///
-/// Past a few thousand rows `search` stops passing over everything above the
-/// page: it bisects for the date the page begins at, counts the rows above it
-/// out of a rank over the live bitmap, and merges from there. That replaces
-/// two million row visits with a few thousand column reads, and every way it
-/// can be wrong returns a *fast, plausible* page — one row late, a segment's
-/// dead rows counted as live, a group of files sharing a second entered at the
-/// wrong place. None of those is visible to a benchmark, so every offset here
-/// is compared with brute force.
+/// A page **reached** rather than walked to, checked against the truth. `search`
+/// bisects for the date the page begins at and counts the rows above it out of a
+/// rank over the live bitmap; every way that can be wrong returns a fast,
+/// plausible page, so every offset is compared.
 #[test]
 fn a_reached_page_is_the_page_the_walk_would_have_found() {
     let f = Fixture::new(16_000, 2_000);
@@ -4548,17 +4180,13 @@ fn a_reached_page_is_the_page_the_walk_would_have_found() {
             paths, want,
             "the page at {offset}+{limit} disagrees with brute force"
         );
-        // **And that it was reached, not walked to.** The list being right is
-        // half the claim; the other half is that the rows above it were never
-        // visited, and without this assertion a reach that silently declined
-        // would leave this test passing and the cost unchanged.
+        // And that it was reached, not walked to: without this a reach that
+        // silently declined leaves the test passing and the cost unchanged.
         if offset >= 2_000 {
-            // Not merely fewer than the offset: a reach that lands on the
-            // wrong date is still *correct* — the merge walks forward from
-            // wherever it started — and would pass a looser bound while
-            // costing what the walk cost. This corpus has no group of any
-            // size sharing a second, so a page here is the page and little
-            // else.
+            // Not merely fewer than the offset: a reach landing on the wrong
+            // date is still correct, since the merge walks forward, and would
+            // pass a looser bound at the walk's price. No group here shares a
+            // second, so a page is the page and little else.
             assert!(
                 got.rows_visited < (limit * 4) as u64,
                 "the page at {offset} visited {} rows for {limit} — it was walked to",
@@ -4568,15 +4196,10 @@ fn a_reached_page_is_the_page_the_walk_would_have_found() {
     }
 }
 
-/// A reach over segments whose dates do not overlap.
-///
-/// The case that caught the first version of the bisection. Its bracket was
-/// the newest date the segments had *in common* rather than the newest in any
-/// of them, so an index holding one segment written this morning and one
-/// holding last year's files searched a window that did not contain the
-/// answer. It still returned the right page — the merge walks forward from
-/// wherever it starts — while visiting ninety thousand rows to do it, which
-/// is the shape of a fast path that has quietly stopped being one.
+/// A reach over segments whose dates do not overlap. The first bisection
+/// bracketed on the newest date the segments had *in common*, so an index of one
+/// segment from this morning and one from last year searched a window without
+/// the answer — and still returned the right page, after ninety thousand rows.
 #[test]
 fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -4637,14 +4260,10 @@ fn a_reach_over_segments_that_share_no_dates_still_lands_on_the_page() {
     }
 }
 
-/// The same, over an index where a thousand files share every timestamp and
-/// one in seven has been deleted.
-///
-/// Both of those are what the reach has to get right and what a generated
-/// corpus is too tidy to exercise. A date shared by a thousand rows has no
-/// rank inside it — the merge has to step through the part of the group that
-/// precedes the page — and a deleted row is one the bisection must not count
-/// but the row numbering still spends a place on.
+/// The same, over an index where a thousand files share every timestamp and one
+/// in seven has been deleted. A date shared by a thousand rows has no rank
+/// inside it, so the merge steps through the part preceding the page; a deleted
+/// row must not be counted but still spends a place in the row numbering.
 #[test]
 fn a_reached_page_survives_shared_dates_and_deleted_rows() {
     let tmp = tempfile::tempdir().expect("tmpdir");
@@ -4716,9 +4335,8 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
             got.0, want,
             "the page at {offset}+{limit} disagrees with brute force"
         );
-        // A thousand rows share every date here, so a page inside one of
-        // those groups steps through the part of it that comes first — but
-        // never through the two, five or eleven thousand rows above the group.
+        // A thousand rows share every date, so a page inside a group steps
+        // through the part before it — never the thousands above the group.
         assert!(
             got.1 < 1_200 + limit as u64,
             "the page at {offset} visited {} rows — it was walked to",
@@ -4727,22 +4345,10 @@ fn a_reached_page_survives_shared_dates_and_deleted_rows() {
     }
 }
 
-/// A walk of several roots keeps what it saw in every one of them.
-///
-/// **This is what a live index was doing.** `scourd`'s system source walks
-/// `/usr /etc /opt /var` as one source, and the engine swept each root in
-/// turn. The unchanged-row marks — one bit a row, the only thing saying "the
-/// walk saw this and it had not moved" — were consumed by the first sweep, so
-/// every root after it was reconciled against nothing and everything it held
-/// was deleted as missing. The next walk found those rows genuinely absent,
-/// rewrote them, and the walk after that deleted them again: measured on the
-/// live index as `/opt` alternating between 5,477 rows and none, `/etc`
-/// between 2,309 and 34, about once a minute for as long as the service was
-/// up. The first root never suffered, which is what made it look like a walk
-/// stopping early rather than a sweep eating its own evidence.
-///
-/// A sweep now takes every root of the pass at once, which is what makes the
-/// marks last as long as the thing they are evidence for.
+/// A walk of several roots keeps what it saw in every one of them. Unchanged-row
+/// marks were consumed by the first root's sweep, so every later root was
+/// reconciled against nothing and deleted — `/opt` alternated between 5,477 rows
+/// and none. A sweep takes every root of the pass at once.
 #[test]
 fn a_sweep_of_several_roots_keeps_what_the_walk_saw_in_each() {
     fn all_paths(index: &NativeIndex) -> Vec<String> {

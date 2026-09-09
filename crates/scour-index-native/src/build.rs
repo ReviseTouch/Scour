@@ -1,8 +1,5 @@
-//! Turning entries into the files of a segment.
-//!
-//! One pass to intern directories and collect names, one pass to write the
-//! columns. Rows come out newest-first; compact row lists record the text
-//! orders that cannot be bounded by numeric zone maps.
+//! Turning entries into the files of a segment: one pass to intern directories
+//! and collect names, one to write the columns. Rows come out newest-first.
 
 use scour_core::Entry;
 
@@ -21,20 +18,15 @@ pub struct SegmentBytes {
     pub cols: Vec<u8>,
     pub dirs: Vec<u8>,
     pub ids: Vec<u8>,
-    /// Which blocks hold which trigrams — the filter that keeps a selective
-    /// term from walking the whole segment.
+    /// Which blocks hold which trigrams: the filter a selective term skips by.
     pub tri_dict: Vec<u8>,
     pub tri_post: Vec<u8>,
     pub alive: Vec<u8>,
-    /// The rows in ascending path order — four bytes a row, and the whole of
-    /// what makes ordering by path cost what ordering by date costs. See
-    /// [`crate::order`].
+    /// The rows in ascending path order, four bytes a row. See [`crate::order`].
     pub porder: Vec<u8>,
-    /// The rows in folded-name order. Four bytes and one tie-boundary bit per
-    /// row; absent only for a segment built before the order existed.
+    /// The rows in folded-name order: four bytes and one tie bit a row.
     pub norder: Vec<u8>,
-    /// The rows in folded-extension order, in the same grouped format as the
-    /// name order. Optional so older segments remain readable.
+    /// The rows in folded-extension order, grouped as the name order is.
     pub eorder: Vec<u8>,
 }
 
@@ -54,11 +46,8 @@ impl SegmentBytes {
     }
 }
 
-/// Build a segment from entries, in any order.
-///
-/// Rows come out ordered by modification time, newest first, with the path
-/// breaking ties so that two runs over the same input produce byte-identical
-/// files — which is what makes a merge verifiable and a rebuild reproducible.
+/// Build a segment from entries, in any order. Rows come out newest first with
+/// the path breaking ties, so two runs over one input give identical bytes.
 pub fn build(entries: &[Entry]) -> SegmentBytes {
     let mut order: Vec<&Entry> = entries.iter().collect();
     order.sort_unstable_by(|a, b| b.meta.mtime.cmp(&a.meta.mtime).then(a.path.cmp(&b.path)));
@@ -69,18 +58,9 @@ pub fn build(entries: &[Entry]) -> SegmentBytes {
     })
 }
 
-/// Build a segment from entries already in the stored order.
-///
-/// `pass` is invoked **twice** and must produce the same entries in the same
-/// order both times: once to intern directories and collect names, once to
-/// write the columns. Two passes rather than one buffer because the buffer is
-/// what is being avoided — a rebuild folds every entry in the index, and
-/// holding a million of them as `Entry` values costs a quarter of a gigabyte
-/// for as long as it takes.
-///
-/// The order is not checked. Producing entries out of order does not corrupt
-/// anything, it only costs the early exit: the rows will simply not be in the
-/// order a search assumes they are.
+/// Build a segment from entries already in the stored order. `pass` is invoked
+/// **twice** and must yield the same entries in the same order both times; out
+/// of order corrupts nothing, it costs only the early exit a search assumes.
 pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentBytes {
     let mut dirs = DirWriter::new();
     let mut names = NameWriter::new();
@@ -92,26 +72,18 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         tri.push_folded(names.push_and_fold(name));
     });
     let (dir_bytes, remap) = dirs.finish();
-    // Provisional until here — the table is sorted when it is written, so the
-    // numbers `intern` handed out are not the ones a row stores. Remapped in
-    // place rather than into a second vector: it is four bytes a row and the
-    // path order below wants the final numbers, not the ones the walk saw.
+    // `intern` hands out provisional numbers; the table is sorted when written.
+    // Remapped in place — the path order below wants the final numbers.
     for id in &mut dir_of {
         *id = remap[*id as usize];
     }
     drop(remap);
 
-    // **The path order, built here and nowhere else.** This is the one moment
-    // the sorted directory table and every spelled name are both in hand and
-    // neither has been packed, so the order costs a sort of what is already in
-    // memory. Reconstructing it later would mean decoding a front-coded
-    // directory per row, which is the cost this file exists to remove — see
-    // [`crate::order`].
+    // The path order is built here and nowhere else: the one moment the sorted
+    // directory table and every spelled name are both in hand and unpacked.
     let porder = match crate::dirs::DirTable::open(&dir_bytes) {
         Some(table) => crate::order::build(&table, &dir_of, names.spelled()),
-        // A table this cannot read is a segment nothing will open either. No
-        // order is written, and a search falls back to building keys, which is
-        // what every index written before this did.
+        // No order for an unreadable table; a search falls back to building keys.
         None => Vec::new(),
     };
     let mut cols = ColumnWriter::new();
@@ -139,17 +111,14 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
         cols.push(r);
     });
 
-    // Names are already folded once in `NameWriter`; sorting those bytes here
-    // means a query never folds or sorts the corpus again. `dir_of` is dead
-    // after the column pass, so its allocation becomes the sort's row list
-    // instead of adding another four bytes per row to rebuild peak memory.
+    // Names are folded once in `NameWriter`, so a query never folds the corpus
+    // again. `dir_of` is dead after the column pass and becomes the row list.
     let (norder, order) = crate::name_order::build_reusing(rows, names.folded(), dir_of);
     let eorder = crate::extension_order::build(rows, names.spelled(), names.folded(), order);
 
     let (tri_dict, tri_post) = tri.finish();
-    // Consume the two arenas together. Their block tables are appended in
-    // place, so finishing a multi-million-row segment does not briefly hold a
-    // second full copy of both the spelling and its fold.
+    // Consumed together: block tables are appended in place, so finishing never
+    // holds a second full copy of both the spelling and its fold.
     let (name_bytes, folded_bytes) = names.finish_both();
     SegmentBytes {
         fnames: folded_bytes,
@@ -167,11 +136,8 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     }
 }
 
-/// A bitmap with exactly `rows` bits set.
-///
-/// The last byte is masked rather than left full, because the bits past the end
-/// are not "spare" — anything that counts live rows counts them, and an index
-/// of three entries then reports eight.
+/// A bitmap with exactly `rows` bits set. The last byte is masked: whatever
+/// counts live rows would otherwise count the bits past the end too.
 fn alive_bits(rows: usize) -> Vec<u8> {
     let mut alive = vec![0xffu8; rows.div_ceil(8)];
     let spare = rows % 8;
@@ -225,8 +191,8 @@ mod tests {
 
     #[test]
     fn building_is_reproducible() {
-        // Two runs over the same input, in different order, must produce the
-        // same bytes — otherwise a merge cannot be checked against a rebuild.
+        // Same bytes from either input order, or a merge cannot be checked
+        // against a rebuild.
         let mut a = vec![
             entry("/x/b.rs", 5),
             entry("/x/a.rs", 5),

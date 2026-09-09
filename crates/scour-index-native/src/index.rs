@@ -1,29 +1,8 @@
 //! The index, as the rest of Scour sees it.
 //!
-//! Everything under this file is a segment: written once, mapped, never
-//! edited. This is what turns that into something that can be written to.
-//!
-//! ## Three states a change passes through
-//!
-//! 1. **Staged.** An upsert waits in memory. It is not searchable — the trait
-//!    says a change is not durable until [`Index::commit`], and making it
-//!    visible earlier would mean a second matching path that has to agree with
-//!    the first one forever.
-//! 2. **Hidden.** A removal is searchable *immediately*, because the opposite
-//!    is what a user notices: deleting a folder and still seeing its contents
-//!    for a second reads as a broken program. So a removal goes into an overlay
-//!    that every search consults, before anything on disk changes.
-//! 3. **Committed.** The staged entries become a new segment, the hidden ones
-//!    become cleared bits in the segments that hold them, and the overlay
-//!    empties.
-//!
-//! ## Back pressure, again
-//!
-//! The staging buffer is bounded and flushes itself. The engine this replaces
-//! learned that the expensive way: a directory walk produces entries far faster
-//! than anything consumes them, and the queue in between was the whole
-//! filesystem — 1,580 MB of documents in flight, for an index that is 396 MB
-//! when finished. Here the buffer is ours and it is counted.
+//! Everything below is a segment: written once, mapped, never edited. An upsert
+//! is staged and invisible until [`Index::commit`]; a removal goes into an
+//! overlay every search consults at once; a commit turns both into files.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -49,50 +28,29 @@ use crate::segment::Live;
 use crate::usage::Rollup;
 
 /// How many entries may wait in memory before a segment is written.
-///
-/// The number decides two things that pull in opposite directions. Too small
-/// and a full scan leaves hundreds of segments, each of which a search has to
-/// walk separately and each of which must find its own page before it can stop.
-/// Too large and the buffer is the memory spike it exists to prevent.
-///
-/// A hundred thousand entries is roughly 25 MB of `Entry` values, and leaves
-/// eleven segments after a million — which is a search at 5.15 ms instead of
-/// 1.02 until something compacts, and compacting is 2.7 seconds. Raising it
-/// buys fewer segments with memory at the ratio the whole design exists to
-/// avoid paying, so the answer is to compact, not to buffer.
+/// 100k is ~25 MB of `Entry` and leaves eleven segments after a million: a
+/// search at 5.15 ms against 1.02 until a 2.7 s compaction.
 const MAX_STAGED: usize = 100_000;
 
 /// How many rows a facet count will look at before it answers approximately.
-///
 /// A facet is a sidebar, not a result. Nobody waits for it.
 const FACET_SCAN_CAP: usize = 200_000;
 
-/// …except a distribution, which has to see everything or it is a wrong
-/// picture rather than a rough one.
-///
-/// **Rows are stored newest first**, so a cap does not sample — it takes a
-/// prefix, and a prefix of a date-ordered index is the recent end of it. A
-/// histogram of ages built that way says "today" no matter what was asked,
-/// which is how this was noticed. A top-ten list can be approximate because
-/// the tenth item being wrong changes little; a shape cannot.
+/// …except a distribution, which has to see everything. Rows are stored newest
+/// first, so a cap takes a prefix rather than a sample, and a capped histogram
+/// of ages says "today" whatever was asked.
 const AGE_SCAN_CAP: usize = usize::MAX;
 
 const META_FILE: &str = "native-index.json";
 /// Bumped when the files change shape **or when a stored value changes what it
-/// means**. Version 2 added the trigram filter, version 3 the per-block minimum
-/// and maximum, version 4 a distance byte a directory, and version 5 the file
-/// kinds — where nothing changed shape at all and every row of an older index
-/// would still decode, into the wrong answer. `kind:build` would find nothing
-/// and half the sidebar would read `File`: nothing corrupt and everything
-/// wrong, which is the case this constant exists for. Version 6 added the
-/// folded name arena, without which a search has nothing to walk. Version 7
-/// took the block from 128 rows to 32 — every offset in every file is relative
-/// to it, so an older index decodes into noise rather than into an answer.
-/// Version 8 made a row's identity its path: three identity columns went, and
-/// the lookup table is keyed on the path rather than on whatever the source
-/// called the entry, so an older table answers about nothing. Version 9 added
-/// the link count, without which a disk-usage report counts a hard-linked file
-/// once per name.
+/// means**. 2 added the trigram filter; 3 the per-block minimum and maximum; 4 a
+/// distance byte a directory; 5 the file kinds, where nothing changed shape at
+/// all and every older row still decodes, into the wrong answer; 6 the folded
+/// name arena, without which a search has nothing to walk; 7 took the block from
+/// 128 rows to 32, and every offset in every file is relative to it; 8 made a
+/// row's identity its path — three identity columns went and the lookup table is
+/// keyed on the path; 9 added the link count, without which a disk-usage report
+/// counts a hard-linked file once per name.
 const FORMAT: u32 = 9;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -121,13 +79,8 @@ impl Default for Meta {
 }
 
 /// What a flush left for the caller to write once it has let go of the index.
-///
-/// **It also holds the only copy of those rows**, which is what makes losing it
-/// unacceptable: the entries have been lifted out of the staging buffer and
-/// exist nowhere else until the segment is on disk. Every path that can fail
-/// after this point hands it back to [`NativeIndex::restore`] instead of
-/// dropping it — a write that could not happen has to leave the index where it
-/// was, not quietly poorer.
+/// **It holds the only copy of those rows**, so every path that can fail after
+/// this point hands it to [`NativeIndex::restore`] rather than dropping it.
 #[derive(Debug, Default)]
 struct Pending {
     /// The new segment's number, generation and rows.
@@ -153,99 +106,46 @@ impl Pending {
 struct Inner {
     segments: Vec<Live>,
     /// The in-memory segment list or generation is newer than the manifest.
-    ///
-    /// Segment files are written before the manifest names them. If that final
-    /// publication fails, retrying an otherwise empty commit must still write
-    /// the manifest; without this stamp it returns success and a restart loses
-    /// the segment that is visible in RAM.
+    /// Without it a retried commit succeeds and a restart loses the segment.
     meta_dirty: bool,
-    /// Segments whose in-memory live bitmap is newer than the file on disk.
-    ///
-    /// Kept separately from pending prefixes because a failed commit may have
-    /// already applied the removal to RAM. Retrying must write that bitmap
-    /// even though killing the same row again quite correctly reports zero.
+    /// Segments whose in-memory live bitmap is newer than the file on disk. A
+    /// failed commit may have applied the removal to RAM already, where killing
+    /// a dead row again correctly reports zero.
     dirty_alive: std::collections::HashSet<u64>,
-    /// Segment files to erase after the manifest stops naming them.
-    ///
-    /// Kept until a manifest publication succeeds. A fold or sweep that loses
-    /// its final rename must finish on an otherwise empty retry, including the
-    /// cleanup half; otherwise every such failure permanently leaves a full
-    /// orphan segment on disk until the service happens to restart.
+    /// Segment files to erase after the manifest stops naming them, kept until
+    /// a manifest publication succeeds.
     pending_erase: std::collections::HashSet<u64>,
     /// Upserts not yet written. Searchable only after a commit.
     staged: Vec<Entry>,
-    /// Rows a walk found exactly as they already were, by segment number.
-    ///
-    /// **A sweep deletes what the walk did not stamp, and the stamp is one
-    /// number a segment.** So a row that is skipped because nothing about it
-    /// changed has no way to say it was seen — and a rescan of an untouched
-    /// filesystem would empty the index while reporting success. This is that
-    /// way: one bit a row, held only while a generation is open, and never
-    /// written anywhere.
-    ///
-    /// 275 KB for two million rows, against the three seconds and twenty
-    /// segments that writing them all again costs. It is keyed on the segment
-    /// number, which is why folding is refused while a generation is open —
-    /// renumbering would leave every bit pointing at the wrong row, and the
-    /// failure would be the silent one.
+    /// Rows a walk found exactly as they already were, by segment number: a sweep
+    /// deletes what the walk did not stamp, so without this a rescan of an
+    /// untouched disk empties the index. One bit a row, 275 KB for two million.
     seen: HashMap<u64, Vec<u8>>,
     /// How many rows have been spared since the last time somebody was told.
-    ///
-    /// Sparing happens when the batch is flushed, which is not when the entry
-    /// was handed over — so the count reaches [`ApplyReport`] one batch late,
-    /// and the tail of a scan is reported by whatever calls `apply` next. It is
-    /// a diagnostic, and this is the honest shape of it rather than an accurate
-    /// number bought with a probe per entry.
+    /// Counted at flush, so it reaches [`ApplyReport`] one batch late.
     spared: u64,
-    /// Every source this index has been handed a row for.
-    ///
-    /// **`RemoveSubtree` carries a path and no source**, and the identity
-    /// table is keyed on both — so a removal cannot ask "which row is this
-    /// path" without one. Guessing is not needed: there are as many of these
-    /// as there are configured sources, two on the machine this was written
-    /// for, and trying each is two lookups against a scan of every row.
-    ///
-    /// Learned rather than stored. An index reopened and not yet written to
-    /// knows none, and a removal arriving before the first upsert falls back
-    /// to the scan — which is correct, and does not happen in practice
-    /// because a scan upserts before a watcher reports anything.
+    /// Every source this index has been handed a row for. **`RemoveSubtree`
+    /// carries a path and no source** and the identity table is keyed on both,
+    /// so each is tried in turn. Learned rather than stored.
     sources: Vec<SourceId>,
     /// Where each staged path sits, so a second upsert of the same file
     /// replaces the first instead of adding a second row for it.
     staged_at: HashMap<u64, usize>,
     /// Paths whose removal has taken effect for searches but not yet for the
-    /// files.
-    ///
-    /// One structure rather than two. There used to be a map of identities
-    /// beside it for removing a single entry, and nothing ever filled it: a
-    /// watcher reporting a deletion has a path and nothing else, so every real
-    /// removal arrived here. A prefix set holding one path removes exactly
-    /// that path, because nothing is under a file.
+    /// files. A watcher reporting a deletion has a path and nothing else, and a
+    /// prefix set holding one path removes exactly it: nothing is under a file.
     hidden_prefixes: scour_core::PrefixSet,
     generation: u64,
-    /// A generation that has been handed out and not yet reconciled.
-    ///
-    /// A scan takes a generation, writes its rows under it, and finishes by
-    /// sweeping away whatever it did not stamp. Between those two moments the
-    /// index holds rows that are *about to be* judged, and folding a segment
-    /// across a generation boundary in that window would hide them from the
-    /// judgement. Outside it, every row in the index is current by definition,
-    /// which is what makes a full fold safe.
-    ///
-    /// Cleared by the sweep, and replaced when a newer generation begins —
-    /// callers are expected to run one scan at a time, and the engine's single
-    /// worker thread is what guarantees it.
+    /// A generation that has been handed out and not yet reconciled. Between a
+    /// scan taking one and the sweep that ends it, folding across the boundary
+    /// would hide rows from the judgement. Callers scan one at a time.
     open: Option<u64>,
     next_segment: u64,
 }
 
-/// A segment being built on another thread.
-///
-/// Its rows are exactly as invisible as staged rows — the trait says a change
-/// is not durable until `commit`, and this is the window in which that is
-/// literally true. What it has to carry is the set of paths it holds: a
-/// removal arriving while it is in the air has no row to kill yet, and the one
-/// it was meant to kill is about to appear.
+/// A segment being built on another thread, as invisible as staged rows. It
+/// carries the set of paths it holds: a removal arriving while it is in the air
+/// has no row to kill yet.
 #[derive(Debug, Default)]
 struct Flight {
     number: u64,
@@ -280,40 +180,20 @@ struct Building {
     landed: Vec<Landed>,
 }
 
-/// How many segments may be built at once.
-///
-/// Each one holds its rows and its output bytes — about 35 MB for a full
-/// hundred-thousand-row segment — so this is a memory bound as much as a
-/// concurrency one. Past it, whoever wanted the flush builds it themselves,
-/// which is the back pressure this design needs and costs nothing to write.
+/// How many segments may be built at once. Each holds its rows and its output
+/// bytes — about 35 MB for a full segment — so this is a memory bound; past it
+/// the caller builds the flush itself.
 const MAX_BUILDING: usize = 4;
 
-/// How much larger a segment has to be than everything below it before it
-/// stops being folded together with them. `K` in the usual size-tiered
-/// arithmetic; see [`head_of`].
-///
-/// Four rather than two because the cut decides two things at once and they
-/// pull in opposite directions. It is how often a large segment is rewritten —
-/// once per `rows / K` rows of churn beneath it — and it is the base of the
-/// logarithm that bounds how many segments a search opens. Two would rewrite
-/// the measured 454k tail every 227k rows instead of every 113k, but would
-/// allow 24 segments at 5 M rows instead of 13, and a search pays per segment
-/// (1.11 ms for one against 5.20 ms for eleven, at 1.08 M entries). Eight would
-/// allow 9, and would leave a tier free to hold eight times its own weight in
-/// unsorted rows before merging — which is the state this exists to get out of.
+/// How much larger a segment has to be than everything below it before it stops
+/// being folded with them — `K` in size-tiered arithmetic, see [`head_of`]. Two
+/// would allow 24 segments at 5 M rows instead of 13, and a search pays per
+/// segment: 1.11 ms for one against 5.20 for eleven at 1.08 M entries.
 const TIER_RATIO: u64 = 4;
 
-/// Split segments into size tiers, smallest tier first.
-///
-/// Takes `(number, rows)` in any order, walks them by ascending size keeping a
-/// running total, and starts a new tier at the first member that is more than
-/// [`TIER_RATIO`] times everything already below it. Ties are broken by
-/// segment number so the answer does not depend on the order the manifest
-/// happened to list them in.
-///
-/// Pulled out of [`head_of`] because it is the whole of the arithmetic, and it
-/// is worth being able to test at sizes — 5 M rows, a thousand rounds of
-/// trickle — that building real segments could not reach.
+/// Split segments into size tiers, smallest first: `(number, rows)` walked by
+/// ascending size, a new tier at the first member larger than [`TIER_RATIO`]
+/// times everything below it. Ties break on the number, not the manifest order.
 fn size_tiers(sizes: impl IntoIterator<Item = (u64, u64)>) -> Vec<Vec<u64>> {
     let mut sizes: Vec<(u64, u64)> = sizes.into_iter().collect();
     sizes.sort_by_key(|&(number, rows)| (rows, number));
@@ -342,53 +222,14 @@ struct Member {
     dead: u64,
 }
 
-/// Which of a group of segments to fold together next, or nothing.
-///
-/// **The head is the smallest size tier, not the whole of the rest.**
-///
-/// Sparing the largest member and folding *everything else together* is what
-/// this used to do, and on an index that has a body and a tail it re-merged the
-/// tail every time the clock came round. Measured on the live service: a
-/// 4.6 M-row body beside a 454,184-row tail, `COMPACT_EVERY` at 60 s, and the
-/// tail's 11.70 MB of names reappearing under a new segment number nine times
-/// in eight and a half minutes — 1.5 to 1.8 s of worker CPU and 51 to 68 MB
-/// written per round, so 2.5–3% of a core and 50–65 MB/min with nobody touching
-/// the machine, and two folds taking 330 of 612 worker ticks over one
-/// two-minute window. The rows re-merged were the same rows every time. All
-/// that had changed was the handful of tiny segments a trickle of watcher
-/// commits had appended, and paying for the tail to absorb them once a minute
-/// is the whole of the waste.
-///
-/// So what is left once the largest is set aside gets walked in ascending size
-/// and cut where a member is larger than [`TIER_RATIO`] times everything below
-/// it, and only the smallest tier with more than one member is folded. The tail
-/// takes the trickle in when the trickle has grown to a quarter of it — every
-/// ~113k rows of churn rather than every minute — so a row is rewritten
-/// O(log n) times over the life of the index instead of once a minute for ever.
-/// Same argument as the 08-06 cohort fix in `docs/MEASUREMENTS.md:395-399`,
-/// which took this exact shape at 100k rows down to 27.4 ms/min; the 08-12
-/// one-group rule made cohorts irrelevant outside a scan and the tail came back
-/// 4.5× larger.
-///
-/// **The count stays bounded, which is what this has to be judged on.** The
-/// hazard is the one recorded at [`NativeIndex::groups`]: 241 segments across
-/// 205 generations, nothing foldable, every search opening all 241. When this
-/// has nothing left to hand back, every tier below the largest holds exactly
-/// one segment, and the cut says each of those is more than [`TIER_RATIO`]
-/// times the one under it — so their sizes grow at least geometrically from a
-/// single row and there can be at most `ceil(log4(rows)) + 1` segments in all:
-/// **13 at 5 M rows, 14 at 10 M**, against the 2→78 this oscillated between.
-/// `a_long_trickle_stays_under_the_geometric_bound` holds it to that.
-///
-/// Lossless whatever it picks: a fold is a merge of immutable rows, duplicates
-/// are already resolved at flush by `kill_paths`, and the search comparator
-/// breaks its last tie on the joined path rather than on which segment a row
-/// landed in — so how the same rows are divided up cannot be seen from a query.
+/// Which of a group of segments to fold together next, or nothing. **The head is
+/// the smallest size tier, not the whole of the rest**, so the tail absorbs a
+/// trickle every ~113k rows of churn rather than once a minute, and the count
+/// stays under `ceil(log4(rows)) + 1`: 13 at 5 M rows.
 fn head_of(members: &[Member]) -> Option<Vec<u64>> {
     let biggest = members.iter().max_by_key(|m| m.rows)?;
     // A quarter of it dead is the point at which rewriting the largest segment
-    // gives back more than it costs — and when it is being rewritten anyway,
-    // everything riding along with it is the cheap part.
+    // gives back more than it costs, and everything riding along is then cheap.
     if biggest.dead * 4 > biggest.rows {
         return Some(members.iter().map(|m| m.number).collect());
     }
@@ -398,13 +239,8 @@ fn head_of(members: &[Member]) -> Option<Vec<u64>> {
         .collect();
     let tiers = size_tiers(rest.iter().map(|m| (m.number, m.rows)));
     tiers.into_iter().find(|tier| tier.len() >= 2).or_else(|| {
-        // Every tier a single segment: nothing to merge, but a segment a
-        // quarter of which is dead still pays for its own rewrite. Only the
-        // largest was ever asked this before, because every other member was in
-        // the head regardless. Now that a middle segment can sit alone in its
-        // tier, removing a large directory would otherwise leave its rows on
-        // disk until the next `scour maintain rebuild`. `fold` already accepts
-        // a group of one on exactly this condition.
+        // Every tier a single segment: nothing to merge, but a segment a quarter
+        // dead still pays for its own rewrite. `fold` accepts a group of one.
         rest.into_iter()
             .find(|m| m.dead * 4 > m.rows)
             .map(|m| vec![m.number])
@@ -434,36 +270,22 @@ pub struct NativeIndex {
     /// Physical directory bytes cached between index-controlled mutations.
     disk_bytes: std::sync::Arc<DirectoryBytes>,
     inner: RwLock<Inner>,
-    /// Segments in the air, and something to wait on.
-    ///
-    /// Separate from `inner`, and deliberately: a builder thread never takes
-    /// the index lock at all. It writes its files, drops the result here and
-    /// stops — whoever next holds the write lock puts it in the list. Waiting
-    /// for a build while holding the lock the build needs is the deadlock this
-    /// avoids by construction, and it also means a slow disk cannot block a
-    /// search.
+    /// Segments in the air, and something to wait on. Separate from `inner`: a
+    /// builder thread never takes the index lock, so waiting for a build cannot
+    /// deadlock against the lock the build needs.
     building: std::sync::Arc<(parking_lot::Mutex<Building>, parking_lot::Condvar)>,
     /// Builds that failed. Their rows were put back; this is how the next
     /// commit finds out it has something to report.
     build_failed: std::sync::atomic::AtomicUsize,
-    /// Folder sizes, derived and cached.
-    ///
-    /// **Its own lock, and that is the whole reason it is a separate field.**
-    /// Building the prefix sums is 90 ms over two million rows, and doing it
-    /// under `inner` would stop every search on the machine for that long the
-    /// first time somebody looked at a list with a folder in it. Here a
-    /// builder holds `inner` for reading — which searches also do — and this
-    /// one for writing, which nothing else wants.
-    ///
-    /// Taken *after* `inner` on every path, which is what keeps the two from
-    /// deadlocking against each other.
+    /// Folder sizes, derived and cached, under **their own lock**: building the
+    /// prefix sums is 90 ms over two million rows, which under `inner` would stop
+    /// every search for that long. Taken *after* `inner` on every path.
     sizes: parking_lot::RwLock<crate::sizes::Cache>,
     /// A deterministic test-only pause after a fold snapshots its inputs.
     #[cfg(test)]
     fold_gate: parking_lot::Mutex<Option<std::sync::Arc<FoldGate>>>,
     /// Released when this is dropped, or by the kernel if the process dies.
-    /// Held for the lifetime of the index because every writing path — commit,
-    /// sweep, maintain — goes through this value.
+    /// Held for the lifetime of the index: every writing path goes through it.
     _lock: DirLock,
 }
 
@@ -471,18 +293,12 @@ impl NativeIndex {
     /// Open the index in `dir`, creating an empty one if there is none.
     pub fn open_or_create(dir: &Path) -> Result<NativeIndex> {
         std::fs::create_dir_all(dir).map_err(|e| Error::io(&e, &dir.to_string_lossy()))?;
-        // Before anything is read, and long before anything is written: a
-        // second writer here does not merely lose an update, it calls
-        // `File::create` on a file the first one has mmapped.
+        // Before anything is read: a second writer here does not merely lose an
+        // update, it calls `File::create` on a file the first one has mmapped.
         let lock = DirLock::acquire(dir)?;
-        // **Only a missing manifest means a new index.** Every other error —
-        // a permission change, a bad block, a directory that is not readable
-        // right now — used to land here as `Meta::default()`, which says "this
-        // index holds nothing". `sweep_orphans` then reads that as a directory
-        // full of segments nothing refers to and erases them. One unreadable
-        // JSON file was enough to destroy an intact index; failing closed costs
-        // a service that will not start until the cause is dealt with, which is
-        // the cheaper of the two by a distance.
+        // **Only a missing manifest means a new index.** Any other error read as
+        // `Meta::default()` says the index holds nothing, and `sweep_orphans`
+        // then erases every segment on disk.
         let meta: Meta = match std::fs::read_to_string(dir.join(META_FILE)) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| Error::IndexCorrupt {
                 detail: format!("{META_FILE}: {e}"),
@@ -491,10 +307,8 @@ impl NativeIndex {
             Err(e) => return Err(Error::io(&e, &dir.join(META_FILE).to_string_lossy())),
         };
         if meta.format != FORMAT {
-            // Not damaged — written by another version. Nothing here is worth
-            // recovering and nothing here is lost: every row came from the
-            // filesystem and can come from it again. Saying so is the caller's
-            // decision, and `discard` is how they act on it.
+            // Not damaged — written by another version, and nothing is lost:
+            // every row came from the filesystem. `discard` is how to act on it.
             return Err(Error::IndexOutdated {
                 found: meta.format,
                 expected: FORMAT,
@@ -541,16 +355,9 @@ impl NativeIndex {
         }
     }
 
-    /// Throw away an index so the next `open_or_create` starts empty.
-    ///
-    /// For [`Error::IndexOutdated`] and nothing else: the caller has decided
-    /// that a rebuild is cheaper than a migration, which it is whenever the
-    /// index is derived from something still there to be read.
-    ///
-    /// Removes the manifest and the segment files and leaves everything else,
-    /// including the lock, alone. Deliberately not `remove_dir_all`: the
-    /// directory comes from configuration, and a wrong one there should cost a
-    /// confusing error rather than somebody's files.
+    /// Throw away an index so the next `open_or_create` starts empty, for
+    /// [`Error::IndexOutdated`] and nothing else. Removes the manifest and the
+    /// segment files only: the directory comes from configuration.
     pub fn discard(dir: &Path) -> Result<()> {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
@@ -585,10 +392,8 @@ impl NativeIndex {
         let json = serde_json::to_string_pretty(&meta).map_err(|e| Error::Io {
             detail: e.to_string(),
         })?;
-        // Written beside itself and renamed over, so a kill mid-write leaves
-        // the old manifest rather than a truncated one. `std::fs::write`
-        // truncates first, and a zero-length manifest is an index that reports
-        // itself corrupt and has to be rebuilt from a walk of the disk.
+        // Written beside itself and renamed over: `std::fs::write` truncates
+        // first, and a zero-length manifest is an index that must be rebuilt.
         let p = self.dir.join(META_FILE);
         let saved = self
             .disk_bytes
@@ -607,29 +412,16 @@ impl NativeIndex {
         Ok(())
     }
 
-    /// Turn everything staged and hidden into files.
-    ///
-    /// Order matters and is not arbitrary: removals are applied to the existing
-    /// segments *before* the new one is written, because one of those removals
-    /// is the old row of every entry being re-upserted, and applying them
-    /// afterwards would find — and kill — the row that was just added.
-    /// Flush with the lock held throughout. For callers already inside it.
-    /// Flush, and be finished when it returns.
-    ///
-    /// For everything whose next line depends on the rows being *in* the
-    /// index: a sweep about to judge them, a generation about to stamp them, a
-    /// fold about to rewrite them. Only the staging buffer overflowing can
-    /// afford to let a segment be built elsewhere, because nothing is waiting
-    /// on it.
+    /// Turn everything staged and hidden into files, lock held throughout, for
+    /// callers whose next line needs the rows in. Removals are applied *before*
+    /// the new segment: one of them is the old row of every re-upserted entry.
     fn flush(&self, inner: &mut Inner) -> Result<()> {
         self.flush_maybe_elsewhere(inner, false)
     }
 
     fn flush_maybe_elsewhere(&self, inner: &mut Inner, elsewhere: bool) -> Result<()> {
-        // `elsewhere` twice over, and it is the same fact both times: this
-        // flush happens because a buffer filled up, not because a caller needs
-        // the rows in. That is what lets the segment be built on another
-        // thread, and it is what lets the flush be called off entirely.
+        // `elsewhere` says this flush happens because a buffer filled up, not
+        // because a caller needs the rows in.
         let mut pending = self.flush_prepare(inner, elsewhere)?;
         if let Err(e) = pending.write_alive(&self.dir, &self.disk_bytes) {
             Self::restore(inner, pending);
@@ -639,18 +431,9 @@ impl NativeIndex {
             return Ok(());
         };
 
-        // **Somewhere else, if anybody else is free.**
-        //
-        // A hundred thousand rows take about 150 ms to turn into a segment,
-        // and the scan profile put 85% of a full index in exactly that: one
-        // thread interning directories, folding names and extracting trigrams
-        // while nineteen others had nothing to do. Segments are independent —
-        // separate files, separate numbers, merged at query time — so there is
-        // no reason to build them one after another.
-        //
-        // Past `MAX_BUILDING` the caller builds it itself. That is the back
-        // pressure: memory is bounded by the number in the air, and a walk
-        // that outruns the builders is made to wait by doing the work.
+        // **Somewhere else, if anybody else is free.** A hundred thousand rows
+        // are ~150 ms of one thread and segments are independent. Past
+        // `MAX_BUILDING` the caller builds it itself, which is the back pressure.
         let mine = !elsewhere || {
             let held = self.building.0.lock();
             held.flights.len() >= MAX_BUILDING
@@ -679,19 +462,14 @@ impl NativeIndex {
                 }
             };
             drop(staged);
-            // The scan's builder buffers are the process's largest anonymous
-            // allocation. They are gone here, not at the end of the scan: a
-            // builder may run on this long-lived worker, and glibc otherwise
-            // keeps its freed pages until something happens to trim this arena.
+            // The builder buffers are the process's largest anonymous allocation,
+            // and glibc keeps freed pages until this arena is trimmed.
             trim_builder_allocator();
             inner.segments.push(live);
             inner.segments.sort_by_key(|s| s.number);
             inner.meta_dirty = true;
-            // Past here the rows are on disk. A manifest that will not save is
-            // a real failure and is reported, but the segment is named by the
-            // next successful save and swept as an orphan if there never is
-            // one — so the entries are not put back, which would duplicate
-            // them.
+            // Past here the rows are on disk: the segment is named by the next
+            // successful save, or swept as an orphan, so nothing is put back.
             return self.save_meta(inner);
         }
 
@@ -734,10 +512,8 @@ impl NativeIndex {
                 let done = match written {
                     Ok(live) => {
                         drop(staged);
-                        // These threads are deliberately short-lived. Trimming
-                        // while the thread still owns its arena releases the
-                        // pages its entries and output buffers just occupied;
-                        // a later trim from `scour-worker` left them mapped.
+                        // Trimming while this short-lived thread still owns its
+                        // arena releases the pages a later trim leaves mapped.
                         trim_builder_allocator();
                         Landed::Built { number, live }
                     }
@@ -765,23 +541,10 @@ impl NativeIndex {
         Ok(())
     }
 
-    /// Kill every row of a segment that is under one of these prefixes.
-    /// Remove paths that name a file, without looking at any row that is not
-    /// one of them.
-    ///
-    /// **A watcher cannot tell a file from a folder**, so it reports every
-    /// removal as a subtree and the overwhelming majority of them are one
-    /// file. Answering those by scanning was linear in how much had been
-    /// indexed — 10.5 ms at half a million rows and 64.9 ms at four million,
-    /// with a realistic spread of timestamps — while the identity table
-    /// answers "which row is this path" in a binary search.
-    ///
-    /// The path is a file here only if the directory table does not hold it.
-    /// A path that names a directory has descendants to find and goes to
-    /// [`NativeIndex::kill_under`] as before; a path that names neither is
-    /// looked up, missed, and costs nothing.
-    ///
-    /// Returns the prefixes that still need the scan.
+    /// Remove paths that name a file, touching no other row; returns the prefixes
+    /// that still need the scan. A watcher reports every removal as a subtree and
+    /// almost all are one file, where scanning was 10.5 ms at half a million rows
+    /// and 64.9 ms at four million against a binary search on the identity table.
     fn kill_leaves<'p>(
         live: &mut Live,
         prefixes: &'p scour_core::PrefixSet,
@@ -793,9 +556,8 @@ impl NativeIndex {
             let seg = live.view()?;
             for p in prefixes.iter() {
                 let trimmed = p.trim_end_matches('/');
-                // No source yet means no way to key a lookup, so the scan
-                // has to answer it. Dropping it instead would lose the
-                // removal outright, which is what the first version did.
+                // No source yet means no way to key a lookup, so the scan has to
+                // answer it. Dropping it would lose the removal outright.
                 if sources.is_empty() || trimmed.is_empty() || !seg.dirs.subtree(p).is_empty() {
                     keep.push(p.to_owned());
                     continue;
@@ -825,8 +587,7 @@ impl NativeIndex {
                 let mut out = Vec::new();
                 for block in 0..rows.div_ceil(crate::columns::BLOCK) {
                     // A block whose directory numbers all fall outside every
-                    // prefix holds nothing this removal is about. See
-                    // `Doomed::touches`.
+                    // prefix holds nothing this removal is about.
                     if let Some((lo, hi)) = seg.cols.block_range(Field::DirId, block)
                         && lo >= 0
                         && !doomed.touches(lo as u32, hi as u32)
@@ -851,10 +612,8 @@ impl NativeIndex {
         Ok(gone)
     }
 
-    /// Put every finished build in the list. The caller holds the write lock.
-    ///
-    /// Called from every path that takes it, because a segment sitting in
-    /// `landed` is a set of rows that exist on disk and answer no query.
+    /// Put every finished build in the list; the caller holds the write lock.
+    /// A segment sitting in `landed` exists on disk and answers no query.
     fn collect(&self, inner: &mut Inner) -> Result<()> {
         let done: Vec<Landed> = {
             let mut held = self.building.0.lock();
@@ -894,10 +653,9 @@ impl NativeIndex {
                         if !gone.is_empty() {
                             Self::kill_under(&mut live, &gone)?;
                         }
-                        // On a retry the rows above are already dead and both
-                        // calls report zero. The flight still carries the late
-                        // removals, so their presence — not today's hit count —
-                        // is what says the bitmap needs its durable replacement.
+                        // On a retry both calls report zero, so the presence of
+                        // the late removals — not today's hit count — is what
+                        // says the bitmap needs its durable replacement.
                         if !doomed.is_empty() || !gone.is_empty() {
                             let (number, bits) = live.alive_snapshot();
                             self.disk_bytes
@@ -963,12 +721,8 @@ impl NativeIndex {
     }
 
     /// Wait until nothing is being built, then put the results in the list.
-    ///
-    /// **Every operation that reasons about what the index contains has to do
-    /// this first.** A sweep judges rows by generation, a fold rewrites them, a
-    /// rebuild reads all of them: a segment still in the air is a set of rows
-    /// none of those would see, and the failure is silent — rows that outlive a
-    /// reconciliation they should have been judged by.
+    /// **Every operation that reasons about what the index contains does this
+    /// first**: a segment in the air is rows a sweep or fold would silently miss.
     fn settle(&self) -> Result<()> {
         {
             let mut held = self.building.0.lock();
@@ -979,12 +733,9 @@ impl NativeIndex {
         self.collect(&mut self.inner.write())
     }
 
-    /// Put back what a failed publication was carrying.
-    ///
-    /// The staged rows go in **behind** whatever arrived while the write was
-    /// happening, and only where that has not already replaced them: an upsert
-    /// that landed in the meantime is newer than the one being restored, and
-    /// the whole point of the staging map is that a path appears once.
+    /// Put back what a failed publication was carrying. The staged rows go in
+    /// **behind** whatever arrived meanwhile and only where that has not already
+    /// replaced them: a path appears once.
     fn restore(inner: &mut Inner, pending: Pending) {
         for (number, _) in &pending.alive {
             if inner.segments.iter().any(|live| live.number == *number) {
@@ -995,9 +746,7 @@ impl NativeIndex {
         inner.hidden_prefixes = pending.prefixes;
         inner.hidden_prefixes.extend(prefixes.into_paths());
         // An upsert that arrived while a commit was writing is newer than the
-        // removal being restored. Preserve the same exact-path `forget`
-        // semantics `apply` gave it before the failed commit took the prefix
-        // out of `inner`.
+        // removal being restored.
         for entry in &inner.staged {
             inner.hidden_prefixes.forget(&entry.path);
         }
@@ -1023,10 +772,8 @@ impl NativeIndex {
     }
 
     /// Lift every bitmap that is newer than its file out for one durable write.
-    ///
-    /// Taking the stamps matters when the write happens without the index lock:
-    /// a newer removal can dirty the same segment while these snapshots are in
-    /// flight, and its stamp must remain for the following commit.
+    /// Taking the stamps matters: a newer removal can dirty the same segment
+    /// while these snapshots are in flight, and its stamp must survive.
     fn take_dirty_alive(inner: &mut Inner) -> Vec<(u64, Vec<u8>)> {
         let dirty = std::mem::take(&mut inner.dirty_alive);
         inner
@@ -1037,12 +784,9 @@ impl NativeIndex {
             .collect()
     }
 
-    /// Persist dirty bitmaps while the caller holds the write lock.
-    ///
-    /// `forget` and `sweep` mutate live rows directly rather than through a
-    /// [`Pending`] commit. A failed replacement must leave the stamps behind so
-    /// their next invocation can retry even though killing an already-dead row
-    /// quite correctly reports zero.
+    /// Persist dirty bitmaps while the caller holds the write lock. A failed
+    /// replacement leaves the stamps behind, so the next invocation retries even
+    /// though killing an already-dead row reports zero.
     fn write_dirty_alive(&self, inner: &mut Inner) -> Result<()> {
         let alive = Self::take_dirty_alive(inner);
         if alive.is_empty() {
@@ -1066,11 +810,7 @@ impl NativeIndex {
     }
 
     /// Lift the staged entries out, leaving the index consistent without them.
-    ///
-    /// They were never searchable — the trait says a change is not durable
-    /// until `commit` — so removing them from the buffer changes no answer.
-    /// What it buys is that turning them into a segment, which is the only
-    /// expensive part of a flush, can happen with the lock released.
+    /// They were never searchable, so the segment can be built with no lock.
     fn take_staged(inner: &mut Inner) -> Option<(u64, u64, Vec<Entry>)> {
         if inner.staged.is_empty() {
             return None;
@@ -1085,17 +825,12 @@ impl NativeIndex {
         Some((number, inner.generation, staged))
     }
 
-    /// Everything a flush does **except** building and writing the segment.
-    ///
-    /// Returns what still has to be written, so a caller that can afford to
-    /// let go of the lock does — see [`Index::commit`]. Split rather than
-    /// duplicated, because the order inside matters: the identities to kill
-    /// are read *from* the staged entries, and taking them out first meant a
-    /// re-indexed file kept its old row. Two tests said so immediately.
+    /// Everything a flush does **except** building and writing the segment, so a
+    /// caller that can let go of the lock does. The order inside matters: the
+    /// identities to kill are read *from* the staged entries.
     fn flush_prepare(&self, inner: &mut Inner, discretionary: bool) -> Result<Pending> {
-        // Anything that finished building belongs in the list before this
-        // decides what to kill: a row that has just landed is a row this flush
-        // may have to replace.
+        // Anything that finished building belongs in the list first: a row that
+        // has just landed is a row this flush may have to replace.
         self.collect(inner)?;
         if inner.staged.is_empty()
             && inner.hidden_prefixes.is_empty()
@@ -1108,15 +843,9 @@ impl NativeIndex {
         }
         let mut touched = vec![false; inner.segments.len()];
 
-        // Subtrees. One pass over each segment covers every prefix at once.
-        //
-        // By **directory number**, not by path. The first version rebuilt a
-        // path for every live row of every segment and compared strings —
-        // 2.1 M path constructions to delete one folder, with the write lock
-        // held and every search waiting behind it. The directory table already
-        // answers "is this row under that prefix" as a range check on a
-        // column, which is the same thing `under:` uses to make scoping a
-        // search a comparison rather than a scan.
+        // Subtrees, one pass over each segment for every prefix at once, by
+        // **directory number** rather than by path: the directory table answers
+        // it as a range check, where paths meant 2.1 M constructions per delete.
         if !inner.hidden_prefixes.is_empty() {
             let prefixes = std::mem::take(&mut inner.hidden_prefixes);
             let sources = inner.sources.clone();
@@ -1132,10 +861,8 @@ impl NativeIndex {
                     touched[i] = true;
                 }
             }
-            // A segment still being built holds rows this removal is about and
-            // has none of them yet. It carries the prefixes and applies them
-            // the moment it lands — otherwise a folder deleted during a scan
-            // comes back with the segment that was in the air when it went.
+            // A segment still being built has none of these rows yet. It carries
+            // the prefixes and applies them the moment it lands.
             {
                 let mut held = self.building.0.lock();
                 for f in held.flights.iter_mut() {
@@ -1146,36 +873,10 @@ impl NativeIndex {
             inner.hidden_prefixes = prefixes;
         }
 
-        // The old row of everything being re-upserted.
-        //
-        // **By path**, which is the whole of the duplicate problem: the row a
-        // save replaces is the one with the same name, whatever identity the
-        // filesystem gave the new file. Keying this on an inode meant every
-        // write-and-rename left the previous row in place — 267 of them at one
-        // path, measured on the live index.
-        //
-        // One sorted list, one merge a segment. The obvious shape — look each
-        // path up in each segment — is a binary search per path per segment,
-        // and a bulk scan makes both numbers large at once: indexing ten
-        // million entries spent most of a hundred seconds in probes that found
-        // nothing. Sorting once puts them in the order the segment's table is
-        // already in, and the whole check becomes one sequential pass.
-        //
-        // The old rows are killed *always*, not only when a generation says
-        // they might exist. A cheaper rule exists — during a bulk pass every
-        // existing row carries an older generation and `sweep` will take it —
-        // but it is wrong the moment the engine skips a sweep, and the failure
-        // is a duplicated row rather than an error.
-        //
-        // The two fields are borrowed apart rather than the paths copied. A
-        // bulk flush stages a hundred thousand entries, and cloning a path for
-        // each of them to satisfy the borrow checker was **0.32 µs an entry**
-        // — a third of what writing an entry costs in total, spent on strings
-        // that are three lines away from the originals.
-        //
-        // First, though: the rows that are already right leave the batch, so
-        // neither the kill below nor the build after it is asked to do anything
-        // about them. See `spare_unchanged`.
+        // The old row of everything being re-upserted, **by path**: keying on an
+        // inode left 267 rows at one path. Sorted once and merged in one pass a
+        // segment, where a binary search per path per segment spent most of a
+        // hundred seconds on ten million entries.
         spare_unchanged(inner)?;
         {
             let Inner {
@@ -1197,11 +898,9 @@ impl NativeIndex {
                     touched[i] = true;
                 }
             }
-            // The same rows, in segments that do not exist yet. A path being
+            // The same rows, in segments that do not exist yet: a path
             // re-indexed while an earlier segment holding it is still being
-            // written has no row to kill — and would have two the moment that
-            // segment landed, which is the duplicate this index exists to make
-            // impossible.
+            // written would have two rows the moment that segment landed.
             let mut held = self.building.0.lock();
             if !held.flights.is_empty() {
                 for f in held.flights.iter_mut() {
@@ -1215,25 +914,17 @@ impl NativeIndex {
         }
         let t_kill = Instant::now();
 
-        // **A buffer that emptied itself has nothing to flush.** The overflow
-        // that called this in is the only discretionary flush there is, and on
-        // a rescan almost every entry in it leaves through `spare_unchanged` a
-        // few lines up. Writing what is left anyway turned a rescan of an
-        // untouched disk into nine segments of two rows each — one a batch, the
-        // index twice as many segments as it started with, every search reading
-        // all of them and a compaction owed for the rest.
-        //
-        // So the rows stay in the buffer and wait for the next batch, or for
-        // the commit clock, which is a flush that is not discretionary.
+        // **A buffer that emptied itself has nothing to flush.** On a rescan
+        // almost every entry leaves through `spare_unchanged` above, and writing
+        // the rest turned an untouched disk into nine segments of two rows each.
         let pending = if discretionary && inner.staged.len() < MAX_STAGED {
             None
         } else {
             Self::take_staged(inner)
         };
         let _ = t_kill;
-        // Copied, not written. The write is an `fsync` a segment and it happens
-        // once a second; doing it here held the index for 33 to 56 ms while
-        // every search waited.
+        // Copied, not written. The write is an `fsync` a segment and happens
+        // once a second; doing it here held the index for 33 to 56 ms.
         for (i, live) in inner.segments.iter().enumerate() {
             if touched.get(i).copied().unwrap_or(false) {
                 inner.dirty_alive.insert(live.number);
@@ -1241,11 +932,9 @@ impl NativeIndex {
         }
         let mut alive = Self::take_dirty_alive(inner);
         let prefixes = std::mem::take(&mut inner.hidden_prefixes);
-        // Order, and it is the difference between a crash costing a commit and
-        // a crash costing the index: the manifest stops naming these segments
-        // *before* their files go. The other way round — which is how this was
-        // written — leaves a window in which the manifest points at files that
-        // are no longer there, and the index does not open again.
+        // The manifest stops naming these segments *before* their files go. The
+        // other way round leaves a window in which it names files that are gone,
+        // and the index will not open again.
         let gone = self.forget_empty(inner);
         if let Err(e) = self.save_meta(inner) {
             Self::restore(
@@ -1258,14 +947,9 @@ impl NativeIndex {
             );
             return Err(e);
         }
-        // **A segment that was swept empty is both touched and gone**, so its
-        // bitmap is in the snapshot above *and* its files have just been
-        // unlinked — and the caller writes the snapshot after releasing the
-        // lock, which puts the file back. Nothing ever opens it and nothing
-        // ever removes it. Found by counting: 182 orphan segments on the live
-        // index against 55 in the manifest, almost all of them a lone `.alive`,
-        // one of them 160 KB. They also inflate `bytes_on_disk`, which is the
-        // size of the whole directory.
+        // **A segment swept empty is both touched and gone**, and the caller
+        // writes the snapshot after releasing the lock, which puts its file back:
+        // 182 orphan segments on the live index against 55 in the manifest.
         alive.retain(|(n, _)| !gone.contains(n));
         Ok(Pending {
             staged: pending,
@@ -1274,13 +958,8 @@ impl NativeIndex {
         })
     }
 
-    /// Erase segments nothing is left alive in.
-    ///
-    /// Not housekeeping — a correctness-shaped performance bug. A full rescan
-    /// stamps a new generation and the sweep kills every row of the old one,
-    /// and until this ran the emptied segment stayed in the list and was walked
-    /// end to end by every query. Measured on a real index: 1,204,270 rows read
-    /// per search to produce nothing.
+    /// Erase segments nothing is left alive in: an emptied segment left in the
+    /// list is walked end to end by every query, 1,204,270 rows for nothing.
     fn forget_empty(&self, inner: &mut Inner) -> Vec<u64> {
         let mut gone = Vec::new();
         inner.segments.retain(|s| {
@@ -1298,50 +977,15 @@ impl NativeIndex {
         gone
     }
 
-    /// Fold these segments into one, dropping rows that are no longer live.
-    ///
-    /// Merge segments, **without holding the index against a search**.
-    ///
-    /// This used to run start to finish under the write lock, and on a real
-    /// index that meant a query issued during a rebuild waited for the whole
-    /// rebuild: **22,984 ms**, measured, against 3 ms when nothing else was
-    /// happening. A search box that is usually instant and occasionally
-    /// twenty-three seconds is not a fast search box.
-    ///
-    /// It does not have to be that way, because a segment is written once and
-    /// never edited. Reading N of them and writing one more touches nothing a
-    /// search looks at; only the *list* changes, and swapping a list is
-    /// microseconds. So the build happens under the **read** lock, which
-    /// searches also hold and therefore do not queue behind, and the write
-    /// lock is taken once at the end.
-    ///
-    /// What that admits is a commit waiting on a long fold — and the engine
-    /// runs both on one worker thread, so it cannot happen there. A caller
-    /// that does otherwise gets a slow commit rather than a wrong answer: the
-    /// numbers folded are checked against the list again before the swap.
+    /// Fold these segments into one, dropping rows that are no longer live —
+    /// **without holding the index against a search**. A segment is written once
+    /// and never edited, so the build runs under the **read** lock; held
+    /// throughout, a query issued during a rebuild waited **22,984 ms**.
     fn fold(&self, which_numbers: &[u64]) -> Result<bool> {
-        // **Not while a walk is running.** Folding renumbers what is left, and
-        // the marks that say "this row was seen unchanged" are keyed on the
-        // number a row's segment had when it was seen. Renumbering leaves every
-        // one of them pointing at a different row, and the sweep that follows
-        // deletes files that are on the disk — silently, and reporting success.
-        //
-        // **Only the segments being folded, and that width matters.** Marks
-        // are keyed on segment numbers and a fold renumbers only what it
-        // consumes — every other segment keeps its number and its marks stay
-        // true. Refusing on *any* mark anywhere was the first version, and on a
-        // machine whose watcher keeps opening generations it meant compaction
-        // never ran at all: 224 segments that would not come down, every search
-        // reading all of them.
-        //
-        // **`false`, not `Ok(())`, and that difference was a spun core.** The
-        // compaction loop is `while let Some(head) = next_head() { fold(head) }`
-        // and it ends because folding makes the group too small to qualify. A
-        // refusal that looks like success leaves the group exactly as it was,
-        // `next_head` hands back the same one, and the loop never ends —
-        // measured on the live index at **99.7% of a core with nothing
-        // happening**. Whether a caller can tell "refused" from "done" is not a
-        // detail.
+        // **Not while a walk is running, and only for the segments being folded**:
+        // marks are keyed on the number a row's segment had, and a fold renumbers
+        // what it consumes. **`false`, not `Ok(())`** — a refusal that reads as
+        // success leaves the compaction loop spinning at 99.7% of a core.
         let marked = {
             let inner = self.inner.read();
             which_numbers.iter().any(|n| inner.seen.contains_key(n))
@@ -1349,16 +993,9 @@ impl NativeIndex {
         if marked {
             return Ok(false);
         }
-        // **The number is claimed under the write lock, before anything is
-        // built.** Reading `next_segment` under the read lock is not reserving
-        // it: a commit takes the write lock meanwhile, claims the same number
-        // in `take_staged`, and writes its nine files over the ones this fold
-        // is about to write — or has already written and mapped.
-        //
-        // Found by the test below rather than reasoned about. With a writer
-        // committing throughout, a rebuild came back `IndexCorrupt {
-        // "seg-00000009.fnames is unreadable" }`: a segment whose files had
-        // been replaced underneath a live mapping.
+        // **The number is claimed under the write lock, before anything is built.**
+        // Reading `next_segment` under the read lock reserves nothing: a
+        // concurrent commit writes its files over the ones this fold has mapped.
         let number = {
             let mut inner = self.inner.write();
             let n = inner.next_segment;
@@ -1374,18 +1011,15 @@ impl NativeIndex {
                 .filter(|s| which_numbers.contains(&s.number))
                 .collect();
             // Nothing here worth rewriting. `false` for the same reason as
-            // above: the caller loops until a fold stops changing anything, and
-            // it can only know that if it is told.
+            // above: the caller loops until a fold stops changing anything.
             if segs.len() < 2 && segs.iter().all(|s| s.dead_rows() == 0) {
                 return Ok(false);
             }
             // The merged segment can carry only one stamp, so the group must
-            // either share one or be known to be entirely current — see
-            // [`Inner::open`] and the caller.
+            // share one or be known entirely current — see [`Inner::open`].
             let generation = segs.iter().map(|s| s.generation).max().unwrap_or(0);
-            // A segment's immutable bytes cannot change while the read lock is
-            // released, but its live bitmap can. Publishing this fold is safe
-            // only if every input still has the exact death stamp it had here.
+            // Immutable bytes cannot change while the read lock is released, but
+            // a live bitmap can: publishing needs the same death stamps.
             let snapshot: Vec<(u64, u64)> = segs
                 .iter()
                 .map(|segment| (segment.number, segment.deaths()))
@@ -1421,9 +1055,8 @@ impl NativeIndex {
                     .is_some_and(|segment| segment.deaths() == deaths)
             });
         if !current {
-            // A commit changed one of the inputs after the snapshot. The new
-            // segment is an orphan, not an answer: publishing it would bring a
-            // removed or replaced row back. Drop its mappings before unlinking.
+            // A commit changed an input after the snapshot: publishing would
+            // bring a removed or replaced row back. Drop the mappings first.
             drop(inner);
             drop(folded.take());
             self.disk_bytes.changing(|| Live::erase(&self.dir, number));
@@ -1431,8 +1064,7 @@ impl NativeIndex {
             return Ok(false);
         }
         // Between the read and the write another commit may have appended a
-        // segment, and `next_segment` may have moved. Take a number that is
-        // still free and fold only what is still there.
+        // segment. Take a number that is still free and fold only what is there.
         inner.next_segment = inner.next_segment.max(number + 1);
         let old: Vec<u64> = inner
             .segments
@@ -1455,34 +1087,13 @@ impl NativeIndex {
         Ok(true)
     }
 
-    /// Segments grouped by generation, **by number rather than by position**.
-    ///
-    /// A number survives the lock being dropped and a position does not, which
-    /// matters now that a fold releases the lock while it builds: an index of
-    /// eight segments can become nine underneath it, and index 3 would then be
-    /// a different segment than the one that was chosen.
+    /// Segments grouped by generation, **by number rather than by position**: a
+    /// fold releases the lock while it builds, and eight segments can become nine
+    /// underneath it.
     fn groups(inner: &Inner) -> Vec<Vec<u64>> {
-        // **The stamp only constrains a fold while a scan is open.**
-        //
-        // A sweep judges the segments stamped below the generation it was given
-        // and spares the rest, so merging across that line during a scan would
-        // hand old rows a stamp that carries them past it. Outside a scan there
-        // is no sweep coming and the next generation starts above all of them —
-        // the same argument `Maintenance::Rebuild` already makes for folding
-        // everything at once, and `fold` already gives the merged segment the
-        // highest stamp in its group.
-        //
-        // Grouping by it *always* is what killed compaction. The stamp advances
-        // on every walk, a watcher on a busy disk runs walks between almost
-        // every pair of commits, and each segment then sits alone in its own
-        // generation: measured on the live index at **241 segments across 205
-        // generations, largest group 2**, against a threshold of three. Nothing
-        // could ever be folded again, so the count only went up, and every
-        // search opened all 241.
-        //
-        // One group is not a rebuild: `next_head` drops the largest member
-        // unless a quarter of it is dead, which is the head-and-body split this
-        // has always had. What changes is that the head can form at all.
+        // **The stamp only constrains a fold while a scan is open**: outside one
+        // there is no sweep coming and the next generation starts above them all.
+        // Grouping by it always left 241 segments across 205 generations.
         if inner.open.is_none() {
             return vec![inner.segments.iter().map(|s| s.number).collect()];
         }
@@ -1495,11 +1106,8 @@ impl NativeIndex {
         out
     }
 
-    /// The next group of segments worth folding, or nothing.
-    ///
-    /// Read under its own lock and answered in numbers, so the caller can let
-    /// go of the index before it starts building. What "worth folding" means
-    /// is [`head_of`], which is a decision about sizes and holds no lock.
+    /// The next group of segments worth folding, or nothing, answered in numbers
+    /// so the caller can let go of the index before it builds. See [`head_of`].
     fn next_head(&self) -> Option<Vec<u64>> {
         let inner = self.inner.read();
         let group = Self::groups(&inner).into_iter().find(|g| g.len() >= 3)?;
@@ -1518,20 +1126,6 @@ impl NativeIndex {
     }
 
     /// Hand each segment to `f`. For diagnostics that need to see inside.
-    /// What each of these folders weighs, and how many files it holds.
-    ///
-    /// Bytes **on disk**, hard links counted once — the same arithmetic
-    /// `usage.rs` does, held to it by a test, because a column that disagrees
-    /// with the report printed beside it is worse than no column.
-    ///
-    /// Batched because the expensive half is bringing the cache up to date and
-    /// a page asks about every folder on it at once. Measured at 12.1 µs a
-    /// folder once warm, 90 ms for the first call after a restart — which is
-    /// why the engine asks once in the background rather than letting a
-    /// keystroke pay for it.
-    ///
-    /// The answer is the size of what this index *holds*: whatever the scan
-    /// rules exclude is not in it. See `sizes.rs`.
     pub fn for_each_segment(&self, f: &mut dyn FnMut(usize, &Segment<'_>)) -> Result<()> {
         let inner = self.inner.read();
         for (i, live) in inner.segments.iter().enumerate() {
@@ -1540,22 +1134,9 @@ impl NativeIndex {
         Ok(())
     }
 
-    /// Run `f` for every live row that the query accepts, across all segments.
-    ///
-    /// The shared walk behind counting and faceting. Stops when `f` returns
-    /// `false`.
-    /// Run `f` for every live row the query accepts, across all segments.
-    ///
-    /// The shared walk behind counting and faceting. Stops when `f` returns
-    /// `false`.
-    ///
-    /// **Narrowed the same way a search is**, which it was not: this used to
-    /// walk every row of every segment while `run_with` skipped whole blocks
-    /// on the trigram filter and the zone map. So the sidebar cost more than
-    /// the list beside it, on a design whose whole claim is that a sidebar can
-    /// be recomputed on every keystroke. It also handed `accepts` the spelled
-    /// name where a search hands it the folded one, which is a quiet wrong
-    /// answer rather than a slow one.
+    /// Run `f` for every live row that the query accepts, across all segments;
+    /// stops when `f` returns `false`. **Narrowed the same way a search is**, and
+    /// `accepts` is handed the folded name rather than the spelled one.
     fn for_each_match(
         &self,
         inner: &Inner,
@@ -1565,9 +1146,8 @@ impl NativeIndex {
         for live in &inner.segments {
             let seg = live.view()?;
             let plan = Plan::compile(query, &seg)?;
-            // Compile the pending paths into directory-number ranges once per
-            // segment. The old overlay rebuilt a spelled path for every match:
-            // one pending file turned a facet into millions of allocations.
+            // The pending paths become directory-number ranges once per segment;
+            // rebuilding a spelled path per match meant millions of allocations.
             let doomed = Doomed::new(&seg, &inner.hidden_prefixes);
             let go = crate::search::walk_matches(&seg, &plan, |row| {
                 if !doomed.is_empty() && doomed.takes(&seg, row, seg.dir_id(row)) {
@@ -1583,26 +1163,10 @@ impl NativeIndex {
     }
 }
 
-/// Which rows of one segment a batch of subtree removals takes.
-///
-/// The list of removed paths arrives in the thousands — a delete reports one
-/// per file and one per directory, and a commit lands once a second — and the
-/// obvious loop asks every row about every path. Measured on a million rows:
-/// four thousand paths cost **2.24 seconds** with the write lock held, one
-/// search behind it for every one of those seconds.
-///
-/// So the paths are turned into two things a row can be looked up in, once per
-/// segment rather than once per row:
-///
-/// * the **directory numbers** below them, which the front-coded table makes
-///   contiguous, merged into disjoint ranges;
-/// * the ones identified by **parent and name** — a removed file has no
-///   directory number of its own, and a removed directory's own row lives in
-///   its parent and so carries the parent's number. `/home/u/Projeler`
-///   surviving the removal of `/home/u/Projeler` is what taught that.
-///
-/// Both are sorted, so a row costs two binary searches and, for the few rows
-/// whose parent is in the second list, one name comparison.
+/// Which rows of one segment a batch of subtree removals takes. Asking every row
+/// about every path measured **2.24 s** for four thousand paths over a million
+/// rows with the write lock held, so they become two sorted lookups a segment:
+/// the directory numbers below them, and the ones named by parent and name.
 struct Doomed<'a> {
     /// Half-open ranges of directory numbers, disjoint and sorted.
     inside: Vec<(u32, u32)>,
@@ -1671,18 +1235,10 @@ impl<'a> Doomed<'a> {
             .any(|&(_, n)| n == name)
     }
 
-    /// Could any row in a block of directory numbers `lo..=hi` be taken?
-    ///
-    /// **The zone map, used for a removal the way a search already uses it.**
-    /// Deleting one file was a scan of every row of every segment: measured at
-    /// 4.58 ms over 250,000 rows, 19.99 ms over a million and 64.14 ms over
-    /// four — linear in how much had been indexed, against 535 µs for an upsert
-    /// of the same size, and it is the common case because a watcher reports
-    /// every removed file this way.
-    ///
-    /// A block holds 128 rows and the column keeps its smallest and largest
-    /// directory number. One deleted file lives under one directory, so almost
-    /// every block can be dismissed on two comparisons rather than read.
+    /// Could any row in a block of directory numbers `lo..=hi` be taken? **The
+    /// zone map, used for a removal the way a search uses it**: scanning every row
+    /// to delete one file was 4.58 ms over 250,000 rows and 64.14 ms over four
+    /// million, against 535 µs for an upsert.
     fn touches(&self, lo: u32, hi: u32) -> bool {
         if self.inside.iter().any(|&(s, e)| s <= hi && e > lo) {
             return true;
@@ -1693,27 +1249,13 @@ impl<'a> Doomed<'a> {
 }
 
 /// Take out of the batch every entry the index already holds, exactly as it is.
-///
-/// **A rescan of an untouched filesystem should cost nothing to write**, and
-/// used to cost the whole index: the walk hands over every entry it saw and
-/// each one was staged, built into a segment and committed over a row that
-/// already said the same thing.
-///
-/// Asked here rather than in [`Index::apply`], and that placement is the whole
-/// of the performance. `apply` sees one entry at a time, so asking there is a
-/// binary search per entry per segment — twenty segments deep by two million
-/// entries, and it measured *slower* than writing the rows. Here the batch is
-/// already assembled, so it is sorted once and merged against each segment's id
-/// table in a single pass. See [`Live::spare_paths`].
-///
-/// Nothing is written and no live bit moves: an entry is dropped from the batch
-/// and its row is marked in [`Inner::seen`] so the sweep knows the walk saw it.
+/// Asked here rather than in [`Index::apply`], which sees one entry at a time: a
+/// probe per entry per segment measured slower than writing the rows. The row is
+/// marked in [`Inner::seen`] so the sweep knows the walk saw it.
 fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
     let began = Instant::now();
-    // Only inside a generation. Outside one there is no sweep coming, so
-    // nothing needs the mark — and the marks are cleared when a generation
-    // opens, which would make a spared row look unstamped to the sweep that
-    // follows.
+    // Only inside a generation: outside one nothing needs the mark, and the
+    // marks are cleared when a generation opens.
     if inner.open.is_none() || inner.staged.is_empty() || inner.segments.is_empty() {
         return Ok(0);
     }
@@ -1750,10 +1292,8 @@ fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
             spared += hits.len() as u64;
         }
     }
-    // How much of a batch was already there, and how many segments it had to
-    // be asked about. Both numbers, because a ratio that falls is either the
-    // disk changing or this deciding wrongly, and the segment count is what
-    // says which — a rescan that keeps adding segments is not sparing.
+    // Both numbers, because a ratio that falls is either the disk changing or
+    // this deciding wrongly, and the segment count says which.
     if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
         let n = drop_at.len().max(1);
         scour_core::note!(
@@ -1787,8 +1327,7 @@ fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
         keep
     });
     // Rebuilt rather than adjusted: the positions all moved, and a stale one
-    // would have a later upsert overwrite an unrelated entry. Cheap because it
-    // runs over what is *left*, which is the changed files.
+    // would have a later upsert overwrite an unrelated entry.
     inner.staged_at.clear();
     for (i, e) in inner.staged.iter().enumerate() {
         inner.staged_at.insert(digest(e.id.source, &e.path), i);
@@ -1797,12 +1336,9 @@ fn spare_unchanged(inner: &mut Inner) -> Result<u64> {
     Ok(spared)
 }
 
-/// A row's path, as bytes, without a string being made of it.
-///
-/// The join `Segment::path` performs, expressed as a comparison rather than an
-/// allocation — and it has to be the join rather than the two parts, because
-/// they do not order the same way. `("/a", "c")` is less than `("/a-x", "b")`
-/// as a pair, and `/a-x/b` is less than `/a/c` as a path: `-` sorts before `/`.
+/// A row's path, as bytes, without a string being made of it. The join, not the
+/// two parts: `("/a", "c")` is less than `("/a-x", "b")` as a pair, and `/a-x/b`
+/// is less than `/a/c` as a path.
 fn joined_path<'a>(dir: &'a str, name: &'a str) -> impl Iterator<Item = u8> + 'a {
     let (head, slash) = match dir {
         "" => ("", false),
@@ -1814,11 +1350,9 @@ fn joined_path<'a>(dir: &'a str, name: &'a str) -> impl Iterator<Item = u8> + 'a
         .chain(name.bytes())
 }
 
-/// A row that might be on the page, ordered but not built.
-///
-/// Four numbers and a key, against a `Hit` that carries a reconstructed path,
-/// a name and eleven fields. A deep page holds a hundred thousand of these on
-/// the way to sixty rows, which is why it is worth the difference.
+/// A row that might be on the page, ordered but not built: four numbers and a
+/// key, against a `Hit`'s reconstructed path and eleven fields. A deep page holds
+/// a hundred thousand of these on the way to sixty rows.
 struct Candidate {
     key: crate::search::SortValue,
     /// What breaks a tie on the key: newest first, as `sort_hits` does it.
@@ -1857,45 +1391,26 @@ impl PartialEq for Cursor {
 }
 impl Eq for Cursor {}
 
-/// Below this offset a page is walked to, as it always was.
-///
-/// The walk is a few milliseconds near the top of a result and the reach costs
-/// a rank table to be built; there is no sense in paying that where the thing
-/// it replaces is already invisible. It also keeps every ordinary keystroke on
-/// the path whose tests have covered it for months.
+/// Below this offset a page is walked to: the walk is a few milliseconds near
+/// the top of a result, where the reach costs a rank table to be built.
 const REACH_FROM: usize = 2_000;
 
 /// How far the merge will step through a group of rows that share a second
-/// before giving up and letting the walk do it.
-///
-/// A checkout stamps tens of thousands of files with one timestamp, and a page
-/// whose offset lands inside such a group has to step through the part of it
-/// that precedes the page — there is no rank *within* a tie. Bounded so that
-/// the reach can never be slower than what it replaces: past this, it declines
-/// and the caller walks.
+/// before giving up and letting the walk do it. There is no rank *within* a tie,
+/// and the bound keeps the reach from ever being the slower path.
 const TIE_STEPS: usize = 100_000;
 
 /// Whether to keep every page on the walk, for measuring the reach against it.
-///
-/// The walk is not going anywhere — it answers every query the reach declines
-/// — so the honest way to say what the reach is worth is to run the same index
-/// both ways. `SCOUR_NO_REACH=1` is that switch, read once.
+/// `SCOUR_NO_REACH=1`, read once.
 fn walk_only() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("SCOUR_NO_REACH").is_some())
 }
 
-/// A page **reached** rather than walked to.
-///
-/// The walk's cost is everything above the page: 105 ms and 2,080,974 rows
-/// visited for the two hundred at offset two million, none of which the answer
-/// contains. Nothing about those rows is needed to say where the page starts —
-/// only *how many* of them there are — and that is a binary search over a
-/// column plus a rank over a bitmap. See [`crate::rank`].
-///
-/// Returns `None` whenever the shape is not one this can answer, and the
-/// caller then walks exactly as before. That is the whole safety argument:
-/// this adds a path, it changes none.
+/// A page **reached** rather than walked to. The walk's cost is everything above
+/// the page — 105 ms and 2,080,974 rows visited for the two hundred at offset two
+/// million — where the start is a binary search plus a rank over a bitmap. `None`
+/// for any shape this cannot answer, and the caller then walks.
 #[allow(clippy::too_many_arguments)]
 fn reach(
     segments: &[Live],
@@ -1905,9 +1420,8 @@ fn reach(
     cap: usize,
     started: Instant,
 ) -> Option<SearchResponse> {
-    // Live rows before any given row, per segment. Built here rather than kept
-    // because a kept one would have to be invalidated on every commit, and a
-    // rank that is one deletion stale returns a page from the wrong place.
+    // Live rows before any given row, per segment. Not kept: a rank one deletion
+    // stale returns a page from the wrong place.
     let ranks: Vec<LiveRank> = segments
         .iter()
         .zip(views)
@@ -1932,9 +1446,8 @@ fn reach(
         return Some(empty(0));
     }
 
-    // How many live rows are newer than `t`, over the whole index. Two reads a
-    // segment: where the column crosses `t`, and how many rows before that are
-    // live.
+    // How many live rows are newer than `t`. Two reads a segment: where the
+    // column crosses `t`, and how many rows before that are live.
     let newer = |t: i64| -> usize {
         segments
             .iter()
@@ -1948,14 +1461,8 @@ fn reach(
     };
 
     // The date of the row at `offset`: the smallest `t` with no more than
-    // `offset` rows above it. `newer` never rises with `t`, so this is a
-    // bisection — and because it only ever steps at a date some row actually
-    // carries, what it lands on is that row's own date.
-    // The bracket is the whole index: the newest date in **any** segment and
-    // the oldest in any. Not the newest they have in common — a segment
-    // written this morning has a floor of this morning, and bracketing by that
-    // leaves the answer outside the search, which returns a date far too
-    // recent and a page that has to be walked to from there anyway.
+    // `offset` rows above it, by bisection. The bracket is the newest date in
+    // **any** segment and the oldest in any, not the newest they share.
     let mut low = i64::MAX;
     let mut high = i64::MIN;
     for (live, seg) in segments.iter().zip(views) {
@@ -1997,10 +1504,8 @@ fn reach(
         *cursor = next_live(views, segments, i, *cursor);
     }
 
-    // The merge, and it holds one row a segment. Ordered as `sort_hits` orders
-    // it and as the comparator above does: newest first, and a date shared by
-    // two rows broken by their paths — which are compared as if joined, out of
-    // the directory table and the name arena, without building either.
+    // The merge holds one row a segment, ordered as `sort_hits` orders it:
+    // newest first, ties broken by paths compared as if joined.
     let mut dirs: HashMap<(usize, u32), String> = HashMap::new();
     let mut hits: Vec<Hit> = Vec::with_capacity(limit);
     let mut visited = 0u64;
@@ -2079,10 +1584,8 @@ fn first_of(
     joined(a).lt(joined(b))
 }
 
-/// Emit every live row of every segment, in the merged stored order.
-///
-/// Each segment is already in that order, so this is a k-way merge and the
-/// heap never holds more than one row a segment.
+/// Emit every live row of every segment, in the merged stored order. Each
+/// segment is already in it, so the heap holds one row a segment.
 fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry)) {
     use std::collections::BinaryHeap;
 
@@ -2110,13 +1613,9 @@ fn merge_rows(segs: &[&Live], views: &[Segment<'_>], emit: &mut dyn FnMut(&Entry
     }
 }
 
-/// Give freed memory back to the operating system.
-///
-/// A fold builds the whole of a new segment in memory — a name arena, four
-/// output buffers, a table of interned directories — and then drops it. glibc
-/// keeps the freed arena in its own pools rather than returning it, so the
-/// process stays large for the rest of its life having briefly needed the room.
-/// Everywhere else this is someone else's problem and does nothing.
+/// Give freed memory back to the operating system. A fold builds a whole segment
+/// in memory and drops it, and glibc keeps the freed arena in its own pools
+/// rather than returning it. A no-op off Linux/glibc.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn trim_allocator() {
     unsafe extern "C" {
@@ -2234,19 +1733,10 @@ fn trace_commit(
     );
 }
 
-/// Remove segment files the manifest does not name.
-///
-/// Two things leave them behind, and the manifest is the answer to both: a
-/// crash between the first of a segment's nine files and the last leaves a
-/// partial set nothing will ever open, and a bug — since fixed — wrote back the
-/// bitmap of a segment that had just been erased. On the live index that was
-/// **182 orphan segments against 55 real ones**, and because `bytes_on_disk` is
-/// the size of the whole directory, the status line counted them.
-///
-/// Safe by construction: the manifest is written before any file is unlinked
-/// and rewritten before any is added, so a file it does not name is a file
-/// nothing can reach. Failures are ignored — this is housekeeping, and an index
-/// that opens with a stray file is better than one that refuses to open.
+/// Remove segment files the manifest does not name. A crash between the first of
+/// a segment's files and the last leaves a partial set nothing will open: **182
+/// orphan segments against 55 real ones**, counted by `bytes_on_disk`. Safe by
+/// construction — the manifest is written before any file is unlinked.
 fn sweep_orphans(dir: &Path, meta: &Meta) {
     let named: std::collections::HashSet<u64> = meta.segments.iter().map(|s| s.number).collect();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -2262,28 +1752,18 @@ fn sweep_orphans(dir: &Path, meta: &Meta) {
         else {
             continue;
         };
-        // Only what is already behind the manifest's next number. A segment
-        // being written right now by nobody-should-be-there is still not worth
-        // racing, and `next_segment` is exactly the line between the two.
+        // Only what is already behind the manifest's next number: a segment
+        // being written right now is not worth racing.
         if !named.contains(&number) && number < meta.next_segment {
             let _ = std::fs::remove_file(entry.path());
         }
     }
 }
 
-/// Close a scan's compaction cohort before ordinary changes resume.
-///
-/// A generation originally ended only by clearing `open`, so every later
-/// watcher commit kept the scan's stamp. Compaction then saw the scan body and
-/// the trickle as one group: after a 1.55 M-row scan left 1,250,797 and 100,000
-/// row segments, four one-row commits made the group eligible and rewrote the
-/// 100,000-row segment. Measured: **477 ms CPU**, once a minute, which is 0.8%
-/// of a core while the machine appears idle.
-///
-/// Advancing here changes no reconciliation answer. The scan's rows retain the
-/// generation they were stamped with, while the next scan still receives a
-/// newer number and judges every older row exactly as before. It only says
-/// that subsequent commits are a different batch for compaction.
+/// Close a scan's compaction cohort before ordinary changes resume, or every
+/// later watcher commit keeps the scan's stamp and compaction sees body and
+/// trickle as one group: four one-row commits rewrote a 100,000-row segment,
+/// **477 ms of CPU**, once a minute on an idle machine.
 fn close_generation(inner: &mut Inner, generation: u64) {
     if inner.open == Some(generation) {
         inner.open = None;
@@ -2304,21 +1784,14 @@ impl Index for NativeIndex {
                         inner.sources.push(e.id.source);
                     }
                     // A file that was removed and has come back must stop being
-                    // hidden, or the row the user just created stays invisible.
-                    //
-                    // Behind the emptiness test because the common case by far
-                    // is a bulk pass with nothing hidden at all, and asking a
-                    // `HashSet<String>` about a path it does not hold still
-                    // costs hashing that path.
+                    // hidden. Behind the emptiness test because asking a set
+                    // about a path it does not hold still costs hashing it.
                     if !inner.hidden_prefixes.is_empty() {
                         inner.hidden_prefixes.forget(&e.path);
                     }
                     let d = digest(e.id.source, &e.path);
-                    // `get`, not `[]`. The two collections are cleared
-                    // together in `flush` and I could not construct a case
-                    // where the position outlives the buffer — but the cost of
-                    // being sure is nothing, and the cost of being wrong is a
-                    // panic inside a write lock in a long-lived service.
+                    // `get`, not `[]`: the cost of being sure is nothing, and of
+                    // being wrong a panic inside a write lock in a service.
                     match inner.staged_at.get(&d).copied() {
                         Some(i) if inner.staged.get(i).is_some_and(|s| s.path == e.path) => {
                             inner.staged[i] = e
@@ -2331,9 +1804,8 @@ impl Index for NativeIndex {
                     }
                     report.upserted += 1;
                     if inner.staged.len() >= MAX_STAGED {
-                        // The one place a build may happen elsewhere: this is
-                        // a buffer overflowing during a walk, and nothing is
-                        // waiting on the result.
+                        // The one place a build may happen elsewhere: a buffer
+                        // overflowing during a walk, with nothing waiting on it.
                         self.flush_maybe_elsewhere(&mut inner, true)?;
                     }
                 }
@@ -2346,13 +1818,9 @@ impl Index for NativeIndex {
                 Change::Rescan { .. } => {}
             }
         }
-        // What the flushes inside this call decided was already indexed. See
-        // `Inner::spared` for why it is drained here rather than counted above.
-        //
-        // Moved out of `upserted` rather than added beside it: every spared
-        // entry was counted as an upsert on the way in, and `seen()` adds the
-        // two. Saturating because the batch that was spared is not always the
-        // batch that was staged.
+        // Moved out of `upserted` rather than added beside it: a spared entry was
+        // counted as an upsert on the way in and `seen()` adds the two.
+        // Saturating because the spared batch is not always the staged one.
         let spared = std::mem::take(&mut inner.spared);
         report.upserted = report.upserted.saturating_sub(spared);
         report.unchanged = spared;
@@ -2372,19 +1840,13 @@ impl Index for NativeIndex {
         // were staged under and judged by the one that starts here.
         self.settle()?;
         let mut inner = self.inner.write();
-        // Whatever was open is finished: callers scan one at a time. A scan
-        // that ended without sweeping — a cancelled walk, an unreadable root —
-        // deliberately leaves nothing to reconcile.
-        //
-        // **Closed before the flush, not after.** The flush below would
-        // otherwise spare rows into marks that the `clear` two lines down
-        // throws away, leaving them unwritten *and* unstamped — which the next
-        // sweep reads as "the walk did not find them".
+        // Whatever was open is finished: callers scan one at a time. **Closed
+        // before the flush**, or the flush spares rows into marks the `clear`
+        // below throws away, leaving them unwritten *and* unstamped.
         inner.open = None;
         inner.seen.clear();
-        // Flush second, so that no segment ever spans two generations. That is
-        // what lets the generation be one number a segment rather than a column
-        // a row, and it is why `sweep` is a loop over segments and not a scan.
+        // Flush second, so no segment ever spans two generations: that is what
+        // lets a generation be one number a segment rather than a column a row.
         self.flush(&mut inner)?;
         inner.generation += 1;
         inner.meta_dirty = true;
@@ -2444,11 +1906,9 @@ impl Index for NativeIndex {
         self.flush(&mut inner)?;
         close_generation(&mut inner, generation);
         let mut gone = 0u64;
-        // **Taken once, for every root of the walk.** These are the marks
-        // saying "the pass saw this row and it had not moved", and they belong
-        // to the pass rather than to any one root — see the trait, and the
-        // live index that deleted three of its four roots on alternate walks
-        // when this was taken per root.
+        // **Taken once, for every root of the walk.** These marks belong to the
+        // pass rather than to any one root: taken per root, the live index
+        // deleted three of its four roots on alternate walks.
         let inner_seen = std::mem::take(&mut inner.seen);
         let mut touched = vec![false; inner.segments.len()];
         for (i, live) in inner.segments.iter_mut().enumerate() {
@@ -2461,12 +1921,9 @@ impl Index for NativeIndex {
                 // redundant, which is what `whole` has always meant.
                 let whole = under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty();
                 let scopes: Vec<_> = under.iter().map(|p| seg.dirs.subtree(p)).collect();
-                // The swept directory's **own** row is not under itself: it
-                // lives in its parent and carries the parent's number, so the
-                // range check walks straight past it. Same trap as in
-                // `flush_prepare`, same answer — the parent's number and the
-                // last component, and the name is read only for the handful of
-                // rows that sit there.
+                // The swept directory's **own** row is not under itself: it lives
+                // in its parent and carries the parent's number, so the range
+                // check walks past it and the name answers for those few rows.
                 let owns: Vec<(u32, &str)> = if whole {
                     Vec::new()
                 } else {
@@ -2480,26 +1937,14 @@ impl Index for NativeIndex {
                         })
                         .collect()
                 };
-                // **No path is built per row, and that is the whole cost of
-                // this loop.** It used to fall back to
-                // `under(&seg.path(row, …), under_path)` for every row the
-                // directory scope did not already accept — which, for a walk of
-                // one subtree, is every row of the index. Now that a created
-                // directory queues a walk, this runs whenever anyone makes a
-                // folder, and a string per row two million times over is not a
-                // thing to do under the write lock.
-                //
-                // Nothing is lost by dropping it: a row's directory number *is*
-                // its parent, so a descendant is in `scope.below` and a child is
-                // `scope.own`. An empty scope with no `own` means the segment
-                // holds nothing under the path at all.
+                // **No path is built per row, and that is the whole cost of this
+                // loop.** A row's directory number *is* its parent, so a
+                // descendant is in `scope.below` and a child is `scope.own`.
                 if !whole && scopes.iter().all(|s| s.is_empty()) && owns.is_empty() {
                     Vec::new()
                 } else {
-                    // Rows the walk found unchanged are stamped here rather
-                    // than by being rewritten. Without this they look
-                    // unstamped, and an untouched filesystem empties the
-                    // index. See `Inner::seen`.
+                    // Rows the walk found unchanged are stamped here rather than
+                    // by being rewritten. See `Inner::seen`.
                     let seen = inner_seen.get(&live.number);
                     let spared = |row: usize| {
                         seen.is_some_and(|bits: &Vec<u8>| {
@@ -2517,10 +1962,8 @@ impl Index for NativeIndex {
                                 return false;
                             }
                             // **Another source's rows are not this walk's to
-                            // judge.** A sweep says "I looked under here and
-                            // did not find these"; where two sources' roots
-                            // overlap, that is a statement about one of them
-                            // and was being applied to both.
+                            // judge.** A sweep speaks about one source, and where
+                            // roots overlap it was applied to both.
                             if seg.source_of(row) != source {
                                 return false;
                             }
@@ -2574,28 +2017,13 @@ impl Index for NativeIndex {
         Ok(gone)
     }
 
-    /// Write everything staged, **without holding the index while it writes**.
-    ///
-    /// The engine calls this once a second. Everything a flush does except
-    /// building and writing the segment is bookkeeping the lock has to cover;
-    /// the build and the write are the seconds, and a search issued during
-    /// them used to wait for all of it.
-    ///
-    /// So: take the staged entries out under the lock — they were never
-    /// searchable, so nothing sees a different answer — release, build and
-    /// write, and take the lock again to put the segment in the list. The
-    /// window in between is one where the index holds exactly what it held
-    /// before the commit, which is a state it is allowed to be in.
-    ///
-    /// The same shape as `fold`, and for the same reason: a segment is written
-    /// once and never edited, so writing one touches nothing a search reads.
+    /// Close a generation that ended without a sweep — a cancelled walk, an
+    /// unreadable root.
     fn abandon_generation(&self, generation: u64) -> Result<()> {
         let mut inner = self.inner.write();
         close_generation(&mut inner, generation);
         // The marks are worthless without the sweep that would have read them,
-        // and expensive to keep: a marked segment cannot be folded, so leaving
-        // them behind stops compaction until something else opens and closes a
-        // generation. See the trait.
+        // and a marked segment cannot be folded, which stops compaction.
         inner.seen.clear();
         self.save_meta(&mut inner)
     }
@@ -2603,23 +2031,19 @@ impl Index for NativeIndex {
     fn commit(&self) -> Result<()> {
         #[cfg(feature = "memory-trace")]
         let trace_start = CommitStamp::now();
-        // The bookkeeping half: kills, subtree removals, the manifest. It has
-        // to be inside the lock because it edits rows other threads read, and
-        // it is cheap now that a subtree is a range check rather than 2.1 M
-        // paths.
+        // The bookkeeping half — kills, subtree removals, the manifest — must be
+        // inside the lock because it edits rows other threads read.
         let held = Instant::now();
-        // Everything that was being built is on disk and in the list before
-        // this returns: the engine announces a revision on the strength of it,
-        // and a window told to look again has to find what was written.
+        // Everything that was being built is on disk and in the list before this
+        // returns: the engine announces a revision on the strength of it.
         self.settle()?;
         #[cfg(feature = "memory-trace")]
         let trace_settled = CommitStamp::now();
         let mut pending = self.flush_prepare(&mut self.inner.write(), false)?;
         #[cfg(feature = "memory-trace")]
         let trace_prepared = CommitStamp::now();
-        // How long a search could have been waiting. Printed rather than
-        // guessed at, because the last three things blamed for this tail were
-        // each the wrong one.
+        // How long a search could have been waiting, printed rather than guessed
+        // at.
         if std::env::var_os("SCOUR_LOCK_TRACE").is_some() && held.elapsed().as_millis() > 20 {
             eprintln!(
                 "scourd: commit held the index for {:.0?} ({} staged)",
@@ -2627,13 +2051,9 @@ impl Index for NativeIndex {
                 pending.staged.as_ref().map_or(0, |(_, _, v)| v.len())
             );
         }
-        // Both of the expensive halves, now that the lock is gone: the bits
-        // that say which rows are dead, and the segment holding the new ones.
-        //
-        // **Every failure from here hands the rows back.** They are out of the
-        // staging buffer and this is the only copy; dropping it on an `ENOSPC`
-        // or a permission change loses whatever was written since the last
-        // commit, and the engine used to be told the commit had succeeded.
+        // Both of the expensive halves, now that the lock is gone. **Every
+        // failure from here hands the rows back**: they are out of the staging
+        // buffer and this is the only copy.
         if let Err(e) = pending.write_alive(&self.dir, &self.disk_bytes) {
             Self::restore(&mut self.inner.write(), pending);
             return Err(e);
@@ -2703,31 +2123,21 @@ impl Index for NativeIndex {
         let need = offset + limit;
         let cap = req.page.count_cap.max(1) as usize;
 
-        // **Candidates, not rows.** Each segment hands over what it takes to
-        // *order* a row — the sort key, the date that breaks a tie on it, and
-        // where the row is — and nothing that it takes to *show* one. The page
-        // is decided from those and only the page is built.
-        //
-        // What it replaces: every segment built `offset + limit` rows, the
-        // merge sorted them all and threw away everything but the window. A
-        // sixty-row page at offset 100,000 reconstructed 401,438 front-coded
-        // paths to return sixty, and took 1.43 s — which the window pays again
-        // on every index revision, for as long as the list stays scrolled.
+        // **Candidates, not rows.** Building `offset + limit` rows a segment
+        // reconstructed 401,438 front-coded paths to return sixty at offset
+        // 100,000, and took 1.43 s.
         let mut pool: Vec<Candidate> = Vec::new();
-        // Opened before the walk rather than during it, so that the comparator
-        // below can hold them while the pool is still being filled — which is
-        // what lets the pool be trimmed as it grows instead of at the end.
+        // Opened before the walk so the comparator can hold them while the pool
+        // is still filling, which is what lets the pool be trimmed as it grows.
         let views: Vec<Segment<'_>> = inner
             .segments
             .iter()
             .map(|live| live.view())
             .collect::<Result<Vec<_>>>()?;
 
-        // **A page reached instead of walked to**, for the one shape that
-        // allows it: the stored order, nothing filtering, nothing concealed,
-        // and deep enough that the walk is worth avoiding. See [`reach`].
-        // Everything else falls through to the walk below, unchanged — which
-        // is the whole of the safety argument for it.
+        // **A page reached instead of walked to**, for the one shape that allows
+        // it: the stored order, nothing filtering, nothing concealed, deep enough
+        // to be worth it. Everything else falls through to the walk unchanged.
         let stored_order = matches!(
             req.sort,
             scour_core::SortKey::Modified | scour_core::SortKey::Relevance
@@ -2748,39 +2158,18 @@ impl Index for NativeIndex {
         // Paths reconstructed, page and discarded prefix alike — see
         // `SearchResponse::rows_built`.
         let mut rows = 0u64;
-        // The order the merge imposes, and it is `sort_hits`'s — moved to where
-        // the rows have not been built yet, which means every part of it has to
-        // be answerable without building one.
-        //
-        // Two of the three parts needed work. Text keys carry their first
-        // sixteen bytes in a number; where abbreviated names or Unicode-grown
-        // extensions agree, their complete folded keys are compared out of the
-        // arenas. And the last tie is broken by the path, which is the one thing
-        // this exists not to build — so paths are compared *as if joined*, byte
-        // by byte, out of the directory table and the name arena. Neither
-        // allocates; a directory is decoded once and answers for every row in
-        // it.
-        //
-        // Both are on ties alone, and both are load-bearing: a corpus where
-        // many files share a date — an unpacked archive, a checkout — ties on
-        // every comparison, and five tests said so the first time this ordered
-        // ties by segment instead.
+        // The order the merge imposes, and it is `sort_hits`'s, moved to where the
+        // rows have not been built yet: text keys resolve out of the arenas where
+        // their sixteen bytes agree, and the last tie is the path, compared *as if
+        // joined* with a directory decoded once for every row in it.
         let exact = crate::search::key_is_exact(req.sort);
         let desc = req.descending;
         let mut dirs: HashMap<(u32, u32), String> = HashMap::new();
         let mut cmp = |a: &Candidate, b: &Candidate| {
             let mut o = a.key.cmp(&b.key);
             // `exact` says the key is an abbreviation; the sort says what it
-            // abbreviates. A name resolves against its complete folded name;
-            // an extension resolves against its complete folded suffix, with
-            // eligibility still decided from the raw spelling.
-            //
-            // Adding a second inexact key without changing this line is a full
-            // day's work to find. `Path` was added to `key_is_exact`'s
-            // exceptions once and the tie group — every row sharing sixteen
-            // bytes of path, which is most of a directory — came back ordered
-            // by file name. It looks entirely reasonable in a page of results.
-            // See the note at `search::key_is_exact`.
+            // abbreviates. A second inexact key added without a case here orders
+            // its whole tie group by file name.
             if o.is_eq() && !exact {
                 o = match req.sort {
                     scour_core::SortKey::Name => {
@@ -2808,13 +2197,9 @@ impl Index for NativeIndex {
             }
             let o = if desc { o.reverse() } else { o };
             o.then_with(|| b.mtime.cmp(&a.mtime)).then_with(|| {
-                // **Inside one segment the row number is the path order.**
-                // Rows are stored newest-first with the path breaking that, and
-                // the dates have just tied — so what is left is path order, and
-                // it is already a number. Worth the two lines: sorting by date
-                // means the key *is* the date, so every tie on it falls through
-                // to here, and on a corpus where files share dates in thousands
-                // that is most comparisons.
+                // **Inside one segment the row number is the path order.** Rows
+                // are stored newest-first with the path breaking that, and the
+                // dates have just tied.
                 if a.seg == b.seg {
                     return a.row.cmp(&b.row);
                 }
@@ -2852,17 +2237,9 @@ impl Index for NativeIndex {
             let mut veto = |seg: &Segment<'_>, row: usize, _name: &[u8]| {
                 doomed.takes(seg, row, seg.dir_id(row))
             };
-            // **A query with no conditions matches every live row**, and how
-            // many that is is a number the segment already keeps.
-            //
-            // Nothing hidden, nothing to test: the walk's only remaining job
-            // is to produce the page, and rows are stored newest-first so it
-            // stops as soon as the page is full. What it was doing instead was
-            // visiting all of them to arrive at a total — measured on this
-            // index, `/api/count` on the empty query took **1.233 s** across
-            // 2,094,185 rows, against 5.5 ms for the same query's first page.
-            // A window opens showing the empty query, so that second and a
-            // quarter was part of every time one was opened.
+            // **A query with no conditions matches every live row**, and the
+            // segment already keeps that number. Walking for the total took
+            // **1.233 s** across 2,094,185 rows against 5.5 ms for the page.
             let matches_all = !conceals && plan.is_empty();
             if matches_all && need == 0 {
                 // A count and nothing else. There is no page to build, so
@@ -2878,30 +2255,20 @@ impl Index for NativeIndex {
                 Wanted {
                     sort: req.sort,
                     descending: req.descending,
-                    // Nothing is skipped per segment: the row that a global
-                    // offset skips may live in any of them, so paging is
-                    // applied once, after the merge.
+                    // Nothing is skipped per segment: the row a global offset
+                    // skips may live in any of them.
                     offset: 0,
                     limit: need,
-                    // What is left of the *global* count, not a fresh copy of
-                    // it. Handing every segment the whole cap was measured at
-                    // thirteen times the cost of one segment on a fragmented
-                    // index: each one walked until it had found five hundred
-                    // matches of its own, and thirty-two of those is the whole
-                    // corpus. With the budget shared, a segment that cannot
-                    // add to the count stops as soon as it has enough rows to
-                    // be considered for the page — which is what it is for.
-                    // Everything matches, so the walk needs only enough rows
-                    // to fill the page; the total comes from the segment.
+                    // What is left of the *global* count, not a fresh copy: the
+                    // whole cap per segment measured thirteen times the cost of
+                    // one segment on a fragmented index.
                     count_cap: if matches_all { need } else { budget },
                     rank_only: true,
                 },
                 conceals.then_some(&mut veto as &mut dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool),
-                // Only `sort:size` reads this, and it never *builds* it: a
-                // cold cache means a folder sorts by its own column, which is
-                // what it did before folder sizes existed. Building here would
-                // put ninety milliseconds inside a keystroke and hold a lock
-                // across it; the idle pass and `subtree_sizes` fill it.
+                // Only `sort:size` reads this and it never *builds* it: a cold
+                // cache means a folder sorts by its own column, and building here
+                // would put ninety milliseconds inside a keystroke.
                 folders
                     .as_ref()
                     .and_then(|c| c.rows_of(live.number))
@@ -2923,9 +2290,8 @@ impl Index for NativeIndex {
             }));
         }
 
-        // Selection, not a sort. Two partitions put the window where it
-        // belongs without ordering the hundred thousand rows in front of it,
-        // and only the window itself is sorted.
+        // Selection, not a sort. Two partitions put the window where it belongs
+        // without ordering the hundred thousand rows in front of it.
         let end = need.min(pool.len());
         if pool.len() > end && end > 0 {
             pool.select_nth_unstable_by(end - 1, &mut cmp);
@@ -2953,80 +2319,29 @@ impl Index for NativeIndex {
             total: counted.min(cap as u64),
             capped: counted >= cap as u64,
             took_us: started.elapsed().as_micros() as u64,
-            // Did the walk get away with looking at less than everything?
-            //
-            // Not "did every segment stop", which was the first definition and
-            // was useless: a segment holding fewer matches than a page runs to
-            // its own end and reports no early exit, so one small segment made
-            // a query that had stopped after four hundred rows out of a million
-            // report a full scan.
+            // Did the walk get away with looking at less than everything? Not
+            // "did every segment stop": a segment holding fewer matches than a
+            // page runs to its own end and reports no early exit.
             fast_path: rows > 0 && visited < rows,
             rows_visited: visited,
             rows_built: built,
-            // An index is handed a parsed query and never sees the text, so it
-            // has nothing to say about how that text was read. The engine
-            // stamps this on the way out.
+            // An index is handed a parsed query and never sees the text. The
+            // engine stamps this on the way out.
             misread: Vec::new(),
         })
     }
 
-    /// Every matching row, built one at a time and handed over.
-    ///
-    /// The same walk `facets` uses — [`NativeIndex::for_each_match`], which
-    /// visits each segment's matching rows once — with the row built into a
-    /// [`Hit`] instead of counted. Nothing is collected: the caller is writing
-    /// bytes out as they arrive, and the only state this holds is the row in
-    /// hand.
-    ///
-    /// ## The read lock is held for the whole walk, and that is a decision
-    ///
-    /// An export of this index takes seconds, not milliseconds, and `apply`
-    /// wants the write lock — so a scan in progress delays the watcher's next
-    /// commit until it finishes. Taken deliberately, because the alternative
-    /// is worse in a way that is invisible: releasing the lock between
-    /// segments would let a commit renumber rows underneath the walk, and the
-    /// walk would then skip rows or emit them twice with nothing in the output
-    /// to say so.
-    ///
-    /// It is also strictly better than what it replaces. Paging through a live
-    /// index has exactly that defect — a row written during the export shifts
-    /// everything after it by one — and the browser bridge documented it as
-    /// inherent. It was inherent *to paging*. One walk under one lock is a
-    /// consistent snapshot of the index as of when it started.
-    ///
-    /// ## The order is the index's own
-    ///
-    /// Rows arrive newest-first within a segment and the segments in the order
-    /// the manifest lists them. This is not a global sort by anything, and
-    /// the request does not pretend to offer one.
-    ///
-    /// **What an ordered stream would take**, since it is the obvious next
-    /// question and it was worked out rather than guessed. Each segment can
-    /// already produce its matches in a sorted order for four of the nine sort
-    /// keys — row order *is* `(mtime desc, path asc)`, see `build::rows`, and
-    /// `porder`, `norder` and `eorder` hold the other three — so a k-way merge
-    /// over the segments would stream those, and k is four on this index. The
-    /// per-segment row lists are `u32`s: 8.9 MB for 2.24 M matches, which is
-    /// nothing.
-    ///
-    /// What stopped it being done here is the tie groups, not the merge. The
-    /// paged comparator in [`NativeIndex::search`] breaks a tie on the key with
-    /// the date and then with the path, both in a fixed direction — so
-    /// `sort:modified` **ascending** is not the row list reversed, it is the
-    /// row list reversed with each equal-date run reversed back. Every sort
-    /// key has a version of that, an export that gets one wrong looks
-    /// plausible, and `tests/whole.rs` is the only thing that would catch it.
-    /// That is its own change, with its own brute-force comparison, and
-    /// smuggling it in beside a transport change is how the four wrong
-    /// optimisations this week got as far as they did.
+    /// Every matching row, built one at a time and handed over. **The read lock is
+    /// held throughout**, so a scan delays the watcher's next commit; releasing it
+    /// between segments would let a commit renumber rows underneath the walk. Rows
+    /// arrive in the index's own order, not a sorted one.
     fn scan(&self, req: &ScanRequest, f: &mut dyn FnMut(&Hit) -> bool) -> Result<u64> {
         let inner = self.inner.read();
         let mut rows = 0u64;
         self.for_each_match(&inner, &req.query, |seg, row| {
             let Some(name) = seg.names.get(row) else {
                 // A row whose name cannot be read is not a row anybody can be
-                // shown. Skipped rather than aborting the export: one damaged
-                // row should not cost the other two million.
+                // shown. Skipped rather than aborting the export.
                 return true;
             };
             rows += 1;
@@ -3035,21 +2350,10 @@ impl Index for NativeIndex {
         Ok(rows)
     }
 
-    /// Every question about the matching set, from **one** walk of it.
-    ///
-    /// The sidebar wants a count, a breakdown by kind and a distribution by
-    /// age, and each of those used to be its own request — three walks of the
-    /// same rows to produce three views of them, 100 to 200 ms behind a
-    /// keystroke on 2.1 M entries. They are answered together now, which is a
-    /// third of the work by construction and needs no cleverness at all: the
-    /// walk was always the cost and the counting never was.
-    /// What each of these folders weighs, from prefix sums over directory
-    /// numbers. See `sizes.rs` for why that is `O(1)` and what it costs.
-    ///
-    /// Both locks, and in this order every time: `inner` for reading — which
-    /// is what searches take, so they are not blocked — and the cache for
-    /// writing, which nothing else wants. Taking them the other way round is
-    /// the deadlock this order exists to prevent.
+    /// What each of these folders weighs and how many files it holds, from prefix
+    /// sums over directory numbers — bytes **on disk**, hard links counted once,
+    /// over what this index holds. See `sizes.rs`. Both locks, in this order every
+    /// time: `inner` for reading, the cache for writing.
     fn subtree_sizes(&self, paths: &[String]) -> Result<Vec<Option<(u64, u64)>>> {
         let inner = self.inner.read();
         let mut cache = self.sizes.write();
@@ -3060,6 +2364,9 @@ impl Index for NativeIndex {
             .collect())
     }
 
+    /// Every question about the matching set, from **one** walk of it. A count, a
+    /// breakdown by kind and a distribution by age were three walks of the same
+    /// rows behind one keystroke: 100 to 200 ms on 2.1 M entries.
     fn facets(&self, req: &FacetRequest) -> Result<FacetResponse> {
         let started = Instant::now();
         let inner = self.inner.read();
@@ -3072,8 +2379,7 @@ impl Index for NativeIndex {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         // The most demanding question decides, because they share the walk: a
-        // distribution cannot be sampled (see `AGE_SCAN_CAP`), so asking for
-        // one alongside a top-ten makes the top-ten exact as a side effect.
+        // distribution cannot be sampled, so it makes a top-ten exact too.
         let cap = if req.by.iter().any(|b| matches!(b, FacetBy::Age { .. })) {
             AGE_SCAN_CAP
         } else {
@@ -3087,9 +2393,8 @@ impl Index for NativeIndex {
                 _ => String::new(),
             })
             .collect();
-        // Read once per row however many questions want it, and not at all
-        // when none does — which is the common case, since kind and age are
-        // both columns.
+        // Read once per row however many questions want it, and not at all when
+        // none does — the common case, since kind and age are both columns.
         let wants_name = req
             .by
             .iter()
@@ -3102,10 +2407,8 @@ impl Index for NativeIndex {
                     FacetBy::Kind => {
                         let k =
                             Kind::from_u8(seg.num_of(Field::Kind, row) as u8).unwrap_or(Kind::File);
-                        // The token, not the label: a rail turns a facet into
-                        // a `kind:` term, and a label can be two words and can
-                        // be translated. `by` in the reply is what tells the
-                        // renderer to translate it back for display.
+                        // The token, not the label: a rail turns a facet into a
+                        // `kind:` term, and a label can be translated.
                         *counts[i].entry(k.token().to_owned()).or_default() += 1;
                     }
                     FacetBy::Ext { .. } => {
@@ -3127,8 +2430,7 @@ impl Index for NativeIndex {
                     FacetBy::Age { edges } => {
                         let days = (now - seg.num_of(Field::Mtime, row)).max(0) / 86_400;
                         // Ascending, so the first band it fits is its own.
-                        // Linear because there are a couple of dozen and a
-                        // binary search over that is not worth the branch.
+                        // Linear because there are a couple of dozen.
                         let key = edges
                             .iter()
                             .find(|&&e| days <= e as i64)
@@ -3175,9 +2477,8 @@ impl Index for NativeIndex {
             groups,
             capped: seen >= cap,
             took_us: started.elapsed().as_micros() as u64,
-            // The index is handed a parsed query and never sees the text, so
-            // it has nothing to say about how that text was read. Stamped by
-            // the engine on the way out.
+            // The index is handed a parsed query and never sees the text.
+            // Stamped by the engine on the way out.
             misread: Vec::new(),
         })
     }
@@ -3201,10 +2502,8 @@ impl Index for NativeIndex {
         let mut entries = 0u64;
         let mut dirs = 0u64;
         let mut largest = 0u64;
-        // Read, not walked. This used to count directories by visiting every
-        // row of every segment, and the engine calls it once a second to
-        // decide whether to compact — 2.1 M rows a second, one whole core, and
-        // the read lock held against every search while it happened.
+        // Read, not walked: the engine calls this once a second, and counting
+        // directories row by row was 2.1 M rows a second under the read lock.
         for live in &inner.segments {
             let live_rows = live.live_rows();
             entries += live_rows;
@@ -3216,9 +2515,8 @@ impl Index for NativeIndex {
             dirs,
             bytes_on_disk: self.disk_bytes.get(),
             segments: inner.segments.len() as u32,
-            // Everything outside the largest segment. After a rebuild that is
-            // nothing; it grows with every commit, and it is what a search pays
-            // for twice — once per segment that cannot stop early.
+            // Everything outside the largest segment: what a search pays for
+            // twice, once per segment that cannot stop early.
             unsorted_entries: entries - largest,
             pending_removals: inner.hidden_prefixes.len() as u64,
             // No extractor is registered yet. The column is reserved, not used.
@@ -3235,34 +2533,21 @@ impl Index for NativeIndex {
         match level {
             Maintenance::Flush => self.flush(&mut self.inner.write())?,
             Maintenance::Idle => {
-                // There is no arena to give back — the segments are mapped, so
-                // what they cost is page cache the kernel reclaims on its own.
-                // All this can return is the staging buffer.
+                // The segments are mapped, so what they cost is page cache the
+                // kernel reclaims. All this can return is the staging buffer.
                 let mut inner = self.inner.write();
                 self.flush(&mut inner)?;
                 inner.staged.shrink_to_fit();
                 inner.staged_at.shrink_to_fit();
             }
-            // Fold the head; leave the body alone.
-            //
-            // What a search pays for is the *number* of segments, not their
-            // size: at 1,083,334 entries one segment answers `"rapor"` in 1.11
-            // ms and eleven answer it in 5.20, because each of the eleven has
-            // to find its own page before it can stop. Folding ten of them
-            // into one leaves two, and costs a pass over a tenth of the index
-            // instead of over all of it.
-            //
-            // The largest member of the group is what a rebuild left behind,
-            // so it is the one worth not rewriting — unless a quarter of it is
-            // rows nobody can see any more, at which point rewriting is what
-            // gives the space back.
+            // Fold the head; leave the body alone. A search pays for the *number*
+            // of segments: at 1,083,334 entries one answers `"rapor"` in 1.11 ms
+            // and eleven in 5.20. The largest is spared unless a quarter is dead.
             Maintenance::Compact => {
                 self.flush(&mut self.inner.write())?;
                 // The lock is taken to *choose* and released to *build*. Each
-                // round re-reads the list, because folding renumbers what is
-                // left and because a commit may have added to it meanwhile. A
-                // group of eleven becomes two, which no longer qualifies, so
-                // this terminates.
+                // round re-reads the list, and a group of eleven becomes two,
+                // which no longer qualifies — so this terminates.
                 while let Some(head) = self.next_head() {
                     // A refusal ends the round rather than repeating it. See
                     // `fold`.
@@ -3271,28 +2556,10 @@ impl Index for NativeIndex {
                     }
                 }
             }
-            // Everything becomes one segment, generations included.
-            //
-            // What makes that safe is not that generations do not matter —
-            // they do, and a merged segment carries one stamp — but that
-            // outside a scan there is nothing left for one to decide. Folding
-            // per generation was the old rule and it meant a second source
-            // pinned the index at two segments forever: each source's scan
-            // takes its own generation. Measured at 2,951,074 entries, two
-            // segments, 1,441,890 of them unsorted, `rapor` at 125 ms.
-            //
-            // **The work is decided once, before the first fold.** This used
-            // to be a loop that re-read the list and folded again while
-            // anything was left to fold, which cannot finish on a machine that
-            // is being used: a fold releases the lock while it builds — that is
-            // what makes it safe against searches — so a commit lands during
-            // it and appends a segment to the very generation just folded, and
-            // the loop folds the whole index again. Measured: `scour maintain
-            // rebuild` ran for **over ten minutes** on 2.1 M entries and was
-            // still at 38 segments when it was given up on.
-            //
-            // `fold` re-checks which of the numbers it was given still exist,
-            // so a group that a previous round already absorbed costs nothing.
+            // Everything becomes one segment, generations included: outside a scan
+            // there is nothing left for a stamp to decide. **The work is decided
+            // once, before the first fold** — a loop that re-read the list ran for
+            // over ten minutes on 2.1 M entries, a commit landing during each.
             Maintenance::Rebuild => {
                 self.flush(&mut self.inner.write())?;
                 let work: Vec<Vec<u64>> = {
@@ -3408,12 +2675,8 @@ mod tests {
         }
     }
 
-    /// The cut, at the sizes the live index actually holds.
-    ///
-    /// A cohort is not what decides a fold outside a scan any more — one group
-    /// holds everything, see `groups` — so what takes its place is size, and
-    /// this is that rule on its own. The numbers are the measured ones: a
-    /// 4.6 M-row body, a 454,184-row tail, and watcher commits of a few rows.
+    /// The cut, at the sizes the live index actually holds: a 4.6 M-row body, a
+    /// 454,184-row tail, and watcher commits of a few rows.
     #[test]
     fn size_tiers_cut_where_a_member_outweighs_everything_below_it() {
         // Nothing below the tail comes to a quarter of it, so it stays where it
@@ -3422,9 +2685,8 @@ mod tests {
             size_tiers([(1, 4_600_000), (2, 454_184), (3, 40), (4, 40), (5, 40)]),
             vec![vec![3, 4, 5], vec![2], vec![1]]
         );
-        // Once the trickle has grown to a quarter of the tail, the tail takes
-        // it in. That is the one fold this change is willing to pay for, and it
-        // is worth ~113k rows of churn rather than sixty seconds.
+        // Once the trickle has grown to a quarter of the tail, the tail takes it
+        // in — worth ~113k rows of churn rather than sixty seconds.
         assert_eq!(
             size_tiers([(1, 4_600_000), (2, 454_184), (3, 113_546)]),
             vec![vec![3, 2], vec![1]]
@@ -3490,24 +2752,14 @@ mod tests {
         assert_eq!(head_of(&hollow), Some(vec![2]));
     }
 
-    /// The segment count stays bounded under a trickle that never stops.
-    ///
-    /// **This is the assertion the change has to survive.** The rule it
-    /// replaces was written against a real failure — 241 segments across 205
-    /// generations, nothing foldable, every search opening all 241 (see
-    /// `groups`) — and any rule that folds less often has to show it cannot get
-    /// back there. Driven through `head_of` rather than real segments because
-    /// what matters is the count after thousands of rounds at live sizes, and
-    /// building 4.6 M rows of them would take minutes.
-    ///
-    /// Sixty commits a round, then a compaction: `COMPACT_EVERY` is 60 s and
-    /// the live index was measured oscillating between 2 and 78 segments
-    /// between folds.
+    /// The segment count stays bounded under a trickle that never stops — the rule
+    /// this replaces left 241 segments across 205 generations with nothing
+    /// foldable. Driven through `head_of` because what matters is the count after
+    /// thousands of rounds at live sizes.
     #[test]
     fn a_long_trickle_stays_under_the_geometric_bound() {
         // Five hundred rounds of sixty forty-row commits on a 4.6 M-row body,
-        // run through both rules. `pick` is the rule: the one this file uses
-        // now, and the one it used before — everything but the largest member.
+        // through both rules: this file's, and everything but the largest.
         let trickle = |pick: &dyn Fn(&[Member]) -> Option<Vec<u64>>| {
             let mut segments = vec![member(0, 4_600_000)];
             let mut next = 1u64;
@@ -3517,9 +2769,8 @@ mod tests {
                     segments.push(member(next, 40));
                     next += 1;
                 }
-                // `maintain(Compact)`: fold what `next_head` hands back until
-                // it hands back nothing. `groups` offers three or more, or
-                // nothing.
+                // `maintain(Compact)`: fold what `next_head` hands back until it
+                // hands back nothing. `groups` offers three or more, or nothing.
                 while segments.len() >= 3 {
                     let Some(head) = pick(&segments) else { break };
                     if head.len() < 2 {
@@ -3543,10 +2794,8 @@ mod tests {
         };
 
         let (worst, folds, rewritten, total) = trickle(&|m| head_of(m));
-        // `ceil(log4(total)) + 1`: every tier below the largest holds one
-        // segment and each is more than four times the one under it, so their
-        // sizes climb geometrically from a single row; the largest is spared on
-        // top of that.
+        // `ceil(log4(total)) + 1`: each tier below the largest holds one segment
+        // more than four times the one under it, from a single row up.
         let bound = (64 - total.leading_zeros()).div_ceil(2) as usize + 1;
         assert_eq!(bound, 13, "1.2 M rows of trickle on a 4.6 M-row body");
         // Measured at five when this was written. The assertion is the bound,
@@ -3577,14 +2826,8 @@ mod tests {
     }
 
     /// Folding by tiers answers exactly what folding the whole rest answered.
-    ///
-    /// Two indexes given the same rows and the same removals, one compacted the
-    /// way this file does it now and one folded the way it did before —
-    /// everything but the largest member, in one group. A fold is a merge of
-    /// immutable rows, duplicates are already killed at flush by `kill_paths`,
-    /// and the search comparator breaks its last tie on the joined path rather
-    /// than on which segment a row landed in. So the division into segments is
-    /// not something a query can see, and this is what says so.
+    /// Two indexes, the same rows and removals, compacted both ways: how the rows
+    /// are divided into segments is not something a query can see.
     #[test]
     fn a_tiered_fold_answers_what_folding_the_whole_rest_did() {
         let tiered = tempfile::tempdir().expect("tmpdir");
@@ -3691,13 +2934,9 @@ mod tests {
         );
     }
 
-    /// A trickle does not drag the tail through a fold with it.
-    ///
-    /// The live measurement this exists for: the tail's 11.70 MB of names
-    /// reappeared under a new segment number nine times in eight and a half
-    /// minutes, 1.5–1.8 s of worker CPU and 51–68 MB written each time, because
-    /// a handful of one-row watcher commits had landed beside it. The segment
-    /// keeping its number is the observable version of "it was not rewritten".
+    /// A trickle does not drag the tail through a fold with it. The tail's
+    /// 11.70 MB of names reappeared under a new segment number nine times in eight
+    /// and a half minutes, 1.5–1.8 s of worker CPU and 51–68 MB each.
     #[test]
     fn a_trickle_of_small_segments_does_not_refold_the_tail() {
         let tmp = tempfile::tempdir().expect("tmpdir");
@@ -3828,9 +3067,8 @@ mod tests {
             let index = NativeIndex::open_or_create(tmp.path()).expect("create");
             commit_rows(&index, [row(0, "/w/first.txt", 1)]);
 
-            // This is the exact state at the final publication point of a
-            // synchronous commit: its segment is mapped and visible, while
-            // the manifest still names only the preceding list.
+            // The exact state at the final publication point of a synchronous
+            // commit: the segment is mapped and visible, the manifest is not.
             let number = index.inner.read().next_segment;
             let bytes = build(&[row(0, "/w/second.txt", 2)]);
             let live = index

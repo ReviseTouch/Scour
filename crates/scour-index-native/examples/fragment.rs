@@ -1,12 +1,7 @@
-//! What a segment count costs.
+//! What a segment count costs, and the measurement behind the compaction policy.
 //!
-//! Every segment is internally in date order, so each one can stop early on
-//! its own — but each one has to find its *own* page before it does, and every
-//! commit has to look for the previous row of everything it writes. Both of
-//! those grow with the number of segments, and neither is visible in a
-//! single-segment benchmark.
-//!
-//! This is the measurement that sets the compaction policy.
+//! Each segment is in date order and can stop early, but it has to find its own
+//! page first, and every commit looks for the previous row of what it writes.
 //!
 //! `cargo run --release -p scour-index-native --example fragment [entries]`
 

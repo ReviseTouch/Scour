@@ -2,14 +2,9 @@
 //!
 //! `cargo run --release -p scour-index-native --example removal [rows] [dirs]`
 //!
-//! The watcher reports a removed path per file and per directory, so deleting a
-//! tree of fifty thousand files arrives as fifty thousand `RemoveSubtree`
-//! changes — and a commit lands once a second, so a few thousand of them are in
-//! one batch. This measures what that batch costs with the write lock held,
-//! which is what every search issued during it waits for.
-//!
-//! Reports the commit alone, so the number is comparable across runs of
-//! different index sizes.
+//! A removed path arrives per file and per directory, and a commit lands once a
+//! second, so a few thousand are in one batch — held write lock, searches
+//! waiting. Reports the commit alone, so runs of different sizes compare.
 
 use std::time::Instant;
 

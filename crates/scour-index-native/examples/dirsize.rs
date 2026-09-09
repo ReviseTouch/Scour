@@ -1,25 +1,10 @@
 //! Can a folder's size be a column in a list, or only a report?
 //!
-//! The report answers "what does this subtree weigh" in a few hundred
-//! milliseconds, which is fine for a report and hopeless for a column: a page
-//! holds a couple of hundred rows, and any of them may be a directory.
+//! Directory numbers are in sorted path order, so a subtree is one or two
+//! contiguous runs and a prefix sum over them is an O(1) total. This measures
+//! what the prefix costs to build, what it weighs, what a lookup costs, and
+//! whether it agrees with the rollup the report already trusts.
 //!
-//! There is a structure in the layout that says it should be possible.
-//! Directory numbers are handed out in **sorted path order**, so a subtree is
-//! a contiguous run of numbers — two runs, in fact, because a sibling can sort
-//! between a directory and its children (`Projeler-414` falls between
-//! `Projeler` and `Projeler/Belgeler`), which `DirTable::subtree` already
-//! knows and answers with two binary searches.
-//!
-//! A run of numbers plus a **prefix sum over those numbers** is an O(1)
-//! subtree total. This measures whether that is true in practice: what the
-//! prefix costs to build, what it weighs, what a lookup costs, and — the part
-//! that decides whether it is worth anything — whether it agrees with the
-//! rollup the report already trusts.
-//!
-//! Read-only. Point it at a copy:
-//!
-//!   cp -a ~/.local/share/scour/index /tmp/idx
 //!   cargo run --release -p scour-index-native --example dirsize -- /tmp/idx/native
 
 use std::time::Instant;
@@ -29,9 +14,8 @@ use scour_index_native::NativeIndex;
 
 /// What one segment contributes, laid out for O(1) subtree answers.
 struct Fast {
-    /// Own totals by directory number, then prefix-summed: `pre[i]` is
-    /// everything in directories `0..i`. One extra slot so a range is always
-    /// `pre[end] - pre[start]`.
+    /// Own totals by directory number, then prefix-summed: `pre[i]` covers
+    /// directories `0..i`, with one extra slot so a range is a subtraction.
     disk: Vec<u64>,
     files: Vec<u64>,
 }
@@ -59,8 +43,7 @@ fn main() {
                     continue;
                 }
                 // A name's share of a file that may have several, exactly as
-                // the report does it — otherwise a hard-linked tree is counted
-                // once per name and the column disagrees with the report.
+                // the report does it, or a hard-linked tree is counted twice.
                 let links = seg.num_of(scour_index_native::Field::Links, row).max(1) as u64;
                 disk[d] += seg.num_of(scour_index_native::Field::Disk, row).max(0) as u64 / links;
                 files[d] += 1;
@@ -102,9 +85,7 @@ fn main() {
     );
 
     // ---- one lookup -------------------------------------------------------
-    //
-    // Two binary searches a segment for the ranges, then arithmetic. Nothing
-    // is walked, and nothing depends on how big the subtree is.
+    // Two binary searches a segment for the ranges, then arithmetic.
     let ask = |path: &str| -> (u64, u64) {
         let (mut disk, mut files) = (0u64, 0u64);
         let mut at = 0usize;
@@ -156,11 +137,9 @@ fn main() {
         per * 30.0 / 1_000_000.0
     );
 
-    // Where the time actually goes. The arithmetic is three subtractions; if
-    // the lookup costs microseconds, it is the binary search — and
-    // `DirTable::lower_bound` calls `get()` per probe, which decodes up to a
-    // restart block and **allocates a String** each time. Worth separating,
-    // because that cost is paid by every `under:` search as well.
+    // Where the time goes: the arithmetic is three subtractions, so microseconds
+    // are the binary search — `lower_bound` per probe, which every `under:`
+    // search pays as well.
     let began = Instant::now();
     let mut probes = 0u64;
     for p in &paths {
@@ -179,10 +158,8 @@ fn main() {
     );
 
     // ---- does it agree with the report? -----------------------------------
-    //
-    // The number that decides whether any of the above is worth having. The
-    // rollup in `usage.rs` is the trusted answer; this is a different route to
-    // the same total and has to land on it exactly.
+    // The rollup in `usage.rs` is the trusted answer and this is a different
+    // route to the same total; it has to land on it exactly.
     println!("\ndogrulama — rapor ile karsilastirma:");
     let mut checked = 0;
     let mut wrong = 0;

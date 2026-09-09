@@ -1,29 +1,10 @@
 //! Whether a page deep in a result can be *reached* instead of walked to.
 //!
-//! A page at offset two million costs 105 ms and visits 2,080,974 rows, and
-//! every one of those visits is a row the answer does not contain. The way out
-//! is to seek: rows inside a segment are stored newest-first, so "how many
-//! live rows are newer than *t*" is a binary search over the `Mtime` column
-//! plus a rank over the live bitmap — neither of which touches a row between
-//! here and there.
+//! A page at offset two million costs 105 ms and visits 2,080,974 rows. Seeking
+//! rests on two claims measured here: `Mtime` is non-increasing with the row
+//! number in *every* segment, and a rank over the live bitmap is cheap enough
+//! to build per request. Read-only; point it at a copy:
 //!
-//! That rests on two claims, and this measures both before anything is built
-//! on them:
-//!
-//! 1. **`Mtime` is non-increasing with the row number**, in every segment. The
-//!    whole search path already believes this — `stored_forward` returns a
-//!    page by reading the first rows that match — but believing it for the
-//!    first two hundred rows and believing it for all of them are different
-//!    claims, and only the second one supports a binary search.
-//! 2. **A rank over the live bitmap is cheap enough to build per request.**
-//!    Caching it would mean invalidating it on every commit; building it costs
-//!    one popcount per eight rows and this says what that is in microseconds.
-//!
-//! Read-only, and pointed at a copy so a running service is neither blocked
-//! nor believed:
-//!
-//!   cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
-//!   rm -f /var/tmp/idx/native/index.lock
 //!   cargo run --release -p scour-index-native --example rankcheck -- /var/tmp/idx/native
 
 use std::path::PathBuf;
@@ -74,9 +55,8 @@ fn main() {
         };
         let rows = live.rows();
 
-        // 1. Is the column monotone? Every row, not a sample: a single
-        //    inversion anywhere is a binary search that can return the wrong
-        //    boundary, and a sample of one in a thousand would miss it.
+        // 1. Is the column monotone? Every row, not a sample: one inversion
+        //    anywhere is a binary search that returns the wrong boundary.
         let began = Instant::now();
         let mut breaks = 0usize;
         let mut worst = 0i64;

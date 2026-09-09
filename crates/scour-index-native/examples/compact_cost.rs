@@ -1,13 +1,8 @@
 //! CPU, wall time and anonymous-memory peak of one native compaction.
 //!
-//! Diagnostic rather than a benchmark harness. It mutates the index passed to
-//! it, so use a copy: compaction replaces eligible segment groups in place.
-//!
-//! A second argument of `rebuild` folds everything into one segment instead of
-//! folding the eligible groups. That is the heavier of the two and the one
-//! worth being able to price: it is what somebody with an existing index runs
-//! to give it the current stored text orders, and it reads the index rather
-//! than the filesystem.
+//! Mutates the index passed to it, so use a copy. A second argument of
+//! `rebuild` folds everything into one segment instead of the eligible groups
+//! — the heavier of the two, and what gives an old index the current orders.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

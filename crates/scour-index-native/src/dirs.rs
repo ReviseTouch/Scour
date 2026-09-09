@@ -1,58 +1,30 @@
 //! The directory table.
 //!
-//! The largest single saving in the whole design, and the simplest. On the
-//! real corpus, 631,008 entries live in 73,434 directories — 8.6 files each.
-//! Storing the directory once and giving every entry a number into this table
-//! costs **3.63 bytes an entry** against 117.7 for the raw path.
-//!
-//! Front coding does the rest of the work: the table is sorted, so each row
-//! records how many bytes it shares with the row before it and then only the
-//! part that differs. `/home/u/Projeler/Scour/crates/scour-core/src` followed
-//! by `/home/u/Projeler/Scour/crates/scour-core/tests` costs five bytes for
-//! the second.
-//!
-//! What this buys beyond space is the operation a search engine is worst at:
-//! **renaming a folder is a change to one row.** Every entry beneath it keeps
-//! its number and its name; nothing is reindexed. In the engine this replaces,
-//! the same operation was a delete and re-add of every descendant.
+//! 631,008 entries live in 73,434 directories, so storing each once and
+//! numbering it costs 3.63 bytes an entry against 117.7 for the raw path. Rows
+//! are front-coded and sorted, so renaming a folder changes one row.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::varint;
 
-/// Rows are front-coded against the previous one, and every `RESTART` rows the
-/// coding restarts from nothing.
-///
-/// Without restarts, reading row 70,000 means decoding 70,000 rows. With them
-/// it means a binary search over the restart points and then at most 15 steps.
-/// Sixteen is small enough that lookups stay cheap and large enough that the
-/// restart rows — which store their whole path — stay a fifteenth of the
-/// table.
+/// Rows every `RESTART` restart the front coding from nothing, so a lookup is a
+/// binary search over the restarts plus at most 15 decode steps. Sixteen keeps
+/// the restart rows — which store a whole path — a sixteenth of the table.
 const RESTART: usize = 16;
 
-/// A component that is not where anyone keeps their own work counts for this
-/// many ordinary ones.
-///
-/// Three, and the number was measured rather than picked. At one — plain depth
-/// — searching `index` puts a generated `build/index.js` bundle first. At six,
-/// `~/.config/fish/config.fish` falls off the first page of `config` entirely
-/// and a Flutter engine `.gni` file takes its place, which is worse: a dotfile
-/// under `~/.config` is the user's own writing, and only a *deep* one is not.
-/// Three sinks the caches and keeps the dotfiles.
+/// A hidden or generated component counts for this many ordinary ones. At one,
+/// `build/index.js` outranks the source; at six, `~/.config/fish/config.fish`
+/// falls off the first page. Three sinks the caches and keeps the dotfiles.
 const AWAY: u32 = 3;
 
-/// The most steps that can count. Never reached in practice — the deepest
-/// directory on the machine this was measured on scores 32 out of 230,351 —
-/// so it is a guarantee rather than a policy: it is what keeps the whole
-/// penalty under one rung of the relevance score.
+/// The most steps that can count: what keeps the whole penalty under one rung
+/// of the relevance score. The deepest real directory measured scores 32.
 const STEP_CAP: u32 = 60;
 
-/// Directories whose contents were generated rather than written.
-///
-/// Deliberately short and deliberately not a filter: this only changes the
-/// *order* of results, so a name on it that should not be costs a few places
-/// and never a missing file.
+/// Directories whose contents were generated rather than written. Not a filter:
+/// a wrong name here costs a few places in the order, never a missing file.
 const GENERATED: [&str; 11] = [
     "target",
     "build",
@@ -67,18 +39,9 @@ const GENERATED: [&str; 11] = [
     "cmakefiles",
 ];
 
-/// How far this directory is from being something the user wrote.
-///
-/// One number standing for what were originally three separate rules — depth,
-/// hidden, build output — because measurement showed they are the same idea
-/// counted in the same unit. Every path component is a step; a component that
-/// is hidden or is a build directory is [`AWAY`] steps. What the number means
-/// is *distance*, and the search uses it as exactly that: a tie-break within a
-/// rung of the name score, never enough to overturn one.
-///
-/// The alternative was a penalty per reason — so much for being hidden, so
-/// much for being generated, so much per level. It ranks the same results and
-/// takes three constants to explain instead of one.
+/// How far this directory is from being something the user wrote. Every path
+/// component is a step; a hidden or generated one is [`AWAY`] steps. The search
+/// uses it as a tie-break within a rung of the name score, never to overturn one.
 pub fn steps_of(dir: &str) -> u8 {
     let mut steps = 0u32;
     for part in dir.split('/').filter(|p| !p.is_empty()) {
@@ -95,10 +58,8 @@ pub fn steps_of(dir: &str) -> u8 {
     steps as u8
 }
 
-/// The directory part of a full path — everything before the last separator.
-///
-/// For the merge across segments, which has the path and not the directory
-/// number, and must reach the same answer [`steps_of`] gave the table.
+/// The directory part of a full path. For the merge across segments, which has
+/// the path and not the number, and must agree with [`steps_of`] on the table.
 pub fn dir_part(path: &str) -> &str {
     match path.rfind('/') {
         Some(0) => "/",
@@ -119,10 +80,8 @@ impl DirWriter {
         DirWriter::default()
     }
 
-    /// The number for this directory, adding it if it is new.
-    ///
-    /// Returns a *provisional* number: the table is sorted when it is written,
-    /// so [`DirWriter::finish`] hands back the map from provisional to final.
+    /// The number for this directory, adding it if it is new. *Provisional*:
+    /// the table is sorted when written, and `finish` returns the remapping.
     pub fn intern(&mut self, path: &str) -> u32 {
         if let Some(&id) = self.seen.get(path) {
             return id;
@@ -142,15 +101,11 @@ impl DirWriter {
         self.paths.is_empty()
     }
 
-    /// Encode the table, and return the mapping from the numbers handed out by
-    /// [`DirWriter::intern`] to the ones in the encoded table.
-    ///
-    /// Sorting is not decoration: front coding only pays when neighbours share
-    /// a prefix, and it is what lets a subtree be found by binary search
-    /// instead of a scan.
+    /// Encode the table, and return the remapping from provisional numbers.
+    /// Sorted: front coding pays only when neighbours share a prefix, and a
+    /// subtree is then found by binary search instead of a scan.
     pub fn finish(self) -> (Vec<u8>, Vec<u32>) {
-        // Lookups are over. The ordered references keep each path alive, so
-        // free the hash table before allocating the encoded output.
+        // The ordered references keep each path alive; free the table first.
         drop(self.seen);
         let mut order: Vec<u32> = (0..self.paths.len() as u32).collect();
         order.sort_unstable_by(|&a, &b| self.paths[a as usize].cmp(&self.paths[b as usize]));
@@ -162,9 +117,8 @@ impl DirWriter {
 
         let mut rows = Vec::new();
         let mut restarts: Vec<u32> = Vec::new();
-        // One byte a directory, computed here because this is the only place
-        // the paths exist as strings. A search then reads it by number and
-        // never rebuilds a path to rank a row.
+        // One byte a directory, computed here because this is the only place the
+        // paths exist as strings; a search reads it by number to rank a row.
         let mut pens: Vec<u8> = Vec::with_capacity(order.len());
         let mut previous = "";
         for (i, &provisional) in order.iter().enumerate() {
@@ -182,10 +136,8 @@ impl DirWriter {
             previous = path;
         }
 
-        // Layout: count, restart count, the restart offsets, one distance byte
-        // a directory, then the rows. The distances come before the rows
-        // because the rows run to the end of the buffer and nothing records
-        // where they stop.
+        // Layout: count, restart count, restart offsets, one distance byte a
+        // directory, then the rows — which run to the end of the buffer.
         let mut out = Vec::with_capacity(rows.len() + restarts.len() * 4 + pens.len() + 16);
         out.extend_from_slice(&(order.len() as u32).to_le_bytes());
         out.extend_from_slice(&(restarts.len() as u32).to_le_bytes());
@@ -228,11 +180,8 @@ impl<'a> DirTable<'a> {
         })
     }
 
-    /// How far this directory is from being something the user wrote.
-    ///
-    /// Read, not computed: [`steps_of`] ran once when the table was built.
-    /// Zero for a number the table does not hold, which is the same thing as
-    /// no opinion.
+    /// How far this directory is from being something the user wrote: read, not
+    /// computed. Zero for a number the table does not hold — no opinion.
     pub fn steps(&self, id: u32) -> u8 {
         self.pens.get(id as usize).copied().unwrap_or(0)
     }
@@ -251,9 +200,8 @@ impl<'a> DirTable<'a> {
         Some(u32::from_le_bytes(b.try_into().ok()?) as usize)
     }
 
-    /// The path with this number.
-    ///
-    /// Decodes from the nearest restart, so at most `RESTART - 1` steps.
+    /// The path with this number, decoded from the nearest restart: at most
+    /// `RESTART - 1` steps.
     pub fn get(&self, id: u32) -> Option<String> {
         let mut path = String::new();
         self.get_into(id, &mut path)?;
@@ -283,15 +231,9 @@ impl<'a> DirTable<'a> {
     }
 
     /// How deep every directory is, by number: the count of `/` in its path.
-    ///
-    /// One sequential pass, which is what front coding is for — a row is its
-    /// predecessor truncated and extended, so the total work is the length of
-    /// the suffixes rather than of the paths. Slash positions are carried
-    /// along instead of being recounted, so a row costs its own suffix and
-    /// nothing else.
-    ///
-    /// Built when a query asks about depth and not otherwise: 255,089
-    /// directories is half a megabyte, which is cheap once and wasteful always.
+    /// One sequential pass — a row is its predecessor truncated and extended, and
+    /// slash positions are carried along — so a row costs only its own suffix.
+    /// Built when a query asks about depth: 255,089 directories is half a megabyte.
     pub fn depths(&self) -> Vec<u16> {
         let mut out = Vec::with_capacity(self.count);
         let mut path = String::new();
@@ -334,24 +276,11 @@ impl<'a> DirTable<'a> {
         out
     }
 
-    /// What every row's name is appended to, flattened, in table order.
-    ///
-    /// A path is a directory joined to a name, and [`crate::search::Segment`]
-    /// makes that join with a separator unless the directory is empty or is the
-    /// root. So a path *is* one of these followed by a name, and two rows can
-    /// be ordered by their paths without either being built — see
-    /// [`crate::order`].
-    ///
-    /// Materialised because ordering a segment by path compares millions of
-    /// pairs and a front-coded row cannot be compared without being decoded
-    /// first. One sequential pass, exactly as [`DirTable::depths`] does it: a
-    /// row is its predecessor truncated and extended, so the whole table costs
-    /// the length of the suffixes. 257,167 directories are 13 MB flattened,
-    /// held for the length of one sort and then dropped.
-    ///
-    /// The offsets carry a final entry at the end, so `at[i]..at[i + 1]` is
-    /// always the whole of one directory, and there are always `len() + 1` of
-    /// them however far the decode got.
+    /// What every row's name is appended to, flattened, in table order, so two
+    /// rows can be ordered by path without either being built (see
+    /// [`crate::order`]). 257,167 directories are 13 MB, held for one sort.
+    /// The offsets carry a final entry, so `at[i]..at[i + 1]` is always whole
+    /// and there are always `len() + 1` of them however far the decode got.
     pub fn join_prefixes(&self) -> (Vec<u8>, Vec<u32>) {
         let mut out: Vec<u8> = Vec::new();
         let mut offsets: Vec<u32> = Vec::with_capacity(self.count + 1);
@@ -379,34 +308,22 @@ impl<'a> DirTable<'a> {
             offsets.push(out.len() as u32);
             out.extend_from_slice(path.as_bytes());
             // The separator the join uses, and the two directories it does not:
-            // a row with no directory is its own name, and one at the root is
-            // `/` and then its name.
+            // no directory at all, and the root.
             if !path.is_empty() && path != "/" {
                 out.push(b'/');
             }
         }
-        // A decode that stopped short leaves the rest of the table pointing at
-        // nothing, which orders those rows first rather than reading past the
-        // buffer. Damage is refused where the segment is opened, not here.
+        // A short decode leaves the rest pointing at nothing, ordering those
+        // rows first rather than reading past the buffer.
         offsets.resize(self.count, out.len() as u32);
         offsets.push(out.len() as u32);
         (out, offsets)
     }
 
-    /// Every directory number at or beneath `prefix`.
-    ///
-    /// **Not one range**, and the reason is a mistake worth recording. A
-    /// subtree looks like it should be contiguous in a sorted table, and it
-    /// almost is — but a sibling can sort *between* a directory and its own
-    /// children. `/home/u/Projeler-414` falls between `/home/u/Projeler` and
-    /// `/home/u/Projeler/Belgeler`, because `-` is 0x2D and `/` is 0x2F. A
-    /// walk that stops at the first non-descendant therefore stops one row in,
-    /// and a search scoped to a folder silently returns only the files sitting
-    /// directly in it.
-    ///
-    /// The descendants *are* contiguous, as `[prefix + "/", prefix + "0")` —
-    /// `0` being the byte after `/`. The directory's own row sits earlier, on
-    /// its own. So: two ranges, found by two binary searches.
+    /// Every directory number at or beneath `prefix`, as **two** ranges: a
+    /// sibling can sort between a directory and its children, since `-` is 0x2D
+    /// and `/` is 0x2F. The descendants are contiguous as
+    /// `[prefix + "/", prefix + "0")`; the directory's own row sits earlier.
     pub fn subtree(&self, prefix: &str) -> DirScope {
         let prefix = prefix.trim_end_matches('/');
         let own = self.exact(prefix);
@@ -425,12 +342,8 @@ impl<'a> DirTable<'a> {
         (self.get(at).as_deref() == Some(path)).then_some(at)
     }
 
-    /// The path stored at a restart, borrowed rather than built.
-    ///
-    /// **A restart shares nothing with the row before it** — that is what a
-    /// restart is — so its bytes are its whole path and sit contiguously in
-    /// the mapped file. No decoding, no allocation, and this is what makes the
-    /// binary search below cheap.
+    /// The path stored at a restart, borrowed rather than built: a restart
+    /// shares nothing, so its bytes are its whole path, contiguous in the map.
     fn restart_path(&self, block: usize) -> Option<&'a str> {
         let at = self.restart_at(block)?;
         let (shared, used) = varint::get(self.rows.get(at..)?)?;
@@ -441,22 +354,11 @@ impl<'a> DirTable<'a> {
         std::str::from_utf8(self.rows.get(at..at + len as usize)?).ok()
     }
 
-    /// The first number whose path is not less than `prefix`.
-    ///
-    /// **Two levels, and the first one touches no bytes it does not compare.**
-    /// The obvious version binary-searches all `count` rows and calls
-    /// [`DirTable::get`] per probe — and `get` decodes from the nearest
-    /// restart and allocates a `String` every time. Over 247,769 directories
-    /// that is eighteen probes, each decoding up to sixteen rows and
-    /// allocating, and the whole of it is paid **twice per subtree and once
-    /// per segment**: measured at 75 µs of a 89 µs subtree lookup across 64
-    /// segments, and paid again by every `under:` search, which is the same
-    /// call.
-    ///
-    /// So: binary-search the *restarts*, whose paths are already whole and
-    /// borrowable — fourteen probes, no decoding, no allocation — and then
-    /// walk the one block that can hold the answer, at most sixteen rows,
-    /// through a single reused buffer.
+    /// The first number whose path is not less than `prefix`, in two levels:
+    /// binary-search the *restarts*, whose paths are whole and borrowable, then
+    /// walk the one block that can hold the answer through a reused buffer.
+    /// Called twice per subtree and once per segment, so probing rows directly
+    /// cost 75 µs of an 89 µs subtree lookup across 64 segments.
     fn lower_bound(&self, prefix: &str) -> u32 {
         if self.count == 0 {
             return 0;
@@ -470,9 +372,8 @@ impl<'a> DirTable<'a> {
                 _ => hi = mid,
             }
         }
-        // `lo` is the first block that starts at or after `prefix`, so the
-        // answer is inside the block before it — or at row zero, when there is
-        // no block before it.
+        // `lo` is the first block starting at or after `prefix`, so the answer
+        // is in the block before it, or at row zero.
         let block = lo.saturating_sub(1);
         let Some(mut at) = self.restart_at(block) else {
             return self.count as u32;
@@ -524,11 +425,8 @@ impl DirScope {
         self.own == Some(id) || self.below.contains(&id)
     }
 
-    /// Could any number between `lo` and `hi` be in this scope?
-    ///
-    /// For the zone map: a block whose directory numbers all fall outside a
-    /// scope holds nothing under it, and a hundred and twenty-eight rows go
-    /// without being looked at.
+    /// Could any number between `lo` and `hi` be in this scope? For the zone
+    /// map: a block outside the scope holds nothing under it, unread.
     pub fn intersects(&self, lo: u32, hi: u32) -> bool {
         self.own.is_some_and(|o| lo <= o && o <= hi)
             || (self.below.start <= hi && self.below.end > lo)
@@ -608,12 +506,8 @@ mod tests {
 
     #[test]
     fn a_subtree_survives_a_sibling_that_sorts_between_it_and_its_children() {
-        // The bug this test was written for, found by comparing against brute
-        // force: `/a-x` sorts *after* `/a` and *before* `/a/y`, because `-` is
-        // 0x2D and `/` is 0x2F. A walk from `/a` that stops at the first
-        // non-descendant stops at `/a-x` and never sees `/a/y` at all — so a
-        // search scoped to a folder silently returned only the files sitting
-        // directly in it.
+        // `/a-x` sorts after `/a` and before `/a/y`, so a walk that stops at
+        // the first non-descendant never sees `/a/y`.
         let paths = [
             "/a",
             "/a-x",
@@ -667,8 +561,7 @@ mod tests {
 
     #[test]
     fn front_coding_actually_shrinks_it() {
-        // The claim is 117.7 bytes a path down to a few. Check the direction
-        // on a shape like the real corpus: deep, repetitive, sorted.
+        // 117.7 bytes a path down to a few, on a corpus-like shape.
         let mut paths = Vec::new();
         for a in 0..40 {
             for b in 0..40 {
@@ -715,12 +608,10 @@ mod tests {
     #[test]
     fn distance_counts_a_cache_as_further_than_a_project() {
         assert!(steps_of("/home/u/Projeler/Scour/crates") < steps_of("/home/u/.cargo/registry"));
-        // A build directory is as far as a hidden one, and both count once
-        // each time they appear.
+        // A build directory is as far as a hidden one, counted per appearance.
         assert_eq!(steps_of("/home/u/p/target"), steps_of("/home/u/p/.git"));
         assert!(steps_of("/home/u/p/target/debug") > steps_of("/home/u/p/src/debug"));
-        // Shallow and hidden is still close: a dotfile in `~/.config` is the
-        // user's own writing and only a deep one is not.
+        // Shallow and hidden is still close: `~/.config` is the user's writing.
         assert!(steps_of("/home/u/.config/fish") < steps_of("/home/u/.cargo/registry/src/crates"));
         // Case does not save a build directory, and the cap holds.
         assert_eq!(steps_of("/a/Target"), steps_of("/a/target"));
@@ -751,23 +642,15 @@ mod tests {
         assert_eq!(dir_part("a.txt"), "");
     }
 
-    /// **Against brute force, over every path in the table and past both
-    /// edges.** The two-level search reads restart rows for the outer probe
-    /// and decodes the one block that can hold the answer; a mistake in either
-    /// half lands one row out, and one row out in a directory table is a
-    /// search scoped to the wrong folder — which returns files, silently, and
-    /// looks like a working search.
-    ///
-    /// The sizes cross a restart boundary in both directions (RESTART is 16),
-    /// so the "block before `lo`" arithmetic is exercised at the start of a
-    /// block, in the middle of one, and past the last.
+    /// Against brute force. One row out here is a search scoped to the wrong
+    /// folder, which returns files and looks like a working search. The sizes
+    /// straddle a restart boundary in both directions (`RESTART` is 16).
     #[test]
     fn the_first_row_not_below_a_prefix_is_the_one_brute_force_finds() {
         for n in [0usize, 1, 15, 16, 17, 31, 32, 33, 200] {
             let mut paths: Vec<String> = Vec::new();
             for i in 0..n {
-                // Deep, shared prefixes, and the sibling that sorts *between*
-                // a directory and its children — `-` is 0x2D and `/` is 0x2F.
+                // The sibling that sorts between a directory and its children.
                 paths.push(format!("/home/u/Projeler/p{i:03}"));
                 if i % 3 == 0 {
                     paths.push(format!("/home/u/Projeler/p{i:03}-yedek"));
@@ -780,8 +663,7 @@ mod tests {
             let (bytes, _) = build(&refs);
             let t = DirTable::open(&bytes).expect("table");
 
-            // Every stored path, every path with a byte appended, every one
-            // with its last byte removed, and two that fall outside.
+            // Every stored path, extended, shortened, and two outside.
             let mut asked: Vec<String> = vec![String::new(), "/".into(), "~".into(), "/zzz".into()];
             for p in &paths {
                 asked.push(p.clone());

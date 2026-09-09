@@ -1,23 +1,8 @@
 //! One writer per index directory.
 //!
-//! Nothing used to stop two processes opening the same index and writing it.
-//! The consequence is worse than a lost update: segments are **mmapped**, and
-//! `Live::open`'s safety comment says the mapping is sound "as long as nobody
-//! rewrites the file underneath us, which nothing does". Two writers make that
-//! sentence false. One of them calls `File::create` on a `.names` file the
-//! other is reading through a mapping, and reading a mapping whose file has
-//! been truncated is undefined behaviour — in practice `SIGBUS`, in a process
-//! that was answering a search.
-//!
-//! So: an advisory lock on a file in the directory, held for as long as the
-//! index is open. Advisory is enough — every writer is this code — and it is
-//! the only kind that is released by the *kernel* when the process dies, which
-//! matters because the alternative, a pid file, leaves a stale lock after
-//! exactly the crash it is supposed to protect against.
-//!
-//! Readers are not excluded. A second `scour` process running one query does
-//! not write anything, and refusing it would make `scour search` fail whenever
-//! the service is running — the common case, not the exceptional one.
+//! Segments are mmapped, so a second writer truncating a file under a live
+//! mapping is undefined behaviour — `SIGBUS` mid-search. The advisory lock is
+//! kernel-released if the process dies. Readers are not excluded.
 
 use std::fs::File;
 use std::path::Path;
@@ -30,8 +15,7 @@ const LOCK_FILE: &str = "index.lock";
 /// the process ends, whichever comes first.
 #[derive(Debug)]
 pub struct DirLock {
-    // The lock lives in the kernel and is keyed to this open file description.
-    // Holding the handle is what holds the lock; dropping it releases.
+    // The lock is keyed to this open file description; dropping it releases.
     _file: File,
 }
 
@@ -83,8 +67,7 @@ fn try_lock(file: &File) -> std::io::Result<bool> {
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
     let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
-    // SAFETY: a valid handle, a zeroed OVERLAPPED, and a byte range of one.
-    // Locking one byte is the conventional way to lock a file as a whole here;
+    // SAFETY: a valid handle, a zeroed OVERLAPPED, and a byte range of one —
     // the range only has to be agreed on between the processes involved.
     let ok = unsafe {
         LockFileEx(
@@ -109,8 +92,7 @@ fn try_lock(file: &File) -> std::io::Result<bool> {
 
 #[cfg(not(any(unix, windows)))]
 fn try_lock(_file: &File) -> std::io::Result<bool> {
-    // Nothing to lock with, and refusing to run would be worse than running
-    // unprotected on a platform that has no second process to protect from.
+    // Nothing to lock with; refusing to run would be worse than running open.
     Ok(true)
 }
 

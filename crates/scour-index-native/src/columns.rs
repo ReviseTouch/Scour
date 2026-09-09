@@ -1,55 +1,14 @@
 //! The numbers, in columns.
 //!
-//! Sixteen values an entry — eleven from `stat`, the directory number, and
-//! four that carry the entry's identity —
-//! stored one column at a time in blocks of 128, each block bit-packed against
-//! its own minimum. Measured on the real corpus: **8.85 bytes an entry** for
-//! all of them, against 80 stored plainly.
-//!
-//! Two results from that measurement are worth keeping in view.
-//!
-//! `mtime` costs **0.29 bytes** — a block of 128 rows that are already in
-//! date order spans a narrow range, so nine bits hold it. The row order paying
-//! for itself twice is not a coincidence; it is why the order was chosen.
-//!
-//! Delta coding makes this **worse**, not better: 23.4 bytes an entry against
-//! 8.85. It was tried and rejected. Deltas beat a frame of reference only when
-//! the values climb steadily, and `size`, `mode` and `uid` do not.
-//!
-//! Columns rather than rows because a filter reads one number from many rows —
-//! "everything under a megabyte" touches only `size` — and a column puts those
-//! bytes next to each other. A row layout would drag eleven unwanted numbers
-//! through the cache for every candidate.
+//! Fourteen values an entry, stored one column at a time in blocks of [`BLOCK`]
+//! rows, each bit-packed against its own minimum: 8.85 bytes an entry against
+//! 80 stored plainly. Columns, not rows: a filter reads one number of many rows.
 
 use crate::varint;
 
-/// Rows per block.
-///
-/// Two tensions, and the second one decides it.
-///
-/// **Packing.** A larger block amortises the per-block minimum and width
-/// further; a smaller one packs tighter, because a narrow range needs fewer
-/// bits. On its own that argued for 128, which is also the width SIMD
-/// bit-packers use.
-///
-/// **Selectivity**, which was not measured until much later and matters more.
-/// A block is the unit the trigram filter and the zone map can skip, and it
-/// survives if *anything* in it might match — so 128 names to a block hands a
-/// term 128 rows for every one that could be right. Measured over 750,717 real
-/// entries and six real terms:
-///
-/// | rows a block | index | candidates | query |
-/// |---|---|---|---|
-/// | 128 | 51 MB | 267,296 | 5.76 ms |
-/// | 64 | 53 MB | 169,248 | 3.86 ms |
-/// | **32** | **57 MB** | **104,192** | **2.99 ms** |
-/// | 16 | 65 MB | 60,352 | 2.16 ms |
-///
-/// Thirty-two is the knee: 48% off the query for 11% more on disk, where the
-/// next halving buys a fifth as much per megabyte. It is also the number that
-/// decides how a *larger* index behaves, because what grows with the corpus is
-/// how many candidates a term must walk, not what each one costs — that has
-/// been measured flat at about 25 ns whatever the sort.
+/// Rows per block: the unit the trigram filter and the zone map skip whole.
+/// The measured knee at 750,717 entries — against 128 rows, 11% more on disk
+/// for 48% off the query; halving again buys a fifth as much per megabyte.
 pub const BLOCK: usize = 32;
 
 /// The columns, in a fixed order. The numeric values are part of the on-disk
@@ -69,19 +28,10 @@ pub enum Field {
     Items = 9,
     Kind = 10,
     IsDir = 11,
-    /// Names this file has. One for almost everything, which is why it costs
-    /// almost nothing: a column whose values are all `1` packs to a bit a row.
+    /// Names this file has. Almost always `1`, so the column packs to a bit a row.
     Links = 13,
-    /// Which source produced the entry.
-    ///
-    /// The last of the identity, and the only part of it that is not already
-    /// in the directory table and the name arena. Three columns used to sit
-    /// beside it holding whatever the source called the entry — an inode, a
-    /// hash — and they are gone: a row is identified by its source and its
-    /// path, so storing a second identity beside the first meant carrying
-    /// eight incompressible bytes a row to answer a question the path already
-    /// answers. **19 MB of a 200 MB index**, spent on the thing that was
-    /// producing duplicate rows.
+    /// Which source produced the entry. A row is identified by its source and
+    /// its path; no further identity column is stored.
     Source = 12,
 }
 
@@ -108,13 +58,8 @@ impl Field {
     }
 }
 
-/// Encodes rows as they arrive, one block at a time.
-///
-/// Nothing is buffered but the block being filled. The first version held every
-/// row until `finish` — sixteen numbers at eight bytes each, so **152 MB** at a
-/// million entries, all of it anonymous and all of it live for the whole of a
-/// rebuild. Encoding as the block fills costs the same arithmetic and holds
-/// only what will be written.
+/// Encodes rows as they arrive, one block at a time. Nothing is buffered but
+/// the block being filled.
 #[derive(Debug, Default)]
 pub struct ColumnWriter {
     /// The block being filled, in row order.
@@ -158,14 +103,8 @@ impl ColumnWriter {
             let blocks = &mut self.blocks[c];
             self.offsets[c].push(blocks.len() as u32);
             blocks.extend_from_slice(&min.to_le_bytes());
-            // The *true* maximum, not `min + 2^bits - 1`.
-            //
-            // Eight bytes a block a column — one byte an entry — and it is what
-            // lets a numeric filter reject a hundred and twenty-eight rows with
-            // one comparison. The width-derived bound is far too loose to do
-            // that: a block of file sizes spanning a kilobyte to a megabyte has
-            // twenty bits of width, so the derived maximum is a megabyte
-            // whatever the block actually holds.
+            // The *true* maximum, not `min + 2^bits - 1`: the width-derived
+            // bound is far too loose to reject a block on one comparison.
             blocks.extend_from_slice(&max.to_le_bytes());
             blocks.push(bits as u8);
             varint::pack(blocks, &vals, min, bits);
@@ -181,18 +120,9 @@ impl ColumnWriter {
         self.rows == 0
     }
 
-    /// Assemble the file.
-    ///
-    /// Layout: a header of (row count, column count), then per column a
-    /// 64-bit offset to its section. A section is a count of blocks, a 32-bit
-    /// offset for each, and then the blocks — each an 8-byte minimum, an 8-byte
-    /// maximum, a byte of width, and the packed values.
-    ///
-    /// The offset array is what makes a read O(1), and it was added after a
-    /// measurement rather than by foresight. Blocks are variable width, so
-    /// without it reaching block *b* means walking the headers of the *b*
-    /// before it — which turned a single-column filter over a million rows
-    /// into five seconds. Four bytes a block is 0.03 bytes an entry.
+    /// Assemble the file: a header of (rows, columns), then per column a
+    /// 64-bit offset to a section of a block count, a 32-bit offset each, then
+    /// blocks of (8-byte minimum, 8-byte maximum, byte of width, packed values).
     pub fn finish(mut self) -> Vec<u8> {
         self.seal();
         let cols = Field::ALL.len();
@@ -251,11 +181,8 @@ impl<'a> ColumnBlocks<'a> {
         self.rows == 0
     }
 
-    /// One value, in constant time.
-    ///
-    /// Random access rather than bulk decode: a filter usually rejects a row on
-    /// the first column it looks at, and decoding the other fifteen would be
-    /// work thrown away.
+    /// One value, in constant time. Random access rather than bulk decode: a
+    /// filter usually rejects a row on the first column it looks at.
     pub fn get(&self, field: Field, row: usize) -> Option<i64> {
         if row >= self.rows {
             return None;
@@ -277,15 +204,9 @@ impl<'a> ColumnBlocks<'a> {
         Some(varint::unpack_one(packed, min, bits, row % BLOCK))
     }
 
-    /// The range of values a block holds, without decoding any of them.
-    ///
-    /// The zone map. A filter that cannot be satisfied anywhere in `[min, max]`
-    /// rejects a hundred and twenty-eight rows with two comparisons, and the
-    /// walk never touches their names, their paths or any other column.
-    ///
-    /// It can only reject. A block whose range admits the filter still has
-    /// every row tested exactly as before, so this cannot turn a match into a
-    /// miss — only a miss into a skip.
+    /// The range of values a block holds, without decoding any of them: the
+    /// zone map. It can only reject — a block whose range admits the filter has
+    /// every row tested as before, so this cannot turn a match into a miss.
     pub fn block_range(&self, field: Field, block: usize) -> Option<(i64, i64)> {
         let at = field.index() * 8;
         let section = u64::from_le_bytes(self.offsets.get(at..at + 8)?.try_into().ok()?) as usize;
@@ -347,8 +268,8 @@ mod tests {
 
     #[test]
     fn ordered_timestamps_are_nearly_free() {
-        // The measured claim: mtime costs 0.29 bytes an entry because the rows
-        // are in its order. Check the shape rather than the exact figure.
+        // mtime costs 0.29 bytes an entry on the real corpus, the rows being
+        // in its order; this checks the shape, not that figure.
         let mut w = ColumnWriter::new();
         for i in 0..4_096i64 {
             w.push(row(0, 0, 1_785_000_000 - i * 3));
@@ -356,16 +277,8 @@ mod tests {
         let bytes = w.finish();
         let cols = ColumnBlocks::open(&bytes).expect("open");
 
-        // Sixteen i64 stored plainly would be 128 bytes an entry. What the
-        // test asserts is the order of magnitude, not a figure it invented.
-        //
-        // The bound was 9.6 when a block held 128 rows and this measured 23.30
-        // the day it became 32 — because the per-block minimum and width are
-        // paid four times as often, and this synthetic corpus is the worst
-        // case for that: fifteen of its sixteen columns are constant, so the
-        // overhead *is* the file. On the real corpus the same change took the
-        // whole index from 51 MB to 57 for 750,717 entries, and bought 48% off
-        // every query. That is the trade, and it is recorded in `BLOCK`.
+        // A worst case for per-block overhead: most columns here are constant,
+        // so the minimum and width are most of the file. Plainly: 112 bytes.
         let per_entry = bytes.len() as f64 / 4_096.0;
         assert!(
             per_entry < 26.0,
@@ -413,8 +326,7 @@ mod tests {
 
     #[test]
     fn the_field_order_is_part_of_the_format() {
-        // A guard, not a tautology: reordering the enum silently reinterprets
-        // every column of every index already written.
+        // Reordering the enum reinterprets every column of every index written.
         assert_eq!(Field::DirId.index(), 0);
         assert_eq!(Field::Mtime.index(), 2);
         assert_eq!(Field::IsDir.index(), 11);

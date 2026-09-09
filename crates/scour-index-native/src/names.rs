@@ -1,46 +1,15 @@
-//! The name arena.
+//! The name arena: every file name, NUL-separated, in row order.
 //!
-//! Every file name, NUL-separated, in row order. Nothing else — no lengths, no
-//! per-row offsets, no index. A name is found by counting NULs from the start
-//! of its block.
-//!
-//! That works because of how the arena is read. A search walks rows in order
-//! from row zero, so the scan is sequential and the "counting" is free — it is
-//! the same pass that reads the name. Only *materialising* a particular row
-//! needs random access, and that happens forty times a query, not a million.
-//!
-//! So the only index is one 32-bit offset every [`BLOCK`] rows: 0.03 bytes an
-//! entry, against 4 for a per-row offset table.
-//!
-//! ## Two arenas: one to read, one to match
-//!
-//! Names are stored as the filesystem spells them, because that is what the
-//! user reads. Matching is case-folded, because that is what the user means.
-//!
-//! Those used to be the same bytes, folded per row at query time. Measured on
-//! 2,981,748 real names, that fold was **three quarters of the inner loop** —
-//! 24.4 ns of the 40.5 it takes to read a name, fold it and search it — paid
-//! on every candidate row of every query to compute something that never
-//! changes.
-//!
-//! So the fold happens once, when the segment is written, into a second arena
-//! with the same row numbering. A search walks *that* one and never folds
-//! anything; the spelled arena is read only for the forty rows that reach the
-//! screen. Same measurement: **40.5 ns a row becomes 8.3**, and a scan of every
-//! name in the index falls from 121 ms to 25.
-//!
-//! The cost is the second arena — 79 MB here against an index of 174 — and it
-//! is the trade the whole layout is built around: bytes are cheap and the
-//! inner loop is not.
+//! The only index is one 32-bit offset every [`BLOCK`] rows — a search walks in
+//! order, and only forty rows a query are materialised. Two arenas share the row
+//! numbering: the spelling to show, the fold to match. Folding per query instead
+//! costs 40.5 ns a row against 8.3, for 79 MB saved.
 
 use crate::columns::BLOCK;
 
-/// The longest name that will be folded into the stack buffer.
-///
-/// `NAME_MAX` is 255 bytes on Linux and Windows; folding can grow a string
-/// (`İ` is two bytes and folds to one, but `ẞ` folds to two), so the buffer is
-/// generous. A name that somehow exceeds it is matched unfolded rather than
-/// dropped — wrong for one absurd file beats a panic.
+/// The longest name folded into the stack buffer. `NAME_MAX` is 255 bytes and
+/// folding can grow a string, so this is generous; a longer name is matched
+/// unfolded rather than dropped.
 const FOLD_CAP: usize = 1024;
 
 #[derive(Debug, Default)]
@@ -69,12 +38,9 @@ impl NameWriter {
             self.blocks.push(self.bytes.len() as u32);
             self.folded_blocks.push(self.folded.len() as u32);
         }
-        // A NUL cannot occur in a filename on any platform this runs on, so it
-        // is the one byte that can separate them without escaping.
+        // A NUL cannot occur in a filename, so it separates without escaping.
         self.bytes.extend_from_slice(name.as_bytes());
         self.bytes.push(0);
-        // And the same name folded, once, here, rather than once per row per
-        // query for the life of the index.
         let mut fold = Folded::new();
         let start = self.folded.len();
         self.folded
@@ -102,13 +68,10 @@ impl NameWriter {
         pack(self.rows, &self.folded_blocks, &self.folded)
     }
 
-    /// Finish both arenas without copying either name payload.
-    ///
-    /// A rebuild holds the spelling and folded spelling at the same time. The
-    /// prefix layout used by the public single-arena finishers allocates a
-    /// second full buffer for each; at millions of rows that made four copies
-    /// coexist near the end of a build. Moving each owned payload right inside
-    /// its allocation preserves that exact format without the full-size copy.
+    /// Finish both arenas without copying either payload: the single-arena
+    /// finishers allocate a second full buffer, and a rebuild holds both at
+    /// once. Same format, produced by moving each payload inside its own
+    /// allocation.
     pub(crate) fn finish_both(self) -> (Vec<u8>, Vec<u8>) {
         let NameWriter {
             bytes,
@@ -123,20 +86,14 @@ impl NameWriter {
         )
     }
 
-    /// The spelled names as they were pushed: NUL-terminated, in row order.
-    ///
-    /// Before packing, because the one caller — [`crate::order`], ordering a
-    /// segment's rows by path while it is being built — reads them in row order
-    /// and would otherwise have to open the packed arena to read back what it
-    /// has just written.
+    /// The spelled names as they were pushed: NUL-terminated, in row order —
+    /// before packing, so [`crate::order`] need not reopen what it just wrote.
     pub(crate) fn spelled(&self) -> &[u8] {
         &self.bytes
     }
 
     /// The folded names as they were pushed: NUL-terminated, in row order.
-    ///
-    /// Used while building the persisted name order, before this same buffer
-    /// is packed into the arena searches map.
+    /// Used to build the name order, before this buffer becomes the arena.
     pub(crate) fn folded(&self) -> &[u8] {
         &self.folded
     }
@@ -207,10 +164,8 @@ impl<'a> NameArena<'a> {
         Some(u32::from_le_bytes(b.try_into().ok()?) as usize)
     }
 
-    /// One name, by row. Costs a jump plus at most `BLOCK` NUL scans.
-    ///
-    /// For **one** row. A caller inside the crate asking in row order wants
-    /// `Reader`, which is this with the block scan removed.
+    /// One name, by row: a jump plus at most `BLOCK` NUL scans. A caller asking
+    /// in row order wants `Reader`, which is this without the block scan.
     pub fn get(&self, row: usize) -> Option<&'a str> {
         if row >= self.rows {
             return None;
@@ -223,25 +178,16 @@ impl<'a> NameArena<'a> {
         std::str::from_utf8(self.bytes.get(at..end)?).ok()
     }
 
-    /// Walk names from `row` onwards, handing each to `f` with its row number.
-    ///
-    /// The sequential form, and the one a search actually uses: no offsets are
-    /// consulted after the first, and the NUL scan is `memchr`, which is the
-    /// same SIMD loop `grep` uses. Stops when `f` returns `false`.
-    ///
-    /// Bytes, not `&str`. Validating UTF-8 on the way past is a second pass
-    /// over every name in the index for the benefit of the forty that end up
-    /// on screen, and the tests that matter — a substring, an extension, a
-    /// glob — are all answerable without it. The rows that are actually
-    /// returned go through [`NameArena::get`], which does validate.
+    /// Walk names from `row` onwards, handing each to `f` with its row number;
+    /// stops when `f` returns `false`. No offset is consulted after the first.
+    /// Bytes, not `&str`: validating UTF-8 here is a second pass over the whole
+    /// index for the forty rows that reach [`NameArena::get`], which validates.
     pub fn walk(&self, from: usize, f: impl FnMut(usize, &'a [u8]) -> bool) {
         self.walk_range(from, self.rows, f);
     }
 
-    /// The same, stopping at `to` (exclusive).
-    ///
-    /// What the trigram filter uses: it names a handful of blocks, and each is
-    /// a contiguous run of rows.
+    /// The same, stopping at `to` (exclusive). What the trigram filter uses:
+    /// each block it names is a contiguous run of rows.
     pub fn walk_range(&self, from: usize, to: usize, mut f: impl FnMut(usize, &'a [u8]) -> bool) {
         let to = to.min(self.rows);
         if from >= to {
@@ -272,39 +218,10 @@ impl<'a> NameArena<'a> {
     }
 }
 
-/// A place in an arena, kept between reads.
-///
-/// Crate-internal: the only caller is the path sort in `search.rs`.
-///
-/// [`NameArena::get`] starts at the nearest block offset every time, so it
-/// costs up to `BLOCK` NUL scans — sixteen on average. That is the right shape
-/// for the two hundred rows a page shows, and the wrong one for a caller that
-/// wants *every* matching row's spelled name in row order. **Ordering by path
-/// is that caller**, and on this machine — 2,234,580 rows — the repeated block
-/// scan measured **320 ms of the 665 the whole sort cost**, more than the
-/// walk, the keys and the selection put together. (Priced by building the key
-/// out of the folded name the walk already carries — the wrong answer and the
-/// right measurement: the sort fell to 268 ms.)
-///
-/// So this remembers where the last row began. A row ahead of it is reached by
-/// scanning on from there, which for a forward walk is one NUL scan. Anything
-/// else — a jump backwards, or a new run of blocks — falls back to the block
-/// offset, exactly as `get` does. Path descending, offset 0: **665 ms becomes
-/// 424**, and the same at every offset a list can scroll to. It does not
-/// recover the whole 320 because the one scan and the UTF-8 check it still does
-/// are not free.
-///
-/// It is never more work than `get`: the two distances are compared and the
-/// shorter one taken. That guard is for cost, not for correctness — removing it
-/// leaves every answer intact and only makes a backwards jump dear, which is
-/// why the test that covers this type is about agreement with `get` rather than
-/// about which branch was taken.
-///
-/// Holds no arena, only a position, so that whatever owns one across a query
-/// needs no lifetime of its own. Handing it a *different* arena costs
-/// correctness nothing — the position is then simply wrong and repaired by the
-/// same block offset `get` would have used — but it is not something any caller
-/// should want, and none does.
+/// A place in an arena, kept between reads, so a forward step is one NUL scan
+/// rather than `get`'s scan from the block offset — 320 ms of a 665 ms path
+/// sort. Never worse than `get`: the shorter of the two distances is taken, and
+/// a stale position is repaired by the same block offset `get` would use.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Reader {
     /// Where `row` begins. Meaningless until `placed`.
@@ -314,13 +231,10 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
-    /// The name of `row`, spelled as the filesystem spells it.
-    ///
-    /// Empty for a row the arena does not hold, or one whose bytes are not
-    /// UTF-8 — which is the answer `NameArena::get(row).unwrap_or_default()`
-    /// gives, and it has to be, because that is what the path a row *shows* is
-    /// built from. A key that disagreed with the shown path would order rows by
-    /// something nobody can see.
+    /// The name of `row`, spelled as the filesystem spells it. Empty for a row
+    /// the arena lacks or whose bytes are not UTF-8 — exactly what
+    /// `NameArena::get(row).unwrap_or_default()` gives, and so what a sort key
+    /// must be, or rows order by something the shown path does not say.
     pub(crate) fn at<'a>(&mut self, arena: &NameArena<'a>, row: usize) -> &'a str {
         if row >= arena.rows {
             return "";
@@ -356,10 +270,8 @@ impl Reader {
     }
 }
 
-/// A stack buffer that holds one case-folded name.
-///
-/// Reused across every row of a scan, so a million names are folded without a
-/// single allocation.
+/// A stack buffer holding one case-folded name, reused across every row of a
+/// scan, so a million names fold without an allocation.
 #[derive(Debug)]
 pub struct Folded {
     buf: [u8; FOLD_CAP],
@@ -375,26 +287,11 @@ impl Default for Folded {
     }
 }
 
-/// Single-character lowercase mappings for the two-byte range, U+0080–U+07FF.
-///
-/// Every letter Turkish, Western European, Greek and Cyrillic writing needs
-/// lives here, which is most of what a non-ASCII filename on this machine is
-/// made of.
-///
-/// **Built from `char::to_lowercase` rather than written out**, so it cannot
-/// disagree with it. A hand-typed table of 1,920 entries would be a second
-/// statement of the Unicode rules, and the failure mode of two statements
-/// drifting is not an error — it is a file that is never found.
-///
-/// Entries are left absent, and fall through to the general path, when the
-/// lowercase is more than one character or is a combining dot. Both matter:
-/// `İ` folds to `i` *plus* a dot and the dot is then dropped, which is the
-/// whole reason a Turkish name typed either way is found either way.
-///
-/// One 3.8 KB allocation, filled once, turning a per-character binary search
-/// over the core range tables into an array index. Measured interleaved over
-/// six rounds: **19.6% off a Turkish name**, and exactly nothing on an ASCII
-/// one, which is the shape a change like this should have.
+/// Single-character lowercase mappings for the two-byte range, U+0080–U+07FF —
+/// Turkish, Western European, Greek and Cyrillic. Built from
+/// `char::to_lowercase` so it cannot disagree with it; an entry is left absent
+/// where the lowercase is several characters or a combining dot. 3.8 KB once,
+/// replacing a per-character binary search: 19.6% off folding a Turkish name.
 fn two_byte_table() -> &'static [u16; 1920] {
     static TABLE: std::sync::OnceLock<Box<[u16; 1920]>> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
@@ -407,8 +304,7 @@ fn two_byte_table() -> &'static [u16; 1920] {
             let (Some(first), None) = (lower.next(), lower.next()) else {
                 continue; // more than one character: not ours to shortcut
             };
-            // The two rules the general path applies, applied here in the same
-            // order, so the two produce the same bytes.
+            // The general path's two rules, in its order, for the same bytes.
             let first = if first == 'ı' { 'i' } else { first };
             if first == '\u{0307}' {
                 continue; // dropped there, so not shortcut here
@@ -416,8 +312,7 @@ fn two_byte_table() -> &'static [u16; 1920] {
             if (0x80..0x800).contains(&(first as u32)) {
                 *slot = first as u16;
             } else if first.is_ascii() {
-                // `ı` becomes `i`, which is one byte where the source was two.
-                // The high bit records that the width changed.
+                // The high bit records a width change: `ı` is two bytes, `i` one.
                 *slot = 0x8000 | first as u16;
             }
         }
@@ -437,35 +332,11 @@ impl Folded {
         std::str::from_utf8(folded).unwrap_or("")
     }
 
-    /// The same, on bytes, which is what a walk has.
-    ///
-    /// Called once per row of every query that reads a name, so what it costs
-    /// is most of what a search costs. Three paths, and the middle one is the
-    /// reason this is not four lines:
-    ///
-    /// * **Wholly ASCII** — one `make_ascii_lowercase`, which the compiler
-    ///   vectorises. 11.3 ns for a name of nineteen bytes.
-    /// * **Mostly ASCII** — the same bulk copy over each ASCII run, dropping
-    ///   into the real rules only for the characters that need them.
-    /// * **Not text at all** — matched as the bytes it is rather than dropped,
-    ///   because a name off a disk is arbitrary bytes and a row that cannot be
-    ///   searched for is worse than one searched for oddly.
-    ///
-    /// The middle path is worth its complication and the number is measured.
-    /// Before it, a single `ş` anywhere in a name put the *whole* name through
-    /// `char::to_lowercase` — 88.9 ns against 11.3, and a search for a Turkish
-    /// word cost seven times what an English one cost on the same corpus,
-    /// because the blocks a Turkish word selects are full of Turkish names.
-    /// `rapor` visited 439,936 rows in 92 ms where `config` visited more in
-    /// 14.7. Two other explanations were measured and refused first: it is not
-    /// the sort, and it is not name length.
-    ///
-    /// Whatever this does it must do **identically** to `DefaultFolder` — `İ`,
-    /// `I`, `ı` and `i` all become `i`, or a Turkish name is stored under one
-    /// spelling and searched for under another and never found.
-    /// `folding_agrees_with_the_folder_the_index_was_built_with` is the test
-    /// that says so, and it is the reason the rules below are copied rather
-    /// than restated.
+    /// The same, on bytes, which is what a walk has. Wholly ASCII is one
+    /// vectorised `make_ascii_lowercase`, 11.3 ns for nineteen bytes; a mostly
+    /// ASCII name takes that per run, since one `ş` sending the whole name
+    /// through `char::to_lowercase` costs 88.9; non-UTF-8 matches as bytes.
+    /// Must fold **identically** to `DefaultFolder` or a name is never found.
     pub fn fold_bytes<'s>(&'s mut self, bytes: &[u8]) -> &'s [u8] {
         if bytes.len() <= FOLD_CAP && bytes.is_ascii() {
             let n = bytes.len();
@@ -487,9 +358,8 @@ impl Folded {
         let raw = name.as_bytes();
         let mut at = 0;
         while at < raw.len() {
-            // The ASCII run, in bulk. Folding ASCII is `to_ascii_lowercase`
-            // and no rule below distinguishes it, so this is exactly what the
-            // per-character path would have produced.
+            // The ASCII run, in bulk: no rule below distinguishes ASCII, so
+            // this is what the per-character path would have produced.
             let from = at;
             while at < raw.len() && raw[at] < 0x80 {
                 at += 1;
@@ -507,9 +377,8 @@ impl Folded {
                 break;
             };
             at += c.len_utf8();
-            // The common case, and what the table exists for: a two-byte
-            // character whose lowercase is one character. Everything Turkish
-            // is here.
+            // What the table exists for: a two-byte character whose lowercase
+            // is one character. Everything Turkish is here.
             if let Some(entry) = (0x80..0x800)
                 .contains(&(c as u32))
                 .then(|| two_byte_table()[c as usize - 0x80])
@@ -650,12 +519,8 @@ mod tests {
 
     #[test]
     fn a_reader_answers_whatever_get_would_have_answered() {
-        // The reader exists to skip the block scan, which means it carries a
-        // position between calls — and a position is a thing that can be
-        // wrong. Its only defence is that it must agree with `get` on every
-        // order the rows can be asked for, so that is what is checked: the
-        // forward walk it is built for, but also backwards, block boundaries
-        // both ways, repeats, and the far ends.
+        // A carried position can be wrong; it must agree with `get` on every
+        // order the rows can be asked for.
         let names: Vec<String> = (0..400).map(|i| format!("n{i}_dosya.rs")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let bytes = build(&refs);
@@ -663,7 +528,6 @@ mod tests {
 
         let want = |row: usize| arena.get(row).unwrap_or_default();
         let orders: Vec<Vec<usize>> = vec![
-            // What a path sort does, and the only order that is fast.
             (0..400).collect(),
             (0..400).rev().collect(),
             // Runs of blocks with gaps, which is what a narrowed walk hands it.
@@ -686,9 +550,8 @@ mod tests {
 
     #[test]
     fn folding_agrees_with_the_folder_the_index_was_built_with() {
-        // If these two ever disagree, a file is stored under one spelling and
-        // searched for under another, and nothing reports an error — the file
-        // is simply never found.
+        // Disagreement stores a file under one spelling and searches under
+        // another, with no error anywhere.
         let mut f = Folded::new();
         for name in [
             "main.rs",
@@ -708,26 +571,16 @@ mod tests {
 
     #[test]
     fn folding_agrees_on_every_mixture_of_scripts_it_can_be_handed() {
-        // The fixed list above is what somebody thought of. This is the shape
-        // the fast path actually has to survive: ASCII runs of every length,
-        // broken by non-ASCII characters at every position, including at the
-        // very start and the very end and two in a row.
-        //
-        // It exists because the bulk-ASCII path is an optimisation whose only
-        // failure mode is silence. A fold that disagrees does not error — the
-        // file is stored under one spelling, searched for under another, and
-        // simply never found.
+        // The shape the bulk-ASCII path has to survive: runs of every length,
+        // broken by non-ASCII at every position, including both ends.
         let alphabet: &[&str] = &[
             "a", "Z", "9", "-", ".", " ", "_",
-            // Turkish, which is the whole reason the rules are what they are.
             "ı", "İ", "I", "i", "ş", "Ş", "ğ", "Ğ", "ç", "Ç", "ö", "Ö", "ü", "Ü",
-            // Elsewhere: two-byte, three-byte, four-byte, and one that folds
-            // to *two* characters.
+            // Two-byte, three-byte, four-byte, and one folding to two.
             "é", "Ω", "д", "中", "🙂", "ẞ", "\u{0307}",
         ];
         let mut f = Folded::new();
-        // Deterministic rather than random: a failure has to be reproducible
-        // by running the test again, and a seed nobody prints is not.
+        // Deterministic: a failure has to reproduce by running it again.
         let mut state: u64 = 0x243f_6a88_85a3_08d3;
         let mut next = |n: usize| -> usize {
             state = state

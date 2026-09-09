@@ -1,8 +1,5 @@
-//! How the numbers move when the corpus does.
-//!
-//! Everything else in this repository was measured at about a million entries,
-//! which is one point on a curve. This walks the curve — size, memory, build
-//! time and query latency — so that "it scales" is a table rather than a claim.
+//! How the numbers move when the corpus does: size, memory, build time and
+//! query latency across the curve, so that "it scales" is a table.
 //!
 //! `cargo run --release -p scour-index-native --example scale [max entries]`
 
@@ -34,8 +31,7 @@ const CASES: &[&str] = &[
 ];
 
 /// Memory this process owns, as opposed to mapped file pages the kernel can
-/// drop. The distinction is the whole point: an mmap'd index is not resident
-/// cost.
+/// drop: an mmap'd index is not resident cost.
 fn anon_mb() -> u64 {
     std::fs::read_to_string("/proc/self/smaps_rollup")
         .ok()

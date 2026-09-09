@@ -1,22 +1,9 @@
 //! What the disk-usage report costs, with a query and without one.
 //!
-//! The report used to walk every live row whatever was being asked, because it
-//! had no way to be asked anything narrower than a folder. Giving
-//! [`UsageRequest`] a query was expected to be free — the rollup then walks
-//! what a *search* walks, which is less — and "expected to be free" is the
-//! kind of claim this file exists to check.
+//! Two numbers: the unfiltered answer, which is the one the tab opens on, and
+//! the filtered ones against the number of rows each query matches. Read-only;
+//! point it at a copy:
 //!
-//! Two things are measured and both matter:
-//!
-//! * the **unfiltered** answer, which is the one the tab opens on and which
-//!   must not have got slower;
-//! * the **filtered** answers, against the number of rows each query matches,
-//!   because that is the ratio the whole argument rests on.
-//!
-//! Read-only. Point it at a copy, so a live service is neither blocked nor
-//! believed:
-//!
-//!   cp -a ~/.local/share/scour/index /tmp/idx
 //!   cargo run --release -p scour-index-native --example report -- /tmp/idx/native [scope]
 
 use std::time::Instant;
@@ -24,9 +11,9 @@ use std::time::Instant;
 use scour_core::{Index, Page, SearchRequest, SortKey, UsageRequest};
 use scour_index_native::NativeIndex;
 
-/// Queries worth timing, chosen to span the shapes the planner handles: a word
-/// (trigram-narrowed), an extension (read from the name), a kind (a column and
-/// a zone map), a date (a column), and one that matches nothing.
+/// Queries worth timing, spanning the shapes the planner handles: a word
+/// (trigram-narrowed), an extension, a kind (column and zone map), a date, and
+/// one that matches nothing.
 const QUERIES: [&str; 6] = [
     "",
     "osman",
@@ -105,10 +92,8 @@ fn main() {
             if q.is_empty() { "(no filter)" } else { q }
         );
 
-        // And what it answers, because a fast wrong number is worse than a
-        // slow right one. The children have to come to the root: they are the
-        // same tree the unfiltered report has, with the empty folders still in
-        // it, so the sum is a real check rather than a tautology.
+        // And what it answers: the children have to come to the root, over the
+        // same tree the unfiltered report has, empty folders included.
         if let Some(r) = answer {
             let kids: u64 = r.children.iter().map(|c| c.disk).sum();
             println!(

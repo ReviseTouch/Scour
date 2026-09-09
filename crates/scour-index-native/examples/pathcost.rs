@@ -1,20 +1,10 @@
 //! What a path search costs, and what it could cost.
 //!
-//! A term with a separator in it asks about the path, and the index answers by
-//! **building the path of every row**: a directory lookup, a join and a fold,
-//! 2.68 M times. Measured at 1.7 s.
+//! A term with a separator asks about the path, and the index builds the path
+//! of every row: 2.68 M lookups, joins and folds, 1.7 s. Rows live in far fewer
+//! directories than there are rows — 326,450 against 2,684,498 — so this
+//! measures reading the table once against a number per row.
 //!
-//! Nothing about that is necessary. The rows live in far fewer directories
-//! than there are rows — 326,450 against 2,684,498 on this machine, eight to
-//! one — and the directory is where nearly all of a path is. So the question
-//! is whether the same answer can be had by reading the directory table once
-//! and then looking at a number per row, and this measures both halves of it
-//! before anything is built on the idea.
-//!
-//! Read-only, and pointed at a copy:
-//!
-//!   cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
-//!   rm -f /var/tmp/idx/native/index.lock
 //!   cargo run --release -p scour-index-native --example pathcost -- /var/tmp/idx/native rapor
 
 use std::path::PathBuf;

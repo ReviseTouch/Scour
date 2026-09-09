@@ -2,15 +2,8 @@
 //!
 //! `cargo run --release -p scour-index-native --example folding`
 //!
-//! The claim under test: a search for a Turkish word costs seven times as much
-//! per row as a search for an English one, and the reason is that
-//! `Folded::fold_bytes` has a vectorised path for names that are entirely
-//! ASCII and a per-character one for everything else — so a single `ş`
-//! anywhere in a name moves the whole row onto the slow path.
-//!
-//! Measured on names rather than reasoned about, because the last two
-//! explanations for that seven times — the sort, and name length — were both
-//! wrong.
+//! `Folded::fold_bytes` has a vectorised path for wholly ASCII names and a
+//! per-character one otherwise, so one `ş` can move a whole row.
 
 use std::time::Instant;
 
@@ -68,9 +61,8 @@ fn main() {
     run("ascii", &ascii, rounds);
     run("turkish", &turkish, rounds);
 
-    // And the mix that matters: one non-ASCII character in an otherwise
-    // English name is enough to take the slow path, which is the shape most
-    // real corpora have.
+    // And the mix that matters: one non-ASCII character in an otherwise English
+    // name, which is the shape most real corpora have.
     let mut mixed = ascii.clone();
     for (i, n) in mixed.iter_mut().enumerate() {
         if i % 10 == 0 {

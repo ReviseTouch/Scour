@@ -4,11 +4,8 @@
 //! cargo run --release -p scour-index-native --example writepath -- 400000
 //! ```
 //!
-//! The path that changed when a row's identity became its path: every entry is
-//! hashed by path rather than by whatever the source called it, three columns
-//! stopped being written, and the old row of a re-upsert is found by path.
-//! Deliberately written against the public API only, so the same file compiles
-//! against the version before that change and the two can be compared.
+//! Written against the public API only, so it compiles against older versions
+//! of the crate and the two can be compared.
 
 use std::time::Instant;
 

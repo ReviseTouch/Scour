@@ -1,9 +1,8 @@
 //! CPU and wall time for one native-index commit.
 //!
-//! Diagnostic rather than a benchmark harness: pass an index, a source id and
-//! paths that are already in it. Replacing existing rows exercises both fixed
-//! parts of a desktop commit — publishing a segment and rewriting the touched
-//! alive bitmap — without timing process startup or index opening.
+//! Pass an index, a source id and paths already in it: replacing existing rows
+//! exercises both fixed parts of a desktop commit, publishing a segment and
+//! rewriting the touched alive bitmap, without timing startup or opening.
 
 use std::time::{Duration, Instant};
 

@@ -1,42 +1,8 @@
 //! Narrowing the walk to the blocks that could match.
 //!
-//! The scan answers every query correctly and most of them quickly, and the
-//! measurement said exactly where it does not: a *selective* substring. `rapor`
-//! matches fifteen files out of 1,197,514, so there is no page to fill and no
-//! count to reach, and the walk runs to the end — 28.9 ms where an inverted
-//! index answers in 1.7.
-//!
-//! This is that index, and it is deliberately the weakest one that closes the
-//! gap.
-//!
-//! ## It narrows; it never answers
-//!
-//! A posting list here holds **block numbers**, not rows: which groups of
-//! [`BLOCK`] rows contain a trigram. A query intersects the lists of its
-//! trigrams and the walk then visits only those blocks — where it applies the
-//! same exact byte comparison it always did.
-//!
-//! So the index cannot be wrong in the direction that matters. A name that
-//! contains the needle contains every trigram of the needle, so its block is in
-//! every one of those lists and survives the intersection: **no match can be
-//! missed**. A block that survives without containing a match costs a few
-//! microseconds of scanning and nothing else. The guarantee the whole design
-//! rests on — that this thing can be slow but not wrong — still holds.
-//!
-//! That is also why the blocks are 128 rows rather than one. It makes the lists
-//! thirty times shorter, and the false positives it admits are paid for at
-//! memory speed by code that was going to run anyway.
-//!
-//! ## What it declines to index
-//!
-//! A trigram present in most blocks narrows nothing, and those are the trigrams
-//! that would cost the most to store. They are recorded in the dictionary as
-//! *present but unindexed*, which is not the same as absent: absent means no
-//! row in this segment contains it, and that is an answer.
-//!
-//! Terms shorter than three bytes have no trigram at all and fall back to the
-//! full walk. That is worth stating plainly: it is slower, and it is an answer.
-//! A trigram index alone has to refuse them.
+//! A posting list holds *block numbers*, not rows: which groups of [`BLOCK`]
+//! rows hold a trigram. A name containing the needle holds every trigram of it,
+//! so no match is missed; a surviving block without one costs microseconds.
 
 use std::collections::HashMap;
 
@@ -44,23 +10,17 @@ use crate::columns::BLOCK;
 use crate::names::Folded;
 use crate::varint;
 
-/// A trigram is three consecutive bytes of the folded name.
-///
-/// Bytes rather than characters, which sounds wrong for text and is right here:
-/// the query is folded by the same code that folded the name, so both sides cut
-/// the same windows out of the same bytes. A window landing inside a multi-byte
-/// character is not a character, but it is the *same* not-a-character on both
-/// sides, which is all a filter needs.
+/// A trigram is three consecutive bytes of the folded name. Bytes, not
+/// characters: query and name are folded by the same code, so a window landing
+/// inside a multi-byte character is the same non-character on both sides.
 pub fn for_each(folded: &[u8], mut f: impl FnMut(u32)) {
     for w in folded.windows(3) {
         f((u32::from(w[0]) << 16) | (u32::from(w[1]) << 8) | u32::from(w[2]));
     }
 }
 
-/// Above this share of blocks, a trigram is not stored.
-///
-/// It would narrow the candidate set to most of the index while costing the
-/// largest posting list in the file — the worst trade available.
+/// Above this share of blocks a trigram is not stored: it would narrow to most
+/// of the index while costing the largest posting list in the file.
 const TOO_COMMON: f64 = 0.4;
 
 /// What the dictionary records for a trigram that is present everywhere.
@@ -74,32 +34,18 @@ struct List {
     bytes: Vec<u8>,
 }
 
-/// Collects, one block at a time.
-///
-/// The lists are delta-encoded as they are appended rather than buffered as
-/// numbers: blocks arrive in increasing order, so nothing needs sorting, and
-/// what is held is what will be written. Buffering the pairs instead would be
-/// eleven million of them at a million entries.
+/// Collects, one block at a time. Lists are delta-encoded as they are appended
+/// — blocks arrive in increasing order — so nothing is buffered or sorted.
 #[derive(Debug)]
 pub struct TrigramWriter {
     lists: HashMap<u32, List>,
-    /// Trigrams seen in the block being filled, as a bitmap over the whole
-    /// 24-bit key space plus the list of keys that were set.
-    ///
-    /// This was a `HashSet<u32>` and it was the single most expensive thing in
-    /// a scan: three bytes make a key, so there are only 2^24 of them, and
-    /// hashing a number that small to store it in a table costs more than
-    /// addressing it directly. The bitmap is 2 MB and lives for one segment;
-    /// the list is what makes clearing it proportional to what was set rather
-    /// than to the key space.
+    /// Trigrams seen in the block being filled: a bitmap over the whole 24-bit
+    /// key space — 2 MB, one segment — plus the keys set, so clearing costs
+    /// what was set rather than the key space.
     seen_bits: Vec<u64>,
     seen_list: Vec<u32>,
-    /// The writer folds, rather than trusting the caller to have folded.
-    ///
-    /// Not tidiness: a name indexed under its own spelling and searched for
-    /// under a folded one produces a *false negative*, which is the one failure
-    /// this design is not allowed to have. It was written the other way first
-    /// and the test caught `Colpan` being unfindable as `colpan`.
+    /// The writer folds rather than trusting the caller: a name indexed under
+    /// its own spelling and searched folded is a *false negative*.
     fold: Folded,
     block: u32,
     rows: usize,
@@ -305,11 +251,9 @@ impl<'a> TrigramIndex<'a> {
         out
     }
 
-    /// Blocks that could contain `folded`.
-    ///
-    /// `None` means "this cannot be narrowed usefully — walk everything", which
-    /// is a slower answer and never a wrong one. `Some(empty)` means the
-    /// segment genuinely holds nothing that matches.
+    /// Blocks that could contain `folded`. `None` means walk everything — a
+    /// slower answer, never a wrong one, and what a term under three bytes
+    /// gets. `Some(empty)` means the segment holds nothing that matches.
     pub fn candidates(&self, folded: &[u8]) -> Option<Vec<u32>> {
         if self.len == 0 || folded.len() < 3 {
             return None;
@@ -331,9 +275,8 @@ impl<'a> TrigramIndex<'a> {
         if lists.is_empty() {
             return None;
         }
-        // Cheapest first: the intersection can only shrink, so starting from
-        // the shortest list means every later pass is over the smallest set so
-        // far.
+        // Cheapest first: the intersection only shrinks, so every later pass
+        // is over the smallest set so far.
         lists.sort_unstable_by_key(|(count, _)| *count);
         let mut out = Self::decode(lists[0].0, lists[0].1);
         for (count, bytes) in &lists[1..] {
@@ -385,9 +328,8 @@ mod tests {
 
     #[test]
     fn every_matching_block_survives_the_intersection() {
-        // The only property that matters: a name containing the needle is in a
-        // block the candidate list keeps. A false positive is a few
-        // microseconds; a false negative is a file the user cannot find.
+        // A false positive costs microseconds; a false negative is a file the
+        // user cannot find.
         let names: Vec<String> = (0..2_000)
             .map(|i| match i % 7 {
                 0 => format!("rapor-{i}.pdf"),

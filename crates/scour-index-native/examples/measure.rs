@@ -2,8 +2,7 @@
 //!
 //! `cargo run --release -p scour-index-native --example measure`
 //!
-//! Not a test — it prints bytes per entry so that a claim in the module docs
-//! can be checked rather than repeated.
+//! Prints bytes per entry, so a claim in the module docs can be checked.
 
 use scour_index_native::{ColumnWriter, DirWriter, Field};
 use scour_mock::{MockOptions, generate};

@@ -1,16 +1,8 @@
 //! What a subtree weighs — the measurement behind the disk-usage report.
 //!
-//! The question TreeSize answers takes it minutes, because it walks the
-//! filesystem. Everything it needs is already in this index, and the layout
-//! happens to make the rollup nearly free:
-//!
-//! * every row carries the number of the directory it sits in;
-//! * directory numbers are handed out in **sorted path order**, so a subtree is
-//!   a contiguous range of them plus the directory's own number.
-//!
-//! So one pass over the rows gives every directory the bytes sitting *directly*
-//! in it, and one pass over the directory table — which is sorted, so a stack
-//! reconstructs the hierarchy — rolls those up into subtree totals.
+//! Every row carries its directory number, and directory numbers are in sorted
+//! path order, so one pass over the rows gives each directory what sits
+//! directly in it and one pass over the sorted table rolls those up.
 //!
 //! `cargo run --release -p scour-index-native --example rollup <index-dir> [top]`
 
@@ -55,10 +47,8 @@ fn main() {
             let t = Instant::now();
             let mut own_bytes = vec![0u64; n_dirs];
             let mut own_files = vec![0u32; n_dirs];
-            // And the same bytes split by how old they are. This is the thing
-            // no disk-usage tool shows and the one that decides what to delete:
-            // twenty-five gigabytes matters less than twenty-five gigabytes
-            // nothing has touched in a year.
+            // And the same bytes split by age — the thing that decides what to
+            // delete: 25 GB matters less than 25 GB untouched in a year.
             let mut own_age = vec![[0u64; BANDS]; n_dirs];
             for row in 0..rows {
                 if !seg.is_alive(row) {
@@ -75,10 +65,8 @@ fn main() {
             let pass1 = t.elapsed();
 
             // --- pass two: roll children into parents ------------------------
-            //
-            // The table is sorted by path, so a stack of open ancestors is
-            // enough: a directory whose path is not under the top of the stack
-            // closes it, and closing adds its total to whatever is below.
+            // The table is sorted by path, so a directory not under the top of
+            // the stack closes it and adds its total to whatever is below.
             let t = Instant::now();
             let mut total = vec![0u64; n_dirs];
             let mut files = vec![0u64; n_dirs];

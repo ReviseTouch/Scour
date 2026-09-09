@@ -1,19 +1,11 @@
 //! The rows of a segment, in folded-name order.
 //!
-//! Names are not a numeric column, so a page sorted by name used to walk every
-//! matching row before it could decide which rows won. The folded name arena
-//! already holds the exact comparison bytes; this file stores the result of
-//! sorting those bytes once, when the segment is built.
-//!
-//! The row list costs four bytes per row. One additional bit marks the start
-//! of each equal-name group. That bit is what makes descending order correct:
-//! reversing the whole row list would also reverse the newest-first/path-first
-//! tie order, while Scour deliberately keeps that tie order in both directions.
+//! Four bytes a row, plus one bit marking the start of each equal-name group.
+//! That bit is what makes descending order correct: reversing the row list
+//! would reverse the newest-first tie order too, and that stays in both.
 
-/// The rows of one segment in ascending folded-name order.
-///
-/// Read in place out of a mapped file: a count, one 32-bit row number per row,
-/// then one bit per position marking the start of an equal-name group.
+/// The rows of one segment in ascending folded-name order: a count, one 32-bit
+/// row number per row, then one bit per position starting an equal-name group.
 #[derive(Debug, Clone, Copy)]
 pub struct NameOrder<'a> {
     rows: usize,
@@ -22,10 +14,8 @@ pub struct NameOrder<'a> {
 }
 
 impl<'a> NameOrder<'a> {
-    /// Open the file, or refuse a malformed one.
-    ///
-    /// Absence is handled by the segment reader as a legacy segment. A file
-    /// that is present has to describe all of its rows exactly.
+    /// Open the file, or refuse a malformed one: a present file has to describe
+    /// all of its rows exactly. Absence is the segment reader's business.
     pub fn open(bytes: &'a [u8]) -> Option<NameOrder<'a>> {
         let rows = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
         let order_len = rows.checked_mul(4)?;
@@ -61,12 +51,8 @@ impl<'a> NameOrder<'a> {
         ((row as usize) < self.rows).then_some(row)
     }
 
-    /// The start of the group containing position `i`.
-    ///
-    /// Descending text order reads primary-key groups from the end while
-    /// retaining forward row order inside each group. Looking one bit at a
-    /// time makes a million-row tie a million branches before the first page;
-    /// scanning the compact boundary bytes keeps that case cheap.
+    /// The start of the group containing position `i`, by scanning the boundary
+    /// bytes: bit at a time makes a million-row tie a million branches.
     pub(crate) fn group_at_or_before(&self, i: usize) -> Option<usize> {
         if i >= self.rows {
             return None;
@@ -89,32 +75,22 @@ impl<'a> NameOrder<'a> {
     }
 }
 
-/// Order rows by their already-folded names.
-///
-/// `names` is the unpacked, NUL-terminated folded arena held by
-/// [`crate::NameWriter`] while a segment is being built. Rows already have the
-/// stored newest-first/path-first order, so the row number is the exact tie
-/// breaker used by a name sort.
+/// Order rows by their already-folded names. Rows carry the stored newest-first
+/// order, so the row number is exactly the tie breaker a name sort wants.
 #[cfg(test)]
 fn build(rows: usize, names: &[u8], order: Vec<u32>) -> Vec<u8> {
     build_reusing(rows, names, order).0
 }
 
-/// Build the name order and return its row-list allocation for another order.
-///
-/// A full rebuild has one `u32` scratch slot per row already. Returning it
-/// after serialisation lets the extension order reuse those same bytes instead
-/// of adding another four bytes per row to peak memory.
+/// Build the name order and hand its row-list allocation back, so the extension
+/// order reuses those bytes rather than adding four per row to peak memory.
 pub(crate) fn build_reusing(rows: usize, names: &[u8], order: Vec<u32>) -> (Vec<u8>, Vec<u32>) {
     build_keyed(rows, names, order, |name| name, None)
 }
 
-/// Build this grouped-row format using one derived key per name.
-///
-/// When `eligible` is present, a clear row bit gives that row an empty key.
-/// The extension order uses this to remember eligibility derived from the raw
-/// spelling while comparing bytes derived from the folded spelling, without
-/// keeping a second four-byte offset table during a rebuild.
+/// Build this grouped-row format using one derived key per name. A clear bit in
+/// `eligible` gives that row an empty key — eligibility decided pre-fold, keys
+/// compared post-fold, without a second offset table.
 pub(crate) fn build_keyed(
     rows: usize,
     names: &[u8],
@@ -138,10 +114,6 @@ pub(crate) fn build_keyed(
         if allowed { key(name(row)) } else { b"" }
     };
 
-    // The segment builder hands over its directory-number scratch here. It is
-    // dead after the columns have been written and already has one `u32` of
-    // capacity per row, so reusing it avoids another four-byte-per-row peak
-    // during a full rebuild.
     order.clear();
     order.extend(0..rows as u32);
     order.sort_unstable_by(|&a, &b| value(a).cmp(value(b)).then(a.cmp(&b)));

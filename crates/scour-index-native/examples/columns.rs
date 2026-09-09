@@ -2,14 +2,8 @@
 //!
 //! `cargo run --release -p scour-index-native --example columns <index-dir>`
 //!
-//! Sixteen numbers a row sounds like a lot and the total is 33 bytes an entry,
-//! so the obvious question is which of them to drop. The obvious answer is
-//! wrong in both directions, which is why this exists: the columns are
-//! bit-packed per block against that block's minimum, so a column that barely
-//! varies costs almost nothing however many rows there are, and a column of
-//! independent timestamps costs nearly its full width.
-//!
-//! Point it at a **copy** of an index — the service holds a writer lock.
+//! Columns are bit-packed per block against that block's minimum, so a column
+//! that barely varies costs almost nothing. Point it at a **copy**.
 
 use scour_index_native::{ColumnWriter, Field, Live};
 
@@ -63,9 +57,8 @@ fn main() {
             row[f as usize] = v;
             w.push(row);
         }
-        // The empty writer is the floor: headers and the per-block bookkeeping
-        // of the other columns held at zero. Subtracting it leaves what this
-        // column actually costs.
+        // The empty writer is the floor — headers and per-block bookkeeping —
+        // so subtracting it leaves what this column actually costs.
         let with = w.finish().len();
         let mut e = ColumnWriter::new();
         for _ in 0..rows {

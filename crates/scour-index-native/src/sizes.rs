@@ -1,52 +1,9 @@
-//! What a folder weighs, as fast as reading a column.
+//! What a folder weighs, in O(1) per folder.
 //!
-//! `usage.rs` answers this too, and answers more of it — the age spread, the
-//! heaviest children, the whole tree at once — in 384 ms over this disk. That
-//! is a report. A *column* needs the same number for thirty folders on a page
-//! between two keystrokes, and three hundred milliseconds a folder is not a
-//! column, it is a wait.
-//!
-//! ## Why it can be O(1)
-//!
-//! Directory numbers are handed out in **sorted path order**, so a subtree is
-//! a contiguous run of them. Two runs, in fact — a sibling can sort between a
-//! directory and its children, because `Projeler-414` falls between `Projeler`
-//! and `Projeler/Belgeler` — which [`DirTable::subtree`] already knows and
-//! answers with two binary searches.
-//!
-//! A contiguous run plus a **prefix sum over those numbers** is a subtraction.
-//! So: one pass over a segment's rows to total what sits directly in each
-//! directory, one pass over the directories to prefix-sum it, and after that
-//! every folder in that segment costs two binary searches and some arithmetic.
-//!
-//! Measured on this index — 17 segments, 247,541 directories, 1.97 M rows:
-//! **90 ms to build, 3.8 MB, 12.1 µs a folder, 0.36 ms for a page of thirty**.
-//!
-//! ## Why it stays right
-//!
-//! **A segment's bytes never change.** Once written it is immutable, so its
-//! prefix sums are too — except for one thing, which is which of its rows are
-//! still alive. That is what [`Live::deaths`] is for: a count that moves only
-//! when a row is retired, compared in `O(1)`, and a segment whose count has
-//! moved is rebuilt. In practice the large segments are cold and the small
-//! newest one is what churns, so the steady-state cost is rebuilding a segment
-//! of a few thousand rows rather than of two million.
-//!
-//! ## Hard links, and why this cannot simply add up sizes
-//!
-//! A file with four names is four rows, so summing `Disk` over a tree counts
-//! its blocks four times. Each row carries its share — `disk / links` — which
-//! is exactly what `usage.rs` does, and it has to be exactly what `usage.rs`
-//! does or the column disagrees with the report printed beside it. There is a
-//! test that holds them to each other.
-//!
-//! ## What the number is, and is not
-//!
-//! It is the size of **what this index holds** under that folder. `target/`,
-//! `node_modules/` and everything else the rules exclude are not in it, so it
-//! reads smaller than `du` and the interface says so rather than hiding it.
-//! Making it agree with `du` would take a walk of the filesystem, which is the
-//! thing this whole design exists to avoid.
+//! Directory numbers are handed out in sorted path order, so a subtree is one
+//! or two contiguous runs ([`DirTable::subtree`]) and a prefix sum over them is
+//! a subtraction — 90 ms to build and 12.1 µs a folder over 1.97 M rows. Only
+//! what this index holds is counted, so it reads smaller than `du`.
 
 use std::collections::HashMap;
 
@@ -54,30 +11,18 @@ use crate::columns::Field;
 use crate::search::Segment;
 use crate::segment::Live;
 
-/// One segment's totals, by directory number, prefix-summed.
-///
-/// `disk[i]` is everything in directories `0..i`, so the total of the run
-/// `a..b` is `disk[b] - disk[a]`. One extra slot at the end, which is what
-/// makes that true for the last directory as well.
+/// One segment's totals, by directory number, prefix-summed: `disk[i]` covers
+/// directories `0..i`, so the run `a..b` totals `disk[b] - disk[a]`. One extra
+/// slot at the end makes that true for the last directory too.
 #[derive(Debug, Default)]
 pub struct Prefix {
     disk: Vec<u64>,
     files: Vec<u64>,
-    /// What each *directory row* has under it, by row number, in row order.
-    ///
-    /// **Because a folder that is shown as `~13 GB` has to sort as 13 GB.**
-    /// A directory's `Size` column is its own entry table — four kilobytes —
-    /// so ordering by it put every folder behind every file bigger than a
-    /// block, which on a page of two hundred means folders vanish from a
-    /// size-sorted list entirely. Showing one number and ordering by another
-    /// is the kind of wrongness that reads as a broken sort.
-    ///
-    /// Sorted by row already, because the pass that fills it goes in row
-    /// order, so a lookup is a binary search over a compact entry rather
-    /// than a hash of a path.
+    /// What each *directory row* has under it, so a folder shown as `~13 GB`
+    /// sorts as 13 GB rather than by its `Size` column, which is four kilobytes
+    /// of entry table. In row order, so a lookup is a binary search.
     by_row: Vec<(u32, i64)>,
-    /// What the segment's death count was when this was built. Anything else
-    /// means the alive bits have moved and these numbers are stale.
+    /// The segment's death count when this was built; anything else is stale.
     deaths: u64,
 }
 
@@ -90,8 +35,7 @@ impl Prefix {
 
     fn rebuild(&mut self, seg: &Segment<'_>, deaths: u64) {
         let n = seg.dirs.len();
-        // Readers hold the cache lock, so refresh in the existing buffers.
-        // Building a replacement first kept two complete tables at the peak.
+        // Refreshed in the existing buffers: a replacement would double the peak.
         self.disk.resize(n + 1, 0);
         self.files.resize(n + 1, 0);
         self.disk.fill(0);
@@ -99,10 +43,8 @@ impl Prefix {
         let (disk, files) = (&mut self.disk, &mut self.files);
         let mut directory_rows = 0;
         for row in 0..seg.rows() {
-            // Directories are skipped, not because their own size is large but
-            // because it is meaningless: a directory's `st_size` is the size of
-            // its *entry table*, and adding it to a subtree total would report
-            // a few kilobytes of bookkeeping as content.
+            // A directory's `st_size` is its entry table, not content, so its
+            // own row is skipped. A row's share of a hard link is `disk/links`.
             if !seg.is_alive(row) {
                 continue;
             }
@@ -118,8 +60,7 @@ impl Prefix {
             disk[d] += seg.num_of(Field::Disk, row).max(0) as u64 / links;
             files[d] += 1;
         }
-        // In place, and shifted by one: after this, `v[i]` is everything
-        // *before* `i`.
+        // Shifted by one: after this `v[i]` is everything *before* `i`.
         for v in [&mut *disk, &mut *files] {
             let mut run = 0u64;
             for slot in v.iter_mut() {
@@ -128,10 +69,8 @@ impl Prefix {
                 run += own;
             }
         }
-        // The rows that *are* directories, and what is under each.
-        //
-        // dir_id is the parent. A bounded direct-mapped cache reuses decoded
-        // parents without retaining a String for every directory in the index.
+        // The rows that *are* directories. `dir_id` is the parent; a bounded
+        // cache reuses decoded parents rather than retaining one String each.
         self.by_row.clear();
         self.by_row.reserve_exact(directory_rows);
         let mut parents = ParentPaths::default();
@@ -179,10 +118,8 @@ impl Prefix {
                 files += b.saturating_sub(*a);
             }
         };
-        // The directory's own row is not adjacent to its descendants, so it is
-        // a run of one and has to be added separately. Forgetting it loses
-        // whatever sits *directly* in the folder — which on a folder holding
-        // only files is the entire answer, and reads as zero.
+        // The directory's own row is not adjacent to its descendants: a run of
+        // one, holding whatever sits directly in the folder.
         if let Some(own) = scope.own {
             add(own as usize, own as usize + 1);
         }
@@ -194,20 +131,15 @@ impl Prefix {
 /// The prefix sums for every segment, kept until the segment changes.
 #[derive(Debug, Default)]
 pub struct Cache {
-    /// By segment number, which is stable — a segment is never renumbered,
-    /// only folded away and replaced by a new one.
+    /// By segment number, which is stable: a segment is never renumbered.
     per_segment: HashMap<u64, Prefix>,
 }
 
 impl Cache {
-    /// Bring the cache up to date with these segments, then answer for each
-    /// path: bytes on disk, and how many files.
-    ///
-    /// Both in one call, because the expensive half is bringing the cache up
-    /// to date and a page asks about thirty folders at once.
+    /// Bring the cache up to date, then answer for each path: bytes on disk and
+    /// file count. One call, because a page asks about thirty folders at once.
     pub fn subtrees(&mut self, segments: &[Live], paths: &[String]) -> Vec<(u64, u64)> {
         // Retire folded-away segments before allocating their replacements.
-        // The segment list is small; no temporary set or duplicate caches.
         self.per_segment
             .retain(|number, _| segments.iter().any(|live| live.number == *number));
         let mut out = vec![(0u64, 0u64); paths.len()];
@@ -233,12 +165,9 @@ impl Cache {
         out
     }
 
-    /// What each directory row in this segment has under it — the table the
-    /// sort reads, so that a folder shown as `~13 GB` orders as 13 GB.
-    ///
-    /// `None` when the segment has no entry yet, which means nothing has asked
-    /// for a folder size since it appeared. The sort then falls back to the
-    /// stored column, which is the old behaviour rather than a wrong one.
+    /// What each directory row has under it — the table the sort reads. `None`
+    /// until something asks for a folder size; the sort then falls back to the
+    /// stored column.
     pub fn rows_of(&self, segment: u64) -> Option<&[(u32, i64)]> {
         self.per_segment.get(&segment).map(|p| &p.by_row[..])
     }

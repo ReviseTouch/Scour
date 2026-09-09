@@ -1,15 +1,8 @@
 //! The rows of a segment, in folded-extension order.
 //!
-//! Extension *eligibility* comes from the spelling: the suffix after the last
-//! dot has to be one to twelve bytes before folding. Its comparison key comes
-//! from the folded arena and may be longer, because Unicode folding can change
-//! byte length. Discovering which rows own the first page used to walk every
-//! row; this stores that decision once when the segment is built.
-//!
-//! The on-disk representation is deliberately the same grouped-row format as
-//! [`crate::NameOrder`]. Equal extensions are one large tie group, often tens
-//! of thousands of rows, and their row order is load-bearing: newest first,
-//! then path, independently of the requested primary-key direction.
+//! Eligibility comes from the spelling — one to twelve bytes after the last dot,
+//! before folding — while the key comes from the folded arena and may be longer.
+//! Grouped as [`crate::NameOrder`]; within a group: newest first, then path.
 
 use crate::name_order::NameOrder;
 
@@ -45,9 +38,7 @@ impl<'a> ExtensionOrder<'a> {
 }
 
 /// Order rows by the complete folded extension of each eligible spelled name.
-///
-/// `order` is returned by the name-order build, so this second text order adds
-/// no second row-list allocation to rebuild peak memory.
+/// `order` comes from the name-order build, so no second row list is allocated.
 pub(crate) fn build(rows: usize, spelled: &[u8], folded: &[u8], order: Vec<u32>) -> Vec<u8> {
     let eligible = eligible_rows(rows, spelled);
     crate::name_order::build_keyed(rows, folded, order, extension, Some(&eligible)).0
@@ -139,8 +130,7 @@ mod tests {
     fn eligibility_is_decided_before_folding_changes_the_byte_length() {
         use scour_core::text::{DefaultFolder, Folder};
 
-        // Seven dotless i characters are fourteen raw bytes, so this is not
-        // an extension even though Scour's Turkish fold contracts it to seven.
+        // Fourteen raw bytes, so not an extension, though the fold makes seven.
         let contracted = format!("x.{}", "ı".repeat(7));
         let contracted_folded = DefaultFolder.fold(&contracted);
         assert_eq!(
@@ -148,9 +138,8 @@ mod tests {
             b""
         );
 
-        // U+023A is two bytes and lowercases to U+2C65, which is three. Six
-        // fit the raw twelve-byte limit while their complete folded key is
-        // eighteen bytes and must not be truncated to the raw limit.
+        // U+023A is two bytes and folds to three, so six fit the raw limit while
+        // the key is eighteen bytes and must not be truncated to it.
         let growing_ext = "Ⱥ".repeat(6);
         assert_eq!(growing_ext.len(), 12);
         let growing = format!("x.{growing_ext}");

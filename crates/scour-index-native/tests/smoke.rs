@@ -1,13 +1,8 @@
 //! The index, checked against the truth.
 //!
 //! Every search here is compared with [`scour_mock::brute_force`], which looks
-//! at every entry and cannot take a shortcut. The engine this replaces had
-//! five defects found this way, three of which returned a *fast, wrong*
-//! answer — a timing benchmark called all three a success.
-//!
-//! A hand-written index has strictly more surfaces like that than a library
-//! does, which is exactly why this file exists before the index is wired to
-//! anything.
+//! at every entry and cannot take a shortcut. A hand-written index has more
+//! surfaces that return a fast, wrong answer than a library does.
 
 use scour_core::{Entry, EntryId, Meta, SortKey, SourceId};
 use scour_index_native::{
@@ -185,11 +180,9 @@ fn results_match_brute_force_for_every_kind_of_term() {
         "size:<1kb",
         "size:=0",
         "path:eski-arsiv",
-        // **The three shapes a path term comes in**, because the fast answer
-        // is built from a directory table and each of them reaches it a
-        // different way: inside a directory, straddling the separator between
-        // the directory and the name, and — with no separator at all — inside
-        // the name.
+        // The three shapes a path term comes in, each reaching the directory
+        // table a different way: inside a directory, straddling the separator,
+        // and — with no separator at all — inside the name.
         "Projeler/eski-arsiv",
         "eski-arsiv/rapor",
         "path:/home/u",
@@ -310,10 +303,8 @@ fn empty_relevance_has_one_tie_order_in_both_directions() {
 
 #[test]
 fn a_count_cap_never_changes_which_rows_win() {
-    // The bug this exists for: capping the count also stopped the walk, so
-    // "the largest forty" quietly became "the largest forty among the five
-    // hundred newest" — a plausible answer to a different question. The cap
-    // may bound the *total*; it may never bound the *result*.
+    // The cap may bound the *total*; it may never bound the *result*. Stopping
+    // the walk makes "the largest forty" mean "among the five hundred newest".
     let f = Fixture::new(20_000);
     let seg = f.segment();
     let plan = Plan::compile(&parse_at("ext:rs", NOW), &seg).expect("compile");
@@ -341,18 +332,10 @@ fn a_count_cap_never_changes_which_rows_win() {
     assert_eq!(by_size(1), want);
 }
 
-/// Ordering by a number opens a page of blocks, not all of them.
-///
-/// The claim: each block records the range of every column, so the blocks can
-/// be put in the order of what they can reach and abandoned once the page is
-/// beyond them. What has to survive it is the answer — every one of these is
-/// compared against the reference that looks at every entry.
-///
-/// `Kind` is the awkward one and is here for that. A handful of values covers
-/// the whole corpus, so a block that can only *equal* the worst row held is
-/// commonplace — and such a block is not out of reach, because the page breaks
-/// ties on the row and its rows may come first. A version that stopped on
-/// "equal" would return the right values from the wrong rows.
+/// Ordering by a number opens a page of blocks, not all of them: each block
+/// records the range of every column. `Kind` is the awkward one — a handful of
+/// values covers the corpus, so a block that can only *equal* the worst row
+/// held is commonplace, and its rows may still come first.
 #[test]
 fn a_numeric_order_opens_a_page_of_blocks_rather_than_all_of_them() {
     let f = Fixture::new(50_000);
@@ -404,26 +387,10 @@ fn a_numeric_order_opens_a_page_of_blocks_rather_than_all_of_them() {
     }
 }
 
-/// A block that can only *equal* the page's worst row is still opened.
-///
-/// **The one-character version of this optimisation that is wrong.** Blocks are
-/// opened best first and the walk ends when the page's worst row beats
-/// everything the next block could hold — but "beats" may not be weakened to
-/// "is not beaten by". The page's second key is the row, so a block whose best
-/// merely ties the worst row held still displaces it whenever its rows come
-/// first.
-///
-/// The corpus is shaped to make that difference visible rather than to look
-/// like a disk. Dates fall by one a row, so a row number is known rather than
-/// guessed at. Every file is empty except twenty-five, one in each of the last
-/// twenty-five blocks — so those blocks are opened first, and the page fills
-/// with their *empty* rows, which live at the very end of the segment. Every
-/// remaining block ties them at zero, and every one of them holds earlier rows
-/// that belong in the page instead.
-///
-/// Stopping on the tie returns twenty-five eight-kilobyte files and fifteen
-/// empty ones: the right sizes, in the right order, and the wrong fifteen
-/// files. Only the reference can tell the two apart.
+/// A block that can only *equal* the page's worst row is still opened: "beats
+/// everything the next block could hold" may not be weakened to "is not beaten
+/// by", the second key being the row. The corpus is shaped so that stopping on
+/// the tie returns the right sizes in the right order from the wrong rows.
 #[test]
 fn a_block_that_only_ties_the_page_is_still_opened() {
     let entries: Vec<Entry> = (0..4_000i64)
@@ -435,9 +402,8 @@ fn a_block_that_only_ties_the_page_is_still_opened() {
                 is_dir: false,
                 meta: Meta {
                     mtime: NOW - i,
-                    // One a block, in the last quarter of the segment. A block
-                    // holds thirty-two rows — see `columns::BLOCK`, which this
-                    // deliberately depends on.
+                    // One a block, in the last quarter of the segment; a block
+                    // holds thirty-two rows, `columns::BLOCK`.
                     size: if i >= 3_200 && i % 32 == 0 { 8_192 } else { 0 },
                     ..Meta::UNKNOWN
                 },
@@ -461,12 +427,9 @@ fn a_block_that_only_ties_the_page_is_still_opened() {
     );
 }
 
-/// The count is not what stops the selection, and a deep page proves it.
-///
-/// At an offset the page is twenty thousand rows wide, so the boundary that
-/// ends the walk is the twenty-thousandth best rather than the fortieth — and
-/// a bound taken from the wrong end of the selection would still look right at
-/// offset zero.
+/// The count is not what stops the selection, and a deep page proves it: at an
+/// offset the boundary is the twenty-thousandth best, not the fortieth, and a
+/// bound from the wrong end of the selection looks right at offset zero.
 #[test]
 fn a_deep_page_of_a_numeric_order_is_the_page_it_would_have_been() {
     let f = Fixture::new(20_000);
@@ -649,9 +612,8 @@ fn short_terms_are_answered_rather_than_refused() {
 
 #[test]
 fn a_selective_term_stops_reading_the_corpus() {
-    // The reason the trigram filter exists, and the assertion that it is
-    // actually being taken: a name that occurs once must not cost a walk of
-    // fifty thousand rows.
+    // The filter has to actually be taken: a name occurring once must not cost
+    // a walk of fifty thousand rows.
     let f = Fixture::new(50_000);
     let mut times: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for e in &f.entries {
@@ -693,9 +655,8 @@ fn a_selective_term_stops_reading_the_corpus() {
 
 #[test]
 fn narrowing_never_loses_a_match() {
-    // Every substring of every name, checked against the walk that cannot take
-    // a shortcut. A false positive here is microseconds; a false negative is a
-    // file the user cannot find, and nothing would report it.
+    // Every substring of every name against the walk that takes no shortcut. A
+    // false positive is microseconds; a false negative is an unfindable file.
     let f = Fixture::new(20_000);
     let mut tried = 0;
     for e in f.entries.iter().step_by(97) {
@@ -717,9 +678,8 @@ fn narrowing_never_loses_a_match() {
 
 #[test]
 fn an_extension_and_a_glob_narrow_the_same_way_a_substring_does() {
-    // `*.pdf` and `ext:pdf` are the same question as "contains .pdf", and a
-    // rare extension is as selective as a rare name. Both still have to agree
-    // with the walk that cannot take a shortcut.
+    // `*.pdf` and `ext:pdf` are the same question as "contains .pdf"; a rare
+    // extension is as selective as a rare name.
     let f = Fixture::new(50_000);
     let seg = f.segment();
     for q in ["ext:pdf", "*.pdf", "rap*or", "ext:rs;toml", "ext:rs"] {
@@ -746,9 +706,8 @@ fn an_extension_and_a_glob_narrow_the_same_way_a_substring_does() {
 
 #[test]
 fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
-    // The zone map. A block whose sizes are all under a megabyte cannot hold a
-    // file over one, and rejecting it costs two comparisons against numbers
-    // that were already in the file.
+    // The zone map: a block whose sizes are all under a megabyte cannot hold a
+    // file over one, and rejecting it is two comparisons.
     let f = Fixture::new(50_000);
     let seg = f.segment();
     for q in ["size:>1mb", "kind:image", "folder:", "dc:>2024-01-01"] {
@@ -772,9 +731,8 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
         );
     }
 
-    // And it has to actually skip, or it is only a slower way to be correct.
-    // Calibrated from the fixture rather than guessed: no file is larger than
-    // the largest file, so every block can be rejected on its maximum alone.
+    // And it has to actually skip. Calibrated from the fixture: no file is
+    // larger than the largest, so every block is rejected on its maximum.
     let biggest = f
         .entries
         .iter()
@@ -820,13 +778,9 @@ fn a_numeric_filter_skips_blocks_it_cannot_satisfy() {
 
 #[test]
 fn ties_come_back_newest_first() {
-    // The tie-break, pinned on its own rather than only against the reference:
-    // both were changed together, and a test that compares them proves they
-    // agree, not that either is right.
-    //
-    // Sorting by kind puts every code file at the same value. Which forty of
-    // them appear is decided by the stored order — newest first — because that
-    // is both the useful answer and the one that costs nothing.
+    // The tie-break pinned on its own: comparing against the reference proves
+    // they agree, not that either is right. Sorting by kind ties every code
+    // file, and which forty appear is the stored order — newest first.
     let f = Fixture::new(20_000);
     let seg = f.segment();
     let plan = Plan::compile(&parse_at("kind:code", NOW), &seg).expect("compile");
@@ -864,9 +818,8 @@ fn ties_come_back_newest_first() {
 
 #[test]
 fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
-    // Names are selected on their first eight bytes. Rows that share those
-    // eight still have to be compared properly, or a page of files whose names
-    // begin alike comes back in the wrong order.
+    // Names are selected on their first sixteen bytes; rows sharing those must
+    // still be compared in full, or names beginning alike come back unordered.
     let tmp: Vec<Entry> = (0..300)
         .map(|i| Entry {
             id: scour_core::EntryId::inode(scour_core::SourceId(0), 1, i),
@@ -915,9 +868,7 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
 #[test]
 fn a_query_with_no_name_test_still_sorts_by_name_correctly() {
     // The row-driven walk skips the name arena, which is right until the sort
-    // key is the name. It was not asked, and the result was forty rows chosen
-    // out of a corpus where every sort key had come back identical — correct by
-    // accident, and at the cost of building every row.
+    // key is the name — then every key comes back identical.
     let f = Fixture::new(20_000);
     for q in ["", "size:>1kb", "kind:code"] {
         for key in [SortKey::Name, SortKey::Ext, SortKey::Path] {

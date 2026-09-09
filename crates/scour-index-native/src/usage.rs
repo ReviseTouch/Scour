@@ -1,45 +1,8 @@
-//! What a subtree weighs.
+//! What a subtree weighs, without walking the filesystem.
 //!
-//! The question TreeSize takes minutes to answer, because it walks the
-//! filesystem. Everything it needs is already here, and two properties of the
-//! layout make the answer nearly free:
-//!
-//! * every row carries the number of the directory it sits in, as a column;
-//! * directory numbers are handed out in **sorted path order**, so the table
-//!   itself is a depth-first walk of the tree and a stack of open ancestors is
-//!   the whole of the hierarchy.
-//!
-//! So: one pass over the rows gives every directory what sits *directly* in it,
-//! and one pass over the directory table rolls those into subtree totals. No
-//! path is reconstructed to add up a number, and nothing is stored.
-//!
-//! ## Why this is not one pass per segment
-//!
-//! A directory has a different number in every segment that holds rows in it,
-//! and the same path can be in all of them. Rolling up per segment and adding
-//! the answers gives the right total for a leaf and the wrong one for anything
-//! above it, because each segment's stack closes ancestors the others also
-//! close. So the per-directory *own* totals are merged by path first, and the
-//! rollup runs once over the merged, sorted list.
-//!
-//! ## Hard links, and the premise that stopped being true
-//!
-//! This used to say that no work was needed: a file with four names had one
-//! inode, an inode was an identity, and the index held one row for it. Identity
-//! became the **path**, because an inode is a promise about an object and a row
-//! is a name — and the moment it did, a four-name file became four rows and
-//! this file started counting its blocks four times.
-//!
-//! Each row carries its share instead: `disk / links`, with `links` straight
-//! from `st_nlink`. The total over a tree is then the space the tree really
-//! occupies, whatever order the walk took. It is not what `du` does — `du`
-//! charges the whole file to whichever name it meets first, so its per-folder
-//! numbers depend on traversal order — but the two agree on the total, and this
-//! one does not change when a directory is renamed.
-//!
-//! The division truncates, so a file with an odd allocation and two names
-//! loses a byte across the pair. Against block sizes of 4,096 that is not a
-//! number anybody can see.
+//! Directory numbers are handed out in sorted path order, so the table is a
+//! depth-first walk and a stack of open ancestors is the hierarchy. Own totals
+//! merge by path across segments first: a directory is numbered per segment.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -83,13 +46,9 @@ impl Own {
     }
 }
 
-/// The accumulator a caller drives one segment at a time.
-///
-/// Split from [`NativeIndex`] so that the merge across segments is visible:
-/// [`Rollup::add_segment`] is the linear pass over rows, and
-/// [`Rollup::finish`] is the one that sorts paths and walks the tree.
-///
-/// [`NativeIndex`]: crate::NativeIndex
+/// The accumulator a caller drives one segment at a time:
+/// [`Rollup::add_segment`] is the linear pass over rows, and [`Rollup::finish`]
+/// sorts the paths and walks the tree.
 pub struct Rollup<'a> {
     req: &'a UsageRequest,
     now: i64,
@@ -120,37 +79,11 @@ impl<'a> Rollup<'a> {
     }
 
     /// Accumulate one segment's rows.
-    ///
-    /// The directory numbers are resolved to paths once each rather than once
-    /// per row — there are two orders of magnitude more rows than directories,
-    /// and a path is a decode and an allocation.
-    ///
-    /// ## The two walks
-    ///
-    /// With no query this visits every row, because every row is wanted. With
-    /// one it hands the walk to [`walk_matches`] — the same narrowing a search
-    /// gets, trigram blocks and zone maps and all.
-    ///
-    /// That saves less than it sounds like it should, and knowing why matters
-    /// before anybody optimises the wrong half: **the row walk is not where
-    /// the report's time goes.** The directory loop below is, and it runs over
-    /// every wanted directory whatever was asked. Whole index, 2,228,623 rows
-    /// in 255,869 directories: 376 ms unfiltered, and still 243 ms for a query
-    /// that matches nothing at all. Scoping is the lever that works — the same
-    /// two under one folder are 57 ms and 13.9 ms.
-    ///
-    /// The unfiltered case keeps its own loop instead of running an empty plan
-    /// through the same door. An empty plan accepts every row, so the answer
-    /// would be identical; what it would add is a closure call and a block
-    /// list on the path that walks two million rows, and this is the path the
-    /// tab opens on.
-    ///
-    /// **Directories are entered whether or not they hold a match.** The
-    /// rollup's tree is the set of paths in `own`, and dropping the empty ones
-    /// would break it in a way that reads as a bug in the totals: a folder
-    /// missing between the scope and a match makes the match roll up into a
-    /// grandparent, so the headline counts bytes that no row beneath it
-    /// admits to. They cost a decode each and they sort to the bottom.
+    /// Directory numbers are resolved to paths once each, not once per row, and
+    /// a directory is entered whether or not it holds a match: dropping the
+    /// empty ones rolls a match up into a grandparent. The directory loop is
+    /// the cost, not the row walk — 376 ms unfiltered over 2,228,623 rows and
+    /// 243 ms for a query matching nothing; scoped to a folder, 57 and 13.9 ms.
     pub fn add_segment(&mut self, seg: &Segment<'_>) -> Result<()> {
         let n_dirs = seg.dirs.len();
         let mut per_dir = vec![Own::default(); n_dirs];
@@ -177,9 +110,8 @@ impl<'a> Rollup<'a> {
         }
 
         for (id, o) in per_dir.iter().enumerate() {
-            // A directory with nothing directly in it still has to be here:
-            // it may be an ancestor the rollup needs, and its path is what the
-            // stack closes against.
+            // A directory with nothing directly in it is still an ancestor the
+            // rollup needs, and its path is what the stack closes against.
             if !wanted[id] {
                 continue;
             }
@@ -196,9 +128,8 @@ impl<'a> Rollup<'a> {
         let mut dirs: Vec<(String, Own)> = std::mem::take(&mut self.own).into_iter().collect();
         dirs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
-        // Sorted by path, so a stack of open ancestors is the hierarchy: a
-        // directory that is not under the top of the stack closes it, and
-        // closing adds its total to whatever is below.
+        // Sorted by path: a directory not under the top of the stack closes it,
+        // and closing adds its total to whatever is below.
         let mut total: Vec<Own> = dirs.iter().map(|(_, o)| *o).collect();
         let mut stack: Vec<usize> = Vec::new();
         for id in 0..dirs.len() {
@@ -229,33 +160,14 @@ impl<'a> Rollup<'a> {
             age: total[i].age,
         };
 
-        // **With no scope there is no single root**, and taking the first row
-        // as one was wrong in a way that looked right. Rows are sorted by path,
-        // so on an index of `/home/hasan` and `/mnt/depo` the first row is
-        // under `/home` — and the answer came back naming `/home`, totalling
-        // only `/home`, and looking complete. Measured on this machine when
-        // the report tab was first wired to it: 93.8 GiB reported against
-        // 384.8 GiB indexed, with the larger source silently absent.
-        //
-        // So an unscoped roll-up sums the *maximal* directories — those with no
-        // ancestor in the set — and reports them as the children of a root that
-        // stands for everything. One source gives the same answer as before;
-        // two give both. The empty path is what names it, because that is what
-        // was asked for and any real path here would be a claim about the
-        // filesystem that the index cannot make.
+        // With no scope there is no single root: taking the first row gives
+        // `/home` alone on an index of `/home/hasan` and `/mnt/depo`. An
+        // unscoped roll-up sums the *maximal* directories — those with no
+        // ancestor in the set — under a root named by the empty path.
         let (root, mut children) = if self.scope.is_empty() {
-            // **Checked against every maximal so far, not just the last one.**
-            // The obvious version keeps one open directory and asks whether the
-            // row is below it, which assumes a directory's descendants follow
-            // it without interruption. They do not: `-` is 0x2D and `/` is
-            // 0x2F, so `/a-b` sorts *between* `/a` and `/a/x`, becomes the open
-            // directory, and `/a/x` is then not below it and is counted twice.
-            // The test below is that exact list, and it failed on the first
-            // version of this loop.
-            //
-            // The list it scans is the source roots — two here, and a machine
-            // with a hundred separate mount points is not the shape this is
-            // for — so this is linear in the rows and constant in practice.
+            // Every maximal so far, not just the last: `-` is 0x2D and `/` is
+            // 0x2F, so `/a-b` sorts between `/a` and `/a/x`. The list holds the
+            // source roots, so this stays linear in the rows.
             let mut tops: Vec<usize> = Vec::new();
             for i in 0..dirs.len() {
                 if tops.iter().any(|&t| strictly_below(&dirs[i].0, &dirs[t].0)) {
@@ -301,15 +213,9 @@ impl<'a> Rollup<'a> {
     }
 }
 
-/// Add one row to the directory it sits in.
-///
-/// Shared by both walks so that a filtered report and an unfiltered one cannot
-/// drift apart in what they count — the whole promise of the filter is that it
-/// changes *which* rows are added and nothing about how.
-///
-/// A directory row is skipped: what a folder holds is the sum of the files
-/// beneath it, and a directory's own `size` is its entry table, which is not
-/// part of anything it contains.
+/// Add one row to the directory it sits in. Shared by both walks, so a filtered
+/// report and an unfiltered one cannot drift apart. A directory row is skipped:
+/// its own `size` is its entry table, not part of what it contains.
 fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], now: i64) {
     if seg.num_of(Field::IsDir, row) != 0 {
         return;
@@ -328,13 +234,8 @@ fn charge(seg: &Segment<'_>, row: usize, per_dir: &mut [Own], wanted: &[bool], n
     o.age[band(now - seg.num_of(Field::Mtime, row))] += bytes;
 }
 
-/// Is `path` **strictly** below `prefix`?
-///
-/// Not [`scour_core::under`], and the difference is the whole point: a rollup
-/// asks what a directory *contains*, so the directory is not one of its own
-/// children. Named apart from the shared one because the two were briefly
-/// confused for each other, which is a compile error here and would have been
-/// an off-by-one row in a total.
+/// Is `path` **strictly** below `prefix`? Not [`scour_core::under`]: a rollup
+/// asks what a directory *contains*, so it is not one of its own children.
 fn strictly_below(path: &str, prefix: &str) -> bool {
     let p = prefix.trim_end_matches('/');
     if p.is_empty() {
@@ -354,10 +255,8 @@ mod tests {
 
     #[test]
     fn the_maximal_directories_of_a_sorted_list_are_found_in_one_pass() {
-        // What an unscoped roll-up sums. The trap is the sibling that sorts
-        // between a directory and its children — `-` is 0x2D, `/` is 0x2F — so
-        // `/a-b` lands after `/a` and before `/a/x`, and a scan that only ever
-        // looked at the previous row would call it a child of `/a`.
+        // The trap is the sibling that sorts between a directory and its
+        // children: `-` is 0x2D and `/` is 0x2F, so `/a-b` lands after `/a`.
         let sorted = [
             "/home",
             "/home/hasan",

@@ -1,42 +1,20 @@
 //! What one page of results costs, in every order a heading can ask for.
 //!
-//! The list fetches two hundred rows at a time and the window it is looking at
-//! decides the offset, so this is the shape of nearly every request the
-//! interface makes. It is also the request that stopped being fast: measured
-//! from outside on a live service, the empty query — the one a window opens on
-//! — went from single-digit milliseconds to forty-six.
+//! Two hundred rows at an offset is nearly every request the interface makes.
+//! The count cap is the one the bridge sends rather than `u32::MAX`. A third
+//! argument of `warm` builds the folder-size table first, which widens the
+//! block ranges a size sort skips on. Read-only; point it at a copy:
 //!
-//! Read-only, and pointed at a copy so a running service is neither blocked
-//! nor believed:
-//!
-//!   cp -a ~/.local/share/scour/index /tmp/idx && rm -f /tmp/idx/index.lock
 //!   cargo run --release -p scour-index-native --example searchcost -- /tmp/idx/native
-//!
-//! The count cap is the one the bridge sends rather than `u32::MAX`, because
-//! an uncapped total is the one piece of work proportional to the number of
-//! matches and the interface has never asked for it.
-//!
-//! A third argument of `warm` builds the folder-size table before measuring.
-//! It matters to one row: sorted by size a directory is ordered by what is
-//! under it rather than by its own column, so the block ranges the walk skips
-//! on have to be widened to cover the rollups, and they are looser. A service
-//! that has shown anybody a folder size is in that state and a fresh process
-//! is not, so both are worth being able to ask for.
 
 use std::time::Instant;
 
 use scour_core::{Index, Page, SearchRequest, SortKey};
 use scour_index_native::NativeIndex;
 
-/// The orders a heading offers, plus the two directions. `Modified` descending
-/// is the stored order and the one everything opens on; `Modified` ascending is
-/// the same order walked backwards.
-///
-/// The numeric keys are here in both directions, and `kind` is here because it
-/// is the awkward one: a hundred thousand rows share a value, so it is where a
-/// selection that leans on the key being distinct falls apart. `name` and
-/// `path` are the two the zone map cannot bound at all; their persisted row
-/// lists are exercised here in both relevant directions.
+/// The orders a heading offers, in both directions. `Modified` descending is
+/// the stored order; `kind` is the awkward one, a hundred thousand rows to a
+/// value; `name` and `path` are the two the zone map cannot bound at all.
 const ORDERS: [(SortKey, bool, &str); 13] = [
     (SortKey::Modified, true, "modified ↓ (stored order)"),
     (SortKey::Modified, false, "modified ↑ (backwards)"),

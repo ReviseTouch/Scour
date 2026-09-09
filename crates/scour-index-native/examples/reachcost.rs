@@ -1,10 +1,6 @@
-//! What a page costs at every depth, walked to and reached.
+//! What a page costs at every depth, walked to and reached: the empty query in
+//! the stored order, which is what a window opens on. Run twice on one copy:
 //!
-//! The empty query in the stored order — what a window opens on and what a
-//! scrollbar drags through. Run it twice on the same copied index:
-//!
-//!   cp -a --reflink=auto ~/.local/share/scour/index /var/tmp/idx
-//!   rm -f /var/tmp/idx/native/index.lock
 //!   cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx
 //!   SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example reachcost -- /var/tmp/idx
 
@@ -31,9 +27,8 @@ fn main() {
         let mut runs = Vec::new();
         let mut visited = 0;
         let mut rows = 0;
-        // **The page itself, not only what it cost.** Two runs of this over one
-        // index — one reached, one walked — have to agree digit for digit, and
-        // a page that is one row out looks exactly like a page that is not.
+        // The page itself, not only what it cost: the two runs have to agree
+        // digit for digit, and a page one row out looks like one that is not.
         let mut digest = 0u64;
         for _ in 0..3 {
             let began = Instant::now();
