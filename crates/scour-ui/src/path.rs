@@ -1,16 +1,8 @@
-//! Cutting a path up the way every face cuts it.
-//!
-//! Three windows show the same path three ways — a leaf in the name column,
-//! the folder beside it, a trail of steps across the top of the report — and
-//! each of them had written its own rule for where to cut. They agree here
-//! instead.
-//!
-//! Slash-separated throughout, because that is what the index stores.
+//! Cutting a path up the way every face cuts it: a leaf, the folder beside it,
+//! a trail of steps. Slash-separated throughout, as the index stores it.
 
-/// The last component: what a file or folder is called.
-///
-/// A trailing slash is not a component, and a path that is nothing but slashes
-/// is its own name — there is nothing else to call it.
+/// The last component: what a file or folder is called. A trailing slash is not
+/// a component, and a path of nothing but slashes is its own name.
 pub fn leaf(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -22,11 +14,8 @@ pub fn leaf(path: &str) -> &str {
     }
 }
 
-/// Everything above the leaf: the folder a row sits in.
-///
-/// `/` for something at the root, and empty for a bare name with no path in
-/// it at all — which is a different answer, and a column that showed `/` for
-/// it would be claiming something untrue.
+/// Everything above the leaf: the folder a row sits in. `/` at the root, and
+/// empty for a bare name with no path in it, which is a different answer.
 pub fn folder(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rsplit_once('/') {
@@ -36,12 +25,8 @@ pub fn folder(path: &str) -> &str {
     }
 }
 
-/// The steps of a path, each with the path that reaches it.
-///
-/// `("Everything", "")` first — the whole index is where a trail starts, and
-/// pressing it is how somebody gets back out of a folder. The label of that
-/// first step is the caller's, because it is a word from the catalogue and
-/// this crate does not speak.
+/// The steps of a path, each with the path that reaches it. `("Everything", "")`
+/// comes first; the caller supplies that label, as it is a catalogue word.
 ///
 /// ```
 /// # use scour_ui::path::steps;

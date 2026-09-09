@@ -1,10 +1,6 @@
-//! The service.
-//!
-//! This is the only file in the workspace that names a concrete
-//! implementation. `NativeIndex` and `FsSource` appear in [`wire`] and
-//! nowhere else; everything above them was written against traits and cannot
-//! tell what it was given. Replacing the search engine is a change to one
-//! line here.
+//! The service: the only place in the workspace that names a concrete
+//! implementation. `NativeIndex` and `FsSource` appear in [`wire`] and nowhere
+//! else, so replacing the search engine is a change to one line here.
 
 mod handle;
 mod sources;
@@ -40,50 +36,19 @@ struct Args {
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 const ARENAS: libc::c_int = 2;
 
-/// Cap how many heaps the allocator keeps, before any thread asks for one.
-///
-/// glibc hands a thread its own arena rather than let it contend for one, up
-/// to **eight per core** — 160 on a twenty-core machine — and each grows to
-/// 64 MiB. Memory freed into an arena goes back to that arena and not to the
-/// kernel, so a parallel walk that touches all of them leaves the process
-/// holding hundreds of megabytes that are free, fragmented and never handed
-/// out again. This is the allocator half of the "allocator or worker-pool"
-/// decision the idle-memory review of 2026-08-06 left open.
-///
-/// **The whole curve, measured**, alternating over a 743,000-entry scan of one
-/// local source, medians of three rounds (memory) and three rounds (time):
-///
-/// | arenas | settled anonymous | scan |
-/// |---|---|---|
-/// | 160 (the default here) | 164 MiB | 0.865 s |
-/// | 8 | 98 MiB | 0.866 s |
-/// | 4 | 57 MiB | 1.070 s |
-/// | 2 | 31 MiB | 1.262 s |
-///
-/// So it is a trade and not a free win: **two arenas cost 46% of the scan's
-/// wall clock** — 0.39 s here, and on the two-source index this service
-/// actually holds, about a second, once, at start-up. Eight is free and gives
-/// back 40%; two gives back 81%.
-///
-/// Two, because the shapes of the two costs are different. A scan happens at
-/// start-up and when something asks for one; the memory is held every second
-/// of every day the machine is on, and this is a service that exists to sit
-/// there being ready. Paying a second of one to stop paying 130 MiB of the
-/// other is the trade this program is for. Eight is the setting for a machine
-/// that rescans constantly, and the table is here so that choice can be made
-/// again without measuring it again.
-///
-/// Set before anything spawns, because an arena a thread already holds is not
-/// given back by lowering the cap. `MALLOC_ARENA_MAX` in the environment wins,
-/// which is what keeps the measurement harness — and anyone whose machine
-/// disagrees — able to say otherwise.
+/// Cap how many heaps the allocator keeps, before any thread asks for one:
+/// glibc gives a thread its own arena, eight per core, and memory freed into
+/// one never returns to the kernel. Over a 743,000-entry scan, 160 arenas held
+/// 164 MiB in 0.865 s and 2 held 31 MiB in 1.262 s — the second is paid once,
+/// the memory every second the machine is on. Set before anything spawns, since
+/// a held arena is not given back; `MALLOC_ARENA_MAX` wins over it.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn cap_allocator_arenas() {
     if std::env::var_os("MALLOC_ARENA_MAX").is_some() {
         return;
     }
-    // SAFETY: `mallopt` is a plain setter on the allocator's own parameters,
-    // called here before any thread but this one exists.
+    // SAFETY: a plain setter on the allocator's own parameters, called before
+    // any thread but this one exists.
     unsafe {
         libc::mallopt(libc::M_ARENA_MAX, ARENAS);
     }
@@ -100,18 +65,9 @@ fn main() -> Result<()> {
         None => Config::load_or_default(),
     };
     if let Some(e) = problem {
-        // **Fatal**, and it was not. The service used to run on defaults and
-        // say why, which is the right answer for a preference and the wrong
-        // one for a source list: the default source list is one entry, the
-        // home directory, so a single stray character dropped every other
-        // source — and the engine, seeing a source it no longer has, forgets
-        // its rows. On this machine that is a million of them, gone, while the
-        // service stays up indexing the wrong tree and reports it in one line
-        // nobody reads.
-        //
-        // A service that will not start is a problem somebody fixes in a
-        // minute. An index quietly rebuilt around the wrong sources is one
-        // they notice a week later, if at all.
+        // Fatal: falling back to the default source list drops every source
+        // but the home directory, and the engine forgets the rows of a source
+        // it no longer has. A service that will not start is the cheaper fault.
         return Err(e.into());
     }
 
@@ -139,14 +95,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // A cold index is scanned without being asked. The alternative is a
-    // freshly installed service that answers every question with nothing until
-    // someone discovers there is a command for it.
+    // A cold index is scanned without being asked, or a fresh install answers
+    // every question with nothing.
     let want_scan = config.scan.on_start || engine.status().cold;
     if args.scan_only {
         engine.rescan(None)?;
-        // Nothing is watching in this mode and nothing should be: the process
-        // exists to finish a walk and leave.
+        // Nothing is watching in this mode: the process finishes a walk and
+        // leaves.
         wait_for_scan(&engine);
         engine.shutdown();
         return Ok(());
@@ -161,39 +116,23 @@ fn main() -> Result<()> {
 
     let engine = Arc::new(engine);
 
-    // Watching starts on a thread of its own, and that is not tidiness.
-    //
-    // A recursive watch on Linux is one inotify watch per directory, installed
-    // one at a time: 342,000 of them took **15.1 seconds** here, during which
-    // the socket did not exist and every client — including a window spawned
-    // on demand — sat waiting for a service that was already running. Nothing
-    // about answering a query needs the watches to be in place, so nothing
-    // waits for them. `scour status` reports the count when it lands.
-    //
-    // **And the baseline walk goes after them, on the same thread.** A walk is
-    // a snapshot and a watch is everything after it; running the walk first
-    // leaves the window between them covered by neither, which is exactly the
-    // race that was found and fixed for subtrees a watcher discovers — and it
-    // was still here, on the biggest walk of all. Anything that changes during
-    // the walk now arrives as a queued event and is replayed after the sweep.
-    // The cost is that a cold index fills a few seconds later than it used to.
+    // Watching starts on its own thread: installing 342,000 inotify watches
+    // took 15.1 s here and no query needs them. The baseline walk goes after
+    // them, on the same thread — walking first leaves a window covered by
+    // neither the snapshot nor the watch.
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
-            // **One call, because the order inside it is the invariant.** Two
-            // calls with a comment between them is not something a test can
-            // hold on to, and this one had already been got wrong twice. See
-            // `Engine::cover_then_walk`.
+            // One call, because the order inside it is the invariant that a
+            // test can hold on to. See `Engine::cover_then_walk`.
             match engine.cover_then_walk(want_scan) {
                 Ok((n, skipped)) if skipped.is_empty() => {
                     scour_core::note!("scourd: watching {n} source(s)");
                 }
                 Ok((n, skipped)) => {
-                    // Named, not merely counted — "live updates are partial"
-                    // is not something anyone can act on and a path is. But
-                    // named *briefly*: one unreadable directory tree here
-                    // produced 191 of them, and a log line that long is one
-                    // nobody reads. The shared prefix is the useful part.
+                    // Named, so it can be acted on, but briefly: one unreadable
+                    // tree produced 191 paths, and the shared prefix is the
+                    // useful part of them.
                     scour_core::note!(
                         "scourd: watching {n} source(s); {} subtree(s) unreadable, under {}",
                         skipped.len(),
@@ -216,16 +155,9 @@ fn main() -> Result<()> {
         });
     }
 
-    // Beside the index rather than in the config file: this is written when
-    // somebody drags a column, and rewriting a hand-edited `config.toml` — with
-    // its comments and its measurements — to record a column width would be
-    // vandalism.
-    //
-    // **Beside *this* index, not beside the default one.** The first version
-    // took `data_dir()`, which meant a service started with `--config` for a
-    // test wrote over the settings of the one somebody actually uses — and it
-    // did, within an hour of being written. Anything the config points at has
-    // to move together, or `--config` is not the isolation it claims to be.
+    // Beside the index rather than in the config file, which is hand-edited.
+    // Beside *this* index, not the default one: everything the config points
+    // at moves together, or `--config` is not the isolation it claims to be.
     let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
@@ -234,14 +166,9 @@ fn main() -> Result<()> {
         move |req, emit| {
             if matches!(req, scour_proto::Request::Shutdown {}) {
                 handler_stop.store(true, Ordering::Relaxed);
-                // Setting the flag is not enough: the accept loop is blocked
-                // inside `accept` and only looks at it when a connection
-                // arrives. Without this the service answered `shutdown` and
-                // then kept running until something else happened to connect —
-                // which, on an idle machine, is never.
-                //
-                // From another thread, and after a moment, so this request's
-                // own reply is written before the loop is torn down.
+                // The accept loop only reads the flag when a connection
+                // arrives, so one is made. From another thread and after a
+                // moment, so this reply is written before the tear-down.
                 let addr = wake_addr.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(Duration::from_millis(50));
@@ -365,11 +292,8 @@ fn proc_kb(text: &str, key: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// The deepest directory every one of these paths is inside.
-///
-/// What makes a list of 191 skipped subtrees into one line somebody reads:
-/// they were all under `~/.local/share/waydroid/data`, and that is the whole
-/// of what a person needs in order to decide whether to care.
+/// The deepest directory every one of these paths is inside: what turns a list
+/// of 191 skipped subtrees into one line somebody reads.
 fn common_prefix(paths: &[String]) -> String {
     let Some(first) = paths.first() else {
         return String::new();
@@ -380,8 +304,7 @@ fn common_prefix(paths: &[String]) -> String {
         let keep = best.iter().zip(&parts).take_while(|(a, b)| a == b).count();
         best.truncate(keep);
     }
-    // A prefix that reaches a file rather than its directory says less than it
-    // looks like it does, so stop at the last component every path shares.
+    // Stop at the last component every path shares.
     match best.join("/") {
         p if p.is_empty() => "/".into(),
         p => p,
@@ -389,10 +312,8 @@ fn common_prefix(paths: &[String]) -> String {
 }
 
 fn wait_for_scan(engine: &scour_engine::Engine) {
-    // Wait for it to *begin* before waiting for it to end. `rescan` queues a
-    // job and returns, so a loop that starts by asking "still scanning?" is
-    // told no and leaves with a third of an index — which is exactly what a
-    // block-size measurement got, three times, before anyone noticed.
+    // Wait for it to begin before waiting for it to end: `rescan` queues a job
+    // and returns, so "still scanning?" is answered no and the index is partial.
     let began = std::time::Instant::now();
     while !engine.status().scanning && began.elapsed() < std::time::Duration::from_secs(10) {
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -407,7 +328,7 @@ fn wait_for_scan(engine: &scour_engine::Engine) {
         }
         idle += 1;
         // Two quiet ticks: a scan reports itself finished a moment before the
-        // last batch has been applied.
+        // last batch is applied.
         if idle >= 2 {
             let st = engine.status();
             scour_core::note!(

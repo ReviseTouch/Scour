@@ -1,20 +1,8 @@
-//! Numbers, sizes and dates, said the same way in every window.
-//!
-//! **These were written three times.** The browser page has its own in
-//! JavaScript, the window had `grouped` and `compact_bytes` and reached for
-//! `humansize` for a third shape, and a terminal would have made a fourth set
-//! — at which point "2,1 GB" in one window and "2.1 GiB" in another would be
-//! the same file. So they live here, beside the palette and the columns, for
-//! the same reason those do: a thing every face has to agree on is not a thing
-//! any one face owns.
-//!
-//! No dependencies, like the rest of this crate.
+//! Numbers, sizes and dates, said the same way in every window: "2,1 GB" in one
+//! face and "2.1 GiB" in another must never be the same file.
 
-/// A number a person can read: `5356281` becomes `5.356.281`.
-///
-/// **The separator is the language's, not the platform's.** A window may be
-/// asked for English on a Turkish desktop, and the number belongs to the text
-/// around it rather than to the machine under it.
+/// A number a person can read: `5356281` becomes `5.356.281`. The separator is
+/// the language's, not the platform's.
 pub fn grouped(n: u64, separator: char) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -27,11 +15,8 @@ pub fn grouped(n: u64, separator: char) -> String {
     out
 }
 
-/// The separator a language groups thousands with.
-///
-/// Two answers, because two languages: a dot for Turkish, a comma for
-/// everything else this speaks. It takes the tag rather than a catalogue so
-/// that a crate with no dependencies can answer it.
+/// The separator a language groups thousands with: a dot for Turkish, a comma
+/// otherwise. Takes the tag rather than a catalogue, to stay dependency-free.
 pub fn group_mark(language: &str) -> char {
     if language.starts_with("tr") { '.' } else { ',' }
 }
@@ -41,11 +26,8 @@ pub fn decimal_mark(language: &str) -> char {
     if language.starts_with("tr") { ',' } else { '.' }
 }
 
-/// Bytes at a glance, for a meter or a summary: `636,3 MB`.
-///
-/// Two units and one decimal, because this is read in passing — the exact
-/// byte count belongs in a column, not in a sentence about how big an index
-/// is.
+/// Bytes at a glance, for a meter or a summary: `636,3 MB`. Two units and one
+/// decimal, because this is read in passing.
 pub fn compact_bytes(n: u64, decimal: char) -> String {
     let mb = n as f64 / 1_048_576.0;
     let said = if mb >= 1024.0 {
@@ -60,12 +42,8 @@ pub fn compact_bytes(n: u64, decimal: char) -> String {
     }
 }
 
-/// Bytes in a column, where they are compared with the row above: `1,44 MiB`.
-///
-/// **Binary units, and the unit is named.** A list sorted by size is read down
-/// the column, and `1.4 MB` beside `1,440 KB` makes somebody do arithmetic to
-/// see which is bigger. Powers of two, three significant figures, and the same
-/// width whatever the number.
+/// Bytes in a column, compared with the row above: `1,44 MiB`. Binary units,
+/// named, three significant figures, same width whatever the number.
 pub fn size(n: u64, decimal: char) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     if n < 1024 {
@@ -94,28 +72,13 @@ pub fn size(n: u64, decimal: char) -> String {
 /// Seconds in a day, which several of these count in.
 pub const DAY: i64 = 86_400;
 
-/// `YYYY-MM-DD HH:MM`, in the zone the person is in.
-///
-/// **It was UTC, on purpose, and the purpose was wrong.** The argument was
-/// that a listing is read for ordering more than for the exact minute, and
-/// that local time needs the zone database. Both are true and neither is the
-/// point: a file saved at 12:08 and shown as 09:08 is not "roughly ordered",
-/// it is wrong in the one place a person looks to check whether the index is
-/// keeping up — and it was reported exactly that way, with the browser page
-/// (which formats in the browser, hence locally) showing 12:08 beside it.
-/// Three faces showing two different times for one file is worse than any
-/// cost of asking the operating system what the zone is.
-///
-/// The zone comes from `localtime_r`, which reads the system's database and
-/// knows about daylight saving at *that* instant rather than now. Off Unix
-/// there is no such call in `libc` and the time stays UTC, which is the
-/// behaviour there was.
+/// `YYYY-MM-DD HH:MM` in the person's zone, from `localtime_r`, which knows
+/// daylight saving at *that* instant. Off Unix there is no such call: UTC.
 pub fn stamp(secs: i64) -> String {
     stamp_at(secs, local_offset(secs))
 }
 
-/// The same, with the zone offset given in seconds — the pure half, so a test
-/// can say what it expects without depending on where the machine is.
+/// The same, with the zone offset in seconds: the pure half, machine-independent.
 pub fn stamp_at(secs: i64, offset: i64) -> String {
     if secs <= 0 {
         return String::new();
@@ -131,10 +94,8 @@ pub fn stamp_at(secs: i64, offset: i64) -> String {
     )
 }
 
-/// Seconds east of UTC at that instant, from the operating system.
-///
-/// Asked per instant and not once at start-up, because the answer changes
-/// twice a year and a service runs for weeks.
+/// Seconds east of UTC at that instant, asked per instant: a service outlives
+/// the twice-yearly change.
 #[cfg(unix)]
 pub fn local_offset(secs: i64) -> i64 {
     let t = secs as libc::time_t;
@@ -167,10 +128,7 @@ fn civil(z: i64) -> (i64, i64, i64) {
 }
 
 /// Which of the six age bands a moment falls in: 0 is today, 5 is over a year.
-///
-/// The stripe down the left of every row, and the bands the report counts in.
-/// One function so that a row drawn in a terminal and the same row in a window
-/// are never a different colour.
+/// One function, so a row in a terminal and the same row in a window match.
 pub fn band(now: i64, mtime: i64) -> usize {
     match now - mtime {
         a if a < DAY => 0,
@@ -206,8 +164,7 @@ mod tests {
         assert_eq!(size(1024, '.'), "1.00 KiB");
         assert_eq!(size(1_512_000, '.'), "1.44 MiB");
         assert_eq!(size(1_512_000, ','), "1,44 MiB");
-        // Ten and a hundred are where the decimals drop, so that the column
-        // stays the same width all the way down.
+        // Ten and a hundred are where the decimals drop, keeping the width.
         assert_eq!(size(10 * 1024 * 1024 + 512 * 1024, '.'), "10.5 MiB");
         assert_eq!(size(150 * 1024 * 1024, '.'), "150 MiB");
     }
@@ -219,30 +176,28 @@ mod tests {
         assert_eq!(compact_bytes(2_147_483_648, ','), "2,0 GB");
     }
 
-    /// The pure half, pinned: this is what the machine-independent tests
-    /// used to assert of `stamp` itself, back when it was UTC.
+    /// The pure half, pinned.
     #[test]
     fn a_stamp_at_an_offset_is_exact_and_an_unset_time_says_nothing() {
         assert_eq!(stamp_at(0, 0), "");
         assert_eq!(stamp_at(-1, 3 * 3600), "");
         assert_eq!(stamp_at(1_755_000_000, 0), "2025-08-12 12:00");
-        // Istanbul, which is where this was reported from: +03:00 all year.
+        // Istanbul: +03:00 all year.
         assert_eq!(stamp_at(1_755_000_000, 3 * 3600), "2025-08-12 15:00");
         // An offset that crosses midnight moves the date too.
         assert_eq!(stamp_at(1_755_043_200, -3 * 3600), "2025-08-12 21:00");
         assert_eq!(stamp_at(1_755_043_200, 0), "2025-08-13 00:00");
     }
 
-    /// **The bug this fixes.** `stamp` is `stamp_at` with the operating
-    /// system's offset — never UTC on a machine that is not in UTC.
+    /// `stamp` is `stamp_at` with the system's offset, never UTC on a machine
+    /// that is not in UTC.
     #[test]
     fn a_stamp_is_in_the_zone_the_machine_is_in() {
         let at = 1_755_000_000;
         let off = local_offset(at);
         assert!(off.abs() <= 14 * 3600, "an offset no zone has: {off}");
         assert_eq!(stamp(at), stamp_at(at, off));
-        // And on a machine with a zone, it is not the UTC string. This can
-        // only be asserted where TZ is not UTC, so it says so instead of
+        // Only assertable where TZ is not UTC, so it says so rather than
         // failing on a CI box.
         if off != 0 {
             assert_ne!(stamp(at), stamp_at(at, 0), "still UTC despite offset {off}");

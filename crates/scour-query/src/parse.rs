@@ -1,12 +1,8 @@
 //! Text to [`Ast`].
 //!
-//! The parser never fails. Everything-style search is typed one character at a
-//! time, and a query that is halfway through being written — `size:>`, `ext:`,
-//! a lone opening quote — must still produce *some* sensible reading rather
-//! than an error dialog. So an unrecognised field, or a field whose value makes
-//! no sense, falls back to searching for the raw text: `http://example` is a
-//! name to look for, not a broken `http:` field, and `size:abc` looks for the
-//! literal string rather than quietly matching everything.
+//! The parser never fails: a query halfway through being typed — `size:>`, a
+//! lone opening quote — must still read as something. An unknown field, or one
+//! whose value will not parse, becomes a search for the raw text.
 
 use scour_core::text::DefaultFolder;
 use scour_core::{Ast, Cmp, Group, Kind, Match, TimeField};
@@ -18,11 +14,8 @@ pub fn parse(input: &str) -> Ast {
     parse_at(input, now_secs())
 }
 
-/// Parse query text as though `now` were the current unix time.
-///
-/// Relative windows (`dm:7d`) resolve against this, which is what makes them
-/// testable — and, later, what will let a saved search be re-evaluated at a
-/// stated moment rather than at whatever moment it happens to be replayed.
+/// Parse query text as though `now` were the current unix time; relative
+/// windows (`dm:7d`) resolve against it, which is what makes them testable.
 pub fn parse_at(input: &str, now: i64) -> Ast {
     let mut groups = Vec::new();
     for token in join_parens(join_operators(split_bangs(split_semicolons(join_lists(
@@ -31,23 +24,8 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
     .into_iter()
     .flat_map(|t| expand(&t))
     {
-        // Alternatives split on `|`. Quoted runs are already protected, so a
-        // pipe inside quotes is a literal character.
-        // **`;` is `|` outside a field's value**, and that is one rule rather
-        // than two. `ext:rs;toml` already means "extension is rs *or* toml";
-        // a mark that means "any of these" inside a value and something else
-        // between words is the inconsistency, not the fix. Reported as
-        // `OPUS ; SONNET` finding neither, which is what three AND-ed terms —
-        // one of them a literal semicolon — correctly finds.
-        //
-        // A field's value keeps its own semicolons: `join_lists` has already
-        // glued them on, and splitting here would take `ext:rs;toml` apart.
-        // A quoted run is literal all the way through — `"a ; b"` is one
-        // phrase and the semicolon in it is a character. The same guard every
-        // other stage here uses, and forgetting it took the phrase apart.
-        // Only `|` makes alternatives. A `;` between words is a separator —
-        // `split_semicolons` has already cut the token there — and the only
-        // semicolons left are a field's own list and the ones inside quotes.
+        // Only `|` makes alternatives, and only outside quotes. Every `;`
+        // still here is a field's own list or a character inside a phrase.
         let alts: Vec<(bool, Match)> = split_outside_quotes(&token, '|')
             .into_iter()
             .filter(|a| !a.is_empty())
@@ -61,18 +39,7 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
 }
 
 /// Rewrite the spellings that are shorthand for something the language can
-/// already say.
-///
-/// **Text in, text out, and that is the point.** A term like `size:1mb..2mb`
-/// is two comparisons AND-ed, and `empty:` is a file of no bytes; both are
-/// sentences this parser already understands, so the honest way to add them
-/// is to write those sentences rather than to grow the tree. Everything a
-/// rewrite produces can be typed by hand, which is also what makes it
-/// explainable — `explain` reads back the expansion, so nothing is happening
-/// that the user cannot see.
-///
-/// The spellings are Everything's, because somebody arriving from it has a
-/// decade of muscle memory and no reason to relearn any of this.
+/// already say. Text in, text out, so `explain` reads back what actually ran.
 fn expand(token: &str) -> Vec<String> {
     // A quoted run is literal all the way through.
     if token.starts_with('"') {
@@ -105,9 +72,8 @@ fn expand(token: &str) -> Vec<String> {
         return with(&[&format!("kind:{k}")]);
     }
     match canonical {
-        // A folder's size is stored as zero and its child count is not stored
-        // at all, so "empty" can only honestly mean a file of no bytes. Saying
-        // that is better than a folder rule that would match every folder.
+        // A folder's size is stored as zero and its child count not at all, so
+        // "empty" can only mean a file of no bytes.
         "empty" => return with(&["file:", "size:=0"]),
         "startwith" if !value.is_empty() => return with(&[&format!("{value}*")]),
         "endwith" if !value.is_empty() => return with(&[&format!("*{value}")]),
@@ -131,27 +97,14 @@ fn expand(token: &str) -> Vec<String> {
     vec![token.to_owned()]
 }
 
-/// Glue `( a | b )` into one token, so an alternation may be spelled with
-/// spaces in it the way every shell and `find` allows.
-///
-/// **Only when the run contains a `|`.** A parenthesis is an ordinary
-/// character in a filename and a very common one — `rapor (1).pdf`, `IMG (2)`
-/// — so treating every one of them as syntax would break searching for the
-/// files people actually have. Grouping is what parentheses are *for* here;
-/// anywhere else they are text, and this is the rule that keeps both true.
-///
-/// Nesting is not supported and the shape of the AST is why: a query is
-/// groups AND-ed together and a group is alternatives OR-ed, which is one
-/// level by construction. `(a|b) (c|d)` works and says a great deal;
-/// `(a (b|c))` would need a tree, and the day something needs one it should
-/// get a tree rather than a parser that pretends.
+/// Glue `( a | b )` into one token, but only when the run holds a `|`: anywhere
+/// else a parenthesis is an ordinary character in a name (`rapor (1).pdf`).
+/// Nesting is not supported; the AST is one level of AND over OR by construction.
 fn join_parens(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
-        // `<a|b>` as well as `(a|b)`: Everything groups with angle brackets,
-        // and the same rule applies to both — they are syntax only when they
-        // hold an alternation, because both are ordinary characters in names.
+        // `<a|b>` groups as `(a|b)` does, under the same rule.
         let angle = tokens[i].starts_with('<');
         let open = (tokens[i].starts_with('(') || angle) && !tokens[i].starts_with("(\"");
         if !open {
@@ -193,8 +146,7 @@ fn join_parens(tokens: Vec<String>) -> Vec<String> {
 
 /// Split on whitespace, keeping quoted runs together.
 ///
-/// The quote characters are kept in the token so that a later stage can tell a
-/// phrase from a bare word and leave its wildcards alone.
+/// The quotes stay in the token so a later stage can tell a phrase from a word.
 fn tokenize(input: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -219,21 +171,10 @@ fn tokenize(input: &str) -> Vec<String> {
     out
 }
 
-/// Cut a token at every `;` that separates two terms.
-///
-/// **`;` is a space somebody typed without pressing space.** It used to be
-/// `|` — "either of these" — and that is what made `hasan;genel` answer with
-/// every file called `hasan`: one of the two words was enough. Between terms
-/// it now means what a space means, which is *both*.
-///
-/// Inside a field's value it goes on meaning "any of these", and that is not
-/// the same mark used two ways: `ext:rs;toml` is one filter with a list in
-/// it, and a list of extensions can only ever be an "any". Two terms are a
-/// different thing from two values.
-///
-/// After `join_lists`, so a value written across a space — `ext:rs ; toml` —
-/// is already one token by the time this looks; and before `split_bangs`, so
-/// that `a;!b` reaches it as `a` and `!b`.
+/// Cut a token at every `;` that separates two terms: between terms `;` means
+/// what a space means, both, while inside a field's value it stays "any of
+/// these". After `join_lists`, which glues `ext:rs ; toml`, and before
+/// `split_bangs`, so `a;!b` reaches it as `a` and `!b`.
 fn split_semicolons(tokens: Vec<String>) -> Vec<String> {
     let mut out = Vec::with_capacity(tokens.len());
     for t in tokens {
@@ -252,29 +193,10 @@ fn split_semicolons(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Cut a token where a `!` starts a new term inside it.
-///
-/// **After `join_lists`, so that a value continued across a space is already
-/// one token.** Before it, `ext:rs ; f!g` had its last token cut into `f` and
-/// `!g` while the list was still open, and the line — which glues first — read
-/// the same query as one filter. A `!` inside a field's value is a character,
-/// wherever the value happens to have been written.
-///
-/// **A separator that needs a space in front of it is a separator people get
-/// wrong.** `;` and `|` have never needed one — `a;b` is two alternatives —
-/// and `!` did: `rapor!tmp` was the literal string, so the exclusion silently
-/// did nothing. Nobody types a `!` in the middle of a word by accident.
-///
-///
-/// Three places a `!` is *not* a separator, and each is a real query:
-///
-/// * **At the end**, `hello!` — there is nothing to exclude, and files are
-///   called that. Long-standing, and unchanged.
-/// * **Just after `;` or `|`**, `a|!b` — the `!` belongs to the alternative
-///   that is starting, not to a new term. Cutting there would break the `or`.
-/// * **Inside a field's value or a quoted run**, `path:/home/a!b` and
-///   `"a!b"` — both are literal all the way through, and a path may contain
-///   anything.
+/// Cut a token where a `!` starts a new term: `rapor!tmp` excludes `tmp`, no
+/// space needed. Must run after `join_lists`, or a `!` cuts an open list.
+/// Not a separator at the end (`hello!`), right after `;` or `|` (`a|!b`, where
+/// it belongs to the alternative starting there), or inside a value or quotes.
 fn split_bangs(tokens: Vec<String>) -> Vec<String> {
     let mut out = Vec::with_capacity(tokens.len());
     for t in tokens {
@@ -303,28 +225,8 @@ fn split_bangs(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Reattach `|` and `!` to what they operate on.
-///
-/// Whitespace splitting happens first, so `a | b` arrives as three tokens and
-/// `! main` as two. Left alone, the lone `|` parsed to nothing and the query
-/// silently became `a AND b`; the lone `!` did the same and `! main` searched
-/// *for* main rather than against it. Both are the opposite of what was asked,
-/// and neither reported anything.
-///
-/// Only a pipe or bang that stands alone, or sits at the edge of a token, is
-/// treated as an operator — so a file called `hello!` and a query `hello! doc`
-/// are still two ordinary words.
-/// Close up the spaces around a `;` inside a field's value.
-///
-/// `;` separates the values of a list field — `ext:rs;toml` — and space
-/// separates terms, so `ext:rs ; toml` used to be three terms: an extension
-/// filter, a search for the literal text ";", and a search for "toml". Nobody
-/// means that, and a search box that puts breathing room around its separators
-/// (which is what makes a long query readable) would produce it constantly.
-///
-/// Only after something that is already a field. `rapor ; pdf` stays two terms
-/// and a stray semicolon, because there is no list there to extend and joining
-/// them would invent one.
+/// Close up the spaces around a `;` inside a field's value, so `ext:rs ; toml`
+/// is one filter. Only after a real field: `rapor ; pdf` has no list to extend.
 fn join_lists(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     // Set when the previous token ended in a way that wants what comes next.
@@ -335,14 +237,12 @@ fn join_lists(tokens: Vec<String>) -> Vec<String> {
             open = false;
             continue;
         }
-        // Only a real field's value can be continued, on either side of the
-        // separator. Without this condition on *both*, `rapor ; pdf` became
-        // `rapor;` and `pdf` — a list invented where there was none.
+        // Both sides must be a real field's value, or `rapor ; pdf` invents a
+        // list where there was none.
         let after_field = out.last().is_some_and(|p| token_field(p).is_some());
         if after_field && (open || t.starts_with(';')) {
             let prev = out.last_mut().expect("checked by after_field");
-            // The spaces go; the separator stays exactly once, however many
-            // sides of it it was written on.
+            // The separator stays exactly once, however it was spaced.
             if !prev.ends_with(';') {
                 prev.push(';');
             }
@@ -356,6 +256,8 @@ fn join_lists(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
+/// Reattach a `|` or `!` that stands alone — whitespace splitting turns `a | b`
+/// into three tokens — but only at a token's edge, so `hello!` stays a word.
 fn join_operators(tokens: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut pending_bang = false;
@@ -363,10 +265,7 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
     for t in tokens {
         // A quoted run is literal all the way through.
         let quoted = t.starts_with('"');
-        // **Only `|` joins.** `;` used to as well, and that is what made
-        // `hasan;genel` find everything called `hasan`: one of the two words
-        // was enough. It is a separator now — the same thing a space is —
-        // and `split_semicolons` has already cut the token there.
+        // Only `|` joins; `split_semicolons` has already cut on `;`.
         if !quoted && t == "|" {
             want_alt = true;
             continue;
@@ -388,10 +287,7 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
             want_alt |= trailing_alt;
             continue;
         }
-        // **Once, not twice.** `! !ext:rs;toml` prepended a second `!` and
-        // made `!!ext:rs`, which is not a field term to anything that looks
-        // — so the list came apart at the semicolon and the exclusion turned
-        // into an `or` again. A second `!` says nothing the first did not.
+        // Once, not twice: `!!ext:rs` reads as no field at all.
         if std::mem::take(&mut pending_bang) && !t.starts_with('!') {
             t.insert(0, '!');
         }
@@ -420,9 +316,7 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
     if let Some((field, value)) = split_field(rest) {
         let raw = unquote(value);
         let folded = DefaultFolder::of(&raw);
-        // The field table is the only place a field name is written down. It
-        // used to be this match arm, with the reference text in `syntax.rs` as
-        // a hand-kept second copy — and the two had already drifted.
+        // The field table is the only place a field name is written down.
         let m: Option<Match> = match crate::fields::lookup(&field).map(|f| f.name) {
             Some("ext") => Some(Match::Ext(
                 folded
@@ -433,10 +327,8 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
                     .collect(),
             )),
             Some("path") => Some(Match::PathContains(folded)),
-            // Paths are compared as the filesystem stores them. Folding them
-            // would make `under:` disagree with the tokens the index actually
-            // holds, and a scope that silently matches nothing is worse than
-            // one that refuses.
+            // Paths are compared as the filesystem stores them: folding would
+            // make `under:` disagree with the tokens the index holds.
             Some("under") => (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw))),
             Some("parent") => (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw))),
             Some("file") => Some(Match::IsDir(false)),
@@ -447,28 +339,18 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             Some("dm") => parse_time(TimeField::Modified, &folded, now),
             Some("dc") => parse_time(TimeField::Created, &folded, now),
             Some("da") => parse_time(TimeField::Accessed, &folded, now),
-            // Reserved from the first day so the language does not have to
-            // change shape when content indexing arrives. An index built
-            // without contents rejects it explicitly rather than silently
-            // finding nothing.
+            // An index built without contents rejects this explicitly rather
+            // than silently finding nothing.
             Some("content") => (!folded.is_empty()).then(|| Match::ContentContains(folded.clone())),
             Some("node") => parse_node(&folded),
             Some("perm") => parse_perm(&folded),
-            // The four that are one bit each, spelled the way a person says
-            // them rather than in octal.
+            // The four single-bit tests, named rather than written in octal.
             Some("suid") => Some(bits(0o4000, 0o4000, false)),
             Some("sgid") => Some(bits(0o2000, 0o2000, false)),
             Some("sticky") => Some(bits(0o1000, 0o1000, false)),
             Some("ww") => Some(bits(0o0002, 0, true)),
             Some("user") => resolve_owner(scour_core::NumField::Uid, &raw),
             Some("group") => resolve_owner(scour_core::NumField::Gid, &raw),
-            // **A bare number means *equals* here, not "at least".**
-            //
-            // `size:1mb` meaning "at least" is right — nobody looks for a file
-            // of exactly one megabyte. Depth is the opposite: `depth:3` reads
-            // as "three deep" to everyone, and taking the size convention made
-            // it match almost the whole index while `depth:<=3` matched 77.
-            // Both were working as written; one of them was written wrong.
             Some("len") => {
                 let (cmp, rest) = split_cmp(&folded);
                 rest.trim()
@@ -476,9 +358,10 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
                     .ok()
                     .map(|n| Match::NameLen(cmp, n))
             }
-            // The raw text, not the folded one: the whole point is the
-            // spelling, so folding it first would be folding the question away.
+            // The raw text: the spelling is the whole question.
             Some("case") => (!raw.is_empty()).then(|| Match::NameContainsCased(raw.clone())),
+            // A bare number means *equals*: `depth:3` reads as "three deep",
+            // where `size:1mb` rightly reads as "at least".
             Some("depth") => {
                 let (cmp, rest) = match split_cmp(&folded) {
                     (Cmp::Ge, r) if r == folded => (Cmp::Eq, r),
@@ -489,15 +372,13 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
                     .ok()
                     .map(|n| Match::Depth(cmp, n))
             }
-            // The pattern is folded, not the raw text: it is matched against a
-            // folded name, so `[A-Z]` would never fire and `İ` has to reach
-            // the same letter `i` does.
+            // Folded, because it is matched against a folded name: `[A-Z]`
+            // would never fire.
             Some("regex") => (!folded.is_empty()).then(|| Match::Regex(folded.clone())),
             _ => None,
         };
-        // An unknown field, or a value that will not parse, becomes a search
-        // for the raw text. Dropping the term instead would turn a typo into a
-        // query that matches everything.
+        // An unknown field or an unusable value becomes a search for the raw
+        // text; dropping the term would turn a typo into "everything".
         return Some((
             negated,
             m.unwrap_or_else(|| name_match(&DefaultFolder::of(&unquote(rest)))),
@@ -513,8 +394,7 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
     Some((
         negated,
         if quoted {
-            // Quotes turn off wildcards; they do not change which field the
-            // term is about. `"Projeler/Scour"` is still a path.
+            // Quotes turn off wildcards, not which field the term is about.
             if text.contains('/') {
                 Match::PathContains(text)
             } else {
@@ -551,11 +431,8 @@ fn parse_node(v: &str) -> Option<Match> {
     Some(bits(0o170000, want, false))
 }
 
-/// `perm:` — the three shapes `find` has, and for the same reasons.
-///
-/// `644` is *exactly these bits*, `-200` is *all of these*, `/222` is *any of
-/// these*. The last is the one an audit actually wants: "anything a stranger
-/// can write to" is `perm:/222`, not a list of the modes that would allow it.
+/// `perm:` — `find`'s three shapes: `644` exactly these bits, `-200` all of
+/// these, `/222` any of these.
 fn parse_perm(v: &str) -> Option<Match> {
     let (rest, all_of, any_of) = match v.as_bytes().first() {
         Some(b'-') => (&v[1..], true, false),
@@ -568,18 +445,13 @@ fn parse_perm(v: &str) -> Option<Match> {
     } else if all_of {
         Some(bits(n, n, false))
     } else {
-        // Exact, and only over the permission bits — the type bits are
-        // `type:`'s business and nobody writes `perm:100644`.
+        // Only the permission bits: the type bits are `node:`'s business.
         Some(bits(0o7777, n, false))
     }
 }
 
-/// `user:` and `group:` — a number, or a name looked up on this machine.
-///
-/// Resolved here because here is where the index is: the service runs on the
-/// machine that owns the files, so `/etc/passwd` is the right answer to "who
-/// is `root`". A client on another machine asking by name would be asking
-/// about its own users, which is not what it means.
+/// `user:` and `group:` — a number, or a name looked up in `/etc/passwd` on the
+/// machine that owns the files.
 fn resolve_owner(field: scour_core::NumField, raw: &str) -> Option<Match> {
     let name = raw.trim();
     if name.is_empty() {
@@ -609,17 +481,9 @@ fn resolve_owner(field: scour_core::NumField, raw: &str) -> Option<Match> {
 }
 
 fn name_match(text: &str) -> Match {
-    // **A term with a separator in it is about the path.** No name holds a
-    // slash, so `Projeler/Scour` typed on its own matched nothing at all —
-    // which is the one thing somebody typing a fragment of a path is certain
-    // not to mean. Everything has the same rule and for the same reason.
-    //
-    // A path term costs what a scan of the path column costs — 1.7 s over 2.7
-    // million rows, measured — because nothing indexes paths. That is the
-    // price of asking about them, and it is paid only when a slash is typed.
-    // There is no path glob, so a wildcard in a path term is matched as text:
-    // `Projeler/*.rs` asks for paths holding that, which is not what a glob
-    // would say but is closer to it than nothing.
+    // A term with a separator in it is about the path: no name holds a slash.
+    // Nothing indexes paths, so this costs a column scan — 1.7 s over 2.7 M
+    // rows — and there is no path glob: a wildcard here is matched as text.
     if text.contains('/') {
         return Match::PathContains(text.to_owned());
     }
@@ -630,28 +494,9 @@ fn name_match(text: &str) -> Match {
     }
 }
 
-/// Split `field:value`.
-///
-/// A field name is at least two letters and nothing else. The length rule is
-/// what keeps `C:/Users` from being read as a field, which is load-bearing on
-/// Windows where every absolute path begins with something that looks like a
-/// one-letter one. `http://example` clears the rule and is then rejected for a
-/// different reason — `http` is not a field — and falls back to text.
-///
-/// The letters do not have to be ASCII. Requiring that was a quiet bug: it
-/// meant the Turkish aliases `tür:` and `içerik:` were listed as fields, looked
-/// like fields, and were silently searched for as literal text instead.
-/// Split on `mark`, ignoring any that falls inside a quoted run.
-///
-/// **A quoted run is literal all the way through**, and the alternative split
-/// never saw the quotes: `"a|b"` came out as two alternatives, so a phrase
-/// with a pipe in it searched for something else entirely. Guarding by "does
-/// the token start with a quote" is not enough either — `join_operators`
-/// appends an alternative to whatever came before, so `"x y" ;c` arrives here
-/// as `"x y"|c`, which starts with a quote and is two things.
-///
-/// Shared with the highlighter, so that the line cannot cut a term anywhere
-/// the parser does not.
+/// Split on `mark`, ignoring any that falls inside a quoted run — a leading
+/// quote is not enough of a guard, since `"x y" ;c` arrives as `"x y"|c`.
+/// Shared with the highlighter, so the line cuts exactly where the parser does.
 pub(crate) fn split_outside_quotes(s: &str, mark: char) -> Vec<&str> {
     let mut out = Vec::new();
     let mut quoted = false;
@@ -668,27 +513,15 @@ pub(crate) fn split_outside_quotes(s: &str, mark: char) -> Vec<&str> {
     out
 }
 
-/// The field a whole **token** names, with any leading `!` set aside.
-///
-/// **`!ext:rs` is a field term, and `split_field` says it is not.** It reads
-/// the name as `!ext` — which is not all letters, therefore not a field — so
-/// every question of the form "is this a list I have to keep whole?" answered
-/// no the moment the term was negated. `!ext:rs;toml` was then cut at the
-/// semicolon into an exclusion and a bare word, OR-ed together:
-///
-/// ```text
-/// !ext:rs;toml   →  (not extension is .rs or name contains "toml")
-/// ```
-///
-/// which is very nearly "everything", from a term that reads as a narrowing.
-/// The same for `!kind:image;code`, and for `!ext:rs; toml` across the space.
-///
-/// So: ask about the token, not about the string. `split_field` still answers
-/// about a value being parsed, where the `!` has already been taken off.
+/// The field a whole token names, with any leading `!` set aside: `split_field`
+/// alone reads `!ext` as not-a-field, and `!ext:rs;toml` then comes apart at the
+/// semicolon into an exclusion OR a bare word — nearly everything.
 fn token_field(s: &str) -> Option<(String, &str)> {
     split_field(s.strip_prefix('!').unwrap_or(s))
 }
 
+/// Split `field:value`. A name is at least two alphabetic characters, ASCII or
+/// not; the length rule is what keeps the Windows `C:/Users` from being a field.
 fn split_field(s: &str) -> Option<(String, &str)> {
     let idx = s.find(':')?;
     let name = &s[..idx];
@@ -714,10 +547,8 @@ fn trim_dir(s: &str) -> String {
     }
 }
 
-/// Split off a leading comparison operator. Absent means `>=`.
-///
-/// `size:1mb` reading as "at least a megabyte" matches what people mean when
-/// they type it; nobody is looking for files of exactly 1048576 bytes.
+/// Split off a leading comparison operator; absent means `>=`, so `size:1mb`
+/// reads as "at least a megabyte".
 pub(crate) fn split_cmp(v: &str) -> (Cmp, &str) {
     for (prefix, cmp) in [
         (">=", Cmp::Ge),
@@ -733,10 +564,7 @@ pub(crate) fn split_cmp(v: &str) -> (Cmp, &str) {
     (Cmp::Ge, v)
 }
 
-/// `>1mb`, `<=500kb`, `=0`.
-///
-/// Multipliers are binary, matching how file managers report sizes on the
-/// platforms this runs on.
+/// `>1mb`, `<=500kb`, `=0`. Multipliers are binary, as file managers report them.
 fn parse_size(v: &str) -> Option<Match> {
     let (cmp, rest) = split_cmp(v);
     let rest = rest.trim();
@@ -779,7 +607,6 @@ mod paren_tests {
 
     #[test]
     fn a_parenthesis_in_a_filename_is_a_parenthesis() {
-        // The case that made the rule: these files exist on every machine.
         for q in ["rapor (1).pdf", "IMG (2)", "(kopya)"] {
             let a = parse_(q);
             let text: Vec<&Match> = a.matches().collect();
@@ -809,8 +636,7 @@ mod paren_tests {
 mod tests {
     use super::*;
 
-    /// Every alternative in the query, flattened — most assertions here are
-    /// about what a token turned into, not about grouping.
+    /// Every alternative in the query, flattened.
     fn m(q: &str) -> Vec<(bool, Match)> {
         parse_at(q, 0)
             .groups
@@ -819,15 +645,8 @@ mod tests {
             .collect()
     }
 
-    /// A `!` in front of a list does not take the list apart.
-    ///
-    /// **The failure was silent and it went the wrong way.** `!ext:rs;toml`
-    /// reads as a narrowing and became `(not extension is .rs) or (name
-    /// contains "toml")` — a disjunction with a negation in it, which matches
-    /// very nearly every file there is. The cause: `split_field` was asked
-    /// about the token with its `!` still on, said "not a field", and the
-    /// semicolon was therefore read as the alternative separator it is
-    /// outside a field's value.
+    /// A `!` in front of a list does not take the list apart: `!ext:rs;toml`
+    /// is one exclusion, not a negation OR-ed with a bare word.
     #[test]
     fn a_negated_list_stays_one_list() {
         assert_eq!(
@@ -848,8 +667,7 @@ mod tests {
             1,
             "!kind:image;code came apart"
         );
-        // What it must not break: the un-negated form, and a `;` between
-        // words, which separates two terms and has to go on doing that.
+        // What it must not break: the un-negated form, and `;` between words.
         assert_eq!(
             m("ext:rs;toml"),
             vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
@@ -948,29 +766,21 @@ mod tests {
 
     #[test]
     fn field_names_may_contain_non_ascii_letters() {
-        // `tür:` and `içerik:` were listed as aliases but could never match,
-        // because the field-name rule demanded ASCII. They are the only two
-        // fields whose Turkish spelling is not ASCII, so nothing else was hit.
+        // The only two field spellings that are not ASCII.
         assert_eq!(m("tür:kod"), vec![(false, Match::Kind(vec![Kind::Code]))]);
         assert_eq!(m("TÜR:kod"), vec![(false, Match::Kind(vec![Kind::Code]))]);
         assert_eq!(
             m("içerik:x"),
             vec![(false, Match::ContentContains("x".into()))]
         );
-        // The rule that made it worth having is untouched: `C:` is not read
-        // as a field. It is a path term rather than a name term because it
-        // has a separator in it — which is what a Windows path is.
+        // `C:` is still not a field, and is a path term because of the slash.
         assert_eq!(
             m("C:/Users"),
             vec![(false, Match::PathContains("c:/users".into()))]
         );
     }
 
-    /// **A term with a separator in it asks about the path.**
-    ///
-    /// No name holds a slash, so this used to be the one shape of query that
-    /// could not match anything: somebody typing a piece of a path they could
-    /// see on the screen got nothing back.
+    /// A term with a separator in it asks about the path: no name holds a slash.
     #[test]
     fn a_term_with_a_slash_in_it_is_about_the_path() {
         assert_eq!(
@@ -982,8 +792,7 @@ mod tests {
             m("Scour"),
             vec![(false, Match::NameContains("scour".into()))]
         );
-        // Quoted, it is still a path term: the quotes turn off wildcards,
-        // not the meaning of a separator.
+        // Quoted, it is still a path term: quotes only turn off wildcards.
         assert_eq!(
             m("\"Projeler/Scour\""),
             vec![(false, Match::PathContains("projeler/scour".into()))]
@@ -992,11 +801,8 @@ mod tests {
 
     #[test]
     fn a_field_that_cannot_be_read_becomes_plain_text() {
-        // This is the rule that keeps a half-typed query usable, and keeps
-        // Windows paths and URLs from being mistaken for fields.
-        // Still text rather than a field, and a path term because of the
-        // slashes. Neither reading finds anything — no path holds `//` — and
-        // what matters here is that it parses at all.
+        // The rule that keeps a half-typed query usable, and keeps Windows
+        // paths and URLs from being read as fields.
         assert_eq!(
             m("http://x"),
             vec![(false, Match::PathContains("http://x".into()))]
@@ -1094,18 +900,8 @@ mod list_separator_tests {
 
     #[test]
     fn a_semicolon_between_words_is_and() {
-        // **This has been all three things, and each time a user found the
-        // one before.** First a literal character: `OPUS ; SONNET` found
-        // neither, because it was three terms AND-ed and one of them was a
-        // semicolon. Then `|`, for consistency with `ext:rs;toml` — and that
-        // made `hasan;genel` answer with every file called `hasan`, because
-        // one of the two words was enough.
-        //
-        // It is a separator: the thing a space is, typed without pressing
-        // space. Between terms that means **both**. Inside a field's value it
-        // goes on meaning "any of these", and that is not the same mark used
-        // two ways — a list of extensions can only ever be an "any", and two
-        // terms are a different thing from two values.
+        // Between terms `;` is a space typed without pressing space: both.
+        // Inside a field's value it stays "any of these".
         let want = vec![
             vec![(false, Match::NameContains("rapor".into()))],
             vec![(false, Match::NameContains("pdf".into()))],
@@ -1123,11 +919,7 @@ mod list_separator_tests {
         }
     }
 
-    /// The two marks say different things, and that is the point.
-    ///
-    /// `|` is "either of these"; `;` is "and also". Reported as
-    /// `hasan;genel` answering with every file called `hasan` — one word out
-    /// of two being enough — where what was wanted was both.
+    /// `|` is "either of these"; `;` is "and also".
     #[test]
     fn a_pipe_is_either_and_a_semicolon_is_both() {
         let either = |q: &str| {
@@ -1141,15 +933,14 @@ mod list_separator_tests {
         for q in ["a;b;c", "a ; b ; c", "a b c"] {
             assert_eq!(parse_at(q, 0).groups.len(), 3, "{q:?}");
         }
-        // A field's own list is untouched: a list of extensions can only be
-        // an "any", and two values are not two terms.
+        // A field's own list is untouched: two values are not two terms.
         assert_eq!(
             one("ext:rs;toml"),
             vec![(false, Match::Ext(vec!["rs".into(), "toml".into()]))]
         );
         assert_eq!(parse_at("ext:rs;toml", 0).groups.len(), 1);
-        // And beside a `|` it says nothing the `|` has not: the operator
-        // decides how the terms combine, the separator only where one ends.
+        // Beside a `|` it says nothing more: the operator decides how the
+        // terms combine, the separator only where one ends.
         assert_eq!(either("a|;c"), (1, 2));
         assert_eq!(either("a | ;c"), (1, 2));
     }

@@ -1,15 +1,8 @@
 //! Dates, without a calendar dependency.
 //!
-//! Two forms are accepted, and they mean different things on purpose:
-//!
-//! * **A relative window** — `24h`, `7d`, `today`, `hafta` — means "within the
-//!   last N hours or days", counted backwards from now. Not a calendar
-//!   boundary: that would need the local time zone, and the answer to "changed
-//!   in the last week" does not become more useful for knowing where the user
-//!   is sitting.
-//! * **An ISO day** — `2026-01-31` — is a calendar day in UTC. Written without
-//!   an operator it means *on* that day, which is what a person typing a date
-//!   into a search box is asking for.
+//! A relative window (`24h`, `7d`, `today`) means "within the last N hours or
+//! days" counted back from now, never to a calendar boundary — that would need
+//! the local zone. An ISO day (`2026-01-31`) is a calendar day in UTC.
 
 use scour_core::{Cmp, Match, TimeField};
 
@@ -28,11 +21,8 @@ pub fn now_secs() -> i64 {
 
 /// Can a time field read this value, and to what instant?
 ///
-/// The same judgement [`parse_time`] makes, without a field to attach it to —
-/// the highlighter has to decide whether `dm:soon` is a date before it knows
-/// whether the term survives, and asking two different questions there is how
-/// a search box ends up colouring a term green that the parser then reads as
-/// text.
+/// [`parse_time`] with no field attached: the highlighter must colour a term
+/// exactly as the parser will later read it.
 pub(crate) fn parse_time_value(v: &str, now: i64) -> Option<i64> {
     match parse_time(TimeField::Modified, v, now) {
         Some(Match::Time(_, _, at)) => Some(at),
@@ -47,14 +37,8 @@ pub(crate) fn parse_time(field: TimeField, v: &str, now: i64) -> Option<Match> {
         return None;
     }
     if let Some(window) = relative_window(rest) {
-        // The window resolves to an instant, and the comparison applies to it
-        // exactly as it would to a written date. A bare `dm:7d` means "within
-        // the last week", so no operator is `Ge`; `dm:<7d` means the file has
-        // not been touched since then.
-        //
-        // The operator used to be computed and then dropped here, which made
-        // `dm:<7d` and `dm:>7d` both mean `dm:7d` — a confident answer to the
-        // opposite question.
+        // A bare `dm:7d` means "within the last week", so no operator is `Ge`;
+        // `dm:<7d` means untouched since then.
         let cmp = if v.starts_with(['>', '<', '=']) {
             cmp
         } else {
@@ -63,8 +47,7 @@ pub(crate) fn parse_time(field: TimeField, v: &str, now: i64) -> Option<Match> {
         return Some(Match::Time(field, cmp, now - window));
     }
     let day = parse_iso_date(rest)?;
-    // `split_cmp` defaults to `Ge`, which is right for sizes and wrong for a
-    // bare date: "modified 2026-01-31" means that day, not that day onwards.
+    // `split_cmp` defaults to `Ge`; a bare date means that day, not that day on.
     let cmp = if v.starts_with(['>', '<', '=']) {
         cmp
     } else {
@@ -112,8 +95,7 @@ fn parse_iso_date(s: &str) -> Option<i64> {
 }
 
 /// Howard Hinnant's civil-date algorithm: (year, month, day) to days since the
-/// unix epoch. Correct for the whole proleptic Gregorian calendar, and short
-/// enough that pulling in a date library to do it would be the larger cost.
+/// unix epoch, correct across the proleptic Gregorian calendar.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;

@@ -1,10 +1,8 @@
 //! The query language, from outside.
 //!
-//! The most valuable test here is the last one: every example in [`SYNTAX`] is
-//! parsed and checked. That document is served to language models as the
-//! authoritative description of the language, so an example in it that no
-//! longer works is worse than no documentation at all — it actively teaches
-//! the wrong thing.
+//! Every example in [`SYNTAX`] is parsed and checked here: that document is
+//! served to language models, so an example in it that no longer works teaches
+//! the wrong language.
 
 use scour_core::{Ast, Cmp, Kind, Match, TimeField};
 use scour_query::{SYNTAX, describe, glob_matches, parse, parse_at};
@@ -136,9 +134,8 @@ fn describe_reads_back_what_was_asked() {
     );
 }
 
-/// Every fenced example and every table row in [`SYNTAX`] has to parse to
-/// something other than "a literal string", because that is the parser's
-/// fallback for input it did not understand.
+/// Every fenced example and table row in [`SYNTAX`] must parse to something
+/// other than a literal string, the parser's fallback for what it cannot read.
 #[test]
 fn every_documented_example_still_works() {
     let examples = [
@@ -261,10 +258,7 @@ fn every_documented_example_still_works() {
 
 #[test]
 fn a_comparison_on_a_relative_window_is_not_dropped() {
-    // `dm:<7d` used to mean `dm:7d`: the operator was computed and discarded,
-    // so a query for "not touched in a week" returned exactly the files that
-    // *had* been. A confident answer to the opposite question, and nothing
-    // reported it.
+    // `dm:<7d` is "not touched in a week", the opposite of `dm:>7d`.
     let now = 1_785_000_000;
     let week = 7 * 86_400;
     let of = |q: &str| match &parse_at(q, now).groups[..] {
@@ -282,9 +276,8 @@ fn a_comparison_on_a_relative_window_is_not_dropped() {
 
 #[test]
 fn operators_survive_the_spaces_around_them() {
-    // Whitespace splitting runs first, so `a | b` arrived as three tokens and
-    // the lone pipe parsed to nothing — the query quietly became `a AND b`.
-    // `! main` did the same and searched *for* main.
+    // Whitespace splitting runs first, so `a | b` reaches the parser as three
+    // tokens and `! main` as two.
     let now = 1_785_000_000;
     let shape = |q: &str| {
         parse_at(q, now)

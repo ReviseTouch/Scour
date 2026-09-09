@@ -1,25 +1,10 @@
-//! Which number belongs to which source, across restarts.
+//! Which number belongs to which source, across restarts: every row carries a
+//! `SourceId`, so a mapping kept beside the index is what makes that number
+//! mean the same thing twice. It lives here rather than in the index because a
+//! source's name and roots are configuration.
 //!
-//! Every row in the index carries a `SourceId`, and that number used to be a
-//! position in the configuration array. Nothing wrote it down, so:
-//!
-//! * **reordering the sources rebound every row.** The rows a home directory
-//!   put there became a removable disk's rows, and the next walk of either one
-//!   swept on that belief.
-//! * **removing a source left its rows for ever.** No walk would ever visit
-//!   them again, and a sweep needs a walk, so a disconnected disk's contents
-//!   stayed in every result until somebody deleted the whole index.
-//!
-//! So the mapping is kept beside the index, in a file this module owns. It is
-//! the smallest amount of state that makes a number mean the same thing twice,
-//! and it lives here rather than in the index because what a source *is* — a
-//! name, a set of roots — is configuration, and the index has no business
-//! knowing about either.
-//!
-//! **The name is the identity.** It is the one part of a source's description a
-//! person chooses and can keep stable while roots move. A source whose roots
-//! change keeps its number and is reconciled by the walk that follows; a source
-//! whose name changes is a new source, and the old one's rows are forgotten.
+//! The name is the identity: changed roots keep the number, a changed name is
+//! a new source and the old one's rows are dropped.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -50,9 +35,8 @@ fn path_of(dir: &Path) -> PathBuf {
 /// Give every configured source the number it had last time, and say which
 /// numbers are now orphaned.
 ///
-/// A file that cannot be read is treated as absent: the cost is renumbering
-/// once, which the caller turns into a rescan, and the alternative is a service
-/// that will not start because of a cache.
+/// A file that cannot be read is treated as absent: renumbering once, which the
+/// caller turns into a rescan, beats a service that will not start over a cache.
 pub fn assign(dir: &Path, names: &[String]) -> Assigned {
     let mut map: Map = std::fs::read_to_string(path_of(dir))
         .ok()
@@ -99,8 +83,7 @@ mod tests {
         assert_eq!(first.ids, vec![0, 1]);
         assert!(first.dropped.is_empty());
 
-        // The same two sources, the other way round. Every row already in the
-        // index belongs to the same source it did a moment ago.
+        // The same two sources, the other way round.
         let again = assign(tmp.path(), &names(&["depo", "ev"]));
         assert_eq!(again.ids, vec![1, 0], "reordering renumbered the rows");
         assert!(again.dropped.is_empty());
@@ -114,9 +97,8 @@ mod tests {
         assert_eq!(after.ids, vec![0, 2], "the survivors kept their numbers");
         assert_eq!(after.dropped, vec![1], "nothing would ever sweep these");
 
-        // And a source added later does not reuse a number that once meant
-        // something else — rows outlive a commit, and a reused number is a
-        // wrong answer rather than a missing one.
+        // A number that once meant something else is never reused: rows
+        // outlive a commit, and a reused number is a wrong answer.
         let added = assign(tmp.path(), &names(&["ev", "yedek", "yeni"]));
         assert_eq!(added.ids, vec![0, 2, 3]);
     }

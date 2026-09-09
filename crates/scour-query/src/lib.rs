@@ -1,18 +1,8 @@
-//! The query language.
+//! The query language: text in, an [`Ast`](scour_core::Ast) out.
 //!
-//! Text goes in and an [`Ast`] comes out. Nothing here knows what will evaluate
-//! that tree — that is the whole reason the language and the engine are
-//! separate crates. The same syntax therefore means the same thing whether it
-//! was typed into a search box, passed to `scour search`, or handed to a model
-//! through the MCP server.
-//!
-//! The shape is Everything's, because people who want this tool already know
-//! that syntax and because it has held up: whitespace is AND, `|` is OR, `!` is
-//! NOT, quotes make a phrase, `*` and `?` are wildcards, and `field:value`
-//! narrows. [`SYNTAX`] is the reference text, kept next to the parser so the
-//! two cannot drift, and served verbatim to language models.
-//!
-//! [`Ast`]: scour_core::Ast
+//! Nothing here evaluates the tree, so the same syntax means the same thing in a
+//! search box, in `scour search`, and over MCP. The shape is Everything's:
+//! whitespace is AND, `|` OR, `!` NOT, quotes a phrase, `*`/`?` wildcards, `field:value`.
 
 mod describe;
 mod fields;

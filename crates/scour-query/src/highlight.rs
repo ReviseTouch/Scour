@@ -1,20 +1,8 @@
-//! Query text, cut into pieces a search box can colour.
+//! Query text, cut into pieces a search box can colour, so that a term the
+//! parser will read as its own text (`kind:zurna`) says so while it is typed.
 //!
-//! The parser is forgiving on purpose — a term it cannot read is searched for
-//! as its own text — and that forgiveness is what makes a half-typed query
-//! usable. It is also the one way the engine can confidently answer the wrong
-//! question: `kind:zurna` finds files *named* "kind:zurna", and says so
-//! nowhere. Everything here exists to put that on the screen while it is being
-//! typed, rather than in the results afterwards.
-//!
-//! Two rules keep it honest:
-//!
-//! * **Same judgement as the parser.** A value is coloured as usable only if
-//!   the parser's own value parsers accept it. There is no second opinion.
-//! * **Nothing is dropped.** The spans cover the input byte for byte,
-//!   whitespace included, so a frontend can concatenate them and get the query
-//!   back. A highlighter that quietly loses a character would put every colour
-//!   after it in the wrong place.
+//! Two rules: a value is coloured usable only if the parser's own value parsers
+//! accept it, and the spans cover the input byte for byte, whitespace included.
 
 use scour_core::text::DefaultFolder;
 use scour_core::{Completion, CompletionKind, Role, Span};
@@ -27,61 +15,39 @@ pub fn spans(input: &str) -> Vec<Span> {
     spans_at(input, now_secs())
 }
 
-/// Cut a query into coloured runs as though `now` were the current unix time.
-///
-/// Relative windows are judged against this, so `dm:7d` is testable — and a
-/// saved query can be coloured as it was read at the time it ran.
+/// Cut a query into coloured runs against `now`, so `dm:7d` is testable.
 pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
     let mut out = Vec::new();
     let toks = tokens(input);
-    // A list is a context, not a character. `ext:rs ; toml` is one filter, so
-    // the spaces in it are separators rather than term boundaries — and the
-    // word after the separator is a value, not a new search term. Colouring
-    // either of them the other way would show a query the engine does not see.
+    // A list is a context, not a character: in `ext:rs ; toml` the spaces are
+    // separators and the word after one is a value, not a new term.
     let mut list: Option<&'static fields::Field> = None;
     let mut expect_value = false;
-    // A `!` in front of a list field reaches every value in it, and the values
-    // of a list are the one thing that outlives its token: `!ext:rs; toml`
-    // excludes both.
+    // A `!` on a list field reaches every value in it, past the end of the
+    // token: `!ext:rs; toml` excludes both.
     let mut list_not = false;
-    // **A `!` on its own belongs to the term after it.** The parser binds it
-    // there — `expand`'s `pending_bang` — so `! main` and `!main` ask exactly
-    // the same question. The colouring did not: it drew one red character and
-    // then the excluded term in the colour of the thing being looked for,
-    // which is the disagreement between parser and highlighter this whole
-    // module exists to prevent.
+    // A `!` on its own belongs to the term after it, as `join_operators`
+    // binds it: `! main` and `!main` are the same query.
     let mut lone_bang = false;
     for (i, (start, token)) in toks.iter().enumerate() {
         let (start, token) = (*start, *token);
         if is_space(token) {
-            // **A space beside an `or` is inside the group, not between two
-            // of them.** `a ;b` and `a; b` are one term with two alternatives
-            // — the parser joins across the space either way — and drawing an
-            // ordinary gap there showed two terms where there is one.
-            // Looking *through* a lone `!`, which belongs to the term after
-            // it rather than being one: `a ! ;c` is `a` or `not c`, one term.
-            // **While a list is open the `;` belongs to it**, which is the
-            // order the parser works in: `join_lists` runs before
-            // `join_operators`, so `ext:rs ; "x y"` is a filter and a phrase
-            // and not one term with two alternatives.
-            // **While a list is open the `;` belongs to it**, which is the
-            // order the parser works in: `join_lists` runs before
-            // `join_operators`, so `ext:rs ; "x y"` is a filter and a phrase
-            // and not one term with two alternatives. A `|` is an operator
-            // either way — no list has ever claimed one.
+            // A space beside an `or` is inside the group: `a ;b` and `a; b`
+            // are one term with two alternatives, and a lone `!` is looked
+            // through because it belongs to the term after it.
+            // While a list is open the `;` belongs to it — `join_lists` runs
+            // before `join_operators` — but a `|` is an operator either way.
             let beside_alt = next_term_word(&toks, i).is_some_and(|t| t.starts_with('|'))
                 || prev_word(&toks, i).is_some_and(|t| t.ends_with('|'));
-            // A field's value continuing across the space is a different
-            // thing from two alternatives sitting either side of one, and
-            // only the first carries the term's exclusion with it.
+            // A value continued across the space carries the term's exclusion;
+            // two alternatives either side of one do not.
             let list_join = list.is_some()
                 && next_word(&toks, i).is_some_and(|t| !t.starts_with('"'))
                 && (expect_value || next_word(&toks, i).is_some_and(|t| t.starts_with(';')));
             let joins = beside_alt || list_join;
             let role = if joins { Role::Sep } else { Role::Space };
             let span = Span::new(start, token.len(), role);
-            // The gap between a lone `!` and its term is inside the exclusion:
-            // one red run, not two with a hole in it.
+            // The gap between a lone `!` and its term is inside the exclusion.
             let inside = (list_join && list_not) || lone_bang;
             out.push(if inside { span.excluded() } else { span });
             if !list_join {
@@ -91,8 +57,7 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
             }
             continue;
         }
-        // A quoted run is never a continuation: `join_lists` pushes it
-        // through untouched and closes the list behind it.
+        // A quoted run is never a continuation; it closes the list behind it.
         if let Some(f) = list
             && !token.starts_with('"')
             && (expect_value || token.starts_with(';'))
@@ -104,14 +69,11 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 out.push(Span::new(at, 1, Role::Sep));
                 at += 1;
                 rest = r;
-                // A separator standing on its own means the value it
-                // separates has not been written yet.
+                // A separator alone means its value is not written yet.
                 expect_value = true;
             }
-            // **A `|` ends the value and starts an alternative.** The
-            // parser glues the token onto the list and *then* cuts it there,
-            // so `ext:rs ; i|j` is a two-extension filter or the word `j`;
-            // drawn as one value it was one thing.
+            // A `|` ends the value and starts an alternative: `ext:rs ; i|j`
+            // is a two-extension filter or the word `j`.
             let mut pieces = crate::parse::split_outside_quotes(rest, '|').into_iter();
             let first = pieces.next().unwrap_or("");
             if !first.is_empty() {
@@ -138,19 +100,13 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
         }
         let mark = out.len();
         list_not = term(&mut out, start, token, now) | lone_bang;
-        // A token can be several terms now, and only the last of them can be
-        // continued across the space: `a!ext:rs; toml`.
+        // Only the last term in a token continues across the space.
         let tail = *bang_pieces(token).last().unwrap_or(&token);
-        // **The first alternative of the first term, and no further.** A `!`
-        // standing on its own binds to what comes after it exactly as though
-        // it had been written against it — `! d;e` is `!d e`, two terms, one
-        // of them excluded. Marking everything the token produced drew `e` as
-        // excluded when the engine was searching *for* it.
+        // The first alternative of the first term and no further: `! d;e` is
+        // `!d e`, two terms with only the first excluded.
         let had_bang = std::mem::take(&mut lone_bang);
         if had_bang {
-            // Past a separator that has nothing in front of it — `! ;c` is
-            // `!c`, the `;` saying only "a term ends here" where one already
-            // had — and stopping at the next one.
+            // Past a leading separator (`! ;c` is `!c`), stopping at the next.
             let mut reached = false;
             for span in &mut out[mark..] {
                 if span.role == Role::Or {
@@ -166,10 +122,8 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
                 span.not = true;
             }
         }
-        // Nothing follows a `!` inside its own token, so this can only be the
-        // operator standing alone — and a token of nothing but separators
-        // does not use it up: `! ; a` excludes `a`, the `;` saying only that
-        // a term ends where one already had.
+        // A token of nothing but separators does not use up a pending `!`:
+        // `! ; a` excludes `a`.
         lone_bang = token == "!" || (had_bang && token.chars().all(|c| c == ';'));
         list = field_of(tail);
         expect_value = list.is_some() && tail.ends_with(';');
@@ -178,15 +132,9 @@ pub fn spans_at(input: &str, now: i64) -> Vec<Span> {
     out
 }
 
-/// A `;` beside a `|` says nothing the `|` has not already said.
-///
-/// `|` decides how two terms combine; `;` only says where one ends. Written
-/// next to each other — `a|;c`, `a | ;c`, `a ; |c` — the parser keeps the
-/// operator and drops the separator, so a line that drew the `;` as a
-/// boundary showed two AND-ed terms where the engine has one `or`.
-///
-/// Done as a pass over the finished spans because "beside" reaches across
-/// tokens, and the tokeniser hands them over one at a time.
+/// A `;` beside a `|` says nothing the `|` has not: in `a|;c` the parser keeps
+/// the operator and drops the separator, so the line must draw one term. A pass
+/// over the finished spans, because "beside" reaches across tokens.
 fn absorb_separators(spans: &mut [Span], query: &str) {
     let speaks = |s: &Span| !matches!(s.role, Role::Space | Role::Sep) || s.of(query) == ";";
     for i in 0..spans.len() {
@@ -203,22 +151,11 @@ fn absorb_separators(spans: &mut [Span], query: &str) {
 
 /// The same query with every term on one of `names` taken out of it.
 ///
-/// **A rail cannot filter itself out of existence.** The list of kinds beside
-/// the results and the strip of ages under them are controls, and a control
-/// answers "what would switching to this give me" — so they are counted over
-/// the query *without* the term they set. Type `kind:code` and the rail still
-/// says how many images there are; type `dm:7d` and the strip still has a
-/// shape to press. Counting them over the query as typed makes every other
-/// bar read zero, which is a rail that can only ever confirm what is already
-/// on the screen.
-///
-/// `None` when nothing was taken out, so a caller can ask one question
-/// instead of two — which is every query without such a term, and that is
-/// most of them.
-///
-/// Names are the canonical ones from [`FIELDS`](crate::FIELDS): pass `"kind"`
-/// and `tür:` goes too, because the alias table is what decides here rather
-/// than the spelling.
+/// A rail cannot filter itself out of existence: the kind list and the age
+/// strip are counted over the query *without* the term they set, or every other
+/// bar reads zero. `None` when nothing was taken out, so a caller can ask one
+/// question instead of two. Names are the canonical ones from
+/// [`FIELDS`](crate::FIELDS), so `"kind"` takes `tür:` too.
 ///
 /// ```
 /// # use scour_query::without;
@@ -230,8 +167,7 @@ pub fn without(input: &str, names: &[&str]) -> Option<String> {
     without_at(input, names, now_secs())
 }
 
-/// The same, as though `now` were the current unix time — `dm:7d` is a term
-/// only if the clock says it parses.
+/// The same, against `now`: `dm:7d` is a term only if the clock says it parses.
 pub fn without_at(input: &str, names: &[&str], now: i64) -> Option<String> {
     let toks = tokens(input);
     let mut kept: Vec<&str> = Vec::with_capacity(toks.len());
@@ -240,22 +176,16 @@ pub fn without_at(input: &str, names: &[&str], now: i64) -> Option<String> {
             kept.push(token);
         }
     }
-    // **Compared by count, not by text.** Dropping a term leaves the space
-    // that was beside it, and a query differing from another only by a double
-    // space would ask the service the same question twice — two walks for one
-    // answer, on every keystroke.
+    // By count, not by text: dropping a term leaves the space beside it, and
+    // a query differing only by a double space costs a second walk.
     if kept.len() == toks.len() {
         return None;
     }
     Some(kept.concat().trim().to_string())
 }
 
-/// Is this one token a usable term on one of `names`?
-///
-/// **Usable, not merely spelled that way.** `kind:zurna` is not a kind filter
-/// — the engine searches for it as text — so taking it out would change the
-/// question rather than widen it. Same judgement as the colouring, from the
-/// same table.
+/// Is this one token a *usable* term on one of `names`? `kind:zurna` is
+/// searched for as text, so dropping it would change the question, not widen it.
 fn drops(token: &str, names: &[&str], now: i64) -> bool {
     if token.starts_with('"') {
         return false;
@@ -321,13 +251,9 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
         let mut in_quotes = false;
         while i < input.len() {
             let c = bytes[i];
-            // **A run of whitespace ends at the first character that is not
-            // whitespace, quote or no quote.** The quote was toggled here
-            // too, so a space followed by a phrase — `rapor "iki kelime"` —
-            // opened a quoted run *inside the whitespace token*, and the
-            // whole of ` "iki kelime"` came out as one piece of plain text:
-            // no quote colour, no phrase colour, and one term where the
-            // engine reads two. Found by asking the parser.
+            // A run of whitespace ends at the first character that is not
+            // whitespace, quote or no quote: a quote toggled inside a space
+            // run swallows the phrase after it.
             if space {
                 if !c.is_ascii_whitespace() {
                     break;
@@ -339,9 +265,8 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
                     break;
                 }
             }
-            // Multi-byte characters are never whitespace or a quote, so
-            // advancing by one byte here can only land inside a run that is
-            // already being consumed whole.
+            // Multi-byte characters are never whitespace or a quote, so a
+            // one-byte step can only land inside a run already being consumed.
             i += 1;
         }
         out.push((start, &input[start..i]));
@@ -349,21 +274,16 @@ fn tokens(input: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// One whitespace-separated term, which may itself hold alternatives.
-///
-/// Answers whether the term is excluded, which for a list field has to travel
-/// past the end of the token: `!ext:rs; toml` is one filter and the `toml`
-/// after the space is inside it.
+/// One whitespace-separated term, which may itself hold alternatives. Answers
+/// whether it is excluded — for a list field that travels past the token's end.
 fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
-    // A lone operator is an operator; `hello!` is a word. The parser makes the
-    // same distinction, and colouring it differently would teach the wrong rule.
+    // A lone operator is an operator; `hello!` is a word, as for the parser.
     if text == "|" {
         out.push(Span::new(start, 1, Role::Or));
         return false;
     }
-    // **A `;` between terms is a separator, not an operator.** It is the
-    // thing a space is, so it wears the same role: `hasan;genel` wants both
-    // words, exactly as `hasan genel` does.
+    // A `;` between terms wears the role a space does: `hasan;genel` wants
+    // both words, exactly as `hasan genel` does.
     if text == ";" {
         out.push(Span::new(start, 1, Role::Space));
         return false;
@@ -373,10 +293,8 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
         return true;
     }
 
-    // **A `;` or a `!` inside a word starts a new term**, the same cuts
-    // `split_semicolons` and `split_bangs` make. Without them the line drew
-    // `rapor!tmp` as one word being looked for, which is what the engine did
-    // too — and both were wrong.
+    // A `;` or a `!` inside a word starts a new term, the same cuts
+    // `split_semicolons` and `split_bangs` make.
     let mut at = start;
     let mut negated = false;
     for (piece, cut) in term_pieces(text) {
@@ -390,17 +308,11 @@ fn term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     negated
 }
 
-/// One term: alternatives separated by `;` or `|`, each with an optional `!`.
+/// One term: alternatives separated by `|`, each with an optional `!`.
 fn one_term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     let mut at = start;
     let mut negated = false;
-    // **`;` is `|` outside a field's value**, and the parser has said so since
-    // `OPUS ; SONNET` was reported as finding neither. This did not, so
-    // `HASAN;DENEME` was drawn as one word somebody was looking for while the
-    // engine read two alternatives — and `!ama ;deneme` drew four independent
-    // terms where there were three, one of them a disjunction with the
-    // exclusion inside it. A query line that hides an `or` hides the reason
-    // its answer is enormous.
+    // A line that hides an `or` hides the reason its answer is enormous.
     for (alt, sep) in alternatives(text) {
         if let Some(c) = sep {
             out.push(Span::new(at, c.len_utf8(), Role::Or));
@@ -412,13 +324,9 @@ fn one_term(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     negated
 }
 
-/// The terms inside one whitespace-separated token, and whether each was cut
-/// off the one before by a `;`.
-///
-/// Mirrors `parse::split_semicolons` and `parse::split_bangs`, including
-/// their exceptions. The `;` is *consumed* — it separates rather than belongs
-/// to either side — while a `!` stays at the head of the piece it negates;
-/// with the separators put back, the pieces cover the token.
+/// The terms inside one token, and whether each was cut off the one before by a
+/// `;`. Mirrors `parse::split_semicolons` and `parse::split_bangs`: the `;` is
+/// consumed, a `!` stays at the head of the piece it negates.
 fn term_pieces(text: &str) -> Vec<(&str, bool)> {
     if text.starts_with('"') || field_of(text).is_some() {
         return vec![(text, false)];
@@ -463,17 +371,11 @@ fn bang_pieces(text: &str) -> Vec<&str> {
 }
 
 /// The alternatives in a term, each with the character that separated it from
-/// the one before.
-///
-/// Mirrors `parse::ast`: a token that is a field term or a quoted run keeps
-/// its own semicolons — `ext:rs;toml` is one filter — and everything else
-/// splits on both marks.
+/// the one before. Only `|` makes one; `;` has already separated terms.
 fn alternatives(text: &str) -> Vec<(&str, Option<char>)> {
     let mut out = Vec::new();
     let mut sep = None;
-    // A quoted run is literal all the way through, and the split is the
-    // parser's own so the two cannot cut in different places. Only `|` makes
-    // alternatives; a `;` has already separated terms by the time this runs.
+    // The split is the parser's own, so the two cannot cut in different places.
     for part in crate::parse::split_outside_quotes(text, '|') {
         out.push((part, sep));
         sep = Some('|');
@@ -481,18 +383,9 @@ fn alternatives(text: &str) -> Vec<(&str, Option<char>)> {
     out
 }
 
-/// One alternative: an optional `!`, then either a field term or plain text.
-///
-/// **The `!` marks the whole alternative, not the character it is.** A query
-/// line is read for two things — what is wanted and what is not — and no role
-/// says which: `pdf` in `!ext:pdf` is a `Value` exactly as it is in
-/// `ext:pdf`. Colouring [`Role::Not`] alone put one red character in front of
-/// a term drawn in the colour of the thing being looked for.
-///
-/// So the extent is decided here, where the `!` is read, and every run the
-/// alternative produces carries it. Answers whether it was negated, because
-/// a list field goes on across the spaces after it and the caller is the only
-/// one that can see that far.
+/// One alternative: an optional `!`, then a field term or plain text. The `!`
+/// marks the whole alternative, so every run it produces carries the mark, and
+/// the answer travels out because a list field runs past the spaces after it.
 fn alternative(out: &mut Vec<Span>, start: usize, text: &str, now: i64) -> bool {
     let mark = out.len();
     let negated = text.starts_with('!');
@@ -526,9 +419,7 @@ fn alternative_spans(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
                     out.push(Span::new(at + name.len(), 1, Role::Colon));
                     value_spans(out, at + name.len() + 1, value, f, now);
                 }
-                // Two or more letters and a colon, but not a field: the whole
-                // term is text. Colouring only the name would suggest the
-                // colon still separates something.
+                // Letters and a colon but not a field: the whole term is text.
                 None => out.push(Span::new(at, rest.len(), Role::UnknownField)),
             }
         }
@@ -539,8 +430,7 @@ fn alternative_spans(out: &mut Vec<Span>, start: usize, text: &str, now: i64) {
 /// The value after a field's colon.
 fn value_spans(out: &mut Vec<Span>, start: usize, value: &str, f: &fields::Field, now: i64) {
     if value.is_empty() {
-        // `folder:` is complete; `ext:` is not yet wrong, only unfinished, and
-        // marking it as a mistake while someone is mid-word would be noise.
+        // `folder:` is complete; `ext:` is unfinished, not yet wrong.
         return;
     }
     let folded = DefaultFolder::of(&value.replace('"', ""));
@@ -611,11 +501,8 @@ fn plain(out: &mut Vec<Span>, start: usize, text: &str) {
     out.push(Span::new(start, text.len(), role));
 }
 
-/// `field:value`, by the parser's rule: two or more letters and nothing else.
-///
-/// The rule is what keeps `C:/Users` and `http://example` out, and it has to be
-/// the parser's rule exactly — a highlighter that thought `C:` was a field
-/// would paint every Windows path as a mistake.
+/// `field:value` by the parser's rule — two or more letters and nothing else —
+/// exactly, or every Windows path is painted as a mistake.
 fn field_split(s: &str) -> Option<(&str, &str)> {
     let idx = s.find(':')?;
     let name = &s[..idx];
@@ -627,12 +514,8 @@ fn field_split(s: &str) -> Option<(&str, &str)> {
 
 // ───────────────────────────── completions ─────────────────────────────
 
-/// What could be typed at `cursor`, given the query so far.
-///
-/// The offer is always for the word the cursor is in, so a completion accepted
-/// mid-query replaces that word and leaves the rest alone. Everything comes
-/// from the field table, which means a field that exists is offered and a field
-/// that does not cannot be.
+/// What could be typed at `cursor`: always the word the cursor is in, always
+/// from the field table.
 pub fn complete(input: &str, cursor: usize) -> Vec<Completion> {
     let cursor = caret(input, cursor);
     let word = word_at(input, cursor);
@@ -684,22 +567,8 @@ fn values_for(f: &fields::Field, written_name: &str, typed: &str) -> Vec<Complet
         .collect()
 }
 
-/// The whitespace-delimited word the cursor sits in, as byte offsets.
-/// The caret, moved to a boundary this string actually has.
-///
-/// A caret is a number from somewhere else, and the somewhere else counts
-/// differently. A browser's `selectionStart` counts UTF-16 code units; this
-/// counts bytes; `İ` is one of the first and two of the second. So a caret
-/// after a single Turkish capital I arrives one short of where it means, and
-/// slicing there is not a wrong answer but a panic — which took the connection
-/// with it, and the request that connection was carrying. Measured on this
-/// machine: two of them in one second of ordinary typing.
-///
-/// Clients should send bytes and the page now does. This is what happens when
-/// one does not: the caret moves back to the start of the character it landed
-/// inside, and the offer is for a word that was very nearly the right one. The
-/// alternative — refusing, or returning nothing — spends a crash to punish a
-/// caller for a rounding error nobody can see.
+/// The caret, moved back to a boundary this string actually has: a browser's
+/// `selectionStart` counts UTF-16 code units, and slicing mid-character panics.
 fn caret(input: &str, cursor: usize) -> usize {
     let mut at = cursor.min(input.len());
     while !input.is_char_boundary(at) {
@@ -708,6 +577,7 @@ fn caret(input: &str, cursor: usize) -> usize {
     at
 }
 
+/// The whitespace-delimited word the cursor sits in, as byte offsets.
 fn word_at(input: &str, cursor: usize) -> (usize, usize) {
     let bytes = input.as_bytes();
     let mut start = cursor;
@@ -732,8 +602,7 @@ mod tests {
             .collect()
     }
 
-    /// The invariant everything else depends on: put the spans back together
-    /// and the query comes back.
+    /// The invariant: put the spans back together and the query comes back.
     fn covers(q: &str) {
         let spans = spans_at(q, 1_800_000_000);
         let mut at = 0;
@@ -776,8 +645,7 @@ mod tests {
 
     #[test]
     fn a_value_the_field_cannot_read_is_marked() {
-        // This is the case the whole module is for: the parser turns each of
-        // these into a search for its own text, silently.
+        // The case the module is for: the parser searches for these as text.
         assert_eq!(
             roles("kind:zurna"),
             vec![
@@ -813,10 +681,7 @@ mod tests {
 
     #[test]
     fn a_field_name_is_case_insensitive_and_coloured_as_one() {
-        // The reference text used `sizE:>1mb` as its example of a misspelling
-        // that falls back to text. It does not: field names are folded, so
-        // this is the size field, and a highlighter that marked it as a
-        // mistake would be teaching a rule the parser does not have.
+        // Field names are folded, so this is the size field, not a mistake.
         assert_eq!(
             roles("sizE:>1mb"),
             vec![
@@ -830,8 +695,7 @@ mod tests {
 
     #[test]
     fn windows_paths_and_urls_are_not_fields() {
-        // One letter is not a field name, so this is ordinary text — the same
-        // rule the parser applies, for the same reason.
+        // One letter is not a field name, so this is ordinary text.
         assert_eq!(roles("C:/Users"), vec![(Role::Text, "C:/Users")]);
         assert_eq!(
             roles("http://example"),
@@ -895,10 +759,6 @@ mod tests {
     }
 
     /// The `!` is not the exclusion — the term after it is.
-    ///
-    /// Every one of these drew a single red character in front of a term in
-    /// the colour of the thing being *searched for*, which is the opposite of
-    /// what the query says.
     #[test]
     fn an_excluded_term_is_excluded_all_the_way_through() {
         fn excluded(q: &str) -> Vec<&str> {
@@ -919,9 +779,7 @@ mod tests {
         );
         // One alternative of a group, not the group.
         assert_eq!(excluded("a|!b"), vec!["!", "b"]);
-        // **A `!` on its own binds to the term after it**, exactly as
-        // `expand` does — `! main` and `!main` are the same query, so they
-        // are the same colour.
+        // A `!` on its own binds to the term after it: `! main` is `!main`.
         assert_eq!(excluded("! main"), vec!["!", " ", "main"]);
         assert_eq!(
             excluded("rapor ! ext:pdf"),
@@ -950,12 +808,7 @@ mod tests {
         covers("a|!b !kind:zurna");
     }
 
-    /// `;` between words separates two terms, and the line has to say so.
-    ///
-    /// It is drawn the way a space is, because that is what it is: quiet, and
-    /// a boundary. It was drawn as an `or` for a while, which is what it also
-    /// *meant* for a while — `hasan;genel` then answered with every file
-    /// called `hasan`, one word out of two being enough.
+    /// `;` between words separates two terms, and is drawn the way a space is.
     #[test]
     fn a_semicolon_between_words_is_a_separator() {
         assert_eq!(
@@ -998,7 +851,6 @@ mod tests {
                 (Role::Value, "toml")
             ]
         );
-        // Negated, which is where the parser used to come apart too.
         assert_eq!(
             roles("!ext:rs;toml"),
             vec![
@@ -1022,40 +874,9 @@ mod tests {
         );
     }
 
-    /// The colouring and the parser read the same query.
-    ///
-    /// **Every fault this module has ever had is the two disagreeing**, and
-    /// each was found by a person staring at a line that did not match the
-    /// answer: `;` drawn as a letter when it is an `or`; a lone `!` drawn as
-    /// itself when it binds to the word after it; `rapor!tmp` drawn as one
-    /// word when it is a term and an exclusion. None of them were caught by a
-    /// test, because every test here asked the highlighter what it thought
-    /// and never asked the parser.
-    ///
-    /// So this one asks both. For each query: the same number of AND-ed
-    /// groups, the same number of alternatives in each, and the same
-    /// alternatives negated.
-    ///
-    /// The corpus is deliberately free of the rewritten spellings —
-    /// `size:1mb..2mb`, `empty:`, the Everything macros — because `expand`
-    /// turns one token into several groups on purpose, which is a difference
-    /// the line is not meant to show.
-    /// The colouring and the parser read the same query.
-    ///
-    /// **Every fault this module has ever had is the two disagreeing**, and
-    /// each was found by a person staring at a line that did not match the
-    /// answer: `;` drawn as a letter when it is an `or`; a lone `!` drawn as
-    /// itself when it binds to the word after it; `rapor!tmp` drawn as one
-    /// word when it is a term and an exclusion; a phrase after a space drawn
-    /// as neither. None were caught by a test, because every test here asked
-    /// the highlighter what it thought and never asked the parser.
-    ///
-    /// So this asks both: the same number of AND-ed terms, the same number of
-    /// alternatives in each, and the same ones excluded.
-    ///
-    /// The corpus has no rewritten spellings — `size:1mb..2mb`, `empty:`, the
-    /// Everything macros — because `expand` turns one token into several
-    /// terms on purpose, which is a difference the line is not meant to show.
+    /// The colouring and the parser read the same query: the same AND-ed terms,
+    /// alternatives and exclusions. No rewritten spellings in the corpus —
+    /// `expand` turns one token into several terms, which the line cannot show.
     #[test]
     fn the_colouring_and_the_parser_read_the_same_query() {
         const NOW: i64 = 1_800_000_000;
@@ -1113,11 +934,6 @@ mod tests {
     }
 
     /// The same agreement, over every query a handful of pieces can build.
-    ///
-    /// Thirty hand-written queries are thirty guesses about where the two
-    /// disagree, and every fault so far has been somewhere nobody guessed.
-    /// Four thousand is not a guess — the phrase-after-a-space fault above
-    /// was found by this and by nothing else.
     #[test]
     fn the_colouring_and_the_parser_agree_on_everything_these_pieces_can_spell() {
         const NOW: i64 = 1_800_000_000;
@@ -1144,13 +960,10 @@ mod tests {
             for two in PIECES {
                 for three in PIECES {
                     let q = format!("{one} {two} {three}");
-                    // **One shape no colouring can draw truthfully.** A lone
-                    // `!` followed by a term that opens with `|` binds *past*
-                    // the operator — `a ! |c` is `a` or `not c` — so the `!`
-                    // is written before the `|` and belongs after it. The
-                    // line gets the terms and the alternatives right; it
-                    // cannot get which side of the `or` the exclusion is on,
-                    // because that is not where it was typed.
+                    // One shape no colouring can draw truthfully: a lone `!`
+                    // before a term opening with `|` binds past the operator
+                    // (`a ! |c` is `a` or `not c`), so it is written on the
+                    // wrong side of the `or`.
                     let toks: Vec<&str> = q.split_whitespace().collect();
                     let looks_past = toks
                         .windows(2)
@@ -1167,11 +980,8 @@ mod tests {
     }
 
     /// The line and the engine read `q` the same way, or say how they differ.
-    ///
-    /// The structure is read off the spans by the rules a person reads them
-    /// by: terms are separated by the spaces between them, an `or` joins two
-    /// alternatives inside one term, and a `!` begins a term unless it is
-    /// already at the start of one or is starting an alternative.
+    /// Structure comes off the spans as a person reads them: spaces separate
+    /// terms, an `or` joins alternatives, a `!` begins one unless it opens one.
     fn agree(q: &str, now: i64) {
         let ast = crate::parse::parse_at(q, now);
         let spans = spans_at(q, now);
@@ -1196,18 +1006,14 @@ mod tests {
         if !cur.is_empty() {
             groups.push(cur);
         }
-        // A `!` with nothing after it excludes nothing — the parser drops it,
-        // and the line draws it because somebody is halfway through typing
-        // the word it will exclude. Neither is wrong; it is not a term.
-        // A term made only of operators has nothing to search for: the
-        // parser drops it, and the line draws it because somebody is halfway
-        // through typing the word it will apply to.
+        // A term made only of operators has nothing to search for: the parser
+        // drops it, and the line draws it because someone is mid-word.
         groups.retain(|g| {
             !g.iter()
                 .all(|s| matches!(s.role, Role::Not | Role::Or | Role::Space | Role::Sep))
         });
-        // And a `!` at the *end* of a term excludes nothing either: `a ; !`
-        // is one alternative, not two with an empty second.
+        // A `!` at the end of a term excludes nothing: `a ; !` is one
+        // alternative, not two with an empty second.
         for g in &mut groups {
             while g
                 .last()
@@ -1224,10 +1030,8 @@ mod tests {
             ast.groups.len()
         );
         for (i, (drawn, read)) in groups.iter().zip(&ast.groups).enumerate() {
-            // An `or` with nothing after it joins nothing yet, for the same
-            // reason a `!` with nothing after it excludes nothing — and an
-            // `or` straight after another one joins nothing either: `a ; ;c`
-            // reads as `a` or `c`, which is what the engine makes of it.
+            // An `or` with nothing after it, or right after another, joins
+            // nothing: `a ; ;c` reads as `a` or `c`.
             let mut alts = 1;
             let mut last: Option<Role> = None;
             for s in drawn {
@@ -1247,8 +1051,7 @@ mod tests {
                 "{q:?}: term {i} is drawn with {alts} alternatives and read with {}",
                 read.alts.len()
             );
-            // And the same ones are excluded: cut the drawn run at its `or`s
-            // and ask whether each piece carries the mark.
+            // Cut the drawn run at its `or`s; each piece must carry the mark.
             if dangling {
                 continue;
             }
@@ -1261,8 +1064,7 @@ mod tests {
                     continue;
                 }
                 if s.role == Role::Or {
-                    // The same rule the count uses: only an `or` with
-                    // something in front of it starts a new alternative.
+                    // Only an `or` with something in front starts a new one.
                     if last.is_some_and(|r| r != Role::Or) {
                         drawn_neg.push(any);
                         any = false;
@@ -1291,8 +1093,7 @@ mod tests {
 
     #[test]
     fn an_unfinished_field_is_not_yet_a_mistake() {
-        // Someone is mid-word. Marking it red here would flash a warning on
-        // the way to every correct query with a field in it.
+        // Someone is mid-word: a warning here fires on the way to every field.
         assert_eq!(
             roles("ext:"),
             vec![(Role::Field, "ext"), (Role::Colon, ":")]
@@ -1347,9 +1148,7 @@ mod tests {
 
     #[test]
     fn completions_offer_fields_by_prefix() {
-        // Offered, not offered *alone*: `exe:` begins with the same two
-        // letters, and asserting a count here was asserting that no field
-        // would ever be added.
+        // Offered, not offered alone: `exe:` shares the first two letters.
         let c = complete("ex", 2);
         assert!(c.iter().any(|x| x.insert == "ext:"), "{c:?}");
         assert!(c.iter().all(|x| x.insert.starts_with("ex")), "{c:?}");
@@ -1367,8 +1166,7 @@ mod tests {
         let c = complete("kind:i", 6);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].insert, "kind:image");
-        // The spelling the user chose is kept, so accepting a completion does
-        // not silently rewrite their query into another language.
+        // The spelling the user chose is kept.
         let c = complete("tür:i", 6);
         assert_eq!(c[0].insert, "tür:image");
     }
@@ -1388,26 +1186,22 @@ mod tests {
 
     #[test]
     fn a_caret_inside_a_character_does_not_take_the_connection_down() {
-        // What a browser sends after typing `İ`: one code unit per character,
-        // where this counts two bytes for that one. Every offset from nowhere
-        // to past the end has to answer rather than panic — the caller is a
-        // socket, and the panic was killing the thread holding it.
+        // A browser counts `İ` as one code unit where this counts two bytes.
+        // Every offset up to past the end must answer rather than panic.
         for input in ["İ", "kİ", "ad:İ", "rapor İş", "TRABZON.MÜZEKKERE"] {
             for cursor in 0..=input.len() + 4 {
                 let _ = complete(input, cursor);
             }
         }
 
-        // And it lands on the character the caret is inside, not before it:
-        // `ad:İ` is 5 bytes, so a browser's 4 is mid-`İ` and means the word so
-        // far — which is still `ad:`, still a field, still worth an offer.
+        // It lands on the character the caret is inside: `ad:İ` is 5 bytes,
+        // so a browser's 4 is mid-`İ` and still means the word so far.
         assert_eq!(complete("ad:İ", 4), complete("ad:İ", 3));
     }
 
     #[test]
     fn every_offered_completion_parses_as_what_it_claims() {
-        // The strongest thing this can promise: take any field it offers,
-        // fill it in the way its own example does, and the parser reads it as
+        // Any offered field, filled in as its own example does, parses as
         // that field rather than as plain text.
         for f in FIELDS {
             let query = if f.example.is_empty() {
@@ -1457,8 +1251,7 @@ mod list_tests {
 
     #[test]
     fn whitespace_inside_a_list_is_a_separator_not_a_boundary() {
-        // The parser closes these spaces up, so colouring them as term
-        // boundaries would show a query the engine does not see.
+        // The parser closes these spaces up; they are not term boundaries.
         assert_eq!(
             roles("ext:rs ; toml"),
             vec![
@@ -1485,11 +1278,8 @@ mod list_tests {
                 (Role::Text, "toml"),
             ]
         );
-        // **And a `;` standing alone is not a boundary at all.** The
-        // comment here used to say "no list in front of it, so the parser
-        // leaves this alone too", and the parser had never left it alone:
-        // `rapor ; pdf` is one term with two alternatives. Two ordinary gaps
-        // drew it as two terms AND-ed, which is a different query.
+        // With no list in front of it, `rapor ; pdf` is two AND-ed terms and
+        // three ordinary gaps.
         assert_eq!(
             roles("rapor ; pdf")
                 .into_iter()
@@ -1538,8 +1328,7 @@ mod without_tests {
 
     #[test]
     fn nothing_to_drop_is_none_rather_than_the_same_string() {
-        // The caller asks one question instead of two on this answer, so it
-        // has to be distinguishable from a query that merely came back equal.
+        // Must be distinguishable from a query that merely came back equal.
         assert_eq!(drop_kind("rapor"), None);
         assert_eq!(drop_kind(""), None);
         assert_eq!(without_at("rapor kind:code", &["dm"], NOW), None);
@@ -1554,16 +1343,13 @@ mod without_tests {
 
     #[test]
     fn an_excluded_term_is_still_that_field() {
-        // `!kind:image` narrows by kind as much as `kind:image` does, and a
-        // rail counted over it would be missing exactly the bar it is drawn
-        // to offer.
+        // `!kind:image` narrows by kind as much as `kind:image` does.
         assert_eq!(drop_kind("rapor !kind:image").as_deref(), Some("rapor"));
     }
 
     #[test]
     fn a_value_the_parser_would_not_take_is_left_alone() {
-        // `kind:zurna` is searched for as text. Dropping it would answer a
-        // different question, not a wider one.
+        // `kind:zurna` is text: dropping it answers a different question.
         assert_eq!(drop_kind("rapor kind:zurna"), None);
         assert_eq!(without_at("rapor dm:soon", &["dm"], NOW), None);
     }
@@ -1579,11 +1365,8 @@ mod without_tests {
 
     #[test]
     fn a_term_out_of_the_middle_leaves_the_spaces_that_were_beside_it() {
-        // Two spaces, and deliberately so: the page does exactly this, and a
-        // tidier answer here would be one more thing that has to be tidied
-        // identically there. The parser reads them as one separator, and the
-        // ends are trimmed, so the only visible effect is on a string nobody
-        // shows anybody.
+        // Two spaces, deliberately: the parser reads them as one separator
+        // and the ends are trimmed, so nothing downstream sees a difference.
         assert_eq!(drop_kind("a kind:code b").as_deref(), Some("a  b"));
         assert_eq!(drop_kind("kind:code b").as_deref(), Some("b"));
         assert_eq!(drop_kind("a kind:code").as_deref(), Some("a"));

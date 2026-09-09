@@ -1,72 +1,28 @@
-//! What every Scour window agrees on.
-//!
-//! **Data, and nothing else.** The palette and the metrics live here once; a
-//! window reads them and turns them into whatever its own toolkit wants — CSS
-//! custom properties in the browser, globals in Slint, escape codes in a
-//! terminal. This crate has no dependencies and knows about none of them.
-//!
-//! ## Why it exists
-//!
-//! There were two copies. `page.html` declared twenty-six CSS variables and
-//! `theme.slint` declared thirty properties, and they held **the same hex
-//! codes** — `#0d1117`, `#7fa9e0`, `4px`, `30px` — because somebody kept them
-//! that way by hand. That works right up until it doesn't, and it already
-//! hadn't: the focus colour had drifted apart in the light theme, one side
-//! saying `#4a9eff` and the other `#2f6ba3`, and nothing anywhere could tell.
-//!
-//! ## What is deliberately *not* here
-//!
-//! Layout. Where a button sits, how a panel opens, what a list does when it is
-//! scrolled — those are a toolkit's business and copying them between two
-//! toolkits produces something that fits neither. What is shared is the
-//! vocabulary: this colour means "a field name", that one means "changed this
-//! week", a row is thirty pixels tall.
+//! What every Scour window agrees on: data, and nothing else. Each face turns
+//! it into what its toolkit wants — CSS variables, Slint globals, escape codes
+//! — and this crate has no dependencies. What is shared is the vocabulary,
+//! never the layout: which colour means "a field name", how tall a row is.
 
 pub mod faces;
 pub mod format;
 pub mod path;
 pub mod preview;
 
-/// What every face says while the index is being walked.
-///
-/// **A number, not a word.** A face that says `scanning` and nothing else
-/// cannot be told from one that is stuck, and the moment the question is
-/// asked — somebody switched a skip rule off and is watching the counts for
-/// proof — a still indicator is the same as no indicator. `scanned` climbs
-/// several times a second during a walk, so it is the proof.
-///
-/// The msgid rather than the sentence, because the number has to be
-/// punctuated in the reader's language and only the caller has the catalogue.
-/// Empty when nothing is being walked, which is what a face draws nothing for.
+/// What every face says while the index is being walked. A number, not a word:
+/// a still indicator cannot be told from a stuck one. The msgid rather than the
+/// sentence, because only the caller can punctuate a number.
 pub const SCANNING: &str = "scanning {n}";
 
-/// The index has grown an unsorted tail, and searching has slowed for it.
-///
-/// **Every face says this, from here, because it is a fact about the index
-/// rather than about a window.** Every query reads that tail: a week of
-/// ordinary use took ordering by path from 1.9 ms to 21.5 on the machine this
-/// was written for, and one rebuild put it back. The engine has always worked
-/// out when it was due — [`scour_core::Status::rebuild_advised`] — and the
-/// answer reached the command line and nowhere else.
-///
-/// It names the command rather than only the condition. A reader who cannot
-/// act on a number stops reading numbers.
+/// The index has grown an unsorted tail, and searching has slowed for it: a
+/// week of ordinary use took ordering by path from 1.9 ms to 21.5, and one
+/// rebuild put it back. Names the command, not only the condition.
 pub const REBUILD_ADVISED: &str = "`scour maintain rebuild` would speed searches up";
 pub mod menu;
 pub mod query;
 
-/// A colour, and the one representation both sides can be built from.
-///
-/// Alpha is carried because the palette needs it: the match wash and the
-/// selection tint are translucent on purpose, so that a row which is both
-/// matched *and* selected stays legible.
-///
-/// **The selection was 15% and could not be seen.** At that alpha it lands two
-/// or three values away from the row under the pointer, so "which row am I on"
-/// and "which row is selected" were the same faint blue — and on a list of
-/// hover, match and selection stacked, none of the three said which it was.
-/// 26% dark and 20% light is still translucent enough that a matched row shows
-/// its wash through, and is a colour rather than a suggestion of one.
+/// A colour, and the one representation both sides can be built from. Alpha is
+/// carried so a row that is both matched and selected stays legible: at 15% the
+/// selection was indistinguishable from hover, so it is 26% dark, 20% light.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba {
     pub r: u8,
@@ -96,11 +52,8 @@ impl Rgba {
         }
     }
 
-    /// How the browser wants it: `#rrggbb`, or `rgba(…)` when translucent.
-    ///
-    /// Two spellings rather than always `#rrggbbaa`, because the page these
-    /// go into is read by people and `rgba(74, 158, 255, .15)` is what was
-    /// written there before this crate existed.
+    /// How the browser wants it: `#rrggbb`, or `rgba(…)` when translucent —
+    /// two spellings rather than `#rrggbbaa`, because people read the page.
     pub fn css(&self) -> String {
         if self.a == 255 {
             format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
@@ -122,10 +75,8 @@ impl Rgba {
     }
 }
 
-/// Every colour a window needs, in one of the two schemes.
-///
-/// The field names are the vocabulary. A window may not invent a colour that
-/// is not here; if it needs one, it belongs here and in both windows at once.
+/// Every colour a window needs, in one of the two schemes. The field names are
+/// the vocabulary: a window that needs a new colour adds it here, for both.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     /// Behind the window itself.
@@ -148,39 +99,22 @@ pub struct Palette {
     pub mark: Rgba,
     /// Text drawn *on* `mark`, where the toolkit cannot blend.
     pub mark_ink: Rgba,
-    /// The tint over a selected row. Translucent, and blue where the match
-    /// wash is yellow — a row can be both at once.
+    /// The tint over a selected row: translucent, and blue where the match wash
+    /// is yellow, since a row can be both at once.
     pub pick: Rgba,
     /// The ring around whatever has the keyboard.
     pub focus: Rgba,
     /// The row under the pointer.
     pub hover: Rgba,
-    /// What a menu draws on the one item that changes something.
-    ///
-    /// **Not an error colour.** Nothing has gone wrong when this is on screen;
-    /// it is on the item that moves a file to the wastebasket, and the reader
-    /// is being told which one that is before their hand gets there. Red
-    /// rather than orange because the reader already knows what red on a menu
-    /// item means and this is not the place to teach them something new.
+    /// What a menu draws on the one item that changes something. Not an error
+    /// colour: it marks the wastebasket item before a hand gets there.
     pub danger: Rgba,
-    /// The time spectrum, newest to oldest. Six bands, and the engine already
-    /// stores rows in date order, so an unbroken spectrum runs the length of
-    /// the list.
+    /// The time spectrum, newest to oldest. Six bands, and rows are stored in
+    /// date order, so the spectrum runs unbroken down the list.
     pub t: [Rgba; 6],
-    /// The query line's own palette, **deliberately separate** from the time
-    /// spectrum: the spectrum uses all of the saturation there is, and reusing
-    /// a band here would give "changed yesterday" and "field value" the same
-    /// colour.
-    ///
-    /// **What is being looked for.** A bare word — the thing the query is
-    /// actually about.
-    ///
-    /// It used to be the ordinary ink, on the reasoning that the plain part of
-    /// a query is plain. But a query line is read to answer two questions —
-    /// what am I looking for, and what am I leaving out — and the answer to
-    /// the first was the same colour as the punctuation around it. Blue for
-    /// what is wanted, red for what is not, is the pair somebody can read
-    /// without being taught.
+    /// What is being looked for: a bare word. Blue against the red of `q_not`.
+    /// The query palette is separate from the time spectrum, or "changed
+    /// yesterday" and "field value" would share a colour.
     pub q_term: Rgba,
     /// Field name and comparison — structure.
     pub q_key: Rgba,
@@ -188,18 +122,10 @@ pub struct Palette {
     pub q_val: Rgba,
     /// Wildcard — a pattern rather than a word.
     pub q_glob: Rgba,
-    /// **Exclusion.** Red, and the opposite of `q_term` on purpose.
-    ///
-    /// This was orange, on the reasoning that an exclusion is deliberate and
-    /// red is for mistakes. True, and it lost the argument to the thing a
-    /// person actually does with this line: `!` means *not this*, and the
-    /// colour of not-this is red in every interface anybody has used.
+    /// Exclusion. Red, the opposite of `q_term`: `!` means not this.
     pub q_not: Rgba,
-    /// Looks like a field, was searched for as text.
-    ///
-    /// Amber now that red belongs to exclusion — which is the better fit
-    /// anyway: this is not an error, it is a warning that the query does not
-    /// mean what it looks like it means.
+    /// Looks like a field, was searched for as text. Amber: a warning that the
+    /// query does not mean what it looks like, not an error.
     pub q_bad: Rgba,
 }
 
@@ -218,8 +144,7 @@ pub const DARK: Palette = Palette {
     pick: Rgba::wash(0x4a9eff, 26),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0x171f29),
-    // Legible on the dark panel without shouting: the same red the
-    // browser face uses for a refused rule, one step brighter.
+    // Legible on the dark panel without shouting.
     danger: Rgba::hex(0xd07070),
     t: [
         Rgba::hex(0xffb020),
@@ -237,14 +162,8 @@ pub const DARK: Palette = Palette {
     q_bad: Rgba::hex(0xe8a33d),
 };
 
-/// The light scheme.
-///
-/// **`focus` is the browser's `#4a9eff`, not the window's `#2f6ba3`.** The two
-/// had drifted: the page never redeclared `--focus` in its light block, so the
-/// dark value carried over, while `theme.slint` had chosen a darker blue. The
-/// browser's actual behaviour wins here because it is the one people have been
-/// looking at. If the darker ring is the better answer it is now one edit, in
-/// one place, for both windows.
+/// The light scheme. `focus` stays `#4a9eff` here rather than darkening, which
+/// is the ring people have actually been looking at.
 pub const LIGHT: Palette = Palette {
     ground: Rgba::hex(0xf7f5f0),
     panel: Rgba::hex(0xfffefb),
@@ -259,8 +178,7 @@ pub const LIGHT: Palette = Palette {
     pick: Rgba::wash(0x0062cc, 20),
     focus: Rgba::hex(0x4a9eff),
     hover: Rgba::hex(0xefece4),
-    // Darker on paper, so it carries the same weight against a light
-    // ground that the one above does against a dark one.
+    // Darker on paper, for the same weight against a light ground.
     danger: Rgba::hex(0xa8342c),
     t: [
         Rgba::hex(0xd98600),
@@ -278,10 +196,8 @@ pub const LIGHT: Palette = Palette {
     q_bad: Rgba::hex(0x9a6a10),
 };
 
-/// The numbers that are not colours.
-///
-/// Pixels, and they mean the same thing in both windows because both draw at
-/// the same nominal scale and let the platform handle the rest.
+/// The numbers that are not colours: pixels at the same nominal scale in both
+/// windows, with the platform handling the rest.
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
     /// The spacing unit everything else is a multiple of.
@@ -301,32 +217,19 @@ pub const METRICS: Metrics = Metrics {
     size: 13.0,
 };
 
-/// Words people write as operators that this language does not read as ones.
-///
-/// Whitespace is AND, `|` is OR, `!` is NOT — so `a or b` looks for three
-/// words, one of which is "or", and nothing anywhere is marked wrong. It is
-/// the one case where a query means something else entirely and the colouring
-/// has nothing to say about it, so the reading is shown for it whether or not
-/// anything else in the query earns a line.
+/// Words people write as operators that this language does not read as ones:
+/// `a or b` looks for three words, and nothing in the colouring says so.
 pub const MISTAKEN: [&str; 6] = ["or", "and", "not", "ve", "veya", "değil"];
 
-/// The font stacks, as the browser wants them written.
-///
-/// A native window cannot use a list like this — it asks the platform for one
-/// family, and the generic at the end of this stack is *not* one: a toolkit
-/// looks for a family literally called "monospace", finds none, and serves the
-/// interface sans instead. So the window resolves the generic the way the rest
-/// of the desktop does, through fontconfig, and lands on the same face this
-/// list ends at. See `scour-gui`'s `mono_family`.
+/// The font stacks, as the browser wants them written. A native window asks the
+/// platform for one family and the trailing generic is not one, so it resolves
+/// `monospace` through fontconfig — see `scour-gui`'s `mono_family`.
 pub const MONO: &str =
     r#"ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace"#;
 pub const SANS: &str = r#"system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif"#;
 
-/// The palette as CSS custom properties, without the surrounding braces.
-///
-/// Written here rather than in the bridge because the *names* are part of the
-/// shared vocabulary: `--q-key` is the same idea as `Theme.q-key`, and a page
-/// that renamed it would be a page this crate no longer describes.
+/// The palette as CSS custom properties, without the surrounding braces. The
+/// names are part of the vocabulary: `--q-key` is `Theme.q-key`.
 pub fn css_vars(p: &Palette) -> String {
     let mut s = String::with_capacity(700);
     let mut put = |name: &str, c: &Rgba| {
@@ -374,14 +277,8 @@ pub fn css_metrics() -> String {
 mod tests {
     use super::*;
 
-    /// The two schemes describe the same set of colours.
-    ///
-    /// A scheme that forgot a field is how the drift started: the page's light
-    /// block never redeclared `--focus`, so it silently kept a colour meant
-    /// for a dark background. Here that cannot happen — the struct has the
-    /// field or it does not compile — and this checks the weaker thing the
-    /// type system cannot: that neither scheme left one at the other's value
-    /// by accident.
+    /// The struct makes the two schemes describe the same set of colours; this
+    /// checks the weaker thing, that neither left a field at the other's value.
     #[test]
     fn the_two_schemes_are_actually_different() {
         assert_ne!(DARK.ground, LIGHT.ground);
@@ -401,8 +298,7 @@ mod tests {
         assert_eq!(LIGHT.pick.css(), "rgba(0, 98, 204, .20)");
     }
 
-    /// Opaque colours are written the short way, because that is what the page
-    /// said before and a diff of the served page should be empty.
+    /// Opaque colours are written the short way, as the page writes them.
     #[test]
     fn an_opaque_colour_is_six_digits() {
         assert_eq!(DARK.ground.css(), "#0d1117");
@@ -410,8 +306,8 @@ mod tests {
         assert_eq!(LIGHT.panel.css(), "#fffefb");
     }
 
-    /// Slint takes alpha first; the browser takes it last. Getting this the
-    /// wrong way round is invisible for `#ffffff` and wrong for everything.
+    /// Slint takes alpha first, the browser last: reversed, `#ffffff` still
+    /// looks right and nothing else does.
     #[test]
     fn argb_is_alpha_first() {
         assert_eq!(DARK.focus.argb(), (255, 0x4a, 0x9e, 0xff));
@@ -423,82 +319,42 @@ mod tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
     Start,
-    /// Numbers, right-aligned so the digits line up down the column — the
-    /// whole reason a size column is readable at a glance.
+    /// Numbers, right-aligned so the digits line up down the column.
     End,
 }
 
-/// One column a window can show.
-///
-/// **The definition, not the drawing.** How a cell is painted is each window's
-/// own business — one writes a `<td>`, the other a `Text` — but *which*
-/// columns exist, what they are called, what sorting them asks the service
-/// for, and how wide they start out are the same in both or the two windows
-/// are two programs.
+/// One column a window can show: the definition, not the drawing. Which columns
+/// exist, their names, sort keys and starting widths are the same in every face.
 #[derive(Debug, Clone, Copy)]
 pub struct Column {
     /// What the settings file calls it. Stable; the sort key is not.
     pub id: &'static str,
     /// The English source string, and therefore the catalogue key.
     pub msgid: &'static str,
-    /// What `sort:` this column asks the service for. Empty means the column
-    /// cannot be sorted by.
+    /// What `sort:` this column asks for; empty means it cannot be sorted by.
     pub sort: &'static str,
-    /// What it asks for in pixels, before anything is shared out or taken
-    /// back. A person dragging the edge overrides it, and what they chose is
-    /// kept per column id — see `scour_settings::widths`.
+    /// What it asks for in pixels before anything is shared out or taken back.
+    /// A drag overrides it, kept per column id in `scour_settings::widths`.
     pub width: u32,
-    /// Never squeezed narrower than this, whatever else has to give.
-    ///
-    /// **This is the number that keeps the right-hand columns on screen.**
-    /// Without a floor per column, a narrow window and a wide name took the
-    /// date and the size off the edge entirely: they were still in the table,
-    /// still being fetched and drawn, and nowhere a person could see them.
-    /// A column that has reached its floor stops paying, and the two that
-    /// hold text carry the rest — which is right, because a path that elides
-    /// is still a path and a date cut in half is nothing.
+    /// Never squeezed narrower than this: the floor is what keeps the date and
+    /// the size on screen. A column on its floor stops paying, so the two text
+    /// columns carry the rest — a path that elides is still a path.
     pub min: u32,
-    /// Its share of the stretching room in a **narrow** window, as a
-    /// percentage. Zero is a column that never stretches and keeps [`width`].
-    ///
-    /// [`width`]: Column::width
-    ///
-    /// **The shares slide with the window, and that is the point.** A fixed
-    /// ratio between the name and the location is right at exactly one width.
-    /// In a narrow window the name is what a person needs — it is how a file
-    /// is recognised, and there is nowhere else to read it; the location is
-    /// context, and the preview panel and the tooltip both have it. In a wide
-    /// one the name has long since run out of characters to show and the
-    /// location has not, so the room should go there.
-    ///
-    /// So a stretching column asks for a percentage of the room rather than a
-    /// number of pixels, and the percentage it asks for depends on how much
-    /// room there is. Between [`NARROW`] and [`WIDE`] the two are mixed in
-    /// proportion, which makes the change continuous: a window being dragged
-    /// wider never shows a column jumping.
-    ///
-    /// Only columns nobody has dragged stretch at all: a width somebody chose
-    /// is an answer, not a hole to pour space into.
+    /// Its share of the stretching room in a **narrow** window, as a percentage;
+    /// zero never stretches and keeps [`width`](Column::width). The share slides
+    /// to [`far`](Column::far) between [`NARROW`] and [`WIDE`], continuously, so
+    /// the name leads in a narrow window and the location in a wide one.
     pub near: u8,
-    /// Its share in a **wide** window, as a percentage. See [`near`].
-    ///
-    /// [`near`]: Column::near
+    /// Its share in a **wide** window, as a percentage. See [`near`](Column::near).
     pub far: u8,
-    /// As wide as growth may take it; zero is no ceiling.
-    ///
-    /// **Only the name has one.** Its share already falls as the window grows,
-    /// but on a very wide screen thirty per cent of the room is still more
-    /// pixels than a file name has characters. Past its ceiling the name stops
-    /// taking and what it declined goes round again to the location, which can
-    /// always use it.
+    /// As wide as growth may take it; zero is no ceiling. Only the name has
+    /// one: past it, what it declines goes round again to the location.
     pub max: u32,
     pub align: Align,
 }
 
-/// Every column, in the order a window shows them when nobody has said
-/// otherwise.
-///
-/// The first five are the default set. The rest are there to be turned on.
+/// Every column, in default order. The first five are the default set; the rest
+/// are there to be turned on.
 pub const COLUMNS: &[Column] = &[
     Column {
         id: "name",
@@ -634,11 +490,8 @@ pub const COLUMNS: &[Column] = &[
     },
 ];
 
-/// What a window shows before anybody has chosen.
-///
-/// Five, and the order is the reading order of the question people actually
-/// ask: what is it called, what kind of thing is it, where does it live, when
-/// did it change, how big is it.
+/// What a window shows before anybody has chosen, in the reading order of the
+/// question: what, what kind, where, when, how big.
 pub const DEFAULT_COLUMNS: &[&str] = &["name", "kind", "path", "mtime", "size"];
 
 /// Look one up by the id the settings file uses.
@@ -647,71 +500,26 @@ pub fn column(id: &str) -> Option<&'static Column> {
 }
 
 /// The window width at which a stretching column asks for its [`Column::near`]
-/// share, and below which it asks for nothing more.
-///
-/// Picked from what the columns are for rather than from a screen size: below
-/// about seven hundred pixels of room there is no arrangement of five columns
-/// that reads well, and every share is academic — the floors are already doing
-/// the deciding.
+/// share, and below which it asks for nothing more: under 700px the floors are
+/// already doing the deciding.
 pub const NARROW: u32 = 700;
-/// And where it asks for its [`Column::far`] share, and stops changing.
-///
-/// A laptop panel at its usual scaling leaves somewhere near a thousand
-/// pixels for the columns, so the sliding happens across the widths people
-/// actually work at rather than at one end of them.
+/// And where it asks for its [`Column::far`] share, and stops changing. A
+/// laptop leaves near a thousand pixels, so the slide covers the working range.
 pub const WIDE: u32 = 1900;
 
-/// How wide each of the columns on screen is, given the room there is.
+/// How wide each of the columns on screen is, given the room there is. The
+/// widths add up to `avail` exactly at every size, which is the property the
+/// whole thing exists for; only a room narrower than one pixel a column fails.
 ///
-/// **The arithmetic, in one place, because both windows got it wrong in the
-/// same way.** Each of them worked out a width per column against the room it
-/// had and then drew them; neither checked that the answers added up to the
-/// room. On a wide screen that gave the name half the table for a word twenty
-/// characters long; on a narrow one, or after somebody dragged the name wider,
-/// the total ran past the right edge and the last two columns — the date and
-/// the size — were simply not on screen. Nothing said so: they were still
-/// listed, still fetched, still drawn, off the end.
+/// Four moves: what each column asks for (a drag, else its own width, else a
+/// share of what is left that slides from [`Column::near`] to [`Column::far`]);
+/// share out the remainder, a column at its [`Column::max`] dropping out; take
+/// back the overflow in proportion to what each has above its floor; and below
+/// [`floor_width`] let the floors give way together rather than draw a column
+/// off the right-hand edge.
 ///
-/// So the answer here always fits, and it is reached in three moves:
-///
-/// 1. **What each column asks for.** A width somebody dragged, if there is
-///    one. Otherwise a column that does not stretch asks for its own width,
-///    and a column that does asks for a **percentage of what is left after
-///    those** — a percentage that slides with the window, from
-///    [`Column::near`] to [`Column::far`] between [`NARROW`] and [`WIDE`].
-///    Nothing goes below its floor: a remembered width from a narrower window
-///    is not a width to keep.
-///
-///    This is what makes the name and the location responsive to each other
-///    rather than to a ratio decided once. Narrow, they are about even and the
-///    name is readable; wide, the location has most of the row and the name
-///    has stopped needing more.
-/// 2. **Share out anything still left**, among the stretching columns nobody
-///    has dragged. A column that reaches its [`Column::max`] drops out and
-///    what it declined goes round again — which is how the name stops at a
-///    readable width and the location takes the rest of a wide screen.
-/// 3. **Take back what does not fit**, in proportion to how much each column
-///    has above its floor. The two that hold text have most of the room above
-///    theirs, so they give up nearly all of it and the date and the size — a
-///    few pixels above their floors — keep their digits.
-///
-/// `chosen` answers with the width a person dragged that column to, or `None`.
-/// Zero counts as `None`, which is how the settings file says it too: a width
-/// of zero is not a column somebody wanted, it is one nobody has touched.
-///
-/// 4. **And if even the floors do not fit, the floors give way too**, all of
-///    them together and in proportion. A window narrow enough for that is a
-///    window with the preview panel open on a small screen, and there the
-///    choice is between five cramped columns and two of them drawn past the
-///    right-hand edge where nobody can see them. Cramped is the better half
-///    of that: a column too narrow to read still says it is there, and a
-///    column off the edge says nothing at all. [`floor_width`] is the width
-///    below which this happens.
-///
-/// The widths add up to `avail` exactly, at every size — which is the property
-/// the whole thing exists for and the one the tests check across every width
-/// from cramped to a very wide screen. The only exception is a room narrower
-/// than the number of columns, which is not a window.
+/// `chosen` is the width a person dragged that column to, or `None`. Zero
+/// counts as `None`, as the settings file means it.
 pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -> Vec<u32> {
     let cols: Vec<&Column> = ids.iter().filter_map(|id| column(id)).collect();
     if cols.is_empty() {
@@ -722,12 +530,8 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
         .map(|c| chosen(c.id).filter(|w| *w > 0))
         .collect();
 
-    // What the stretching columns have to divide between them: the room, less
-    // every column that is not stretching — the fixed ones at their own width
-    // and the dragged ones at whatever they were dragged to.
-    // Only the columns that never stretch are taken off the top. A dragged
-    // one stays in the budget — see `DRAG_CAP` below — so that narrowing the
-    // window is shared rather than paid by whichever column was not touched.
+    // The room, less the columns that never stretch. A dragged one stays in
+    // the budget — see `DRAG_CAP` — so narrowing the window is shared.
     let taken: u32 = cols
         .iter()
         .zip(&set)
@@ -742,41 +546,22 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
         .zip(&set)
         .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
         .collect();
-    // **A dragged width is a wish, not a lock.**
-    //
-    // It used to be taken out of the budget entirely, so a column somebody had
-    // dragged kept that width whatever the window did — and the column beside
-    // it paid the whole bill. Dragging the name to 359 and then narrowing the
-    // window took every pixel out of the location until it hit its floor, and
-    // only then did the name move at all. Reported as "the name never narrows,
-    // only the path does", which is exactly what the code said to do.
-    //
-    // So a dragged width is honoured while there is room for it and gives way
-    // in proportion when there is not: at most this share of what the
-    // stretching columns have between them. Wide open it changes nothing —
-    // 359 of a 1301px budget is 28% — and it is what makes a narrow window
-    // shrink both columns instead of one.
-    //
-    // Forty-five rather than sixty: at sixty the sharing did not begin until
-    // the location had fallen from 942px to 212, which is not "when there is
-    // no room", it is the other column being spent first. It is a floor under
-    // the column's own sliding share, never a ceiling below it.
+    // A dragged width is a wish, not a lock: honoured while there is room, and
+    // capped at this share of the stretching budget when there is not, so a
+    // narrowing window shrinks both text columns instead of one. 45 rather
+    // than 60, at which the location fell from 942px to 212 before the dragged
+    // column moved. A floor under the column's own sliding share, not a ceiling.
     const DRAG_CAP: u32 = 45;
     let mut handed = 0;
     for (n, &i) in stretchy.iter().enumerate() {
-        // The last stretching column takes what the others left, so the
-        // shares add up to the budget exactly however they rounded.
         let want = match set[i] {
-            // Dragged: what was asked for, while it fits inside a fair share
-            // — and never less than the column would have had untouched. A
-            // flat cap alone made a dragged name *narrower* in a small window
-            // than an undragged one, which turns asking for a width into a
-            // penalty for having asked.
+            // Dragged: what was asked for while it fits a fair share, and
+            // never less than the column would have had untouched.
             Some(chosen) => {
                 let fair = share_at(cols[i], avail).max(DRAG_CAP * 10);
                 chosen.min(budget * fair / 1000)
             }
-            // Not dragged, and last: whatever the others left, so the shares
+            // Not dragged and last: whatever the others left, so the shares
             // add up to the budget exactly however they rounded.
             None if n + 1 == stretchy.len() => budget.saturating_sub(handed),
             None => budget * share_at(cols[i], avail) / 1000,
@@ -799,12 +584,8 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
 }
 
 /// What share of the stretching room this column asks for at this width, in
-/// parts per thousand.
-///
-/// **Straight-line, and integer the whole way**, because the browser page has
-/// to reach the same number: a `f64` here and a `Number` there agree until
-/// they do not, and the disagreement is a column a pixel out at some widths
-/// and not others. See the test that runs both.
+/// parts per thousand. Straight-line and integer the whole way, because the
+/// browser page has to reach the same number.
 fn share_at(c: &Column, avail: u32) -> u32 {
     let t = if avail <= NARROW {
         0
@@ -817,10 +598,7 @@ fn share_at(c: &Column, avail: u32) -> u32 {
 }
 
 /// The narrowest these columns can be drawn with every floor still honoured.
-///
-/// For a window deciding its own minimum, or for a panel deciding whether it
-/// has room to open: below this, [`lay_out`] still fits the columns in, but by
-/// taking them under the widths they say they need.
+/// Below it, [`lay_out`] still fits them in, but under the widths they need.
 pub fn floor_width(ids: &[&str]) -> u32 {
     ids.iter().filter_map(|id| column(id)).map(|c| c.min).sum()
 }
@@ -842,10 +620,8 @@ fn share_out(cols: &[&Column], set: &[Option<u32>], w: &mut [u32], spare: u32) {
         }
         let mut spent = 0;
         for (n, &i) in open.iter().enumerate() {
-            // The last one takes the rounding as well as its share, so the
-            // widths add up to the room exactly rather than to a pixel or two
-            // less — which shows as a hairline of panel past the last column,
-            // and it moves as the window is dragged.
+            // The last one takes the rounding too, or a hairline of panel
+            // shows past the last column.
             let share = if n + 1 == open.len() {
                 left - spent
             } else {
@@ -869,14 +645,9 @@ fn share_out(cols: &[&Column], set: &[Option<u32>], w: &mut [u32], spare: u32) {
     }
 }
 
-/// Move 4, and only when move 3 ran out of room: everything in proportion.
-///
-/// **The floors are a promise about which column gives way first, not about
-/// the window being wide enough to keep them.** With the preview panel open on
-/// a small screen there are four hundred pixels for five columns whose floors
-/// add up to four hundred and sixty-six, and no ordering of who-gives-way
-/// fixes that. So they all give way at once and evenly, which at least leaves
-/// every column where a person can see it and take hold of its edge.
+/// Move 4, and only when move 3 ran out of room: everything in proportion. The
+/// floors say which column gives way first, not that the window can keep them —
+/// 400px for five floors adding to 466 has no ordering that works.
 fn squash(w: &mut [u32], avail: u32) {
     let sum: u32 = w.iter().sum();
     // Not a window: below a pixel a column there is nothing to say.
@@ -902,9 +673,8 @@ fn take_back(cols: &[&Column], w: &mut [u32], over: u32) {
     loop {
         let open: Vec<usize> = (0..cols.len()).filter(|&i| w[i] > cols[i].min).collect();
         let room: u32 = open.iter().map(|&i| w[i] - cols[i].min).sum();
-        // Every column is on its floor and the window is still too narrow.
-        // Nothing here can fix that; the floors go back and the drawing
-        // clips. See `floor_width`.
+        // Every column on its floor and the window still too narrow: nothing
+        // here can fix that, and `squash` takes over.
         if left == 0 || room == 0 {
             return;
         }
@@ -931,9 +701,8 @@ fn take_back(cols: &[&Column], w: &mut [u32], over: u32) {
 mod column_tests {
     use super::*;
 
-    /// Every default is a column that exists.
-    ///
-    /// A typo here is a window that starts with four columns and no complaint.
+    /// Every default is a column that exists: a typo starts a window with four
+    /// columns and no complaint.
     #[test]
     fn the_defaults_all_name_real_columns() {
         for id in DEFAULT_COLUMNS {
@@ -962,9 +731,8 @@ mod column_tests {
                 assert!(c.max >= c.width, "`{}`: ceiling below its own width", c.id);
                 assert!(c.near > 0, "`{}` has a ceiling it can never reach", c.id);
             }
-            // A stretching column asks for a share at both ends or at
-            // neither; one of the two left at zero is a column that collapses
-            // to its floor at that end of the range and nowhere says why.
+            // A share at both ends or neither: one of the two left at zero
+            // collapses the column to its floor at that end of the range.
             assert_eq!(
                 c.near == 0,
                 c.far == 0,
@@ -972,9 +740,7 @@ mod column_tests {
                 c.id
             );
         }
-        // The shares are percentages of one row and have to read as such at
-        // both ends, or the columns ask for more room than there is at one
-        // width and less at another.
+        // Percentages of one row, and they must read as such at both ends.
         for word in ["near", "far"] {
             let total: u32 = DEFAULT_COLUMNS
                 .iter()
@@ -990,9 +756,7 @@ mod column_tests {
         );
     }
 
-    /// **The invariant the whole thing exists for.** Whatever the window is
-    /// doing, the columns add up to the room — so there is never one drawn
-    /// past the right edge.
+    /// The invariant: the columns add up to the room, whatever the window does.
     #[test]
     fn the_widths_add_up_to_the_room_at_every_size() {
         for avail in (200..3600).step_by(7) {
@@ -1005,9 +769,7 @@ mod column_tests {
         }
     }
 
-    /// The complaint this was written for: a name dragged wide used to push
-    /// the date and the size off the right-hand edge, where they were drawn
-    /// and could not be seen.
+    /// A name dragged wide must not push the date and the size off the edge.
     #[test]
     fn a_name_dragged_far_too_wide_does_not_push_the_date_and_size_off() {
         let avail = 900;
@@ -1045,13 +807,8 @@ mod column_tests {
         }
     }
 
-    /// **A dragged width is a wish, not a lock.**
-    ///
-    /// Reported as "the name never narrows, only the path does": a column
-    /// dragged to 359px was taken out of the budget entirely, so narrowing the
-    /// window took every pixel from the location — 942 down to 212 — before
-    /// the name moved at all. Now it is honoured while there is room and
-    /// follows its own share down when there is not.
+    /// A dragged width is a wish, not a lock: honoured while there is room,
+    /// following its own share down when there is not.
     #[test]
     fn a_dragged_column_gives_way_too_once_there_is_no_room() {
         let pinned = |id: &str| (id == "name").then_some(359);
@@ -1082,12 +839,8 @@ mod column_tests {
         }
     }
 
-    /// **The thing the sliding shares are for**: the two text columns trade
-    /// places as the window grows, and they do it without a step.
-    ///
-    /// Narrow, the name is the one a person needs and gets about half the
-    /// room. Wide, it has run out of characters to show and the location —
-    /// which never does — has most of it.
+    /// What the sliding shares are for: the two text columns trade places as
+    /// the window grows, and they do it without a step.
     #[test]
     fn the_name_leads_in_a_narrow_window_and_the_location_in_a_wide_one() {
         let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
@@ -1107,13 +860,9 @@ mod column_tests {
             at(&roomy, "name")
         );
 
-        // **And no step anywhere between.** A ratio that switched over at a
-        // threshold would show as a column jumping under the hand while the
-        // window edge is being dragged, and it would jump by tens of pixels.
-        // The shares slide instead, so one pixel of window is a pixel or two
-        // of column — the four here is integer arithmetic, not a threshold: a
-        // share is carried in parts per thousand and crossing one of those
-        // moves a wide column by about its budget over a thousand.
+        // No step anywhere between: one pixel of window is a pixel or two of
+        // column. The 4 is integer rounding on a share carried in parts per
+        // thousand, not a threshold.
         let mut last = lay_out(DEFAULT_COLUMNS, |_| None, 500);
         for avail in 501..3000 {
             let now = lay_out(DEFAULT_COLUMNS, |_| None, avail);
@@ -1131,15 +880,13 @@ mod column_tests {
         let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(160), 2400);
         assert_eq!(w[0], 160, "the name was grown past what was chosen");
         assert_eq!(w.iter().sum::<u32>(), 2400);
-        // A remembered width from a narrower window is pulled up to the floor
-        // rather than kept: nobody chose to make a column unreadable.
+        // A remembered width from a narrower window is pulled up to the floor.
         let w = lay_out(DEFAULT_COLUMNS, |id| (id == "size").then_some(3), 1400);
         let size = w[DEFAULT_COLUMNS.iter().position(|i| *i == "size").unwrap()];
         assert_eq!(size, column("size").unwrap().min);
     }
 
-    /// Below every floor at once, they all give way together — because the
-    /// other answer is two columns drawn off the right-hand edge.
+    /// Below every floor at once, they all give way together.
     #[test]
     fn too_narrow_for_the_floors_cramps_them_rather_than_losing_any() {
         let floor = floor_width(DEFAULT_COLUMNS);
@@ -1166,10 +913,8 @@ mod column_tests {
         }
     }
 
-    /// Numbers are the ones that right-align, and only those.
-    ///
-    /// Stated as a test because it is the rule a new column will be added
-    /// against, and "size-ish" is not something the type can check.
+    /// Numbers are the ones that right-align, and only those — a rule the type
+    /// cannot check.
     #[test]
     fn only_the_sizes_are_right_aligned() {
         for c in COLUMNS {
@@ -1190,16 +935,9 @@ pub const BAR_COUNT: usize = 24;
 /// How far back the ribbon reaches, in days.
 pub const BAR_SPAN_DAYS: f64 = 730.0;
 
-/// The upper edge of each bar, in days, newest first.
-///
-/// **Logarithmic, so that the last day, the last week and the last year all
-/// have room on one screen.** A linear scale spends twenty-three of its
-/// twenty-four bars on "older than a month", which is the part nobody is
-/// looking for.
-///
-/// These are what the service is asked for — `FacetBy::Age { edges }` — so the
-/// two windows asking for different edges would be two windows drawing
-/// different histograms of the same index.
+/// The upper edge of each bar, in days, newest first. Logarithmic, so the last
+/// day, week and year all have room: a linear scale spends 23 of 24 bars on
+/// "older than a month". The service is asked for exactly these edges.
 pub fn bar_edges() -> Vec<u32> {
     let mut v: Vec<u32> = (0..BAR_COUNT)
         .map(|i| {
@@ -1213,10 +951,8 @@ pub fn bar_edges() -> Vec<u32> {
     v
 }
 
-/// Which of the six time bands an age in days falls in, oldest last.
-///
-/// The same six the rows use for the date's colour, so a bar and the rows it
-/// stands for are the same colour.
+/// Which of the six time bands an age in days falls in, oldest last — the same
+/// six the rows use, so a bar and the rows it stands for match.
 pub fn band_of(days: f64) -> usize {
     match days {
         d if d < 1.0 => 0,
@@ -1232,12 +968,8 @@ pub fn band_of(days: f64) -> usize {
 mod ribbon_tests {
     use super::*;
 
-    /// The edges are what the browser page has always computed.
-    ///
-    /// Written out rather than recomputed, because the point is that this
-    /// function replaced a line of JavaScript and has to produce the same
-    /// twenty-four numbers — a ribbon whose bars mean something slightly
-    /// different in each window is worse than two ribbons.
+    /// The edges, written out rather than recomputed: every face must draw the
+    /// same twenty-four numbers.
     #[test]
     fn the_edges_match_the_page() {
         let want: [u32; BAR_COUNT] = [
@@ -1247,14 +979,9 @@ mod ribbon_tests {
         assert_eq!(bar_edges(), want, "the ribbon's bars moved");
     }
 
-    /// The ribbon reads left to right as time does.
-    ///
-    /// **`bar_edges()` is newest first and a ribbon is not.** The edges are
-    /// upper bounds, so the smallest one is the newest bar; the ribbon's axis
-    /// says "2 years ago" at its left end. A window drawing them in the order
-    /// they arrive gets bars running backwards under an axis that does not —
-    /// which is worse than no ribbon, because it is a ribbon that is
-    /// confidently wrong. Both windows reverse; this says why in one place.
+    /// The ribbon reads left to right as time does, and `bar_edges()` is newest
+    /// first: the edges are upper bounds, so every face reverses them before
+    /// drawing or the bars run backwards under the axis.
     #[test]
     fn the_edges_are_newest_first_and_the_ribbon_is_not() {
         let e = bar_edges();
@@ -1282,14 +1009,9 @@ mod ribbon_tests {
     }
 }
 
-/// The colour a kind's icon is drawn in.
-///
-/// **One hue a kind, and the same one in both windows.** These are what makes
-/// a list of two hundred rows readable at a glance without reading a word of
-/// it: the eye learns "blue-grey is a folder, green is code" in about a
-/// screenful. The browser page paints an SVG mask with them; the native window
-/// tints the same SVG. `file` has no colour — a plain file is drawn in the
-/// window's own quiet ink, because "nothing in particular" is not a category.
+/// The colour a kind's icon is drawn in: one hue a kind, the same in every
+/// face, so the eye learns the list without reading it. `file` has no colour —
+/// a plain file takes the window's own quiet ink.
 pub fn kind_colour(token: &str) -> Option<Rgba> {
     Some(match token {
         "folder" => Rgba::hex(0x7d9bc4),

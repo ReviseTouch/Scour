@@ -1,12 +1,7 @@
 //! Every field the language has, written down once.
 //!
-//! This table used to be a `match` arm in the parser, and the reference text in
-//! `syntax.rs` was a second copy of it written by hand. They had already drifted
-//! — the reference listed neither `in:`, nor `tur:`, nor `altında:`, all of
-//! which work — and nothing could have caught that, because nothing read both.
-//!
-//! Now the parser, the highlighter, the completions and the reference all read
-//! this. A field that is not here does not exist anywhere; a field that is here
+//! The parser, the highlighter, the completions and the reference all read this
+//! table. A field that is not here does not exist anywhere; a field that is here
 //! is offered to the user and understood when they type it.
 
 use scour_core::Kind;
@@ -16,15 +11,13 @@ use crate::time::parse_time_value;
 
 /// What a field does with the text after its colon.
 ///
-/// This is what tells the highlighter whether a value is usable, which is the
-/// whole reason it is here: `size:abc` parses to a search for the literal text
-/// "size:abc", and without knowing what `size` accepts nothing could say so.
+/// Tells the highlighter whether a value is usable: `size:abc` is a search for
+/// the literal text "size:abc".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Takes {
     /// Any text, folded and matched. Empty is not useful but not an error.
     Text,
-    /// A path. Empty is refused — a scope that matches nothing is worse than
-    /// one that says it cannot be read.
+    /// A path. Empty is refused: a scope that matches nothing is not a scope.
     Path,
     /// A list of extensions separated by `;`, each with an optional dot.
     Ext,
@@ -48,11 +41,9 @@ pub struct Field {
     /// spellings. Folded before comparison, so case never appears here.
     pub aliases: &'static [&'static str],
     pub takes: Takes,
-    /// One line, in English, as a message id like every other string the
-    /// engine produces.
+    /// One line of English, a message id.
     pub about: &'static str,
-    /// What to show someone who has typed the field and needs a value. Empty
-    /// for fields that take nothing.
+    /// What to show someone who has typed the field; empty when it takes nothing.
     pub example: &'static str,
 }
 
@@ -74,9 +65,8 @@ pub const FIELDS: &[Field] = &[
     },
     Field {
         name: "under",
-        // `altında` is not listed: the folder turns every dotless and dotted i
-        // into the same letter, so it arrives here spelled `altinda`. Listing
-        // it as well would be an entry that can never be reached.
+        // Not `altında`: folding maps both i's to one letter, so it arrives
+        // spelled `altinda`.
         aliases: &["in", "altinda"],
         takes: Takes::Path,
         about: "anywhere below this folder, at any depth",
@@ -146,16 +136,8 @@ pub const FIELDS: &[Field] = &[
         example: "content:invoice",
     },
     // ---- what a filesystem knows and nothing else does --------------------
-    //
-    // The index has carried these columns from the first version and no query
-    // could name them. They are what `find` gets reached for: the
-    // world-writable file, the setuid binary nobody remembers installing,
-    // everything owned by a user who was deleted last year.
-    // `type:` is taken, and rightly — it has meant `kind:` since the language
-    // was written. The two are different questions and both deserve a word:
-    // `kind:` is what a file *is* (a document, an image), `node:` is what the
-    // filesystem *made* it (a file, a symlink, a socket). Only the second can
-    // tell you a symlink from what it points at.
+    // `kind:` is what a file is (a document, an image); `node:` is what the
+    // filesystem made it — only `node:` tells a symlink from what it points at.
     Field {
         name: "node",
         aliases: &["dugum"],
@@ -227,15 +209,8 @@ pub const FIELDS: &[Field] = &[
         example: "regex:^[0-9]{4}-",
     },
     // ---- Everything's spellings ------------------------------------------
-    //
-    // Somebody arriving from Everything has a decade of muscle memory and no
-    // reason to relearn it. These are its documented names for questions this
-    // index can already answer, so the query they would have typed there is
-    // the query that works here.
-    //
-    // Not everything it has: `dupe:` and `child:` ask for a grouping this
-    // index does not do, and the Windows `attrib:` letters name a thing a
-    // filesystem here does not have. Those are absent rather than approximated.
+    // Its documented names for questions this index can answer. `dupe:` and the
+    // Windows `attrib:` letters are absent rather than approximated.
     Field {
         name: "empty",
         aliases: &["bos"],
@@ -316,16 +291,9 @@ pub const FIELDS: &[Field] = &[
     },
 ];
 
-/// The values `kind:` accepts, in the order a list should show them.
-///
-/// Spelled the way [`Kind::from_name`] wants them, which is not the way
-/// [`Kind::msgid`] spells them: a label can be two words and can be
-/// translated, and `Build output` is both. [`Kind::token`] is the spelling
-/// that parses, and going through it is what keeps a completion from producing
-/// a term the parser then reads as plain text.
-///
-/// `media` is deliberately absent: it still parses, so an old query keeps
-/// working, but offering it would invite new ones.
+/// The values `kind:` accepts, in display order, spelled as [`Kind::from_name`]
+/// wants them and not as [`Kind::msgid`] does, so a completion always parses.
+/// `media` still parses but is not offered.
 pub const KIND_VALUES: &[&str] = &[
     "folder", "code", "doc", "image", "data", "config", "archive", "exec", "audio", "video",
     "font", "build", "file",
@@ -343,9 +311,8 @@ pub fn lookup(folded: &str) -> Option<&'static Field> {
 
 /// Can this field use this value as written?
 ///
-/// The question the highlighter asks, and the reason [`Takes`] exists. It is
-/// deliberately the *same* judgement the parser makes: both call the same
-/// value parsers, so a value that colours as usable is one that will be used.
+/// Calls the same value parsers the parser does, so a value that colours as
+/// usable is one that will be used.
 pub fn accepts(field: &Field, folded_value: &str, now: i64) -> bool {
     match field.takes {
         Takes::Nothing => true,
@@ -361,9 +328,7 @@ pub fn accepts(field: &Field, folded_value: &str, now: i64) -> bool {
     }
 }
 
-/// The numeric half of `size:`, without building a [`Match`].
-///
-/// [`Match`]: scour_core::Match
+/// The numeric half of `size:`, without building a [`Match`](scour_core::Match).
 pub(crate) fn parse_size_value(v: &str) -> Option<i64> {
     let (_, rest) = split_cmp(v);
     let rest = rest.trim();
@@ -401,8 +366,7 @@ mod tests {
 
     #[test]
     fn every_spelling_is_already_folded() {
-        // The table is compared against folded input, so an entry with a
-        // capital in it could never match and nothing would say why.
+        // The table is compared against folded input; a capital never matches.
         for f in FIELDS {
             for name in std::iter::once(&f.name).chain(f.aliases) {
                 assert_eq!(
@@ -416,8 +380,7 @@ mod tests {
 
     #[test]
     fn every_offered_kind_value_parses() {
-        // A completion that produces a term the parser reads as plain text
-        // would be worse than no completion at all.
+        // A completion the parser reads as plain text is worse than none.
         for v in KIND_VALUES {
             assert!(Kind::from_name(v).is_some(), "kind:{v} does not parse");
         }
@@ -455,8 +418,7 @@ mod tests {
         use scour_core::DefaultFolder;
         assert_eq!(lookup("tür").map(|f| f.name), Some("kind"));
         assert_eq!(lookup("içerik").map(|f| f.name), Some("content"));
-        // Written with a dotted i, folded before it gets here. `ü` and `ç`
-        // survive folding and so must be listed; `ı` does not and must not.
+        // `ü` and `ç` survive folding and must be listed; `ı` does not.
         assert_eq!(
             lookup(&DefaultFolder::of("altında")).map(|f| f.name),
             Some("under")
@@ -466,9 +428,6 @@ mod tests {
     #[test]
     fn field_names_are_case_insensitive() {
         use scour_core::DefaultFolder;
-        // Worth a test of its own because the reference text claimed the
-        // opposite for a while — it used `sizE:>1mb` as its example of a
-        // misspelling that falls back to plain text, when in fact it works.
         assert_eq!(
             lookup(&DefaultFolder::of("sizE")).map(|f| f.name),
             Some("size")

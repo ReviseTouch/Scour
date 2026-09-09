@@ -1,19 +1,8 @@
-//! An [`Ast`] read back as a sentence.
+//! An [`Ast`](scour_core::Ast) read back as a sentence.
 //!
-//! Two callers want this and for the same reason. A language model that issues
-//! a query should be able to check what it actually asked for, because the
-//! parser is forgiving by design and a typo becomes a plain text search rather
-//! than an error — `boyut:1mb` looks for the *string* "boyut:1mb", silently and
-//! reasonably, because there is no `boyut` field. (`sizE:>1mb` is not an example
-//! of this, though it was used as one here for a while: field names are folded,
-//! so that one is the size field.) And a person looking at a saved search wants
-//! to read it without learning the syntax.
-//!
-//! The English here is a message id, like everywhere else: a frontend with a
-//! catalogue translates it, one without is still correct.
-//!
-//! [`Ast`]: scour_core::Ast
-
+//! The parser is forgiving: `boyut:1mb` is a plain text search, because there is
+//! no `boyut` field. A model checking what it actually asked for, or a person
+//! reading a saved search, needs to see that. The English here is a message id.
 use scour_core::{Ast, Cmp, Match, TimeField};
 
 /// Describe a parsed query in English.
@@ -98,9 +87,7 @@ fn describe_match(m: &Match) -> String {
         Match::NameLen(cmp, n) => format!("name length {} {n}", cmp.symbol()),
         Match::NameContainsCased(t) => format!("name contains \"{t}\", exactly so"),
         Match::Regex(p) => format!("name matches the pattern /{p}/"),
-        // Read back in the words the query was typed in, not in octal: the
-        // point of `explain` is to say what was understood, and "0o4000" says
-        // nothing to the person who typed `suid:`.
+        // Words, not octal: "0o4000" says nothing to whoever typed `suid:`.
         Match::Bits {
             mask, want, any, ..
         } => describe_bits(*mask, *want, *any),
@@ -200,8 +187,7 @@ mod tests {
 
     #[test]
     fn a_described_date_can_be_pasted_back_in() {
-        // The round trip is the point: a model reading this back must get a
-        // string the parser accepts and resolves to the same instant.
+        // The round trip: what is described must parse back to the same instant.
         assert_eq!(d("dc:2026-01-31"), "created on 2026-01-31");
         assert_eq!(parse_at("dc:2026-01-31", 0), parse_at("dc:=2026-01-31", 0));
     }

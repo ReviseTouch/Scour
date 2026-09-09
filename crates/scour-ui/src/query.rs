@@ -1,15 +1,7 @@
-//! Putting a filter and a typed query together.
-//!
-//! Every face has a rail beside the list: press "Documents" and the result
-//! narrows. What that *does* is add a term to the query — `kind:doc`,
-//! `under:"/home/hasan"`, `size:>10mb`, `dm:7d` — and the rules about how are
-//! small, shared, and were written twice already.
-//!
-//! **One filter at a time, appended.** Pressing a second replaces the first,
-//! and pressing the active one clears it. Two rails' worth of terms could be
-//! combined instead, but then a person has to be able to see and remove each
-//! of them — and the place where they are all visible is the query box, which
-//! is where somebody who wants two terms can type the second.
+//! Putting a filter and a typed query together: pressing a rail bar appends a
+//! term (`kind:doc`, `under:"/home/hasan"`, `size:>10mb`, `dm:7d`). One filter
+//! at a time — a second replaces the first, the active one clears it, and a
+//! second term is typed into the query box where it can be seen and removed.
 
 /// The query the service is asked, given what was typed and what is pressed.
 ///
@@ -28,10 +20,8 @@ pub fn compose(typed: &str, filter: Option<&str>) -> String {
     }
 }
 
-/// Pressing a filter: the one that is now in force.
-///
-/// **Pressing the active one clears it.** A filter somebody cannot see how to
-/// remove is worse than no filter at all.
+/// Pressing a filter: the one that is now in force. Pressing the active one
+/// clears it, since a filter nobody can see how to remove is worse than none.
 pub fn pressed(current: Option<&str>, term: &str) -> Option<String> {
     if current == Some(term) {
         None
@@ -45,10 +35,8 @@ pub fn of_kind(token: &str) -> String {
     format!("kind:{token}")
 }
 
-/// The term a place stands for.
-///
-/// Quoted, because a path with a space in it is two words to a parser — and
-/// `/home/hasan/Belgelerim ve Diğerleri` is an ordinary folder name.
+/// The term a place stands for. Quoted: a path with a space in it is two words
+/// to the parser.
 pub fn of_place(path: &str) -> String {
     format!("under:\"{path}\"")
 }

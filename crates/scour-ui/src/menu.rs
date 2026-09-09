@@ -1,43 +1,18 @@
-//! What the right-click menu offers, in one table every face reads.
+//! What the right-click menu offers, in one table every face reads, so three
+//! menus cannot drift apart — as [`COLUMNS`](crate::COLUMNS) does not.
 //!
-//! **Why a table rather than three menus.** There are four faces and the menu
-//! belongs in three of them. Written out where each one draws, they would
-//! agree on the day they were written and drift on every day after: an item
-//! added to the window and not the page, a shortcut printed in one and not the
-//! other, a word translated twice into two different words. The columns went
-//! this way for the same reason and have not drifted since — see [`COLUMNS`].
-//!
-//! [`COLUMNS`]: crate::COLUMNS
-//!
-//! ## The rule this table is shaped around
-//!
-//! **What a menu offers should be safe to press.** The browser face wrote that
-//! down before there was anything unsafe in it, and the sentence is what makes
-//! a delete admissible at all: [`Weight::Careful`] items are reversible, and
-//! the only irreversible thing this program can do is not here. Permanent
-//! deletion is reached by holding a modifier, which is a decision rather than a
-//! slip, and it asks.
-//!
-//! ## What is only here because there is an index
-//!
-//! The middle group of a file's menu — search this folder, the same kind, find
-//! its duplicates — is what a file manager cannot offer. Not because nobody
-//! thought of it: because answering any of them means walking a disk, and by
-//! the time it answered the person would have typed it themselves. Here they
-//! are the index being asked a different question about a row already on
-//! screen, and they cost what a search costs.
+//! Everything here is safe to press: [`Weight::Careful`] items are reversible,
+//! and permanent deletion is not in the table — it needs a held modifier.
 
-/// How dangerous an item is, which is the only thing a face has to render
-/// differently.
+/// How dangerous an item is: the only thing a face renders differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Weight {
     /// Press it and find out; nothing is lost.
     Plain,
-    /// Reversible, but it changes something. Drawn apart, and in the colour a
-    /// face uses for warnings.
+    /// Reversible, but it changes something. Drawn apart, in the warning colour.
     Careful,
-    /// It will start more programs, or take long enough to notice. Drawn
-    /// dimmed, and it asks before it acts — the trailing `…` says so.
+    /// Starts more programs, or takes long enough to notice. Dimmed, and it
+    /// asks first — the trailing `…` says so.
     Heavy,
 }
 
@@ -59,37 +34,24 @@ pub enum When {
 pub struct Item {
     /// What a face sends back when it is pressed. Never translated.
     pub id: &'static str,
-    /// The English source string, and therefore the catalogue key.
-    ///
-    /// `{n}` is the number of rows selected, punctuated by whoever draws it —
-    /// the catalogue is the caller's and so is the thousands separator.
+    /// The English source string, and therefore the catalogue key. `{n}` is the
+    /// number of rows selected, punctuated by whoever draws it.
     pub msgid: &'static str,
-    /// The shortcut to print at the right, already in the notation a person
-    /// reads. Empty where there is none.
+    /// The shortcut to print at the right, in a person's notation; empty if none.
     pub key: &'static str,
-    /// Items with the same number sit together; a rule is drawn where the
-    /// number changes. Not a count of anything — only an ordering.
+    /// Items with the same number sit together and a rule is drawn where it
+    /// changes; an ordering, not a count.
     pub group: u8,
     pub weight: Weight,
     pub when: When,
-    /// Faces that cannot perform this one.
-    ///
-    /// **Written beside the item because the reason is a fact about the
-    /// platform, not a gap somebody will close.** A browser cannot put a file
-    /// on the clipboard — it can put text there, and an image's bytes, and
-    /// nothing that another program will paste as a file. Leaving the item in
-    /// the page greyed would promise something that is never coming; leaving
-    /// the whole item out of the table would take it from the window and the
-    /// terminal, which can.
+    /// Faces that cannot perform this one, because of the platform rather than
+    /// a gap: a browser cannot put a *file* on the clipboard.
     pub except: &'static [crate::faces::Face],
 }
 
-/// The whole menu, in the order it is drawn.
-///
-/// **Order is meaning here.** The first group is what most presses are for, so
-/// it is under the pointer when the menu opens. The last thing before the
-/// wastebasket is a rule, so that a hand travelling down the list stops at a
-/// boundary rather than arriving at the delete by momentum.
+/// The whole menu, in the order it is drawn. Order is meaning: the first group
+/// is under the pointer when the menu opens, and a rule sits before the
+/// wastebasket so a travelling hand stops short of it.
 pub const ITEMS: &[Item] = &[
     // ---- one row: open ---------------------------------------------------
     Item {
@@ -315,10 +277,8 @@ pub const ITEMS: &[Item] = &[
     },
 ];
 
-/// The menu for one shape of selection, in order.
-///
-/// `selected` is how many rows are picked and `is_dir` describes the row the
-/// pointer is on — which only matters when there is one.
+/// The menu for one shape of selection, in order. `is_dir` describes the row
+/// under the pointer, which only matters when one row is picked.
 pub fn items_for(
     selected: usize,
     is_dir: bool,
@@ -336,11 +296,8 @@ pub fn items_for(
         })
 }
 
-/// Where a rule goes: true when this item starts a new group.
-///
-/// Given to the faces rather than left to each of them, because "draw a line
-/// when the number changes" written in three places is three chances to draw
-/// a line above the first item.
+/// Where a rule goes: true when this item starts a new group. Given to the
+/// faces, so none of them draws a line above the first item.
 pub fn rule_before(previous: Option<&Item>, item: &Item) -> bool {
     previous.is_some_and(|p| p.group != item.group)
 }
@@ -359,8 +316,7 @@ mod tests {
                 item.id
             );
         }
-        // And the one thing that changes the disk says where it went, so that
-        // a reader knows it can be got back.
+        // The one thing that changes the disk says where it went.
         let trash: Vec<_> = ITEMS.iter().filter(|i| i.id == "trash").collect();
         assert_eq!(trash.len(), 2, "one for a row, one for a selection");
         for t in trash {
@@ -376,9 +332,7 @@ mod tests {
         for item in ITEMS {
             for other in ITEMS {
                 if item.id == other.id && item.when != other.when {
-                    // Same action, different wording for a folder or a
-                    // selection — allowed, and the reason ids repeat at all.
-                    // What is not allowed is the same id in the same shape.
+                    // Same action, different wording per shape: allowed.
                     continue;
                 }
                 if std::ptr::eq(item, other) {
@@ -399,8 +353,7 @@ mod tests {
             let items: Vec<_> = items_for(selected, is_dir, crate::faces::Face::Window).collect();
             assert!(items.len() >= 5, "{selected}/{is_dir}: {}", items.len());
             assert!(!rule_before(None, items[0]));
-            // Groups only ever go forwards, so a rule is never drawn twice
-            // between the same pair.
+            // Groups only go forwards, so no rule is drawn twice.
             let mut last = items[0].group;
             for i in &items[1..] {
                 assert!(i.group >= last, "{} went backwards", i.id);

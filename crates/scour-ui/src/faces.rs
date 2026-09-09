@@ -1,22 +1,8 @@
-//! What Scour can do, and which of its faces can do it.
+//! What Scour can do, and which of its four faces can do it: every feature and
+//! where each face stands with it, so a face that is behind says so in code.
 //!
-//! There are four ways to use this program — a browser page, a window, a
-//! terminal, a command line — and they are not four programs. Everything they
-//! know arrives over the same socket, from the same service, and the rules
-//! about what an answer *means* live in shared crates. What is left to each
-//! face is drawing.
-//!
-//! **The hard part is not writing a feature, it is noticing that one face is
-//! missing it.** That is what this table is: every feature, and where it
-//! stands in each face. A row here is the first thing written when a feature
-//! is thought of, and the last thing changed when one lands — and a face that
-//! is behind says so, in code that ships, rather than in a plan that goes
-//! stale.
-//!
-//! It is data, and deliberately not enforcement: no test can tell whether a
-//! window really draws a rail. What the tests here do is keep the *table*
-//! honest — every feature has a state for every face, and nothing claims to be
-//! partial without saying what is missing.
+//! Data, not enforcement — no test can tell whether a window draws a rail. The
+//! tests keep the table honest: a state per face, and a note on every gap.
 
 /// One of the four ways to use Scour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,8 +39,7 @@ pub enum State {
     Part(&'static str),
     /// It is not there, and the note says why not — or "not yet".
     Not(&'static str),
-    /// It cannot be there, and the note says what makes it impossible.
-    /// A thumbnail in a command line, say.
+    /// It cannot be there; the note says why. A thumbnail in a command line.
     Never(&'static str),
 }
 
@@ -210,21 +195,9 @@ pub const FEATURES: &[Feature] = &[
     },
 ];
 
-/// Start a face so that it outlives the one starting it.
-///
-/// **A face that opens another one is about to close**, and without this the
-/// one it opened closed with it: a child is in its parent's process group, and
-/// a desktop closing a window signals the group. Measured the way anybody
-/// would — switch to the terminal, close the window, watch the terminal go.
-///
-/// `process_group(0)` puts the child in a group of its own, so nothing aimed
-/// at the parent reaches it. The child's own children — the launcher execs a
-/// terminal emulator, which starts the terminal interface — inherit the new
-/// group and are covered by the same line.
-///
-/// The one thing this crate does rather than describes, and it is here because
-/// it is about faces: three of them start each other and all three had the
-/// same bug. It adds no dependency — `std::process` is all it uses.
+/// Start a face so that it outlives the one starting it: a desktop closing a
+/// window signals the whole process group, so `process_group(0)` puts the child
+/// in its own. The child's own children inherit that group.
 pub fn detach(command: &mut std::process::Command) {
     command
         .stdin(std::process::Stdio::null())

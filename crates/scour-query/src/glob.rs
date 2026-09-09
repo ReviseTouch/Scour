@@ -1,19 +1,13 @@
 //! Wildcard matching, anchored end to end.
 //!
-//! `*.rs` matches `main.rs` and not `main.rst`, because Everything anchors its
-//! patterns and people rely on that. A pattern with no wildcard in it is
-//! therefore an exact-name test, not a substring one — substring is what a bare
-//! word already does.
-//!
-//! This lives beside the parser rather than inside an index, because every
-//! index has to answer the same question the same way. Both sides must also
-//! already have case-folded their input: this compares what it is given.
+//! `*.rs` matches `main.rs` and not `main.rst`; a pattern with no wildcard is an
+//! exact-name test, not a substring one. Callers pass case-folded input — this
+//! compares what it is given, so every index answers the question the same way.
 
 /// Does `text` match `pattern`, where `*` is any run and `?` is one character?
 ///
-/// Iterative with backtracking rather than recursive: a pathological pattern
-/// like `*a*a*a*a*b` against a long run of `a` would blow a recursive matcher's
-/// stack, and patterns come from whatever the user typed.
+/// Iterative with backtracking: a user pattern like `*a*a*a*a*b` against a long
+/// run of `a` blows a recursive matcher's stack.
 pub fn glob_matches(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
@@ -95,7 +89,7 @@ mod tests {
 
     #[test]
     fn backtracking_terminates_on_a_pathological_pattern() {
-        // A recursive matcher would recurse ~2^n here. This must simply answer.
+        // A recursive matcher would recurse ~2^n here.
         let text = "a".repeat(64);
         assert!(!glob_matches("*a*a*a*a*a*a*b", &text));
         assert!(glob_matches("*a*a*a*a*a*a*a", &text));
