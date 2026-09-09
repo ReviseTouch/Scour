@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Assemble the Linux tarball from target/release, the way `install.sh` expects it.
+#
+#   scripts/release            → dist/scour-<version>-linux-x86_64.tar.gz + SHA256SUMS
+#
+# Build first: `cargo build --release --workspace`. Nothing here compiles.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="$(grep -m1 '^version' "$here/Cargo.toml" | sed 's/.*"\(.*\)"/\1/')"
+name="scour-$version-linux-x86_64"
+dist="$here/dist"; stage="$dist/$name"
+rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/assets" "$stage/scripts" "$stage/packaging"
+for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
+    [ -x "$here/target/release/$b" ] || { echo "missing target/release/$b — build first" >&2; exit 1; }
+    install -m755 "$here/target/release/$b" "$stage/bin/$b"
+done
+install -m755 "$here/packaging/install.sh" "$stage/install.sh"
+install -m755 "$here/scripts/scour-open" "$stage/scripts/scour-open"
+install -m644 "$here/packaging/scour.desktop" "$here/packaging/scour.service" "$here/packaging/scourd.service" "$stage/packaging/"
+install -m644 "$here/assets/scour.svg" "$stage/assets/scour.svg"
+install -m644 "$here/README.md" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
+tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
+rm -rf "$stage"
+( cd "$dist" && sha256sum "$name.tar.gz" > SHA256SUMS && [ -f "scour-$version-windows-x86_64.zip" ] && sha256sum "scour-$version-windows-x86_64.zip" >> SHA256SUMS || true )
+echo "$dist/$name.tar.gz  ($(du -h "$dist/$name.tar.gz" | cut -f1))"

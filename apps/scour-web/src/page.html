@@ -1487,21 +1487,9 @@
   const withIndexTotal = (shown) =>
     TOTAL_KNOWN ? shown + " / " + fmt(TOTAL) : shown;
 
-  // Real measurements (docs/MEASUREMENTS.md, 1,217,362 entries, 40 rows, count cap 500).
-  const MEASURED = {
-    "": [0.11, 500], "r": [0.16, 3965], "ra": [0.29, 25272], "rap": [0.59, 39028],
-    "rapo": [0.54, 11264], "rapor": [0.29, 4864], "ab": [0.59, 16850],
-    "main": [0.71, 21468], "ext:rs": [0.34, 9723], "*.pdf": [0.55, 24192],
-    "kind:image": [2.38, 102460], "size:>10mb": [0.71, 15798],
-    "kind:code dm:7d": [0.60, 5510]
-  };
-
   const DAY = 86400;
   /* Recomputed every draw: a window stays open for hours. */
   let now = Math.floor(Date.now() / 1000);
-  const F = (p, name, size, ago, kind) =>
-    ({ path: p, name, size, mtime: now - ago, kind });
-
   /* The only thing here that knows there is a daemon. */
   const TOKEN = new URLSearchParams(location.search).get("t") || "";
 
@@ -4570,7 +4558,7 @@
     if (tag === "img") {
       el.alt = "";
       el.addEventListener("load", () => {
-        if (PEEK.path === mine) addFact("Boyutlar", `${el.naturalWidth} × ${el.naturalHeight}`);
+        if (PEEK.path === mine) addFact(T("Dimensions"), `${el.naturalWidth} × ${el.naturalHeight}`);
       });
     } else {
       el.controls = true;
@@ -5741,7 +5729,7 @@
       `<div class="line"><span>under:</span><span style="font-size:10.5px">${scope || "/"}</span></div>` +
       `<button class="facet" style="padding-left:0;margin-top:6px" id="jump">
          <span class="dot" style="background:var(--t1)"></span>
-         <span class="nm">Bu kapsamda ara</span></button>`;
+         <span class="nm">${escape_(T("Search in this scope"))}</span></button>`;
     document.getElementById("jump").onclick = () => {
       const q = document.getElementById("q");
       const rest = q.value.replace(/under:\S+\s*/g, "").trim();

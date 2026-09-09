@@ -251,7 +251,7 @@ fn capabilities_describe_this_platform_honestly() {
     {
         assert!(
             !caps.contains(Caps::RECURSIVE_WATCH),
-            "inotify is one watch per directory"
+            "on Linux the source has no watch of its own; the mark comes from the helper"
         );
     }
     #[cfg(any(windows, target_os = "macos"))]

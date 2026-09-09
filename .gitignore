@@ -10,3 +10,4 @@ __pycache__/
 
 # Codex bir tur bunu bıraktı; derleme çıktısı, depoya girmez.
 walk/
+dist/
