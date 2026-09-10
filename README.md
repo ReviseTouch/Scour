@@ -1,22 +1,20 @@
 # Scour
 
-Instant file search, and a filesystem a language model can actually explore.
-
-Type three characters and get an answer in a few milliseconds, over an index
-of everything. The same index answers `scour tree /some/huge/directory` in the
-same time whether that directory holds ten files or a million — which is what
-makes it usable from an assistant's context window.
-
-Written in Rust, and nothing here is a wrapper around anything else.
+Scour is a file indexer and search tool for Linux. It keeps every file and
+folder of the configured volumes in an index of its own, updates the index as
+the filesystem changes, and answers searches from it in milliseconds. The same
+index is exposed to language models through an MCP server. Scour is written in
+Rust and depends on no external search engine or database.
 
 **[revisetouch.com/scour](https://revisetouch.com/scour)** ·
 **[Documentation](https://revisetouch.com/en/docs/scour/introduction)** ·
 **[Releases](https://github.com/ReviseTouch/Scour/releases)**
 
-> **Alpha.** Used daily on Linux against 4.8 million entries and measured
-> there. **Windows is untested**: the build has had one afternoon on one
-> machine, nothing more. macOS has never been run. The index format may still
-> change.
+> **Alpha release.** Scour is in daily use on one Linux machine, against an
+> index of 4.8 million entries, and its measurements come from there. The
+> Windows build has been started on one machine and is otherwise untested.
+> macOS compiles and has not been run. The index format may change between
+> releases.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
@@ -28,50 +26,55 @@ $ scour "ext:rs size:>10kb dm:7d"
 5 of 1705 in 3.27 ms (28000 rows) · -n 40 for more
 ```
 
-Five rows at a terminal, forty into a pipe — a search that answers in
-milliseconds is asked again, not scrolled. `-n` says how many.
+At a terminal the command prints five rows; when piped, forty. `-n` sets the
+number.
 
-## The four faces
+## Interfaces
 
-One index, one service, one query. These were photographed together, running
-`kind:code dm:7d size:>10kb` against the same 4.7 million entries.
+One service (`scourd`) holds the index; four interfaces connect to it over a
+local socket and share its settings. The screenshots below were taken at the
+same time with the same query, `kind:code dm:7d size:>10kb`, on an index of
+4.7 million entries.
 
-**The command line** — `scour`.
+**Command line** — `scour`
 
 ![Scour on the command line](docs/img/command-line.webp)
 
-**The window** — `scour-gui`, Slint, no browser inside it.
+**Window** — `scour-gui`, a native Slint application
 
 ![The Scour window](docs/img/window.webp)
 
-**The browser** — `scour-web` serves one page to a browser already open.
+**Browser** — `scour-web`, a local bridge that serves one page
 
 ![Scour in a browser](docs/img/browser.webp)
 
-**The terminal** — `scour-tui`, the same rails and the same colours.
+**Terminal** — `scour-tui`, a full-screen terminal interface
 
 ![Scour in a terminal](docs/img/terminal.webp)
 
-## Why this rather than `find`
+## Performance
 
-`find` walks the filesystem every time you ask. Scour walks it once, keeps an
-index, and watches for changes. On the live index — 4.8 million entries,
-493 MiB on disk — whole round trips, socket to forty rows:
+`find` walks the filesystem on every query. Scour walks it once, keeps an index
+and follows changes. On the live index (4.8 million entries, 493 MiB on disk),
+measured as complete round trips — socket, parse, search, sort, count and
+forty rows:
 
-| | ms |
+| query | ms |
 |---|---:|
 | `rapor` | 7.9 |
 | `size:>10mb` | 7.5 |
 | `kind:code dm:7d` | 16.7 |
 | `kind:image` (1.6 million matches) | 37.3 |
 
-The index is memory-mapped, so it lives in the page cache and the kernel can
-reclaim it; searching costs tens of megabytes resident, not the whole index.
-Change feeds are hints, not proof: every source also gets a full reconciliation
-pass, every 30 minutes by default and every minute where nothing watches or
-pulses. Numbers, and how they were taken, in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
+The index is memory-mapped: it lives in the page cache and the kernel can
+reclaim it under pressure, so searching costs tens of megabytes of resident
+memory rather than the size of the index. Change notifications are not
+treated as complete: every source also receives a full reconciliation pass,
+every 30 minutes by default, and every minute on a source with neither a watch
+nor a write counter. The measurements and the commands that produced them are
+in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 
-## Install
+## Installation
 
 ### From a release
 
@@ -81,118 +84,128 @@ cd scour-0.2.0-alpha.1-linux-x86_64
 ./install.sh
 ```
 
-Nothing in it asks for a password: seven binaries into `~/.local/bin`, a menu
-entry and an icon into `~/.local/share`. To undo it, delete those files. Built
-against glibc 2.39 — Ubuntu 24.04+, Debian 13+, Fedora 40+, any rolling
-distribution; older ones want the source route. Tested on a clean Ubuntu
-24.04 guest, not merely compiled for it.
+The script does not require a password. It installs seven binaries into
+`~/.local/bin`, a menu entry and an icon into `~/.local/share`, and on GNOME
+and KDE binds **Super+F** to the window (`SCOUR_KEY=ctrl+alt+s` selects another
+key, `SCOUR_KEY=none` skips the binding). Removing those files uninstalls it.
 
-**Windows: untested.** The workspace builds for `x86_64-pc-windows-msvc` and
-the binaries were started once on one Windows desktop — the service indexed
-and the command line searched — and that is the whole of it. Untried there:
-the window, live watching, network and FAT32 volumes, more than one machine.
-No USN journal reader yet, so the first scan walks. Expect things to break,
-and say so in an issue. **macOS: compiles, never run.** A `cross` CI job
-keeps all three targets compiling.
+The binaries are built against glibc 2.39: Ubuntu 24.04 and later, Debian 13
+and later, Fedora 40 and later, and rolling distributions. Older releases
+require building from source. The package was installed and run in clean
+Ubuntu 24.04 and Fedora containers.
+
+**Windows.** The workspace builds for `x86_64-pc-windows-msvc`, and the
+release includes a zip. The binaries were started once on one Windows machine:
+the service indexed and the command line searched. The window, live watching,
+network and FAT32 volumes have not been tested there, and there is no USN
+journal reader, so the first scan walks the disk. **macOS** compiles and has
+not been run. A CI job checks that all three targets compile.
 
 ### From source
 
 ```bash
 cargo build --release
-./target/release/scourd &        # indexes your home directory on first run
+./target/release/scourd &        # indexes the home directory on first run
 ./target/release/scour rapor     # search
-./target/release/scour where     # where the settings and index live
+./target/release/scour where     # prints where the settings and the index live
 ```
 
-### A key to open it
+### Keyboard shortcut
 
-`install.sh` binds **Super+F** on GNOME and KDE (`SCOUR_KEY=ctrl+alt+s` to
-choose another, `SCOUR_KEY=none` to skip). The first press opens the window,
-the next one brings the same window forward — a second copy is never started.
-Elsewhere, bind any key to `scour-gui`:
+The installer binds a key on GNOME and KDE. On other desktops, bind any key to
+`scour-gui`: the first press opens the window and every later press brings the
+same window forward; a second instance is never started.
 
-| desktop | where |
+| desktop | location |
 |---|---|
-| GNOME | Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts → `+`, command `scour-gui` |
-| KDE Plasma | System Settings → Shortcuts → Add Command… `scour-gui` (or right-click Scour in the menu → Edit Application → Application → Trigger) |
-| anything else | your compositor's `bindsym`/`exec` line — `scour-gui`, nothing more |
+| GNOME | Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts, command `scour-gui` |
+| KDE Plasma | System Settings → Shortcuts → Add Command, `scour-gui` |
+| other | the compositor's key binding, command `scour-gui` |
 
-Under Wayland, GNOME does not let a program raise its own window; the press
-still works, but the window may blink in the taskbar instead of coming to the
-front. `platform/gnome` holds a tiny Shell extension that fixes that, and
-`scripts/install-desktop` installs it with a binding.
+Under GNOME on Wayland a program may not raise its own window; the window may
+be indicated in the taskbar instead of coming to the front. The Shell
+extension in `platform/gnome` provides this, and `scripts/install-desktop`
+installs it together with a binding.
 
-### Watching, and the one privilege
+### Watching the filesystem
 
-On Linux the watcher is one `fanotify` mark per volume: immediate, and free per
-directory. Placing it needs `CAP_SYS_ADMIN`, which `scourd` does not have — a
-small helper places the marks, hands over the descriptor, drops the privilege
-and execs `scourd`. **There is no inotify fallback, on purpose**: inotify costs
-one watch per directory out of a budget that belongs to your session, and what
-runs out is the next editor's. Without the mark, `scourd` reconciles by walking
-when a volume's write counter moves; nothing is missed, changes take longer to
-appear. Network and FUSE mounts have no counter and need the mark.
+On Linux, Scour watches with one `fanotify` mark per volume. The cost does not
+depend on the number of directories. Placing a mark requires `CAP_SYS_ADMIN`;
+`scourd` does not hold that capability. A separate helper, `scour-watch`,
+places the marks, passes the descriptor on, drops the privilege and executes
+`scourd`.
+
+inotify is not used and there is no inotify fallback. inotify requires one
+watch per directory from a budget shared by every program in the session;
+exhausting it makes unrelated programs fail. Without a mark, `scourd`
+reconciles a volume by walking it when the volume's write counter changes;
+no change is lost, but changes appear later. Network and FUSE mounts have no
+write counter and require the mark.
 
 ```bash
-sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # the only step that needs root
+sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # the only step that requires root
 systemctl start scour.service
 ```
 
-The user defaults to whoever ran `sudo`; the roots — the filesystems to mark —
-default to `/home`. Read the unit and the polkit rule before installing: the
-rule lets that one account start and stop this one service without a prompt,
-and nothing else. Turn the user unit off first if you had one
-(`systemctl --user disable --now scourd.service`).
+The account defaults to the user who ran `sudo`; the roots — the filesystems
+to mark — default to `/home`. The installer places the helper under
+root-owned `/usr/local/libexec/scour`, installs a system unit, and installs a
+polkit rule that allows that one account to start, stop and restart this one
+service without authentication. Read both files before installing. If the user
+unit is enabled, disable it first: `systemctl --user disable --now
+scourd.service`.
 
 ### Settings
 
-TOML at `~/.config/scour/config.toml`. The exclusion lists are the part worth
-editing — the first place to look when something you expected is missing.
+Settings are in `~/.config/scour/config.toml`. The exclusion lists determine
+what is left out of the index; consult them when an expected file is missing.
 
 ## Query language
 
-Whitespace is AND, `|` is OR, `!` is NOT, quotes make a phrase, `*` and `?` are
-wildcards, `field:value` narrows.
+Whitespace is AND, `|` is OR, `!` is NOT, quotes enclose a phrase, `*` and `?`
+are wildcards, and `field:value` restricts a field.
 
 ```
-rapor ext:pdf dm:30d          PDFs with "rapor" in the name, last 30 days
+rapor ext:pdf dm:30d          PDFs with "rapor" in the name, modified in the last 30 days
 *.log size:>100mb             log files over 100 MB
-under:/home/u/Projeler *.rs   Rust files anywhere in one project tree
+under:/home/u/Projeler *.rs   Rust files anywhere under one directory
 path:src ext:rs !test         Rust files under src, excluding tests
-kind:image dm:today           images touched today
+kind:image dm:today           images modified today
 ```
 
-`scour syntax` prints the reference. Search is case-insensitive, and Turkish
-`i`, `ı`, `I`, `İ` are one letter. The parser never fails: an unknown field is
-searched for as text, and `scour explain "<query>"` reads back how a query was
-understood.
+`scour syntax` prints the reference. Searching is case-insensitive, and the
+Turkish letters `i`, `ı`, `I` and `İ` are treated as one. Parsing does not
+fail: an unrecognised field is searched for as text, and `scour explain
+"<query>"` shows how a query was read.
 
-## For language models
+## MCP server
 
-`scour-mcp` is an MCP server with eleven read-only tools, and **every answer
-is bounded** and says when it was cut: `scour_tree` lists a directory of a
-million files as fast as one of ten and says how many it left out;
-`scour_count` answers "how many" without listing; `scour_facets` answers
-"what is in here" without reading anything; `scour_sources` tells "not
-found" from "not looked at". Rescan, maintenance and shutdown exist in the
-protocol and are deliberately not exposed.
+`scour-mcp` is a Model Context Protocol server with eleven read-only tools.
+Every answer is bounded and states when it was truncated: `scour_tree` lists a
+directory of a million entries as quickly as one of ten and reports how many
+entries were omitted; `scour_count` returns a count without a listing;
+`scour_facets` summarises a set of files by kind, extension or directory;
+`scour_sources` reports which paths are indexed. Rescanning, maintenance and
+shutdown exist in the protocol and are not exposed to the model.
 
-`scour mcp-config` prints the snippet for a client and says where it goes:
+`scour mcp-config` prints the configuration for a client and the file it
+belongs in:
 
-| client | |
+| client | command |
 |---|---|
 | Claude Desktop | `scour mcp-config` → `claude_desktop_config.json` |
-| Claude Code | `scour mcp-config --for claude-code` → one `claude mcp add` command |
+| Claude Code | `scour mcp-config --for claude-code` → a `claude mcp add` command |
 | Codex | `scour mcp-config --for codex` → `~/.codex/config.toml` |
 | Cursor | `scour mcp-config --for cursor` → `~/.cursor/mcp.json` |
 | Gemini CLI | `scour mcp-config --for gemini` → `~/.gemini/settings.json` |
 | VS Code | `scour mcp-config --for vscode` → `.vscode/mcp.json` |
 
-`scourd` has to be running; the server is a client of it like every other face.
+`scourd` must be running; the MCP server is a client of it like every other
+interface.
 
-## How it is put together
+## Architecture
 
-One rule: **nothing but `scour-core` is depended on by more than one layer.**
+Only `scour-core` — types and traits — is depended on by more than one layer.
 
 ```
    scour (CLI)   scour-mcp   scour-web   scour-gui   scour-tui
@@ -209,21 +222,23 @@ One rule: **nothing but `scour-core` is depended on by more than one layer.**
   scour-index-native   scour-source-fs   scour-query   scour-config   scour-i18n
 ```
 
-The engine is handed a source and an index and cannot tell what either is;
-replacing the search engine is one line in `scourd`. The index stores rows
-newest first, keeps displayed text out of the sorted columns, and tokenises
-every ancestor directory so deleting a subtree is one term. Every result is
-checked against a brute-force reference in the tests.
+The engine receives a source and an index through traits and does not know
+their concrete types; replacing the index implementation is a one-line change
+in `scourd`. The index stores rows newest first, keeps displayed text outside
+the sorted columns, and indexes every ancestor directory as a term, so
+removing a subtree is a single operation. The test suite compares every query
+shape against a brute-force reference implementation.
 
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and the kind taxonomy in
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the file-kind taxonomy:
 [docs/TAXONOMY.md](docs/TAXONOMY.md).
 
 ## Languages
 
-English is the source language; translations are gettext catalogues in
-`lang/`, compiled in and keyed by the English text. `SCOUR_LANG=tr scour status`.
-Shipped: English, Turkish.
+English is the source language. Translations are gettext catalogues in
+`lang/`, compiled into the binaries and keyed by the English text.
+`SCOUR_LANG=tr scour status` selects a language for one run. Shipped: English,
+Turkish.
 
-## Licence
+## License
 
 MIT or Apache-2.0, at your option.

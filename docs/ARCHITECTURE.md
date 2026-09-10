@@ -1,11 +1,11 @@
 # Scour — how it is put together
 
-For somebody opening the repository for the first time: **where to look**, and
-**where a new thing goes**. The reasons behind each decision are in the code
-beside it; this is the map.
+This document describes where each part of Scour lives and where a new part
+belongs. The reasoning behind individual decisions is in the code; this is the
+map.
 
-The rule in one sentence: **tight inside, loose between.** Every crate does one
-whole job; what joins them is data and a contract, not a call chain.
+The governing rule: every crate does one complete job, and crates are joined
+by data and contracts rather than by call chains.
 
 ---
 
@@ -54,10 +54,10 @@ service.
 
 ---
 
-## 3. Shared presentation — the real "central control"
+## 3. Shared presentation
 
-Giving the same answer in four places means the four drifting apart quietly.
-These are written once:
+Anything that all interfaces must answer identically is written once, in a
+shared crate:
 
 | crate | decides | why there |
 |---|---|---|
@@ -66,14 +66,13 @@ These are written once:
 | `scour-ui::query` | how a pressed filter joins the typed text, and how pressing it again clears it | "one filter, appended" is a language rule, not a drawing rule |
 | `scour-ui` (palette, columns, bands, kind colours) | `#0d1117`, the twelve columns and their widths, the time bands | CSS and `.slint` held two copies, and the focus colour had already drifted |
 | `scour-ui::faces` | what each face has | §5 |
-| `scour-page` | pages of 200 rows, an LRU of 32, an answer written at the offset *it* names, when a short page is the end | learned at the cost of six bugs; not to be learned twice |
+| `scour-page` | pages of 200 rows, an LRU of 32, an answer written at the offset *it* names, when a short page is the end | the paging rules; each was once wrong in one interface |
 | `scour-settings` | columns and their order, widths, language, layout, **which face opens**, skip rules | the four faces' shared memory; `config.toml` stays the file written by hand |
 | `scour-i18n` | the catalogue, and the **order of languages**: chosen → `config.toml` → desktop → English | `.po` files; English msgids in code. The order is written once, in `choose()` |
 | `scour-places` | the desktop's own folders, which volumes record reads | a question about the machine, not about the index |
 | `scour-thumbs` | where the thumbnail cache is, which kinds are never worth a look, who may make one | the one rule that says which row earns four `stat`s; the page and the window ask the same question |
 
-If something is needed by **two faces at once**, it lives here. A third copy
-being written is the sign that something has gone wrong.
+Anything needed by two interfaces belongs here.
 
 The same rule holds for paths: `Config::state_dir()` says where settings are.
 It was written in three places once — service, window, terminal — and the day
