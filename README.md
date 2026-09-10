@@ -101,6 +101,22 @@ cargo build --release
 ./target/release/scour where     # where the settings and index live
 ```
 
+### A key to open it
+
+Bind any key to `scour-gui`: the first press opens the window, the next one
+brings the same window forward — a second copy is never started.
+
+| desktop | where |
+|---|---|
+| GNOME | Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts → `+`, command `scour-gui` |
+| KDE Plasma | System Settings → Shortcuts → Add Command… `scour-gui` (or right-click Scour in the menu → Edit Application → Application → Trigger) |
+| anything else | your compositor's `bindsym`/`exec` line — `scour-gui`, nothing more |
+
+Under Wayland, GNOME does not let a program raise its own window; the press
+still works, but the window may blink in the taskbar instead of coming to the
+front. `platform/gnome` holds a tiny Shell extension that fixes that, and
+`scripts/install-desktop` installs it with a binding.
+
 ### Watching, and the one privilege
 
 On Linux the watcher is one `fanotify` mark per volume: immediate, and free per

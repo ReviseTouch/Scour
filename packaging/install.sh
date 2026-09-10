@@ -63,6 +63,9 @@ cat <<'TXT'
       Read that file first — it explains what the privilege is for and where it
       is dropped.
 
+  A key to open it: bind any shortcut to scour-gui in your desktop's keyboard
+  settings — pressing it again brings the same window forward.
+
   Uninstall: delete the files listed above. The index and settings live under
   ~/.local/share/scour and ~/.config/scour; `scour where` prints both.
 
