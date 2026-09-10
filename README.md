@@ -103,8 +103,10 @@ cargo build --release
 
 ### A key to open it
 
-Bind any key to `scour-gui`: the first press opens the window, the next one
-brings the same window forward — a second copy is never started.
+`install.sh` binds **Super+F** on GNOME and KDE (`SCOUR_KEY=ctrl+alt+s` to
+choose another, `SCOUR_KEY=none` to skip). The first press opens the window,
+the next one brings the same window forward — a second copy is never started.
+Elsewhere, bind any key to `scour-gui`:
 
 | desktop | where |
 |---|---|
