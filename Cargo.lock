@@ -5081,6 +5081,7 @@ dependencies = [
  "anyhow",
  "clap",
  "humansize",
+ "i-slint-backend-winit",
  "rfd",
  "scour-clip",
  "scour-config",

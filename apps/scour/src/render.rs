@@ -538,25 +538,47 @@ pub fn locations() -> Result<()> {
 }
 
 /// The block to paste into an MCP client's configuration.
-pub fn mcp_config() -> Result<()> {
+pub fn mcp_config(client: crate::McpClient) -> Result<()> {
+    use crate::McpClient::*;
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("scour-mcp")))
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "scour-mcp".to_owned());
-    println!(
-        r#"{{
-  "mcpServers": {{
-    "scour": {{
-      "command": "{exe}",
-      "args": []
-    }}
-  }}
-}}"#
+    let json = format!(
+        "{{\n  \"mcpServers\": {{\n    \"scour\": {{\n      \"command\": \"{exe}\",\n      \"args\": []\n    }}\n  }}\n}}"
     );
+    // Where each client reads its servers from, and the shape it wants.
+    let (snippet, goes) = match client {
+        ClaudeDesktop => (
+            json,
+            "~/.config/Claude/claude_desktop_config.json (Linux) · ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) · %APPDATA%\\Claude\\claude_desktop_config.json (Windows)",
+        ),
+        ClaudeCode => (
+            format!("claude mcp add scour -- {exe}"),
+            "one command in a terminal; or the claude-desktop JSON in .mcp.json at the project root",
+        ),
+        Codex => (
+            format!("[mcp_servers.scour]\ncommand = \"{exe}\""),
+            "~/.codex/config.toml",
+        ),
+        Cursor => (
+            json,
+            "~/.cursor/mcp.json, or .cursor/mcp.json in the project",
+        ),
+        Gemini => (json, "~/.gemini/settings.json"),
+        Vscode => (
+            format!(
+                "{{\n  \"servers\": {{\n    \"scour\": {{\n      \"type\": \"stdio\",\n      \"command\": \"{exe}\"\n    }}\n  }}\n}}"
+            ),
+            ".vscode/mcp.json in the project",
+        ),
+    };
+    println!("{snippet}");
+    eprintln!("\n{} {goes}", t("Goes in:"));
     eprintln!(
-        "\n{}",
+        "{}",
         t("Start `scourd` first — the MCP server is a client of it, like this one.")
     );
     Ok(())

@@ -34,6 +34,17 @@ struct Args {
     query: Vec<String>,
 }
 
+/// The clients `mcp-config` knows how to speak to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum McpClient {
+    ClaudeDesktop,
+    ClaudeCode,
+    Codex,
+    Cursor,
+    Gemini,
+    Vscode,
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Search for files.
@@ -150,7 +161,11 @@ enum Command {
         level: Level,
     },
     /// Print the MCP configuration to paste into a client.
-    McpConfig,
+    McpConfig {
+        /// Which client: `claude-desktop`, `claude-code`, `codex`, `cursor`, `gemini`, `vscode`.
+        #[arg(long = "for", value_enum, default_value_t = McpClient::ClaudeDesktop)]
+        client: McpClient,
+    },
     /// Where the settings and the index live.
     Where,
 }
@@ -223,7 +238,7 @@ fn main() -> Result<()> {
     // These four need no service — which is what you reach for when the service
     // is the thing that is not working.
     match &args.command {
-        Some(Command::McpConfig) => return render::mcp_config(),
+        Some(Command::McpConfig { client }) => return render::mcp_config(*client),
         Some(Command::Where) => return render::locations(),
         Some(Command::Features) => {
             print!("{}", scour_ui::faces::table());
@@ -431,7 +446,9 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
         },
-        Some(Command::McpConfig | Command::Where | Command::Features | Command::Faces { .. }) => {
+        Some(
+            Command::McpConfig { .. } | Command::Where | Command::Features | Command::Faces { .. },
+        ) => {
             unreachable!("handled before connecting")
         }
     })

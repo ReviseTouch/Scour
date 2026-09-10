@@ -148,13 +148,26 @@ understood.
 
 ## For language models
 
-`scour-mcp` is an MCP server; `scour mcp-config` prints the block to paste into
-a client. Ten read-only tools, and **every answer is bounded** and says when it
-was cut: `scour_tree` lists a directory of a million files as fast as one of
-ten and says how many it left out; `scour_count` answers "how many" without
-listing; `scour_facets` answers "what is in here" without reading anything;
-`scour_sources` tells "not found" from "not looked at". Rescan, maintenance and
-shutdown exist in the protocol and are deliberately not exposed.
+`scour-mcp` is an MCP server with eleven read-only tools, and **every answer
+is bounded** and says when it was cut: `scour_tree` lists a directory of a
+million files as fast as one of ten and says how many it left out;
+`scour_count` answers "how many" without listing; `scour_facets` answers
+"what is in here" without reading anything; `scour_sources` tells "not
+found" from "not looked at". Rescan, maintenance and shutdown exist in the
+protocol and are deliberately not exposed.
+
+`scour mcp-config` prints the snippet for a client and says where it goes:
+
+| client | |
+|---|---|
+| Claude Desktop | `scour mcp-config` → `claude_desktop_config.json` |
+| Claude Code | `scour mcp-config --for claude-code` → one `claude mcp add` command |
+| Codex | `scour mcp-config --for codex` → `~/.codex/config.toml` |
+| Cursor | `scour mcp-config --for cursor` → `~/.cursor/mcp.json` |
+| Gemini CLI | `scour mcp-config --for gemini` → `~/.gemini/settings.json` |
+| VS Code | `scour mcp-config --for vscode` → `.vscode/mcp.json` |
+
+`scourd` has to be running; the server is a client of it like every other face.
 
 ## How it is put together
 

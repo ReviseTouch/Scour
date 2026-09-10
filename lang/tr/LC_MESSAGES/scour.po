@@ -179,6 +179,9 @@ msgstr "belge içeriği gerekiyor, bu dizinde olmayabilir"
 msgid "Start `scourd` first — the MCP server is a client of it, like this one."
 msgstr "Önce `scourd` başlatın — MCP sunucusu, bunun gibi, onun istemcisidir."
 
+msgid "Goes in:"
+msgstr "Şuraya:"
+
 msgid "counts are a lower bound: the scan hit its cap"
 msgstr "sayılar alt sınırdır: tarama üst sınırına ulaştı"
 

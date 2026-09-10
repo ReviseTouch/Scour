@@ -517,12 +517,21 @@ fn main() -> Result<()> {
     // A window from a desktop entry has nowhere for standard error to go.
     crash_log(&config.state_dir());
 
+    // One window. A second start hands over to the first and leaves.
+    #[cfg(unix)]
+    let claim = match only_one(&args.socket.clone().unwrap_or_else(|| config.socket())) {
+        Some(claim) => claim,
+        None => return Ok(()),
+    };
+
     let kept = scour_settings::Settings::load(&config.state_dir());
     // Behind a cell: picking a language rebuilds it and rewrites every string.
     let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
         &language(&kept, &config),
     ))));
     let window = MainWindow::new().context("the window could not be created")?;
+    #[cfg(unix)]
+    answer_the_next_start(claim.listener.try_clone()?, window.as_weak());
     dress(&window);
     words(&window, &cat.borrow());
     window.set_sorted_by("relevance".into());
@@ -2327,6 +2336,8 @@ fn main() -> Result<()> {
         );
     }
     window.run().context("the event loop failed")?;
+    #[cfg(unix)]
+    drop(claim);
     Ok(())
 }
 
@@ -3557,6 +3568,79 @@ fn apply(
             }
         }
     }
+}
+
+/// The lock a running window holds: a socket beside the service's, removed on
+/// exit.
+#[cfg(unix)]
+struct Claim {
+    listener: std::os::unix::net::UnixListener,
+    path: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Claim the one window, or tell the one that has it to show itself.
+///
+/// `None` means another window answered and this one should leave. A socket
+/// file nobody answers on is a crash's leftover and is taken over.
+#[cfg(unix)]
+fn only_one(service_socket: &str) -> Option<Claim> {
+    use std::io::Write;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let path = std::path::PathBuf::from(format!("{service_socket}.gui"));
+    if let Ok(mut other) = UnixStream::connect(&path) {
+        let _ = other.write_all(b"show\n");
+        return None;
+    }
+    let _ = std::fs::remove_file(&path);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match UnixListener::bind(&path) {
+        Ok(listener) => Some(Claim { listener, path }),
+        // Without a lock there is still a window; there may just be two.
+        Err(_) => {
+            let spare = std::env::temp_dir().join(format!("scour-gui-{}.sock", std::process::id()));
+            let _ = std::fs::remove_file(&spare);
+            let listener = UnixListener::bind(&spare).ok()?;
+            Some(Claim {
+                listener,
+                path: spare,
+            })
+        }
+    }
+}
+
+/// Every connection on the lock is a second start asking for the window.
+#[cfg(unix)]
+fn answer_the_next_start(
+    listener: std::os::unix::net::UnixListener,
+    weak: slint::Weak<MainWindow>,
+) {
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            drop(stream);
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                use i_slint_backend_winit::WinitWindowAccessor;
+                w.window().show().ok();
+                w.window().with_winit_window(|ww| {
+                    ww.set_minimized(false);
+                    ww.focus_window();
+                });
+            });
+        }
+    });
 }
 
 /// The plain text terms of a query, for highlighting and for nothing else: a
