@@ -107,4 +107,5 @@ i-slint-backend-winit = { version = "=1.16.1", default-features = false }
 rfd = { version = "0.15", default-features = false, features = ["async-std", "xdg-portal"] }
 
 [build-dependencies]
+scour-icon = { workspace = true }
 slint-build  = "=1.16.1"

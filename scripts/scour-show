@@ -11,7 +11,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Spelled in pieces so this script's own command line does not match the pattern
 # it is about to search for.
-mark="--class=""Scour"
+mark="--class=""scour"
 
 if gdbus call --session --dest org.scour.Shell \
     --object-path /org/scour/Shell \

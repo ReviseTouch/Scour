@@ -1,0 +1,9 @@
+[package]
+name        = "scour-icon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish     = false
+description = "Build-script helper: the application icon, embedded in Windows executables"
+
+[dependencies]

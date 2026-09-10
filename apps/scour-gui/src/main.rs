@@ -529,6 +529,9 @@ fn main() -> Result<()> {
     let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
         &language(&kept, &config),
     ))));
+    // `scour`, the desktop entry's own name: that is how a Wayland desktop
+    // finds the icon and the menu entry for a window.
+    let _ = slint::set_xdg_app_id("scour");
     let window = MainWindow::new().context("the window could not be created")?;
     #[cfg(unix)]
     answer_the_next_start(claim.listener.try_clone()?, window.as_weak());

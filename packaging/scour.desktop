@@ -30,4 +30,4 @@ Categories=Utility;FileTools;
 Keywords=search;find;file;everything;
 Keywords[tr]=ara;bul;dosya;arama;
 StartupNotify=true
-StartupWMClass=Scour
+StartupWMClass=scour

@@ -1,4 +1,5 @@
 fn main() {
+    scour_icon::embed();
     slint_build::compile("ui/main.slint").expect("the interface does not compile");
     old_glibc_math();
 }

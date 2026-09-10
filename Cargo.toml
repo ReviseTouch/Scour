@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/scour-core",
     "crates/scour-query",
+    "crates/scour-icon",
     "crates/scour-mock",
     "crates/scour-source-fs",
     "crates/scour-config",
@@ -56,6 +57,7 @@ publish      = false
 # abstraction it needs is missing from `scour-core`.
 scour-core          = { path = "crates/scour-core" }
 scour-query         = { path = "crates/scour-query" }
+scour-icon          = { path = "crates/scour-icon" }
 scour-proto         = { path = "crates/scour-proto" }
 scour-ipc           = { path = "crates/scour-ipc" }
 scour-index-native  = { path = "crates/scour-index-native" }

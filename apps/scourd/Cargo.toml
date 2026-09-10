@@ -50,3 +50,6 @@ tempfile = "3"
 # Not optional any more. The arena cap in `main` is part of the shipped
 # service rather than a diagnostic — see `cap_allocator_arenas`.
 libc = { workspace = true }
+
+[build-dependencies]
+scour-icon = { workspace = true }

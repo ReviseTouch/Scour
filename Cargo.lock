@@ -5017,6 +5017,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-i18n",
+ "scour-icon",
  "scour-ipc",
  "scour-proto",
  "scour-settings",
@@ -5087,6 +5088,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-i18n",
+ "scour-icon",
  "scour-ipc",
  "scour-name",
  "scour-openers",
@@ -5109,6 +5111,10 @@ version = "0.2.0-alpha.1"
 dependencies = [
  "scour-core",
 ]
+
+[[package]]
+name = "scour-icon"
+version = "0.2.0-alpha.1"
 
 [[package]]
 name = "scour-index-native"
@@ -5151,6 +5157,7 @@ dependencies = [
  "schemars",
  "scour-config",
  "scour-core",
+ "scour-icon",
  "scour-ipc",
  "scour-proto",
  "scour-settings",
@@ -5265,6 +5272,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-i18n",
+ "scour-icon",
  "scour-ipc",
  "scour-name",
  "scour-openers",
@@ -5302,6 +5310,7 @@ dependencies = [
  "scour-config",
  "scour-core",
  "scour-i18n",
+ "scour-icon",
  "scour-ipc",
  "scour-name",
  "scour-openers",
@@ -5325,6 +5334,7 @@ dependencies = [
  "scour-core",
  "scour-dupes",
  "scour-engine",
+ "scour-icon",
  "scour-index-native",
  "scour-ipc",
  "scour-places",

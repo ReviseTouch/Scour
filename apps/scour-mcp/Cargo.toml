@@ -32,3 +32,6 @@ schemars     = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 humansize    = { workspace = true }
+
+[build-dependencies]
+scour-icon = { workspace = true }

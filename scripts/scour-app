@@ -24,7 +24,7 @@ pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
 
 # And the window that bridge belonged to: a profile has one owner, so a window
 # whose process outlives it makes the next launch a stack of error dialogs.
-# The pattern is this port's app URL, narrower than `--class=Scour` on purpose.
+# The pattern is this port's app URL, narrower than `--class=scour` on purpose.
 pkill -f -- "--app=http://127.0.0.1:$PORT/" 2>/dev/null || true
 # Chromium lets go of the profile as it goes; starting before it has is the
 # same failure by a shorter route.
@@ -99,7 +99,7 @@ start_window() {
     "$browser" \
         --app="$url" \
         "${WAYLAND_ARGS[@]}" \
-        --class=Scour \
+        --class=scour \
         --user-data-dir="$PROFILE" \
         --password-store=basic \
         --no-first-run \

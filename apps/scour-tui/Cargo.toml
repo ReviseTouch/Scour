@@ -47,3 +47,6 @@ scour-page     = { workspace = true }
 ratatui = { workspace = true }
 anyhow  = { workspace = true }
 clap    = { workspace = true }
+
+[build-dependencies]
+scour-icon = { workspace = true }

@@ -37,3 +37,6 @@ humansize    = { workspace = true }
 # only way to know where to stop is to ask. `TIOCGWINSZ` is the whole use.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[build-dependencies]
+scour-icon = { workspace = true }
