@@ -2424,7 +2424,6 @@ export component MainWindow inherits Window {
                         }
 
                         rowtouch := TouchArea {
-                            changed has-hover => { debug("row", i, self.has-hover, self.mouse-x, self.mouse-y, self.absolute-position.x, self.absolute-position.y, self.width, self.height); }
                             clicked => {
                                 root.selected = i;
                                 root.focus-query();
@@ -2590,7 +2589,6 @@ export component MainWindow inherits Window {
                                         && rowtouch.mouse-x >= root.cx[ci]
                                         && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
                                     changed under => {
-                                        debug("under", ci, self.under, self.preferred-width, self.width, rowtouch.mouse-x, root.cx[ci]);
                                         if (self.under && self.preferred-width > self.width) {
                                             root.tip-pending = c.pre + c.hit + c.post;
                                             root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
@@ -3719,10 +3717,8 @@ export component MainWindow inherits Window {
     Timer {
         interval: 450ms;
         running: root.tip-pending != "" && root.tip-text == "";
-        triggered => { debug("timer fired", root.tip-pending); root.tip-text = root.tip-pending; }
+        triggered => { root.tip-text = root.tip-pending; }
     }
-    changed tip-text => { debug("tip-text", root.tip-text, root.tip-x, root.tip-y, root.width, root.height); }
-    changed tip-pending => { debug("tip-pending", root.tip-pending); }
 
     // The cut text, whole. Below the row and near the pointer, kept on screen;
     // a fixed width so the height can come from the text without a cycle.
