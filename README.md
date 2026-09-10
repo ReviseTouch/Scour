@@ -103,12 +103,28 @@ not been run. A CI job checks that all three targets compile.
 
 ### From source
 
+Requirements: Rust 1.88 or later ([rustup](https://rustup.rs)), `pkg-config`,
+and the fontconfig development headers, which only the window needs:
+
+| distribution | packages |
+|---|---|
+| Ubuntu, Debian | `sudo apt install pkg-config libfontconfig1-dev` |
+| Fedora | `sudo dnf install pkgconf fontconfig-devel` |
+| Arch | `sudo pacman -S pkgconf fontconfig` |
+
 ```bash
+git clone https://github.com/ReviseTouch/Scour.git
+cd Scour
 cargo build --release
-./target/release/scourd &        # indexes the home directory on first run
-./target/release/scour rapor     # search
-./target/release/scour where     # prints where the settings and the index live
+scripts/release                      # assembles dist/scour-<version>-linux-x86_64.tar.gz
+cd dist && tar xzf scour-*-linux-x86_64.tar.gz && cd scour-*-linux-x86_64 && ./install.sh
 ```
+
+A clean build takes a few minutes. If a C compiler is present it is used to
+pin two libm symbols so the window also runs on older glibc versions; without
+one the build still completes. To install by hand instead of `install.sh`:
+`install -m755 target/release/scour{,d,-gui,-tui,-web,-watch,-mcp} ~/.local/bin/`
+(no menu entry and no shortcut in that case).
 
 ### Keyboard shortcut
 
