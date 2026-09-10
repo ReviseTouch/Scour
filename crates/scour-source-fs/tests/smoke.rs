@@ -589,17 +589,14 @@ fn a_network_mount_lets_events_settle_for_longer() {
     assert!(Medium::Spinning.debounce_ms() > Medium::Solid.debounce_ms());
 }
 
-/// Whatever this machine is, its temp directory is not a spinning disk and not
-/// a network share.
+/// Whatever this machine is, its temp directory is not a network share. (A CI
+/// runner's disk reports itself as spinning, so that much is not assumed.)
 #[test]
 #[cfg(target_os = "linux")]
 fn a_real_mount_is_classified() {
     use scour_source_fs::fs::{Medium, medium_of};
     let m = medium_of(&std::env::temp_dir());
-    assert!(
-        matches!(m, Medium::Solid | Medium::Memory),
-        "temp dir came out as {m:?}"
-    );
+    assert!(!matches!(m, Medium::Network), "temp dir came out as {m:?}");
 }
 
 #[test]
