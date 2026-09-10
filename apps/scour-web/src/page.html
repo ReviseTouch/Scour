@@ -4137,6 +4137,15 @@
   });
 
   /* Clicking picks. Plain replaces, `Ctrl` adds one, `Shift` takes the run. */
+  /* A cell that cut its text says the whole of it on hover. Only cells that
+     set no title of their own: the date and the folder size keep theirs. */
+  body.addEventListener("mouseover", (e) => {
+    const td = e.target.closest && e.target.closest("td");
+    if (!td || (td.title && !td.dataset.tip)) return;
+    const el = td.querySelector(".path") || td;
+    if (el.scrollWidth > el.clientWidth) { td.title = el.textContent; td.dataset.tip = "1"; }
+    else if (td.dataset.tip) { td.removeAttribute("title"); delete td.dataset.tip; }
+  });
   body.addEventListener("click", (e) => {
     const tr = e.target.closest("tr[data-path]");
     if (!tr) { return; }

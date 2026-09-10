@@ -3889,6 +3889,20 @@ fn relayout(window: &MainWindow, table: &Table) {
         return;
     }
     let px: Vec<f32> = widths.iter().map(|w| *w as f32).collect();
+    // Where each column starts inside the row: the row's 12px padding, then
+    // every earlier column and the 8px gap after it. Handed over so a cell can
+    // tell whether the row's pointer is on it without reading its own
+    // geometry — which, in a repeater's `changed` binding, is a cycle.
+    let mut at = 12.0;
+    let starts: Vec<f32> = px
+        .iter()
+        .map(|w| {
+            let here = at;
+            at += w + 8.0;
+            here
+        })
+        .collect();
+    window.set_cx(ModelRc::new(VecModel::from(starts)));
     window.set_cw(ModelRc::new(VecModel::from(px)));
 }
 

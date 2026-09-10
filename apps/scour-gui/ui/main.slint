@@ -789,6 +789,8 @@ export component MainWindow inherits Window {
     // The widths every row and the heading are handed, adding up to `lane`
     // exactly. A dragged width wins over a computed one; zero means untouched.
     in-out property <[length]> cw: [240px, 110px, 320px, 120px, 90px];
+    // Where each column starts inside a row, from `relayout` with `cw`.
+    in-out property <[length]> cx: [12px, 260px, 378px, 706px, 834px];
     // The headings in shown order, handed in from `scour-ui` by `dress()` in
     // `main.rs`, so the header row and every row below it use one list.
     in-out property <[HeadInfo]> heads;
@@ -866,6 +868,13 @@ export component MainWindow inherits Window {
     // `scour_ui::menu` and answers `menu-pick` with the id that comes back.
     in property <[MenuItem]> menu;
     in-out property <bool> menu-open: false;
+    /// The whole text of the cell under the pointer, shown when the cell had
+    /// to cut it. `tip-pending` is what the pointer is on; `tip-text` is what
+    /// is drawn, after a moment's rest or on a click.
+    in-out property <string> tip-pending;
+    in-out property <string> tip-text;
+    in-out property <length> tip-x;
+    in-out property <length> tip-y;
     in-out property <length> menu-x;
     in-out property <length> menu-y;
     /// A row was right-clicked, at this point on the window.
@@ -2415,9 +2424,11 @@ export component MainWindow inherits Window {
                         }
 
                         rowtouch := TouchArea {
+                            changed has-hover => { debug("row", i, self.has-hover, self.mouse-x, self.mouse-y, self.absolute-position.x, self.absolute-position.y, self.width, self.height); }
                             clicked => {
                                 root.selected = i;
                                 root.focus-query();
+                                root.tip-text = root.tip-pending;
                             }
                             double-clicked => {
                                 root.selected = i;
@@ -2569,6 +2580,26 @@ export component MainWindow inherits Window {
                                     post: c.post;
                                     colour: here.is-dir ? Theme.q-key : Theme.ink;
                                     width: parent.width;
+                                    // The row's pointer, in this cell, judged
+                                    // by the column table rather than by this
+                                    // element's geometry: a `changed` binding
+                                    // that reads geometry recurses while the
+                                    // repeater lays out. The row owns the touch
+                                    // area, so no click is taken from it.
+                                    property <bool> under: rowtouch.has-hover
+                                        && rowtouch.mouse-x >= root.cx[ci]
+                                        && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
+                                    changed under => {
+                                        debug("under", ci, self.under, self.preferred-width, self.width, rowtouch.mouse-x, root.cx[ci]);
+                                        if (self.under && self.preferred-width > self.width) {
+                                            root.tip-pending = c.pre + c.hit + c.post;
+                                            root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
+                                            root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
+                                        } else if (root.tip-pending == c.pre + c.hit + c.post) {
+                                            root.tip-pending = "";
+                                            root.tip-text = "";
+                                        }
+                                    }
                                 }
 
                                 if c.id != "name": Text {
@@ -2587,6 +2618,19 @@ export component MainWindow inherits Window {
                                     horizontal-alignment: c.right ? right : left;
                                     vertical-alignment: center;
                                     overflow: elide;
+                                    property <bool> under: rowtouch.has-hover
+                                        && rowtouch.mouse-x >= root.cx[ci]
+                                        && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
+                                    changed under => {
+                                        if (self.under && self.preferred-width > self.width) {
+                                            root.tip-pending = c.text;
+                                            root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
+                                            root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
+                                        } else if (root.tip-pending == c.text) {
+                                            root.tip-pending = "";
+                                            root.tip-text = "";
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -3671,4 +3715,39 @@ export component MainWindow inherits Window {
         }
     }
 
+    // A moment's rest before the tip appears; a click skips it.
+    Timer {
+        interval: 450ms;
+        running: root.tip-pending != "" && root.tip-text == "";
+        triggered => { debug("timer fired", root.tip-pending); root.tip-text = root.tip-pending; }
+    }
+    changed tip-text => { debug("tip-text", root.tip-text, root.tip-x, root.tip-y, root.width, root.height); }
+    changed tip-pending => { debug("tip-pending", root.tip-pending); }
+
+    // The cut text, whole. Below the row and near the pointer, kept on screen;
+    // a fixed width so the height can come from the text without a cycle.
+    if root.tip-text != "": Rectangle {
+        width: min(520px, root.width - 16px);
+        height: tip-label.preferred-height + 12px;
+        x: max(8px, min(root.tip-x, root.width - self.width - 8px));
+        y: root.tip-y + self.height > root.height - 8px
+            ? root.tip-y - self.height - Theme.row-height - 4px : root.tip-y;
+        background: Theme.panel;
+        border-width: 1px;
+        border-color: Theme.line;
+        border-radius: 3px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #00000060;
+        drop-shadow-offset-y: 4px;
+        tip-label := Text {
+            x: 10px;
+            y: 6px;
+            width: parent.width - 20px;
+            text: root.tip-text;
+            color: Theme.ink;
+            font-family: Fonts.mono;
+            font-size: 11.5px;
+            wrap: word-wrap;
+        }
+    }
 }
