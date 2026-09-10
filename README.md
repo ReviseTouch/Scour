@@ -14,8 +14,9 @@ Written in Rust, and nothing here is a wrapper around anything else.
 **[Releases](https://github.com/ReviseTouch/Scour/releases)**
 
 > **Alpha.** Used daily on Linux against 4.8 million entries and measured
-> there; the Windows build has had one afternoon on one machine and macOS has
-> never been run. The index format may still change.
+> there. **Windows is untested**: the build has had one afternoon on one
+> machine, nothing more. macOS has never been run. The index format may still
+> change.
 
 ```
 $ scour "ext:rs size:>10kb dm:7d"
@@ -86,11 +87,13 @@ against glibc 2.39 — Ubuntu 24.04+, Debian 13+, Fedora 40+, any rolling
 distribution; older ones want the source route. Tested on a clean Ubuntu
 24.04 guest, not merely compiled for it.
 
-**Windows: it runs.** The workspace builds for `x86_64-pc-windows-msvc` and the
-binaries were used on a Windows desktop: the service indexed, the command line
-searched. Untried there: the window, live watching, network and FAT32 volumes.
-No USN journal reader yet, so the first scan walks. **macOS: compiles, never
-run.** A `cross` CI job keeps all three targets compiling.
+**Windows: untested.** The workspace builds for `x86_64-pc-windows-msvc` and
+the binaries were started once on one Windows desktop — the service indexed
+and the command line searched — and that is the whole of it. Untried there:
+the window, live watching, network and FAT32 volumes, more than one machine.
+No USN journal reader yet, so the first scan walks. Expect things to break,
+and say so in an issue. **macOS: compiles, never run.** A `cross` CI job
+keeps all three targets compiling.
 
 ### From source
 
