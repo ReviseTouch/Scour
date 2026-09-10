@@ -129,11 +129,10 @@ impl Scour {
     /// Send a request, connecting or reconnecting as needed. Nothing mutating
     /// leaves here: every tool passes through, so the server is read-only because
     /// `Request::is_mutating` refuses, not because no such tool was written.
-    fn call(&self, req: Request) -> String {
+    fn call(&self, req: Request) -> Result<String, String> {
         if req.is_mutating() {
-            return crate::render::failure(&scour_core::Error::unsupported(format!(
-                "{}: this server is read-only",
-                req.name()
+            return Err(crate::render::failure(&scour_core::Error::unsupported(
+                format!("{}: this server is read-only", req.name()),
             )));
         }
         // Kept because a warning arrives as offsets into this string. Here
@@ -155,21 +154,21 @@ impl Scour {
         // fresh one; anything else is the answer.
         if let Some(held) = guard.as_mut() {
             match held.call(req.clone()) {
-                Ok(r) => return say(&r),
-                Err(e) if !e.is_transient() => return crate::render::failure(&e),
+                Ok(r) => return Ok(say(&r)),
+                Err(e) if !e.is_transient() => return Err(crate::render::failure(&e)),
                 Err(_) => *guard = None,
             }
         }
         match Client::connect(&self.inner.addr) {
             Ok(mut fresh) => {
                 let out = match fresh.call(req) {
-                    Ok(r) => say(&r),
-                    Err(e) => crate::render::failure(&e),
+                    Ok(r) => Ok(say(&r)),
+                    Err(e) => Err(crate::render::failure(&e)),
                 };
                 *guard = Some(fresh);
                 out
             }
-            Err(e) => crate::render::failure(&e),
+            Err(e) => Err(crate::render::failure(&e)),
         }
     }
 
@@ -180,7 +179,7 @@ impl Scour {
                        results plus the total number of matches. Call scour_syntax for the \
                        query language."
     )]
-    fn scour_search(&self, Parameters(a): Parameters<SearchArgs>) -> String {
+    fn scour_search(&self, Parameters(a): Parameters<SearchArgs>) -> Result<String, String> {
         self.call(Request::Search {
             query: a.query,
             sort: sort_of(a.sort.as_deref()),
@@ -197,7 +196,7 @@ impl Scour {
         description = "Count matching files without listing them. Use this when the question \
                        is how many, or to find out whether a search is worth running at all."
     )]
-    fn scour_count(&self, Parameters(a): Parameters<QueryArgs>) -> String {
+    fn scour_count(&self, Parameters(a): Parameters<QueryArgs>) -> Result<String, String> {
         self.call(Request::Count {
             query: a.query,
             cap: 10_000_000,
@@ -210,7 +209,7 @@ impl Scour {
                        left out rather than returning them. Use this to explore a filesystem \
                        instead of reading directories one by one."
     )]
-    fn scour_tree(&self, Parameters(a): Parameters<TreeArgs>) -> String {
+    fn scour_tree(&self, Parameters(a): Parameters<TreeArgs>) -> Result<String, String> {
         self.call(Request::Tree {
             path: a.path,
             depth: a.depth.unwrap_or(1).min(6),
@@ -226,7 +225,7 @@ impl Scour {
                        size match is NOT a duplicate. Do not delete anything on the strength \
                        of an unconfirmed group."
     )]
-    fn scour_duplicates(&self, Parameters(a): Parameters<DupeArgs>) -> String {
+    fn scour_duplicates(&self, Parameters(a): Parameters<DupeArgs>) -> Result<String, String> {
         self.call(Request::Duplicates {
             under: a.under,
             min_size: a.min_mb.unwrap_or(1) * 1024 * 1024,
@@ -236,7 +235,7 @@ impl Scour {
     }
 
     #[tool(description = "Everything known about one path: size, dates, type, permissions.")]
-    fn scour_stat(&self, Parameters(a): Parameters<PathArgs>) -> String {
+    fn scour_stat(&self, Parameters(a): Parameters<PathArgs>) -> Result<String, String> {
         self.call(Request::Stat { path: a.path })
     }
 
@@ -249,7 +248,7 @@ impl Scour {
                        'kind:video', 'ext:log', 'dm:>1y' — which answers where a kind of file \
                        sits rather than what the folder holds."
     )]
-    fn scour_disk_usage(&self, Parameters(a): Parameters<UsageArgs>) -> String {
+    fn scour_disk_usage(&self, Parameters(a): Parameters<UsageArgs>) -> Result<String, String> {
         self.call(Request::Usage {
             path: a.path,
             top: a.top.unwrap_or(20).min(200),
@@ -265,7 +264,7 @@ impl Scour {
                        `noatime` that date is when the file was created, not when it was last \
                        looked at."
     )]
-    fn scour_places(&self) -> String {
+    fn scour_places(&self) -> Result<String, String> {
         self.call(Request::Places {})
     }
 
@@ -274,7 +273,7 @@ impl Scour {
                        or by the child folders of a directory. Answers 'what is in here' without \
                        listing anything."
     )]
-    fn scour_facets(&self, Parameters(a): Parameters<FacetArgs>) -> String {
+    fn scour_facets(&self, Parameters(a): Parameters<FacetArgs>) -> Result<String, String> {
         let top = a.top.unwrap_or(15).min(100);
         self.call(Request::Facets {
             query: a.query,
@@ -294,7 +293,7 @@ impl Scour {
                        forgiving — an unrecognised field is searched for as literal text — so \
                        use this when a search returns something surprising."
     )]
-    fn scour_explain(&self, Parameters(a): Parameters<QueryArgs>) -> String {
+    fn scour_explain(&self, Parameters(a): Parameters<QueryArgs>) -> Result<String, String> {
         self.call(Request::Explain {
             query: a.query,
             cursor: None,
@@ -302,7 +301,7 @@ impl Scour {
     }
 
     #[tool(description = "The query language reference. Read this before composing a query.")]
-    fn scour_syntax(&self, Parameters(_): Parameters<NoArgs>) -> String {
+    fn scour_syntax(&self, Parameters(_): Parameters<NoArgs>) -> Result<String, String> {
         self.call(Request::Syntax {})
     }
 
@@ -311,10 +310,10 @@ impl Scour {
                        Check this when a search finds nothing you expected — the answer is \
                        often that the path is outside the indexed roots."
     )]
-    fn scour_sources(&self, Parameters(_): Parameters<NoArgs>) -> String {
-        let sources = self.call(Request::Sources {});
-        let status = self.call(Request::Status {});
-        format!("{sources}\n{status}")
+    fn scour_sources(&self, Parameters(_): Parameters<NoArgs>) -> Result<String, String> {
+        let sources = self.call(Request::Sources {})?;
+        let status = self.call(Request::Status {})?;
+        Ok(format!("{sources}\n{status}"))
     }
 }
 
@@ -371,10 +370,10 @@ mod tests {
     #[test]
     fn a_server_starts_with_no_service_to_talk_to() {
         let s = Scour::new(NOWHERE);
-        let out = s.call(Request::Sources {});
+        let out = s.call(Request::Sources {}).unwrap_err();
         assert!(
-            out.contains("not running"),
-            "should say the service is down, said: {out}"
+            out.contains("Nothing answered") && out.contains(NOWHERE),
+            "should name the path nothing answered at, said: {out}"
         );
     }
 
@@ -393,7 +392,7 @@ mod tests {
     #[test]
     fn a_request_that_would_write_is_refused_before_anything_is_opened() {
         let s = Scour::new(NOWHERE);
-        let out = s.call(Request::Shutdown {});
+        let out = s.call(Request::Shutdown {}).unwrap_err();
         assert!(out.contains("read-only"), "{out}");
         assert!(
             s.inner.client.lock().unwrap().is_none(),

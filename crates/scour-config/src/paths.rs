@@ -48,11 +48,44 @@ pub fn socket_path() -> String {
     }
     #[cfg(not(windows))]
     {
-        let base = dirs()
-            .and_then(|d| d.runtime_dir().map(PathBuf::from))
-            .unwrap_or_else(data_dir);
-        base.join("scour.sock").to_string_lossy().into_owned()
+        socket_at(
+            std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
+            run_user_dir(),
+        )
+        .to_string_lossy()
+        .into_owned()
     }
+}
+
+/// The socket, given the runtime directory the environment names and the one
+/// the system keeps for this user.
+///
+/// **The same answer with or without the environment.** A client started by
+/// something that strips `XDG_RUNTIME_DIR` — an MCP host, a cron job — used to
+/// fall back to the data directory and look for a socket the service never
+/// made. `/run/user/<uid>` is where logind puts the runtime directory, so it
+/// is tried before giving up on it.
+#[cfg(not(windows))]
+pub fn socket_at(runtime: Option<PathBuf>, run_user: Option<PathBuf>) -> PathBuf {
+    runtime
+        .filter(|p| p.is_absolute())
+        .or(run_user)
+        .map(|p| p.join("scour"))
+        .unwrap_or_else(data_dir)
+        .join("scour.sock")
+}
+
+/// `/run/user/<uid>` if it exists. The uid is read off the process itself, or
+/// off the home directory where there is no `/proc`.
+#[cfg(not(windows))]
+fn run_user_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self")
+        .ok()
+        .or_else(|| std::env::var_os("HOME").and_then(|h| std::fs::metadata(h).ok()))?
+        .uid();
+    let dir = PathBuf::from(format!("/run/user/{uid}"));
+    dir.is_dir().then_some(dir)
 }
 
 #[cfg(test)]
@@ -67,6 +100,25 @@ mod tests {
         assert!(i.starts_with(&d));
         assert_ne!(c.parent(), Some(i.as_path()));
         assert!(!socket_path().is_empty());
+    }
+
+    /// The service and every client must name one socket, whatever the
+    /// environment of the process asking.
+    #[test]
+    #[cfg(not(windows))]
+    fn the_socket_is_the_same_with_and_without_the_environment() {
+        let run = PathBuf::from("/run/user/1000");
+        let with_env = socket_at(Some(run.clone()), Some(run.clone()));
+        let without = socket_at(None, Some(run.clone()));
+        assert_eq!(with_env, without);
+        assert_eq!(with_env, PathBuf::from("/run/user/1000/scour/scour.sock"));
+        // A relative or empty XDG_RUNTIME_DIR is no runtime directory.
+        assert_eq!(
+            socket_at(Some(PathBuf::from("")), Some(run.clone())),
+            without
+        );
+        // Only with neither does it fall back to the data directory.
+        assert!(socket_at(None, None).starts_with(data_dir()));
     }
 
     #[test]

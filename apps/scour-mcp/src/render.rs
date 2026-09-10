@@ -406,7 +406,9 @@ pub fn failure(e: &Error) -> String {
         Error::NotIndexed => " The first scan has not finished. Try again shortly.",
         Error::NotFound { .. } => " Check the path, or call scour_sources to see what is indexed.",
         Error::Unreachable { .. } => {
-            " The Scour service is not running. It has to be started separately."
+            " Nothing answered at that path: either the service is not running, or it \
+             listens elsewhere — `scour where` prints the path it expects, and `--socket` \
+             names another."
         }
         _ => "",
     };
