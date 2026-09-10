@@ -1,5 +1,7 @@
 # Scour
 
+*Türkçe: [README.tr.md](README.tr.md)*
+
 Scour is a file indexer and search tool for Linux. It keeps every file and
 folder of the configured volumes in an index of its own, updates the index as
 the filesystem changes, and answers searches from it in milliseconds. The same
