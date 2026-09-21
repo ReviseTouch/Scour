@@ -559,6 +559,15 @@ fn main() -> Result<()> {
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
     }
+    // Where it was left. Set before the window is shown: one that appears and
+    // then jumps is worse than one that appears a frame later. The screen is
+    // not knowable yet — [`opening_size`] holds it inside a ceiling for now,
+    // and the first resize below does it properly.
+    let opened_at = opening_size(kept_size(kept.view.get("slint")), None);
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(opened_at.0, opened_at.1));
+    trace(&format!("opening at {:.0}x{:.0}", opened_at.0, opened_at.1));
     let addr = match &args.socket {
         Some(given) => given.clone(),
         None => config.socket(),
@@ -615,6 +624,50 @@ fn main() -> Result<()> {
     // every answer here is a process this window must not wait for.
     hotkey::start(kept.key_hint_seen);
     hotkey::wire(&window, &link, &cat);
+
+    // --- the window's own size --------------------------------------------
+    // Kept under `view.slint.size`, as the page keeps its own under
+    // `view.web`. Written once the drag stops, never per frame.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        // What the settings already say, so an untouched window writes nothing.
+        let saved = Rc::new(std::cell::Cell::new(opened_at));
+        // Asked once, as soon as there is a real window behind the Slint one —
+        // which is the first moment a monitor can be named at all, and why this
+        // is not done at birth.
+        let asked = Rc::new(std::cell::Cell::new(false));
+        let later = Rc::new(slint::Timer::default());
+        window.on_resized(move || {
+            use i_slint_backend_winit::WinitWindowAccessor;
+            let Some(w) = weak.upgrade() else { return };
+            if !asked.get() && w.window().has_winit_window() {
+                asked.set(true);
+                let screen = screen_size(w.window());
+                trace(&format!("screen {screen:?}"));
+                let fits = opening_size(Some(window_size(w.window())), screen);
+                if fits != window_size(w.window()) {
+                    // Lands back here, and the second time it fits. The
+                    // settings keep the larger size: this screen is where the
+                    // window is now, not what somebody chose.
+                    w.window().set_size(slint::LogicalSize::new(fits.0, fits.1));
+                    saved.set(fits);
+                    return;
+                }
+            }
+            let link = Rc::clone(&link);
+            let saved = Rc::clone(&saved);
+            let weak = w.as_weak();
+            later.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(SIZE_SETTLES_MS),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    keep_size(w.window(), &link, &saved);
+                },
+            );
+        });
+    }
 
     // --- the query line ---------------------------------------------------
     {
@@ -2288,6 +2341,29 @@ fn main() -> Result<()> {
                     });
             },
         );
+    }
+
+    // `SCOUR_GUI_RESIZE=1240,820` — resize from the inside, because there is
+    // no hand to drag the corner in a test. `1240,820,1500` says when.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_RESIZE") {
+        let at: Vec<f32> = spec
+            .split(',')
+            .filter_map(|n| n.trim().parse().ok())
+            .collect();
+        if let [w, h, ..] = at[..] {
+            let after = at.get(2).copied().unwrap_or(1200.0) as u64;
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(after),
+                move || {
+                    let Some(win) = weak.upgrade() else { return };
+                    trace(&format!("resizing to {w}x{h}"));
+                    win.window().set_size(slint::LogicalSize::new(w, h));
+                },
+            );
+        }
     }
 
     // Photograph the window and leave, when asked. See [`snapshot`].
@@ -4215,6 +4291,119 @@ fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> Stri
     scour_i18n::choose(&kept.language, &cfg.ui.language)
 }
 
+/// What a first run opens at, in logical pixels. **The same pair as
+/// `preferred-width`/`preferred-height` in `main.slint`**, said here because
+/// this is what the code applies; the `.slint` numbers only cover the frame
+/// before it does.
+const DEFAULT_SIZE: (f32, f32) = (1100.0, 680.0);
+/// The smallest the window may open at — `min-width`/`min-height` in
+/// `main.slint`. A screen narrower than this wins nothing by being obeyed.
+const SMALLEST_SIZE: (f32, f32) = (560.0, 320.0);
+/// Stands in for the screen until there is one to ask. Generous on purpose: it
+/// is a guard against a nonsense number in the settings, not a layout choice.
+const NO_SCREEN_IS_BIGGER: (f32, f32) = (3840.0, 2160.0);
+/// How long a drag has to stop before the size is written down. A resize is
+/// hundreds of changes; this is one call at the end of them.
+const SIZE_SETTLES_MS: u64 = 700;
+
+/// What size to open at: what was left behind, held inside the screen and never
+/// under the window's own minimum; [`DEFAULT_SIZE`] when nothing was left.
+/// `screen` is the usable screen in logical pixels, `None` while it is not
+/// knowable — before there is a real window, there is no monitor to ask.
+fn opening_size(kept: Option<(f32, f32)>, screen: Option<(f32, f32)>) -> (f32, f32) {
+    let (sw, sh) = screen.unwrap_or(NO_SCREEN_IS_BIGGER);
+    let (want_w, want_h) = kept.unwrap_or(DEFAULT_SIZE);
+    // The floor beats the screen: a window under `min-width` is drawn wrong,
+    // and a screen that small is a misreading of a monitor, not a monitor.
+    let fit = |want: f32, floor: f32, screen: f32| want.min(screen.max(floor)).max(floor);
+    (
+        fit(want_w, SMALLEST_SIZE.0, sw.min(NO_SCREEN_IS_BIGGER.0)),
+        fit(want_h, SMALLEST_SIZE.1, sh.min(NO_SCREEN_IS_BIGGER.1)),
+    )
+}
+
+/// The size a face left behind, out of its own corner of the settings
+/// (`view.slint.size` here, `view.web.size` for the page): two positive
+/// numbers, and anything else is nobody's opinion.
+fn kept_size(view: Option<&serde_json::Value>) -> Option<(f32, f32)> {
+    let [w, h] = view?.get("size")?.as_array()?.as_slice() else {
+        return None;
+    };
+    let (w, h) = (w.as_f64()? as f32, h.as_f64()? as f32);
+    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
+}
+
+/// The window's size now, in logical pixels.
+fn window_size(win: &slint::Window) -> (f32, f32) {
+    let size = win.size().to_logical(win.scale_factor());
+    (size.width, size.height)
+}
+
+/// The screen this window is on, in logical pixels. `None` until there is a
+/// winit window behind the Slint one — which is why the clamp happens on the
+/// first resize and not at birth — and on a compositor that will not say.
+fn screen_size(win: &slint::Window) -> Option<(f32, f32)> {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    // **The window's scale, not the monitor's.** A Wayland output advertises
+    // the integer scale beside its physical size — 2 for a screen this window
+    // is drawn on at 1.667 — and a size compared against the window's has to be
+    // in the window's frame. Measured here: 3200x2000 at 2 is 1600x1000 and
+    // wrong; over 1.667 it is 1920x1200, which is the screen.
+    let scale = win.scale_factor();
+    win.with_winit_window(|ww| {
+        let logical = |on: i_slint_backend_winit::winit::monitor::MonitorHandle| {
+            let size = on.size();
+            let (w, h) = (size.width as f32 / scale, size.height as f32 / scale);
+            (w > 0.0 && h > 0.0 && w.is_finite() && h.is_finite()).then_some((w, h))
+        };
+        // Wayland names no monitor for a window — a client is not told which
+        // output it is on. Then the **widest** screen there is, never the
+        // nearest: a guess that shrinks a window is worse than no guess.
+        ww.current_monitor()
+            .and_then(logical)
+            .or_else(|| ww.available_monitors().filter_map(logical).reduce(widest))
+    })?
+}
+
+/// The bigger of two screens, by area.
+fn widest(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+    if b.0 * b.1 > a.0 * a.1 { b } else { a }
+}
+
+/// Is the window spread by the desktop rather than sized by hand? A maximised
+/// window's size is the screen's, which is not a choice worth keeping.
+fn spread(win: &slint::Window) -> bool {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    win.with_winit_window(|ww| ww.is_maximized() || ww.fullscreen().is_some())
+        .unwrap_or(false)
+}
+
+/// Write the window's size down, under `view.slint.size`. A [`scour_settings::Change`]
+/// merges `view` key by key, so nothing else the window keeps there is touched.
+fn keep_size(win: &slint::Window, link: &Rc<Link>, saved: &std::cell::Cell<(f32, f32)>) {
+    if spread(win) {
+        trace("size not kept: the desktop is spreading the window, not a hand");
+        return;
+    }
+    let (w, h) = window_size(win);
+    let was = saved.get();
+    // Sub-pixel jitter from a scale factor is not somebody resizing a window.
+    if (w - was.0).abs() < 1.0 && (h - was.1).abs() < 1.0 {
+        return;
+    }
+    saved.set((w, h));
+    trace(&format!("keeping window size {w:.0}x{h:.0}"));
+    link.send(Ask::Remember {
+        change: scour_settings::Change {
+            view: std::collections::BTreeMap::from([(
+                "slint".to_owned(),
+                serde_json::json!({ "size": [w.round() as i64, h.round() as i64] }),
+            )]),
+            ..Default::default()
+        },
+    });
+}
+
 /// As much of a file as a preview should show — and as much as can be drawn: the
 /// software renderer casts every glyph position to `i16`, and a quarter megabyte
 /// in a 300 px column is ninety thousand pixels tall. Divided by the scale.
@@ -4750,6 +4939,81 @@ mod tests {
                     k.msgid()
                 );
             }
+        }
+    }
+
+    /// What the window opens at, which is the whole of this decision: the
+    /// screen only ever takes room away, and never below the minimum.
+    #[test]
+    fn the_window_opens_where_it_was_left_unless_the_screen_is_smaller() {
+        use super::{DEFAULT_SIZE, NO_SCREEN_IS_BIGGER, SMALLEST_SIZE, opening_size};
+        let screen = Some((1920.0, 1080.0));
+
+        assert_eq!(
+            opening_size(Some((1440.0, 900.0)), screen),
+            (1440.0, 900.0),
+            "a size that fits is the size"
+        );
+        assert_eq!(
+            opening_size(Some((3000.0, 2000.0)), screen),
+            (1920.0, 1080.0),
+            "a size kept on a wider screen is brought back inside this one"
+        );
+        assert_eq!(
+            opening_size(None, screen),
+            DEFAULT_SIZE,
+            "nothing kept is the default"
+        );
+        assert_eq!(
+            opening_size(None, Some((800.0, 600.0))),
+            (800.0, 600.0),
+            "the default fits the screen too"
+        );
+        assert_eq!(
+            opening_size(Some((1440.0, 900.0)), Some((320.0, 200.0))),
+            SMALLEST_SIZE,
+            "a screen under the window's minimum does not shrink it further"
+        );
+        // No window has been made yet, so no monitor can be asked.
+        assert_eq!(
+            opening_size(Some((1440.0, 900.0)), None),
+            (1440.0, 900.0),
+            "an unknown screen takes nothing away"
+        );
+        assert_eq!(
+            opening_size(Some((99_000.0, 99_000.0)), None),
+            NO_SCREEN_IS_BIGGER,
+            "but a nonsense size is still bounded"
+        );
+    }
+
+    /// The settings are a free-form object written by another program's idea of
+    /// this key; everything that is not two positive numbers is no opinion.
+    #[test]
+    fn only_two_positive_numbers_count_as_a_remembered_size() {
+        use super::kept_size;
+        let read = |text: &str| kept_size(Some(&serde_json::from_str(text).unwrap()));
+
+        assert_eq!(read(r#"{"size":[1180,760]}"#), Some((1180.0, 760.0)));
+        assert_eq!(read(r#"{"size":[1180.5,760.5]}"#), Some((1180.5, 760.5)));
+        assert_eq!(
+            read(r#"{"peek":true,"size":[900,700]}"#),
+            Some((900.0, 700.0)),
+            "the size is one key among whatever else is kept there"
+        );
+        assert_eq!(kept_size(None), None, "no corner of its own yet");
+        for junk in [
+            r#"{}"#,
+            r#"{"size":[]}"#,
+            r#"{"size":[1180]}"#,
+            r#"{"size":[1180,760,40]}"#,
+            r#"{"size":[0,760]}"#,
+            r#"{"size":[-1180,760]}"#,
+            r#"{"size":["1180","760"]}"#,
+            r#"{"size":{"w":1180,"h":760}}"#,
+            r#"{"size":null}"#,
+        ] {
+            assert_eq!(read(junk), None, "{junk}");
         }
     }
 }

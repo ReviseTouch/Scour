@@ -146,7 +146,7 @@ A screenshot does not verify an interface; a trace and a synthetic event do.
 | tool | what it does |
 |---|---|
 | `SCOUR_GUI_SNAP=/x.png` | the window photographs itself |
-| `SCOUR_GUI_QUERY/PANEL/SCROLL/CLICK/HOVER` | puts the window in a state, sends a synthetic event |
+| `SCOUR_GUI_QUERY/PANEL/SCROLL/CLICK/HOVER/RESIZE` | puts the window in a state, sends a synthetic event |
 | `scour-tui --once WxH` | prints the frame **as text** |
 | `scour-tui --press`, `--click` | presses a key, a point |
 | `SCOUR_TUI_TRACE=/tmp/log` | writes what happened to a file (not the screen) |

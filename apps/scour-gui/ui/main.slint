@@ -829,6 +829,12 @@ export component MainWindow inherits Window {
     min-width: 560px;
     min-height: 320px;
 
+    /// The window was resized. Rust writes the size down so the next run opens
+    /// at it; the numbers above are only what a first run gets.
+    callback resized();
+    changed width => { root.resized(); }
+    changed height => { root.resized(); }
+
     // --- what Rust sets ---------------------------------------------------
     in property <[Row]> rows;
     in property <[Span]> spans;

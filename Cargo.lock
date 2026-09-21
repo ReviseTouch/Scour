@@ -5111,6 +5111,7 @@ dependencies = [
  "scour-thumbs",
  "scour-trash",
  "scour-ui",
+ "serde_json",
  "slint",
  "slint-build",
 ]

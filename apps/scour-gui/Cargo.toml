@@ -49,6 +49,9 @@ scour-page     = { workspace = true }
 # For `Change` alone: what this window remembers goes to the service, so the
 # browser page opens in the same language and the same shape.
 scour-settings = { workspace = true }
+# For one shape alone: `view.slint.size`, the free-form corner of the settings
+# where a face keeps what only it can mean.
+serde_json     = { workspace = true }
 # The desktop's thumbnail cache: where a picture lives, and which kinds are
 # never worth looking for one. **Nothing here makes a thumbnail** — that starts
 # processes, and the service is the only thing allowed to; this window asks it,
