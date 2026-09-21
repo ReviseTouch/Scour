@@ -65,3 +65,6 @@ scour-icon = { workspace = true }
 [dev-dependencies]
 # Stub `gsettings` and `kwriteconfig` scripts for the hotkey route's tests.
 tempfile = "3"
+# The report's arithmetic is written twice — once here in Rust, once in the
+# page's JavaScript. `the_report_shares_the_bytes_out…` runs both and compares.
+scour-chart = { workspace = true }

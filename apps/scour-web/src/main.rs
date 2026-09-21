@@ -1782,6 +1782,165 @@ mod tests {
         assert!(n > 400, "only {n} widths were compared");
     }
 
+    /// The report's arithmetic exists twice: in `scour-chart`, which the window
+    /// and the terminal draw from, and in the page, which is JavaScript. This
+    /// runs the page's copy under `node` and compares every number it gives.
+    #[test]
+    fn the_report_shares_the_bytes_out_exactly_as_the_chart_crate_does() {
+        let from = PAGE
+            .find("  function shares(values, decimals) {")
+            .expect("the page has no `shares`");
+        let to = PAGE
+            .find("  const LABEL_PX = 64;")
+            .expect("the page has no `LABEL_PX`");
+        assert!(to > from, "the mirrored numbers are no longer one block");
+
+        // The mock-up's twelve folders and what they leave over; three equal
+        // thirds, where the rounding has to pick a winner; every value zero;
+        // one value; a scope split by age; and eight of the same number.
+        let fixtures: Vec<Vec<u64>> = vec![
+            vec![
+                651_571_270_524,
+                31_643_455_926,
+                15_738_588_363,
+                14_110_521_835,
+                10_863_393_896,
+                10_852_991_366,
+                9_242_344_819,
+                8_271_160_692,
+                7_898_028_191,
+                7_372_347_728,
+                5_889_237_540,
+                4_856_318_717,
+                20_649_608_929,
+            ],
+            vec![1, 1, 1],
+            vec![0, 0, 0],
+            vec![7],
+            vec![
+                106_500_000_000,
+                25_300_000_000,
+                482_000_000_000,
+                114_600_000_000,
+                3_700_000_000,
+                12_600_000_000,
+            ],
+            vec![5, 5, 5, 5, 5, 5, 5, 5],
+        ];
+        let json = serde_json::to_string(&fixtures).expect("the fixtures as JSON");
+        let harness = format!(
+            "{}\nconst C = 2 * Math.PI * 54;\nconst out = {json}.map((v) => ({{\n\
+             s0: shares(v, 0), s1: shares(v, 1), s2: shares(v, 2),\n\
+             seg: segments(v).map((s) => [s.start, s.width]),\n\
+             dash: dashes(v, C).map((d) => [d.length, d.offset]),\n\
+             fold: (() => {{\n\
+             const f = fold(v.map((x, i) => [x, i]), (p) => p[0], 6);\n\
+             return {{ kept: f.kept.map((p) => p[1]),\n\
+             rest: f.rest ? [f.rest.count, f.rest.value] : null }};\n\
+             }})(),\n}}));\nconsole.log(JSON.stringify(out));\n",
+            &PAGE[from..to],
+        );
+        let path = std::env::temp_dir().join("scour-chart-check.js");
+        std::fs::write(&path, &harness).expect("writing the harness out");
+        let out = match std::process::Command::new("node").arg(&path).output() {
+            Ok(out) => out,
+            Err(e) => {
+                eprintln!("the_report_shares_the_bytes_out…: skipped, no node here ({e})");
+                let _ = std::fs::remove_file(&path);
+                return;
+            }
+        };
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            out.status.success(),
+            "the page's chart numbers did not run:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let said: Vec<serde_json::Value> =
+            serde_json::from_slice(&out.stdout).expect("the page printed JSON");
+
+        let circumference = 2.0 * std::f64::consts::PI * 54.0;
+        // A tenth of a nanounit: far below anything a bar or a legend shows,
+        // and far above the noise of one `f64` division done twice.
+        let close = |a: f64, b: f64, what: &str| {
+            assert!((a - b).abs() < 1e-9, "{what}: the page {a}, the crate {b}");
+        };
+        let list = |v: &serde_json::Value| -> Vec<f64> {
+            v.as_array()
+                .expect("a list")
+                .iter()
+                .map(|x| x.as_f64().expect("a number"))
+                .collect()
+        };
+        let pairs = |v: &serde_json::Value| -> Vec<(f64, f64)> {
+            v.as_array()
+                .expect("a list")
+                .iter()
+                .map(|x| {
+                    let p = list(x);
+                    (p[0], p[1])
+                })
+                .collect()
+        };
+
+        for (f, values) in fixtures.iter().enumerate() {
+            let got = &said[f];
+            for (key, decimals) in [("s0", 0u8), ("s1", 1), ("s2", 2)] {
+                let want = scour_chart::shares(values, decimals);
+                let mine = list(&got[key]);
+                assert_eq!(
+                    mine.len(),
+                    want.len(),
+                    "fixture {f}: {key} is a different length"
+                );
+                for (i, (a, b)) in mine.iter().zip(&want).enumerate() {
+                    close(*a, *b, &format!("fixture {f}: {key}[{i}]"));
+                }
+            }
+            for (i, (s, want)) in pairs(&got["seg"])
+                .iter()
+                .zip(scour_chart::segments(values))
+                .enumerate()
+            {
+                close(s.0, want.start, &format!("fixture {f}: segment {i} start"));
+                close(s.1, want.width, &format!("fixture {f}: segment {i} width"));
+            }
+            for (i, (d, want)) in pairs(&got["dash"])
+                .iter()
+                .zip(scour_chart::dashes(values, circumference))
+                .enumerate()
+            {
+                close(d.0, want.length, &format!("fixture {f}: dash {i} length"));
+                close(d.1, want.offset, &format!("fixture {f}: dash {i} offset"));
+            }
+            let items: Vec<(u64, usize)> = values.iter().copied().zip(0..).collect();
+            let want = scour_chart::fold(items, |x| x.0, 6);
+            let kept: Vec<usize> = got["fold"]["kept"]
+                .as_array()
+                .expect("kept")
+                .iter()
+                .map(|x| x.as_u64().expect("an index") as usize)
+                .collect();
+            assert_eq!(
+                kept,
+                want.kept.iter().map(|x| x.1).collect::<Vec<_>>(),
+                "fixture {f}: the folded order differs"
+            );
+            match (&got["fold"]["rest"], want.rest) {
+                (serde_json::Value::Null, None) => {}
+                (rest, Some(r)) => {
+                    let rest = list(rest);
+                    assert_eq!(
+                        (rest[0] as usize, rest[1] as u64),
+                        (r.count, r.value),
+                        "fixture {f}: the rest differs"
+                    );
+                }
+                (rest, None) => panic!("fixture {f}: the page folded {rest} away, the crate none"),
+            }
+        }
+    }
+
     /// Neither the words nor the taxonomy starts a second search when it lands.
     #[test]
     fn the_first_search_does_not_wait_for_the_kind_taxonomy() {

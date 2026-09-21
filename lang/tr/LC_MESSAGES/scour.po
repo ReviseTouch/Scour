@@ -1614,3 +1614,79 @@ msgstr "bir kombinasyon yazıp Enter'a bas"
 
 msgid "the key that opens Scour"
 msgstr "Scour'u açan tuş"
+
+# --- the report, rebuilt from the approved mock-up ---
+
+msgid "Where the bytes are"
+msgstr "Baytlar nerede"
+
+# The headline. Turkish puts the unit before the number here ("diskte X"),
+# which is why the whole line is one string and not three glued together.
+msgid "<b>{files}</b> files · <b>{disk}</b> on disk · {n} folders"
+msgstr "<b>{files}</b> dosya · diskte <b>{disk}</b> · {n} klasör"
+
+msgid "the other {n} folders and the files here"
+msgstr "diğer {n} klasör ve buradaki dosyalar"
+
+# The same row when every folder already has one of its own.
+msgid "the files here"
+msgstr "buradaki dosyalar"
+
+msgid "The bar behind a row is the folder's share, against the heaviest. The coloured strip is the age of its bytes. Clicking a row descends into it."
+msgstr "Satırın arkasındaki çubuk klasörün payı, en ağır olana göre. Renkli şerit o klasörün baytlarının yaşı. Bir satıra tıklamak o klasöre iner."
+
+# The word in the middle of the ring, uppercased by the page.
+msgid "kinds"
+msgstr "tür"
+
+msgid "the other {n} kinds"
+msgstr "diğer {n} tür"
+
+# Said only when the walk stopped at its cap.
+msgid "{n} sampled rows"
+msgstr "{n} örneklenmiş kayıt"
+
+msgid "Clicking a slice adds a <code>kind:</code> term to the query and opens the search tab with the same scope."
+msgstr "Bir dilime tıklamak sorguya <code>kind:</code> terimini ekler, arama sekmesi aynı kapsamla açılır."
+
+msgid "Right-click opens the same menu: open, open the folder, move to trash."
+msgstr "Sağ tık aynı menü: aç, klasörünü aç, çöp kutusuna taşı."
+
+# --- the report in the terminal ---
+
+# The bar over the report: what the age of a folder is called.
+msgid "age"
+msgstr "yaş"
+
+# The terminal legend says the bands short; `this week` above is the
+# window's, which has the room for it.
+msgid "week"
+msgstr "hafta"
+
+msgid "month"
+msgstr "ay"
+
+msgid "year"
+msgstr "yıl"
+
+# The heading over the kind bar, in the terminal report.
+msgid "BY KIND"
+msgstr "TÜRE GÖRE"
+
+# The slice for everything the legend had no room to name.
+msgid "other"
+msgstr "diğer"
+
+# The line under the weighed folders: what is not a row of its own.
+msgid "the other {n} folders"
+msgstr "diğer {n} klasör"
+
+# The headline, without the markup the page hangs on `<b>`: this window has
+# no stylesheet and puts its own colour on the numbers.
+msgid "{files} files · {disk} on disk · {n} folders"
+msgstr "{files} dosya · diskte {disk} · {n} klasör"
+
+# The same sentence for the window, without the `<code>` and without the
+# promise of a scope: the window leaves the report scope where it is.
+msgid "Clicking a slice adds a kind: term to the query and opens the search tab."
+msgstr "Bir dilime tıklamak sorguya kind: terimini ekler ve arama sekmesini açar."

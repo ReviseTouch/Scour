@@ -1019,45 +1019,133 @@
   .crumb .filt button { color: var(--ink-3); padding: 0 3px; }
   .crumb .filt button:hover { color: var(--ink); text-decoration: none; }
 
-  .headline { display: flex; align-items: baseline; gap: calc(var(--u) * 5); flex-wrap: wrap;
-              margin-bottom: calc(var(--u) * 4); }
+  /* The number is the headline: large and light, not loud. */
+  .headline { display: flex; align-items: baseline; flex-wrap: wrap;
+              gap: calc(var(--u) * 1.5) calc(var(--u) * 5); margin-bottom: calc(var(--u) * 3); }
   .headline .b {
-    font: 700 34px/1 var(--mono); letter-spacing: -.02em;
+    font: 300 34px/1 var(--sans); letter-spacing: -.02em;
     font-variant-numeric: tabular-nums; color: var(--ink);
   }
-  .headline .m { font: 500 12px/1.4 var(--mono); color: var(--ink-3); }
-  .headline .m b { color: var(--ink-2); font-weight: 500; }
+  .headline .m { font-size: 12.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .headline .m b { color: var(--ink); font-weight: 650; }
+  .headline .ms { font: 400 12px/1 var(--mono); color: var(--ink-3); }
 
-  .kids { width: 100%; border-collapse: collapse; }
-  .kids th {
-    text-align: left; padding: 0 calc(var(--u) * 2) calc(var(--u) * 1.5);
-    font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase;
-    color: var(--ink-3); font-weight: 650; border-bottom: 1px solid var(--line);
+  /* The report's own headings; `.panel h4` and the duplicates keep theirs. */
+  .report h4.sec {
+    margin: calc(var(--u) * 6) 0 calc(var(--u) * 2); font-size: 9.5px;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); font-weight: 650;
   }
-  .kids th.r { text-align: right; }
-  .kids td { padding: calc(var(--u) * 1.5) calc(var(--u) * 2); border-bottom: 1px solid var(--line-soft); }
-  .kids tr:hover td { background: var(--panel-2); }
-  .kids .nmcell button {
-    background: none; border: 0; padding: 0; cursor: pointer;
-    font: 500 12.5px/1 var(--mono); color: var(--ink); text-align: left;
+  .report h4.sec small {
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    margin-left: calc(var(--u) * 2); font-size: 11px;
   }
-  .kids .nmcell button:hover { text-decoration: underline; }
-  .kids .nmcell button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-  .kids td.r {
-    text-align: right; font: 400 12px/1 var(--mono);
-    font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap;
-  }
-  .kids td.r.big { color: var(--ink); font-weight: 600; }
+  .report .note { margin: calc(var(--u) * 2) 0 0; font-size: 11px;
+                  line-height: 1.5; color: var(--ink-3); }
 
-  .stack { display: flex; height: 13px; border-radius: 2px; overflow: hidden; background: var(--line-soft); }
-  .stack i { display: block; height: 100%; }
-  .stack-wrap { min-width: 120px; }
+  /* One bar cut into segments; `tall` is a whole line and carries its labels.
+     `content-box` because inside a row the cell's own padding would eat the
+     height, leaving the segments nothing to be 100% of. */
+  .report .strip { display: flex; height: 10px; box-sizing: content-box;
+                   border-radius: 2px; overflow: hidden; background: var(--line-soft); }
+  .report .strip i { display: block; height: 100%; }
+  .report .strip.tall { height: 22px; border-radius: 3px; }
+  .report .strip.tall i { position: relative; }
+  /* `--ground` rather than white: the label has to read on a dark segment in
+     the light scheme and on a light one in the dark scheme. */
+  .report .strip.tall i span {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    padding-left: calc(var(--u) * 2); font: 500 11px/1 var(--sans);
+    color: var(--ground); overflow: hidden; white-space: nowrap;
+  }
 
-  .agekey { display: flex; gap: calc(var(--u) * 3); flex-wrap: wrap;
-            margin: calc(var(--u) * 3) 0 calc(var(--u) * 5);
-            font: 500 10px/1 var(--mono); color: var(--ink-3); }
-  .agekey span { display: inline-flex; align-items: center; gap: 5px; }
-  .agekey i { width: 9px; height: 9px; border-radius: 1px; display: block; }
+  .report .key { display: flex; flex-wrap: wrap; gap: var(--u) calc(var(--u) * 4);
+                 margin-top: calc(var(--u) * 2); font-size: 11.5px; color: var(--ink-2); }
+  .report .key span { display: inline-flex; align-items: center; gap: 5px; }
+  .report .key i { width: 9px; height: 9px; border-radius: 1px; display: block; }
+  .report .key b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  /* One folder a row: its share as a bar behind the name, as the rail draws one. */
+  .report .rows {
+    display: grid; align-items: center; gap: 0 calc(var(--u) * 3);
+    grid-template-columns: minmax(130px, 1.2fr) minmax(110px, 1fr) 84px 54px 74px;
+    margin-top: calc(var(--u) * 3);
+  }
+  .report .rows > div { padding: calc(var(--u) * 1.5) 0; font-size: 12px;
+                        border-bottom: 1px solid var(--line-soft);
+                        font-variant-numeric: tabular-nums; }
+  .report .rows .hd {
+    color: var(--ink-3); font-size: 9.5px; letter-spacing: .16em; font-weight: 650;
+    text-transform: uppercase; border-bottom: 1px solid var(--line);
+  }
+  .report .rows .nm { position: relative; padding-left: calc(var(--u) * 2); min-width: 0; }
+  .report .rows .nm i {
+    position: absolute; left: 0; top: 3px; bottom: 3px;
+    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+  }
+  .report .rows .nm button {
+    position: relative; z-index: 1; max-width: 100%; background: none; border: 0;
+    padding: 0; cursor: pointer; text-align: left; color: var(--ink);
+    font: 500 12.5px/1.2 var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .report .rows .nm button:hover { text-decoration: underline; }
+  .report .rows .nm button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .report .rows .nm .go { color: var(--ink-3); margin-left: 4px; }
+  .report .rows .r { text-align: right; font-family: var(--mono); white-space: nowrap; }
+  .report .rows .r.big { color: var(--ink); font-weight: 600; }
+  .report .rows .mute { color: var(--ink-3); }
+  .report .rows .hollow { grid-column: 1 / -1; padding: calc(var(--u) * 6) calc(var(--u) * 2);
+                          color: var(--ink-3); font-size: 12.5px; border-bottom: 0; }
+
+  /* `minmax(0, …)`: a long file name would otherwise push its own column wider
+     than half and shove the ring out of the other. */
+  .report .two { display: grid; gap: calc(var(--u) * 7);
+                 grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) {
+    .report .two { grid-template-columns: 1fr; }
+    .report .rows { grid-template-columns: 1fr 1fr 70px 46px 58px; }
+  }
+
+  .report .ring { display: flex; align-items: center; gap: calc(var(--u) * 5); flex-wrap: wrap; }
+  .report .ring svg { flex: none; }
+  .report .ring circle[data-kind] { cursor: pointer; }
+  .report .ring .mid { font: 300 20px/1 var(--sans); fill: var(--ink); }
+  .report .ring .mid2 { font: 650 9.5px/1 var(--sans); fill: var(--ink-3); letter-spacing: .16em; }
+
+  /* `gap: 0` on purpose: the help sheet's `.legend` sets one, and a report row
+     is a row, not a paragraph. */
+  .report .legend { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 0; }
+  .report .legend button {
+    display: grid; grid-template-columns: 10px minmax(0, 1fr) auto 46px;
+    align-items: center; gap: calc(var(--u) * 2); width: 100%;
+    background: none; border: 0; border-radius: 2px; padding: 3px var(--u);
+    cursor: pointer; text-align: left; color: var(--ink-2);
+    font: inherit; font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .report .legend button:hover { background: var(--hover); color: var(--ink); }
+  .report .legend button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .report .legend button[disabled] { cursor: default; }
+  .report .legend i { width: 10px; height: 10px; border-radius: 2px; display: block; }
+  .report .legend .w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .report .legend .n { text-align: right; }
+  .report .legend .p { text-align: right; color: var(--ink-3); }
+
+  /* The largest files: the same bar behind a name, the size on the right. */
+  .report .files button {
+    position: relative; display: flex; align-items: baseline; justify-content: space-between;
+    gap: calc(var(--u) * 3); width: 100%; background: none; border: 0; border-radius: 2px;
+    padding: 4px calc(var(--u) * 2); cursor: pointer; text-align: left; color: var(--ink);
+    font: inherit; font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .report .files button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .report .files i {
+    position: absolute; left: 0; top: 2px; bottom: 2px;
+    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+  }
+  .report .files .nm { position: relative; z-index: 1; min-width: 0;
+                       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .report .files .nm small { color: var(--ink-3); margin-left: 6px; }
+  .report .files .v { position: relative; z-index: 1; flex: none; color: var(--ink-2); }
 
   .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
             gap: calc(var(--u) * 4); margin-top: calc(var(--u) * 5); }
@@ -1438,32 +1526,36 @@
       <div class="headline">
         <div class="b" id="r-bytes">—</div>
         <div class="m" id="r-meta"></div>
+        <div class="ms" id="r-ms"></div>
+      </div>
+      <p class="note" id="r-only" hidden></p>
+
+      <!-- The scope by age: one bar, and the six words under it. -->
+      <div class="strip tall" id="r-age"></div>
+      <div class="key" id="agekey"></div>
+
+      <h4 class="sec"><span data-t="Where the bytes are"></span><small id="r-cut"></small></h4>
+      <div class="strip tall" id="r-folders"></div>
+      <div class="rows" id="r-kids"></div>
+      <p class="note" data-t="The bar behind a row is the folder's share, against the heaviest. The coloured strip is the age of its bytes. Clicking a row descends into it."></p>
+
+      <div class="two">
+        <div>
+          <h4 class="sec"><span data-t="By kind"></span><small id="k-cap"></small></h4>
+          <div class="ring">
+            <div id="k-ring"></div>
+            <div class="legend" id="p-kind"></div>
+          </div>
+          <p class="note" data-t-html="Clicking a slice adds a &lt;code&gt;kind:&lt;/code&gt; term to the query and opens the search tab with the same scope."></p>
+        </div>
+        <div>
+          <h4 class="sec"><span data-t="Largest files"></span></h4>
+          <div class="files" id="p-big"></div>
+          <p class="note" data-t="Right-click opens the same menu: open, open the folder, move to trash."></p>
+        </div>
       </div>
 
-      <table class="kids">
-        <thead>
-          <tr>
-            <th data-t="Folder"></th>
-            <th style="width:34%" data-t="By age"></th>
-            <th class="r" data-t="Size"></th>
-            <th class="r" data-t="Share"></th>
-            <th class="r" data-t="Files"></th>
-          </tr>
-        </thead>
-        <tbody id="r-kids"></tbody>
-      </table>
-
-      <div class="agekey" id="agekey"></div>
-
       <div class="panels">
-        <div class="panel">
-          <h4 data-t="By kind"></h4>
-          <div id="p-kind"></div>
-        </div>
-        <div class="panel">
-          <h4 data-t="Largest files"></h4>
-          <div id="p-big"></div>
-        </div>
         <div class="panel">
           <h4 data-t="Search in this folder"></h4>
           <div id="p-jump"></div>
@@ -5706,6 +5798,12 @@
   let scope = "";
   let drawing = 0;
 
+  /* How many folders get a row, how many kinds get a slice, how many files get
+     a bar. The rest of each is one folded line, never dropped. */
+  const TOP = 12;
+  const KEPT_KINDS = 6;
+  const BIG_FILES = 6;
+
   const crumb = document.getElementById("crumb");
   const kidsEl = document.getElementById("r-kids");
 
@@ -5715,15 +5813,149 @@
   const qBox = document.getElementById("q");
   const filter = () => qBox.value.trim();
 
-  /* From bytes: a percentage of nothing is undefined rather than zero. */
-  function stack(age, total) {
-    if (!total) return `<div class="stack"></div>`;
-    return `<div class="stack">` + age.map((v, i) => {
-      const pct = (v / total) * 100;
+  /* ---- the numbers, mirrored from `scour-chart` ----
+   * A drift test runs these under node against the crate's own answers.
+   * `BigInt` because the crate sums in `u128`. */
+
+  /* Percentages to `decimals` places that sum to exactly 100 — the largest
+     remainders take the units rounding left over, so a legend never says 99.9. */
+  function shares(values, decimals) {
+    const total = values.reduce((a, v) => a + BigInt(v), 0n);
+    if (total === 0n) return values.map(() => 0);
+    const scale = 10n ** BigInt(decimals);
+    const whole = 100n * scale;
+    const units = values.map((v) => (BigInt(v) * whole) / total);
+    const over = values.map((v, i) => [(BigInt(v) * whole) % total, i]);
+    /* The largest remainder first; on a tie the earlier value, which is the
+       larger one when the caller has sorted. */
+    over.sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] < b[0] ? 1 : -1));
+    let short = whole - units.reduce((a, u) => a + u, 0n);
+    for (let i = 0; short > 0n && i < over.length; i++, short--) units[over[i][1]] += 1n;
+    return units.map((u) => Number(u) / Number(scale));
+  }
+
+  /* A bar cut in the order given; exact fractions, not rounded, so widths meet. */
+  function segments(values) {
+    const total = values.reduce((a, v) => a + v, 0);
+    let at = 0;
+    return values.map((v) => {
+      const width = total === 0 ? 0 : v / total;
+      const seg = { start: at, width };
+      at += width;
+      return seg;
+    });
+  }
+
+  /* Keep the `keep` largest by `value`, fold the others into one rest. Stable:
+     two equal values keep the order they came in. */
+  function fold(items, value, keep) {
+    const sorted = items.slice().sort((a, b) => {
+      const d = value(b) - value(a);
+      return d === 0 ? 0 : d > 0 ? 1 : -1;
+    });
+    if (sorted.length <= keep) return { kept: sorted, rest: null };
+    const others = sorted.slice(keep);
+    return {
+      kept: sorted.slice(0, keep),
+      rest: { count: others.length, value: others.reduce((a, x) => a + value(x), 0) },
+    };
+  }
+
+  /* A slice drawn as a dash of a stroked circle; the offset is negative and
+     cumulative, and the circle is rotated to start at twelve o'clock. */
+  function dashes(values, circumference) {
+    return segments(values).map((s) => ({
+      length: s.width * circumference,
+      offset: -(s.start * circumference),
+    }));
+  }
+
+  /* ---- what those numbers are painted as ---- */
+
+  /* A segment narrower than this cannot hold its own label. Measured against
+     the bar's width after layout, so a narrow window drops words, not bars. */
+  const LABEL_PX = 64;
+
+  /* Darkest step first; everything past the sixth shares the lightest, and the
+     folded remainder is the one colour that is not on the scale. */
+  function barColour(i, restAt) {
+    return i === restAt ? "--kx" : "--k" + Math.min(i, 5);
+  }
+
+  /* One bar cut by `values`. `label` and `tip` return escaped text or ""; a
+     label is drawn only where `room` — the bar's own pixels — leaves space. */
+  function stripHtml(values, colour, label, tip, room) {
+    return segments(values).map((s, i) => {
+      const pct = s.width * 100;
       if (pct < 0.05) return "";
-      return `<i style="width:${pct}%;background:var(${AGE[i].c})"` +
-             ` title="${escape_(T(AGE[i].msgid))} · ${escape_(percent(pct))}"></i>`;
-    }).join("") + `</div>`;
+      const text = label ? label(i) : "";
+      const inside = text && s.width * room >= LABEL_PX ? `<span>${text}</span>` : "";
+      const title = tip ? ` title="${tip(i)}"` : "";
+      return `<i style="width:${pct.toFixed(3)}%;background:var(${colour(i)})"${title}>${inside}</i>`;
+    }).join("");
+  }
+
+  /* The age of one folder's bytes, as the column beside its name. No labels:
+     the column is too narrow for a word, and the legend above carries them. */
+  function ageStrip(age) {
+    const pct = shares(age, 0);
+    return stripHtml(age, (i) => AGE[i].c, null,
+      (i) => escape_(T(AGE[i].msgid) + " · " + percent(pct[i], 0)), 0);
+  }
+
+  /* The rows under the folder bar, header included. `rest` is what got no row
+     of its own; a filter passes null for it — the answer is then about the
+     matching files, not about what the folder holds. */
+  function folderRows(kids, rest, pcts) {
+    const top = Math.max(1, ...kids.map((v) => v.bytes));
+    const head = [["Folder", ""], ["By age", ""], ["Size", " r"], ["Share", " r"], ["Files", " r"]];
+    let html = head.map(([w, r]) => `<div class="hd${r}">${escape_(T(w))}</div>`).join("");
+    html += kids.map((v, i) =>
+      `<div class="nm"><i style="width:${((v.bytes / top) * 100).toFixed(1)}%"></i>` +
+        `<button type="button" data-path="${escape_(v.path)}">${escape_(leafOf(v.path))}` +
+        `<span class="go">›</span></button></div>` +
+      `<div class="strip">${ageStrip(v.age)}</div>` +
+      `<div class="r big">${escape_(bytes(v.bytes))}</div>` +
+      `<div class="r mute">${escape_(percent(pcts[i], 1))}</div>` +
+      `<div class="r mute">${fmt(v.files)}</div>`).join("");
+    if (rest && rest.value > 0) {
+      const said = rest.count
+        ? T("the other {n} folders and the files here", { n: fmt(rest.count) })
+        : T("the files here");
+      html += `<div class="nm mute">${escape_(said)}</div><div></div>` +
+        `<div class="r mute">${escape_(bytes(rest.value))}</div>` +
+        `<div class="r mute">${escape_(percent(pcts[kids.length], 1))}</div><div></div>`;
+    }
+    return html;
+  }
+
+  /* The kind ring: r=54 under a 22px stroke inside a 150px box, rotated so the
+     first slice starts at twelve o'clock. One dash of the circle a slice. */
+  const RING_R = 54;
+  function ringHtml(rows, restAt, middle, word) {
+    const c = 2 * Math.PI * RING_R;
+    const slices = dashes(rows.map((r) => r.count), c).map((d, i) =>
+      `<circle cx="75" cy="75" r="${RING_R}" stroke="var(${barColour(i, restAt)})"` +
+      ` stroke-dasharray="${d.length.toFixed(2)} ${c.toFixed(2)}"` +
+      ` stroke-dashoffset="${d.offset.toFixed(2)}"` +
+      (rows[i].key ? ` data-kind="${escape_(rows[i].key)}"` : "") +
+      `><title>${escape_(rows[i].label)}</title></circle>`).join("");
+    return `<svg width="150" height="150" viewBox="0 0 150 150" role="img"` +
+      ` aria-label="${escape_(T("By kind"))}">` +
+      `<g transform="rotate(-90 75 75)" fill="none" stroke-width="22">${slices}</g>` +
+      `<text class="mid" x="75" y="72" text-anchor="middle">${escape_(middle)}</text>` +
+      `<text class="mid2" x="75" y="88" text-anchor="middle">${escape_(word)}</text></svg>`;
+  }
+
+  /* Its legend, in the ring's own order. A row with no key is the folded rest,
+     which nothing can be searched for. */
+  function legendHtml(rows, restAt, pcts) {
+    return rows.map((r, i) =>
+      `<button type="button"${r.key ? ` data-kind="${escape_(r.key)}"` : " disabled"}>` +
+      `<i style="background:var(${barColour(i, restAt)})"></i>` +
+      `<span class="w">${escape_(r.label)}</span>` +
+      `<span class="n">${fmt(r.count)}</span>` +
+      `<span class="p">${escape_(percent(pcts[i], 1))}</span></button>`).join("");
   }
 
   function breadcrumb() {
@@ -5752,12 +5984,13 @@
     const q = filter();
     let res;
     try {
-      res = await SERVICE.usage(scope, 24, q);
+      res = await SERVICE.usage(scope, TOP, q);
     } catch (e) {
       if (mine !== drawing) return;
       console.error("scour: the report did not load:", e);
       document.getElementById("r-bytes").textContent = "—";
       document.getElementById("r-meta").textContent = T("the service cannot be reached");
+      document.getElementById("r-ms").textContent = "";
       kidsEl.innerHTML = "";
       return;
     }
@@ -5765,50 +5998,72 @@
 
     const n = res.root;
     document.getElementById("r-bytes").textContent = bytes(n.bytes);
-
     /* `disk` beside `bytes`: the logical size is not disk usage. */
-    const stale = n.bytes ? Math.round(((n.age[4] + n.age[5]) / n.bytes) * 100) : 0;
+    document.getElementById("r-meta").innerHTML =
+      T("<b>{files}</b> files · <b>{disk}</b> on disk · {n} folders",
+        { files: fmt(n.files), disk: escape_(bytes(n.disk)), n: fmt(res.child_count) });
+    const ms = res.took_us / 1000;
+    document.getElementById("r-ms").textContent =
+      (ms >= 10 ? fmt(Math.round(ms)) : ms.toFixed(1)) + " ms";
+
+    /* With a filter on, every number here is the matching files, not the folder. */
+    const only = document.getElementById("r-only");
+    only.hidden = !q;
+    if (q) only.innerHTML = T("only the <b>matching</b> files · not the whole folder");
+
+    /* The bars are as wide as the report, so one measurement serves both.
+       Read after layout: a label is drawn only where it fits. */
+    const ageBar = document.getElementById("r-age");
+    const room = ageBar.clientWidth;
+
+    const agePct = shares(n.age, 0);
+    const ageWord = (i) => T(AGE[i].msgid);
+    ageBar.innerHTML = stripHtml(n.age, (i) => AGE[i].c,
+      (i) => escape_(ageWord(i) + " " + percent(agePct[i], 0)),
+      (i) => escape_(ageWord(i) + " · " + percent(agePct[i], 0)), room);
+    document.getElementById("agekey").innerHTML = AGE.map((band, i) =>
+      `<span><i style="background:var(${band.c})"></i>${escape_(T(band.msgid))}` +
+      ` <b>${escape_(percent(agePct[i], 0))}</b></span>`).join("");
 
     /* Every child is in the answer, since a gap in the rollup's tree strands
        bytes in a grandparent; the empty ones are dropped here. */
     const kids = q ? res.children.filter((c) => c.files > 0) : res.children;
-    const cut = q
+    document.getElementById("r-cut").textContent = q
       ? (res.child_count
-          ? " · " + T("{shown} of {total} folders have a match",
-                      { shown: fmt(kids.length), total: fmt(res.child_count) })
+          ? T("{shown} of {total} folders have a match",
+              { shown: fmt(kids.length), total: fmt(res.child_count) })
           : "")
       : res.child_count > kids.length
-        ? " · " + T("the heaviest {shown} of {total} folders",
-                    { shown: kids.length, total: fmt(res.child_count) })
+        ? T("the heaviest {shown} of {total} folders",
+            { shown: fmt(kids.length), total: fmt(res.child_count) })
         : "";
-    /* With a filter on this is the matching files, not the folder. */
-    const about = q
-      ? "<br>" + T("only the <b>matching</b> files · not the whole folder")
-      : "";
-    document.getElementById("r-meta").innerHTML =
-      T("{files} files · {disk} on disk", { files: fmt(n.files), disk: bytes(n.disk) })
-      + "<br>"
-      + T("<b>{percent}%</b> of it older than a year", { percent: stale })
-      + "<br>"
-      + `<b>${(res.took_us / 1000).toFixed(1)} ms</b>${cut}${about}`;
+
+    /* What the shown folders leave over: the folders with no row of their own
+       and the files lying directly here. Never negative. */
+    const rest = {
+      count: Math.max(0, res.child_count - kids.length),
+      value: Math.max(0, n.bytes - kids.reduce((a, c) => a + c.bytes, 0)),
+    };
+    const weights = kids.map((c) => c.bytes).concat(rest.value);
+    const restAt = kids.length;
+    /* Two roundings of one set: whole percent inside the bar, a tenth in the
+       rows. Both from `shares`, so both add up to a hundred. */
+    const wide = shares(weights, 0);
+    const exact = shares(weights, 1);
+    document.getElementById("r-folders").innerHTML = stripHtml(weights,
+      (i) => barColour(i, restAt),
+      (i) => (i === restAt ? "" : escape_(leafOf(kids[i].path) + " " + percent(wide[i], 0))),
+      (i) => escape_(i === restAt
+        ? T("the other {n} folders and the files here", { n: fmt(rest.count) })
+        : leafOf(kids[i].path) + " · " + bytes(kids[i].bytes) + " · " + percent(wide[i], 0)),
+      room);
 
     /* Already heaviest-first from the engine, which is what `top` cuts on. */
-    kidsEl.innerHTML = kids.map((v) => `
-      <tr>
-        <td class="nmcell"><button data-path="${v.path}">${leafOf(v.path)} <span style="color:var(--ink-3)">›</span></button></td>
-        <td class="stack-wrap">${stack(v.age, v.bytes)}</td>
-        <td class="r big">${bytes(v.bytes)}</td>
-        <td class="r">${escape_(percent(n.bytes ? (v.bytes / n.bytes) * 100 : 0, 1))}</td>
-        <td class="r">${fmt(v.files)}</td>
-      </tr>`).join("") ||
-      `<tr><td colspan="5" style="padding:24px 8px;color:var(--ink-3);font-size:12.5px">${
-        escape_(q
+    kidsEl.innerHTML = kids.length
+      ? folderRows(kids, q ? null : rest, exact)
+      : `<div class="hollow">${escape_(q
           ? T("In this scope, none of the subfolders has a matching file.")
-          : T("There are no further folders to show under this one."))
-      }</td></tr>`;
-
-    document.getElementById("agekey").innerHTML = AGE.map((band) =>
-      `<span><i style="background:var(${band.c})"></i>${escape_(T(band.msgid))}</span>`).join("");
+          : T("There are no further folders to show under this one."))}</div>`;
 
     drawKinds();
     drawBiggest();
@@ -5820,44 +6075,93 @@
     if (dupesOpen) drawDupes(0);
   }
 
-  /* From the sidebar's own faceting, filter included: a panel beside a
-   * filtered headline must not count something else. */
+  /* From the sidebar's own faceting, filter included: a panel beside a filtered
+   * headline must not count something else. The age edges travel with it because
+   * that is what lifts the 200,000-row sampling cap, so the counts are exact. */
   async function drawKinds() {
-    const el = document.getElementById("p-kind");
     const q = ((scope ? `under:${scope} ` : "") + filter()).trim();
+    let res;
     try {
-      const res = await SERVICE.sidebar(q, barEdges());
-      const g = (res.groups || []).find((x) => x.by === "kind");
-      const rows = (g ? g.facets : []).filter((f) => f.count > 0)
-        .sort((a, b) => b.count - a.count).slice(0, 8);
-      const max = Math.max(1, ...rows.map((r) => r.count));
-      el.innerHTML = rows.map((r) => `
-        <div class="line" style="position:relative">
-          <span style="position:absolute;left:-4px;top:3px;bottom:3px;width:${(r.count / max * 100).toFixed(1)}%;background:var(--line);border-radius:0 2px 2px 0"></span>
-          <span style="position:relative">${(kinds().find(([, t]) => t === r.key) || [r.key])[0]}</span>
-          <span style="position:relative">${fmt(r.count)}</span>
-        </div>`).join("") ||
-        `<div class="line"><span style="color:var(--ink-3)">—</span></div>`;
+      res = await SERVICE.sidebar(q, barEdges());
     } catch (e) {
       console.error("scour: the kind panel did not load:", e);
+      return;
     }
+    const g = (res.groups || []).find((x) => x.by === "kind");
+    const all = (g ? g.facets : []).filter((f) => f.count > 0);
+    const few = fold(all, (x) => x.count, KEPT_KINDS);
+    const rows = few.kept.map((x) => ({
+      key: x.key, count: x.count,
+      label: (kinds().find(([, t]) => t === x.key) || [x.key])[0],
+    }));
+    if (few.rest) {
+      rows.push({ key: "", count: few.rest.value,
+                  label: T("the other {n} kinds", { n: fmt(few.rest.count) }) });
+    }
+    const restAt = few.rest ? rows.length - 1 : -1;
+    const pcts = shares(rows.map((r) => r.count), 1);
+    /* The middle says how many kinds there are, not how many slices: the
+       folded ones are kinds too. */
+    document.getElementById("k-ring").innerHTML = rows.length
+      ? ringHtml(rows, restAt, fmt(all.length),
+                 T("kinds").toLocaleUpperCase(document.documentElement.lang))
+      : "";
+    document.getElementById("p-kind").innerHTML = legendHtml(rows, restAt, pcts);
+    /* Said only when the service says the walk stopped short. */
+    document.getElementById("k-cap").textContent =
+      res.capped ? T("{n} sampled rows", { n: fmt(res.total) }) : "";
   }
 
   /* An ordinary search: the index sorts by size without walking. */
   async function drawBiggest() {
     const el = document.getElementById("p-big");
     const q = ((scope ? `under:${scope} ` : "") + "file: " + filter()).trim();
+    let res;
     try {
-      const res = await SERVICE.search(q, "size", true, 8, 0);
-      el.innerHTML = res.rows.map((r) => `
-        <div class="line" title="${r.dir}/${r.name}">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${r.name}</span>
-          <span>${bytes(r.size)}</span>
-        </div>`).join("") ||
-        `<div class="line"><span style="color:var(--ink-3)">—</span></div>`;
+      res = await SERVICE.search(q, "size", true, BIG_FILES, 0);
     } catch (e) {
       console.error("scour: the largest-files panel did not load:", e);
+      return;
     }
+    const top = Math.max(1, ...res.rows.map((r) => r.size));
+    el.innerHTML = res.rows.map((r) => {
+      const path = r.dir + "/" + r.name;
+      /* The folder after the name, and muted: under this scope it is the part
+         below it, elsewhere the reader's own spelling of the path. */
+      const where = r.dir === scope ? ""
+        : scope && r.dir.startsWith(scope + "/") ? r.dir.slice(scope.length + 1)
+        : shorten(r.dir);
+      return `<button type="button" data-file="${escape_(path)}" data-size="${r.size}"` +
+        ` title="${escape_(shorten(path))}">` +
+        `<i style="width:${((r.size / top) * 100).toFixed(1)}%"></i>` +
+        `<span class="nm">${escape_(r.name)}` +
+        (where ? `<small>${escape_(where)}</small>` : "") + `</span>` +
+        `<span class="v">${escape_(bytes(r.size))}</span></button>`;
+    }).join("") || `<p class="note">—</p>`;
+  }
+
+  /* The same menu the search list opens, on the same code path. */
+  const bigEl = document.getElementById("p-big");
+  function fileMenu(e, el) {
+    /* Any click on the document closes the menu, so this one must not reach
+       it: the menu it opens would shut in the same tick. */
+    e.stopPropagation();
+    window.SCOUR.rowMenu(e, el.dataset.file,
+      { is_dir: false, size: +el.dataset.size || 0 }, () => drawBiggest());
+  }
+  for (const what of ["contextmenu", "click"]) {
+    bigEl.addEventListener(what, (e) => {
+      const el = e.target.closest("[data-file]");
+      if (el) fileMenu(e, el);
+    });
+  }
+
+  /* A kind, from the ring or from its legend, into the search with this scope. */
+  for (const id of ["k-ring", "p-kind"]) {
+    document.getElementById(id).addEventListener("click", (e) => {
+      const el = e.target.closest("[data-kind]");
+      if (el) toSearch("kind:" + el.dataset.kind);
+    });
   }
 
   /* Two numbers, always both: what shares a size against what was read end to
@@ -6145,19 +6449,29 @@
 
   document.getElementById("d-confirm").onclick = () => drawDupes(2048);
 
+  /* Into the search tab with this scope, and with `extra` in front of whatever
+     was typed. A `kind:` of its own replaces one already in the query, or the
+     two would fight; `under:` always does. */
+  function toSearch(extra) {
+    const box = document.getElementById("q");
+    let rest = box.value.replace(/under:\S+\s*/g, "");
+    if (extra) rest = rest.replace(/kind:\S+\s*/g, "");
+    const parts = [];
+    if (scope) parts.push("under:" + scope);
+    if (extra) parts.push(extra);
+    if (rest.trim()) parts.push(rest.trim());
+    box.value = parts.join(" ");
+    box.dispatchEvent(new Event("input"));
+    show("search");
+  }
+
   function drawJump() {
     document.getElementById("p-jump").innerHTML =
-      `<div class="line"><span>under:</span><span style="font-size:10.5px">${scope || "/"}</span></div>` +
+      `<div class="line"><span>under:</span><span style="font-size:10.5px">${escape_(scope || "/")}</span></div>` +
       `<button class="facet" style="padding-left:0;margin-top:6px" id="jump">
          <span class="dot" style="background:var(--t1)"></span>
          <span class="nm">${escape_(T("Search in this scope"))}</span></button>`;
-    document.getElementById("jump").onclick = () => {
-      const q = document.getElementById("q");
-      const rest = q.value.replace(/under:\S+\s*/g, "").trim();
-      q.value = (scope ? "under:" + scope + " " + rest : rest).trim();
-      q.dispatchEvent(new Event("input"));
-      show("search");
-    };
+    document.getElementById("jump").onclick = () => toSearch("");
   }
 
   document.querySelector(".report").addEventListener("click", (e) => {

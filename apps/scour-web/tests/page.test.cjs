@@ -422,3 +422,168 @@ test('a press sends the body the route reads, and sends nothing for a mistake', 
   // A clear is a clear whatever is in the field.
   assert.equal(sent('clear', 'hyper+f'), '{"clear":true}');
 });
+
+// The report's numbers — `scour-chart` mirrored in JavaScript — and the markup
+// that reads from them. A stub DOM under it, as the duplicates have.
+function chartContext() {
+  const c = context();
+  Object.assign(c, {
+    T(msgid, vars) {
+      let s = msgid;
+      if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(vars[k]);
+      return s;
+    },
+    fmt: (n) => String(n),
+    bytes: (n) => n + ' B',
+    escape_: (s) => String(s),
+    percent: (v, d) => v.toFixed(d === undefined ? 1 : d) + '%',
+    leafOf: (p) => p.slice(p.lastIndexOf('/') + 1) || p,
+    AGE: [
+      { msgid: 'today', c: '--t0' }, { msgid: 'this week', c: '--t1' },
+      { msgid: 'this month', c: '--t2' }, { msgid: 'six months', c: '--t3' },
+      { msgid: 'this year', c: '--t4' }, { msgid: 'older', c: '--t5' },
+    ],
+  });
+  vm.runInContext(section('  function shares(values, decimals) {', '\n  const LABEL_PX = 64;'), c);
+  vm.runInContext(section('  const LABEL_PX = 64;', '\n  function breadcrumb() {'), c);
+  return c;
+}
+// The live home: Projeler, eleven others, and what they leave over.
+const HOME = [
+  651571270524, 31643455926, 15738588363, 14110521835, 10863393896, 10852991366,
+  9242344819, 8271160692, 7898028191, 7372347728, 5889237540, 4856318717, 20649608929,
+];
+const adds = (list) => Math.abs(list.reduce((a, b) => a + b, 0) - 100) < 1e-9;
+// Across the sandbox boundary: a vm realm's arrays and objects are not the
+// test realm's, and strict deep equality compares prototypes.
+const plain = (x) => JSON.parse(JSON.stringify(x));
+
+test('shares add up to a hundred whatever the rounding', () => {
+  const c = chartContext();
+  // Three equal thirds would be 33.3 each and sum to 99.9; the first takes the
+  // missing tenth, being the largest by the tie rule.
+  assert.deepEqual(plain(c.shares([1, 1, 1], 1)), [33.4, 33.3, 33.3]);
+  assert.deepEqual(plain(c.shares([1, 1, 1], 0)), [34, 33, 33]);
+  assert.deepEqual(plain(c.shares([0, 0, 0], 1)), [0, 0, 0]);
+  assert.deepEqual(plain(c.shares([7], 2)), [100]);
+  assert.deepEqual(plain(c.shares([], 1)), []);
+  const s = plain(c.shares(HOME, 1));
+  assert.ok(adds(s), String(s));
+  // 81.55% of the home directory, and the largest remainder does not reach it.
+  assert.equal(s[0], 81.5);
+  assert.ok(adds(plain(c.shares(HOME, 0))));
+});
+
+test('a bar and a ring cut the same whole the same way', () => {
+  const c = chartContext();
+  const seg = c.segments([1, 3]);
+  assert.equal(seg[0].start, 0);
+  assert.equal(seg[0].width, 0.25);
+  assert.equal(seg[1].start, 0.25);
+  assert.ok(c.segments([0, 0]).every((s) => s.width === 0));
+  // The ring the page draws: r=54, so the circle is this long.
+  const round = 2 * Math.PI * 54;
+  const d = c.dashes([1, 1, 2], round);
+  assert.ok(Math.abs(d[0].length - round / 4) < 1e-9);
+  assert.ok(d[0].offset === 0, 'the first dash starts at twelve o\'clock');
+  assert.ok(Math.abs(d[1].offset + round / 4) < 1e-9, 'negative and cumulative');
+  assert.ok(Math.abs(d[2].offset + round / 2) < 1e-9);
+  assert.ok(Math.abs(d.reduce((a, x) => a + x.length, 0) - round) < 1e-9);
+});
+
+test('folding keeps the largest and sums the others into one', () => {
+  const c = chartContext();
+  const f = c.fold([['b', 5], ['a', 9], ['c', 1], ['d', 5]], (x) => x[1], 2);
+  assert.deepEqual(plain(f.kept), [['a', 9], ['b', 5]], 'stable: b before d');
+  assert.deepEqual(plain(f.rest), { count: 2, value: 6 });
+  assert.equal(c.fold([['a', 1]], (x) => x[1], 3).rest, null);
+});
+
+test('a label is drawn only in a segment wide enough to hold it', () => {
+  const c = chartContext();
+  const word = () => 'word';
+  const spans = (html) => (html.match(/<span>/g) || []).length;
+  // Sixty-four pixels of a 640px bar is a tenth of it.
+  assert.equal(spans(c.stripHtml([10, 90], () => '--t0', word, null, 640)), 2);
+  assert.equal(spans(c.stripHtml([5, 95], () => '--t0', word, null, 640)), 1);
+  // Before layout there are no pixels, so there are no words — but there is
+  // still a bar, which is the half that matters.
+  const blind = c.stripHtml([50, 50], () => '--t0', word, null, 0);
+  assert.equal(spans(blind), 0);
+  assert.equal((blind.match(/<i /g) || []).length, 2);
+  // A sliver too thin to see costs no element at all.
+  assert.equal((c.stripHtml([100000, 1], () => '--t0', null, null, 640).match(/<i /g) || []).length, 1);
+});
+
+test('the folder bar and the ring take one hue, darkest first, the rest its own', () => {
+  const c = chartContext();
+  const upto = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => c.barColour(i, 8));
+  assert.deepEqual(upto, ['--k0', '--k1', '--k2', '--k3', '--k4', '--k5', '--k5', '--k5']);
+  assert.equal(c.barColour(8, 8), '--kx');
+  // Nothing was folded away, so nothing wears the folded colour.
+  assert.ok(![0, 1, 2].map((i) => c.barColour(i, -1)).includes('--kx'));
+});
+
+test('the age strip keeps the time spectrum in its own order', () => {
+  const c = chartContext();
+  const drawn = c.ageStrip([1, 1, 1, 1, 1, 1]);
+  assert.deepEqual([...drawn.matchAll(/var\((--t[0-9])\)/g)].map((m) => m[1]),
+    ['--t0', '--t1', '--t2', '--t3', '--t4', '--t5']);
+  assert.ok(drawn.includes('title="today · 17%"'), drawn);
+});
+
+test('the row for what was not shown appears, unless a filter is on', () => {
+  const c = chartContext();
+  const kids = [
+    { path: '/home/hasan/Projeler', bytes: 80, files: 8, age: [8, 0, 0, 0, 0, 0] },
+    { path: '/home/hasan/.config', bytes: 10, files: 2, age: [0, 0, 10, 0, 0, 0] },
+  ];
+  const pcts = plain(c.shares([80, 10, 10], 1));
+  const left = { count: 51, value: 10 };
+  const with_ = c.folderRows(kids, left, pcts);
+  assert.ok(with_.includes('>the other 51 folders and the files here<'), with_);
+  // The bar behind a name is its share of the heaviest, not of the parent.
+  assert.ok(with_.includes('data-path="/home/hasan/Projeler"'), with_);
+  assert.ok(with_.includes('style="width:100.0%"'), with_);
+  assert.ok(with_.includes('style="width:12.5%"'), with_);
+  // A filtered report hands over no rest: the answer is about the matches.
+  const without = c.folderRows(kids, null, pcts);
+  assert.ok(!without.includes('the other'), without);
+  assert.ok(without.includes('data-path="/home/hasan/.config"'), without);
+  // Every folder already has a row of its own, so only the files here are left.
+  assert.ok(c.folderRows(kids, { count: 0, value: 10 }, pcts)
+    .includes('class="nm mute">the files here<'));
+  // And nothing at all when nothing is left over.
+  assert.ok(!c.folderRows(kids, { count: 0, value: 0 }, pcts).includes('the files here'));
+});
+
+test('the ring and its legend run in the same order, the folded rest last', () => {
+  const c = chartContext();
+  const rows = [
+    { key: 'build', count: 75090, label: 'Build output' },
+    { key: 'file', count: 49295, label: 'File' },
+    { key: 'dir', count: 41307, label: 'Folder' },
+    { key: 'data', count: 16128, label: 'Data' },
+    { key: 'config', count: 5248, label: 'Config' },
+    { key: 'doc', count: 4786, label: 'Document' },
+    { key: '', count: 8146, label: 'the other 5 kinds' },
+  ];
+  const pcts = plain(c.shares(rows.map((r) => r.count), 1));
+  assert.ok(adds(pcts), String(pcts));
+  const ring = c.ringHtml(rows, 6, '11', 'KINDS');
+  const legend = c.legendHtml(rows, 6, pcts);
+  const scale = ['--k0', '--k1', '--k2', '--k3', '--k4', '--k5', '--kx'];
+  assert.deepEqual([...ring.matchAll(/stroke="var\((--k[0-9x])\)"/g)].map((m) => m[1]), scale);
+  assert.deepEqual([...legend.matchAll(/background:var\((--k[0-9x])\)/g)].map((m) => m[1]), scale);
+  // The mock-up's ring exactly: the first dash at twelve o'clock, the rest
+  // negative and cumulative behind it.
+  assert.ok(ring.includes('rotate(-90 75 75)'), ring);
+  assert.ok(ring.includes('r="54"') && ring.includes('stroke-width="22"'), ring);
+  assert.ok(ring.includes('stroke-dashoffset="0.00"'), ring);
+  assert.ok(ring.includes('>11</text>') && ring.includes('>KINDS</text>'), ring);
+  // The folded row can be clicked in neither place: it names no one kind.
+  assert.equal((ring.match(/data-kind=/g) || []).length, 6);
+  assert.equal((legend.match(/data-kind=/g) || []).length, 6);
+  assert.ok(legend.includes(' disabled>'), legend);
+  assert.ok(legend.includes('>37.5%</span>'), legend);
+});
