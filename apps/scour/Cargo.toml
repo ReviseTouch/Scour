@@ -1,6 +1,6 @@
 [package]
 name        = "scour"
-description = "The Scour command line."
+description = "Local file index and search"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
@@ -40,3 +40,118 @@ libc = { workspace = true }
 
 [build-dependencies]
 scour-icon = { workspace = true }
+
+# --- packages -----------------------------------------------------------
+#
+# One package for the whole workspace, built by `scripts/package`. The assets
+# name `target/package`, a staging directory that script fills: it is what
+# decides which binary tree ships and it is where the icon sizes are rendered.
+# Binaries other than this crate's own are listed here for the same reason —
+# a package is not a crate, and all seven faces belong in it.
+#
+# `dpkg-shlibdeps` and `rpm` are not on the machine that builds these, so the
+# runtime dependencies are written out rather than discovered. What is linked
+# (`objdump -p`) is a hard dependency; what the window opens by name at run
+# time (`libwayland-client.so.0`, `libX11.so.6`, `libxkbcommon.so.0`, …) is a
+# recommendation, so a headless install of the command line does not drag a
+# display stack in. The glibc floor is measured, not guessed, and
+# `scripts/package` refuses to build a package that claims a lower one than
+# the binaries in front of it need. 2.30 is what the container build produces
+# (Debian 11); this machine's own target/release needs 2.39.
+
+# cargo-deb resolves every path below against *this* file's directory, where
+# cargo-generate-rpm resolves against the workspace root — hence the ../../.
+[package.metadata.deb]
+maintainer        = "Hasan Salihoğlu <hasantr@ymail.com>"
+copyright         = "2026 Hasan Salihoğlu"
+# The generated copyright file carries the MIT text; both licences ship whole
+# under /usr/share/doc/scour, which is where the "OR Apache-2.0" half lives.
+license-file      = ["../../LICENSE-MIT", "0"]
+section           = "utils"
+priority          = "optional"
+extended-description = """
+Scour keeps every file and folder of the configured volumes in an index of \
+its own, updates it as the filesystem changes, and answers searches from it \
+in milliseconds. One service and five faces: a command line, a window, a \
+terminal interface, a browser page and an MCP server. Installing this package \
+starts nothing."""
+depends           = "libc6 (>= 2.30), libgcc-s1 (>= 4.2), libfontconfig1"
+recommends        = "libwayland-client0, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6, fontconfig, desktop-file-utils"
+suggests          = "xdg-utils, wl-clipboard | xclip | xsel"
+maintainer-scripts = "../../packaging/deb"
+assets = [
+    ["../../target/package/bin/scour",          "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scourd",         "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scour-gui",      "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scour-tui",      "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scour-web",      "usr/bin/",                                          "755"],
+    ["../../target/package/bin/scour-mcp",      "usr/bin/",                                          "755"],
+    # Root-owned and never in a writable home: the system unit gives this one
+    # CAP_SYS_ADMIN. A package may not write to /usr/local, so it is not the
+    # /usr/local/libexec the unit's own installer uses — see PACKAGE-NOTES.
+    ["../../target/package/bin/scour-watch",    "usr/libexec/scour/scour-watch",                     "755"],
+    ["../../scripts/scour-open",                "usr/bin/scour-open",                                "755"],
+    ["../../scripts/scour-app",                 "usr/bin/scour-app",                                 "755"],
+    ["../../packaging/scour.desktop",           "usr/share/applications/scour.desktop",              "644"],
+    ["../../assets/scour.svg",                  "usr/share/icons/hicolor/scalable/apps/scour.svg",   "644"],
+    ["../../target/package/icons/hicolor/48x48/apps/scour.png",   "usr/share/icons/hicolor/48x48/apps/scour.png",   "644"],
+    ["../../target/package/icons/hicolor/128x128/apps/scour.png", "usr/share/icons/hicolor/128x128/apps/scour.png", "644"],
+    ["../../target/package/icons/hicolor/256x256/apps/scour.png", "usr/share/icons/hicolor/256x256/apps/scour.png", "644"],
+    ["../../target/package/scourd.service",     "usr/lib/systemd/user/scourd.service",               "644"],
+    ["../../packaging/scour@.service",          "usr/share/doc/scour/examples/scour@.service",       "644"],
+    ["../../packaging/50-scour-service.rules",  "usr/share/doc/scour/examples/50-scour-service.rules","644"],
+    ["../../target/package/PACKAGE-NOTES",      "usr/share/doc/scour/PACKAGE-NOTES",                 "644"],
+    ["../../README.md",                         "usr/share/doc/scour/README.md",                     "644"],
+    ["../../LICENSE-MIT",                       "usr/share/doc/scour/LICENSE-MIT",                   "644"],
+    ["../../LICENSE-APACHE",                    "usr/share/doc/scour/LICENSE-APACHE",                "644"],
+]
+
+[package.metadata.generate-rpm]
+# rpm's %description ends up as this line too: cargo-generate-rpm ignores a
+# `description` key of its own, so the summary is the whole of it.
+summary = "Local file index and search"
+# No rpm on the build machine, so nothing can read the ELF headers for us.
+auto-req = "disabled"
+post_install_script_path   = "packaging/rpm/post.sh"
+post_uninstall_script_path = "packaging/rpm/postun.sh"
+assets = [
+    { source = "target/package/bin/scour",       dest = "/usr/bin/scour",       mode = "755" },
+    { source = "target/package/bin/scourd",      dest = "/usr/bin/scourd",      mode = "755" },
+    { source = "target/package/bin/scour-gui",   dest = "/usr/bin/scour-gui",   mode = "755" },
+    { source = "target/package/bin/scour-tui",   dest = "/usr/bin/scour-tui",   mode = "755" },
+    { source = "target/package/bin/scour-web",   dest = "/usr/bin/scour-web",   mode = "755" },
+    { source = "target/package/bin/scour-mcp",   dest = "/usr/bin/scour-mcp",   mode = "755" },
+    { source = "target/package/bin/scour-watch", dest = "/usr/libexec/scour/scour-watch", mode = "755" },
+    { source = "scripts/scour-open",             dest = "/usr/bin/scour-open",  mode = "755" },
+    { source = "scripts/scour-app",              dest = "/usr/bin/scour-app",   mode = "755" },
+    { source = "packaging/scour.desktop",        dest = "/usr/share/applications/scour.desktop", mode = "644" },
+    { source = "assets/scour.svg",               dest = "/usr/share/icons/hicolor/scalable/apps/scour.svg", mode = "644" },
+    { source = "target/package/icons/hicolor/48x48/apps/scour.png",   dest = "/usr/share/icons/hicolor/48x48/apps/scour.png",   mode = "644" },
+    { source = "target/package/icons/hicolor/128x128/apps/scour.png", dest = "/usr/share/icons/hicolor/128x128/apps/scour.png", mode = "644" },
+    { source = "target/package/icons/hicolor/256x256/apps/scour.png", dest = "/usr/share/icons/hicolor/256x256/apps/scour.png", mode = "644" },
+    { source = "target/package/scourd.service",  dest = "/usr/lib/systemd/user/scourd.service", mode = "644" },
+    { source = "packaging/scour@.service",       dest = "/usr/share/doc/scour/examples/scour@.service", mode = "644", doc = true },
+    { source = "packaging/50-scour-service.rules", dest = "/usr/share/doc/scour/examples/50-scour-service.rules", mode = "644", doc = true },
+    { source = "target/package/PACKAGE-NOTES",   dest = "/usr/share/doc/scour/PACKAGE-NOTES", mode = "644", doc = true },
+    { source = "README.md",                      dest = "/usr/share/doc/scour/README.md",     mode = "644", doc = true },
+    { source = "LICENSE-MIT",                    dest = "/usr/share/licenses/scour/LICENSE-MIT",   mode = "644", doc = true },
+    { source = "LICENSE-APACHE",                 dest = "/usr/share/licenses/scour/LICENSE-APACHE", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+glibc = ">= 2.30"
+libgcc = "*"
+fontconfig = "*"
+
+[package.metadata.generate-rpm.recommends]
+libwayland-client = "*"
+libxkbcommon = "*"
+libxkbcommon-x11 = "*"
+libX11 = "*"
+libX11-xcb = "*"
+libXcursor = "*"
+libXi = "*"
+
+[package.metadata.generate-rpm.suggests]
+xdg-utils = "*"
+wl-clipboard = "*"

@@ -42,6 +42,7 @@ for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
     echo "  $bin/$b"
 done
 install -m755 "$here/scripts/scour-open" "$bin/scour-open"
+install -m755 "$here/scripts/scour-app" "$bin/scour-app"
 install -m644 "$here/packaging/scour.desktop" "$share/applications/scour.desktop"
 install -m644 "$here/assets/scour.svg" "$icons/scalable/apps/scour.svg"
 # The raster sizes as well: GNOME's shell reads the SVG, but KDE's task

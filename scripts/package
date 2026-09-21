@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Assemble the Debian and Fedora packages from binaries that are already built.
+#
+#   scripts/package                       → dist/scour_<version>_amd64.deb
+#                                           dist/scour-<version>.x86_64.rpm
+#   SCOUR_BIN_DIR=some/dir scripts/package
+#
+# Nothing here compiles: `cargo build --release --workspace` first. The binary
+# directory is SCOUR_BIN_DIR, else target/container/release when it holds all
+# seven — that tree is built against an older glibc and is the one to ship —
+# else target/release. Whichever it picks is printed.
+#
+# Needs: cargo-deb, cargo-generate-rpm (`cargo install` both) and rsvg-convert.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$here"
+
+bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp)
+version="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+
+complete() { local d=$1 b; for b in "${bins[@]}"; do [ -x "$d/$b" ] || return 1; done; }
+
+if [ -n "${SCOUR_BIN_DIR:-}" ]; then
+    bin_dir=$SCOUR_BIN_DIR
+elif complete target/container/release; then
+    bin_dir=target/container/release
+else
+    bin_dir=target/release
+fi
+complete "$bin_dir" || { echo "$bin_dir is missing some of: ${bins[*]}" >&2; exit 1; }
+command -v rsvg-convert >/dev/null || { echo "rsvg-convert is needed for the icon sizes" >&2; exit 1; }
+for tool in cargo-deb cargo-generate-rpm; do
+    command -v "$tool" >/dev/null || { echo "$tool is not installed: cargo install $tool" >&2; exit 1; }
+done
+echo "binaries:  $bin_dir  (version $version)"
+
+# One staging directory, because the asset lists in apps/scour/Cargo.toml name
+# target/package and nothing else: which binary tree was chosen, and the icons
+# that do not exist until they are rendered, stay out of the metadata.
+stage=target/package
+rm -rf "$stage"
+install -d "$stage/bin" "$stage/icons"
+for b in "${bins[@]}"; do install -m755 "$bin_dir/$b" "$stage/bin/$b"; done
+
+# The menu shows the SVG; the task bar, the alt-tab list and the notification
+# corner ask for a pixel size and take the nearest one they find. One renderer
+# for the tarball and the packages; the asset lists name three of its sizes.
+scripts/icons "$stage/icons" >/dev/null
+
+# In the repository the user unit points at ~/.local/bin, where install.sh puts
+# scourd. A package installs it to /usr/bin, so the shipped copy says that.
+sed 's|%h/\.local/bin/scourd|/usr/bin/scourd|' packaging/scourd.service > "$stage/scourd.service"
+
+cat > "$stage/PACKAGE-NOTES" <<'NOTES'
+Where a package puts things, and where the repository's installers do not
+------------------------------------------------------------------------
+
+The seven binaries are in /usr/bin, except the privileged one: a package may
+not write to /usr/local, so the fanotify helper is at
+
+    /usr/libexec/scour/scour-watch
+
+examples/scour@.service still names /usr/local/libexec/scour/scour-watch,
+because packaging/install-service.sh installs its own root-owned copy there
+from a source checkout. To run the packaged helper instead, point that unit's
+ExecStart at /usr/libexec/scour/scour-watch.
+
+Installing this package starts nothing. The unprivileged service is
+
+    systemctl --user enable --now scourd.service
+
+whose unit is /usr/lib/systemd/user/scourd.service and names /usr/bin/scourd,
+where the copy in the repository names ~/.local/bin/scourd.
+
+examples/ holds the privileged alternative: a systemd template, one instance
+per account, and the polkit rule that lets each account manage its own. Both
+want per-account pieces that packaging/install-service.sh writes from a source
+checkout. Install one or the other, never both — two writers race for the
+index lock and the loser restarts forever.
+NOTES
+
+# What the binaries actually need. There is no dpkg-shlibdeps and no rpm on
+# this machine, so the Depends and Requires in apps/scour/Cargo.toml are
+# written by hand — and checked here rather than trusted.
+floor=$(objdump -T "$stage"/bin/* | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)
+floor=${floor#GLIBC_}
+claim=$(grep -m1 '^depends' apps/scour/Cargo.toml | sed -E 's/.*libc6 \(>= ([0-9.]+)\).*/\1/')
+echo "glibc:     binaries need $floor, the package claims $claim"
+if [ "$(printf '%s\n%s\n' "$floor" "$claim" | sort -V | tail -1)" != "$claim" ]; then
+    echo "These binaries need a newer glibc than the package claims: they would" >&2
+    echo "install on a distribution they cannot run on. Build them against the old" >&2
+    echo "base instead (scripts/release-build), or raise depends and" >&2
+    echo "generate-rpm.requires in apps/scour/Cargo.toml to $floor." >&2
+    exit 1
+fi
+if [ "$floor" != "$claim" ]; then
+    echo "           ($claim is stricter than these binaries need — $floor would reach further back)"
+fi
+
+install -d dist
+# -q because every asset outside the crate draws a "will not be built" warning,
+# which is the point of --no-build. `debug = 0, strip = "none"` is the release
+# profile's decision, so neither package strips: a backtrace that names a line
+# is worth the bytes.
+cargo deb -q --no-build --no-strip --no-dbgsym -p scour -o dist/ >/dev/null
+# rpm has no '-' in a version. 0.2.0-alpha.1 becomes 0.2.0~alpha.1, which rpm
+# and dpkg both sort *before* 0.2.0 — cargo-deb does the same rewrite itself.
+cargo generate-rpm -p apps/scour -o dist/ -s "version = \"${version//-/\~}\"" >/dev/null
+
+for f in "$(ls -t dist/scour_*.deb | head -1)" "$(ls -t dist/scour-*.rpm | head -1)"; do
+    printf '%s  (%s)\n' "$f" "$(du -h "$f" | cut -f1)"
+done

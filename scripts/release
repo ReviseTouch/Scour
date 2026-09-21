@@ -33,7 +33,7 @@ for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
     install -m755 "$from/$b" "$stage/bin/$b"
 done
 install -m755 "$here/packaging/install.sh" "$stage/install.sh"
-install -m755 "$here/scripts/scour-open" "$stage/scripts/scour-open"
+install -m755 "$here/scripts/scour-open" "$here/scripts/scour-app" "$stage/scripts/"
 # Whatever packaging/ currently holds, because install.sh's closing text tells
 # the reader to run install-service.sh out of this directory. The system unit
 # has been both `scour.service` and `scour@.service`; ship the one that exists.
