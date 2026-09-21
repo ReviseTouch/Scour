@@ -30,6 +30,9 @@ scour-proto  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
+# The service, started by the window when nothing is listening. It knows a
+# binary, a socket and a log file, and nothing about Scour's types.
+scour-launch = { workspace = true }
 # The palette, shared with the browser page so the two cannot drift.
 scour-ui       = { workspace = true }
 # **The language, for one function: `without`.** The rails are counted over

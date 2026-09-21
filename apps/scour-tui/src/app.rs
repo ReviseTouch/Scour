@@ -1004,6 +1004,23 @@ impl App {
         }
     }
 
+    /// Nothing was listening, so one is being started.
+    pub fn booting(&mut self) {
+        self.note = self.say("Starting the Scour service…").into_owned();
+        self.dirty = true;
+    }
+
+    /// That attempt is over; `why` is there when nothing is listening even so.
+    pub fn booted(&mut self, why: Option<String>) {
+        self.note.clear();
+        if let Some(why) = why {
+            // The reason first, then the hint the face used to print on its
+            // own: the reason is the part that is new.
+            self.trouble = format!("{why} — {}", self.say("Start one with `scourd`."));
+        }
+        self.dirty = true;
+    }
+
     /// The service said no.
     pub fn upset(&mut self, generation: u64, why: String) -> Want {
         if generation != self.generation {

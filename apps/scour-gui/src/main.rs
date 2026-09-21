@@ -664,7 +664,11 @@ fn main() -> Result<()> {
         let _ = slint::invoke_from_event_loop(move || deliver(got));
     };
 
-    let link = Rc::new(Link::start(addr.clone(), sink));
+    let link = Rc::new(Link::start(
+        addr.clone(),
+        config.state_dir().join("scourd.log"),
+        sink,
+    ));
 
     {
         let link = Rc::clone(&link);
@@ -2797,6 +2801,20 @@ fn apply(
                 "file name  ·  ext:pdf  ·  kind:image dm:7d  ·  size:>10mb",
             ));
         }
+        // The empty list is right: there is nothing to show until a service
+        // answers. Only the line under it changes.
+        Got::Starting => said(w, t(cat, "Starting the Scour service…")),
+        Got::Started(why) => match why {
+            // The reason first, then the hint the window used to show alone.
+            Some(why) => {
+                w.set_busy(false);
+                said(
+                    w,
+                    format!("{why} — {}", cat.get("Start one with `scourd`.")).into(),
+                );
+            }
+            None => said(w, t(cat, "connecting…")),
+        },
         Got::Search {
             generation,
             offset,

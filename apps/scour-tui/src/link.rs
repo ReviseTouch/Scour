@@ -129,6 +129,11 @@ pub enum Got {
     /// Something that is not about a search went wrong. Not a `Trouble`, which
     /// is dropped when its keystroke is old — wrong for a file that failed.
     Failed(String),
+    /// Nothing was listening, so a service is being started; the lanes are
+    /// waiting on it.
+    Booting,
+    /// That attempt ended. `Some` is why nothing is listening even so.
+    Booted(Option<String>),
     /// The service could not be reached, or said no.
     Trouble { generation: u64, why: String },
 }
@@ -146,21 +151,34 @@ pub struct Link {
 
 impl Link {
     /// Start talking to the service at `addr`; answers go to the returned
-    /// receiver, which the event loop selects on alongside the keyboard.
-    pub fn start(addr: String) -> (Link, Receiver<Got>) {
+    /// receiver, which the event loop selects on alongside the keyboard. A
+    /// service that is not there is started, with `log` for its output.
+    pub fn start(addr: String, log: std::path::PathBuf) -> (Link, Receiver<Got>) {
         let (asks, inbox) = channel::<Ask>();
         let (slow, waiting) = channel::<Ask>();
         let (wait, dozing) = channel::<Ask>();
         let (gots, answers) = channel::<Got>();
+        // Said from a thread of its own: the lanes below block inside `boot`,
+        // and the line has to be on screen before they do.
+        if scour_launch::wanted() && !scour_ipc::is_running(&addr) {
+            let (addr, log, out) = (addr.clone(), log.clone(), gots.clone());
+            thread::spawn(move || {
+                let _ = out.send(Got::Booting);
+                let outcome = boot(&addr, &log);
+                let _ = out.send(Got::Booted(outcome.reason().map(str::to_string)));
+            });
+        }
         let fast_addr = addr.clone();
         let fast_out = gots.clone();
-        thread::spawn(move || serve(&fast_addr, &inbox, &fast_out));
+        let fast_log = log.clone();
+        thread::spawn(move || serve(&fast_addr, &fast_log, &inbox, &fast_out));
         // Three connections, because `scour-ipc` is one call at a time and the
         // long poll holds its own for thirty seconds.
         let slow_addr = addr.clone();
         let slow_out = gots.clone();
-        let slow_thread = thread::spawn(move || serve(&slow_addr, &waiting, &slow_out));
-        thread::spawn(move || serve(&addr, &dozing, &gots));
+        let slow_log = log.clone();
+        let slow_thread = thread::spawn(move || serve(&slow_addr, &slow_log, &waiting, &slow_out));
+        thread::spawn(move || serve(&addr, &log, &dozing, &gots));
         (
             Link {
                 asks,
@@ -247,7 +265,17 @@ fn export(link: &mut Client, query: &str, to: &str, out: &Sender<Got>) -> Result
     }
 }
 
-fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
+/// Have a service at `addr`, starting one if nobody else has. At most once for
+/// the whole program, whichever lane arrives first; the others wait here.
+fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
+    scour_launch::ensure_once(&scour_launch::Autostart::new(
+        addr,
+        log.to_path_buf(),
+        &scour_ipc::is_running,
+    ))
+}
+
+fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<Got>) {
     let mut client: Option<Client> = None;
     while let Ok(ask) = inbox.recv() {
         if matches!(ask, Ask::Done) {
@@ -257,6 +285,10 @@ fn serve(addr: &str, inbox: &Receiver<Ask>, out: &Sender<Got>) {
         // is restarted far more often than the terminal is.
         if client.is_none() {
             client = Client::connect(addr).ok();
+            if client.is_none() {
+                boot(addr, log);
+                client = Client::connect(addr).ok();
+            }
         }
         let generation = match &ask {
             Ask::Search { generation, .. }

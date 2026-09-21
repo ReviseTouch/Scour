@@ -391,6 +391,16 @@ msgstr "servise ulaşılamıyor — scourd çalışıyor mu?"
 msgid "the service cannot be reached"
 msgstr "servise ulaşılamıyor"
 
+# A face that finds nothing listening starts the service itself: the first is
+# what it says while it does, the second the hint it shows beside a failure.
+# The reason itself is a diagnostic from `scour-launch` and stays English, as
+# every other error detail does.
+msgid "Starting the Scour service…"
+msgstr "Scour servisi başlatılıyor…"
+
+msgid "Start one with `scourd`."
+msgstr "`scourd` ile bir tane başlatın."
+
 msgid "icons"
 msgstr "simgeler"
 
@@ -1496,3 +1506,37 @@ msgstr "GRUP"
 
 msgid "ON DISK"
 msgstr "DİSKTE"
+
+# --- the duplicates workflow: what a group is worth, and moving the copies ---
+msgid "{n} groups · {size} could be freed"
+msgstr "{n} grup · {size} boşaltılabilir"
+
+msgid "all confirmed identical by reading"
+msgstr "hepsi okunarak aynı olduğu doğrulandı"
+
+msgid "{n} confirmed identical, the rest share a size only"
+msgstr "{n} tanesi okunarak doğrulandı, kalanı yalnızca aynı boyutta"
+
+msgid "candidates by size — nothing was read"
+msgstr "boyuta göre aday — hiçbiri okunmadı"
+
+msgid "Nothing should be deleted before it is confirmed."
+msgstr "Doğrulanmadan hiçbir şey silinmemeli."
+
+msgid "Keep this one"
+msgstr "Bunu tut"
+
+msgid "show fewer"
+msgstr "daha az göster"
+
+msgid "Move the other {n} to trash"
+msgstr "Diğer {n} tanesini çöp kutusuna taşı"
+
+msgid "Confirm by reading first"
+msgstr "Önce okuyarak doğrulayın"
+
+msgid "Move {n} files to trash? The one under {path} stays."
+msgstr "{n} dosya çöp kutusuna taşınsın mı? {path} altındaki kalır."
+
+msgid "{gone} moved to trash · {n} stayed: {which}"
+msgstr "{gone} tanesi çöp kutusuna taşındı · {n} tanesi kaldı: {which}"

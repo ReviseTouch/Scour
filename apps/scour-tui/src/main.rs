@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     let theme = Theme::read(std::env::var("SCOUR_TUI_SCHEME").as_deref() != Ok("light"));
 
     let (beats, waiting) = channel::<Beat>();
-    let (link, answers) = Link::start(addr);
+    let (link, answers) = Link::start(addr, config.state_dir().join("scourd.log"));
     pump(&beats, answers);
     // Where this desktop keeps things. Asked once: it does not change.
     link.later(Ask::Places);
@@ -182,6 +182,10 @@ fn snap(
                 builtin,
                 off,
             })) => state.ruled(added, config, builtin, off),
+            // A picture of a machine with no service running shows the same
+            // line the interactive loop would.
+            Ok(Beat::Reply(Got::Booting)) => state.booting(),
+            Ok(Beat::Reply(Got::Booted(why))) => state.booted(why),
             Ok(_) => {}
             Err(_) => break,
         }
@@ -420,6 +424,8 @@ fn run(
             Beat::Reply(Got::Trouble { generation, why }) => {
                 act(state.upset(generation, why), link);
             }
+            Beat::Reply(Got::Booting) => state.booting(),
+            Beat::Reply(Got::Booted(why)) => state.booted(why),
         }
         if state.leaving {
             break;
@@ -487,6 +493,8 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 let want = state.awake(revision);
                 act(want, link);
             }
+            Beat::Reply(Got::Booting) => state.booting(),
+            Beat::Reply(Got::Booted(why)) => state.booted(why),
             _ => {}
         }
     }

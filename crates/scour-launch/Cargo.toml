@@ -1,0 +1,29 @@
+[package]
+name        = "scour-launch"
+description = "Starting the service a face was about to give up on."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **No Scour crate here, not even `scour-core`.** What this does is find a
+# binary, start it and watch a socket; none of that is a type of this project's.
+# Whether something is listening is asked through a function the caller passes,
+# so the crate that owns the wire — `scour-ipc` — stays a dependency of the
+# faces alone.
+[dependencies]
+
+# `setsid` only. A new session is the difference between a service that
+# survives the terminal the face was started from and one that does not, and
+# std has no way to ask for it: `process_group` changes the group, not the
+# session. Windows needs no crate for its half — two creation flags.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

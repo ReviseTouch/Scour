@@ -23,6 +23,10 @@ scour-core     = { workspace = true }
 scour-proto    = { workspace = true }
 scour-ipc      = { workspace = true }
 scour-config   = { workspace = true }
+# The service, started by the face when nothing is listening. Knows only a
+# binary, a socket and a log file; whether something answers is asked through
+# a function this crate passes it.
+scour-launch   = { workspace = true }
 scour-i18n     = { workspace = true }
 scour-settings = { workspace = true }
 scour-places   = { workspace = true }

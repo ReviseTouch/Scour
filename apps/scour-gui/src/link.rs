@@ -166,6 +166,11 @@ pub enum Got {
     Down(String),
     /// It could, after having been down.
     Up,
+    /// Nothing was listening, so one is being started; the lanes are waiting
+    /// on it and the window says so.
+    Starting,
+    /// That attempt ended. `Some` is why nothing is listening even so.
+    Started(Option<String>),
 }
 
 /// The freshness domain of a rejected request. Ordering advances a search
@@ -244,21 +249,44 @@ impl Freshness {
 
 impl Link {
     /// Start the two lanes. `sink` is called from the worker threads.
-    pub fn start(addr: String, sink: impl Fn(Got) + Send + Clone + 'static) -> Link {
+    /// `log` is where a service this window starts writes its output.
+    pub fn start(
+        addr: String,
+        log: std::path::PathBuf,
+        sink: impl Fn(Got) + Send + Clone + 'static,
+    ) -> Link {
         let (fast_tx, fast_rx) = channel::<Ask>();
         let (slow_tx, slow_rx) = channel::<Ask>();
         let freshness = Freshness::default();
 
         let (wait_tx, wait_rx) = channel::<Ask>();
-        spawn_lane(addr.clone(), fast_rx, sink.clone(), freshness.clone(), true);
+        // On a thread of its own, because the lanes below block inside `boot`
+        // and the line has to reach the window before they do.
+        if scour_launch::wanted() && !scour_ipc::is_running(&addr) {
+            let (addr, log, sink) = (addr.clone(), log.clone(), sink.clone());
+            std::thread::spawn(move || {
+                sink(Got::Starting);
+                let outcome = boot(&addr, &log);
+                sink(Got::Started(outcome.reason().map(str::to_string)));
+            });
+        }
         spawn_lane(
             addr.clone(),
+            log.clone(),
+            fast_rx,
+            sink.clone(),
+            freshness.clone(),
+            true,
+        );
+        spawn_lane(
+            addr.clone(),
+            log.clone(),
             slow_rx,
             sink.clone(),
             freshness.clone(),
             false,
         );
-        spawn_lane(addr, wait_rx, sink, freshness.clone(), false);
+        spawn_lane(addr, log, wait_rx, sink, freshness.clone(), false);
         Link {
             fast: fast_tx,
             slow: slow_tx,
@@ -355,9 +383,20 @@ enum Lane {
     Await,
 }
 
+/// Have a service at `addr`, starting one if nobody else has. At most once for
+/// the whole program, whichever lane arrives first; the others wait here.
+fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
+    scour_launch::ensure_once(&scour_launch::Autostart::new(
+        addr,
+        log.to_path_buf(),
+        &scour_ipc::is_running,
+    ))
+}
+
 /// One lane: connect, serve, reconnect when the service comes back.
 fn spawn_lane(
     addr: String,
+    log: std::path::PathBuf,
     rx: Receiver<Ask>,
     sink: impl Fn(Got) + Send + 'static,
     freshness: Freshness,
@@ -381,7 +420,13 @@ fn spawn_lane(
             }
             // Reconnect lazily: the window only cares when it has something to ask.
             if client.is_none() {
-                match Client::connect(&addr) {
+                // A second try, because the first failure is what starts a
+                // service; `boot` blocks here until one is listening or gone.
+                let opened = Client::connect(&addr).or_else(|e| {
+                    boot(&addr, &log);
+                    Client::connect(&addr).map_err(|_| e)
+                });
+                match opened {
                     Ok(c) => {
                         client = Some(c);
                         if was_down {
