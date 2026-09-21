@@ -9,14 +9,21 @@ use scour_core::{Ast, Cmp, Group, Kind, Match, TimeField};
 
 use crate::time::{now_secs, parse_time};
 
-/// Parse query text against the current clock.
+/// Parse query text against the current clock, with `~` in `under:` and
+/// `parent:` standing for the home directory.
 pub fn parse(input: &str) -> Ast {
-    parse_at(input, now_secs())
+    parse_in(input, now_secs(), home().as_deref())
 }
 
 /// Parse query text as though `now` were the current unix time; relative
 /// windows (`dm:7d`) resolve against it, which is what makes them testable.
+/// No home is known here, so `~` stays literal.
 pub fn parse_at(input: &str, now: i64) -> Ast {
+    parse_in(input, now, None)
+}
+
+/// The full form: the clock, and the directory `~` expands to, if any.
+pub fn parse_in(input: &str, now: i64, home: Option<&str>) -> Ast {
     let mut groups = Vec::new();
     for token in join_parens(join_operators(split_bangs(split_semicolons(join_lists(
         tokenize(input),
@@ -29,13 +36,21 @@ pub fn parse_at(input: &str, now: i64) -> Ast {
         let alts: Vec<(bool, Match)> = split_outside_quotes(&token, '|')
             .into_iter()
             .filter(|a| !a.is_empty())
-            .filter_map(|a| parse_alt(a, now))
+            .filter_map(|a| parse_alt(a, now, home))
             .collect();
         if !alts.is_empty() {
             groups.push(Group { alts });
         }
     }
     Ast { groups }
+}
+
+/// The home directory as the index spells paths: forward slashes, no trailing one.
+fn home() -> Option<String> {
+    let h = std::env::home_dir()?;
+    let h = h.to_string_lossy().replace('\\', "/");
+    let h = h.trim_end_matches('/');
+    (!h.is_empty()).then(|| h.to_owned())
 }
 
 /// Rewrite the spellings that are shorthand for something the language can
@@ -304,7 +319,7 @@ fn join_operators(tokens: Vec<String>) -> Vec<String> {
     out
 }
 
-fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
+fn parse_alt(raw: &str, now: i64, home: Option<&str>) -> Option<(bool, Match)> {
     let (negated, rest) = match raw.strip_prefix('!') {
         Some(r) => (true, r),
         None => (false, raw),
@@ -329,8 +344,8 @@ fn parse_alt(raw: &str, now: i64) -> Option<(bool, Match)> {
             Some("path") => Some(Match::PathContains(folded)),
             // Paths are compared as the filesystem stores them: folding would
             // make `under:` disagree with the tokens the index holds.
-            Some("under") => (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw))),
-            Some("parent") => (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw))),
+            Some("under") => (!raw.is_empty()).then(|| Match::Under(trim_dir(&raw, home))),
+            Some("parent") => (!raw.is_empty()).then(|| Match::ParentIs(trim_dir(&raw, home))),
             Some("file") => Some(Match::IsDir(false)),
             Some("folder") => Some(Match::IsDir(true)),
             Some("size") => parse_size(&folded),
@@ -537,13 +552,18 @@ fn unquote(s: &str) -> String {
 
 /// A directory path in the form the index stores it: `/`-separated, with no
 /// trailing slash. `/home/u/` and `/home/u` are the same folder.
-fn trim_dir(s: &str) -> String {
+/// A directory as typed, spelt the index's way; a lone `~` or a leading `~/`
+/// becomes `home` when one is known. `~x` is a folder named `~x`.
+fn trim_dir(s: &str, home: Option<&str>) -> String {
     let t = s.replace('\\', "/");
     let trimmed = t.trim_end_matches('/');
     if trimmed.is_empty() {
-        "/".to_owned()
-    } else {
-        trimmed.to_owned()
+        return "/".to_owned();
+    }
+    match (home, trimmed.strip_prefix("~/")) {
+        (Some(h), _) if trimmed == "~" => h.to_owned(),
+        (Some(h), Some(rest)) => format!("{h}/{rest}"),
+        _ => trimmed.to_owned(),
     }
 }
 
@@ -643,6 +663,40 @@ mod tests {
             .into_iter()
             .flat_map(|g| g.alts)
             .collect()
+    }
+
+    /// The same, with a home for `~` to expand to.
+    fn mh(q: &str) -> Vec<(bool, Match)> {
+        parse_in(q, 0, Some("/home/u"))
+            .groups
+            .into_iter()
+            .flat_map(|g| g.alts)
+            .collect()
+    }
+
+    #[test]
+    fn tilde_is_the_home_directory_when_one_is_known() {
+        assert_eq!(
+            mh("under:~/x"),
+            vec![(false, Match::Under("/home/u/x".into()))]
+        );
+        assert_eq!(mh("under:~"), vec![(false, Match::Under("/home/u".into()))]);
+        assert_eq!(
+            mh("under:~/"),
+            vec![(false, Match::Under("/home/u".into()))]
+        );
+        assert_eq!(
+            mh("parent:~/Downloads"),
+            vec![(false, Match::ParentIs("/home/u/Downloads".into()))]
+        );
+        assert_eq!(
+            mh(r"under:~\x"),
+            vec![(false, Match::Under("/home/u/x".into()))]
+        );
+        // Only a lone `~` or `~/`: a folder named `~x` is a folder named `~x`.
+        assert_eq!(mh("under:~x"), vec![(false, Match::Under("~x".into()))]);
+        // Without a home there is nothing to expand to.
+        assert_eq!(m("under:~/x"), vec![(false, Match::Under("~/x".into()))]);
     }
 
     /// A `!` in front of a list does not take the list apart: `!ext:rs;toml`

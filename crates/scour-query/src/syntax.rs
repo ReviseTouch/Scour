@@ -149,8 +149,9 @@ Search is case-insensitive. Turkish `i`, `ı`, `I` and `İ` are treated as the
 same letter, so `ISTANBUL`, `İstanbul` and `ıstanbul` all find each other.
 
 `under:` and `parent:` are the exception: they take a path and compare it the
-way the filesystem stores it. They are also much faster than `path:`, because
-the index holds every ancestor folder as a term — prefer them for scoping.
+way the filesystem stores it; a leading `~` is your home directory. They are
+also much faster than `path:`, because the index holds every ancestor folder
+as a term — prefer them for scoping.
 
 Terms shorter than three characters cannot be answered by the index and are
 rejected: it is built on trigrams.

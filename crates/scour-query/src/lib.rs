@@ -16,6 +16,6 @@ pub use describe::describe;
 pub use fields::{FIELDS, Field, Takes};
 pub use glob::glob_matches;
 pub use highlight::{complete, spans, spans_at, without, without_at};
-pub use parse::{parse, parse_at};
+pub use parse::{parse, parse_at, parse_in};
 pub use syntax::SYNTAX;
 pub use time::now_secs;

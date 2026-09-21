@@ -69,8 +69,8 @@ pub const FIELDS: &[Field] = &[
         // spelled `altinda`.
         aliases: &["in", "altinda"],
         takes: Takes::Path,
-        about: "anywhere below this folder, at any depth",
-        example: "under:/home",
+        about: "anywhere below this folder, at any depth; ~ is your home",
+        example: "under:~/Projects",
     },
     Field {
         name: "parent",
