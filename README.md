@@ -218,6 +218,18 @@ Turkish letters `i`, `ı`, `I` and `İ` are treated as one. Parsing does not
 fail: an unrecognised field is searched for as text, and `scour explain
 "<query>"` shows how a query was read.
 
+## Duplicates
+
+The browser face's report tab lists files that share a size, largest saving
+first: each group leads with what deleting all but one copy would free, and
+the heading adds the groups up and says whether they were read and proved
+identical or merely share a size. Nothing is deleted on a size match. One
+copy in each group carries a keep mark, the newest by default; "Move the
+other N to trash" is enabled only after "Confirm by reading" has proved that
+group identical, asks once, and goes to the desktop's trash, never to an
+unlink. Every path has the search list's own menu. Hard links count as
+copies; trashing one frees nothing, and the page does not yet say so.
+
 ## MCP server
 
 `scour-mcp` is a Model Context Protocol server with eleven read-only tools.

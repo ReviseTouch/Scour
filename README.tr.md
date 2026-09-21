@@ -211,6 +211,19 @@ kind:image dm:today           bugün değişen görseller
 `I` ve `İ` tek harf sayılır. Ayrıştırma hata vermez: tanınmayan bir alan metin
 olarak aranır, `scour explain "<sorgu>"` sorgunun nasıl okunduğunu gösterir.
 
+## Yinelenen dosyalar
+
+Tarayıcı yüzünün rapor sekmesi aynı boyuttaki dosyaları, en çok yer
+kazandıracak grup başta olmak üzere listeler: her grup, biri dışında hepsini
+silmenin ne boşaltacağını söyler; başlık grupları toplar ve okunarak aynı
+oldukları kanıtlandı mı, yoksa yalnız boyutları mı aynı, onu belirtir. Boyut
+eşleşmesiyle hiçbir şey silinmez. Her grupta bir kopya "tut" işaretini taşır,
+varsayılan olarak en yenisi; "Diğer N tanesini çöp kutusuna taşı" yalnız
+"Okuyarak doğrula" o grubu kanıtladıktan sonra açılır, bir kez sorar ve
+masaüstünün çöp kutusuna gönderir, asla doğrudan silmez. Her yolun arama
+listesindeki menüsü vardır. Sabit bağlantılar kopya sayılır; birini çöpe
+taşımak yer açmaz ve sayfa bunu henüz söylemiyor.
+
 ## MCP sunucusu
 
 `scour-mcp`, on bir salt-okunur araçlı bir Model Context Protocol sunucusudur.
