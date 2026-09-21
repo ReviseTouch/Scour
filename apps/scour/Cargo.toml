@@ -24,6 +24,10 @@ scour-ui     = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
+# The desktop's key that opens Scour. Reaches no service and nothing of
+# Scour's: a key binding is the desktop's business, and this is the one face
+# that can set it without a window open.
+scour-hotkey = { workspace = true }
 # For `rule_id` alone. A switched-off rule is named the same way wherever the
 # name is built; two spellings of one id is a switch that silently misses.
 scour-settings = { workspace = true }
@@ -37,6 +41,11 @@ humansize    = { workspace = true }
 # only way to know where to stop is to ask. `TIOCGWINSZ` is the whole use.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+# A directory to hang stub desktop tools in: `scour hotkey` is rendered
+# against scripts standing in for `gsettings`, never against this machine.
+[dev-dependencies]
+tempfile = "3"
 
 [build-dependencies]
 scour-icon = { workspace = true }

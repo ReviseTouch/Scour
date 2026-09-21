@@ -9,6 +9,7 @@ use ratatui::crossterm::event::{
 };
 
 use crate::app::{App, Mode, Panel, Spot, Want};
+use crate::link::Deed;
 
 /// Every key, and what it does. The help screen is drawn from it.
 pub const MAP: &[(&str, &str)] = &[
@@ -28,6 +29,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Tab", "the rail, and back"),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
+    ("Ctrl+B", "the key that opens Scour"),
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
     ("F2 · Ctrl+R", "the report, and back"),
@@ -78,6 +80,28 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             }
             KeyCode::Char(c) if !ctrl => {
                 app.ask_text.push(c);
+                app.dirty = true;
+                return Want::Nothing;
+            }
+            _ => {}
+        }
+    }
+
+    // The other panel that listens to letters: what is typed into it is a key
+    // combination, not a query. `Esc` and the arrows are left to the branch
+    // below, which every panel shares.
+    if app.panel == Panel::Key && app.key_can {
+        match key.code {
+            KeyCode::Backspace => {
+                app.key_typed.pop();
+                app.dirty = true;
+                return Want::Nothing;
+            }
+            KeyCode::Delete => return app.drop_key(),
+            // `x` only on an empty line: `ctrl+x` has to be typeable.
+            KeyCode::Char('x') if !ctrl && app.key_typed.is_empty() => return app.drop_key(),
+            KeyCode::Char(c) if !ctrl => {
+                app.key_typed.push(c);
                 app.dirty = true;
                 return Want::Nothing;
             }
@@ -159,6 +183,15 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         KeyCode::Char('l') if ctrl => {
             app.show(Panel::Language);
             return Want::Nothing;
+        }
+        KeyCode::Char('b') if ctrl => {
+            app.show(Panel::Key);
+            // Asked when it opens, like the skip list: the desktop can have
+            // been changed from its own settings since the last look.
+            return match app.panel {
+                Panel::Key => Want::Hotkey(Deed::Read),
+                _ => Want::Nothing,
+            };
         }
         KeyCode::Char('t') if ctrl => {
             app.show(Panel::Columns);
@@ -317,6 +350,10 @@ fn panel_press(app: &mut App) -> Want {
             None => Want::Nothing,
         },
         Panel::Language => app.speak(app.panel_at),
+        // Nothing to press where nothing can be bound: the panel is a sentence.
+        Panel::Key if !app.key_can => Want::Nothing,
+        Panel::Key if app.panel_at == 0 => app.bind_key(),
+        Panel::Key => app.drop_key(),
         Panel::Faces => app.run_face(app.panel_at),
         Panel::Menu => app.menu_pick(),
         Panel::Openers => app.open_with(),
@@ -779,6 +816,134 @@ mod tests {
             ),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The whole of the key panel: it asks when it opens, letters go into it
+    /// rather than into the query, and `Enter` sends what was typed as typed.
+    #[test]
+    fn the_key_panel_takes_the_letters_the_query_would_have_had() {
+        let mut app = app(4);
+        let want = press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.panel, Panel::Key);
+        assert_eq!(want, Want::Hotkey(Deed::Read), "asked as it opens");
+
+        for c in "super+f".chars() {
+            press(&mut app, key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.key_typed, "super+f");
+        assert_eq!(app.query, "", "and the query underneath is untouched");
+        press(&mut app, key(KeyCode::Backspace));
+        assert_eq!(app.key_typed, "super+", "backspace is the field's too");
+        press(&mut app, key(KeyCode::Char('f')));
+
+        let want = press(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            want,
+            Want::Hotkey(Deed::Bind("super+f".into())),
+            "as typed: what counts as a combination is scour-hotkey's judgement"
+        );
+        press(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.panel, Panel::None);
+        press(&mut app, key(KeyCode::Char('a')));
+        assert_eq!(app.query, "a", "and the letters are the query's again");
+    }
+
+    /// `x` removes, but only where it cannot be the key somebody is typing.
+    #[test]
+    fn x_removes_on_an_empty_line_and_types_on_a_started_one() {
+        let mut app = App {
+            panel: Panel::Key,
+            ..Default::default()
+        };
+        assert_eq!(
+            press(&mut app, key(KeyCode::Char('x'))),
+            Want::Hotkey(Deed::Clear)
+        );
+        for c in "ctrl+".chars() {
+            press(&mut app, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            press(&mut app, key(KeyCode::Char('x'))),
+            Want::Nothing,
+            "here it is the key being bound"
+        );
+        assert_eq!(app.key_typed, "ctrl+x");
+        // Delete says it whatever is in the field.
+        assert_eq!(
+            press(&mut app, key(KeyCode::Delete)),
+            Want::Hotkey(Deed::Clear)
+        );
+        assert_eq!(app.key_typed, "", "and the field is emptied with it");
+    }
+
+    /// Where nothing can be bound the panel is a sentence: no field, nothing
+    /// to press, and the letters belong to the query as under any other panel.
+    #[test]
+    fn a_desktop_that_cannot_be_bound_offers_nothing_to_press() {
+        let mut app = App {
+            panel: Panel::Key,
+            key_can: false,
+            key_command: "scour-gui".into(),
+            ..Default::default()
+        };
+        assert_eq!(app.panel_lines(), 0, "nothing to walk and nothing to press");
+        press(&mut app, key(KeyCode::Char('x')));
+        assert_eq!(app.key_typed, "", "there is no field to type into");
+        assert_eq!(app.query, "x", "so it went where letters go");
+        assert_eq!(press(&mut app, key(KeyCode::Enter)), Want::Nothing);
+    }
+
+    /// The answer is what the desktop says, and it clears the field — unless
+    /// it refused, where what was typed is what has to be corrected.
+    #[test]
+    fn the_answer_clears_the_field_but_a_refusal_leaves_it_to_be_fixed() {
+        let mut app = App {
+            panel: Panel::Key,
+            key_typed: "super+f".into(),
+            ..Default::default()
+        };
+        app.keyed(
+            "GNOME".into(),
+            Some("super+f".into()),
+            "scour-gui".into(),
+            true,
+            String::new(),
+            false,
+        );
+        assert_eq!(app.key_bound.as_deref(), Some("super+f"));
+        assert_eq!(app.key_typed, "");
+        assert!(!app.key_bad);
+
+        app.key_typed = "hyper+f".into();
+        app.keyed(
+            "GNOME".into(),
+            None,
+            "scour-gui".into(),
+            true,
+            "not a modifier: hyper".into(),
+            false,
+        );
+        assert!(app.key_bad);
+        assert_eq!(app.key_note, "not a modifier: hyper");
+        assert_eq!(app.key_typed, "hyper+f", "still there to be corrected");
+
+        // KDE's remark is not a refusal: the key was written.
+        app.keyed(
+            "KDE".into(),
+            Some("super+f".into()),
+            "scour-gui".into(),
+            true,
+            String::new(),
+            true,
+        );
+        assert!(!app.key_bad);
+        assert_eq!(
+            app.key_note,
+            app.say("It takes effect after the next login.")
+        );
     }
 
     #[test]

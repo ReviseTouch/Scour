@@ -584,6 +584,149 @@ pub fn mcp_config(client: crate::McpClient) -> Result<()> {
     Ok(())
 }
 
+/// What `scour hotkey` was asked to do.
+pub enum Deed<'a> {
+    /// Say what the key is now.
+    Show,
+    Set(&'a str),
+    Clear,
+}
+
+/// Everything one `hotkey` run prints, and what it leaves with: 0 done, 1 a
+/// tool refused, 2 not a key. Built rather than printed, so the three states
+/// can be read back in a test.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Said {
+    pub out: String,
+    pub err: String,
+    pub code: i32,
+}
+
+/// The desktop key that opens Scour. Reaches no service: `gsettings` or
+/// `kwriteconfig` is asked directly, through `scour_hotkey`.
+pub fn hotkey(deed: Deed<'_>, json: bool) -> i32 {
+    let said = hotkey_said(&scour_hotkey::Hotkey::detect(), deed, json);
+    print!("{}", said.out);
+    eprint!("{}", said.err);
+    said.code
+}
+
+/// What `scour-hotkey` says about a combination, in the reader's language. The
+/// English is the key, so a variant with no entry comes out as itself.
+fn key_error(e: &scour_hotkey::KeyError) -> String {
+    match e {
+        scour_hotkey::KeyError::UnknownModifier(m) => t("not a modifier: {m}").replace("{m}", m),
+        other => t(&other.to_string()),
+    }
+}
+
+/// The same for what the desktop refused. [`scour_hotkey::Error::Tool`] carries
+/// the tool's own words, which no catalogue can hold.
+fn tool_error(e: &scour_hotkey::Error) -> String {
+    match e {
+        scour_hotkey::Error::Tool(why) => why.clone(),
+        other => t(&other.to_string()),
+    }
+}
+
+/// GNOME and KDE are names, not words, so none of these is translated. The
+/// `--json` spelling is this one in lower case: one table, two readers.
+fn desktop_word(d: scour_hotkey::Desktop) -> &'static str {
+    match d {
+        scour_hotkey::Desktop::Gnome => "GNOME",
+        scour_hotkey::Desktop::Kde => "KDE",
+        scour_hotkey::Desktop::Flatpak => "Flatpak",
+        scour_hotkey::Desktop::Other => "other",
+    }
+}
+
+fn hotkey_said(hk: &scour_hotkey::Hotkey, deed: Deed<'_>, json: bool) -> Said {
+    use scour_hotkey::{Applies, Error, Key, Status};
+    let mut said = Said::default();
+    // The combination is read before the desktop is touched: a misspelling
+    // must not leave half an entry behind.
+    let wanted = match &deed {
+        Deed::Set(text) => match Key::parse(text) {
+            Ok(key) => Some(key),
+            Err(e) => {
+                said.err = format!("{}\n", key_error(&e));
+                said.code = 2;
+                return said;
+            }
+        },
+        _ => None,
+    };
+    let mut applies: Option<Applies> = None;
+    let did = match (&deed, &wanted) {
+        (Deed::Set(_), Some(key)) => hk.bind(key).map(|a| applies = Some(a)),
+        (Deed::Clear, _) => hk.clear(),
+        _ => Ok(()),
+    };
+    // Asked afterwards either way: the answer is what the desktop says the key
+    // is now, not what was written at it.
+    let state = hk.status();
+    if did.is_err() || state.is_err() {
+        said.code = 1;
+    }
+    let key = match &state {
+        Ok(Status::Bound(k)) => Some(k.to_string()),
+        _ => None,
+    };
+    if json {
+        let value = serde_json::json!({
+            "desktop": desktop_word(hk.desktop()).to_ascii_lowercase(),
+            "can_bind": hk.can_bind(),
+            "key": key,
+            "command": hk.command(),
+            "applies": applies.map(|a| match a {
+                Applies::Now => "now",
+                Applies::AfterLogin => "after-login",
+            }),
+        });
+        said.out = format!("{value:#}\n");
+    } else {
+        match &state {
+            // Nothing to show but what to do by hand, and what to bind it to.
+            Ok(Status::CannotBind { command }) => {
+                said.out = format!(
+                    "{}{}\n{}\n  {command}\n",
+                    label("desktop"),
+                    desktop_word(hk.desktop()),
+                    t("This desktop cannot be bound from here. Bind a key of your choice to:"),
+                );
+            }
+            Ok(_) => {
+                said.out = format!(
+                    "{}{}\n{}{}\n{}{}\n",
+                    label("desktop"),
+                    desktop_word(hk.desktop()),
+                    label("key"),
+                    key.unwrap_or_else(|| t("not bound")),
+                    label("command"),
+                    hk.command(),
+                );
+            }
+            Err(_) => {}
+        }
+    }
+    // The block above has already said it; a second line repeating it is noise.
+    let told = !json && matches!(state, Ok(Status::CannotBind { .. }));
+    if let Err(e) = &did
+        && !(told && matches!(e, Error::Unsupported | Error::Sandboxed))
+    {
+        said.err.push_str(&format!("{}\n", tool_error(e)));
+    }
+    if let Err(e) = &state {
+        said.err.push_str(&format!("{}\n", tool_error(e)));
+    }
+    // KDE writes the file; `kglobalaccel` reads it at the next login.
+    if applies == Some(Applies::AfterLogin) {
+        said.err
+            .push_str(&format!("{}\n", t("It takes effect after the next login.")));
+    }
+    said
+}
+
 /// Which languages this build ships, for `scour where`.
 fn languages() -> String {
     scour_i18n::LANGUAGES
@@ -727,6 +870,12 @@ mod tests {
             "socket",
             "service",
             "problem",
+            "desktop",
+            "key",
+            "command",
+            "not bound",
+            "This desktop cannot be bound from here. Bind a key of your choice to:",
+            "It takes effect after the next login.",
             "accepted",
             "full scan",
             "paths built",
@@ -750,5 +899,151 @@ mod tests {
         ];
         let missing: Vec<&str> = used.iter().copied().filter(|m| c.get(m) == **m).collect();
         assert!(missing.is_empty(), "untranslated: {missing:?}");
+    }
+
+    /// A `gsettings` keeping its settings in a file beside itself, as
+    /// `scour-hotkey`'s own tests use. Never this machine's desktop.
+    #[cfg(unix)]
+    fn stub_gsettings(dir: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("gsettings");
+        std::fs::write(
+            &script,
+            r#"#!/bin/bash
+db="$(dirname "$0")/db"; touch "$db"
+case "$1" in
+  get)
+    line=$(grep -F -- "$2 $3=" "$db" | head -1)
+    if [ -n "$line" ]; then printf '%s\n' "${line#*=}"
+    elif [ "$3" = custom-keybindings ]; then echo "@as []"
+    else echo "''"; fi ;;
+  set)
+    grep -v -F -- "$2 $3=" "$db" > "$db.new" || true
+    printf '%s %s=%s\n' "$2" "$3" "$4" >> "$db.new"; mv "$db.new" "$db" ;;
+  reset-recursively)
+    grep -v -F -- "$2 " "$db" > "$db.new" || true; mv "$db.new" "$db" ;;
+  *) echo "stub: $*" >&2; exit 1 ;;
+esac
+"#,
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        script
+    }
+
+    #[cfg(unix)]
+    fn gnome(dir: &std::path::Path) -> scour_hotkey::Hotkey {
+        scour_hotkey::Hotkey::new(scour_hotkey::Tools {
+            gsettings: Some(stub_gsettings(dir)),
+            gnome_keys: true,
+            desktop_var: "GNOME".into(),
+            ..Default::default()
+        })
+    }
+
+    /// Unbound, bound, and bound-then-cleared, in both forms.
+    #[cfg(unix)]
+    #[test]
+    fn the_key_reads_the_same_way_before_and_after_it_is_set() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hk = gnome(dir.path());
+
+        // Built with the same helpers, not spelled out: this process speaks
+        // whatever the machine's locale is, and the shape is what is being
+        // checked.
+        let block = |key: String| {
+            format!(
+                "{}GNOME\n{}{key}\n{}scour-gui\n",
+                label("desktop"),
+                label("key"),
+                label("command")
+            )
+        };
+
+        let said = hotkey_said(&hk, Deed::Show, false);
+        assert_eq!(said.code, 0);
+        assert_eq!(said.out, block(t("not bound")));
+
+        let said = hotkey_said(&hk, Deed::Set("Super+F"), false);
+        assert_eq!(said.code, 0);
+        assert_eq!(
+            said.out,
+            block("super+f".into()),
+            "the combination as this crate spells it, not as it was typed"
+        );
+        // GNOME's is in force at once, so there is nothing to add.
+        assert_eq!(said.err, "");
+        assert_eq!(hotkey_said(&hk, Deed::Show, false).out, said.out);
+
+        let said = hotkey_said(&hk, Deed::Clear, false);
+        assert_eq!(said.code, 0);
+        assert_eq!(said.out, block(t("not bound")));
+    }
+
+    /// `--json` is the same five facts without the wording.
+    #[cfg(unix)]
+    #[test]
+    fn the_json_carries_what_a_script_needs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let hk = gnome(dir.path());
+        let said = hotkey_said(&hk, Deed::Set("ctrl+alt+s"), true);
+        let value: serde_json::Value = serde_json::from_str(&said.out).expect("json");
+        assert_eq!(value["desktop"], "gnome");
+        assert_eq!(value["can_bind"], true);
+        assert_eq!(value["key"], "ctrl+alt+s");
+        assert_eq!(value["command"], "scour-gui");
+        assert_eq!(value["applies"], "now");
+        let said = hotkey_said(&hk, Deed::Clear, true);
+        let value: serde_json::Value = serde_json::from_str(&said.out).expect("json");
+        assert_eq!(value["key"], serde_json::Value::Null);
+        assert_eq!(value["applies"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_combination_that_is_not_one_is_refused_before_anything_is_written() {
+        let hk = scour_hotkey::Hotkey::new(scour_hotkey::Tools::default());
+        let said = hotkey_said(&hk, Deed::Set("hyper+f"), false);
+        assert_eq!(said.code, 2, "not a tool failure");
+        assert_eq!(
+            said.err,
+            format!("{}\n", t("not a modifier: {m}").replace("{m}", "hyper")),
+            "the crate's own words, and the value it refused"
+        );
+        assert!(said.out.is_empty(), "and nothing was said about the state");
+    }
+
+    /// A desktop this program cannot write to says what to bind by hand, and
+    /// `set` leaves with a code that stops a script.
+    #[test]
+    fn a_desktop_that_cannot_be_bound_names_the_command_instead() {
+        let hk = scour_hotkey::Hotkey::new(scour_hotkey::Tools {
+            desktop_var: "XFCE".into(),
+            ..Default::default()
+        });
+        let said = hotkey_said(&hk, Deed::Show, false);
+        assert_eq!(said.code, 0, "being told is not a failure");
+        assert_eq!(
+            said.out,
+            format!(
+                "{}other\n{}\n  scour-gui\n",
+                label("desktop"),
+                t("This desktop cannot be bound from here. Bind a key of your choice to:")
+            )
+        );
+        assert_eq!(said.err, "");
+
+        for deed in [Deed::Set("super+f"), Deed::Clear] {
+            let said = hotkey_said(&hk, deed, false);
+            assert_eq!(said.code, 1, "a script has to be able to see this");
+            assert!(said.out.contains("scour-gui"), "{}", said.out);
+            assert_eq!(said.err, "", "the sentence is not said twice");
+        }
+        // In JSON the sentence is not printed, so the reason goes to stderr.
+        let said = hotkey_said(&hk, Deed::Set("super+f"), true);
+        assert_eq!(said.code, 1);
+        assert_eq!(
+            said.err,
+            format!("{}\n", t("this desktop cannot be bound from here"))
+        );
     }
 }

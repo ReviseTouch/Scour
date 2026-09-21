@@ -38,6 +38,10 @@ scour-ui       = { workspace = true }
 # Asking the crate that owns the field table is what keeps that from becoming
 # a second, quietly different opinion about the query language.
 scour-query    = { workspace = true }
+# The desktop's key that opens Scour. Reaches no service and nothing of
+# Scour's: setting a key binding is the desktop's business, spoken to through
+# `gsettings` or `kwriteconfig`.
+scour-hotkey = { workspace = true }
 # The wastebasket and the clipboard, the same two the window uses.
 scour-trash  = { workspace = true }
 scour-clip   = { workspace = true }

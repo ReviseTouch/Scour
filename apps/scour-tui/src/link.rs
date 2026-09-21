@@ -15,6 +15,16 @@ use scour_proto::{Request, Response};
 /// figure follows once the typing settles.
 pub const TYPING_CAP: u32 = 1_000;
 
+/// What to do about the desktop's key that opens Scour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Deed {
+    /// What the key is now.
+    Read,
+    /// Bind this combination, as it was typed: `scour-hotkey` owns the spelling.
+    Bind(String),
+    Clear,
+}
+
 /// What the terminal asks for. Not boxed: one per user action, crossing a
 /// channel once.
 #[allow(clippy::large_enum_variant)]
@@ -66,6 +76,9 @@ pub enum Ask {
     Remember(scour_settings::Change),
     /// The whole result as a spreadsheet, written where the caller says.
     Export { query: String, to: String },
+    /// The desktop's key. Reaches no service — but travels this lane even so:
+    /// binding runs `gsettings`, and a process must not start on the draw path.
+    Hotkey(Deed),
     /// Stop: the terminal is closing.
     Done,
 }
@@ -126,6 +139,18 @@ pub enum Got {
     Writing(u64),
     /// A spreadsheet was written, and where.
     Wrote(String),
+    /// The desktop's key: what it is now, what it runs, and whether this
+    /// program can write one here at all.
+    Hotkey {
+        desktop: String,
+        key: Option<String>,
+        command: String,
+        can_bind: bool,
+        /// Why the last deed was refused; empty when it was not.
+        trouble: String,
+        /// Written, but dead until the next login — KDE.
+        later: bool,
+    },
     /// Something that is not about a search went wrong. Not a `Trouble`, which
     /// is dropped when its keystroke is old — wrong for a file that failed.
     Failed(String),
@@ -275,11 +300,68 @@ fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
     ))
 }
 
+/// Ask the desktop about its key, or change it. Every decision is
+/// `scour-hotkey`'s; this turns the answer into an event.
+fn hotkey(deed: &Deed) -> Got {
+    use scour_hotkey::{Applies, Desktop, Hotkey, Key, Status};
+    let hk = Hotkey::detect();
+    let mut trouble = String::new();
+    let mut later = false;
+    match deed {
+        Deed::Read => {}
+        Deed::Bind(text) => match Key::parse(text) {
+            Ok(key) => match hk.bind(&key) {
+                Ok(applies) => later = applies == Applies::AfterLogin,
+                Err(e) => trouble = e.to_string(),
+            },
+            Err(e) => trouble = e.to_string(),
+        },
+        Deed::Clear => {
+            if let Err(e) = hk.clear() {
+                trouble = e.to_string();
+            }
+        }
+    }
+    // Read back afterwards: what the desktop says it is now is the answer, not
+    // what was written at it.
+    let key = match hk.status() {
+        Ok(Status::Bound(k)) => Some(k.to_string()),
+        Ok(_) => None,
+        Err(e) => {
+            if trouble.is_empty() {
+                trouble = e.to_string();
+            }
+            None
+        }
+    };
+    Got::Hotkey {
+        // Names, not words: nothing here goes through the catalogue.
+        desktop: match hk.desktop() {
+            Desktop::Gnome => "GNOME",
+            Desktop::Kde => "KDE",
+            Desktop::Flatpak => "Flatpak",
+            Desktop::Other => "other",
+        }
+        .to_owned(),
+        key,
+        command: hk.command(),
+        can_bind: hk.can_bind(),
+        trouble,
+        later,
+    }
+}
+
 fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<Got>) {
     let mut client: Option<Client> = None;
     while let Ok(ask) = inbox.recv() {
         if matches!(ask, Ask::Done) {
             return;
+        }
+        // Before the socket, because this one needs none: a machine with no
+        // service running still answers about its keyboard.
+        if let Ask::Hotkey(deed) = &ask {
+            let _ = out.send(hotkey(deed));
+            continue;
         }
         // Reconnect on every failure rather than once at startup: the service
         // is restarted far more often than the terminal is.
@@ -392,6 +474,9 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 }
                 continue;
             }
+            // Answered above, before the connection. Unreachable rather than a
+            // silent fallback: reaching it means that branch is gone.
+            Ask::Hotkey(_) => unreachable!("the desktop's key is answered without a socket"),
             Ask::Done => return,
         };
         let offsets = match &request {

@@ -85,9 +85,9 @@ enrichment; not transport or rendering.
 
 A client only. On the bare form everything after the query is the query, flags
 included; `-n` and `-s` go before it. `--json` prints the protocol type as the
-service sent it; `--socket` picks another service. `where` and `mcp-config`
-reach no service. At a terminal five rows are shown, into a pipe forty, and the
-summary says how to get more.
+service sent it; `--socket` picks another service. `where`, `mcp-config` and
+`hotkey` reach no service. At a terminal five rows are shown, into a pipe forty,
+and the summary says how to get more.
 
 ### MCP — `scour-mcp`
 

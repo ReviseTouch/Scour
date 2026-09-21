@@ -160,6 +160,13 @@ enum Command {
         #[arg(default_value = "flush")]
         level: Level,
     },
+    /// The desktop key that opens Scour: what it is, and setting it.
+    ///
+    /// With nothing after it, what this desktop says the key is now.
+    Hotkey {
+        #[command(subcommand)]
+        action: Option<HotkeyAction>,
+    },
     /// Print the MCP configuration to paste into a client.
     McpConfig {
         /// Which client: `claude-desktop`, `claude-code`, `codex`, `cursor`, `gemini`, `vscode`.
@@ -168,6 +175,15 @@ enum Command {
     },
     /// Where the settings and the index live.
     Where,
+}
+
+/// What to do about that key.
+#[derive(Debug, Subcommand)]
+enum HotkeyAction {
+    /// Bind this combination: `super+f`, `ctrl+alt+s`, `super+space`.
+    Set { key: String },
+    /// Take the binding off again.
+    Clear,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -235,9 +251,19 @@ fn fits() -> u32 {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // These four need no service — which is what you reach for when the service
+    // These five need no service — which is what you reach for when the service
     // is the thing that is not working.
     match &args.command {
+        // The only one with an exit code of its own: 1 a tool refused, 2 not a
+        // key. Everything else here is `anyhow`'s 0 or 1.
+        Some(Command::Hotkey { action }) => {
+            let deed = match action {
+                None => render::Deed::Show,
+                Some(HotkeyAction::Set { key }) => render::Deed::Set(key),
+                Some(HotkeyAction::Clear) => render::Deed::Clear,
+            };
+            std::process::exit(render::hotkey(deed, args.json));
+        }
         Some(Command::McpConfig { client }) => return render::mcp_config(*client),
         Some(Command::Where) => return render::locations(),
         Some(Command::Features) => {
@@ -447,7 +473,11 @@ fn build(args: &Args) -> Result<Request> {
             level: (*level).into(),
         },
         Some(
-            Command::McpConfig { .. } | Command::Where | Command::Features | Command::Faces { .. },
+            Command::McpConfig { .. }
+            | Command::Where
+            | Command::Features
+            | Command::Faces { .. }
+            | Command::Hotkey { .. },
         ) => {
             unreachable!("handled before connecting")
         }

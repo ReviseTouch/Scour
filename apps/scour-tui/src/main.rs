@@ -387,6 +387,14 @@ fn run(
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Hotkey {
+                desktop,
+                key,
+                command,
+                can_bind,
+                trouble,
+                later,
+            }) => state.keyed(desktop, key, command, can_bind, trouble, later),
             Beat::Reply(Got::Writing(bytes)) => {
                 state.note = format!(
                     "{} {}",
@@ -479,6 +487,14 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Hotkey {
+                desktop,
+                key,
+                command,
+                can_bind,
+                trouble,
+                later,
+            }) => state.keyed(desktop, key, command, can_bind, trouble, later),
             Beat::Reply(Got::Writing(_)) => {}
             Beat::Reply(Got::Wrote(path)) => {
                 state.note = format!("{} {path}", state.say("written to"))
@@ -603,6 +619,8 @@ fn act(want: Want, link: &Link) {
         Want::Peek(path) => link.later(Ask::Preview { path }),
         Want::OffRules(off) => link.later(Ask::OffRules(off)),
         Want::Remember(change) => link.later(Ask::Remember(change)),
+        // On the slow lane like the rest: `gsettings` is a process to start.
+        Want::Hotkey(deed) => link.later(Ask::Hotkey(deed)),
         Want::Export { query, to } => link.later(Ask::Export { query, to }),
     }
 }

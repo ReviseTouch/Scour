@@ -7,7 +7,7 @@
 use scour_core::{Hit, SortKey};
 use scour_page::{Change, Pages};
 
-use crate::link::TYPING_CAP;
+use crate::link::{Deed, TYPING_CAP};
 
 /// A line of working out, when `SCOUR_TUI_TRACE` is set: to the file it names,
 /// or to standard error.
@@ -84,6 +84,8 @@ pub enum Panel {
     Rules,
     /// Which of the two languages to speak.
     Language,
+    /// The desktop's key that opens Scour: what it is, and typing another.
+    Key,
     /// Window, terminal, browser.
     Faces,
     /// What can be done with the row the cursor is on: the list in
@@ -146,6 +148,8 @@ pub enum Want {
     OffRules(Vec<String>),
     /// Remember a preference.
     Remember(scour_settings::Change),
+    /// Ask the desktop about its key, or change it.
+    Hotkey(Deed),
     /// Write the whole result to this file.
     Export {
         query: String,
@@ -266,6 +270,20 @@ pub struct App {
     /// The skip rules as the service last reported them, kept from the answer:
     /// switching one off means sending back the whole list.
     pub rules: Vec<(String, String, bool, bool)>,
+    /// What the desktop last said about the key that opens Scour: which
+    /// desktop it is, the combination if there is one, what it runs, and
+    /// whether this program may write one here. Empty until it is asked.
+    pub key_desktop: String,
+    pub key_bound: Option<String>,
+    pub key_command: String,
+    pub key_can: bool,
+    /// What has been typed into the panel, and what came back about it. The
+    /// note is the panel's own line: a refusal there belongs beside the field
+    /// it is about, not on the counter line with the last file copied.
+    pub key_typed: String,
+    pub key_note: String,
+    /// Whether that note is a refusal rather than a remark.
+    pub key_bad: bool,
     /// What was said about the last thing done — a file written, a language
     /// changed. Cleared by the next keystroke.
     pub note: String,
@@ -357,6 +375,15 @@ impl Default for App {
             ask_yes: String::new(),
             openers: Vec::new(),
             rules: Vec::new(),
+            key_desktop: String::new(),
+            key_bound: None,
+            key_command: String::new(),
+            // Until the desktop has been asked, the panel offers the field: a
+            // panel that opens refusing and then changes its mind reads worse.
+            key_can: true,
+            key_typed: String::new(),
+            key_note: String::new(),
+            key_bad: false,
             note: String::new(),
             revision: 0,
             hover: Spot::default(),
@@ -1622,6 +1649,12 @@ impl App {
         match self.panel {
             Panel::Rules => self.rules.len(),
             Panel::Language => 2,
+            // The line typed into and the one that removes. The state under
+            // them is drawn but not walked: a cursor on a fact is a press that
+            // does nothing. Where nothing can be bound there is only the
+            // sentence, and nothing to press at all.
+            Panel::Key if self.key_can => 2,
+            Panel::Key => 0,
             Panel::Faces => 3,
             Panel::Menu => self.menu.len(),
             Panel::Openers => self.openers.len(),
@@ -1661,6 +1694,63 @@ impl App {
             language: Some((*tag).to_string()),
             ..Default::default()
         })
+    }
+
+    /// Bind what has been typed into the key panel. Nothing is read here: what
+    /// counts as a combination is `scour-hotkey`'s judgement, and it answers on
+    /// the worker lane.
+    pub fn bind_key(&mut self) -> Want {
+        let typed = self.key_typed.trim().to_owned();
+        if typed.is_empty() {
+            self.key_note = self.say("type a combination and press Enter").into_owned();
+            self.key_bad = false;
+            self.dirty = true;
+            return Want::Nothing;
+        }
+        self.key_note.clear();
+        self.key_bad = false;
+        self.dirty = true;
+        Want::Hotkey(Deed::Bind(typed))
+    }
+
+    /// Take the binding off, whatever was typed.
+    pub fn drop_key(&mut self) -> Want {
+        self.key_typed.clear();
+        self.key_note.clear();
+        self.key_bad = false;
+        self.dirty = true;
+        Want::Hotkey(Deed::Clear)
+    }
+
+    /// What the desktop said about its key. On the event, never the draw.
+    pub fn keyed(
+        &mut self,
+        desktop: String,
+        key: Option<String>,
+        command: String,
+        can_bind: bool,
+        trouble: String,
+        later: bool,
+    ) {
+        self.key_desktop = desktop;
+        self.key_bound = key;
+        self.key_command = command;
+        self.key_can = can_bind;
+        self.key_bad = !trouble.is_empty();
+        self.key_note = if self.key_bad {
+            trouble
+        } else if later {
+            self.say("It takes effect after the next login.")
+                .into_owned()
+        } else {
+            String::new()
+        };
+        // What was typed has been taken; leaving it in the field invites a
+        // second press of a key that is already bound.
+        if !self.key_bad {
+            self.key_typed.clear();
+        }
+        self.dirty = true;
     }
 
     /// Start another face, and remember that it is the one to open: 0 is the

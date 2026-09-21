@@ -57,36 +57,30 @@ done
 update-desktop-database "$share/applications" 2>/dev/null || true
 gtk-update-icon-cache -qtf "$icons" 2>/dev/null || true
 
-# A key to open it, on the desktops that let a script set one. Super+F unless
+# A key to open it, on the desktops that let a program set one. Super+F unless
 # `SCOUR_KEY` says otherwise; `SCOUR_KEY=none` skips this. Pressing it again
 # brings the same window forward — scour-gui never opens a second copy.
+#
+# The command line does it: `scour hotkey` knows GNOME's dconf entry and KDE's
+# kglobalshortcutsrc, and this script no longer has a second opinion about
+# either. `--json` because the words are translated and the keys are not.
 key=${SCOUR_KEY:-super+f}
 bound=""
 if [ "$key" != none ]; then
-    gnome_key=$(printf '%s' "$key" | sed -e 's/super+/<Super>/' -e 's/ctrl+/<Control>/' -e 's/alt+/<Alt>/' -e 's/shift+/<Shift>/')
-    kde_key=$(printf '%s' "$key" | sed -e 's/super+/Meta+/' -e 's/ctrl+/Ctrl+/' -e 's/alt+/Alt+/' -e 's/shift+/Shift+/' -e 's/+\(.\)$/+\U\1/')
-    if command -v gsettings >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 \
-        && gsettings list-schemas 2>/dev/null | grep -qx org.gnome.settings-daemon.plugins.media-keys; then
-        media=org.gnome.settings-daemon.plugins.media-keys
-        path=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/scour/
-        entry="$media.custom-keybinding:$path"
-        gsettings set "$entry" name 'Scour' \
-            && gsettings set "$entry" command "$bin/scour-gui" \
-            && gsettings set "$entry" binding "$gnome_key" \
-            && current=$(gsettings get "$media" custom-keybindings) \
-            && python3 - "$path" "$current" <<'PY' | xargs -0 gsettings set "$media" custom-keybindings \
-            && bound="$key (GNOME)"
-import ast, sys
-want, current = sys.argv[1], sys.argv[2]
-paths = [] if current.strip() in ("@as []", "[]") else ast.literal_eval(current)
-if want not in paths:
-    paths.append(want)
-sys.stdout.write("[" + ", ".join(f"'{p}'" for p in paths) + "]\0")
-PY
-    elif command -v kwriteconfig6 >/dev/null 2>&1 || command -v kwriteconfig5 >/dev/null 2>&1; then
-        kw=$(command -v kwriteconfig6 || command -v kwriteconfig5)
-        "$kw" --file kglobalshortcutsrc --group services --group scour.desktop --key _launch "$kde_key" \
-            && bound="$key (KDE — after the next login, or: kquitapp6 kglobalaccel)"
+    # Never fatal. A container has no desktop to bind on, and under `set -e` a
+    # failure anywhere but an `if` condition would end the install here.
+    if said=$("$bin/scour" --json hotkey set "$key" 2>/dev/null); then
+        where=$(printf '%s' "$said" | sed -n 's/.*"desktop": *"\([^"]*\)".*/\1/p')
+        # The JSON spells them in lower case; these two are names.
+        case "$where" in
+            gnome) where=GNOME ;;
+            kde) where=KDE ;;
+        esac
+        bound="$key (${where:-this desktop})"
+        case "$said" in
+            *'"applies": "after-login"'*)
+                bound="$bound — after the next login, or: kquitapp6 kglobalaccel" ;;
+        esac
     fi
 fi
 

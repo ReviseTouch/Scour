@@ -158,10 +158,45 @@ impl From<(String, bool)> for PanelLine {
     }
 }
 
+/// How wide a panel is on a screen this wide.
+fn panel_width(area: Rect) -> u16 {
+    66u16.min(area.width.saturating_sub(4))
+}
+
+/// A sentence over as many lines as it takes. A panel line wider than the box
+/// is silently cut, which is fine for a fact and wrong for an instruction.
+fn wrapped(text: &str, wide: usize, dimmed: bool) -> Vec<PanelLine> {
+    let wide = wide.max(8);
+    let mut out: Vec<PanelLine> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        // A word longer than the box — a path — is cut rather than dropped.
+        for piece in word
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(wide)
+            .map(|c| c.iter().collect::<String>())
+        {
+            let room = line.is_empty() || line.chars().count() + 1 + piece.chars().count() <= wide;
+            if !room {
+                out.push((std::mem::take(&mut line), dimmed).into());
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(&piece);
+        }
+    }
+    if !line.is_empty() || out.is_empty() {
+        out.push((line, dimmed).into());
+    }
+    out
+}
+
 /// Where a panel of this many lines is drawn. One function, two callers — this
 /// and the mouse — because a panel hit-tested elsewhere drifts from where it is.
 pub fn panel_rect(area: Rect, lines: usize) -> Rect {
-    let wide = 66u16.min(area.width.saturating_sub(4));
+    let wide = panel_width(area);
     let tall = (lines as u16 + 3).min(area.height.saturating_sub(2));
     Rect {
         x: area.x + area.width.saturating_sub(wide) / 2,
@@ -174,6 +209,9 @@ pub fn panel_rect(area: Rect, lines: usize) -> Rect {
 /// Whatever panel is open, over the middle of the screen. One drawing for all
 /// of them: a title, a list, and a cursor on one line of it.
 fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    // The same six the drawing takes off below: the indent, the border and the
+    // gap the shortcut sits in.
+    let wrap = panel_width(area).saturating_sub(6) as usize;
     let (title, lines): (std::borrow::Cow<str>, Vec<PanelLine>) = match app.panel {
         Panel::Rules => (
             app.say("WHAT IS SKIPPED"),
@@ -206,6 +244,63 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .map(|(_, endonym)| ((*endonym).to_string(), false).into())
                 .collect(),
         ),
+        // The key in the title, because it is what the panel is about; what to
+        // do about it in the lines. The last line is drawn but not walked —
+        // see [`App::panel_lines`].
+        Panel::Key => {
+            let now = || {
+                app.key_bound
+                    .clone()
+                    .unwrap_or_else(|| app.say("not bound").into_owned())
+            };
+            // Nothing after the title until the desktop has answered, and
+            // nothing at all where it cannot hold one: "not bound" there reads
+            // as something a press would fix.
+            let head = match !app.key_desktop.is_empty() && app.key_can {
+                true => format!("{}  ·  {}", app.say("KEYBOARD SHORTCUT"), now()),
+                false => app.say("KEYBOARD SHORTCUT").into_owned(),
+            };
+            let lines = if app.key_can {
+                let mut lines = vec![
+                    PanelLine {
+                        text: format!("› {}█", app.key_typed),
+                        key: app.say("type a combination and press Enter").into_owned(),
+                        dimmed: false,
+                        careful: false,
+                        rule: false,
+                    },
+                    PanelLine {
+                        text: app.say("Remove").into_owned(),
+                        key: "x".into(),
+                        dimmed: false,
+                        careful: true,
+                        rule: false,
+                    },
+                ];
+                let below = if app.key_note.is_empty() {
+                    format!("{}  ·  {}", app.key_desktop, app.key_command)
+                } else {
+                    app.key_note.clone()
+                };
+                for (at, mut line) in wrapped(&below, wrap, !app.key_bad).into_iter().enumerate() {
+                    line.careful = app.key_bad;
+                    line.rule = at == 0;
+                    lines.push(line);
+                }
+                lines
+            } else {
+                let mut lines = wrapped(
+                    &app.say(
+                        "This desktop cannot be bound from here. Bind a key of your choice to:",
+                    ),
+                    wrap,
+                    false,
+                );
+                lines.extend(wrapped(&app.key_command, wrap, true));
+                lines
+            };
+            (std::borrow::Cow::Owned(head), lines)
+        }
         Panel::Faces => (
             app.say("HOW TO RUN IT"),
             vec![
@@ -314,9 +409,12 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         format!(" {title}"),
         Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
     ))];
+    // A panel with nothing to press — a sentence to read — draws no cursor: a
+    // mark against a line that answers to nothing is a mark that lies.
+    let pressable = app.panel_lines();
     for (at, line) in lines.iter().enumerate().skip(from).take(room) {
         let dimmed = &line.dimmed;
-        let on = at == app.panel_at;
+        let on = at == app.panel_at && at < pressable;
         let lit = if app.pressed == Spot::Panel(at) {
             Style::new().bg(theme.key()).fg(theme.back())
         } else if app.hover == Spot::Panel(at) {
@@ -1590,4 +1688,36 @@ fn help(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ),
         box_area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sentence that does not fit is drawn whole over several lines, and a
+    /// path with no spaces in it is cut rather than lost off the right edge.
+    #[test]
+    fn a_line_too_wide_for_the_panel_is_wrapped_rather_than_cut() {
+        let said = "This desktop cannot be bound from here. Bind a key of your choice to:";
+        let lines = wrapped(said, 30, false);
+        assert!(lines.len() > 1, "one line would have been cut");
+        for line in &lines {
+            assert!(line.text.chars().count() <= 30, "{:?}", line.text);
+        }
+        let back: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(back.join(" "), said, "and nothing was lost doing it");
+
+        let path = "/home/somebody/.local/share/applications/a-very-long-name/scour-gui";
+        let lines = wrapped(path, 20, true);
+        assert!(lines.iter().all(|l| l.text.chars().count() <= 20));
+        assert_eq!(
+            lines
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<String>()
+                .replace(' ', ""),
+            path
+        );
+        assert_eq!(wrapped("", 20, false).len(), 1, "an empty line is a line");
+    }
 }
