@@ -1,0 +1,16 @@
+[package]
+name        = "scour-chart"
+description = "The numbers behind a picture: shares that add up, bars, rings, block bars"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Nothing of Scour's and nothing else: arithmetic on a list of counts. Every
+# face draws from the same numbers, so a share is the same share everywhere.
+[dependencies]

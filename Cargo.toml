@@ -23,6 +23,7 @@ members = [
     "crates/scour-page",
     "crates/scour-launch",
     "crates/scour-hotkey",
+    "crates/scour-chart",
 
     "crates/scour-thumbs",
     "crates/scour-ui",
@@ -78,6 +79,7 @@ scour-places        = { path = "crates/scour-places" }
 scour-page          = { path = "crates/scour-page" }
 scour-launch        = { path = "crates/scour-launch" }
 scour-hotkey        = { path = "crates/scour-hotkey" }
+scour-chart         = { path = "crates/scour-chart" }
 scour-thumbs        = { path = "crates/scour-thumbs" }
 scour-ui            = { path = "crates/scour-ui" }
 scour-engine        = { path = "crates/scour-engine" }

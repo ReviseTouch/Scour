@@ -5028,6 +5028,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-chart"
+version = "0.2.0-alpha.1"
+
+[[package]]
 name = "scour-clip"
 version = "0.2.0-alpha.1"
 
