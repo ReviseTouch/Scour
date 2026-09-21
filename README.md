@@ -125,6 +125,27 @@ Tested in Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Fedora 40 containers.
 `scripts/package` builds both from compiled binaries; it needs `cargo-deb`,
 `cargo-generate-rpm` and `rsvg-convert`.
 
+### Flatpak
+
+```bash
+flatpak install --user flathub org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --force-clean \
+    build-dir packaging/flatpak/com.revisetouch.Scour.yml
+flatpak run com.revisetouch.Scour
+```
+
+The manifest is in `packaging/flatpak/`; Scour is not on Flathub yet. A
+sandboxed Scour indexes and searches the whole filesystem, and the window,
+the browser page and the terminal interface work, but it cannot place a
+`fanotify` mark, so nothing is watched live: the service finds a change when
+the volume's write counter moves and on its periodic reconciliation pass.
+Thumbnails need a program the runtime does not ship. The socket lives inside
+the sandbox, so the command line and the MCP server are reached as
+`flatpak run --command=scour com.revisetouch.Scour` and
+`flatpak run --command=scour-mcp com.revisetouch.Scour`. Settings and index
+live under `~/.var/app/com.revisetouch.Scour/`, apart from a tarball install.
+`packaging/flatpak/README.md` has the rest.
+
 **Windows.** The workspace builds for `x86_64-pc-windows-msvc`, and the
 release includes a zip. The binaries were started once on one Windows machine:
 the service indexed and the command line searched. The window, live watching,

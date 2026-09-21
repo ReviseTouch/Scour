@@ -122,6 +122,26 @@ olarak, paketin neyi nereye koyduğunu anlatan bir notla durur. Pencerenin
 `scripts/package` ikisini derlenmiş ikililerden üretir; `cargo-deb`,
 `cargo-generate-rpm` ve `rsvg-convert` ister.
 
+### Flatpak
+
+```bash
+flatpak install --user flathub org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --force-clean \
+    build-dir packaging/flatpak/com.revisetouch.Scour.yml
+flatpak run com.revisetouch.Scour
+```
+
+Manifest `packaging/flatpak/` altındadır; Scour henüz Flathub'da değildir.
+Kum havuzundaki Scour bütün dosya sistemini indeksler ve arar; pencere,
+tarayıcı sayfası ve uçbirim arayüzü çalışır, ancak `fanotify` işareti
+koyamadığı için canlı izleme yoktur: servis değişikliği birimin yazma sayacı
+oynayınca ve dönemsel eşitleme geçişinde bulur. Küçük resimler çalışma
+ortamının taşımadığı bir programı ister. Soket kum havuzunun içindedir; komut
+satırına ve MCP sunucusuna `flatpak run --command=scour com.revisetouch.Scour`
+ve `flatpak run --command=scour-mcp com.revisetouch.Scour` ile ulaşılır.
+Ayarlar ve indeks `~/.var/app/com.revisetouch.Scour/` altında, tarball
+kurulumundan ayrı durur. Gerisi `packaging/flatpak/README.md` dosyasındadır.
+
 **Windows.** Çalışma alanı `x86_64-pc-windows-msvc` için derlenir ve sürümde
 bir zip vardır. İkililer bir Windows makinesinde bir kez başlatılmıştır:
 servis indeksledi, komut satırı aradı. Pencere, canlı izleme, ağ ve FAT32
