@@ -35,6 +35,10 @@ scour-i18n   = { workspace = true }
 scour-launch = { workspace = true }
 # The palette, shared with the browser page so the two cannot drift.
 scour-ui       = { workspace = true }
+# Every share and every segment the report draws: percentages that add up to a
+# hundred, a bar cut end to end, a ring cut into arcs. The other faces draw the
+# same picture from the same arithmetic.
+scour-chart    = { workspace = true }
 # **The language, for one function: `without`.** The rails are counted over
 # the query with their own term taken out, and deciding which token is such a
 # term is the parser's judgement — `kind:zurna` is text, `tür:code` is a kind.

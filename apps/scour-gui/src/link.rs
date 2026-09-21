@@ -566,8 +566,9 @@ fn spawn_lane(
                         sort: scour_core::SortKey::Size,
                         descending: true,
                         page: scour_core::Page {
+                            // As many as the report names, and no more.
                             offset: 0,
-                            limit: 8,
+                            limit: 6,
                             // Nothing here reads the total, and counting is the
                             // one cost proportional to how many match.
                             count_cap: 1,

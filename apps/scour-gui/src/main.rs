@@ -6,6 +6,7 @@
 
 mod hotkey;
 mod link;
+mod report;
 mod rows;
 
 use std::cell::RefCell;
@@ -32,8 +33,8 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Cell, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule, Scheme,
-    Span, Theme,
+    Bar, Big, Cell, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule,
+    Scheme, Seg, Slice, Span, Theme,
 };
 
 thread_local! {
@@ -262,98 +263,6 @@ fn hunt(w: &MainWindow, link: &Rc<Link>, state: &Rc<RefCell<State>>) {
         min_size: FLOORS[w.get_dupe_floor().clamp(0, 3) as usize].0,
         read_budget: 0,
     });
-}
-
-/// The six age bands, in the order the colours run.
-const BANDS: [&str; 6] = [
-    "today",
-    "this week",
-    "this month",
-    "six months",
-    "this year",
-    "older",
-];
-
-/// The scope, as a run of buttons: everything, then each ancestor.
-fn crumb_of(cat: &Catalogue, path: &str) -> Vec<Facet> {
-    scour_ui::path::steps(path, &t(cat, "Everything"))
-        .into_iter()
-        .map(|(label, walked)| Facet {
-            label: label.as_str().into(),
-            token: walked.as_str().into(),
-            count: slint::SharedString::new(),
-            share: 0.0,
-        })
-        .collect()
-}
-
-/// Draw a weighed folder: what it comes to, and where the weight sits.
-fn show_usage(w: &MainWindow, cat: &Catalogue, path: &str, u: &scour_core::UsageResponse) {
-    w.set_crumb(ModelRc::new(VecModel::from(crumb_of(cat, path))));
-    w.set_report_total(compact_bytes(u.root.bytes).into());
-    w.set_report_files(
-        t(cat, "{files} files · {disk} on disk")
-            .replace("{files}", &grouped(u.root.files))
-            .replace("{disk}", &compact_bytes(u.root.disk))
-            .into(),
-    );
-    // How much of this weight nothing has touched in a year.
-    let stale = if u.root.bytes > 0 {
-        ((u.root.age[4] + u.root.age[5]) as f64 / u.root.bytes as f64 * 100.0).round()
-    } else {
-        0.0
-    };
-    w.set_report_stale(
-        t(cat, "{percent}% of it older than a year")
-            .replace("{percent}", &format!("{stale:.0}"))
-            .into(),
-    );
-    let cut = if u.child_count as usize > u.children.len() {
-        format!(
-            "  ·  {}",
-            t(cat, "the heaviest {shown} of {total} folders")
-                .replace("{shown}", &grouped(u.children.len() as u64))
-                .replace("{total}", &grouped(u.child_count as u64))
-        )
-    } else {
-        String::new()
-    };
-    w.set_report_took(format!("{:.1} ms{cut}", u.took_us as f64 / 1000.0).into());
-    let kids: Vec<Kid> = u
-        .children
-        .iter()
-        .map(|c| {
-            let band = |at: usize| {
-                if c.bytes == 0 {
-                    0.0
-                } else {
-                    c.age[at] as f32 / c.bytes as f32
-                }
-            };
-            Kid {
-                name: scour_ui::path::leaf(&c.path).into(),
-                path: c.path.as_str().into(),
-                size: compact_bytes(c.bytes).into(),
-                share: format!(
-                    "{:.1}%",
-                    if u.root.bytes == 0 {
-                        0.0
-                    } else {
-                        c.bytes as f64 / u.root.bytes as f64 * 100.0
-                    }
-                )
-                .into(),
-                files: grouped(c.files).into(),
-                a0: band(0),
-                a1: band(1),
-                a2: band(2),
-                a3: band(3),
-                a4: band(4),
-                a5: band(5),
-            }
-        })
-        .collect();
-    w.set_kids(ModelRc::new(VecModel::from(kids)));
 }
 
 /// The engine's own numbers, in three pieces: they are drawn differently.
@@ -604,6 +513,13 @@ fn main() -> Result<()> {
         down: false,
     }));
 
+    // The report's last answer, held so a resize can relabel its strips without
+    // weighing the folder again.
+    let weighed: Rc<RefCell<report::Kept>> = Rc::new(RefCell::new(report::Kept::default()));
+    // The path the right-click menu is about, when it was not a row of the list:
+    // the report's heaviest files are not in the table's model.
+    let menu_path: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+
     let rows: Rc<rows::Rows> = Rc::new(rows::Rows::default());
     // **Selected by path**: the index and the sort both move under a row number.
     let picks: Rc<RefCell<std::collections::BTreeMap<usize, rows::Pick>>> =
@@ -660,6 +576,7 @@ fn main() -> Result<()> {
     let ui_facets = facets.clone();
     let ui_rules = rules.clone();
     let ui_cat = Rc::clone(&cat);
+    let ui_weighed = Rc::clone(&weighed);
 
     let sink = move |got: Got| {
         let _ = slint::invoke_from_event_loop(move || deliver(got));
@@ -687,6 +604,7 @@ fn main() -> Result<()> {
                     &ui_rules,
                     &ui_cat.borrow().clone(),
                     &link,
+                    &ui_weighed,
                     got,
                 );
             }));
@@ -1217,37 +1135,16 @@ fn main() -> Result<()> {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let cat = Rc::clone(&cat);
+        let weighed = Rc::clone(&weighed);
         let weak = window.as_weak();
         window.on_report_open(move |path| {
             stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
             state.borrow_mut().scope = path.to_string();
-            w.set_head_folder(t(&cat, "Folder"));
-            w.set_head_age(t(&cat, "By age"));
-            w.set_head_share(t(&cat, "Share"));
-            w.set_head_files(t(&cat, "Files"));
-            w.set_kids_empty(t(
-                &cat,
-                "There are no further folders to show under this one.",
-            ));
-            w.set_age_words(ModelRc::new(VecModel::from(
-                BANDS.iter().map(|b| t(&cat, b)).collect::<Vec<_>>(),
-            )));
-            w.set_head_kinds(t(&cat, "By kind"));
-            w.set_head_biggest(t(&cat, "Largest files"));
-            w.set_head_jump(t(&cat, "Search in this folder"));
-            w.set_head_dupes(t(&cat, "Duplicate files"));
-            w.set_report_under(if path.is_empty() {
-                t(&cat, "everything")
-            } else {
-                path.clone()
-            });
-            w.set_jump_label(t(&cat, "Search in this scope"));
-            w.set_jump_note(t(
-                &cat,
-                "From the report into the search: an under: term is added to the query and the search tab opens with the same scope.",
-            ));
+            // A new scope: what is held answers for the old one.
+            *weighed.borrow_mut() = report::Kept::default();
+            report::words(&w, &cat, &path);
             w.set_dupes_show(t(&cat, "show"));
             w.set_dupes_hide(t(&cat, "hide"));
             w.set_dupes_confirm(t(&cat, "Confirm by reading"));
@@ -1269,6 +1166,21 @@ fn main() -> Result<()> {
             if w.get_dupes_open() {
                 hunt(&w, &link, &state);
             }
+        });
+    }
+
+    // The strips run the width of the report, and which of their segments can
+    // carry a word is decided in Rust. A resize changes that answer, and the
+    // reply is kept so the folder is not weighed again to find out.
+    {
+        let cat = Rc::clone(&cat);
+        let weighed = Rc::clone(&weighed);
+        let weak = window.as_weak();
+        window.on_report_resized(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let held = weighed.borrow();
+            let Some(u) = held.usage.as_ref() else { return };
+            report::draw_usage(&w, &cat.borrow().clone(), &held.path, u);
         });
     }
 
@@ -1541,11 +1453,14 @@ fn main() -> Result<()> {
     {
         let rows = Rc::clone(&rows);
         let picks = Rc::clone(&picks);
+        let menu_path = Rc::clone(&menu_path);
         let weak = window.as_weak();
         let cat = Rc::clone(&cat);
         window.on_menu_at(move |i, x, y| {
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
+            // A row of the list, so the selection is what the menu is about.
+            menu_path.borrow_mut().take();
             let picked = picks.borrow().len();
             let is_dir = rows
                 .what_at(usize::try_from(i).unwrap_or(0))
@@ -1576,6 +1491,38 @@ fn main() -> Result<()> {
         });
     }
 
+    // The same menu over one of the report's heaviest files. It is about that
+    // one path, not about the list's selection, which is a different set.
+    {
+        let menu_path = Rc::clone(&menu_path);
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        window.on_big_menu_at(move |path, x, y| {
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            *menu_path.borrow_mut() = Some(path.to_string());
+            let mut model: Vec<MenuItem> = Vec::new();
+            let mut last: Option<u8> = None;
+            for item in scour_ui::menu::items_for(1, false, scour_ui::faces::Face::Window) {
+                model.push(MenuItem {
+                    id: item.id.into(),
+                    label: t(&cat, item.msgid).replace("{n}", "1").into(),
+                    key: item.key.into(),
+                    rule: last.is_some_and(|l| l != item.group),
+                    careful: item.weight == scour_ui::menu::Weight::Careful,
+                    heavy: item.weight == scour_ui::menu::Weight::Heavy,
+                    on: false,
+                    off: false,
+                });
+                last = Some(item.group);
+            }
+            w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+            w.set_menu_x(x);
+            w.set_menu_y(y);
+            w.set_menu_open(true);
+        });
+    }
+
     // What a pending question is about. **The paths are taken when the menu is
     // pressed**: a watched index can move a row out from under a selection.
     let pending: Rc<RefCell<Option<(String, Vec<String>)>>> = Rc::new(RefCell::new(None));
@@ -1589,17 +1536,24 @@ fn main() -> Result<()> {
         let weak = window.as_weak();
         let cat = Rc::clone(&cat);
         let pending = Rc::clone(&pending);
+        let menu_path = Rc::clone(&menu_path);
         let addr = addr.clone();
         window.on_menu_pick(move |id| {
             stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
             let cat_now = cat.borrow().clone();
             let here = w.get_selected();
-            let (path, is_dir, _bytes) = match rows.what_at(usize::try_from(here).unwrap_or(0)) {
-                Some(x) => x,
-                None => return,
+            // A path set aside by the report names one file and nothing else;
+            // otherwise the menu is about the row the list has selected.
+            let over = menu_path.borrow().clone();
+            let (path, is_dir) = match over {
+                Some(one) => (one, false),
+                None => match rows.what_at(usize::try_from(here).unwrap_or(0)) {
+                    Some((p, dir, _)) => (p, dir),
+                    None => return,
+                },
             };
-            let chosen: Vec<String> = if picks.borrow().len() > 1 {
+            let chosen: Vec<String> = if menu_path.borrow().is_none() && picks.borrow().len() > 1 {
                 picks.borrow().values().map(|p| p.path.clone()).collect()
             } else {
                 vec![path.clone()]
@@ -2055,7 +2009,10 @@ fn main() -> Result<()> {
         window.set_tab("report".into());
         // The duplicate hunt is the one part of the report nobody runs unasked.
         window.set_dupes_open(std::env::var_os("SCOUR_GUI_DUPES").is_some());
-        window.invoke_report_open(slint::SharedString::new());
+        // Nothing named is everything indexed, which is the scope a press on the
+        // tab opens; `SCOUR_GUI_SCOPE` starts further down.
+        let scope = std::env::var("SCOUR_GUI_SCOPE").unwrap_or_default();
+        window.invoke_report_open(scope.as_str().into());
     }
 
     if let Ok(px) = std::env::var("SCOUR_GUI_RAIL")
@@ -2772,6 +2729,7 @@ fn apply(
     rules: &[Rc<VecModel<Rule>>; 3],
     cat: &Rc<Catalogue>,
     link: &Rc<Link>,
+    weighed: &Rc<RefCell<report::Kept>>,
     got: Got,
 ) {
     match got {
@@ -3105,41 +3063,26 @@ fn apply(
             if path != state.borrow().scope {
                 return;
             }
-            show_usage(w, cat, &path, &u);
+            report::draw_usage(w, cat, &path, &u);
+            *weighed.borrow_mut() = report::Kept {
+                usage: Some(u),
+                path,
+            };
         }
-        // What kinds the weight under a folder is in, drawn as a share.
+        // What kinds the weight under a folder is in, drawn as a ring.
         Got::Kinds { path, reply } => {
             let Response::Facets(f) = *reply else { return };
             if path != state.borrow().scope {
                 return;
             }
-            let kinds = f
+            let Some(group) = f
                 .groups
                 .iter()
-                .find(|g| matches!(g.by, scour_core::FacetBy::Kind));
-            let Some(group) = kinds else { return };
-            let most = group
-                .facets
-                .iter()
-                .map(|k| k.count)
-                .max()
-                .unwrap_or(1)
-                .max(1);
-            // The kind's word comes from the engine's own msgid.
-            let mut rows: Vec<Facet> = Vec::new();
-            for kind in rows::offered_kinds() {
-                let token = kind.token();
-                let Some(hit) = group.facets.iter().find(|x| x.key == token) else {
-                    continue;
-                };
-                rows.push(Facet {
-                    label: t(cat, kind.msgid()),
-                    token: token.into(),
-                    count: grouped(hit.count).into(),
-                    share: hit.count as f32 / most as f32,
-                });
-            }
-            w.set_report_kinds(ModelRc::new(VecModel::from(rows)));
+                .find(|g| matches!(g.by, scour_core::FacetBy::Kind))
+            else {
+                return;
+            };
+            report::draw_kinds(w, cat, &group.facets, f.total, f.capped);
         }
         // The heaviest files under it, with no count: counting is the one piece of
         // work proportional to how many match.
@@ -3148,17 +3091,7 @@ fn apply(
             if path != state.borrow().scope {
                 return;
             }
-            let rows: Vec<Facet> = r
-                .hits
-                .iter()
-                .map(|h| Facet {
-                    label: h.name().into(),
-                    token: h.path.as_str().into(),
-                    count: compact_bytes(h.meta.size.max(0) as u64).into(),
-                    share: 0.0,
-                })
-                .collect();
-            w.set_report_big(ModelRc::new(VecModel::from(rows)));
+            report::draw_biggest(w, &path, &r.hits);
         }
         // The pictures the service managed to make. `ran` is how many processes a
         // screenful of unseen files actually starts.
