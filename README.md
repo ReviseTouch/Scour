@@ -87,14 +87,24 @@ cd scour-0.2.0-alpha.1-linux-x86_64
 ```
 
 The script does not require a password. It installs seven binaries into
-`~/.local/bin`, a menu entry and an icon into `~/.local/share`, and on GNOME
+`~/.local/bin`, a menu entry and the icon — scalable plus nine raster sizes,
+for the panels that do not draw an SVG — into `~/.local/share`, and on GNOME
 and KDE binds **Super+F** to the window (`SCOUR_KEY=ctrl+alt+s` selects another
-key, `SCOUR_KEY=none` skips the binding). Removing those files uninstalls it.
+key, `SCOUR_KEY=none` skips the binding). At a terminal it then offers to start
+Scour with your session as a systemd user unit and waits until the index
+answers; `--yes` accepts, `--no-service` skips the offer, and a run without a
+terminal never asks. Removing those files uninstalls it.
 
-The binaries are built against glibc 2.39: Ubuntu 24.04 and later, Debian 13
-and later, Fedora 40 and later, and rolling distributions. Older releases
-require building from source. The package was installed and run in clean
-Ubuntu 24.04 and Fedora containers.
+A face that finds no service running starts one. The window, the terminal
+interface and the browser bridge look for `scourd` beside their own binary and
+on `PATH`, start it detached with its output in `scourd.log` under the state
+directory, and wait up to ten seconds for the socket. This needs no systemd.
+`SCOUR_NO_AUTOSTART=1` turns it off; the command line never starts anything.
+
+The release binaries are built in a Debian 11 container against glibc 2.31:
+Debian 11, Ubuntu 22.04, RHEL 9 and everything later. The window also needs
+`libfontconfig1`, which every desktop has. The package was installed and run
+in clean Ubuntu 22.04, Ubuntu 24.04 and Debian 11 containers.
 
 **Windows.** The workspace builds for `x86_64-pc-windows-msvc`, and the
 release includes a zip. The binaries were started once on one Windows machine:
@@ -127,6 +137,12 @@ pin two libm symbols so the window also runs on older glibc versions; without
 one the build still completes. To install by hand instead of `install.sh`:
 `install -m755 target/release/scour{,d,-gui,-tui,-web,-watch,-mcp} ~/.local/bin/`
 (no menu entry and no shortcut in that case).
+
+A binary's glibc floor is set by the machine that built it, so a tarball built
+on a rolling distribution does not start on Ubuntu 22.04. `scripts/release-build`
+builds the same seven binaries in a Debian 11 container (podman or docker) into
+`target/container/release` and prints the floor each one asks for;
+`scripts/release --container` packs those.
 
 ### Keyboard shortcut
 
@@ -162,15 +178,21 @@ write counter and require the mark.
 
 ```bash
 sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # the only step that requires root
-systemctl start scour.service
+systemctl start scour@<user>.service
 ```
 
-The account defaults to the user who ran `sudo`; the roots — the filesystems
-to mark — default to `/home`. The installer places the helper under
-root-owned `/usr/local/libexec/scour`, installs a system unit, and installs a
-polkit rule that allows that one account to start, stop and restart this one
-service without authentication. Read both files before installing. If the user
-unit is enabled, disable it first: `systemctl --user disable --now
+The system unit is a template with one instance per account.
+`scour@hasan.service` marks the filesystems named in `/etc/scour/hasan.conf`
+(the roots given to the installer, default `/home`), drops to that account and
+runs `scourd` as it, so an instance can only index what its account can read,
+and its socket is in that account's own runtime directory. The account
+defaults to the user who ran `sudo`. The installer places the helper under
+root-owned `/usr/local/libexec/scour`, installs the template, and installs a
+polkit rule that lets each account start, stop and restart its own instance
+without authentication and nothing else. Run it again with `--user` to add
+another person; an older single-user `scour.service` is migrated. Read both
+files before installing. If the per-user unit is enabled for that account the
+installer refuses until it is off: `systemctl --user disable --now
 scourd.service`.
 
 ### Settings

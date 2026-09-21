@@ -84,14 +84,24 @@ cd scour-0.2.0-alpha.1-linux-x86_64
 ```
 
 Betik parola istemez. Yedi ikiliyi `~/.local/bin` altına, menü girdisini ve
-simgeyi `~/.local/share` altına kurar; GNOME ve KDE'de **Super+F**'yi
-pencereye bağlar (`SCOUR_KEY=ctrl+alt+s` başka bir tuş seçer,
-`SCOUR_KEY=none` bağlamayı atlar). Bu dosyaları silmek kurulumu geri alır.
+simgeyi — SVG çizemeyen paneller için dokuz boyda PNG ile birlikte —
+`~/.local/share` altına kurar; GNOME ve KDE'de **Super+F**'yi pencereye bağlar
+(`SCOUR_KEY=ctrl+alt+s` başka bir tuş seçer, `SCOUR_KEY=none` bağlamayı atlar).
+Uçbirimde ardından Scour'u oturumunuzla başlatmayı (systemd kullanıcı birimi)
+teklif eder ve indeks cevap verene kadar bekler; `--yes` kabul eder,
+`--no-service` teklifi atlar, uçbirimsiz bir çalıştırma hiç sormaz. Bu
+dosyaları silmek kurulumu geri alır.
 
-İkililer glibc 2.39'a göre derlenmiştir: Ubuntu 24.04 ve üstü, Debian 13 ve
-üstü, Fedora 40 ve üstü, yuvarlanan dağıtımlar. Daha eski sürümler kaynaktan
-derlemeyi gerektirir. Paket sıfırdan kurulmuş Ubuntu 24.04, Fedora, Debian 13
-ve Arch konteynerlerinde kurulup çalıştırılmıştır.
+Servis çalışmıyorsa arayüz onu kendisi başlatır. Pencere, uçbirim arayüzü ve
+tarayıcı köprüsü `scourd`'u önce kendi ikilisinin yanında, sonra `PATH`'te
+arar, çıktısı durum dizinindeki `scourd.log`'a gidecek şekilde ayrı bir
+oturumda başlatır ve sokete en çok on saniye bekler. systemd gerekmez.
+`SCOUR_NO_AUTOSTART=1` bunu kapatır; komut satırı hiçbir şey başlatmaz.
+
+Sürüm ikilileri bir Debian 11 konteynerinde glibc 2.31'e göre derlenir:
+Debian 11, Ubuntu 22.04, RHEL 9 ve sonrası. Pencere ayrıca her masaüstünde
+bulunan `libfontconfig1`'i ister. Paket sıfırdan kurulmuş Ubuntu 22.04,
+Ubuntu 24.04 ve Debian 11 konteynerlerinde kurulup çalıştırılmıştır.
 
 **Windows.** Çalışma alanı `x86_64-pc-windows-msvc` için derlenir ve sürümde
 bir zip vardır. İkililer bir Windows makinesinde bir kez başlatılmıştır:
@@ -125,6 +135,12 @@ kullanılır; yoksa derleme yine tamamlanır. `install.sh` yerine elle kurmak
 için: `install -m755 target/release/scour{,d,-gui,-tui,-web,-watch,-mcp}
 ~/.local/bin/` (bu durumda menü girdisi ve kısayol olmaz).
 
+Bir ikilinin glibc tabanını onu derleyen makine belirler; yuvarlanan bir
+dağıtımda derlenen tarball Ubuntu 22.04'te açılmaz. `scripts/release-build`
+aynı yedi ikiliyi bir Debian 11 konteynerinde (podman ya da docker)
+`target/container/release` altına derler ve her birinin istediği tabanı basar;
+`scripts/release --container` onları paketler.
+
 ### Klavye kısayolu
 
 Kurucu GNOME ve KDE'de bir tuş bağlar. Diğer masaüstlerinde herhangi bir tuşu
@@ -157,15 +173,21 @@ görünür. Ağ ve FUSE bağlarının yazma sayacı yoktur; onlar işaret ister.
 
 ```bash
 sudo bash packaging/install-service.sh [--user AD] [KÖK...]   # root isteyen tek adım
-systemctl start scour.service
+systemctl start scour@<kullanıcı>.service
 ```
 
-Hesap, `sudo`'yu çalıştıran kullanıcıya; kökler — işaretlenecek dosya
-sistemleri — `/home`'a varsayılır. Kurucu yardımcıyı root'a ait
-`/usr/local/libexec/scour` altına koyar, bir sistem birimi ve yalnız o hesabın
-yalnız bu servisi parolasız başlatıp durdurmasına izin veren bir polkit kuralı
-kurar. Kurmadan önce iki dosyayı da okuyun. Kullanıcı birimi etkinse önce
-kapatın: `systemctl --user disable --now scourd.service`.
+Sistem birimi bir şablondur, hesap başına bir örnek çalışır.
+`scour@hasan.service`, `/etc/scour/hasan.conf` dosyasındaki dosya sistemlerini
+(kurucuya verilen kökler, varsayılan `/home`) işaretler, o hesaba düşer ve
+`scourd`'u onun adına çalıştırır; yani bir örnek yalnız hesabının okuyabildiğini
+indeksler ve soketi o hesabın kendi çalışma dizinindedir. Hesap `sudo`'yu
+çalıştıran kullanıcıya varsayılır. Kurucu yardımcıyı root'a ait
+`/usr/local/libexec/scour` altına koyar, şablonu ve her hesabın yalnız kendi
+örneğini parolasız başlatıp durdurmasına izin veren, başka hiçbir şeye izin
+vermeyen bir polkit kuralı kurar. İkinci bir kişi için `--user` ile yeniden
+çalıştırın; eski tek kullanıcılı `scour.service` kendiliğinden taşınır.
+Kurmadan önce iki dosyayı da okuyun. O hesabın kullanıcı birimi etkinse kurucu
+kapatılana kadar reddeder: `systemctl --user disable --now scourd.service`.
 
 ### Ayarlar
 

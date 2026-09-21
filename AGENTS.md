@@ -111,6 +111,12 @@ generation, never drawn. Neither parses queries: what a term means is
 `explain`'s answer, with two narrow exceptions — `terms_of` (which words to
 highlight) and `scour_query::without` (a rail dropping its own term).
 
+A face that finds nothing listening starts `scourd` through `scour-launch`:
+beside its own binary, then on `PATH`, detached, once per process, output to
+`scourd.log` in the state directory. `SCOUR_NO_AUTOSTART=1` turns it off. The
+CLI never starts anything. The crate depends on nothing of Scour's; whether
+something listens is a function the face passes in.
+
 ### Service — `scourd`
 
 `src/wire.rs` names the concrete index and source; nothing else does. Change
@@ -118,4 +124,6 @@ feeds are hints: every source gets a full reconciliation pass
 (`reconcile_interval_secs`, default 1800; `poll_interval_secs`, default 60,
 for a source with neither a watch nor a pulse), resting at least twenty times
 the previous pass's cost. The privileged `scour-watch` helper places the
-`fanotify` marks, drops privilege and execs the daemon.
+`fanotify` marks, drops privilege and execs the daemon — one
+`scour@<user>.service` instance per account, its roots in
+`/etc/scour/<user>.conf`, its socket in that account's runtime directory.
