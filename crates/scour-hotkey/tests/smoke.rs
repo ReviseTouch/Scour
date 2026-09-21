@@ -139,6 +139,15 @@ fn the_command_is_the_window_beside_this_executable_when_there_is_one() {
     assert_eq!(alone.command(), "scour-gui");
 }
 
+/// Writing a script and starting one are one race: a fork on another test's
+/// thread inherits the file still open for writing, and the exec then says
+/// `Text file busy`. The tests that start a process take turns.
+#[cfg(unix)]
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// A `gsettings` that keeps its settings in a file beside itself.
 #[cfg(unix)]
 fn stub_gsettings(dir: &std::path::Path) -> std::path::PathBuf {
@@ -171,6 +180,7 @@ esac
 #[cfg(unix)]
 #[test]
 fn gnome_bind_read_rebind_clear() {
+    let _turn = one_at_a_time();
     let dir = tempfile::tempdir().expect("tempdir");
     let gsettings = stub_gsettings(dir.path());
     let hk = Hotkey::new(Tools {
@@ -214,6 +224,7 @@ fn gnome_bind_read_rebind_clear() {
 #[cfg(unix)]
 #[test]
 fn gnome_leaves_other_peoples_bindings_alone() {
+    let _turn = one_at_a_time();
     let dir = tempfile::tempdir().expect("tempdir");
     let gsettings = stub_gsettings(dir.path());
     std::fs::write(
@@ -242,6 +253,7 @@ fn gnome_leaves_other_peoples_bindings_alone() {
 #[cfg(unix)]
 #[test]
 fn kde_writes_the_launch_key_of_the_desktop_entry() {
+    let _turn = one_at_a_time();
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().expect("tempdir");
     let write = dir.path().join("kwriteconfig6");
