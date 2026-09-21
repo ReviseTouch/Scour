@@ -4,6 +4,7 @@
 //! calls run on worker threads and return as events ([`link`]); query
 //! meaning is the engine's; a reply for a superseded keystroke is dropped.
 
+mod hotkey;
 mod link;
 mod rows;
 
@@ -692,6 +693,11 @@ fn main() -> Result<()> {
         });
     }
 
+    // The desktop's key: asked for at once, on a thread of its own, because
+    // every answer here is a process this window must not wait for.
+    hotkey::start(kept.key_hint_seen);
+    hotkey::wire(&window, &link, &cat);
+
     // --- the query line ---------------------------------------------------
     {
         let state = state.clone();
@@ -814,6 +820,11 @@ fn main() -> Result<()> {
                     w.set_panel(if open { "".into() } else { other.into() });
                     if !open && other == "rules" {
                         link.send(Ask::Rules);
+                    }
+                    // The desktop may have been changed in its own settings
+                    // since this window started; the row must not be stale.
+                    if !open && other == "faces" {
+                        hotkey::work(hotkey::Deed::Look);
                     }
                 }
             }
@@ -2764,6 +2775,7 @@ fn apply(
     got: Got,
 ) {
     match got {
+        Got::Key(done) => hotkey::landed(w, cat, *done),
         Got::Down(why) => {
             let mut s = state.borrow_mut();
             s.down = true;
@@ -3803,6 +3815,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
         cat,
         "Part of the program. Mostly build output and package caches, which churn constantly and bury real results.",
     ));
+    hotkey::words(window, cat);
     window.set_rules_hint(t(cat, "a directory name, or a path"));
     window.set_rules_add(t(cat, "add"));
     window.set_rules_off_word(t(cat, "off"));

@@ -994,6 +994,43 @@ export component MainWindow inherits Window {
     callback rule-added(string);
     callback language-picked(string);
     callback rule-toggled(string);
+    // --- the desktop's key ------------------------------------------------
+    // Every one of these is written from Rust after a worker has spoken to the
+    // desktop: nothing here asks, and nothing here parses a combination.
+    in property <string> key-title;
+    /// The bound key, "not bound", or the sentence for a desktop that cannot be
+    /// bound from here. Empty until the first answer arrives.
+    in property <string> key-state;
+    /// What to bind by hand, when this program cannot. Empty otherwise.
+    in property <string> key-command;
+    in property <string> key-copy;
+    in property <bool> key-can-bind;
+    in property <bool> key-bound;
+    in property <string> key-hint;
+    /// The parse error as the combination is typed, and the neutral spelling
+    /// that would be written. Only one of the two is ever set.
+    in property <string> key-error;
+    in property <string> key-preview;
+    in property <string> key-bind;
+    in property <string> key-remove;
+    /// KDE's line, after a binding that is not in force yet.
+    in property <string> key-later;
+    in-out property <string> key-typed: "";
+    /// The last combination short enough to draw; see `rule-kept` for why.
+    private property <string> key-kept: "";
+    callback key-typed-changed(string);
+    callback key-bind-pressed();
+    callback key-remove-pressed();
+    callback key-command-copied();
+    // The first-run offer under the list. `key-nudge` is Rust's decision; the
+    // error keeps the strip where the line was when a bind failed.
+    in property <bool> key-nudge;
+    in property <string> key-nudge-text;
+    in property <string> key-nudge-yes;
+    in property <string> key-nudge-no;
+    in property <string> key-nudge-error;
+    /// True for "bind it", false for "not now". Sent once, either way.
+    callback key-nudged(bool);
     // --- the selection ----------------------------------------------------
     // Several rows at once, and an action takes all of them. The sentence is
     // written in Rust: counts and a size in a language's own word order.
@@ -2750,6 +2787,54 @@ export component MainWindow inherits Window {
                         }
                     }
                 }
+                // The first-run offer, under the list: bind a key once, and no
+                // face asks again. It stays while an error has to be read.
+                if root.key-nudge || root.key-nudge-error != "": Rectangle {
+                    height: 38px;
+                    background: Theme.panel;
+
+                    Rectangle {
+                        y: 0;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.key-nudge-error != ""
+                                    ? root.key-nudge-error : root.key-nudge-text;
+                                color: root.key-nudge-error != "" ? Theme.q-not : Theme.ink-2;
+                                font-size: 11.5px;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle { }
+
+                        if root.key-nudge: VerticalLayout {
+                            alignment: center;
+                            Push {
+                                label: root.key-nudge-yes;
+                                clicked => { root.key-nudged(true); }
+                            }
+                        }
+
+                        if root.key-nudge: VerticalLayout {
+                            alignment: center;
+                            Push {
+                                label: root.key-nudge-no;
+                                clicked => { root.key-nudged(false); }
+                            }
+                        }
+                    }
+                }
             }
 
             // The scrollbar's lane. Beside the list, never over it; the
@@ -3274,6 +3359,154 @@ export component MainWindow inherits Window {
                     go: root.face-go;
                     picked => { root.armed-face = "web"; }
                     confirmed => { root.face-picked("web"); }
+                }
+
+                Rectangle { height: 12px; }
+
+                // Not a face, but the same question: how Scour gets opened.
+                // The browser page keeps its own row here too.
+                Text {
+                    text: root.key-title;
+                    color: Theme.ink;
+                    font-size: 11px;
+                    font-weight: 650;
+                    letter-spacing: 1.2px;
+                }
+
+                if root.key-bound: Text {
+                    text: root.key-state;
+                    color: Theme.q-key;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                }
+                if !root.key-bound: Text {
+                    text: root.key-state;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                // Nothing here can write the binding, so the command is handed
+                // over instead: one line, selectable, and a button that copies.
+                if root.key-command != "": HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+
+                    Rectangle {
+                        border-width: 1px;
+                        border-radius: 3px;
+                        border-color: Theme.line;
+                        background: Theme.panel;
+                        clip: true;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+
+                            TextInput {
+                                text: root.key-command;
+                                read-only: true;
+                                color: Theme.ink-2;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                            }
+                        }
+                    }
+
+                    Push {
+                        label: root.key-copy;
+                        clicked => { root.key-command-copied(); }
+                    }
+                }
+
+                if root.key-can-bind: HorizontalLayout {
+                    spacing: 6px;
+                    height: 26px;
+
+                    Rectangle {
+                        border-width: 1px;
+                        border-radius: 3px;
+                        border-color: Theme.line;
+                        background: Theme.panel;
+                        // A combination is short, but the placeholder is a
+                        // sentence and a layout does not clip its children.
+                        clip: true;
+
+                        HorizontalLayout {
+                            padding-left: 8px;
+                            padding-right: 8px;
+
+                            combo := TextInput {
+                                text <=> root.key-typed;
+                                color: Theme.ink;
+                                font-family: Fonts.mono;
+                                font-size: 11.5px;
+                                single-line: true;
+                                vertical-alignment: center;
+                                selection-background-color: Theme.selection;
+                                selection-foreground-color: Theme.ink;
+                                // Capped like the rule field, and for the same
+                                // reason: the software renderer places glyphs
+                                // at `i16`. A combination is a dozen characters.
+                                edited => {
+                                    if (self.text.character-count > 64) {
+                                        self.text = root.key-kept;
+                                    } else {
+                                        root.key-kept = self.text;
+                                        root.key-typed-changed(self.text);
+                                    }
+                                }
+                                accepted => { root.key-bind-pressed(); }
+                            }
+                        }
+
+                        if combo.text == "": Text {
+                            text: root.key-hint;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: parent.height;
+                        }
+                    }
+
+                    Push {
+                        label: root.key-bind;
+                        clicked => { root.key-bind-pressed(); }
+                    }
+
+                    if root.key-bound: Push {
+                        label: root.key-remove;
+                        clicked => { root.key-remove-pressed(); }
+                    }
+                }
+
+                if root.key-error != "": Text {
+                    text: root.key-error;
+                    color: Theme.q-not;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                if root.key-preview != "": Text {
+                    text: "→ " + root.key-preview;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11.5px;
+                }
+
+                if root.key-later != "": Text {
+                    text: root.key-later;
+                    color: Theme.ink-3;
+                    font-size: 11px;
+                    wrap: word-wrap;
                 }
             }
         }

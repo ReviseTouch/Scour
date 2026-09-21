@@ -150,6 +150,10 @@ pub enum Got {
     },
     Thumbnails(Box<Response>),
     Rules(Box<Response>),
+    /// What the desktop says about Scour's key, or what writing it did. Not a
+    /// reply from the service: `scour-hotkey` spawns processes and answers on
+    /// this same inbox, so the window has one place where work comes back.
+    Key(Box<crate::hotkey::Done>),
     Status(Box<Response>),
     Awake(Box<Response>),
     Explain {

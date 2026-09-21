@@ -60,6 +60,10 @@ scour-places   = { workspace = true }
 # each is a subprocess rather than a binding.
 scour-trash    = { workspace = true }
 scour-clip     = { workspace = true }
+# The desktop's key that opens Scour: gsettings on GNOME, kwriteconfig on KDE,
+# and a command to bind by hand anywhere else. Every call spawns a process, so
+# the window makes them on a thread of its own.
+scour-hotkey   = { workspace = true }
 # What a file may be called — the same rules in all three faces.
 scour-name     = { workspace = true }
 # Which programs claim a kind of file, for `Open with…`.
