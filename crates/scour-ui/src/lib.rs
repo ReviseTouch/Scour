@@ -112,6 +112,12 @@ pub struct Palette {
     /// The time spectrum, newest to oldest. Six bands, and rows are stored in
     /// date order, so the spectrum runs unbroken down the list.
     pub t: [Rgba; 6],
+    /// The report's ring and its folder bar: one hue in six steps, darkest
+    /// first. One hue on purpose — saturation belongs to the time spectrum, and
+    /// a second set of hues beside it would read as age.
+    pub k: [Rgba; 6],
+    /// The slice for what was folded away: "the other five kinds".
+    pub kx: Rgba,
     /// What is being looked for: a bare word. Blue against the red of `q_not`.
     /// The query palette is separate from the time spectrum, or "changed
     /// yesterday" and "field value" would share a colour.
@@ -154,6 +160,15 @@ pub const DARK: Palette = Palette {
         Rgba::hex(0x4a7fb5),
         Rgba::hex(0x3b4a58),
     ],
+    k: [
+        Rgba::hex(0xa9c6e6),
+        Rgba::hex(0x7fa9d6),
+        Rgba::hex(0x5d8bbd),
+        Rgba::hex(0x4a7fb5),
+        Rgba::hex(0x35618d),
+        Rgba::hex(0x264a6d),
+    ],
+    kx: Rgba::hex(0x212a35),
     q_term: Rgba::hex(0x59a6ff),
     q_key: Rgba::hex(0x7fa9e0),
     q_val: Rgba::hex(0x6fc2a0),
@@ -188,6 +203,15 @@ pub const LIGHT: Palette = Palette {
         Rgba::hex(0x2f6ba3),
         Rgba::hex(0x97a1ac),
     ],
+    k: [
+        Rgba::hex(0x24507a),
+        Rgba::hex(0x2f6ba3),
+        Rgba::hex(0x5a8bbf),
+        Rgba::hex(0x86abd3),
+        Rgba::hex(0xb3c9e2),
+        Rgba::hex(0xd7e2ee),
+    ],
+    kx: Rgba::hex(0xddd8cd),
     q_term: Rgba::hex(0x1c5fa8),
     q_key: Rgba::hex(0x2f6ba3),
     q_val: Rgba::hex(0x1a7a58),
@@ -256,6 +280,10 @@ pub fn css_vars(p: &Palette) -> String {
     for (i, c) in p.t.iter().enumerate() {
         put(&format!("t{i}"), c);
     }
+    for (i, c) in p.k.iter().enumerate() {
+        put(&format!("k{i}"), c);
+    }
+    put("kx", &p.kx);
     put("q-term", &p.q_term);
     put("q-key", &p.q_key);
     put("q-val", &p.q_val);
