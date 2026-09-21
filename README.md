@@ -193,11 +193,12 @@ and the browser page each have a "Keyboard shortcut" row, and at a terminal
 `super+f`, `ctrl+alt+s`, `super+F2`. On GNOME the key works at once, on KDE
 after the next login. On other desktops, and inside a Flatpak, Scour cannot
 write the binding: it shows the command to bind by hand in the desktop's own
-keyboard settings, `scour-gui` or `flatpak run com.revisetouch.Scour`. The
+keyboard settings, `scour-open` or `flatpak run com.revisetouch.Scour`. The
 installer offers Super+F (`SCOUR_KEY=ctrl+alt+s` picks another,
-`SCOUR_KEY=none` skips it), and the window's first run offers it once. The
-first press opens the window and every later press brings the same window
-forward; a second instance is never started.
+`SCOUR_KEY=none` skips it), and the window's first run offers it once. The key
+runs the launcher, so it opens whichever face you last switched to; for the
+window a second press brings the same window forward, and a second instance is
+never started.
 
 Under GNOME on Wayland a program may not raise its own window; the window may
 be indicated in the taskbar instead of coming to the front. The Shell

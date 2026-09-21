@@ -4046,7 +4046,7 @@ fn open_face(window: &MainWindow, which_one: &str, cat: &Catalogue, link: &Link)
     // Through the launcher, not directly: a terminal interface without a tty exits
     // at once, and which terminal to start is nine programs in `scour-open`.
     let (program, args): (&str, Vec<&str>) = match which_one {
-        "web" => ("scour-web", Vec::new()),
+        "browser" => ("scour-open", vec!["browser"]),
         "tui" => ("scour-open", vec!["tui"]),
         _ => return,
     };

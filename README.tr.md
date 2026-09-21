@@ -189,11 +189,11 @@ hotkey clear` kaldırır). Kombinasyon tek bir yazımla yazılır: `super+f`,
 `ctrl+alt+s`, `super+F2`. GNOME'da tuş hemen çalışır, KDE'de bir sonraki
 oturum açılışında. Diğer masaüstlerinde ve Flatpak içinde Scour bağı
 yazamaz: masaüstünün kendi klavye ayarlarından elle bağlanacak komutu
-gösterir, `scour-gui` ya da `flatpak run com.revisetouch.Scour`. Kurucu
+gösterir, `scour-open` ya da `flatpak run com.revisetouch.Scour`. Kurucu
 Super+F'yi teklif eder (`SCOUR_KEY=ctrl+alt+s` başka bir tuş seçer,
-`SCOUR_KEY=none` atlar); pencere ilk açılışta bir kez teklif eder. İlk basış
-pencereyi açar, sonraki her basış aynı pencereyi öne getirir; ikinci bir
-kopya hiç başlatılmaz.
+`SCOUR_KEY=none` atlar); pencere ilk açılışta bir kez teklif eder. Tuş
+başlatıcıyı çalıştırır, yani en son geçtiğin yüzü açar; pencerede ikinci
+basış aynı pencereyi öne getirir, ikinci bir kopya hiç başlatılmaz.
 
 Wayland üzerinde GNOME bir programın kendi penceresini öne almasına izin
 vermez; pencere öne gelmek yerine görev çubuğunda işaretlenebilir.

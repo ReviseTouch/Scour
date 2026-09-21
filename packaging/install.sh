@@ -59,7 +59,7 @@ gtk-update-icon-cache -qtf "$icons" 2>/dev/null || true
 
 # A key to open it, on the desktops that let a program set one. Super+F unless
 # `SCOUR_KEY` says otherwise; `SCOUR_KEY=none` skips this. Pressing it again
-# brings the same window forward — scour-gui never opens a second copy.
+# opens the face last switched to, and for the window brings it forward: scour-open.
 #
 # The command line does it: `scour hotkey` knows GNOME's dconf entry and KDE's
 # kglobalshortcutsrc, and this script no longer has a second opinion about
@@ -184,9 +184,9 @@ cat <<'TXT'
 TXT
 if [ -n "$bound" ]; then
     echo "  A key to open it: $bound. Change it in your desktop's keyboard settings;"
-    echo "  the command is scour-gui, and pressing it again brings the window forward."
+    echo "  the command is scour-open: it opens the face you last switched to."
 else
-    echo "  A key to open it: bind any shortcut to scour-gui in your desktop's keyboard"
+    echo "  A key to open it: bind any shortcut to scour-open in your desktop's keyboard"
     echo "  settings — pressing it again brings the same window forward."
 fi
 cat <<'TXT'

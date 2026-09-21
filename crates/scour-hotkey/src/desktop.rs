@@ -71,9 +71,11 @@ impl Tools {
         Desktop::Other
     }
 
-    /// What the key runs: the window beside this executable, so a tarball
-    /// unpacked into a home directory binds itself and not an older install; the
-    /// bare name when nothing is beside it; the Flatpak command in a sandbox.
+    /// What the key runs: the launcher beside this executable, which opens the
+    /// face somebody last switched to — so a tarball unpacked into a home
+    /// directory binds itself and not an older install; the bare name when
+    /// nothing is beside it; the Flatpak command in a sandbox. On Windows the
+    /// launcher is a shell script and the window is what there is.
     pub fn command(&self) -> String {
         if self.sandboxed {
             return format!("flatpak run {FLATPAK_APP}");
@@ -81,7 +83,7 @@ impl Tools {
         let name = if cfg!(windows) {
             "scour-gui.exe"
         } else {
-            "scour-gui"
+            "scour-open"
         };
         self.exe
             .as_deref()

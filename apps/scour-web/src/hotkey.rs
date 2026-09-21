@@ -207,7 +207,7 @@ printf '%s\n' "${line#*=}"
         assert_eq!(s["desktop"], "other");
         assert_eq!(s["can_bind"], false);
         assert_eq!(s["key"], serde_json::Value::Null);
-        assert_eq!(s["command"], "scour-gui");
+        assert_eq!(s["command"], "scour-open");
         assert_eq!(s["error"], serde_json::Value::Null);
         assert!(s.get("applies").is_none(), "nothing was bound");
     }

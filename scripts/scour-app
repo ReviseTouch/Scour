@@ -19,6 +19,13 @@ if [[ ! -x $WEB ]]; then
     exit 1
 fi
 
+# Already open, bridge and window both alive: leave it. The desktop cannot
+# raise a window from here under Wayland, and restarting it would lose the page.
+if pgrep -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
+    && pgrep -f -- "--app=http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+    exit 0
+fi
+
 # A bridge from a window that has since closed: a killed browser tells nobody.
 pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
 

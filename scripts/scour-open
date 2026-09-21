@@ -30,7 +30,7 @@ run() {
 }
 
 case "$face" in
-    browser)
+    browser|web)
         exec "$here/scour-app"
         ;;
     tui)

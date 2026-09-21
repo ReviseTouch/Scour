@@ -1539,7 +1539,7 @@ esac
         // checked.
         let block = |key: String| {
             format!(
-                "{}GNOME\n{}{key}\n{}scour-gui\n",
+                "{}GNOME\n{}{key}\n{}scour-open\n",
                 label("desktop"),
                 label("key"),
                 label("command")
@@ -1578,7 +1578,7 @@ esac
         assert_eq!(value["desktop"], "gnome");
         assert_eq!(value["can_bind"], true);
         assert_eq!(value["key"], "ctrl+alt+s");
-        assert_eq!(value["command"], "scour-gui");
+        assert_eq!(value["command"], "scour-open");
         assert_eq!(value["applies"], "now");
         let said = hotkey_said(&hk, Deed::Clear, true);
         let value: serde_json::Value = serde_json::from_str(&said.out).expect("json");
@@ -1612,7 +1612,7 @@ esac
         assert_eq!(
             said.out,
             format!(
-                "{}other\n{}\n  scour-gui\n",
+                "{}other\n{}\n  scour-open\n",
                 label("desktop"),
                 t("This desktop cannot be bound from here. Bind a key of your choice to:")
             )
@@ -1622,7 +1622,7 @@ esac
         for deed in [Deed::Set("super+f"), Deed::Clear] {
             let said = hotkey_said(&hk, deed, false);
             assert_eq!(said.code, 1, "a script has to be able to see this");
-            assert!(said.out.contains("scour-gui"), "{}", said.out);
+            assert!(said.out.contains("scour-open"), "{}", said.out);
             assert_eq!(said.err, "", "the sentence is not said twice");
         }
         // In JSON the sentence is not printed, so the reason goes to stderr.

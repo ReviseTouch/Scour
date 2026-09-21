@@ -358,7 +358,7 @@ mod tests {
         // hand, and the line would be an offer it cannot keep.
         assert!(!nudge(Some(&unbound), false, false));
         let cannot = Ok(Status::CannotBind {
-            command: "scour-gui".into(),
+            command: "scour-open".into(),
         });
         assert!(!nudge(Some(&cannot), false, false));
         // Something is already bound: there is nothing to offer.

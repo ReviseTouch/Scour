@@ -3685,10 +3685,10 @@ export component MainWindow inherits Window {
                 FaceRow {
                     label: root.face-web;
                     note: root.face-web-note;
-                    armed: root.armed-face == "web";
+                    armed: root.armed-face == "browser";
                     go: root.face-go;
-                    picked => { root.armed-face = "web"; }
-                    confirmed => { root.face-picked("web"); }
+                    picked => { root.armed-face = "browser"; }
+                    confirmed => { root.face-picked("browser"); }
                 }
 
                 Rectangle { height: 12px; }

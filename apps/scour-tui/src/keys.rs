@@ -886,7 +886,7 @@ mod tests {
         let mut app = App {
             panel: Panel::Key,
             key_can: false,
-            key_command: "scour-gui".into(),
+            key_command: "scour-open".into(),
             ..Default::default()
         };
         assert_eq!(app.panel_lines(), 0, "nothing to walk and nothing to press");
@@ -908,7 +908,7 @@ mod tests {
         app.keyed(
             "GNOME".into(),
             Some("super+f".into()),
-            "scour-gui".into(),
+            "scour-open".into(),
             true,
             String::new(),
             false,
@@ -921,7 +921,7 @@ mod tests {
         app.keyed(
             "GNOME".into(),
             None,
-            "scour-gui".into(),
+            "scour-open".into(),
             true,
             "not a modifier: hyper".into(),
             false,
@@ -934,7 +934,7 @@ mod tests {
         app.keyed(
             "KDE".into(),
             Some("super+f".into()),
-            "scour-gui".into(),
+            "scour-open".into(),
             true,
             String::new(),
             true,

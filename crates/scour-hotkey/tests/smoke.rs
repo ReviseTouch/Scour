@@ -116,7 +116,7 @@ fn a_sandbox_and_an_unknown_desktop_can_only_name_the_command() {
     assert_eq!(
         other.status(),
         Ok(Status::CannotBind {
-            command: "scour-gui".into()
+            command: "scour-open".into()
         })
     );
     assert_eq!(other.bind(&key("super+f")), Err(Error::Unsupported));
@@ -125,7 +125,7 @@ fn a_sandbox_and_an_unknown_desktop_can_only_name_the_command() {
 #[test]
 fn the_command_is_the_window_beside_this_executable_when_there_is_one() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let gui = dir.path().join("scour-gui");
+    let gui = dir.path().join("scour-open");
     std::fs::write(&gui, "").expect("write");
     let tools = Tools {
         exe: Some(dir.path().join("scour-tui")),
@@ -136,7 +136,7 @@ fn the_command_is_the_window_beside_this_executable_when_there_is_one() {
         exe: Some(dir.path().join("elsewhere").join("scour-tui")),
         ..Tools::default()
     };
-    assert_eq!(alone.command(), "scour-gui");
+    assert_eq!(alone.command(), "scour-open");
 }
 
 /// Writing a script and starting one are one race: a fork on another test's
@@ -198,7 +198,7 @@ fn gnome_bind_read_rebind_clear() {
     let db = std::fs::read_to_string(dir.path().join("db")).expect("db");
     assert!(db.contains("binding=<Super>f"), "{db}");
     assert!(db.contains("name=Scour"), "{db}");
-    assert!(db.contains("command=scour-gui"), "{db}");
+    assert!(db.contains("command=scour-open"), "{db}");
     assert!(
         db.contains("custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/scour/']"),
         "{db}"
