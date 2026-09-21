@@ -3832,6 +3832,14 @@
   /* What no other frontend can act on. Merged key by key under `web`. */
   const keepView = (patch) => keep({ view: { web: patch } });
 
+  /* The window's outer size, which is what a browser's --window-size sets, so
+     the launcher opens the next window the way this one was left. */
+  let sizeTimer = 0;
+  addEventListener("resize", () => {
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => keepView({ size: [outerWidth, outerHeight] }), 600);
+  });
+
   /* Applied to a window that has already drawn itself with defaults. */
   function applySettings(s) {
     const oldSort = sortKey;

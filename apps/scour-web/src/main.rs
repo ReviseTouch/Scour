@@ -139,6 +139,20 @@ fn main() -> Result<()> {
 
     let _ = QUICKLOOK.set(scour_preview::quicklook(args.quicklook.as_deref()));
 
+    // The size the page was last left at, said before the URL so a launcher
+    // reading this log has it by the time it has the address: scour-app
+    // starts the browser at it. Nothing said when no service answers yet.
+    if let Ok(Response::Settings(s)) = call(&client, Request::Settings {})
+        && let Some(size) = s.view.get("web").and_then(|w| w.get("size"))
+        && let (Some(w), Some(h)) = (
+            size.get(0).and_then(serde_json::Value::as_u64),
+            size.get(1).and_then(serde_json::Value::as_u64),
+        )
+        && w > 0
+        && h > 0
+    {
+        eprintln!("scour-web: window {w}x{h}");
+    }
     eprintln!("scour-web: {url}");
     eprintln!("scour-web: the token is per run — restarting invalidates the link");
     // Said because having none is the ordinary case and looks like a fault.

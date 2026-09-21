@@ -61,6 +61,26 @@ if [[ -z $url ]]; then
     exit 1
 fi
 
+# The size the page was last left at, said by the bridge before the URL; on a
+# first run most of the screen, and a plain default where no screen can be asked.
+size=$(grep -oE 'window [0-9]+x[0-9]+' "$log" | head -1 | cut -d' ' -f2 || true)
+if [[ -z $size ]]; then
+    # A first window: most of the screen. GNOME says its current mode and the
+    # scale over it, and a browser's --window-size is in logical pixels.
+    mode=$(gdbus call --session --dest org.gnome.Mutter.DisplayConfig \
+        --object-path /org/gnome/Mutter/DisplayConfig \
+        --method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null \
+        | grep -oE "\('[0-9]+x[0-9]+@[^']*', [0-9]+, [0-9]+, [0-9.]+, [0-9.]+, [^)]*'is-current': <true>" \
+        | head -1 || true)
+    if [[ -n $mode ]]; then
+        read -r w h scale <<<"$(printf '%s' "$mode" | sed -E "s/^\('[^']*', ([0-9]+), ([0-9]+), [0-9.]+, ([0-9.]+),.*/\1 \2 \3/")"
+        size=$(awk -v w="$w" -v h="$h" -v s="$scale" 'BEGIN { printf "%dx%d", w / s * 0.82, h / s * 0.82 }')
+    else
+        size=1280x840
+    fi
+fi
+size=${size/x/,}
+
 browser=""
 for b in chromium google-chrome-stable google-chrome brave vivaldi; do
     if command -v "$b" >/dev/null; then browser=$b; break; fi
@@ -111,6 +131,7 @@ start_window() {
     local began=$SECONDS
     "$browser" \
         --app="$url" \
+        --window-size="$size" \
         "${WAYLAND_ARGS[@]}" \
         --class=scour \
         --user-data-dir="$PROFILE" \
