@@ -107,7 +107,7 @@ pub struct Palette {
     /// The row under the pointer.
     pub hover: Rgba,
     /// What a menu draws on the one item that changes something. Not an error
-    /// colour: it marks the wastebasket item before a hand gets there.
+    /// colour: it marks the trash item before a hand gets there.
     pub danger: Rgba,
     /// The time spectrum, newest to oldest. Six bands, and rows are stored in
     /// date order, so the spectrum runs unbroken down the list.

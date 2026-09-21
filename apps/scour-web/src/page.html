@@ -4351,8 +4351,8 @@
 
       case "trash": {
         const said = many
-          ? T("Move {n} to the wastebasket", { n: fmt(picked.length) })
-          : T("Move to the wastebasket");
+          ? T("Move {n} to trash", { n: fmt(picked.length) })
+          : T("Move to trash");
         if (!confirm(said + "\n\n" + picked.slice(0, 8).join("\n") +
                      (picked.length > 8 ? "\n…" : ""))) return;
         try {
@@ -4363,7 +4363,7 @@
           q.dispatchEvent(new Event("input", { bubbles: true }));
           flash(r.refused && r.refused.length
             ? T("{n} could not be moved", { n: fmt(r.refused.length) })
-            : T("{n} moved to the wastebasket", { n: fmt(r.gone) }));
+            : T("{n} moved to trash", { n: fmt(r.gone) }));
         } catch (err) {
           flash(String(err.message || err));
         }

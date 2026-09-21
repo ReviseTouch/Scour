@@ -1713,7 +1713,7 @@ fn main() -> Result<()> {
                     let title = t(
                         &cat_now,
                         if id == "trash" {
-                            "Move to the wastebasket"
+                            "Move to trash"
                         } else {
                             "Open all {n}…"
                         },
@@ -1812,7 +1812,7 @@ fn main() -> Result<()> {
             recheck(&addr, paths);
             w.set_hint(match refused {
                 Some(why) => why.into(),
-                None => t(&cat_now, "{n} moved to the wastebasket")
+                None => t(&cat_now, "{n} moved to trash")
                     .replace("{n}", &grouped(gone as u64))
                     .into(),
             });
@@ -3811,7 +3811,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
             "",
             "  Enter           open        Ctrl+Enter   open its folder",
             "  Space           details     Alt+↓        search this folder",
-            "  F2              rename      Delete       to the wastebasket",
+            "  F2              rename      Delete       to trash",
             "  Ctrl+C          copy path   Ctrl+Shift+C copy name",
             "  ↑ ↓ PgUp PgDn   move        Home End     first, last",
             "  Escape          clear the selection, or close this",

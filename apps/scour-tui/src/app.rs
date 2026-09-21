@@ -1594,7 +1594,7 @@ impl App {
         self.note = match refused {
             Some(why) => why,
             None => self
-                .say("{n} moved to the wastebasket")
+                .say("{n} moved to trash")
                 .replace("{n}", &gone.to_string()),
         };
         Want::Recheck(paths)

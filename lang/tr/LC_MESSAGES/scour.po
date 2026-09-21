@@ -1289,7 +1289,7 @@ msgstr "Dosyayı kopyala"
 msgid "Rename…"
 msgstr "Yeniden adlandır…"
 
-msgid "Move to the wastebasket"
+msgid "Move to trash"
 msgstr "Çöp kutusuna taşı"
 
 msgid "Details"
@@ -1307,7 +1307,7 @@ msgstr "{n} dosyayı kopyala"
 msgid "Export as CSV…"
 msgstr "CSV olarak ver…"
 
-msgid "Move {n} to the wastebasket"
+msgid "Move {n} to trash"
 msgstr "{n} satırı çöp kutusuna taşı"
 
 msgid "name copied"
@@ -1319,7 +1319,7 @@ msgstr "{n} ad kopyalandı"
 msgid "no extension to search for"
 msgstr "aranacak bir uzantı yok"
 
-msgid "{n} moved to the wastebasket"
+msgid "{n} moved to trash"
 msgstr "{n} öğe çöp kutusuna taşındı"
 
 msgid "{n} could not be moved"
@@ -1453,7 +1453,7 @@ msgstr "  Enter           aç          Ctrl+Enter   klasörünü aç"
 msgid "  Space           details     Alt+↓        search this folder"
 msgstr "  Boşluk          ayrıntı     Alt+↓        bu klasörde ara"
 
-msgid "  F2              rename      Delete       to the wastebasket"
+msgid "  F2              rename      Delete       to trash"
 msgstr "  F2              adlandır    Delete       çöp kutusuna"
 
 msgid "  Ctrl+C          copy path   Ctrl+Shift+C copy name"

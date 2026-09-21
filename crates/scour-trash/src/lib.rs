@@ -1,4 +1,4 @@
-//! The desktop's wastebasket: <https://specifications.freedesktop.org/trash-spec/>.
+//! The desktop's trash: <https://specifications.freedesktop.org/trash-spec/>.
 //! A deletion is a move, so a wrong row is a mistake the file manager can undo.
 //! `$XDG_DATA_HOME/Trash` for the home filesystem, `$topdir/.Trash/$uid` or
 //! `$topdir/.Trash-$uid` for another, because the move must be a rename. A name
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// Why a file could not be sent to the trash.
 #[derive(Debug)]
 pub enum Error {
-    /// There is no wastebasket to move it to on this platform.
+    /// There is no trash to move it to on this platform.
     Unsupported,
     /// There is nowhere to put it: no writable trash for this filesystem.
     NoTrash(PathBuf),
@@ -25,7 +25,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Unsupported => write!(f, "this platform has no wastebasket"),
+            Error::Unsupported => write!(f, "this platform has no trash"),
             Error::NoTrash(p) => write!(f, "no trash directory for {}", p.display()),
             Error::Missing(p) => write!(f, "{} is not there", p.display()),
             Error::Unnamed(p) => write!(f, "{} has no name to trash", p.display()),
@@ -50,7 +50,7 @@ pub fn trash(path: &Path) -> Result<PathBuf, Error> {
 }
 
 #[cfg(unix)]
-/// [`trash`], with the home wastebasket named rather than looked up — so a test
+/// [`trash`], with the home trash named rather than looked up — so a test
 /// need not set the process-wide `XDG_DATA_HOME` its neighbours also read.
 fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
     let path = absolute(path);
@@ -412,7 +412,7 @@ mod tests {
     }
 }
 
-/// Not implemented off Unix: Windows and macOS reach their own wastebaskets
+/// Not implemented off Unix: Windows and macOS reach their own trash
 /// through `SHFileOperation` and `NSFileManager`, not this specification. Faces
 /// ask [`can_trash`] first and leave the item out of the menu.
 #[cfg(not(unix))]

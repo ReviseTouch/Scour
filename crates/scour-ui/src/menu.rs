@@ -51,7 +51,7 @@ pub struct Item {
 
 /// The whole menu, in the order it is drawn. Order is meaning: the first group
 /// is under the pointer when the menu opens, and a rule sits before the
-/// wastebasket so a travelling hand stops short of it.
+/// trash so a travelling hand stops short of it.
 pub const ITEMS: &[Item] = &[
     // ---- one row: open ---------------------------------------------------
     Item {
@@ -185,7 +185,7 @@ pub const ITEMS: &[Item] = &[
     },
     Item {
         id: "trash",
-        msgid: "Move to the wastebasket",
+        msgid: "Move to trash",
         key: "Delete",
         group: 3,
         weight: Weight::Careful,
@@ -259,7 +259,7 @@ pub const ITEMS: &[Item] = &[
     },
     Item {
         id: "trash",
-        msgid: "Move {n} to the wastebasket",
+        msgid: "Move {n} to trash",
         key: "Delete",
         group: 2,
         weight: Weight::Careful,
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(trash.len(), 2, "one for a row, one for a selection");
         for t in trash {
             assert_eq!(t.weight, Weight::Careful);
-            assert!(t.msgid.contains("wastebasket"), "{}", t.msgid);
+            assert!(t.msgid.contains("trash"), "{}", t.msgid);
         }
     }
 

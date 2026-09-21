@@ -1079,7 +1079,7 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     }
 }
 
-/// Send rows to the wastebasket, and tell the index straight away. Trashable
+/// Send rows to the trash, and tell the index straight away. Trashable
 /// only if the index holds the path; the move is this process's, with this
 /// user's permissions, and [`Request::Recheck`] only re-reads.
 fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
