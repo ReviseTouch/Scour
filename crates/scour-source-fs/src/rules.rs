@@ -321,13 +321,17 @@ pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
             ]
             .map(String::from),
         );
-        dirs.push(".Trash-1000".into());
+        // The trash on a removable volume carries the uid of whoever emptied it there.
+        // SAFETY: `getuid` reads a field of the process and cannot fail.
+        let uid = unsafe { libc::getuid() };
+        dirs.push(format!(".Trash-{uid}"));
     }
     #[cfg(target_os = "macos")]
     {
         paths.extend(["/dev", "/System/Volumes/Data/private", "/private/var/vm"].map(String::from));
         dirs.push(".Spotlight-V100".into());
         dirs.push(".fseventsd".into());
+        dirs.push("Library/Caches".into());
     }
     #[cfg(windows)]
     {
@@ -345,11 +349,15 @@ pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
     // Everywhere: churn, not content. `target` is 852,437 of 2,986,545 entries
     // here, and one `cargo test` queued 3,935 changes at 67% of a core. `build`,
     // `dist` and `out` stay out of it: those are names people use for real work.
+    // `.cache` is what XDG defines as regenerable: 337,565 rows here, a third of
+    // them browser and thumbnail churn. The home trash is a sequence, not a name.
     dirs.extend(
         [
             ".git/objects",
             "target",
             "node_modules",
+            ".cache",
+            ".local/share/Trash",
             "__pycache__",
             ".venv",
             ".mypy_cache",
@@ -535,6 +543,49 @@ mod tests {
         assert!(
             paths.iter().all(|p| p.starts_with('/') || p.contains(':')),
             "{paths:?}"
+        );
+        assert!(dirs.iter().any(|d| d == ".cache"));
+        assert!(dirs.iter().any(|d| d == ".local/share/Trash"));
+        #[cfg(target_os = "linux")]
+        {
+            let mine = format!(".Trash-{}", unsafe { libc::getuid() });
+            assert!(
+                dirs.iter().any(|d| d == &mine),
+                "the trash is named after this uid"
+            );
+            assert!(!dirs.iter().any(|d| d == ".Trash-1000") || mine == ".Trash-1000");
+        }
+    }
+
+    /// Caches and the two trashes go, by name anywhere and by sequence in the home.
+    #[test]
+    fn caches_and_trashes_are_skipped_by_default() {
+        let (paths, dirs, files) = platform_defaults();
+        let r = Rules::from_options(&ScanOptions {
+            exclude_paths: paths,
+            exclude_dirs: dirs,
+            exclude_files: files,
+            ..Default::default()
+        });
+        assert!(r.excludes("/home/u/.cache", ".cache", true));
+        assert!(r.excludes_path("/home/u/.cache/mozilla/firefox/cache2/entries/x"));
+        assert!(
+            r.excludes("/home/u/proj/.cache", ".cache", true),
+            "a project's cache too"
+        );
+        assert!(r.excludes("/home/u/.local/share/Trash", "Trash", true));
+        assert!(r.excludes_path("/home/u/.local/share/Trash/files/old.pdf"));
+        assert!(
+            !r.excludes("/home/u/.local/share", "share", true),
+            "only the trash under it"
+        );
+        assert!(
+            !r.excludes("/home/u/Trash", "Trash", true),
+            "a folder somebody named Trash stays"
+        );
+        assert!(
+            !r.excludes("/home/u/cache", "cache", true),
+            "so does one named cache"
         );
     }
 }
