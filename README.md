@@ -261,6 +261,20 @@ Turkish letters `i`, `ı`, `I` and `İ` are treated as one. Parsing does not
 fail: an unrecognised field is searched for as text, and `scour explain
 "<query>"` shows how a query was read.
 
+## Report
+
+The report answers "where are the bytes" for a folder, and every face draws the
+same picture from the same numbers: one bar for the scope's bytes by age with a
+legend, one bar for where the bytes are, the heaviest folders and the rest, then
+a row a folder with its share behind the name, its own age strip, size, share and
+files; a ring for the kinds, six and the rest, whose legend opens the search with
+`kind:`; and the largest files as bars. The window and the browser page draw them
+in pixels, the terminal face in block cells, and at a terminal `scour du` and
+`scour facets` draw the strip and the bars too, while into a pipe they print the
+table they always did. The shares come from one crate, `scour-chart`, which
+rounds so a legend adds up to a hundred; the page's JavaScript copy is checked
+against it on every test run.
+
 ## Duplicates
 
 The browser face's report tab lists files that share a size, largest saving

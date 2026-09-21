@@ -253,6 +253,20 @@ kind:image dm:today           bugün değişen görseller
 `I` ve `İ` tek harf sayılır. Ayrıştırma hata vermez: tanınmayan bir alan metin
 olarak aranır, `scour explain "<sorgu>"` sorgunun nasıl okunduğunu gösterir.
 
+## Rapor
+
+Rapor bir klasör için "baytlar nerede" sorusunu cevaplar ve her yüz aynı resmi
+aynı sayılardan çizer: kapsamın baytlarını yaşa göre gösteren bir şerit ve
+efsanesi; baytların nerede olduğunu gösteren bir şerit, en ağır klasörler ve
+kalanı; sonra klasör başına bir satır, adın arkasında payı, kendi yaş şeridi,
+boyutu, payı ve dosya sayısı; türler için altı dilim ve kalanı gösteren, efsanesi
+aramayı `kind:` ile açan bir halka; ve çubuk olarak en büyük dosyalar. Pencere ve
+tarayıcı sayfası bunları piksel, uçbirim yüzü blok hücreleriyle çizer; uçbirimde
+`scour du` ve `scour facets` de şeridi ve çubukları çizer, boruya yazarken her
+zamanki tabloyu basar. Paylar tek bir crate'ten gelir, `scour-chart`; efsane
+yüze tamamlanacak şekilde yuvarlar ve sayfanın JavaScript kopyası her test
+koşusunda onunla karşılaştırılır.
+
 ## Yinelenen dosyalar
 
 Tarayıcı yüzünün rapor sekmesi aynı boyuttaki dosyaları, en çok yer
