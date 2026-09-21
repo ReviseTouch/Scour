@@ -111,7 +111,31 @@ cargo test -p scour-source-fs --release directory_map_memory_probe -- --ignored 
 
 Same output size and fingerprint before and after.
 
-## Where the design numbers come from
+## A spinning disk
+
+Ubuntu 24.04 guest, 300,000 files in 2,705 directories on a virtio disk that
+QEMU throttles to a fixed IOPS ceiling (`block_set_io_throttle`; 120 is a
+7200 rpm class, 60 a 5400 rpm laptop), the index on an unthrottled disk, cold
+cache, two runs each (2026-09-21):
+
+| | unthrottled | 120 IOPS | 60 IOPS |
+|---|---:|---:|---:|
+| first walk, wall | 2.9 s | 46.4 s | 94.6 s |
+| reconcile with a warm index | — | 45.7 s | — |
+| reboot → search answers | — | 54 s | 101 s |
+| a 4 KiB read on the same disk, median / p90, idle | 3 / 12 ms | 2 / 12 ms | 4 / 12 ms |
+| the same during the walk, one thread | 1 / — ms | 33 / 160 ms | 34 / 290 ms |
+
+The walk reads about 100 MB of metadata whatever the setting; wall time is a
+function of the IOPS ceiling alone. A warm index does not help: the reconcile
+costs what the first walk cost, so `scan.on_start` on a spinning disk is paid
+at every start. Walker threads under a seek limit (`[scan] threads` 1, 2, 4,
+8): wall 46.2–46.9 s, flat; the read probe's p90 160 → 290 → 400 → 820 ms.
+One thread is the right number for the disk's other users, not for the walk.
+`IOSchedulingPriority` did nothing under the `none` scheduler, as under kyber.
+Not measured: real seek latency (the throttle is a uniform tax, so the
+multi-thread penalty is understated), the index on the slow disk, a watched
+steady state.
 
 * Newest-first storage: the default view went from 14.8 ms to 0.022 ms in the
   prototype.

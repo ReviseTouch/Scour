@@ -25,11 +25,11 @@ pub enum Medium {
 impl Medium {
     /// How many walker threads this mount is worth — capped by the one indexing
     /// consumer, not the device: `/mnt/depo`'s 1,565,781 entries cost 13.3 core-s at
-    /// two and 176.3 at twenty. Network and spinning are unmeasured guesses.
+    /// two and 176.3 at twenty. Spinning is measured (docs/MEASUREMENTS.md); network is a guess.
     pub fn threads(self, cores: usize) -> usize {
         match self {
             Medium::Solid | Medium::Memory => 2,
-            // One seek at a time; concurrency here is head-thrashing.
+            // No wall time from threads under a seek limit; a read's p90 goes 160 → 820 ms from 1 to 8.
             Medium::Spinning => 1,
             // Some concurrency hides round trips; too much floods an unseen link.
             Medium::Network => 4,
