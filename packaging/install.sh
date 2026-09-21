@@ -2,18 +2,39 @@
 # Put Scour where the desktop can find it, without asking for a password.
 #
 # **Everything here is unprivileged and reversible.** Binaries go to
-# `~/.local/bin`, the menu entry and its icon to `~/.local/share`. The one
-# thing that needs root — the fanotify mark that makes watching a whole
-# filesystem cheap — is printed at the end rather than done, because a script
-# that asks for a password is a script nobody should run without reading, and
-# Scour works without it.
+# `~/.local/bin`, the menu entry and its icons to `~/.local/share`, and the
+# user unit — if you say yes — to `~/.config/systemd/user`. The one thing that
+# needs root — the fanotify mark that makes watching a whole filesystem cheap
+# — is printed at the end rather than done, because a script that asks for a
+# password is a script nobody should run without reading, and Scour works
+# without it.
+#
+#   ./install.sh              install, and offer to start it with your session
+#   ./install.sh --yes        ...and take yes for an answer
+#   ./install.sh --no-service install the files only; print how to start it
+#
+# With no terminal on standard input nothing is asked: the files are
+# installed and the hint is printed, which is what a pipe or a package
+# postinst wants.
 set -eu
+
+service=ask
+for a in "$@"; do
+    case "$a" in
+        --no-service) service=no ;;
+        -y|--yes) service=yes ;;
+        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "install.sh: unknown option $a" >&2; exit 2 ;;
+    esac
+done
+if [ "$service" = ask ] && [ ! -t 0 ]; then service=no; fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 bin=${PREFIX:-$HOME/.local}/bin
 share=${PREFIX:-$HOME/.local}/share
+icons=$share/icons/hicolor
 
-mkdir -p "$bin" "$share/applications" "$share/icons/hicolor/scalable/apps"
+mkdir -p "$bin" "$share/applications" "$icons/scalable/apps"
 
 for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
     [ -f "$here/bin/$b" ] || continue
@@ -22,9 +43,18 @@ for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
 done
 install -m755 "$here/scripts/scour-open" "$bin/scour-open"
 install -m644 "$here/packaging/scour.desktop" "$share/applications/scour.desktop"
-install -m644 "$here/assets/scour.svg" "$share/icons/hicolor/scalable/apps/scour.svg"
+install -m644 "$here/assets/scour.svg" "$icons/scalable/apps/scour.svg"
+# The raster sizes as well: GNOME's shell reads the SVG, but KDE's task
+# manager, XFCE, LXQt and the older docks look for a PNG at the size they
+# draw and show nothing at all when there is none.
+for png in "$here"/assets/icons/hicolor/*/apps/scour.png; do
+    [ -f "$png" ] || continue
+    size=$(basename "$(dirname "$(dirname "$png")")")
+    mkdir -p "$icons/$size/apps"
+    install -m644 "$png" "$icons/$size/apps/scour.png"
+done
 update-desktop-database "$share/applications" 2>/dev/null || true
-gtk-update-icon-cache -qtf "$share/icons/hicolor" 2>/dev/null || true
+gtk-update-icon-cache -qtf "$icons" 2>/dev/null || true
 
 # A key to open it, on the desktops that let a script set one. Super+F unless
 # `SCOUR_KEY` says otherwise; `SCOUR_KEY=none` skips this. Pressing it again
@@ -59,6 +89,51 @@ PY
     fi
 fi
 
+# --- start it with the session -------------------------------------------
+#
+# Never when a *system* unit is already running: two writers race for the
+# index lock and the loser exits in a restart loop.
+units=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+system_unit=""
+user_systemd=no
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user show-environment >/dev/null 2>&1; then user_systemd=yes; fi
+    if systemctl is-active --quiet scour.service 2>/dev/null; then
+        system_unit=scour.service
+    else
+        system_unit=$(systemctl list-units --state=active --no-legend 'scour@*.service' 2>/dev/null | awk '{print $1; exit}')
+    fi
+fi
+
+started=skipped
+if [ "$user_systemd" = yes ] && [ -z "$system_unit" ] && [ "$service" != no ]; then
+    answer=y
+    if [ "$service" = ask ]; then
+        echo
+        printf '  Start Scour with your session now (a systemd user service)? [Y/n] '
+        if ! read -r answer; then answer=y; fi
+        [ -n "$answer" ] || answer=y
+    fi
+    case "$answer" in
+        [Nn]*) ;;
+        *)
+            install -Dm644 "$here/packaging/scourd.service" "$units/scourd.service"
+            systemctl --user daemon-reload
+            if systemctl --user enable --now scourd.service; then started=waiting; fi
+            ;;
+    esac
+fi
+# Enabled is not running, and running is not answering. Ask the socket.
+if [ "$started" = waiting ]; then
+    started=late
+    n=0
+    while [ "$n" -lt 10 ]; do
+        if "$bin/scour" status >/dev/null 2>&1; then started=yes; break; fi
+        sleep 1
+        n=$((n + 1))
+    done
+fi
+
 echo
 case ":$PATH:" in
     *":$bin:"*) ;;
@@ -67,18 +142,37 @@ esac
 
 cat <<'TXT'
 
-  Start it:
+  Use it:
 
-      scourd &            # indexes your home directory on first run
       scour rapor         # search from the terminal
       scour-gui           # the window   (also in the application menu)
       scour-tui           # the terminal face
       scour-web           # opens in a browser
+TXT
+
+case "$started" in
+    yes) echo
+         echo "  scourd is running and indexing your home directory now." ;;
+    late) echo
+          echo "  scourd was enabled but did not answer within 10 s — it may still be"
+          echo "  starting. Look: journalctl --user -u scourd.service -e" ;;
+    *) if [ -n "$system_unit" ]; then
+           echo
+           echo "  $system_unit is already running; nothing to start."
+       else
+           cat <<'TXT'
+
+      scourd &            # indexes your home directory on first run
 
   Start it with your session (optional):
 
       install -Dm644 packaging/scourd.service ~/.config/systemd/user/scourd.service
       systemctl --user enable --now scourd.service
+TXT
+       fi ;;
+esac
+
+cat <<'TXT'
 
   Watching, and why it is worth a password once:
 
@@ -87,10 +181,10 @@ cat <<'TXT'
       take longer to appear. The mark needs root once — the system unit:
 
           sudo bash packaging/install-service.sh     # [--user NAME] [ROOT...]
-          systemctl start scour.service
 
-      Read that file first — it explains what the privilege is for and where it
-      is dropped.
+      It prints the unit it installed and how to start it. Read that file
+      first — it explains what the privilege is for and where it is dropped.
+      Install one or the other, never both.
 
 TXT
 if [ -n "$bound" ]; then

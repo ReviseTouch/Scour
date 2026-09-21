@@ -1,25 +1,54 @@
 #!/usr/bin/env bash
-# Assemble the Linux tarball from target/release, the way `install.sh` expects it.
+# Assemble the Linux tarball from built binaries, the way `install.sh` expects it.
 #
 #   scripts/release            → dist/scour-<version>-linux-x86_64.tar.gz + SHA256SUMS
+#   scripts/release --container  take the binaries from target/container/release
+#   scripts/release --from DIR   take them from DIR
 #
-# Build first: `cargo build --release --workspace`. Nothing here compiles.
+# Nothing here compiles. Build first, with either of:
+#
+#   cargo build --release --workspace     # this machine's glibc, this machine only
+#   scripts/release-build                 # a container's old glibc, for shipping
+#
+# `SCOUR_BIN_DIR` does the same as `--from`.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+from="${SCOUR_BIN_DIR:-$here/target/release}"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --container) from="$here/target/container/release"; shift ;;
+        --from) from="$2"; shift 2 ;;
+        -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "release: unknown option $1" >&2; exit 2 ;;
+    esac
+done
+
 version="$(grep -m1 '^version' "$here/Cargo.toml" | sed 's/.*"\(.*\)"/\1/')"
 name="scour-$version-linux-x86_64"
 dist="$here/dist"; stage="$dist/$name"
 rm -rf "$stage"; mkdir -p "$stage/bin" "$stage/assets" "$stage/scripts" "$stage/packaging"
 for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
-    [ -x "$here/target/release/$b" ] || { echo "missing target/release/$b — build first" >&2; exit 1; }
-    install -m755 "$here/target/release/$b" "$stage/bin/$b"
+    [ -x "$from/$b" ] || { echo "missing $from/$b — build first" >&2; exit 1; }
+    install -m755 "$from/$b" "$stage/bin/$b"
 done
 install -m755 "$here/packaging/install.sh" "$stage/install.sh"
 install -m755 "$here/scripts/scour-open" "$stage/scripts/scour-open"
-install -m644 "$here/packaging/scour.desktop" "$here/packaging/scour.service" "$here/packaging/scourd.service" "$stage/packaging/"
+# Whatever packaging/ currently holds, because install.sh's closing text tells
+# the reader to run install-service.sh out of this directory. The system unit
+# has been both `scour.service` and `scour@.service`; ship the one that exists.
+for f in scour.desktop scourd.service scour.service 'scour@.service' \
+         install-service.sh 50-scour-service.rules; do
+    if [ -f "$here/packaging/$f" ]; then
+        install -m644 "$here/packaging/$f" "$stage/packaging/$f"
+    fi
+done
+[ -f "$stage/packaging/scour.desktop" ] || { echo "missing packaging/scour.desktop" >&2; exit 1; }
 install -m644 "$here/assets/scour.svg" "$stage/assets/scour.svg"
+# The raster sizes: the panels that cannot draw an SVG show nothing without them.
+"$here/scripts/icons" "$stage/assets/icons" >/dev/null
 install -m644 "$here/README.md" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
 tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
 rm -rf "$stage"
 ( cd "$dist" && sha256sum "$name.tar.gz" > SHA256SUMS && [ -f "scour-$version-windows-x86_64.zip" ] && sha256sum "scour-$version-windows-x86_64.zip" >> SHA256SUMS || true )
-echo "$dist/$name.tar.gz  ($(du -h "$dist/$name.tar.gz" | cut -f1))"
+echo "$dist/$name.tar.gz  ($(du -h "$dist/$name.tar.gz" | cut -f1))  from $from"

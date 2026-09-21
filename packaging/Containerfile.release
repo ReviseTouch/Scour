@@ -1,0 +1,36 @@
+# The build image for a release tarball: an old glibc, and the -dev packages
+# the window needs.
+#
+# **A binary's glibc floor is decided by the machine that built it.** Built
+# here, on 2.44, the tarball will not start on Ubuntu 22.04 (2.35) or Debian
+# 12 (2.36) — which is what the first tester ran into. Debian 11 is 2.31, old
+# enough for every distribution still getting security updates, so that is the
+# base. Nothing about the build is different; only the libc it links against.
+#
+# Used by `scripts/release-build`, which also picks the base:
+#
+#   podman build -f packaging/Containerfile.release \
+#       --build-arg BASE=docker.io/library/rust:1-bullseye -t scour-release .
+ARG BASE=docker.io/library/rust:1-bullseye
+FROM ${BASE}
+
+# fontconfig is the one system library the binaries really link:
+# `yeslogic-fontconfig-sys`, reached from Slint through fontique. The rest are
+# here because winit's Wayland and X11 paths use pkg-config when they are not
+# dlopening, and finding that out on a release build costs an hour. gcc and ar
+# come with the image and `apps/scour-gui/build.rs` needs them for the shim
+# that pins acosf/atan2f to an old symbol version.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libfontconfig1-dev \
+        libwayland-dev \
+        libxkbcommon-dev libxkbcommon-x11-dev \
+        libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+        libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# The source is mounted read-only at /src; the target directory and the cargo
+# caches are mounted from the host, so a second run is incremental.
+ENV CARGO_HOME=/cargo CARGO_TARGET_DIR=/target
+RUN mkdir -p /cargo /target && chmod 1777 /cargo /target
+WORKDIR /src

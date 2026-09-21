@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Build the seven release binaries against a glibc old enough to ship.
+#
+#   scripts/release-build                  # Debian 11 (glibc 2.31)
+#   scripts/release-build --base docker.io/library/rust:1-bookworm
+#   scripts/release-build --shell          # a prompt in the image
+#   scripts/release-build --check          # report the floor, build nothing
+#
+# **The floor is decided by the machine that builds.** On this host that is
+# whatever glibc it runs, and a binary linked against 2.39 will not start on
+# Ubuntu 22.04. So the release is built in a container instead, and the only
+# thing that container changes is the libc.
+#
+# Binaries land in `target/container/release`; `scripts/release --container`
+# packs those. The host's own `target/release` and toolchain are untouched.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+base="${SCOUR_RELEASE_BASE:-docker.io/library/rust:1-bullseye}"
+cargo_home="${SCOUR_CARGO_HOME:-${CARGO_HOME:-$HOME/.cargo}}"
+target="$root/target/container"
+bins=(scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp)
+mode=build
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --base) base="$2"; shift 2 ;;
+        --shell) mode=shell; shift ;;
+        --check) mode=check; shift ;;
+        -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "release-build: unknown option $1" >&2; exit 2 ;;
+    esac
+done
+
+# The highest glibc symbol version a binary asks for — the oldest system it
+# can start on. The answer, not a guess about the base image.
+floor() {
+    local b
+    printf '  %-12s %s\n' binary 'needs at most'
+    for b in "${bins[@]}"; do
+        if [ -x "$target/release/$b" ]; then
+            printf '  %-12s %s\n' "$b" \
+                "$(objdump -T "$target/release/$b" | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1)"
+        else
+            printf '  %-12s %s\n' "$b" '(missing)'
+        fi
+    done
+}
+
+if [ "$mode" = check ]; then
+    command -v objdump >/dev/null || { echo "release-build: objdump is missing (binutils)" >&2; exit 1; }
+    floor
+    exit 0
+fi
+
+engine="$(command -v podman || command -v docker)" || {
+    echo "release-build: neither podman nor docker is installed" >&2; exit 1; }
+tag="localhost/scour-release:$(printf '%s' "${base##*/}" | tr ':' '-')"
+
+mkdir -p "$target" "$cargo_home/registry" "$cargo_home/git"
+
+"$engine" build --build-arg "BASE=$base" \
+    -f "$root/packaging/Containerfile.release" -t "$tag" "$root/packaging"
+
+# Source read-only and `--locked`: a release build reads the lock file, never
+# rewrites it. Rootless podman maps container root to this user, so what lands
+# in target/container belongs to us; `--user` keeps that true under docker.
+run=("$engine" run --rm
+    -v "$root:/src:ro"
+    -v "$target:/target"
+    -v "$cargo_home/registry:/cargo/registry"
+    -v "$cargo_home/git:/cargo/git"
+    -w /src)
+[ "${engine##*/}" = docker ] && run+=(--user "$(id -u):$(id -g)")
+
+if [ "$mode" = shell ]; then
+    exec "${run[@]}" -it "$tag" bash
+fi
+
+"${run[@]}" "$tag" cargo build --release --locked --workspace
+
+for b in "${bins[@]}"; do
+    [ -x "$target/release/$b" ] || { echo "release-build: $b was not built" >&2; exit 1; }
+done
+
+echo
+echo "  built with $base into $target/release"
+command -v objdump >/dev/null && floor
+echo
+echo "  pack it:  scripts/release --container"

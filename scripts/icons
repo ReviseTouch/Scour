@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Rasterise assets/scour.svg into a hicolor tree.
+#
+#   scripts/icons                → target/icons/hicolor/<n>x<n>/apps/scour.png
+#   scripts/icons path/to/out    → path/to/out/hicolor/...
+#
+# GNOME's shell reads the scalable icon; KDE's task manager, XFCE, LXQt and
+# the older docks look for a PNG at the size they draw and show nothing when
+# there is none. Output is generated, never committed — `scripts/release`
+# calls this and puts the tree in the tarball.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+out="${1:-$root/target/icons}"
+svg="$root/assets/scour.svg"
+sizes="16 22 24 32 48 64 128 256 512"
+
+command -v rsvg-convert >/dev/null || {
+    echo "scripts/icons: rsvg-convert is missing (librsvg)" >&2
+    exit 1
+}
+[ -f "$svg" ] || { echo "scripts/icons: no $svg" >&2; exit 1; }
+
+mkdir -p "$out/hicolor/scalable/apps"
+install -m644 "$svg" "$out/hicolor/scalable/apps/scour.svg"
+for n in $sizes; do
+    mkdir -p "$out/hicolor/${n}x${n}/apps"
+    rsvg-convert -w "$n" -h "$n" "$svg" -o "$out/hicolor/${n}x${n}/apps/scour.png"
+    chmod 644 "$out/hicolor/${n}x${n}/apps/scour.png"
+done
+
+echo "$out/hicolor  ($(echo "$sizes" | wc -w) sizes + scalable)"
