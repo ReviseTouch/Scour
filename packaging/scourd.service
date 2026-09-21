@@ -9,7 +9,7 @@
 # On a large one it is not enough, and `scourd` will say so rather than take
 # the whole budget and break the next program that wants a watch. It then
 # reconciles by walking instead — nothing is missed, changes take longer to
-# appear. The fix for that is `packaging/scour.service`, which is a *system*
+# appear. The fix for that is `packaging/scour@.service`, which is a *system*
 # unit and asks for root once. **Install one or the other, never both**: two
 # writers race for the index lock and the loser exits in a restart loop.
 #

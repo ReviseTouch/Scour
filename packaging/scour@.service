@@ -1,0 +1,48 @@
+[Unit]
+# Scour for one account. The instance name is the Unix user name, so
+# `scour@hasan.service` is hasan's: his index, his socket under
+# /run/user/<uid>/scour. Install the template once, enable an instance each.
+#
+# One `FAN_MARK_FILESYSTEM` per superblock is the whole watch, and placing a
+# mark needs CAP_SYS_ADMIN. `scour-watch` is the only program here that ever
+# has it: it marks, reads %i's uid, gid and home out of the password database,
+# drops to that account and *then* execs `~/.local/bin/scourd`, expanded
+# against that home. A path inside a home is only safe because the drop comes
+# first; the helper itself is execed as root, so it stays under root-owned
+# /usr/local/libexec.
+#
+# Without the mark, `scourd` reconciles by walking when a volume's write
+# counter moves: nothing is missed, changes take longer to appear.
+#
+# packaging/install-service.sh writes the two per-instance pieces — the roots
+# to mark in /etc/scour/%i.conf (required: with none, every real filesystem is
+# marked, /efi included), and the ordering after user@<uid>.service, which no
+# specifier can spell, in a scour@%i.service.d drop-in. The per-user unit must
+# be off for that account, or two writers race for the index lock:
+# systemctl --user disable --now scourd.service
+Description=Scour file index for %i
+Documentation=https://github.com/ReviseTouch/Scour
+After=local-fs.target
+
+[Service]
+Type=simple
+# No `-`: an instance nobody was provisioned for fails here rather than mark
+# every filesystem on the machine.
+EnvironmentFile=/etc/scour/%i.conf
+# `$SCOUR_ROOTS` is unquoted on purpose — systemd splits it at whitespace, one
+# argument per root.
+ExecStart=/usr/local/libexec/scour/scour-watch --as %i $SCOUR_ROOTS -- ~/.local/bin/scourd
+# Also the safety net for starting before the runtime directory exists.
+Restart=on-failure
+RestartSec=5
+# The index is derived from the filesystem, so nothing here is worth protecting
+# from a kill -9; what matters is that only one writer exists, which scourd
+# enforces with a lock on its own directory.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+[Install]
+WantedBy=multi-user.target

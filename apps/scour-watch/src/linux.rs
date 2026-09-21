@@ -234,26 +234,9 @@ fn mark(fd: libc::c_int, sb: &Sb) -> bool {
 /// Put the environment back to the invoking user's: dropping the user id is not
 /// enough, since `sudo` leaves `HOME=/root`. The home comes from the password
 /// database, because there is no `SUDO_HOME` and `/home/<name>` is a guess.
-fn restore_environment(uid: u32, gid: u32) {
-    let mut home = String::new();
-    let mut name = String::new();
-    // SAFETY: `getpwuid` returns a pointer into a static buffer that is valid
-    // until the next call, and both strings are copied out before returning.
-    unsafe {
-        let pw = libc::getpwuid(uid);
-        if !pw.is_null() {
-            if !(*pw).pw_dir.is_null() {
-                home = std::ffi::CStr::from_ptr((*pw).pw_dir)
-                    .to_string_lossy()
-                    .into_owned();
-            }
-            if !(*pw).pw_name.is_null() {
-                name = std::ffi::CStr::from_ptr((*pw).pw_name)
-                    .to_string_lossy()
-                    .into_owned();
-            }
-        }
-    }
+fn restore_environment(acct: &Account) {
+    let (uid, home) = (acct.uid, acct.home.clone());
+    let mut name = acct.name.clone();
     if name.is_empty() {
         name = std::env::var("SUDO_USER").unwrap_or_default();
     }
@@ -287,45 +270,50 @@ fn restore_environment(uid: u32, gid: u32) {
             std::env::remove_var(k);
         }
     }
-    let _ = gid;
 }
 
-/// Become the user who invoked `sudo`, irreversibly. Supplementary groups first:
-/// dropping the user id takes away the right to change them. `SUDO_UID`, or
-/// `--as <uid|name>` for a unit file; with neither this refuses rather than stay root.
-fn become_invoker(asked: Option<u32>) -> Result<(u32, u32), String> {
-    let uid: u32 = match asked {
-        Some(uid) => uid,
-        None => std::env::var("SUDO_UID")
-            .map_err(|_| "nobody to drop to — run under sudo or pass --as <uid>".to_string())?
-            .parse()
-            .map_err(|_| "SUDO_UID is not a number".to_string())?,
+/// Become the target account, irreversibly. Supplementary groups first: dropping
+/// the user id takes away the right to change them. `--as <uid|name>` for a unit
+/// file, `SUDO_UID` for a shell; with neither this refuses rather than stay root.
+fn become_invoker(asked: Option<Account>) -> Result<Account, String> {
+    let acct = match asked {
+        Some(a) => a,
+        None => {
+            let uid: u32 = std::env::var("SUDO_UID")
+                .map_err(|_| "nobody to drop to — run under sudo or pass --as <user>".to_string())?
+                .parse()
+                .map_err(|_| "SUDO_UID is not a number".to_string())?;
+            let mut a = account_by_uid(uid).unwrap_or(Account {
+                uid,
+                gid: uid,
+                name: String::new(),
+                home: String::new(),
+            });
+            // What `sudo` says outranks the table: a login can carry another group.
+            if let Some(g) = std::env::var("SUDO_GID").ok().and_then(|g| g.parse().ok()) {
+                a.gid = g;
+            }
+            a
+        }
     };
-    let gid: u32 = match asked {
-        Some(uid) => group_of(uid).unwrap_or(uid),
-        None => std::env::var("SUDO_GID")
-            .ok()
-            .and_then(|g| g.parse().ok())
-            .unwrap_or(uid),
-    };
-    if uid == 0 {
+    if acct.uid == 0 {
         return Err("the target user is root — there is no privilege to drop".into());
     }
     unsafe {
         if libc::setgroups(0, std::ptr::null()) != 0 {
             return Err(format!("setgroups: {}", err()));
         }
-        if libc::setgid(gid) != 0 {
+        if libc::setgid(acct.gid) != 0 {
             return Err(format!("setgid: {}", err()));
         }
-        if libc::setuid(uid) != 0 {
+        if libc::setuid(acct.uid) != 0 {
             return Err(format!("setuid: {}", err()));
         }
-        if libc::geteuid() != uid || libc::setuid(0) == 0 {
+        if libc::geteuid() != acct.uid || libc::setuid(0) == 0 {
             return Err("the privilege was not actually dropped".into());
         }
     }
-    Ok((uid, gid))
+    Ok(acct)
 }
 
 fn usage() {
@@ -334,48 +322,86 @@ fn usage() {
          sudo scour-watch -- <command> [arg...]   every real filesystem\n  \
          sudo scour-watch <path>... -- <command>  only the filesystems under these paths\n  \
          sudo scour-watch --show                  print what would be marked, do nothing\n  \
-         --as <user|uid>                          who to drop to (without sudo: a service unit)"
+         --as <user|uid>                          who to drop to (without sudo: a service unit)\n  \
+         a ~/ in the command is expanded against that account's home directory"
     );
 }
 
-/// `--as <uid|name>`, if it is there: the id to drop to, and the word that
+/// `--as <uid|name>`, if it is there: the account to drop to, and the word that
 /// followed the flag so the path list can leave it out.
-fn user_arg(paths: &[String]) -> Result<(Option<u32>, Option<String>), String> {
+fn user_arg(paths: &[String]) -> Result<(Option<Account>, Option<String>), String> {
     let Some(at) = paths.iter().position(|a| a == "--as") else {
         return Ok((None, None));
     };
     let who = paths
         .get(at + 1)
         .ok_or_else(|| "--as wants a user name or a uid".to_string())?;
-    if let Ok(uid) = who.parse::<u32>() {
-        return Ok((Some(uid), Some(who.clone())));
+    let found = match who.parse::<u32>() {
+        Ok(uid) => account_by_uid(uid),
+        Err(_) => account_by_name(who),
+    };
+    let acct = found.ok_or_else(|| format!("no such user: {who}"))?;
+    Ok((Some(acct), Some(who.clone())))
+}
+
+/// Everything `--as` needs about an account, from one lookup.
+#[derive(Debug)]
+struct Account {
+    uid: u32,
+    gid: u32,
+    name: String,
+    home: String,
+}
+
+/// SAFETY: `getpw*` hand back a pointer into a static buffer that is valid until
+/// the next call, so every field is copied out before this returns.
+unsafe fn read_pw(pw: *const libc::passwd) -> Option<Account> {
+    if pw.is_null() {
+        return None;
     }
-    let uid = uid_of(who).ok_or_else(|| format!("no such user: {who}"))?;
-    Ok((Some(uid), Some(who.clone())))
+    unsafe {
+        Some(Account {
+            uid: (*pw).pw_uid,
+            gid: (*pw).pw_gid,
+            name: owned((*pw).pw_name),
+            home: owned((*pw).pw_dir),
+        })
+    }
 }
 
-/// The numeric id behind a user name, from this machine's own table.
-fn uid_of(name: &str) -> Option<u32> {
-    std::fs::read_to_string("/etc/passwd")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            let mut f = line.split(':');
-            (f.next()? == name).then(|| f.nth(1)?.parse().ok())?
-        })
+/// SAFETY: the pointer is a NUL-terminated C string or null.
+unsafe fn owned(p: *const libc::c_char) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned() }
 }
 
-/// The primary group of a user id, from the same table.
-fn group_of(uid: u32) -> Option<u32> {
-    std::fs::read_to_string("/etc/passwd")
-        .ok()?
-        .lines()
-        .find_map(|line| {
-            let mut f = line.split(':');
-            let _name = f.next()?;
-            let _x = f.next()?;
-            (f.next()?.parse::<u32>().ok()? == uid).then(|| f.next()?.parse().ok())?
-        })
+/// The account behind a name. `getpwnam`, not `/etc/passwd`: a machine several
+/// people share may keep them in LDAP or SSSD, and a unit names them the same way.
+fn account_by_name(name: &str) -> Option<Account> {
+    let c = CString::new(name).ok()?;
+    unsafe { read_pw(libc::getpwnam(c.as_ptr())) }
+}
+
+/// The same entry, found by id.
+fn account_by_uid(uid: u32) -> Option<Account> {
+    unsafe { read_pw(libc::getpwuid(uid)) }
+}
+
+/// `~/x` against the account's own home. A system unit cannot write the home in —
+/// `%h` in one is root's — so the path arrives with the tilde and is resolved
+/// here, from the password database, once the account is known.
+fn expand_home(word: &str, home: &str) -> Result<String, String> {
+    let Some(rest) = word.strip_prefix("~/") else {
+        return Ok(word.to_owned());
+    };
+    if home.is_empty() {
+        return Err(format!(
+            "{word}: that account has no home to expand ~ against"
+        ));
+    }
+    Ok(format!("{}/{rest}", home.trim_end_matches('/')))
 }
 
 pub(crate) fn main() -> ExitCode {
@@ -471,15 +497,31 @@ pub(crate) fn main() -> ExitCode {
     }
 
     // Read before the identity is dropped: `restore_environment` clears these first.
-    let (uid, gid) = match become_invoker(asked) {
+    let acct = match become_invoker(asked) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("scour-watch: {e}");
             return ExitCode::FAILURE;
         }
     };
-    restore_environment(uid, gid);
-    println!("  {marked} filesystem(s) marked, running as uid={uid} gid={gid}\n");
+    restore_environment(&acct);
+    println!(
+        "  {marked} filesystem(s) marked, running as uid={} gid={}\n",
+        acct.uid, acct.gid
+    );
+
+    // After the drop, so a path under the home is the account's own to trust.
+    let command: Vec<String> = match command
+        .iter()
+        .map(|a| expand_home(a, &acct.home))
+        .collect::<Result<_, _>>()
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("scour-watch: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     // The descriptor has to cross the exec, so the flag that would close it is
     // cleared here — `fanotify_init` does not offer the choice separately.
@@ -520,6 +562,31 @@ mod tests {
         sources.sort_unstable();
         sources.dedup();
         assert_eq!(before, sources.len(), "a source appears more than once");
+    }
+
+    #[test]
+    fn a_tilde_path_is_expanded_against_the_account_and_nothing_else_is() {
+        let h = "/home/a";
+        assert_eq!(
+            expand_home("~/.local/bin/scourd", h).unwrap(),
+            "/home/a/.local/bin/scourd"
+        );
+        assert_eq!(expand_home("~/x", "/home/a/").unwrap(), "/home/a/x");
+        // Only a leading `~/` is a home; the rest is a file name like any other.
+        for word in ["/usr/bin/scourd", "--json", "~", "~root/x", "a~/b", "-"] {
+            assert_eq!(expand_home(word, h).unwrap(), word);
+        }
+        // Guessing here is how root ends up execing /root/.local/bin/scourd.
+        assert!(expand_home("~/x", "").is_err());
+    }
+
+    #[test]
+    fn an_account_is_read_out_of_the_password_database_by_either_key() {
+        let root = account_by_uid(0).expect("uid 0 is in every password database");
+        assert_eq!((root.uid, root.name.as_str()), (0, "root"));
+        assert!(!root.home.is_empty());
+        assert_eq!(account_by_name("root").map(|a| a.uid), Some(0));
+        assert!(account_by_name("no-such-account-9e3f").is_none());
     }
 
     #[test]
