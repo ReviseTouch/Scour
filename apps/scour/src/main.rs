@@ -249,6 +249,14 @@ fn fits() -> u32 {
 }
 
 fn main() -> Result<()> {
+    // Rust ignores SIGPIPE at start-up, so `scour status | head` would panic in
+    // println!; the default disposition ends the process quietly, as every other
+    // tool does. The export keeps its own check, for the count it prints after.
+    #[cfg(unix)]
+    // SAFETY: a signal disposition, set before any thread exists.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args = Args::parse();
 
     // These five need no service — which is what you reach for when the service
