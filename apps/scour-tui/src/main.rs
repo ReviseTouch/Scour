@@ -9,6 +9,7 @@ mod draw;
 mod icons;
 mod keys;
 mod link;
+mod report;
 mod theme;
 
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -372,6 +373,7 @@ fn run(
                 state.usage = Some(*usage);
                 state.dirty = true;
             }
+            Beat::Reply(Got::Kinds(kinds)) => state.scope_counted(kinds),
             Beat::Reply(Got::Peek(look)) => {
                 state.peek = Some(*look);
                 state.dirty = true;
@@ -473,6 +475,7 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             }
             Beat::Reply(Got::Stats(stats)) => state.stats = Some(*stats),
             Beat::Reply(Got::Usage(usage)) => state.usage = Some(*usage),
+            Beat::Reply(Got::Kinds(kinds)) => state.scope_counted(kinds),
             Beat::Reply(Got::Peek(look)) => state.peek = Some(*look),
             Beat::Reply(Got::Dupes { groups, waste }) => {
                 state.dupes = groups;
@@ -514,11 +517,6 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             _ => {}
         }
     }
-}
-
-/// Where the report opens. See `App::report`.
-fn state_home() -> String {
-    std::env::var("HOME").unwrap_or_default()
 }
 
 /// A key by name, for `--press`.
@@ -610,12 +608,18 @@ fn act(want: Want, link: &Link) {
         Want::Rules => link.later(Ask::Rules),
         // On the slow lane: a keystroke must not queue behind a stat of paths.
         Want::Recheck(paths) => link.later(Ask::Recheck(paths)),
-        Want::Report => {
+        Want::Report(path) => {
             link.later(Ask::Stats);
+            // Weighed first and the duplicates last: finding those reads files,
+            // and the lane is one at a time.
+            link.later(Ask::Usage { path: path.clone() });
+            link.later(Ask::Kinds { path });
             link.later(Ask::Dupes);
-            link.later(Ask::Usage { path: state_home() });
         }
-        Want::Weigh(path) => link.later(Ask::Usage { path }),
+        Want::Weigh(path) => {
+            link.later(Ask::Usage { path: path.clone() });
+            link.later(Ask::Kinds { path });
+        }
         Want::Peek(path) => link.later(Ask::Preview { path }),
         Want::OffRules(off) => link.later(Ask::OffRules(off)),
         Want::Remember(change) => link.later(Ask::Remember(change)),

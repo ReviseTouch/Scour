@@ -106,4 +106,15 @@ impl Theme {
     pub fn band(&self, band: usize) -> Color {
         self.of(self.palette.t[band.min(5)])
     }
+
+    /// The report's kind bar: one hue in six steps, darkest first. Past the
+    /// sixth every slice shares the palest step, which only the legend names.
+    pub fn step(&self, at: usize) -> Color {
+        self.of(self.palette.k[at.min(5)])
+    }
+
+    /// The slice for what was folded away: "the other five kinds".
+    pub fn step_rest(&self) -> Color {
+        self.of(self.palette.kx)
+    }
 }

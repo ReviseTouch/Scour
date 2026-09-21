@@ -51,6 +51,10 @@ scour-openers = { workspace = true }
 # And what kind of file it is, which that crate deliberately does not answer.
 scour-thumbs = { workspace = true }
 scour-page     = { workspace = true }
+# The numbers behind the report's pictures — shares that add up, block bars,
+# a bar cut into segments. Arithmetic, shared with the window and the page so
+# one folder is the same percentage in all three.
+scour-chart    = { workspace = true }
 
 ratatui = { workspace = true }
 anyhow  = { workspace = true }

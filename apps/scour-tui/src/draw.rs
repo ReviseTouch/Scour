@@ -1021,74 +1021,16 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     lines.push(Line::from(""));
     lines.push(head(&app.say("WHAT A FOLDER WEIGHS")));
     match &app.usage {
-        Some(usage) => {
-            let where_at = if app.weighing.is_empty() {
-                app.say("everything indexed").into_owned()
-            } else {
-                app.weighing.clone()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("   ", Style::new()),
-                Span::styled(
-                    tail(&where_at, area.width.saturating_sub(30) as usize),
-                    Style::new().fg(theme.key()),
-                ),
-                Span::styled(
-                    format!(
-                        "  {}  ·  {} {}",
-                        format::compact_bytes(usage.root.bytes, mark.1),
-                        format::grouped(usage.root.files, mark.0),
-                        app.say("files")
-                    ),
-                    Style::new().fg(theme.ink_3()),
-                ),
-            ]));
-            // The heaviest children, with the share untouched for a year: the
-            // size says what a folder costs, that share says whether it earns it.
-            let most = usage.children.first().map(|c| c.bytes).unwrap_or(1).max(1);
-            for (at, child) in usage.children.iter().take(crate::app::WEIGHED).enumerate() {
-                let stale = child.age.last().copied().unwrap_or(0);
-                let share = if child.bytes == 0 {
-                    0
-                } else {
-                    (stale * 100 / child.bytes.max(1)) as u32
-                };
-                let bar = ((child.bytes as f64 / most as f64) * 8.0).round() as usize;
-                let here = at == app.weigh_at;
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!(
-                            " {} {:>10}",
-                            if here { "▸" } else { " " },
-                            format::compact_bytes(child.bytes, mark.1)
-                        ),
-                        Style::new().fg(if here { theme.ink() } else { theme.ink_2() }),
-                    ),
-                    Span::styled(
-                        format!("  {:<8}", "▇".repeat(bar.clamp(1, 8))),
-                        Style::new().fg(theme.key()),
-                    ),
-                    Span::styled(
-                        format!("{:<40}", cut(scour_ui::path::leaf(&child.path), 40)),
-                        Style::new().fg(theme.ink_2()),
-                    ),
-                    Span::styled(
-                        if share >= 5 {
-                            app.say("{percent}% of it older than a year")
-                                .replace("{percent}", &share.to_string())
-                        } else {
-                            String::new()
-                        },
-                        Style::new().fg(theme.ink_3()),
-                    ),
-                ]));
-            }
-        }
+        Some(usage) => lines.extend(weighed(area, app, theme, mark, usage)),
         None => lines.push(Line::from(Span::styled(
             format!("   {}", app.say("weighing…")),
             Style::new().fg(theme.ink_3()),
         ))),
     }
+
+    lines.push(Line::from(""));
+    lines.push(head(&app.say("BY KIND")));
+    lines.extend(by_kind(area, app, theme));
 
     lines.push(Line::from(""));
     lines.push(head(&app.say("THE SAME FILE, SEVERAL TIMES OVER")));
@@ -1126,6 +1068,206 @@ fn report(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         ]));
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// How many folders the kind bar names before the rest becomes one slice: the
+/// palette has six steps, and a seventh would repeat one of them.
+const KINDS: usize = 6;
+
+/// The weighed folder: what it is, how old its bytes are, and a row for each of
+/// the heaviest children with everything else as one line under them.
+fn weighed(
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+    mark: (char, char),
+    usage: &scour_core::UsageResponse,
+) -> Vec<Line<'static>> {
+    let where_at = match app.weighing.is_empty() {
+        true => app.say("everything indexed").into_owned(),
+        false => app.weighing.clone(),
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled("   ", Style::new()),
+        Span::styled(
+            tail(&where_at, area.width.saturating_sub(30) as usize),
+            Style::new().fg(theme.key()),
+        ),
+        Span::styled(
+            format!(
+                "  {}  ·  {} {}",
+                format::compact_bytes(usage.root.bytes, mark.1),
+                format::grouped(usage.root.files, mark.0),
+                app.say("files")
+            ),
+            Style::new().fg(theme.ink_3()),
+        ),
+    ])];
+
+    let files = crate::report::files_wide(&usage.children, crate::app::WEIGHED, mark.0);
+    let fit = crate::report::fit(area.width as usize, files);
+    // The words are asked for one by one, not out of a table: the catalogue
+    // test reads this file for `say(` and a table would go unchecked.
+    let bands = [
+        app.say("today").into_owned(),
+        app.say("week").into_owned(),
+        app.say("month").into_owned(),
+        app.say("six months").into_owned(),
+        app.say("year").into_owned(),
+        app.say("older").into_owned(),
+    ];
+    lines.extend(strip_of(
+        area,
+        &usage.root.age,
+        &bands,
+        &app.say("age"),
+        fit.percents,
+        |band| theme.band(band),
+        theme,
+    ));
+
+    // One blank line, and the only one in the block: above it the folder as a
+    // whole, below it the folders inside it.
+    lines.push(Line::from(""));
+    let shown = crate::app::WEIGHED.min(usage.children.len());
+    let (share, rest) = crate::report::parts(usage, shown);
+    // The heaviest child sets the scale: a bar is this folder against its
+    // largest sibling, which is the comparison the eye is making anyway.
+    let most = usage.children.first().map(|c| c.bytes).unwrap_or(1).max(1);
+    for (at, child) in usage.children.iter().take(shown).enumerate() {
+        let row = crate::report::row(child, at == app.weigh_at, most, share[at], &fit, mark);
+        lines.push(Line::from(weighed_row(&row, theme)));
+    }
+    // Only when there are folders under the fold: the line names them, and the
+    // bytes of the folder itself are in the total on the line above.
+    if let Some(rest) = rest.filter(|rest| rest.count > 0) {
+        lines.push(Line::from(Span::styled(
+            crate::report::rest_line(
+                &rest,
+                share.get(shown).copied().unwrap_or(0.0),
+                &app.say("the other {n} folders"),
+                mark,
+            ),
+            Style::new().fg(theme.ink_3()),
+        )));
+    }
+    lines
+}
+
+/// One weighed row, painted. The text is [`crate::report::Row::text`]'s, span by
+/// span: what the columns are is decided in one place and coloured in another.
+fn weighed_row(row: &crate::report::Row, theme: &Theme) -> Vec<Span<'static>> {
+    let ink = match row.here {
+        true => theme.ink(),
+        false => theme.ink_2(),
+    };
+    let mut spans = vec![Span::styled(
+        format!(" {} {}  ", if row.here { '▸' } else { ' ' }, row.size),
+        Style::new().fg(ink),
+    )];
+    for (band, glyphs) in &row.bar {
+        spans.push(Span::styled(
+            glyphs.clone(),
+            Style::new().fg(theme.band(*band)),
+        ));
+    }
+    spans.push(Span::raw(" ".repeat(row.pad + 2)));
+    spans.push(Span::styled(row.name.clone(), Style::new().fg(ink)));
+    spans.push(Span::styled(
+        format!("  {}", row.share),
+        Style::new().fg(theme.ink_3()),
+    ));
+    if !row.files.is_empty() {
+        spans.push(Span::styled(
+            format!("  {}", row.files),
+            Style::new().fg(theme.ink_3()),
+        ));
+    }
+    spans
+}
+
+/// A strip and the legend under it: one line of colour, one line of words. The
+/// label is drawn in front of the strip, and the legend lines up with it.
+fn strip_of(
+    area: Rect,
+    values: &[u64],
+    words: &[String],
+    label: &str,
+    percents: bool,
+    colour: impl Fn(usize) -> ratatui::style::Color,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let indent = 3 + label.chars().count() + 3;
+    let wide = (area.width as usize).saturating_sub(indent);
+    let mut bar = vec![Span::styled(
+        format!("   {label}   "),
+        Style::new().fg(theme.ink_3()),
+    )];
+    for (at, cells) in crate::report::strip(values, wide) {
+        bar.push(Span::styled("█".repeat(cells), Style::new().fg(colour(at))));
+    }
+    let mut legend = vec![Span::raw(" ".repeat(indent))];
+    for (at, said) in crate::report::legend(values, words, percents) {
+        legend.push(Span::styled("■ ", Style::new().fg(colour(at))));
+        legend.push(Span::styled(
+            format!("{said}  "),
+            Style::new().fg(theme.ink_2()),
+        ));
+    }
+    vec![Line::from(bar), Line::from(legend)]
+}
+
+/// What the weighed folder is made of: the six largest kinds as one bar, the
+/// rest as one slice, and a legend naming as many as the width can hold.
+fn by_kind(area: Rect, app: &App, theme: &Theme) -> Vec<Line<'static>> {
+    if app.scope_kinds.is_empty() {
+        return vec![Line::from(Span::styled(
+            format!("   {}", app.say("asking…")),
+            Style::new().fg(theme.ink_3()),
+        ))];
+    }
+    let wide = (area.width as usize).saturating_sub(3);
+    let percents = area.width as usize >= crate::report::NARROW;
+    let other = app.say("other").into_owned();
+    // How many the legend can name decides how many the bar draws: a slice
+    // with no word beside it is a colour nobody can read.
+    let (kept, _) = crate::report::kinds(&app.scope_kinds, KINDS);
+    let words: Vec<String> = kept
+        .iter()
+        .map(|(token, _)| kind_word(app, token).into_owned())
+        .collect();
+    let room = wide.saturating_sub(other.chars().count() + if percents { 5 } else { 2 });
+    let (kept, rest) = crate::report::kinds(
+        &app.scope_kinds,
+        crate::report::named(&words, room, percents),
+    );
+
+    let mut values: Vec<u64> = kept.iter().map(|(_, n)| *n).collect();
+    let mut words: Vec<String> = kept
+        .iter()
+        .map(|(token, _)| kind_word(app, token).into_owned())
+        .collect();
+    if let Some(rest) = &rest {
+        values.push(rest.value);
+        words.push(other);
+    }
+    let colour = |at: usize| match at < kept.len() {
+        true => theme.step(at),
+        false => theme.step_rest(),
+    };
+    let mut bar = vec![Span::raw("   ")];
+    for (at, cells) in crate::report::strip(&values, wide) {
+        bar.push(Span::styled("▓".repeat(cells), Style::new().fg(colour(at))));
+    }
+    let mut legend = vec![Span::raw("   ")];
+    for (at, said) in crate::report::legend(&values, &words, percents) {
+        let ink = match at < kept.len() {
+            true => theme.ink_2(),
+            false => theme.ink_3(),
+        };
+        legend.push(Span::styled(format!("{said}  "), Style::new().fg(ink)));
+    }
+    vec![Line::from(bar), Line::from(legend)]
 }
 
 /// The head of the file under the cursor, when the peek is open. The service
@@ -1552,7 +1694,7 @@ fn mark_of(on: bool, cursor: bool) -> &'static str {
 
 /// A label, cut to fit rather than wrapped: a rail is one line per thing. The
 /// ellipsis is what says four identical-looking rows are not identical.
-fn cut(text: &str, to: usize) -> String {
+pub(crate) fn cut(text: &str, to: usize) -> String {
     if text.chars().count() <= to {
         return text.to_string();
     }
@@ -1693,6 +1835,58 @@ fn help(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// True colour and the dark palette, whatever the terminal running the
+    /// test says: a colour asserted on has to be the palette's own.
+    fn theme() -> Theme {
+        Theme {
+            palette: &scour_ui::DARK,
+            truecolor: true,
+            theirs: false,
+        }
+    }
+
+    /// What is painted is what the layout measured: the spans of a row join
+    /// back into the row's own text, and the bar is coloured band by band.
+    #[test]
+    fn a_painted_row_is_the_row_the_layout_measured() {
+        let theme = theme();
+        let child = scour_core::DirUsage {
+            path: "/home/hasan/Projeler".into(),
+            bytes: 651_571_270_524,
+            disk: 651_571_270_524,
+            files: 896_648,
+            age: [89_000_000_000, 0, 499_571_270_524, 47_000_000_000, 0, 0],
+        };
+        let fit = crate::report::fit(100, 7);
+        let row = crate::report::row(&child, true, child.bytes, 81.6, &fit, ('.', ','));
+        let painted = weighed_row(&row, &theme);
+        let joined: String = painted.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(joined, row.text());
+        // Today, this month, six months: the three bands this folder has, in
+        // the order `DirUsage.age` holds them.
+        let bands: Vec<usize> = row.bar.iter().map(|(band, _)| *band).collect();
+        assert_eq!(bands, vec![0, 2, 3]);
+        let colours: Vec<ratatui::style::Color> = painted[1..1 + bands.len()]
+            .iter()
+            .map(|s| s.style.fg.expect("a band is a colour"))
+            .collect();
+        assert_eq!(
+            colours,
+            bands.iter().map(|b| theme.band(*b)).collect::<Vec<_>>()
+        );
+    }
+
+    /// The kind bar is one hue in six steps, and every slice past the sixth
+    /// shares the palest of them; what was folded away is quieter still.
+    #[test]
+    fn the_kind_bar_steps_through_six_and_stops() {
+        let theme = theme();
+        assert_ne!(theme.step(0), theme.step(1));
+        assert_eq!(theme.step(6), theme.step(5), "and 60 is the fifth as well");
+        assert_eq!(theme.step(60), theme.step(5));
+        assert_ne!(theme.step(5), theme.step_rest());
+    }
 
     /// A sentence that does not fit is drawn whole over several lines, and a
     /// path with no spaces in it is cut rather than lost off the right edge.

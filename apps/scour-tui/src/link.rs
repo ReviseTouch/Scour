@@ -59,6 +59,9 @@ pub enum Ask {
     Dupes,
     /// What a folder weighs, and which of its children weigh the most.
     Usage { path: String },
+    /// What the weighed folder is made of, by kind. Counted over the report's
+    /// scope rather than over the search, so the two questions never mix.
+    Kinds { path: String },
     /// What can be shown of a file, and the head of it when that is text.
     Preview { path: String },
     /// The query read back: which run of it is what. Sent beside every search;
@@ -108,6 +111,8 @@ pub enum Got {
     Stats(Box<scour_core::IndexStats>),
     /// A weighed folder: what it holds, and its heaviest children.
     Usage(Box<scour_core::UsageResponse>),
+    /// The report's kinds, as `(token, count)`, largest first.
+    Kinds(Vec<(String, u64)>),
     /// The head of a file, and what shape it is.
     Peek(Box<scour_preview::Look>),
     /// Duplicate groups, largest saving first, and what they come to.
@@ -389,6 +394,9 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             continue;
         };
         let for_age = matches!(ask, Ask::Facets { age: true, .. });
+        // The report asks the same question over its own scope; the answer
+        // goes to the report's block, not to the rail.
+        let for_report = matches!(ask, Ask::Kinds { .. });
         let request = match ask {
             Ask::Search {
                 query,
@@ -441,6 +449,21 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             Ask::Places => Request::Places {},
             Ask::Stats => Request::Stats {},
             Ask::Preview { path } => Request::Preview { path },
+            // The whole scope and both groups: an age group is what lifts the
+            // 200,000-row sampling cap, and a report that samples is a report
+            // whose percentages are not the folder's.
+            Ask::Kinds { path } => Request::Facets {
+                query: match path.is_empty() {
+                    true => String::new(),
+                    false => format!("under:\"{path}\""),
+                },
+                by: vec![
+                    FacetBy::Kind,
+                    FacetBy::Age {
+                        edges: scour_ui::bar_edges(),
+                    },
+                ],
+            },
             Ask::Usage { path } => Request::Usage {
                 path,
                 top: 12,
@@ -491,6 +514,17 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                     limit: offsets.1,
                     reply: Box::new(reply),
                 });
+            }
+            Ok(Response::Facets(reply)) if for_report => {
+                let mut kinds: Vec<(String, u64)> = reply
+                    .groups
+                    .into_iter()
+                    .filter(|g| matches!(g.by, FacetBy::Kind))
+                    .flat_map(|g| g.facets)
+                    .map(|f| (f.key, f.count))
+                    .collect();
+                kinds.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+                let _ = out.send(Got::Kinds(kinds));
             }
             Ok(Response::Facets(reply)) => {
                 let _ = out.send(Got::Facets {
