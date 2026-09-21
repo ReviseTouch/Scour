@@ -186,15 +186,18 @@ builds the same seven binaries in a Debian 11 container (podman or docker) into
 
 ### Keyboard shortcut
 
-The installer binds a key on GNOME and KDE. On other desktops, bind any key to
-`scour-gui`: the first press opens the window and every later press brings the
-same window forward; a second instance is never started.
-
-| desktop | location |
-|---|---|
-| GNOME | Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts, command `scour-gui` |
-| KDE Plasma | System Settings → Shortcuts → Add Command, `scour-gui` |
-| other | the compositor's key binding, command `scour-gui` |
+Any combination can open Scour, and it is set from inside Scour: the window
+and the browser page each have a "Keyboard shortcut" row, and at a terminal
+`scour hotkey set super+f` does the same (`scour hotkey` shows the state,
+`scour hotkey clear` removes it). Combinations are typed in one spelling:
+`super+f`, `ctrl+alt+s`, `super+F2`. On GNOME the key works at once, on KDE
+after the next login. On other desktops, and inside a Flatpak, Scour cannot
+write the binding: it shows the command to bind by hand in the desktop's own
+keyboard settings, `scour-gui` or `flatpak run com.revisetouch.Scour`. The
+installer offers Super+F (`SCOUR_KEY=ctrl+alt+s` picks another,
+`SCOUR_KEY=none` skips it), and the window's first run offers it once. The
+first press opens the window and every later press brings the same window
+forward; a second instance is never started.
 
 Under GNOME on Wayland a program may not raise its own window; the window may
 be indicated in the taskbar instead of coming to the front. The Shell

@@ -182,15 +182,18 @@ aynı yedi ikiliyi bir Debian 11 konteynerinde (podman ya da docker)
 
 ### Klavye kısayolu
 
-Kurucu GNOME ve KDE'de bir tuş bağlar. Diğer masaüstlerinde herhangi bir tuşu
-`scour-gui`'ye bağlayın: ilk basış pencereyi açar, sonraki her basış aynı
-pencereyi öne getirir; ikinci bir kopya hiç başlatılmaz.
-
-| masaüstü | yer |
-|---|---|
-| GNOME | Ayarlar → Klavye → Klavye Kısayolları → Özel Kısayollar, komut `scour-gui` |
-| KDE Plasma | Sistem Ayarları → Kısayollar → Komut Ekle, `scour-gui` |
-| diğer | compositor'ın tuş bağlama ayarı, komut `scour-gui` |
+Scour'u her kombinasyon açabilir ve bu Scour'un içinden ayarlanır: pencerede
+ve tarayıcı sayfasında bir "Klavye kısayolu" satırı var; uçbirimde `scour
+hotkey set super+f` aynı işi yapar (`scour hotkey` durumu gösterir, `scour
+hotkey clear` kaldırır). Kombinasyon tek bir yazımla yazılır: `super+f`,
+`ctrl+alt+s`, `super+F2`. GNOME'da tuş hemen çalışır, KDE'de bir sonraki
+oturum açılışında. Diğer masaüstlerinde ve Flatpak içinde Scour bağı
+yazamaz: masaüstünün kendi klavye ayarlarından elle bağlanacak komutu
+gösterir, `scour-gui` ya da `flatpak run com.revisetouch.Scour`. Kurucu
+Super+F'yi teklif eder (`SCOUR_KEY=ctrl+alt+s` başka bir tuş seçer,
+`SCOUR_KEY=none` atlar); pencere ilk açılışta bir kez teklif eder. İlk basış
+pencereyi açar, sonraki her basış aynı pencereyi öne getirir; ikinci bir
+kopya hiç başlatılmaz.
 
 Wayland üzerinde GNOME bir programın kendi penceresini öne almasına izin
 vermez; pencere öne gelmek yerine görev çubuğunda işaretlenebilir.
