@@ -640,7 +640,42 @@
   .dupe li {
     font-family: var(--mono); font-size: 11px; color: var(--ink-2);
     overflow-wrap: anywhere; line-height: 1.5;
+    display: flex; align-items: baseline; gap: calc(var(--u) * 1.5);
   }
+  /* The mark, in the pressed shape the rest of the page uses. */
+  .dupe .mark {
+    flex: none; align-self: center; width: 11px; height: 11px; padding: 0;
+    background: none; border: 1px solid var(--line); border-radius: 50%;
+    cursor: pointer;
+  }
+  .dupe .mark:hover { border-color: var(--ink-3); }
+  .dupe .mark[aria-pressed="true"] { border-color: var(--q-key); box-shadow: 0 0 0 2px var(--q-key) inset; }
+  .dupe .mark:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  /* The path is a button so the row menu is a keystroke away, drawn flat. */
+  .dupe .path {
+    flex: 1; min-width: 0; text-align: left; padding: 0;
+    font: inherit; background: none; border: 0; color: inherit;
+    overflow-wrap: anywhere; cursor: pointer;
+  }
+  .dupe .path:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe li.kept .path { color: var(--ink); font-weight: 650; }
+  .dupe .when { flex: none; color: var(--ink-3); font-size: 10.5px; }
+  .dupe .rest {
+    font: inherit; background: none; border: 0; padding: 0;
+    color: var(--ink-3); cursor: pointer; text-align: left;
+  }
+  .dupe .rest:hover { color: var(--ink-2); }
+  .dupe .rest:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .dupe .deeds { margin: calc(var(--u) * 1.5) 0 0 calc(var(--u) * 3); }
+  .dupe .deeds button {
+    font: inherit; font-size: 11px;
+    background: var(--panel-2); color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 3px;
+    padding: 2px calc(var(--u) * 2); cursor: pointer;
+  }
+  .dupe .deeds button:hover:enabled { color: var(--ink); border-color: var(--ink-3); }
+  .dupe .deeds button:disabled { opacity: .5; cursor: default; }
+  .dupe .deeds button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
   /* This face has handed over to another one, so the server is going. */
   .handover {
@@ -1419,6 +1454,9 @@
         </div>
         <p class="hint" id="d-note" hidden
            data-t-html="Being the same size is not being the same file. Below is a list of candidates by size; &lt;b&gt;nothing should be deleted before it is confirmed&lt;/b&gt;."></p>
+        <!-- What the last move to trash did. Outside `d-list`, which a redraw
+             rewrites, so the answer survives the refresh it asked for. -->
+        <p class="hint" id="d-said" hidden></p>
         <div id="d-list" hidden></div>
       </div>
     </div>
@@ -1520,7 +1558,7 @@
     /* `budget_mb: 0` reads nothing — 84 ms over thirty thousand candidates —
        and answers which of them might be copies. */
     dupes: (under, budgetMb, minMb, signal) =>
-      SERVICE.get("dupes",
+      SERVICE.get("duplicates",
         { under, budget_mb: budgetMb || 0, min_mb: minMb || 1, top: 25 }, signal),
     /* Kept by the service: `localStorage` dies with the process. */
     settings: () => SERVICE.get("settings", {}),
@@ -4238,7 +4276,6 @@
     const tr = e.target.closest("tr");
     const p = pathOf(tr);
     if (!p) return;
-    e.preventDefault();
     /* Right-clicking outside the selection selects what was clicked. */
     if (!SEL.has(p)) {
       pickRow(tr, false);
@@ -4246,8 +4283,17 @@
       paintSelection();
       drawSelBar();
     }
-    const many = SEL.size > 1;
-    const dir = !!(tr.__row && tr.__row.is_dir);
+    openRowMenu(e, p, tr.__row || null, null);
+  });
+
+  /* The one menu, wherever a path is drawn. `after` means the caller owns the
+   * path — the report's duplicate rows do — so the search selection is not
+   * what the press is about and the caller redraws its own list. */
+  function openRowMenu(e, p, row, after) {
+    e.preventDefault();
+    const alone = !!after;
+    const many = !alone && SEL.size > 1;
+    const dir = !!(row && row.is_dir);
     /* Built from `MENU`; the count goes in through the catalogue's `{n}`. */
     const shape = (w) => (w === "many" ? many
                         : w === "one" ? !many
@@ -4258,20 +4304,22 @@
       if (!shape(it.when)) continue;
       if (last !== null && it.group !== last) html += '<div class="mline"></div>';
       last = it.group;
-      const label = escape_(T(it.msgid, { n: fmt(SEL.size || 1) }));
+      const label = escape_(T(it.msgid, { n: fmt(alone ? 1 : SEL.size || 1) }));
       const key = it.key ? `<span class="mkey">${escape_(it.key)}</span>` : "";
       html += `<button type="button" data-act="${it.id}" class="w-${it.weight}">${label}${key}</button>`;
     }
     menu.innerHTML = html;
     menu.dataset.path = p;
     /* The row itself: three items ask what kind or how big it is. */
-    menu.__row = tr.__row || null;
+    menu.__row = row;
+    menu.__alone = alone;
+    menu.__after = after || null;
     menu.hidden = false;
     const r = menu.getBoundingClientRect();
     menu.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + "px";
     menu.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + "px";
     menu.querySelector("button").focus();
-  });
+  }
 
   menu.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
@@ -4279,8 +4327,10 @@
     if (!act) return;
     const p = menu.dataset.path;
     const row = menu.__row;
-    const many = SEL.size > 1;
+    const many = !menu.__alone && SEL.size > 1;
     const picked = many ? [...SEL.keys()] : [p];
+    /* Whoever drew the row redraws it; the search list refreshes itself. */
+    const after = menu.__after;
     menu.hidden = true;
 
     /* Said once: the copy items differ only in what part of the path. */
@@ -4360,7 +4410,8 @@
           /* The rows go now rather than when a watcher gets round to them. */
           for (const x of picked) SEL.delete(x);
           /* Ask the current query again through the path a keystroke takes. */
-          q.dispatchEvent(new Event("input", { bubbles: true }));
+          if (after) after(picked, r);
+          else q.dispatchEvent(new Event("input", { bubbles: true }));
           flash(r.refused && r.refused.length
             ? T("{n} could not be moved", { n: fmt(r.refused.length) })
             : T("{n} moved to trash", { n: fmt(r.gone) }));
@@ -4394,7 +4445,8 @@
         try {
           const r = await SERVICE.rename(p, name);
           if (r.refused) return flash(T(r.refused));
-          q.dispatchEvent(new Event("input", { bubbles: true }));
+          if (after) after([p], r);
+          else q.dispatchEvent(new Event("input", { bubbles: true }));
         } catch (err) {
           flash(String(err.message || err));
         }
@@ -5421,6 +5473,11 @@
     fmt: (n) => fmt(n),
     /* The report's redraw, called from `applyLanguage`. Null until it runs. */
     relabel: null,
+    /* One menu for the whole page: the report's duplicate rows open the very
+       list the search rows do, and hand over what to redraw afterwards. */
+    rowMenu: (event, path, row, after) => openRowMenu(event, path, row, after),
+    /* The reader's own spelling of a moment, from the one built formatter. */
+    stamp: (at) => exact(at),
     // Both arrive from the service after this runs, so both are getters.
     kinds: () => KINDS,
     barEdges: () => BAR_EDGES,
@@ -5445,6 +5502,8 @@
   /* Wrappers rather than values, so a language change is picked up here. */
   const T = window.SCOUR.t;
   const fmt = window.SCOUR.fmt;
+  /* The reader's own spelling of a moment, from the formatter built once. */
+  const stamp = window.SCOUR.stamp;
 
   /* The six age bands, resolved at draw time: this runs before the catalogue
      arrives. Named `msgid:`, which is what the catalogue test reads. */
@@ -5641,12 +5700,47 @@
      below a megabyte the candidates are a million files covering 28 GB. */
   const FLOORS = [[1, "1 MB"], [10, "10 MB"], [100, "100 MB"], [1024, "1 GB"]];
   let dupeFloor = 10;
+  /* Copies shown before the rest are asked for: a group of fifty would
+     otherwise swallow the panel. */
+  const FIRST = 6;
+  /* What the panel last asked for, so a redraw after a move asks the same. */
+  let dupeBudget = 0;
+  /* The last answer, largest saving first, and what is drawn over it. */
+  let dupeGroups = [];
+  let dupeFacts = { unconfirmed: 0, read: 0 };
+  /* Which copy to keep, and which groups show every path. Keyed by the
+     group's own paths, so a group that lost one is a new group and its mark
+     goes back to the newest — which is what it should be after a move. */
+  const dupeKept = new Map();
+  const dupeAll = new Set();
+  /* One group at a time: files are moving, and a second press is not a queue. */
+  let sweeping = "";
+
+  /* What deleting all but one gives back, from the group's own numbers: this
+     is the figure the reader is looking at, not a total the service capped. */
+  const reclaim = (g) => g.size * Math.max(0, g.paths.length - 1);
+  const keyOf = (g) => g.size + "|" + g.paths.join("|");
+
+  /* The newest copy is the one worth keeping. A time of 0 is "not stated" —
+     see `TIMED` in `dupes.rs` — and loses to anything that was. */
+  const newest = (g) => {
+    let at = -1, best = g.paths[0] || "";
+    g.paths.forEach((p, i) => {
+      const t = (g.mtimes && g.mtimes[i]) || 0;
+      if (t > at) { at = t; best = p; }
+    });
+    return best;
+  };
+  const keptOf = (g) => {
+    const held = dupeKept.get(keyOf(g));
+    return held && g.paths.includes(held) ? held : newest(g);
+  };
 
   async function drawDupes(budgetMb) {
     const mine = ++dupeRun;
-    const list = document.getElementById("d-list");
     const sum = document.getElementById("d-sum");
     const btn = document.getElementById("d-confirm");
+    dupeBudget = budgetMb || 0;
     sum.textContent = budgetMb ? T("reading…") : "…";
     btn.disabled = true;
     let res;
@@ -5656,43 +5750,192 @@
       if (mine !== dupeRun) return;
       console.error("scour: the duplicates panel did not load:", e);
       sum.textContent = T("the service cannot be reached");
-      list.textContent = "";
+      document.getElementById("d-list").textContent = "";
       btn.disabled = false;
       return;
     }
     if (mine !== dupeRun) return;
     btn.disabled = false;
+    dupeGroups = res.groups.slice().sort((a, b) => reclaim(b) - reclaim(a));
+    dupeFacts = { unconfirmed: res.unconfirmed, read: res.read };
+    paintDupes();
+  }
 
-    sum.textContent =
-      T("{proven} confirmed · {waste} candidate · {n} files",
-        { proven: bytes(res.proven), waste: bytes(res.waste), n: fmt(res.candidates) }) +
-      (res.read ? " · " + T("{n} read", { n: bytes(res.read) }) : "") +
+  /* Draws what `drawDupes` fetched. A mark, an expansion and a finished move
+     all come back through here; only a move asks the service again. */
+  function paintDupes() {
+    const groups = dupeGroups;
+    const total = groups.reduce((n, g) => n + reclaim(g), 0);
+    const sure = groups.filter((g) => g.certainty === "content").length;
+    /* Said plainly: a candidate by size is not a duplicate. */
+    const how = !groups.length ? ""
+      : sure === groups.length ? " · " + T("all confirmed identical by reading")
+      : sure ? " · " + T("{n} confirmed identical, the rest share a size only", { n: fmt(sure) })
+      : " · " + T("candidates by size — nothing was read");
+    document.getElementById("d-sum").textContent =
+      T("{n} groups · {size} could be freed", { n: fmt(groups.length), size: bytes(total) }) +
+      how +
+      (dupeFacts.read ? " · " + T("{n} read", { n: bytes(dupeFacts.read) }) : "") +
       /* No filter, and it says so: narrowing hides half of a pair. */
       (filter() ? " · " + T("independent of the filter") : "");
     /* Never dropped: a partial answer that looks complete deletes files. */
-    document.getElementById("d-note").innerHTML = res.unconfirmed
-      ? T("Being the same size is not being the same file. <b>{n} groups were not confirmed by reading</b> — those are candidates, not duplicates.", { n: fmt(res.unconfirmed) })
+    document.getElementById("d-note").innerHTML = dupeFacts.unconfirmed
+      ? T("Being the same size is not being the same file. <b>{n} groups were not confirmed by reading</b> — those are candidates, not duplicates.", { n: fmt(dupeFacts.unconfirmed) })
+        + " " + T("Nothing should be deleted before it is confirmed.")
       : T("All of them were compared by reading.");
 
     /* The engine's three certainties; the keys name the CSS class. */
     const word = {
       content: T("identical"), edges: T("same ends"), size: T("same size only"),
     };
-    list.innerHTML = res.groups.map((g) => `
-      <div class="dupe">
+    document.getElementById("d-list").innerHTML = groups.map((g) => {
+      const key = keyOf(g);
+      const kept = keptOf(g);
+      const all = dupeAll.has(key);
+      const head = g.paths.slice(0, FIRST);
+      /* The kept copy is always on screen: a group whose mark is hidden in
+         the tail looks like a group with no mark at all. */
+      const shown = all ? g.paths
+        : head.includes(kept) ? head : [kept, ...head.slice(0, FIRST - 1)];
+      /* By path, not by position: `shown` is not always a prefix. */
+      const timeOf = (p) => (g.mtimes && g.mtimes[g.paths.indexOf(p)]) || 0;
+      const rows = shown.map((p) => {
+        const at = timeOf(p);
+        return `<li class="${p === kept ? "kept" : ""}">
+          <button type="button" class="mark" data-keep="${escape_(p)}"
+            aria-pressed="${p === kept}" aria-label="${escape_(T("Keep this one"))}"
+            title="${escape_(T("Keep this one"))}"></button>
+          <button type="button" class="path" data-path="${escape_(p)}">${escape_(shorten(p))}</button>
+          <span class="when">${escape_(at ? stamp(at) : "—")}</span>
+        </li>`;
+      }).join("");
+      /* Kept once expanded, or there is no way back to the short list. */
+      const rest = all || g.paths.length > shown.length
+        ? `<li><button type="button" class="rest" data-more="1">${escape_(all
+            ? T("show fewer")
+            : "… " + T("{n} more", { n: fmt(g.paths.length - shown.length) }))}</button></li>`
+        : "";
+      /* Only a group read end to end may be swept; the reason is in the tip. */
+      const off = g.certainty !== "content" || sweeping === key;
+      return `<div class="dupe" data-key="${escape_(key)}">
         <div class="top">
-          <span class="save">${bytes(g.waste)}</span>
+          <span class="save">${bytes(reclaim(g))}</span>
           <span class="of">×${g.paths.length} · ${bytes(g.size)}</span>
           <span class="sure ${g.certainty}">${escape_(word[g.certainty] || g.certainty)}</span>
         </div>
-        <ul>${g.paths.slice(0, 6).map((p) => `<li>${escape_(shorten(p))}</li>`).join("")}${
-          /* One group of dozens would otherwise swallow the panel. */
-          g.paths.length > 6
-            ? `<li style="color:var(--ink-3)">… ${escape_(T("{n} more", { n: fmt(g.paths.length - 6) }))}</li>`
-            : ""
-        }</ul>
-      </div>`).join("") ||
+        <ul>${rows}${rest}</ul>
+        <div class="deeds"><button type="button" data-sweep="1"${off ? " disabled" : ""}${
+          g.certainty === "content" ? "" : ` title="${escape_(T("Confirm by reading first"))}"`
+        }>${escape_(T("Move the other {n} to trash", { n: fmt(g.paths.length - 1) }))}</button></div>
+      </div>`;
+    }).join("") ||
       `<div class="dupe"><div class="top"><span class="of">${escape_(T("no duplicates in this scope"))}</span></div></div>`;
+  }
+
+  /* What the last move did. Outside `d-list`, so a redraw does not wipe it. */
+  const saidEl = document.getElementById("d-said");
+  function say(text) {
+    saidEl.textContent = text || "";
+    saidEl.hidden = !text;
+  }
+
+  const dlist = document.getElementById("d-list");
+  const groupAt = (el) => {
+    const box = el.closest(".dupe");
+    return box ? dupeGroups.find((g) => keyOf(g) === box.dataset.key) : null;
+  };
+
+  /* The row menu is the search list's own — one table, one code path — and it
+     hands back what to redraw, since this tab cannot see the search rows. */
+  function menuFor(e, el) {
+    const g = groupAt(el);
+    window.SCOUR.rowMenu(e, el.dataset.path,
+      g ? { is_dir: false, size: g.size } : null,
+      (moved, r) => {
+        if (r && r.refused && r.refused.length) {
+          say(T("{n} could not be moved", { n: fmt(r.refused.length) }) + " — " + r.refused[0]);
+        } else if (r && r.gone !== undefined) {
+          say(T("{n} moved to trash", { n: fmt(r.gone) }));
+        }
+        drawDupes(dupeBudget);
+      });
+  }
+
+  dlist.addEventListener("contextmenu", (e) => {
+    const el = e.target.closest("[data-path]");
+    if (el) menuFor(e, el);
+  });
+
+  dlist.addEventListener("click", (e) => {
+    const mark = e.target.closest("[data-keep]");
+    if (mark) {
+      const g = groupAt(mark);
+      if (g) { dupeKept.set(keyOf(g), mark.dataset.keep); paintDupes(); }
+      return;
+    }
+    if (e.target.closest("[data-more]")) {
+      const g = groupAt(e.target);
+      if (!g) return;
+      const key = keyOf(g);
+      if (dupeAll.has(key)) dupeAll.delete(key); else dupeAll.add(key);
+      paintDupes();
+      return;
+    }
+    if (e.target.closest("[data-sweep]")) { sweep(groupAt(e.target)); return; }
+    const path = e.target.closest("[data-path]");
+    if (path) {
+      /* Any click on the document closes the menu, so this one must not
+         reach it: the menu it opens would shut in the same tick. */
+      e.stopPropagation();
+      menuFor(e, path);
+    }
+  });
+
+  /* Paths travel in the request line, which is cut past 16 KB. Whole paths
+     only, 6,000 characters of them a request. */
+  function batches(paths) {
+    const out = [];
+    let now = [], len = 0;
+    for (const p of paths) {
+      const cost = encodeURIComponent(p).length + 3;
+      if (now.length && len + cost > 6000) { out.push(now); now = []; len = 0; }
+      now.push(p);
+      len += cost;
+    }
+    if (now.length) out.push(now);
+    return out;
+  }
+
+  /* The one press here that moves files. The button is disabled for a group
+     nothing was read of; this asks again, because a redraw is not a fence. */
+  async function sweep(g) {
+    if (!g || sweeping || g.certainty !== "content") return;
+    const key = keyOf(g);
+    const kept = keptOf(g);
+    const others = g.paths.filter((p) => p !== kept);
+    if (!others.length) return;
+    if (!confirm(T("Move {n} files to trash? The one under {path} stays.",
+                   { n: fmt(others.length), path: shorten(kept) }))) return;
+    sweeping = key;
+    paintDupes();
+    let gone = 0;
+    const refused = [];
+    for (const batch of batches(others)) {
+      try {
+        const r = await SERVICE.trash(batch);
+        gone += r.gone || 0;
+        if (r.refused) refused.push(...r.refused);
+      } catch (err) {
+        /* One batch failing is not the rest of them failing. */
+        refused.push(...batch.map((p) => p + ": " + (err.message || err)));
+      }
+    }
+    sweeping = "";
+    say(refused.length
+      ? T("{gone} moved to trash · {n} stayed: {which}",
+          { gone: fmt(gone), n: fmt(refused.length), which: refused.slice(0, 3).join(" · ") })
+      : T("{n} moved to trash", { n: fmt(gone) }));
+    drawDupes(dupeBudget);
   }
 
   /* Remembered by the service, so every face starts from the same answer. */
@@ -5707,6 +5950,8 @@
       const el = document.getElementById(id);
       if (el) el.hidden = !open;
     }
+    // A closed section says nothing about a move it no longer shows.
+    if (!open) say("");
     if (open && ask) drawDupes(0);
   }
   showDupes(false, false);

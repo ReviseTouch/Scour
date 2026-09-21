@@ -4,6 +4,7 @@
 //! with no flag to change it, a per-run token without which every route is
 //! 403, an `Origin` that must be ours, and `POST` for everything that acts.
 
+mod dupes;
 mod http;
 mod icons;
 
@@ -108,12 +109,24 @@ fn main() -> Result<()> {
     let _ = CONFIGURED_LANGUAGE.set(config.ui.language.clone());
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
 
-    // Fail here rather than in the browser, which has no command to blame.
-    let client = Client::connect(&addr).with_context(|| {
-        format!("no Scour service is listening on {addr}. Start one with `scourd`.")
-    })?;
+    // Nothing listening is no longer a reason to refuse to start: one is
+    // started instead, and this keeps serving while it comes up. Every route
+    // opens its own connection when the pool is empty, and the page already
+    // has a state for a service it cannot reach.
+    let idle = match Client::connect(&addr) {
+        Ok(open) => vec![open],
+        Err(e) if !scour_launch::wanted() => {
+            return Err(e).with_context(|| {
+                format!("no Scour service is listening on {addr}. Start one with `scourd`.")
+            });
+        }
+        Err(_) => {
+            start_service(&addr, config.state_dir().join("scourd.log"));
+            Vec::new()
+        }
+    };
     let client = Arc::new(Mutex::new(Link {
-        idle: vec![client],
+        idle,
         addr: addr.clone(),
     }));
 
@@ -185,6 +198,30 @@ fn open(url: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Start the service nobody started, on a thread, and say so on standard
+/// error. Not waited for: the browser is already being opened, and a page
+/// that cannot reach the service says so and retries by itself.
+fn start_service(addr: &str, log: std::path::PathBuf) {
+    let cat = scour_i18n::Catalogue::for_language(&scour_i18n::choose(
+        "",
+        CONFIGURED_LANGUAGE.get().map_or("", String::as_str),
+    ));
+    eprintln!("scour-web: {}", cat.get("Starting the Scour service…"));
+    let hint = cat.get("Start one with `scourd`.").into_owned();
+    let addr = addr.to_string();
+    std::thread::spawn(move || {
+        let outcome = scour_launch::ensure_once(&scour_launch::Autostart::new(
+            &addr,
+            log,
+            &scour_ipc::is_running,
+        ));
+        match outcome.reason() {
+            Some(why) => eprintln!("scour-web: {why} — {hint}"),
+            None => eprintln!("scour-web: the service is listening on {addr}"),
+        }
+    });
 }
 
 /// What this bridge is allowed to do besides answer questions.
@@ -291,6 +328,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/openers" => api_openers(&mut stream, client, &req),
         "/api/open-with" if doing.launch => api_open_with(&mut stream, client, &req),
         "/api/open-with" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
+        "/api/duplicates" => dupes::api_duplicates(&mut stream, client, &req),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }
