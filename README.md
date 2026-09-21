@@ -186,7 +186,7 @@ are wildcards, and `field:value` restricts a field.
 ```
 rapor ext:pdf dm:30d          PDFs with "rapor" in the name, modified in the last 30 days
 *.log size:>100mb             log files over 100 MB
-under:/home/u/Projeler *.rs   Rust files anywhere under one directory
+under:~/Projeler *.rs         Rust files anywhere under one directory; ~ is your home
 path:src ext:rs !test         Rust files under src, excluding tests
 kind:image dm:today           images modified today
 ```

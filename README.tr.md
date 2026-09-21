@@ -180,7 +180,7 @@ Boşluk VE, `|` VEYA, `!` DEĞİL; tırnak tam ifade, `*` ve `?` joker,
 ```
 rapor ext:pdf dm:30d          adında "rapor" geçen, son 30 günde değişmiş PDF'ler
 *.log size:>100mb             100 MB'den büyük günlük dosyaları
-under:/home/u/Projeler *.rs   bir dizinin altındaki bütün Rust dosyaları
+under:~/Projeler *.rs         bir dizinin altındaki bütün Rust dosyaları; ~ ev dizinin
 path:src ext:rs !test         src altındaki Rust dosyaları, testler hariç
 kind:image dm:today           bugün değişen görseller
 ```
