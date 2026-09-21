@@ -103,6 +103,25 @@ Debian 11, Ubuntu 22.04, RHEL 9 ve sonrası. Pencere ayrıca her masaüstünde
 bulunan `libfontconfig1`'i ister. Paket sıfırdan kurulmuş Ubuntu 22.04,
 Ubuntu 24.04 ve Debian 11 konteynerlerinde kurulup çalıştırılmıştır.
 
+### Debian, Ubuntu ve Fedora paketleri
+
+```bash
+sudo apt install ./scour_0.2.0~alpha.1-1_amd64.deb      # Debian 11 ve üstü, Ubuntu 22.04 ve üstü
+sudo dnf install ./scour-0.2.0~alpha.1-1.x86_64.rpm     # Fedora
+```
+
+İkisi de yedi ikiliyi taşır: altısı `/usr/bin`'de, ayrıcalıklı `scour-watch`
+`/usr/libexec/scour/` altında; başlatıcılar, menü girdisi, dört boyda simge ve
+`/usr/lib/systemd/user/` altında kullanıcı birimi. Kurmak hiçbir şeyi
+başlatmaz: `systemctl --user enable --now scourd.service` ayrıcalıksız servisi
+başlatır; `/usr/share/doc/scour/` altında sistem birimi ve polkit kuralı örnek
+olarak, paketin neyi nereye koyduğunu anlatan bir notla durur. Pencerenin
+çalışırken yüklediği X11 ve Wayland kütüphaneleri zorunlu değil önerilidir;
+`--no-install-recommends` bir sunucuda yalnız komut satırını kurar. Ubuntu
+22.04, Ubuntu 24.04, Debian 12 ve Fedora 40 konteynerlerinde denenmiştir.
+`scripts/package` ikisini derlenmiş ikililerden üretir; `cargo-deb`,
+`cargo-generate-rpm` ve `rsvg-convert` ister.
+
 **Windows.** Çalışma alanı `x86_64-pc-windows-msvc` için derlenir ve sürümde
 bir zip vardır. İkililer bir Windows makinesinde bir kez başlatılmıştır:
 servis indeksledi, komut satırı aradı. Pencere, canlı izleme, ağ ve FAT32

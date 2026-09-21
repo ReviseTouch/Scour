@@ -106,6 +106,25 @@ Debian 11, Ubuntu 22.04, RHEL 9 and everything later. The window also needs
 `libfontconfig1`, which every desktop has. The package was installed and run
 in clean Ubuntu 22.04, Ubuntu 24.04 and Debian 11 containers.
 
+### Debian, Ubuntu and Fedora packages
+
+```bash
+sudo apt install ./scour_0.2.0~alpha.1-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
+sudo dnf install ./scour-0.2.0~alpha.1-1.x86_64.rpm     # Fedora
+```
+
+Both carry the seven binaries, six in `/usr/bin` and the privileged
+`scour-watch` in `/usr/libexec/scour/`, the launchers, the menu entry, the
+icon at four sizes and the user unit in `/usr/lib/systemd/user/`. Installing
+starts nothing: `systemctl --user enable --now scourd.service` starts the
+unprivileged service, and `/usr/share/doc/scour/` holds the system unit and
+the polkit rule as examples with a note on what a package puts where. The X11
+and Wayland libraries the window loads at run time are recommended, not
+required, so `--no-install-recommends` gives the command line on a server.
+Tested in Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Fedora 40 containers.
+`scripts/package` builds both from compiled binaries; it needs `cargo-deb`,
+`cargo-generate-rpm` and `rsvg-convert`.
+
 **Windows.** The workspace builds for `x86_64-pc-windows-msvc`, and the
 release includes a zip. The binaries were started once on one Windows machine:
 the service indexed and the command line searched. The window, live watching,
