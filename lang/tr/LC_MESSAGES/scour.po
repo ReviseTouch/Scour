@@ -1540,3 +1540,77 @@ msgstr "{n} dosya çöp kutusuna taşınsın mı? {path} altındaki kalır."
 
 msgid "{gone} moved to trash · {n} stayed: {which}"
 msgstr "{gone} tanesi çöp kutusuna taşındı · {n} tanesi kaldı: {which}"
+
+msgid "for example super+f or ctrl+alt+s"
+msgstr "örneğin super+f ya da ctrl+alt+s"
+
+msgid "Keyboard shortcut"
+msgstr "Klavye kısayolu"
+
+msgid "not bound"
+msgstr "bağlı değil"
+
+msgid "Bind"
+msgstr "Bağla"
+
+msgid "Change"
+msgstr "Değiştir"
+
+msgid "Remove"
+msgstr "Kaldır"
+
+msgid "Copy"
+msgstr "Kopyala"
+
+msgid "It takes effect after the next login."
+msgstr "Bir sonraki oturum açılışında geçerli olur."
+
+msgid "Open Scour from anywhere: bind Super+F"
+msgstr "Scour'u her yerden aç: Super+F'yi bağla"
+
+msgid "Bind Super+F"
+msgstr "Super+F'yi bağla"
+
+msgid "Not now"
+msgstr "Şimdi değil"
+
+msgid "This desktop cannot be bound from here. Bind a key of your choice to:"
+msgstr "Bu masaüstünde buradan bağlanamıyor. İstediğin tuşu şu komuta bağla:"
+
+msgid "no key given"
+msgstr "tuş verilmedi"
+
+msgid "a key has to follow the modifiers"
+msgstr "değiştiricilerden sonra bir tuş gelmeli"
+
+msgid "modifiers alone are not a key"
+msgstr "tek başına değiştiriciler bir tuş değildir"
+
+msgid "not a modifier: {m}"
+msgstr "değiştirici değil: {m}"
+
+msgid "this desktop cannot be bound from here"
+msgstr "bu masaüstünde buradan bağlanamıyor"
+
+msgid "a sandboxed program cannot bind a key"
+msgstr "kum havuzundaki bir program tuş bağlayamaz"
+
+# --- the desktop key, as the command line and the terminal say it ---
+
+msgid "desktop"
+msgstr "masaüstü"
+
+msgid "key"
+msgstr "kısayol"
+
+msgid "command"
+msgstr "komut"
+
+msgid "KEYBOARD SHORTCUT"
+msgstr "KLAVYE KISAYOLU"
+
+msgid "type a combination and press Enter"
+msgstr "bir kombinasyon yazıp Enter'a bas"
+
+msgid "the key that opens Scour"
+msgstr "Scour'u açan tuş"

@@ -51,9 +51,17 @@ scour-openers = { workspace = true }
 # same lines; see `icons`. Dependency-free for the same reason `scour-preview`
 # is — where a picture lives is a question about a desktop, not about an index.
 scour-thumbs  = { workspace = true }
+# The desktop's key that opens Scour. Its own crate for the same reason the
+# wastebasket is: which program speaks to GNOME or to KDE is a question about
+# a desktop, not about an index, and all three faces ask it.
+scour-hotkey  = { workspace = true }
 anyhow       = { workspace = true }
 serde_json   = { workspace = true }
 clap         = { workspace = true }
 
 [build-dependencies]
 scour-icon = { workspace = true }
+
+[dev-dependencies]
+# Stub `gsettings` and `kwriteconfig` scripts for the hotkey route's tests.
+tempfile = "3"

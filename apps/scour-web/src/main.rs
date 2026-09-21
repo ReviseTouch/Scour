@@ -5,6 +5,7 @@
 //! 403, an `Origin` that must be ours, and `POST` for everything that acts.
 
 mod dupes;
+mod hotkey;
 mod http;
 mod icons;
 
@@ -262,7 +263,9 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/open-with"
         || req.path == "/api/face"
         || req.path == "/api/thumb"
-        || (req.path == "/api/settings" && req.param("set").is_some());
+        || (req.path == "/api/settings" && req.param("set").is_some())
+        // Reading the desktop's key is a `GET`; writing one carries a body.
+        || (req.path == "/api/hotkey" && !req.body.is_empty());
     if req.method != if acting { "POST" } else { "GET" } {
         http::fail(
             &mut stream,
@@ -329,6 +332,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/open-with" if doing.launch => api_open_with(&mut stream, client, &req),
         "/api/open-with" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
         "/api/duplicates" => dupes::api_duplicates(&mut stream, client, &req),
+        "/api/hotkey" => hotkey::api_hotkey(&mut stream, &req),
         _ => http::fail(&mut stream, "404 Not Found", "no such route"),
     }
 }

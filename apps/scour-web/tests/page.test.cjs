@@ -339,3 +339,86 @@ test('a group shows every path on demand, and the way back', () => {
   // The control stays, or an expanded group can never be shortened again.
   assert.ok(long.includes('show fewer'), long);
 });
+
+// The desktop's key: the three states of the row, the grammar it checks
+// before a round trip, and what a press puts in the body.
+function hotkeyContext() {
+  const c = context();
+  Object.assign(c, {
+    T(msgid, vars) {
+      let s = msgid;
+      if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(vars[k]);
+      return s;
+    },
+    esc: (v) => String(v).replace(/[&<>"]/g, (ch) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]),
+  });
+  vm.runInContext(section('  const HOTKEY_MODS = new Set([', '\n  const hotkeyBody ='), c);
+  return c;
+}
+
+test('the row says what is bound, what is not, and what cannot be', () => {
+  const c = hotkeyContext();
+
+  const bound = c.hotkeyMarkup({ desktop: 'gnome', can_bind: true, key: 'super+f', command: '/opt/scour-gui' });
+  assert.ok(bound.includes('<code>super+f</code>'), bound);
+  assert.ok(bound.includes('value="super+f"'), bound);
+  assert.ok(bound.includes('>Change<'), bound);
+  assert.ok(bound.includes('>Remove<'), bound);
+  assert.ok(!bound.includes('>Bind<'), bound);
+
+  const free = c.hotkeyMarkup({ desktop: 'kde', can_bind: true, key: null, command: 'scour-gui' });
+  assert.ok(free.includes('not bound'), free);
+  assert.ok(free.includes('>Bind<'), free);
+  // Nothing to remove, so no button that would send a clear for nothing.
+  assert.ok(!free.includes('hk-clear'), free);
+  assert.ok(free.includes('for example super+f or ctrl+alt+s'), free);
+
+  const cannot = c.hotkeyMarkup({ desktop: 'other', can_bind: false, key: null, command: 'scour-gui' });
+  assert.ok(cannot.includes('This desktop cannot be bound from here.'), cannot);
+  assert.ok(cannot.includes('<code>scour-gui</code>'), cannot);
+  assert.ok(cannot.includes('>Copy<'), cannot);
+  // No field: there is nothing this page could do with what was typed in it.
+  assert.ok(!cannot.includes('hk-key'), cannot);
+
+  // Every state keeps the line a refusal is written into.
+  for (const drawn of [bound, free, cannot]) assert.ok(drawn.includes('class="hk-said"'), drawn);
+  assert.equal(c.hotkeyMarkup(null), '');
+});
+
+test('a command with markup in it reaches the row as text', () => {
+  const c = hotkeyContext();
+  const drawn = c.hotkeyMarkup({ can_bind: false, command: 'run "<b>x</b>"' });
+  assert.ok(drawn.includes('run &quot;&lt;b&gt;x&lt;/b&gt;&quot;'), drawn);
+  assert.ok(!drawn.includes('<b>'), drawn);
+});
+
+test('the combination is checked against the same grammar the service parses', () => {
+  const c = hotkeyContext();
+  for (const good of ['super+f', 'Super+F', 'ctrl+alt+s', 'win+space', 'super+F2',
+                      'Control+Option+Enter', 'ctrl+"', 'ctrl++', 'f', 'cmd+meta+x',
+                      '  super+f  ']) {
+    assert.equal(c.hotkeyFault(good), '', good);
+  }
+  assert.equal(c.hotkeyFault(''), 'no key given');
+  assert.equal(c.hotkeyFault('   '), 'no key given');
+  assert.equal(c.hotkeyFault(null), 'no key given');
+  assert.equal(c.hotkeyFault('ctrl+'), 'a key has to follow the modifiers');
+  assert.equal(c.hotkeyFault('ctrl+alt+'), 'a key has to follow the modifiers');
+  assert.equal(c.hotkeyFault('hyper+f'), 'not a modifier: hyper');
+  assert.equal(c.hotkeyFault('Hyper+f'), 'not a modifier: hyper');
+  assert.equal(c.hotkeyFault('super+ctrl+wat+f'), 'not a modifier: wat');
+});
+
+test('a press sends the body the route reads, and sends nothing for a mistake', () => {
+  const c = hotkeyContext();
+  // The body as it goes over the wire: the object itself is another realm's.
+  const sent = (what, text) => JSON.stringify(c.hotkeyAsk(what, text));
+  assert.equal(sent('set', '  Super+F  '), '{"set":"Super+F"}');
+  assert.equal(sent('clear'), '{"clear":true}');
+  // Not a combination: nothing to send, so the row says so instead.
+  assert.equal(c.hotkeyAsk('set', 'hyper+f'), null);
+  assert.equal(c.hotkeyAsk('set', ''), null);
+  // A clear is a clear whatever is in the field.
+  assert.equal(sent('clear', 'hyper+f'), '{"clear":true}');
+});

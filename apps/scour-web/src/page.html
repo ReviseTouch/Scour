@@ -891,6 +891,31 @@
   }
   form.add button:hover { border-color: var(--ink-3); }
 
+  /* The desktop's key. The field and its buttons are `form.add`'s, so the two
+     places in this sheet that take typing look like one. */
+  .hk-now { margin: 0 0 calc(var(--u) * 2); }
+  .hk-now code { font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+  .hk-none { color: var(--ink-3); }
+  /* Nothing here can bind: the command is shown to be bound by hand. */
+  .hk-cmd {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    margin-top: calc(var(--u) * 2);
+  }
+  .hk-cmd code {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--ink); overflow-wrap: anywhere;
+  }
+  .hk-cmd button {
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .hk-cmd button:hover { border-color: var(--ink-3); }
+  /* One line for both what went wrong and what is merely waiting. */
+  .hk-said { margin: calc(var(--u) * 2) 0 0; font-size: 11px; color: var(--ink-3); }
+  .hk-said.bad { color: var(--q-bad); }
+
   .help-head { display: flex; align-items: baseline; gap: calc(var(--u) * 3); }
   .help h1 {
     flex: 1;
@@ -1329,6 +1354,9 @@
          data-t-aria="how to run it">
       <h2 data-t="how to run it"></h2>
       <div id="faces-body"></div>
+      <!-- The desktop's own key, which is the other way to run it. -->
+      <h3 data-t="Keyboard shortcut"></h3>
+      <div id="hotkey-body"></div>
     </div>
 
     <div id="rules-panel" class="sheet" hidden role="dialog" aria-modal="false"
@@ -1618,6 +1646,22 @@
       );
       if (!r.ok) throw new Error(await r.text());
       return r.json();
+    },
+    /* The desktop's key that opens Scour. Reading is a `GET`; setting and
+       clearing carry a body, which is what makes them a `POST`. */
+    hotkey: () => SERVICE.get("hotkey", {}),
+    setHotkey: async (change) => {
+      const r = await fetch(`/api/hotkey?${new URLSearchParams({ t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify(change),
+      });
+      const j = await r.json().catch(() => ({}));
+      /* A refused combination says why in the body; the status alone would
+         lose the one sentence worth showing. */
+      if (j.error) throw new Error(j.error);
+      if (!r.ok) throw new Error(`hotkey: ${r.status}`);
+      return j;
     },
     status: () => SERVICE.get("status", {}),
     /* The one request meant to be slow: it answers when the index would. */
@@ -5363,12 +5407,135 @@
     document.body.append(note);
   }
 
+  /* The desktop's key that opens Scour. GNOME and KDE are written to from
+   * here; anywhere else the row can only say what to bind by hand. */
+
+  /* A mirror of `Key::parse`'s modifiers, so a mistake is caught before a
+   * round trip. The server is the authority: when the two disagree its 400
+   * is what the row shows, and these sentences are `KeyError`'s own — the
+   * crate returns English, so a translated copy here would be a second
+   * wording of the same refusal. */
+  const HOTKEY_MODS = new Set([
+    "super", "win", "meta", "cmd", "mod4",
+    "ctrl", "control", "primary",
+    "alt", "option", "mod1",
+    "shift",
+  ]);
+
+  /* Why this is not a combination, or "" when it is one. */
+  function hotkeyFault(text) {
+    const s = String(text == null ? "" : text).trim();
+    if (!s) return "no key given";
+    let head, key;
+    /* The last `+` separates the key, so `ctrl++` is Ctrl and the plus key. */
+    if (s.endsWith("++")) { head = s.slice(0, -2); key = "+"; }
+    else if (s.endsWith("+")) return "a key has to follow the modifiers";
+    else {
+      const at = s.lastIndexOf("+");
+      head = at < 0 ? "" : s.slice(0, at);
+      key = at < 0 ? s : s.slice(at + 1);
+    }
+    for (const m of head.split("+").filter(Boolean)) {
+      const low = m.toLowerCase();
+      if (!HOTKEY_MODS.has(low)) return "not a modifier: " + low;
+    }
+    return key.trim() ? "" : "modifiers alone are not a key";
+  }
+
+  /* What a press sends, or null when what was typed is not a key. */
+  function hotkeyAsk(what, text) {
+    if (what === "clear") return { clear: true };
+    return hotkeyFault(text) ? null : { set: String(text).trim() };
+  }
+
+  /* The row from one answer: a key, no key, or a desktop nothing here can
+     bind, which can only name the command. */
+  function hotkeyMarkup(h) {
+    if (!h) return "";
+    if (!h.can_bind) {
+      return `<p class="why">` +
+        esc(T("This desktop cannot be bound from here. Bind a key of your choice to:")) +
+        `</p><div class="hk-cmd"><code>${esc(h.command)}</code>` +
+        `<button type="button" class="hk-copy">${esc(T("Copy"))}</button></div>` +
+        `<p class="hk-said" role="status"></p>`;
+    }
+    const bound = h.key || "";
+    return `<p class="hk-now">` +
+      (bound ? `<code>${esc(bound)}</code>`
+             : `<span class="hk-none">${esc(T("not bound"))}</span>`) +
+      `</p><form class="add hk-set">` +
+      `<input type="text" class="hk-key" value="${esc(bound)}"` +
+      ` aria-label="${esc(T("Keyboard shortcut"))}"` +
+      ` placeholder="${esc(T("for example super+f or ctrl+alt+s"))}" />` +
+      `<button type="submit">${esc(bound ? T("Change") : T("Bind"))}</button>` +
+      (bound ? `<button type="button" class="hk-clear">${esc(T("Remove"))}</button>` : "") +
+      `</form><p class="hk-said" role="status"></p>`;
+  }
+
+  const hotkeyBody = document.getElementById("hotkey-body");
+  let HOTKEY = null;
+
+  /* `role="status"` on a line that is already there, so a screen reader hears
+     the refusal without the field being rebuilt under the cursor. */
+  const hotkeySaid = (text, bad) => {
+    const p = hotkeyBody.querySelector(".hk-said");
+    if (!p) return;
+    p.textContent = text || "";
+    p.classList.toggle("bad", !!bad && !!text);
+  };
+
+  const drawHotkey = (said, bad) => {
+    hotkeyBody.innerHTML = hotkeyMarkup(HOTKEY);
+    hotkeySaid(said, bad);
+  };
+
+  const loadHotkey = () =>
+    SERVICE.hotkey()
+      .then((h) => { HOTKEY = h; drawHotkey(h.error, true); })
+      .catch(() => { HOTKEY = null; drawHotkey(""); });
+
+  const sendHotkey = (change) =>
+    SERVICE.setHotkey(change)
+      .then((h) => {
+        HOTKEY = h;
+        /* KDE writes the file; `kglobalaccel` reads it at login. */
+        if (h.applies === "after_login") drawHotkey(T("It takes effect after the next login."));
+        else drawHotkey(h.error, true);
+      })
+      .catch((e) => hotkeySaid(e.message || String(e), true));
+
+  hotkeyBody.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const box = hotkeyBody.querySelector(".hk-key");
+    const typed = box ? box.value : "";
+    const fault = hotkeyFault(typed);
+    if (fault) { hotkeySaid(fault, true); return; }
+    sendHotkey(hotkeyAsk("set", typed));
+  });
+
+  /* Nothing is said while somebody is still typing it. */
+  hotkeyBody.addEventListener("input", (e) => {
+    if (e.target.classList.contains("hk-key")) hotkeySaid("");
+  });
+
+  hotkeyBody.addEventListener("click", (e) => {
+    if (e.target.closest(".hk-clear")) { sendHotkey(hotkeyAsk("clear")); return; }
+    const copy = e.target.closest(".hk-copy");
+    if (!copy || !HOTKEY) return;
+    navigator.clipboard.writeText(HOTKEY.command).then(
+      () => {
+        copy.textContent = "✓";
+        setTimeout(() => { copy.textContent = T("Copy"); }, 2000);
+      },
+      () => hotkeySaid(T("could not copy"), true));
+  });
+
   facesBtn.addEventListener("click", () => {
     const open = facesPanel.hidden;
     ARMED = "";
     facesPanel.hidden = !open;
     facesBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    if (open) drawFaces();
+    if (open) { drawFaces(); loadHotkey(); }
   });
 
   rulesBtn.addEventListener("click", () => {

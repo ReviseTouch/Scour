@@ -5016,6 +5016,7 @@ dependencies = [
  "libc",
  "scour-config",
  "scour-core",
+ "scour-hotkey",
  "scour-i18n",
  "scour-icon",
  "scour-ipc",
@@ -5023,6 +5024,7 @@ dependencies = [
  "scour-settings",
  "scour-ui",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -5087,6 +5089,7 @@ dependencies = [
  "scour-clip",
  "scour-config",
  "scour-core",
+ "scour-hotkey",
  "scour-i18n",
  "scour-icon",
  "scour-ipc",
@@ -5287,6 +5290,7 @@ dependencies = [
  "scour-clip",
  "scour-config",
  "scour-core",
+ "scour-hotkey",
  "scour-i18n",
  "scour-icon",
  "scour-ipc",
@@ -5326,6 +5330,7 @@ dependencies = [
  "clap",
  "scour-config",
  "scour-core",
+ "scour-hotkey",
  "scour-i18n",
  "scour-icon",
  "scour-ipc",
@@ -5338,6 +5343,7 @@ dependencies = [
  "scour-trash",
  "scour-ui",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
