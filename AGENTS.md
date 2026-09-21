@@ -87,7 +87,11 @@ A client only. On the bare form everything after the query is the query, flags
 included; `-n` and `-s` go before it. `--json` prints the protocol type as the
 service sent it; `--socket` picks another service. `where`, `mcp-config` and
 `hotkey` reach no service. At a terminal five rows are shown, into a pipe forty,
-and the summary says how to get more.
+and the summary says how to get more. At a terminal `du` and `facets` draw their
+shares as bars — `scour-chart`'s numbers, the palette's colours, plain under
+`NO_COLOR`; the age legend names every band over a percent that the terminal's
+width holds, smallest dropped first, and never wraps. Into a pipe each prints
+the same table it always did.
 
 ### MCP — `scour-mcp`
 

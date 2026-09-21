@@ -21,6 +21,9 @@ workspace = true
 scour-core   = { workspace = true }
 scour-proto  = { workspace = true }
 scour-ui     = { workspace = true }
+# The shares behind the picture a terminal draws. Arithmetic only: the window
+# and this one print the same percentage of the same bytes.
+scour-chart  = { workspace = true }
 scour-ipc    = { workspace = true }
 scour-config = { workspace = true }
 scour-i18n   = { workspace = true }
