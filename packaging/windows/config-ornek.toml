@@ -1,0 +1,26 @@
+# Scour ayarları. Buradan kopyalayıp %APPDATA%\scour\config.toml'a koy,
+# ya da: scourd.exe --config config.toml
+#
+# `roots` ne verirsen onu indeksler. Sürücü harfiyle yaz.
+
+[[source]]
+name  = "belgeler"
+kind  = "local"
+roots = ['C:\Users\KULLANICI\Documents', 'C:\Users\KULLANICI\Downloads']
+watch = true
+
+# Bütün bir sürücü de olur; ilk tarama uzun sürer.
+# [[source]]
+# name  = "d-suruculu"
+# kind  = "local"
+# roots = ['D:\']
+# watch = true
+
+[scan]
+hidden          = true
+follow_symlinks = false
+threads         = 0      # 0 = diske göre kendi seçsin
+
+[exclude]
+dirs  = ["node_modules", "target", ".git", "$RECYCLE.BIN", "System Volume Information"]
+files = []

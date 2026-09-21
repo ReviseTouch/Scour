@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.2" date="2026-09-21" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.2</url>
+      <description>
+        <p>The report draws what it measures in every face; the keyboard shortcut is set from inside Scour; a face starts the service itself; one service instance per account; packages for Debian, Ubuntu and Fedora.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.1" date="2026-09-09" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.1</url>
       <description>

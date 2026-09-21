@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Assemble the Windows zip from a cross-build, the way the Linux tarball is
+# assembled by `scripts/release`.
+#
+#   scripts/release-windows        → dist/scour-<version>-windows-x86_64.zip
+#
+# Build first, statically linked so no Visual C++ Redistributable is needed:
+#
+#   RUSTFLAGS="-C target-feature=+crt-static" \
+#       cargo xwin build --release --target x86_64-pc-windows-msvc --workspace
+#
+# Six programs: `scour-watch` is Linux only. The two readmes and the sample
+# config come from packaging/windows with the version filled in.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="$(grep -m1 '^version' "$here/Cargo.toml" | sed 's/.*"\(.*\)"/\1/')"
+name="scour-$version-windows-x86_64"
+built="${SCOUR_WIN_DIR:-$here/target/x86_64-pc-windows-msvc/release}"
+dist="$here/dist"; stage="$dist/$name"
+rm -rf "$stage"; mkdir -p "$stage"
+for b in scour scourd scour-gui scour-tui scour-web scour-mcp; do
+    [ -f "$built/$b.exe" ] || { echo "missing $built/$b.exe — build first" >&2; exit 1; }
+    install -m755 "$built/$b.exe" "$stage/$b.exe"
+done
+for f in BENIOKU.txt README.txt; do
+    sed "s/@VERSION@/$version/g" "$here/packaging/windows/$f" > "$stage/$f"
+done
+install -m644 "$here/packaging/windows/config-ornek.toml" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
+rm -f "$dist/$name.zip"
+( cd "$dist" && zip -q -r "$name.zip" "$name" )
+rm -rf "$stage"
+echo "$dist/$name.zip  ($(du -h "$dist/$name.zip" | cut -f1))"

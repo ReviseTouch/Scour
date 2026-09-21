@@ -1,5 +1,7 @@
 # Scour
 
+<img src="assets/scour.svg" width="72" alt="">
+
 *Türkçe: [README.tr.md](README.tr.md)*
 
 Scour is a file indexer and search tool for Linux. It keeps every file and
@@ -81,15 +83,15 @@ in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 ### From a release
 
 ```bash
-tar xzf scour-0.2.0-alpha.1-linux-x86_64.tar.gz
-cd scour-0.2.0-alpha.1-linux-x86_64
+tar xzf scour-0.2.0-alpha.2-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.2-linux-x86_64
 ./install.sh
 ```
 
 The script does not require a password. It installs seven binaries into
 `~/.local/bin`, a menu entry and the icon — scalable plus nine raster sizes,
 for the panels that do not draw an SVG — into `~/.local/share`, and on GNOME
-and KDE binds **Super+F** to the window (`SCOUR_KEY=ctrl+alt+s` selects another
+and KDE binds **Super+F** to Scour (`SCOUR_KEY=ctrl+alt+s` selects another
 key, `SCOUR_KEY=none` skips the binding). At a terminal it then offers to start
 Scour with your session as a systemd user unit and waits until the index
 answers; `--yes` accepts, `--no-service` skips the offer, and a run without a
@@ -109,8 +111,8 @@ in clean Ubuntu 22.04, Ubuntu 24.04 and Debian 11 containers.
 ### Debian, Ubuntu and Fedora packages
 
 ```bash
-sudo apt install ./scour_0.2.0~alpha.1-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
-sudo dnf install ./scour-0.2.0~alpha.1-1.x86_64.rpm     # Fedora
+sudo apt install ./scour_0.2.0~alpha.2-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
+sudo dnf install ./scour-0.2.0~alpha.2-1.x86_64.rpm     # Fedora
 ```
 
 Both carry the seven binaries, six in `/usr/bin` and the privileged

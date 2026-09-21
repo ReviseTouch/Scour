@@ -1,0 +1,59 @@
+Scour @VERSION@ — Windows, DENEYSEL
+=======================================
+
+Ne olduğu: Linux'ta günlük kullanılan bir dosya arama aracının Windows
+derlemesi. Gerçek Windows'ta bir öğleden sonra, bir makinede denendi: servis
+indeksledi, komut satırı aradı, sorgu dili cevap verdi. Kapsamlı test
+yapılmadı; ilk denenlerden birisin.
+
+Kurulum yok. Hiçbir şey kurmuyor, kayıt defterine dokunmuyor.
+Visual C++ Redistributable GEREKMİYOR (statik bağlandı).
+
+BAŞLARKEN
+---------
+1) config-ornek.toml'u aç, `roots` satırını kendi klasörlerinle değiştir.
+   config.toml adıyla kaydet; bu klasörde bıraksan yeter.
+
+2) Bir komut istemi aç, bu klasöre gel ve servisi başlat:
+       scourd.exe --config config.toml
+   İlk tarama klasörlerinin büyüklüğüne göre saniyeler-dakikalar sürer.
+   Bu pencereyi açık bırak.
+
+3) İkinci bir komut isteminde ara:
+       scour.exe rapor
+       scour.exe *.pdf
+       scour.exe "ext:xlsx size:>10mb"
+   Uçbirimde beş satır gösterir; daha fazlası için  -n 40  ekle.
+
+DİĞER YÜZLER (servis çalışırken)
+--------------------------------
+   scour-gui.exe     pencere
+   scour-tui.exe     tam ekran uçbirim arayüzü
+   scour-web.exe     tarayıcıda açar
+   scour-mcp.exe     MCP sunucusu (yapay zekâ araçları için)
+
+SORGU DİLİ
+----------
+   boşluk        VE          |  VEYA          ! DEĞİL
+   "iki kelime"  tam ifade    *  ?  joker
+   ext:pdf   kind:image   size:>10mb   dm:7d   under:C:\Yol
+   scour.exe syntax   tam başvuru
+
+NE BEKLEMEMELİSİN
+-----------------
+* Canlı izleme (watch = true) Windows'ta denenmedi. Çalışmazsa
+  watch = false yap; servis yine de düzenli olarak tarayıp günceller.
+* Everything kadar hızlı ilk tarama bekleme: Everything NTFS'in USN
+  günlüğünü okur, bu sürüm okumuyor. Arama hızı benzer, ilk tarama değil.
+* Pencere (scour-gui.exe) Windows'ta denenmedi. Açılmazsa scour-tui.exe
+  ya da scour-web.exe dene; ikisi de aynı servisi kullanır.
+* Ağ sürücüleri ve FAT32 denenmedi.
+
+BİR ŞEY OLMAZSA
+---------------
+scourd.exe'nin penceresindeki satırları kopyala; hata orada yazıyor.
+
+Kaldırmak: bu klasörü sil. Bir de indeks klasörünü (config'de `dir`
+verdiysen orası, vermediysen %LOCALAPPDATA%\scour).
+
+Lisans: MIT VEYA Apache-2.0 (iki dosya da yanında).
