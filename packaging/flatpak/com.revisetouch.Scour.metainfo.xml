@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The app store entry. Facts only, taken from README.md; the summary and the
+     description are what somebody reads before installing, so no adjective in
+     here is doing work the measurements do not. -->
+<component type="desktop-application">
+  <id>com.revisetouch.Scour</id>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <!-- Matches LICENSE-MIT and LICENSE-APACHE at the root of the repository. -->
+  <project_license>MIT OR Apache-2.0</project_license>
+
+  <name>Scour</name>
+  <summary>File index and search for a machine with millions of files</summary>
+
+  <developer id="com.revisetouch">
+    <name>ReviseTouch</name>
+  </developer>
+
+  <description>
+    <p>
+      Scour keeps every file and folder of the volumes it is given in an index
+      of its own, updates that index as the filesystem changes, and answers
+      searches from it in milliseconds. It walks the filesystem once rather
+      than on every query. It depends on no external search engine and no
+      database, and by default it indexes the home directory.
+    </p>
+    <p>
+      One service holds the index and four interfaces connect to it over a
+      local socket, sharing its settings: a command line, a native window, a
+      page served to the browser, and a full-screen terminal interface. The
+      menu entry opens whichever of them was last switched to.
+    </p>
+    <p>
+      Searching is case-insensitive. Whitespace means AND, a vertical bar
+      means OR, an exclamation mark negates, quotes enclose a phrase, and the
+      asterisk and question mark are wildcards. A term of the form
+      field:value restricts a field — among them the extension, the size, the
+      date modified, the kind of file, and the directory a result must be
+      under. Parsing does not fail: an unrecognised field is searched for as
+      text, and the explain command shows how a query was read.
+    </p>
+    <p>
+      The same index is exposed to language models through a Model Context
+      Protocol server with eleven read-only tools, each of which bounds its
+      answer and reports when it was truncated.
+    </p>
+    <p>
+      This is an alpha release. The index format may change between releases.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">com.revisetouch.Scour.desktop</launchable>
+
+  <url type="homepage">https://github.com/ReviseTouch/Scour</url>
+  <url type="bugtracker">https://github.com/ReviseTouch/Scour/issues</url>
+  <url type="vcs-browser">https://github.com/ReviseTouch/Scour</url>
+
+  <!-- The four faces, taken at the same moment with the same query. The files
+       are docs/img/*.webp on branch main; AppStream 1.0 accepts WebP, and the
+       raw URL is what an app store fetches. -->
+  <screenshots>
+    <screenshot type="default">
+      <image type="source" width="1833" height="1133">https://raw.githubusercontent.com/ReviseTouch/Scour/main/docs/img/window.webp</image>
+      <caption>The window, showing code modified in the last week</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1900" height="1084">https://raw.githubusercontent.com/ReviseTouch/Scour/main/docs/img/browser.webp</image>
+      <caption>The same query in a browser</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1900" height="1234">https://raw.githubusercontent.com/ReviseTouch/Scour/main/docs/img/terminal.webp</image>
+      <caption>The same query in a terminal</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Utility</category>
+    <category>FileTools</category>
+  </categories>
+
+  <keywords>
+    <keyword>search</keyword>
+    <keyword>find</keyword>
+    <keyword>file</keyword>
+    <keyword>index</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <!-- The tags on the repository. Both are marked development: the project
+       calls itself alpha and neither release claims otherwise. -->
+  <releases>
+    <release version="0.2.0-alpha.1" date="2026-09-09" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.1</url>
+      <description>
+        <p>Columns, query rails, and a service that costs less to run.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-08-26" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.1.0</url>
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

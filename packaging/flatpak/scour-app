@@ -1,0 +1,14 @@
+#!/bin/sh
+# The browser face, inside the Flatpak. Replaces `scripts/scour-app`.
+#
+# That script hosts the page in a browser of its own — `chromium --app`, or
+# Firefox in kiosk mode — and there is no browser inside this sandbox to host
+# it with. So the bridge starts and hands its URL to `xdg-open`, which in a
+# Flatpak is the OpenURI portal: the desktop's own browser opens a tab at
+# 127.0.0.1. A tab rather than a window with no chrome around it; the page is
+# the same one.
+#
+# This is also why the manifest asks for `--share=network`. Without it the
+# sandbox gets a loopback of its own and the browser, which is outside, finds
+# nothing listening.
+exec scour-web "$@"

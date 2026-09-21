@@ -1,0 +1,218 @@
+# Scour as a Flatpak.
+#
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#       build-dir packaging/flatpak/com.revisetouch.Scour.yml
+#
+# What a sandbox changes about this program, in one place, because each of
+# these is a thing somebody will otherwise report as a bug:
+#
+#   * **No live watching.** On Linux the only watcher is a `fanotify` mark,
+#     which needs `CAP_SYS_ADMIN`; a Flatpak never has it, and `scour-watch`
+#     cannot help because there is no way to install a privileged helper or a
+#     system unit from inside. There is no inotify fallback — the crate does
+#     not even compile `notify` on Linux, on purpose: one watch per directory
+#     out of a session-wide budget starves the rest of the desktop. Unwatched
+#     is not unattended: `scourd` still reconciles a root by walking it when
+#     the root's pulse moves (btrfs `ctransid`, or the write-sector counter in
+#     `/proc/diskstats`, both readable here), and every source gets a full
+#     pass every `reconcile_interval_secs` — 1800 by default. Changes are
+#     found late rather than lost. Network and FUSE mounts have no pulse and
+#     are only reconciled by that periodic pass.
+#
+#   * **No system unit.** Nothing outside starts `scourd`. The window, the
+#     terminal face and the browser bridge start it themselves when no service
+#     answers (`scour-launch`), so the app's command is simply the launcher
+#     and the service is a background process of the app. The command line
+#     does not autostart: open a face first, or
+#     `flatpak run --command=scourd com.revisetouch.Scour &`.
+#
+#   * **The socket is private to the sandbox.** `scourd` listens on
+#     `$XDG_RUNTIME_DIR/scour/scour.sock`. Inside, `XDG_RUNTIME_DIR` is
+#     `/run/user/<uid>` as usual, but it is a directory of the app's own —
+#     host `/run/user/<uid>/.flatpak/com.revisetouch.Scour/xdg-run` — shared
+#     by every instance of this app and by nothing else. So faces and service
+#     find each other, and a `scour` on the *host* does not. Either run the
+#     client in the same sandbox:
+#
+#         flatpak run --command=scour     com.revisetouch.Scour "ext:rs dm:7d"
+#         flatpak run --command=scour-mcp com.revisetouch.Scour
+#
+#     — that second line is what an MCP host should be given instead of a bare
+#     `scour-mcp` path — or point a host client at the socket by hand:
+#
+#         scour --socket /run/user/1000/.flatpak/com.revisetouch.Scour/xdg-run/scour/scour.sock …
+#
+#     `--filesystem=xdg-run/scour:create` is **not** requested, and not
+#     because it would fail: it publishes the host's `/run/user/<uid>/scour`
+#     at the very path this app computes, so the two would share one socket.
+#     That is the problem. A machine with Scour installed both ways would have
+#     two services racing for one address with two different indexes behind
+#     them, and which one answered would depend on start order.
+#
+#   * **Thumbnails are asked for and never arrive.** `scour-thumbs` reads the
+#     machine's `$XDG_DATA_DIRS/thumbnailers/*.thumbnailer` declarations. The
+#     runtime ships five, covering png, jpeg, gif, tiff, webp, avif, jxl and
+#     svg — and does **not** ship the `/usr/bin/gdk-pixbuf-thumbnailer` all
+#     five name; that binary is in the Sdk, not the Platform. So a picture row
+#     is attempted exactly once, the spawn fails, the failure is recorded in
+#     the freedesktop `fail/` directory, and the row is never asked again.
+#     Icons instead of tiles, no error in front of anybody, one cheap failed
+#     `exec` per file. A module building `gdk-pixbuf-thumbnailer` into the app
+#     would fix the image kinds; video and PDF need thumbnailers no runtime
+#     carries.
+#
+#   * **No clipboard helper.** `scour-clip` shells out to `wl-copy`, `xclip`
+#     or `xsel`. None is in the runtime, so Copy reports "no clipboard helper
+#     found" rather than failing silently.
+#
+#   * **No terminal.** If the remembered face is the terminal one, the
+#     launcher looks for a terminal emulator to host it and there is none in
+#     the sandbox. `flatpak run --command=scour-tui com.revisetouch.Scour` in
+#     a terminal of your own is the way to that face.
+#
+#   * **Trash goes to the app's own directory.** `scour-trash` follows the
+#     freedesktop trash spec and writes `$XDG_DATA_HOME/Trash` for files on
+#     the home filesystem — which here is
+#     `~/.var/app/com.revisetouch.Scour/data/Trash`, not the trash the file
+#     manager shows. Files on another filesystem still go to that volume's
+#     `.Trash-<uid>`, where the file manager does find them.
+#
+# **Not requested, deliberately:** `--talk-name=org.freedesktop.Flatpak`. It
+# runs commands on the host — a sandbox escape — and Flathub rejects it.
+# `--talk-name=org.freedesktop.portal.Desktop` is not requested either,
+# because every app may talk to the portals already; `xdg-open` in this
+# runtime is the portal shim and needs nothing added here.
+
+id: com.revisetouch.Scour
+
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+
+# Rust is not in the base SDK. The extension tracks stable; the workspace
+# needs 1.88 or later (edition 2024, let-chains).
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+# The launcher, not a face: which of the four a menu entry means is a setting
+# somebody chose from inside one of them, and `scour-open` is the one place
+# that reads it.
+command: scour-open
+
+# The menu entry and the icon are installed under the project's own name and
+# renamed here, so `packaging/scour.desktop` and `assets/scour.svg` stay the
+# one copy of each. This also rewrites the desktop file's `Icon=` key to the
+# app id; `Exec=scour-open` and `StartupWMClass=scour` are left alone.
+rename-desktop-file: scour.desktop
+rename-icon: scour
+
+finish-args:
+  # The window. Slint here is `renderer-software` — the drawing is on the CPU
+  # — so nothing needs a GPU to put pixels on screen. `--device=dri` is for
+  # the compositor's own buffer path and for builds with the optional `skia`
+  # feature; `--share=ipc` is what makes X11 shared memory work under
+  # `fallback-x11`.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+
+  # **The whole filesystem, read and write.** This is a file search tool: it
+  # answers "where is that file" from an index of everything the person can
+  # reach, and an index of a quarter of the machine answers a quarter of the
+  # questions. The default source is the home directory; any other volume the
+  # person mounts is added by editing the source list, and the portal cannot
+  # grant a directory that does not exist yet at every start. Write and not
+  # read-only because a row can be renamed, trashed or opened from every face.
+  #
+  # Note that `/usr` inside the sandbox is the runtime's, not the host's — a
+  # source list that names `/usr` indexes the runtime. The host's copy is at
+  # `/run/host/usr`.
+  - --filesystem=host
+
+  # The browser face serves one page on 127.0.0.1 with a token per run, and
+  # then asks the desktop to open that URL. The browser is outside the
+  # sandbox; without a shared network namespace it would be looking at its own
+  # loopback and find nothing listening. Scour opens no outbound connection:
+  # the bridge binds 127.0.0.1 only, checks `Origin`, and there is no updater
+  # and no telemetry.
+  - --share=network
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    # Where the generated sources put the vendored registry, and where
+    # `cargo/config` — written by the last entry of cargo-sources.json —
+    # points `source.vendored-sources` at. The module is named `scour`, so
+    # this is its build directory.
+    CARGO_HOME: /run/build/scour/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: scour
+    buildsystem: simple
+
+    build-commands:
+      # `--frozen` is `--locked --offline`: the build fails rather than
+      # reaching for the network if Cargo.lock and cargo-sources.json have
+      # drifted apart. Regenerate with the command in README.md when they do.
+      - cargo --frozen build --release --workspace
+
+      # The seven binaries of a release, and the two scripts beside them.
+      # `scour-watch` is the privileged fanotify helper: it is installed for
+      # parity with the tarball and cannot do its job here, since the sandbox
+      # grants no `CAP_SYS_ADMIN`. Keeping it means `scour where` and the
+      # documentation describe the same set of files everywhere.
+      - install -Dm755 target/release/scour       /app/bin/scour
+      - install -Dm755 target/release/scourd      /app/bin/scourd
+      - install -Dm755 target/release/scour-gui   /app/bin/scour-gui
+      - install -Dm755 target/release/scour-tui   /app/bin/scour-tui
+      - install -Dm755 target/release/scour-web   /app/bin/scour-web
+      - install -Dm755 target/release/scour-mcp   /app/bin/scour-mcp
+      - install -Dm755 target/release/scour-watch /app/bin/scour-watch
+      - install -Dm755 scripts/scour-open         /app/bin/scour-open
+      # Not `scripts/scour-app`: that one needs a browser inside the sandbox
+      # to host a window with. See the header of the replacement.
+      - install -Dm755 packaging/flatpak/scour-app /app/bin/scour-app
+
+      # The menu entry, from the same file the tarball installs, so the two
+      # cannot drift. `rename-desktop-file` and `rename-icon` below turn
+      # `scour.desktop` into `com.revisetouch.Scour.desktop` and rewrite its
+      # `Icon=` key; `Exec=scour-open` and `StartupWMClass=scour` are left
+      # alone, and the class is what `slint::set_xdg_app_id("scour")` sets, so
+      # the task bar shows one entry and not two.
+      - install -Dm644 packaging/scour.desktop /app/share/applications/scour.desktop
+
+      # The icon at every size an app store and a task bar ask for. The PNGs
+      # are rendered here rather than committed, from the one SVG the rest of
+      # the project uses.
+      - install -Dm644 assets/scour.svg /app/share/icons/hicolor/scalable/apps/scour.svg
+      - for s in 64 128 256; do rsvg-convert -w $s -h $s assets/scour.svg -o scour-$s.png && install -Dm644 scour-$s.png /app/share/icons/hicolor/${s}x${s}/apps/scour.png; done
+
+      - install -Dm644 packaging/flatpak/com.revisetouch.Scour.metainfo.xml /app/share/metainfo/com.revisetouch.Scour.metainfo.xml
+
+    sources:
+      # **For Flathub, this becomes a git source** — the builders have no
+      # local tree, and the manifest lives in its own repository:
+      #
+      #   - type: git
+      #     url: https://github.com/ReviseTouch/Scour.git
+      #     tag: v0.2.0-alpha.1
+      #     commit: <the sha that tag points at>
+      #
+      # The local directory is what makes a build of the working tree
+      # possible. `skip` keeps the 850,000 files of `target/` and the release
+      # archives in `dist/` out of the copy.
+      - type: dir
+        path: ../../
+        skip:
+          - target
+          - dist
+          - .git
+          - build-dir
+          - .flatpak-builder
+
+      # Every crate of Cargo.lock as its own archive, plus the `cargo/config`
+      # that points cargo at them. Generated — never edited by hand — by
+      # flatpak-builder-tools; see README.md for the command.
+      - cargo-sources.json
