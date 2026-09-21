@@ -27,6 +27,12 @@ if pgrep -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
 fi
 
 # A bridge from a window that has since closed: a killed browser tells nobody.
+# By the port it holds, not by its command line: the window used to start a
+# bare `scour-web`, which lands on the same port under another name.
+holder=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2 || true)
+if [[ -n $holder ]] && tr '\0' ' ' < "/proc/$holder/cmdline" 2>/dev/null | grep -q 'scour-web'; then
+    kill "$holder" 2>/dev/null || true
+fi
 pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
 
 # And the window that bridge belonged to: a profile has one owner, so a window
