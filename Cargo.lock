@@ -5107,6 +5107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-hotkey"
+version = "0.2.0-alpha.1"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "scour-i18n"
 version = "0.2.0-alpha.1"
 dependencies = [

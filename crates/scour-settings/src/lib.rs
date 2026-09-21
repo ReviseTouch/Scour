@@ -59,6 +59,10 @@ pub struct Settings {
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
     pub dupes_open: bool,
+    /// The window's first-run line about binding a key has been answered, one way
+    /// or the other; it is not shown again. Shared, so one face's answer counts.
+    #[serde(default)]
+    pub key_hint_seen: bool,
     /// What language the interface speaks, as a BCP-47 tag. Empty is "nobody has
     /// chosen", not English: with nothing here a frontend falls back to `config.toml`'s
     /// `ui.language` and then `LANG`, an order `scour_i18n::choose` owns. Not validated.
@@ -106,6 +110,7 @@ pub struct Change {
     pub sort: Option<String>,
     pub descending: Option<bool>,
     pub dupes_open: Option<bool>,
+    pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
     /// environment. `None` is "no opinion", as everywhere else here.
     pub language: Option<String>,
@@ -155,6 +160,9 @@ impl Change {
         }
         if let Some(v) = self.descending {
             to.descending = Some(v);
+        }
+        if let Some(v) = self.key_hint_seen {
+            to.key_hint_seen = v;
         }
         if let Some(v) = self.dupes_open {
             to.dupes_open = v;

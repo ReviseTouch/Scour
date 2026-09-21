@@ -1,0 +1,20 @@
+[package]
+name        = "scour-hotkey"
+description = "The desktop's key that opens Scour: read, set, clear"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# Nothing of Scour's: a key binding is the desktop's business, spoken to through
+# gsettings and kwriteconfig. Whether a program may bind is decided here; what to
+# say about it is the face's.
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"
