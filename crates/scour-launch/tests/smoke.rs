@@ -85,11 +85,9 @@ fn a_socket_that_appears_late_is_waited_for() {
     let log = home.path().join("scourd.log");
     let there = addr.clone();
 
-    let outcome = Autostart::new(
-        addr.to_str().expect("utf-8"),
-        log.clone(),
-        &move |_| there.exists(),
-    )
+    let outcome = Autostart::new(addr.to_str().expect("utf-8"), log.clone(), &move |_| {
+        there.exists()
+    })
     .binary(exe)
     .within(Duration::from_secs(5))
     .every(Duration::from_millis(50))

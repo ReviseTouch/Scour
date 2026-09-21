@@ -4,7 +4,11 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// The service's file name on this platform.
-pub const NAME: &str = if cfg!(windows) { "scourd.exe" } else { "scourd" };
+pub const NAME: &str = if cfg!(windows) {
+    "scourd.exe"
+} else {
+    "scourd"
+};
 
 /// `scourd` for the face that is running: beside it first, then on `PATH`.
 pub fn scourd() -> Option<PathBuf> {

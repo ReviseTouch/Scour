@@ -83,7 +83,9 @@ impl<'a> Autostart<'a> {
         };
         let mut child = match self.spawn(&exe) {
             Ok(child) => child,
-            Err(e) => return Outcome::Failed(format!("{} could not be started: {e}", exe.display())),
+            Err(e) => {
+                return Outcome::Failed(format!("{} could not be started: {e}", exe.display()));
+            }
         };
         self.wait_for(&mut child)
     }
@@ -153,7 +155,10 @@ impl<'a> Autostart<'a> {
         let here = std::env::current_exe()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| "this program".into());
-        format!("{} not found next to {here} or on PATH", crate::binary::NAME)
+        format!(
+            "{} not found next to {here} or on PATH",
+            crate::binary::NAME
+        )
     }
 }
 
@@ -209,12 +214,6 @@ pub fn wanted() -> bool {
 /// undone by the next keystroke.
 pub fn ensure_once(plan: &Autostart<'_>) -> Outcome {
     static DONE: OnceLock<Outcome> = OnceLock::new();
-    DONE.get_or_init(|| {
-        if wanted() {
-            plan.run()
-        } else {
-            Outcome::Off
-        }
-    })
-    .clone()
+    DONE.get_or_init(|| if wanted() { plan.run() } else { Outcome::Off })
+        .clone()
 }
