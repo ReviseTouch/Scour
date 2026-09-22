@@ -281,11 +281,22 @@
     font-variant-numeric: tabular-nums;
     color: var(--ink-3);
     letter-spacing: .02em;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    min-width: 0;
   }
+  .meter > span { white-space: nowrap; flex: none; }
+  .meter > .tools, .meter > .views { flex: none; }
   .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
   .meter .ms  { color: var(--t0); font-weight: 650; }
   .meter .sep { color: var(--line); }
+  /* What the meter has shed for want of width — see `fitMeter`. */
+  .meter[data-drop~="note"] #path-note, .meter[data-drop~="note"] #path-note-sep,
+  .meter[data-drop~="rows"] #rows, .meter[data-drop~="rows"] #rows-sep,
+  .meter[data-drop~="stale"] #stale, .meter[data-drop~="stale"] #stale-sep { display: none; }
+  .meter #stale .short { display: none; }
+  .meter[data-stale="short"] #stale .long { display: none; }
+  .meter[data-stale="short"] #stale .short { display: inline; }
 
   /* ---------------- body ---------------- */
   .body { display: grid; grid-template-columns: 186px minmax(0, 1fr); min-height: 0; overflow: hidden; }
@@ -1395,7 +1406,7 @@
       <span class="big" id="count">—</span>
       <span class="sep">·</span>
       <span class="ms" id="ms">—</span>
-      <span class="sep">·</span>
+      <span class="sep" id="rows-sep">·</span>
       <span id="rows"></span>
       <!-- Switching a skip rule off starts a walk; this is what then moves. -->
       <span class="sep" id="scanning-sep" hidden>·</span>
@@ -1404,7 +1415,7 @@
            from 1.9 ms to 21.5, and a rebuild put it back. -->
       <span class="sep" id="stale-sep" hidden>·</span>
       <span id="stale" class="stale" hidden></span>
-      <span class="sep">·</span>
+      <span class="sep" id="path-note-sep">·</span>
       <span id="path-note" data-t="connecting…"></span>
       <!-- One group: each of these is about the window, not the results. -->
       <div class="tools" role="group" data-t-aria="window controls">
@@ -3840,6 +3851,46 @@
     sizeTimer = setTimeout(() => keepView({ size: [outerWidth, outerHeight] }), 600);
   });
 
+  /* The meter is one line. What a width cannot hold is shed least useful first:
+     the index facts, the rows read, the advisory said in two words, then the
+     advisory itself. The count and the time never go. */
+  const METER_STEPS = ["note", "rows", "stale-short", "stale"];
+  /* Takes steps until `fits(taken)` says so; pure, so it can be tested. */
+  function meterPlan(steps, fits) {
+    const taken = [];
+    for (const step of steps) {
+      if (fits(taken)) break;
+      taken.push(step);
+    }
+    return taken;
+  }
+  function fitMeter() {
+    const meterEl = document.querySelector(".meter");
+    if (!meterEl) return;
+    const set = (taken) => {
+      meterEl.dataset.drop = taken.filter((t) => t !== "stale-short").join(" ");
+      meterEl.dataset.stale = taken.includes("stale-short") ? "short" : "";
+    };
+    const taken = meterPlan(METER_STEPS, (so_far) => {
+      set(so_far);
+      return meterEl.scrollWidth <= meterEl.clientWidth;
+    });
+    set(taken);
+  }
+  {
+    const meterEl = document.querySelector(".meter");
+    if (meterEl) {
+      /* Text and visibility come from many places; the fit follows them all.
+         Its own marks are data attributes, which the filter leaves out. */
+      new MutationObserver(() => fitMeter()).observe(meterEl, {
+        subtree: true, childList: true, characterData: true,
+        attributes: true, attributeFilter: ["hidden"],
+      });
+      addEventListener("resize", fitMeter);
+      fitMeter();
+    }
+  }
+
   /* Applied to a window that has already drawn itself with defaults. */
   function applySettings(s) {
     const oldSort = sortKey;
@@ -4918,7 +4969,14 @@
         ? fmt(s.unsorted || 0) + " " + T("unsorted") + " — " +
           T("`scour maintain rebuild` would speed searches up")
         : "";
-      if (stale.textContent !== advice) { stale.textContent = advice; moved = true; }
+      if (stale.dataset.advice !== advice) {
+        stale.dataset.advice = advice;
+        // Two spellings, and the meter picks by width: the sentence, or the count alone.
+        stale.innerHTML = advice
+          ? `<span class="long">${escape_(advice)}</span><span class="short">${escape_(fmt(s.unsorted || 0) + " " + T("unsorted"))}</span>`
+          : "";
+        moved = true;
+      }
       stale.hidden = !advice;
       staleSep.hidden = !advice;
     }

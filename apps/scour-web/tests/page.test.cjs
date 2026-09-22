@@ -587,3 +587,15 @@ test('the ring and its legend run in the same order, the folded rest last', () =
   assert.ok(legend.includes(' disabled>'), legend);
   assert.ok(legend.includes('>37.5%</span>'), legend);
 });
+
+test('the meter sheds pieces least useful first, and only as many as it must', () => {
+  const c = context();
+  vm.runInContext(section('  const METER_STEPS = [', '\n  function fitMeter() {'), c);
+  const steps = vm.runInContext('METER_STEPS', c);
+  const plan = vm.runInContext('meterPlan', c);
+  assert.deepEqual([...steps], ['note', 'rows', 'stale-short', 'stale']);
+  assert.deepEqual([...plan(steps, () => true)], [], 'nothing goes when it fits');
+  assert.deepEqual([...plan(steps, (taken) => taken.length >= 2)], ['note', 'rows'], 'the index facts, then the rows read');
+  assert.deepEqual([...plan(steps, (taken) => taken.length >= 3)], ['note', 'rows', 'stale-short'], 'the advisory is said short before it goes');
+  assert.deepEqual([...plan(steps, () => false)], [...steps], 'and at worst all of it, never the count or the time');
+});
