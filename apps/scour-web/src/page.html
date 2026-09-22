@@ -59,6 +59,10 @@
   .query {
     display: flex;
     align-items: baseline;
+    /* Its own layer, above the list's sticky header: the suggestion box that
+       drops out of it must not be drawn under the column names. */
+    position: relative;
+    z-index: 20;
     gap: calc(var(--u) * 3);
     padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 3);
     border-bottom: 1px solid var(--line-soft);
