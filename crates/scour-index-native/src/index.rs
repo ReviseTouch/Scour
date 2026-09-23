@@ -1902,7 +1902,12 @@ impl Index for NativeIndex {
         // A segment in the air holds rows this generation stamped; sweeping
         // before it lands judges them by a walk that never saw them.
         self.settle()?;
+        // The walk's own rows, written the way a commit writes them — files and
+        // their syncs outside the lock — and not by the flush below, which holds
+        // it throughout: on a busy disk that held every search for seconds.
+        Index::commit(self)?;
         let mut inner = self.inner.write();
+        // Whatever was staged since, which on the one worker thread is nothing.
         self.flush(&mut inner)?;
         close_generation(&mut inner, generation);
         let mut gone = 0u64;
