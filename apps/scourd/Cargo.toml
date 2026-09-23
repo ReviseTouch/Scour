@@ -22,6 +22,8 @@ memory-trace = [
     "scour-engine/memory-trace",
     "scour-index-native/memory-trace",
 ]
+# Research only: an in-process CPU sampler, see src/profile.rs.
+profile = ["dep:pprof"]
 
 [dependencies]
 scour-core          = { workspace = true }
@@ -38,6 +40,7 @@ scour-thumbs        = { workspace = true }
 scour-preview       = { workspace = true }
 scour-source-fs     = { workspace = true }
 anyhow              = { workspace = true }
+pprof               = { version = "0.15", optional = true, default-features = false }
 clap                = { workspace = true }
 ctrlc               = { workspace = true }
 serde               = { workspace = true }

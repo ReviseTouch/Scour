@@ -57,7 +57,12 @@ fn cap_allocator_arenas() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn cap_allocator_arenas() {}
 
+#[cfg(feature = "profile")]
+mod profile;
+
 fn main() -> Result<()> {
+    #[cfg(feature = "profile")]
+    profile::start();
     cap_allocator_arenas();
     let args = Args::parse();
     let (config, problem) = match &args.config {
