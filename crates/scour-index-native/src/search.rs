@@ -375,16 +375,13 @@ impl PathSet {
         let needle = Needle::new(term);
         let mut fold = Folded::default();
         set.in_name = (!term.contains('/')).then(|| Needle::new(term));
-        for id in 0..count {
-            let Some(dir) = seg.dirs.get(id as u32) else {
-                continue;
-            };
+        seg.dirs.each_bytes(|id, dir| {
             // Folded once and asked twice — the same folding a built path used
             // to get, and the same searcher.
-            let folded = fold.fold_bytes(dir.as_bytes());
+            let folded = fold.fold_bytes(dir);
             set.whole[id] = needle.found_in(folded);
             set.ending[id] = folded.ends_with(head.as_bytes());
-        }
+        });
         set
     }
 }

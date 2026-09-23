@@ -276,6 +276,34 @@ impl<'a> DirTable<'a> {
         out
     }
 
+    /// Every directory in number order, as bytes, one pass. A row is its
+    /// predecessor truncated and extended, so it costs its own suffix; `get`
+    /// per number restarts a block and allocates, and a query that asked it of
+    /// every directory spent 330 ms rebuilding 564,000 paths.
+    pub(crate) fn each_bytes(&self, mut f: impl FnMut(usize, &[u8])) {
+        let Some(mut at) = self.restart_at(0) else {
+            return;
+        };
+        let mut path: Vec<u8> = Vec::new();
+        for id in 0..self.count {
+            let Some((shared, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let Some((rest, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
+                break;
+            };
+            at += used;
+            let Some(bytes) = self.rows.get(at..at + rest as usize) else {
+                break;
+            };
+            at += rest as usize;
+            path.truncate(shared as usize);
+            path.extend_from_slice(bytes);
+            f(id, &path);
+        }
+    }
+
     /// What every row's name is appended to, flattened, in table order, so two
     /// rows can be ordered by path without either being built (see
     /// [`crate::order`]). 257,167 directories are 13 MB, held for one sort.
@@ -344,14 +372,14 @@ impl<'a> DirTable<'a> {
 
     /// The path stored at a restart, borrowed rather than built: a restart
     /// shares nothing, so its bytes are its whole path, contiguous in the map.
-    fn restart_path(&self, block: usize) -> Option<&'a str> {
+    fn restart_bytes(&self, block: usize) -> Option<&'a [u8]> {
         let at = self.restart_at(block)?;
         let (shared, used) = varint::get(self.rows.get(at..)?)?;
         debug_assert_eq!(shared, 0, "a restart row shares nothing");
         let at = at + used;
         let (len, used) = varint::get(self.rows.get(at..)?)?;
         let at = at + used;
-        std::str::from_utf8(self.rows.get(at..at + len as usize)?).ok()
+        self.rows.get(at..at + len as usize)
     }
 
     /// The first number whose path is not less than `prefix`, in two levels:
@@ -365,9 +393,12 @@ impl<'a> DirTable<'a> {
         }
         let blocks = self.restarts.len() / 4;
         let (mut lo, mut hi) = (0usize, blocks);
+        // Compared as bytes, which is how `str` orders: validating each probe
+        // as UTF-8 was 7% of a startup's CPU, spent on text this table wrote.
+        let prefix = prefix.as_bytes();
         while lo < hi {
             let mid = (lo + hi) / 2;
-            match self.restart_path(mid) {
+            match self.restart_bytes(mid) {
                 Some(p) if p < prefix => lo = mid + 1,
                 _ => hi = mid,
             }
@@ -379,7 +410,7 @@ impl<'a> DirTable<'a> {
             return self.count as u32;
         };
         let first = block * RESTART;
-        let mut path = String::new();
+        let mut path: Vec<u8> = Vec::new();
         for step in 0..RESTART {
             let id = first + step;
             if id >= self.count {
@@ -399,11 +430,8 @@ impl<'a> DirTable<'a> {
             };
             at += rest;
             path.truncate(shared as usize);
-            let Ok(tail) = std::str::from_utf8(bytes) else {
-                break;
-            };
-            path.push_str(tail);
-            if path.as_str() >= prefix {
+            path.extend_from_slice(bytes);
+            if path.as_slice() >= prefix {
                 return id as u32;
             }
         }
