@@ -155,6 +155,20 @@ impl<'a> Segment<'a> {
         source: SourceId,
         path: &str,
     ) -> bool {
+        self.is_at_reading(dirs, None, row, source, path)
+    }
+
+    /// [`Segment::is_at`] for rows asked in increasing order, reading names on
+    /// from the last one: a name from its block start was a third of a
+    /// startup's recognising of unchanged rows.
+    pub(crate) fn is_at_reading(
+        &self,
+        dirs: &mut std::collections::HashMap<u32, String>,
+        reader: Option<&mut crate::names::Reader>,
+        row: usize,
+        source: SourceId,
+        path: &str,
+    ) -> bool {
         // **A rejection, not a guarantee.** The probe key mixes the source in, so
         // another source's row for the same path is never a candidate here; the
         // two comparisons below are what make a collision harmless.
@@ -163,8 +177,13 @@ impl<'a> Segment<'a> {
         }
         let (parent, name) = Segment::split_path(path);
         // The name first: a byte comparison against the arena, and it rejects
-        // almost every candidate a digest collision produces.
-        if self.names.get(row) != Some(name) {
+        // almost every candidate a digest collision produces. The reader says
+        // "" where `get` says nothing, so an empty name keeps asking `get`.
+        let same_name = match reader {
+            Some(r) if !name.is_empty() => r.at(&self.names, row) == name,
+            _ => self.names.get(row) == Some(name),
+        };
+        if !same_name {
             return false;
         }
         let dir = self.num(Field::DirId, row) as u32;

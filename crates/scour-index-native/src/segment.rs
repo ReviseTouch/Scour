@@ -369,6 +369,9 @@ impl Live {
         }
         let seg = self.view()?;
         let mut dirs = std::collections::HashMap::new();
+        // In row order, so each name is read on from the one before it.
+        pairs.sort_unstable();
+        let mut names = crate::names::Reader::default();
         for (row, at) in pairs {
             let e = &staged[at as usize];
             // A digest collision can name the same row twice in one pass, and
@@ -376,7 +379,7 @@ impl Live {
             if decided[at as usize] || !self.is_alive(row) {
                 continue;
             }
-            if !seg.is_at(&mut dirs, row, e.id.source, &e.path) {
+            if !seg.is_at_reading(&mut dirs, Some(&mut names), row, e.id.source, &e.path) {
                 continue;
             }
             decided[at as usize] = true;
