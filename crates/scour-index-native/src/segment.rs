@@ -182,6 +182,66 @@ impl Live {
         )
     }
 
+    /// [`Live::in_memory`] taking the bytes rather than copying them: what a
+    /// publish does once a second with a segment that exists nowhere else.
+    pub fn from_bytes(number: u64, generation: u64, bytes: SegmentBytes) -> Result<Live> {
+        let SegmentBytes {
+            names,
+            fnames,
+            cols,
+            dirs,
+            ids,
+            tri_dict,
+            tri_post,
+            alive,
+            porder,
+            norder,
+            eorder,
+        } = bytes;
+        let maps = [names, cols, dirs, ids, tri_dict, tri_post, fnames]
+            .into_iter()
+            .map(Part::Owned)
+            .collect();
+        let owned = |v: Vec<u8>| (!v.is_empty()).then_some(Part::Owned(v));
+        Live::assemble(
+            number,
+            generation,
+            maps,
+            owned(porder),
+            owned(norder),
+            owned(eorder),
+            alive,
+        )
+    }
+
+    /// Everything [`Live::write`] needs to put this segment on disk, copied: for
+    /// one that has only been in memory. The live bits are as they are now.
+    pub fn bytes(&self) -> SegmentBytes {
+        let part = |i: usize| self.maps[i].to_vec();
+        let order = |p: &Option<Part>| p.as_deref().map(<[u8]>::to_vec).unwrap_or_default();
+        SegmentBytes {
+            names: part(0),
+            cols: part(1),
+            dirs: part(2),
+            ids: part(3),
+            tri_dict: part(4),
+            tri_post: part(5),
+            fnames: part(6),
+            alive: self.alive.clone(),
+            porder: order(&self.porder),
+            norder: order(&self.norder),
+            eorder: order(&self.eorder),
+        }
+    }
+
+    /// Take on another copy's live bits and its death count: the same segment,
+    /// written down while rows kept dying in the copy that was being read.
+    pub fn adopt_alive(&mut self, from: &Live) {
+        debug_assert_eq!(self.rows, from.rows, "one segment, two copies");
+        self.alive.clone_from(&from.alive);
+        self.deaths = from.deaths;
+    }
+
     /// Check the pieces agree with each other and count what a search needs.
     /// Shared by both ways in, so an in-memory segment is validated as hard as
     /// one read off a disk.

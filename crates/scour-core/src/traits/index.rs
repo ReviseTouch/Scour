@@ -45,6 +45,14 @@ pub trait Index: Send + Sync + Debug {
     /// Tens of milliseconds, so callers batch rather than commit per change.
     fn commit(&self) -> Result<()>;
 
+    /// Make everything applied so far visible to new readers, without promising
+    /// it survives a crash: for the once-a-second path, which a sync apiece made
+    /// the busiest writer on the disk. [`Index::commit`] writes it down. An index
+    /// with nothing cheaper to offer commits.
+    fn publish(&self) -> Result<()> {
+        self.commit()
+    }
+
     /// Remove everything one source ever put here. Returns how many rows went.
     /// For a source no longer configured: a sweep needs a walk, and a source that
     /// is gone will never walk again. Defaults to nothing removed.

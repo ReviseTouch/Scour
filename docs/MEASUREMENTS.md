@@ -61,6 +61,11 @@ order is rebuilt, never maintained: a week of running left 911,973 unsorted
 rows, and `scour maintain rebuild` took a path-ordered query from **21.5 ms to
 1.9 ms** and the index from 354 to 305 MiB. `scour stats` reports the tail.
 
+Since the path, name and extension orders are stored in every segment, the tail
+costs nothing measurable (2026-09-23): 4.54 M rows in 13 segments with 578,000
+unsorted, then rebuilt into one in 47 s, answered fourteen query shapes in the
+same times within the noise.
+
 ## The service over a day
 
 Measured on the live service with `pkexec`, alternating two builds
@@ -82,6 +87,28 @@ the two CPU rows.
 
 Memory is flat: `RssAnon + VmSwap` 203 MB at 14 minutes, 205 MB at 25. The
 mapped segment files are `RssFile` and the kernel drops them under pressure.
+
+## Publishing, then persisting (2026-09-24)
+
+A change is published: it becomes a segment in memory, searchable at once, and
+a removal is made in memory. Every thirty seconds, or when the service goes
+quiet, the published segments are folded into one and written together with
+the live bitmaps and the manifest. A crash loses what was published since, and
+the next walk finds it again. Before, the once-a-second commit wrote a segment
+and synced about fourteen files, and every walk's start wrote and synced
+another with the index's write lock held.
+
+A client waiting on changes as a window does, 50 file writes a second in a
+watched directory, the two builds alternated twice, 90 s each:
+
+| | before | after |
+|---|---:|---:|
+| writes | 69 / 64 MB/min | **6.2 / 7.4 MB/min** |
+| segment files created | 58 / 55 a minute | **5.3 / 5.3 a minute** |
+| CPU | 8.3% / 9.5% | 8.1% / 9.1% |
+| search p50 | 14 / 12 ms | 12 / 11 ms |
+
+The CPU did not move: the commits were disk time, not processor time.
 
 ## The watcher
 

@@ -67,6 +67,10 @@ pub struct EngineOptions {
     /// How often [`Engine::await_change`] may wake the clients waiting in it; zero
     /// wakes on every bump. 3.5–6.2 bumps a second at 20.5–21 ms of CPU each.
     pub await_hold: Duration,
+    /// How long published changes may stay only in memory before they are
+    /// written down. A commit was a segment and fourteen syncs a second while a
+    /// window watched; a crash now costs this much, and the next walk finds it.
+    pub persist_every: Duration,
 }
 
 impl Default for EngineOptions {
@@ -91,6 +95,7 @@ impl Default for EngineOptions {
             walk_debounce_cap: Duration::from_secs(3),
             // `commit_watched`, exactly: a waiter cannot be shown what has not been written.
             await_hold: Duration::from_millis(1_000),
+            persist_every: Duration::from_secs(30),
         }
     }
 }
@@ -974,6 +979,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
     // When something last arrived, as opposed to when this loop last wrote.
     let mut last_busy = Instant::now();
     let mut last_compact = Instant::now();
+    // Published and not yet written down, and since when the clock runs.
+    let mut published = false;
+    let mut last_persist = Instant::now();
     // Roots that were not there to be read: a session starts before its mounts do.
     let mut retries: Vec<(usize, Instant, usize)> = Vec::new();
     // Subtree walks asked for and waiting for their neighbours.
@@ -1042,6 +1050,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         }
         if let Some(at) = retries.iter().map(|(_, at, _)| *at).min() {
             deadline!("retry", at);
+        }
+        if published {
+            deadline!("persist", last_persist + shared.opts.persist_every);
         }
         // The held walks, flushed below in the same turn, so this cannot spin.
         if let Some(at) =
@@ -1261,9 +1272,11 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
             shared.opts.commit_idle
         };
         if dirty && waited >= shared.opts.commit_interval && (enough || waited >= patience) {
-            match shared.index.commit() {
+            match shared.index.publish() {
                 Ok(()) => {
-                    // Whatever was staged is now in a segment and findable.
+                    // Whatever was staged is now in a segment and findable, and
+                    // on disk once the persist below comes round.
+                    published = true;
                     shared.touched();
                     shared.pending.store(0, Ordering::Relaxed);
                     shared.status.write().unwritten = 0;
@@ -1288,6 +1301,16 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                 }
             }
             last_commit = Instant::now();
+        }
+
+        // What publishing kept in memory, written down in one go. A failure keeps
+        // it in memory and says so the way a failed commit does.
+        if published && last_persist.elapsed() >= shared.opts.persist_every {
+            match shared.index.commit() {
+                Ok(()) => published = false,
+                Err(e) => scour_core::note!("scourd: the index could not be written: {e}"),
+            }
+            last_persist = Instant::now();
         }
 
         // Volumes that were not there when they were last asked about.
@@ -1338,7 +1361,11 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         if !dirty && !idle_done && last_busy.elapsed() >= shared.opts.idle_after {
             // Stop holding a write buffer: on an idle machine that is hundreds of
             // megabytes of a service left running.
-            let _ = shared.index.maintain(Maintenance::Idle);
+            // Which writes down whatever publishing kept in memory.
+            if shared.index.maintain(Maintenance::Idle).is_ok() {
+                published = false;
+                last_persist = Instant::now();
+            }
             // And while nobody is waiting, work out what the folders weigh: 90 ms of
             // prefix sums otherwise paid by the first list a window shows.
             let _ = shared.index.subtree_sizes(&[]);

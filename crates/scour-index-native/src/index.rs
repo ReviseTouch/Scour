@@ -141,6 +141,10 @@ struct Inner {
     /// would hide rows from the judgement. Callers scan one at a time.
     open: Option<u64>,
     next_segment: u64,
+    /// Segments that exist only in memory: published, searchable, and written
+    /// down by the next [`NativeIndex::persist`]. The manifest never names them,
+    /// so a crash loses their rows and the next walk finds them again.
+    unwritten: std::collections::HashSet<u64>,
 }
 
 /// A segment being built on another thread, as invisible as staged rows. It
@@ -179,6 +183,15 @@ struct Building {
     /// Finished, waiting for someone holding the write lock to install them.
     landed: Vec<Landed>,
 }
+
+/// The most staged rows a publish keeps in memory; a larger batch is committed.
+/// A trickle of a second is tens of rows, and a segment costs about 150 bytes a
+/// row, so this is 7.5 MB.
+const PUBLISH_MAX_STAGED: usize = 50_000;
+
+/// The most rows kept in memory across published segments before they are
+/// written anyway, however soon the next persist was due.
+const UNWRITTEN_MAX_ROWS: usize = 200_000;
 
 /// How many segments may be built at once. Each holds its rows and its output
 /// bytes — about 35 MB for a full segment — so this is a memory bound; past it
@@ -383,6 +396,7 @@ impl NativeIndex {
             segments: inner
                 .segments
                 .iter()
+                .filter(|s| !inner.unwritten.contains(&s.number))
                 .map(|s| SegRef {
                     number: s.number,
                     generation: s.generation,
@@ -422,7 +436,7 @@ impl NativeIndex {
     fn flush_maybe_elsewhere(&self, inner: &mut Inner, elsewhere: bool) -> Result<()> {
         // `elsewhere` says this flush happens because a buffer filled up, not
         // because a caller needs the rows in.
-        let mut pending = self.flush_prepare(inner, elsewhere)?;
+        let mut pending = self.flush_prepare(inner, elsewhere, true)?;
         if let Err(e) = pending.write_alive(&self.dir, &self.disk_bytes) {
             Self::restore(inner, pending);
             return Err(e);
@@ -776,10 +790,12 @@ impl NativeIndex {
     /// while these snapshots are in flight, and its stamp must survive.
     fn take_dirty_alive(inner: &mut Inner) -> Vec<(u64, Vec<u8>)> {
         let dirty = std::mem::take(&mut inner.dirty_alive);
+        // A segment only in memory has no bitmap file to replace: its bits go
+        // down with the rest of it.
         inner
             .segments
             .iter()
-            .filter(|live| dirty.contains(&live.number))
+            .filter(|live| dirty.contains(&live.number) && !inner.unwritten.contains(&live.number))
             .map(Live::alive_snapshot)
             .collect()
     }
@@ -811,13 +827,15 @@ impl NativeIndex {
 
     /// Lift the staged entries out, leaving the index consistent without them.
     /// They were never searchable, so the segment can be built with no lock.
-    fn take_staged(inner: &mut Inner) -> Option<(u64, u64, Vec<Entry>)> {
+    fn take_staged(inner: &mut Inner, durable: bool) -> Option<(u64, u64, Vec<Entry>)> {
         if inner.staged.is_empty() {
             return None;
         }
         let number = inner.next_segment;
         inner.next_segment += 1;
-        inner.meta_dirty = true;
+        // A number handed to a segment that stays in memory is never on disk, so
+        // the manifest has nothing to learn from it until that segment is.
+        inner.meta_dirty |= durable;
         let staged = std::mem::take(&mut inner.staged);
         inner.staged.shrink_to_fit();
         inner.staged_at.clear();
@@ -828,7 +846,12 @@ impl NativeIndex {
     /// Everything a flush does **except** building and writing the segment, so a
     /// caller that can let go of the lock does. The order inside matters: the
     /// identities to kill are read *from* the staged entries.
-    fn flush_prepare(&self, inner: &mut Inner, discretionary: bool) -> Result<Pending> {
+    fn flush_prepare(
+        &self,
+        inner: &mut Inner,
+        discretionary: bool,
+        durable: bool,
+    ) -> Result<Pending> {
         // Anything that finished building belongs in the list first: a row that
         // has just landed is a row this flush may have to replace.
         self.collect(inner)?;
@@ -920,7 +943,7 @@ impl NativeIndex {
         let pending = if discretionary && inner.staged.len() < MAX_STAGED {
             None
         } else {
-            Self::take_staged(inner)
+            Self::take_staged(inner, durable)
         };
         let _ = t_kill;
         // Copied, not written. The write is an `fsync` a segment and happens
@@ -936,7 +959,10 @@ impl NativeIndex {
         // other way round leaves a window in which it names files that are gone,
         // and the index will not open again.
         let gone = self.forget_empty(inner);
-        if let Err(e) = self.save_meta(inner) {
+        // Only a change the manifest records: publishing to memory makes none.
+        if inner.meta_dirty
+            && let Err(e) = self.save_meta(inner)
+        {
             Self::restore(
                 inner,
                 Pending {
@@ -958,6 +984,140 @@ impl NativeIndex {
         })
     }
 
+    /// A commit that stops short of the disk: the staged rows become a segment in
+    /// memory and removals are made in memory, all of it searchable at once and
+    /// none of it synced. [`NativeIndex::persist_unwritten`] writes it down.
+    fn publish_now(&self) -> Result<()> {
+        self.settle()?;
+        let mut pending = {
+            let mut inner = self.inner.write();
+            let pending = self.flush_prepare(&mut inner, false, false)?;
+            // Killed in memory; the bitmaps are written with the next persist.
+            for (number, _) in &pending.alive {
+                inner.dirty_alive.insert(*number);
+            }
+            pending
+        };
+        pending.alive.clear();
+        let Some((number, generation, staged)) = pending.staged.take() else {
+            return Ok(());
+        };
+        let live = match Live::from_bytes(number, generation, build(&staged)) {
+            Ok(live) => live,
+            Err(e) => {
+                pending.staged = Some((number, generation, staged));
+                Self::restore(&mut self.inner.write(), pending);
+                return Err(e);
+            }
+        };
+        drop(staged);
+        let mut inner = self.inner.write();
+        inner.next_segment = inner.next_segment.max(number + 1);
+        inner.segments.push(live);
+        inner.segments.sort_by_key(|s| s.number);
+        inner.unwritten.insert(number);
+        Ok(())
+    }
+
+    /// [`NativeIndex::publish_now`] for a caller already holding the lock, which
+    /// also builds the segment under it: for a few rows, where order matters.
+    fn publish_locked(&self, inner: &mut Inner) -> Result<()> {
+        let mut pending = self.flush_prepare(inner, false, false)?;
+        for (number, _) in &pending.alive {
+            inner.dirty_alive.insert(*number);
+        }
+        pending.alive.clear();
+        let Some((number, generation, staged)) = pending.staged.take() else {
+            return Ok(());
+        };
+        let live = match Live::from_bytes(number, generation, build(&staged)) {
+            Ok(live) => live,
+            Err(e) => {
+                pending.staged = Some((number, generation, staged));
+                Self::restore(inner, pending);
+                return Err(e);
+            }
+        };
+        inner.next_segment = inner.next_segment.max(number + 1);
+        inner.segments.push(live);
+        inner.segments.sort_by_key(|s| s.number);
+        inner.unwritten.insert(number);
+        Ok(())
+    }
+
+    /// The published segments in groups a fold may take together: all of them
+    /// outside a walk, one generation apiece inside one — as [`Self::groups`].
+    fn unwritten_groups(inner: &Inner) -> Vec<Vec<u64>> {
+        Self::groups(inner)
+            .into_iter()
+            .map(|g| {
+                g.into_iter()
+                    .filter(|n| inner.unwritten.contains(n))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|g| !g.is_empty())
+            .collect()
+    }
+
+    /// Write down what publishing kept in memory: the segments of a generation
+    /// folded into one where a fold is allowed and each as it is where not, then
+    /// the live bits and the manifest. Every sync the index owes, at once.
+    fn persist_unwritten(&self) -> Result<()> {
+        let groups = Self::unwritten_groups(&self.inner.read());
+        for group in groups {
+            // Refused while a walk has marked them, or overtaken by a commit:
+            // then each is written under the number the marks know it by.
+            if group.len() > 1 && self.fold_to(&group, true)? {
+                continue;
+            }
+            for number in group {
+                self.write_unwritten(number)?;
+            }
+        }
+        let mut inner = self.inner.write();
+        self.write_dirty_alive(&mut inner)?;
+        if inner.meta_dirty {
+            self.save_meta(&mut inner)?;
+        }
+        Ok(())
+    }
+
+    /// Put one in-memory segment on disk under its own number. The files are
+    /// written without the lock; if rows died in the meantime, its bitmap is
+    /// written again with the manifest.
+    fn write_unwritten(&self, number: u64) -> Result<()> {
+        let (generation, bytes, deaths) = {
+            let inner = self.inner.read();
+            let Some(live) = inner.segments.iter().find(|s| s.number == number) else {
+                return Ok(());
+            };
+            if !inner.unwritten.contains(&number) {
+                return Ok(());
+            }
+            (live.generation, live.bytes(), live.deaths())
+        };
+        let mut written = self
+            .disk_bytes
+            .changing(|| Live::write(&self.dir, number, generation, &bytes))?;
+        drop(bytes);
+        let mut inner = self.inner.write();
+        let Some(at) = inner.segments.iter().position(|s| s.number == number) else {
+            // Folded or emptied while it was being written: nothing names these.
+            drop(inner);
+            drop(written);
+            self.disk_bytes.changing(|| Live::erase(&self.dir, number));
+            return Ok(());
+        };
+        written.adopt_alive(&inner.segments[at]);
+        if inner.segments[at].deaths() != deaths {
+            inner.dirty_alive.insert(number);
+        }
+        inner.segments[at] = written;
+        inner.unwritten.remove(&number);
+        inner.meta_dirty = true;
+        Ok(())
+    }
+
     /// Erase segments nothing is left alive in: an emptied segment left in the
     /// list is walked end to end by every query, 1,204,270 rows for nothing.
     fn forget_empty(&self, inner: &mut Inner) -> Vec<u64> {
@@ -970,9 +1130,15 @@ impl NativeIndex {
                 true
             }
         });
-        if !gone.is_empty() {
+        // One that was only in memory has no files and no line in the manifest.
+        let written: Vec<u64> = gone
+            .iter()
+            .copied()
+            .filter(|n| !inner.unwritten.remove(n))
+            .collect();
+        if !written.is_empty() {
             inner.meta_dirty = true;
-            inner.pending_erase.extend(gone.iter().copied());
+            inner.pending_erase.extend(written);
         }
         gone
     }
@@ -982,6 +1148,13 @@ impl NativeIndex {
     /// and never edited, so the build runs under the **read** lock; held
     /// throughout, a query issued during a rebuild waited **22,984 ms**.
     fn fold(&self, which_numbers: &[u64]) -> Result<bool> {
+        self.fold_to(which_numbers, true)
+    }
+
+    /// [`NativeIndex::fold`], ending on disk or, with `durable` false, in memory:
+    /// segments published a second apart become one without a file being
+    /// written, and the one is written when the index is persisted.
+    fn fold_to(&self, which_numbers: &[u64], durable: bool) -> Result<bool> {
         // **Not while a walk is running, and only for the segments being folded**:
         // marks are keyed on the number a row's segment had, and a fold renumbers
         // what it consumes. **`false`, not `Ok(())`** — a refusal that reads as
@@ -1000,7 +1173,7 @@ impl NativeIndex {
             let mut inner = self.inner.write();
             let n = inner.next_segment;
             inner.next_segment += 1;
-            inner.meta_dirty = true;
+            inner.meta_dirty |= durable;
             n
         };
         let (generation, snapshot, bytes) = {
@@ -1037,13 +1210,14 @@ impl NativeIndex {
         // that nothing names yet, so nobody can be reading it.
         let mut folded = if bytes.names.is_empty() || bytes.alive.is_empty() {
             None
-        } else {
+        } else if durable {
             Some(
                 self.disk_bytes
                     .changing(|| Live::write(&self.dir, number, generation, &bytes))?,
             )
+        } else {
+            Some(Live::from_bytes(number, generation, bytes)?)
         };
-        drop(bytes);
 
         let mut inner = self.inner.write();
         let current = snapshot.len() == which_numbers.len()
@@ -1059,7 +1233,9 @@ impl NativeIndex {
             // bring a removed or replaced row back. Drop the mappings first.
             drop(inner);
             drop(folded.take());
-            self.disk_bytes.changing(|| Live::erase(&self.dir, number));
+            if durable {
+                self.disk_bytes.changing(|| Live::erase(&self.dir, number));
+            }
             trim_allocator();
             return Ok(false);
         }
@@ -1075,13 +1251,26 @@ impl NativeIndex {
         inner
             .segments
             .retain(|s| !which_numbers.contains(&s.number));
+        if !durable && let Some(live) = &folded {
+            inner.unwritten.insert(live.number);
+        }
         inner.segments.extend(folded);
-        inner.meta_dirty = true;
-        inner.pending_erase.extend(old.iter().copied());
+        // What was only in memory had no files to erase and no line to drop.
+        let written: Vec<u64> = old
+            .iter()
+            .copied()
+            .filter(|n| !inner.unwritten.remove(n))
+            .collect();
+        if durable || !written.is_empty() {
+            inner.meta_dirty = true;
+        }
+        inner.pending_erase.extend(written);
         // Newest last is what the search loop and `merge_rows` both assume; a
         // fold has to leave the order it found.
         inner.segments.sort_by_key(|s| s.number);
-        self.save_meta(&mut inner)?;
+        if inner.meta_dirty {
+            self.save_meta(&mut inner)?;
+        }
         drop(inner);
         trim_allocator();
         Ok(true)
@@ -1110,7 +1299,16 @@ impl NativeIndex {
     /// so the caller can let go of the index before it builds. See [`head_of`].
     fn next_head(&self) -> Option<Vec<u64>> {
         let inner = self.inner.read();
-        let group = Self::groups(&inner).into_iter().find(|g| g.len() >= 3)?;
+        // Segments only in memory are merged in memory and written by a persist;
+        // folding them in here would write them a second at a time after all.
+        let group = Self::groups(&inner)
+            .into_iter()
+            .map(|g| {
+                g.into_iter()
+                    .filter(|n| !inner.unwritten.contains(n))
+                    .collect::<Vec<_>>()
+            })
+            .find(|g| g.len() >= 3)?;
         let members: Vec<Member> = group
             .iter()
             .map(|&number| {
@@ -1847,12 +2045,16 @@ impl Index for NativeIndex {
         inner.seen.clear();
         // Flush second, so no segment ever spans two generations: that is what
         // lets a generation be one number a segment rather than a column a row.
-        self.flush(&mut inner)?;
+        // Into memory, as a publish: a subtree walk starts dozens of times a
+        // minute during a build, and each one wrote and synced a segment here
+        // with the lock held.
+        self.publish_locked(&mut inner)?;
         inner.generation += 1;
-        inner.meta_dirty = true;
         let g = inner.generation;
         inner.open = Some(g);
-        self.save_meta(&mut inner)?;
+        // Not saved now: every manifest records the generation it was written
+        // in, so none can name a segment stamped above the one it records.
+        inner.meta_dirty = true;
         Ok(g)
     }
 
@@ -1902,10 +2104,10 @@ impl Index for NativeIndex {
         // A segment in the air holds rows this generation stamped; sweeping
         // before it lands judges them by a walk that never saw them.
         self.settle()?;
-        // The walk's own rows, written the way a commit writes them — files and
-        // their syncs outside the lock — and not by the flush below, which holds
-        // it throughout: on a busy disk that held every search for seconds.
-        Index::commit(self)?;
+        // The walk's own rows, made searchable in memory rather than by the flush
+        // below, which writes and syncs a segment with the lock held throughout:
+        // on a busy disk that held every search for seconds. A persist writes them.
+        self.publish_now()?;
         let mut inner = self.inner.write();
         // Whatever was staged since, which on the one worker thread is nothing.
         self.flush(&mut inner)?;
@@ -2068,7 +2270,7 @@ impl Index for NativeIndex {
         self.settle()?;
         #[cfg(feature = "memory-trace")]
         let trace_settled = CommitStamp::now();
-        let mut pending = self.flush_prepare(&mut self.inner.write(), false)?;
+        let mut pending = self.flush_prepare(&mut self.inner.write(), false, true)?;
         #[cfg(feature = "memory-trace")]
         let trace_prepared = CommitStamp::now();
         // How long a search could have been waiting, printed rather than guessed
@@ -2101,7 +2303,7 @@ impl Index for NativeIndex {
                 trace_alive,
                 trace_alive,
             );
-            return Ok(());
+            return self.persist_unwritten();
         };
         #[cfg(feature = "memory-trace")]
         let trace_rows = staged.len();
@@ -2130,6 +2332,7 @@ impl Index for NativeIndex {
         inner.segments.sort_by_key(|s| s.number);
         inner.meta_dirty = true;
         let saved = self.save_meta(&mut inner);
+        drop(inner);
         #[cfg(feature = "memory-trace")]
         trace_commit(
             trace_rows,
@@ -2141,7 +2344,30 @@ impl Index for NativeIndex {
             trace_written,
             CommitStamp::now(),
         );
-        saved
+        saved?;
+        self.persist_unwritten()
+    }
+
+    fn publish(&self) -> Result<()> {
+        // A large batch goes to disk as a commit would: memory holds a second's
+        // trickle, not a walk.
+        if self.inner.read().staged.len() > PUBLISH_MAX_STAGED {
+            return self.commit();
+        }
+        self.publish_now()?;
+        let held: usize = {
+            let inner = self.inner.read();
+            inner
+                .segments
+                .iter()
+                .filter(|s| inner.unwritten.contains(&s.number))
+                .map(Live::rows)
+                .sum()
+        };
+        if held > UNWRITTEN_MAX_ROWS {
+            self.persist_unwritten()?;
+        }
+        Ok(())
     }
 
     fn search(&self, req: &SearchRequest) -> Result<SearchResponse> {
@@ -2565,20 +2791,36 @@ impl Index for NativeIndex {
         self.settle()?;
         let before = dir_size(&self.dir);
         match level {
-            Maintenance::Flush => self.flush(&mut self.inner.write())?,
+            Maintenance::Flush => {
+                self.flush(&mut self.inner.write())?;
+                self.persist_unwritten()?;
+            }
             Maintenance::Idle => {
                 // The segments are mapped, so what they cost is page cache the
-                // kernel reclaims. All this can return is the staging buffer.
-                let mut inner = self.inner.write();
-                self.flush(&mut inner)?;
-                inner.staged.shrink_to_fit();
-                inner.staged_at.shrink_to_fit();
+                // kernel reclaims. All this can return is the staging buffer —
+                // and what publishing held in memory, which a quiet moment writes.
+                {
+                    let mut inner = self.inner.write();
+                    self.flush(&mut inner)?;
+                    inner.staged.shrink_to_fit();
+                    inner.staged_at.shrink_to_fit();
+                }
+                self.persist_unwritten()?;
             }
             // Fold the head; leave the body alone. A search pays for the *number*
             // of segments: at 1,083,334 entries one answers `"rapor"` in 1.11 ms
             // and eleven in 5.20. The largest is spared unless a quarter is dead.
             Maintenance::Compact => {
                 self.flush(&mut self.inner.write())?;
+                // What publishing left a second at a time becomes one segment, in
+                // memory — all of it outside a walk; a refusal leaves it for later.
+                let unwritten: Vec<Vec<u64>> = Self::unwritten_groups(&self.inner.read())
+                    .into_iter()
+                    .filter(|g| g.len() > 1)
+                    .collect();
+                for group in unwritten {
+                    self.fold_to(&group, false)?;
+                }
                 // The lock is taken to *choose* and released to *build*. Each
                 // round re-reads the list, and a group of eleven becomes two,
                 // which no longer qualifies — so this terminates.
@@ -2618,6 +2860,7 @@ impl Index for NativeIndex {
                         break;
                     }
                 }
+                self.persist_unwritten()?;
             }
         }
         Ok(MaintReport {
@@ -2661,6 +2904,166 @@ mod tests {
             })
             .expect("search")
             .hits
+    }
+
+    fn publish_rows(index: &NativeIndex, rows: impl IntoIterator<Item = Entry>) {
+        index
+            .apply(&mut rows.into_iter().map(Change::Upsert))
+            .expect("apply rows");
+        index.publish().expect("publish rows");
+    }
+
+    fn paths(index: &NativeIndex) -> Vec<String> {
+        let mut out: Vec<String> = hits(index).into_iter().map(|h| h.path).collect();
+        out.sort();
+        out
+    }
+
+    fn segment_files(dir: &Path) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with("seg-"))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// A publish is searchable at once and writes nothing: no segment file, no
+    /// manifest line. A commit writes it down, and a reopen finds it.
+    #[test]
+    fn a_published_row_is_found_at_once_and_written_by_the_next_commit() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        {
+            let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+            commit_rows(&index, [row(0, "/w/old.txt", 1)]);
+            let files = segment_files(tmp.path());
+            let manifest = std::fs::read(tmp.path().join(META_FILE)).expect("manifest");
+
+            publish_rows(&index, [row(0, "/w/new.txt", 2)]);
+            assert_eq!(paths(&index), ["/w/new.txt", "/w/old.txt"]);
+            assert_eq!(segment_files(tmp.path()), files, "a publish wrote a file");
+            assert_eq!(
+                std::fs::read(tmp.path().join(META_FILE)).expect("manifest"),
+                manifest,
+                "a publish rewrote the manifest"
+            );
+
+            index.commit().expect("commit");
+            assert!(index.inner.read().unwritten.is_empty());
+        }
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&reopened), ["/w/new.txt", "/w/old.txt"]);
+    }
+
+    /// What a crash does to a publish: the index opens, what was committed is
+    /// there, and what was only published is not — the next walk's to find.
+    #[test]
+    fn an_index_closed_without_a_commit_opens_with_what_was_committed() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        {
+            let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+            commit_rows(&index, [row(0, "/w/kept.txt", 1), row(0, "/w/gone.txt", 2)]);
+            publish_rows(&index, [row(0, "/w/published.txt", 3)]);
+            index
+                .apply(&mut std::iter::once(Change::RemoveSubtree {
+                    path: "/w/gone.txt".into(),
+                }))
+                .expect("remove");
+            index.publish().expect("publish removal");
+            assert_eq!(paths(&index), ["/w/kept.txt", "/w/published.txt"]);
+            // No commit: dropped as a killed process leaves it.
+        }
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&reopened), ["/w/gone.txt", "/w/kept.txt"]);
+    }
+
+    /// A removal made by a publish is written by the commit after it.
+    #[test]
+    fn a_published_removal_is_written_by_the_next_commit() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        {
+            let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+            commit_rows(&index, [row(0, "/w/kept.txt", 1), row(0, "/w/gone.txt", 2)]);
+            index
+                .apply(&mut std::iter::once(Change::RemoveSubtree {
+                    path: "/w/gone.txt".into(),
+                }))
+                .expect("remove");
+            index.publish().expect("publish removal");
+            assert_eq!(paths(&index), ["/w/kept.txt"]);
+            index.commit().expect("commit");
+        }
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&reopened), ["/w/kept.txt"]);
+    }
+
+    /// Published a second apart, merged in memory by a compaction, written as
+    /// one segment by the commit: many publishes cost one set of files.
+    #[test]
+    fn publishes_merge_in_memory_and_are_written_as_one_segment() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        {
+            let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+            commit_rows(&index, [row(0, "/w/base.txt", 1)]);
+            let files = segment_files(tmp.path());
+            for i in 0..12 {
+                publish_rows(&index, [row(0, &format!("/w/p{i:02}.txt"), 10 + i)]);
+            }
+            // Replaced while in memory: one row for the path, the newer one. The
+            // segment the old row was alone in is empty now, and forgotten.
+            publish_rows(&index, [row(0, "/w/p03.txt", 99)]);
+            assert_eq!(index.inner.read().unwritten.len(), 12);
+            index.maintain(Maintenance::Compact).expect("compact");
+            assert_eq!(index.inner.read().unwritten.len(), 1, "merged in memory");
+            assert_eq!(
+                segment_files(tmp.path()),
+                files,
+                "a merge in memory wrote a file"
+            );
+            assert_eq!(paths(&index).len(), 13);
+
+            index.commit().expect("commit");
+            assert!(index.inner.read().unwritten.is_empty());
+            assert_eq!(index.inner.read().segments.len(), 2);
+        }
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        let found = paths(&reopened);
+        assert_eq!(found.len(), 13);
+        let p03 = hits(&reopened)
+            .into_iter()
+            .find(|h| h.path == "/w/p03.txt")
+            .expect("p03");
+        assert_eq!(p03.meta.size, 99);
+    }
+
+    /// While a walk is open its marks pin segment numbers, so a fold is refused
+    /// and each published segment is written under its own number — and the
+    /// sweep that ends the walk still reads the marks right.
+    #[test]
+    fn a_persist_during_a_walk_writes_each_segment_under_its_number() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        commit_rows(&index, [row(0, "/w/a.txt", 1), row(0, "/w/b.txt", 2)]);
+        let generation = index.begin_generation().expect("generation");
+        // The walk sees a.txt unchanged, a new c.txt and d.txt, and no b.txt.
+        publish_rows(&index, [row(0, "/w/a.txt", 1), row(0, "/w/c.txt", 3)]);
+        publish_rows(&index, [row(0, "/w/d.txt", 4)]);
+        index.commit().expect("commit during the walk");
+        assert!(index.inner.read().unwritten.is_empty());
+        index
+            .sweep(
+                SourceId(0),
+                &["/w".to_string()],
+                generation,
+                &scour_core::PrefixSet::default(),
+            )
+            .expect("sweep");
+        assert_eq!(paths(&index), ["/w/a.txt", "/w/c.txt", "/w/d.txt"]);
+        index.commit().expect("commit");
+        drop(index);
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&reopened), ["/w/a.txt", "/w/c.txt", "/w/d.txt"]);
     }
 
     fn block_existing_file(path: &Path) -> PathBuf {

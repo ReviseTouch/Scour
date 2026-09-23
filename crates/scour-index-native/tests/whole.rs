@@ -345,6 +345,103 @@ fn a_name_reading_query_in_a_stored_order_is_what_brute_force_gives() {
     );
 }
 
+/// Upserts, replacements and removals, made visible by publishes, commits and
+/// compactions in a shuffled order, answer what brute force over the same rows
+/// answers after every step; and a reopen after the last commit agrees too.
+#[test]
+fn publishing_committing_and_compacting_in_any_order_is_what_brute_force_gives() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let fs = generate(&MockOptions {
+        files: 6_000,
+        now: NOW,
+        ..Default::default()
+    });
+    let mut model: std::collections::BTreeMap<String, Entry> = Default::default();
+    let mut seed = 0x5eed_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let queries = ["", "e", "kind:code", "size:>1k", "rapor"];
+    let agree = |index: &NativeIndex,
+                 model: &std::collections::BTreeMap<String, Entry>,
+                 step: &str| {
+        let entries: Vec<Entry> = model.values().cloned().collect();
+        for q in queries {
+            for (sort, desc) in [
+                (SortKey::Modified, true),
+                (SortKey::Name, false),
+                (SortKey::Size, true),
+            ] {
+                let got: Vec<String> = index
+                    .search(&SearchRequest {
+                        query: parse_at(q, NOW),
+                        sort,
+                        descending: desc,
+                        page: Page {
+                            offset: 0,
+                            limit: 60,
+                            count_cap: 10_000_000,
+                        },
+                    })
+                    .expect("search")
+                    .hits
+                    .into_iter()
+                    .map(|h| h.path)
+                    .collect();
+                let want: Vec<String> = brute_force(&entries, &parse_at(q, NOW), sort, desc, 60)
+                    .into_iter()
+                    .map(|h| h.path)
+                    .collect();
+                assert_eq!(got, want, "{step}: {q:?} by {sort:?}");
+            }
+        }
+    };
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        for (step, chunk) in fs.entries.chunks(250).enumerate() {
+            let mut changes: Vec<Change> = Vec::new();
+            for e in chunk {
+                model.insert(e.path.clone(), e.clone());
+                changes.push(Change::Upsert(e.clone()));
+            }
+            // Replace a few rows already in, and remove a few.
+            for _ in 0..20 {
+                let at = (next() as usize) % model.len();
+                let path = model.keys().nth(at).cloned().expect("a path");
+                if next() % 3 == 0 {
+                    // A subtree: a folder takes everything under it along.
+                    let under = format!("{path}/");
+                    model.retain(|p, _| *p != path && !p.starts_with(&under));
+                    changes.push(Change::RemoveSubtree { path });
+                } else {
+                    let mut e = model[&path].clone();
+                    e.meta.size += 1 + (next() % 5000) as i64;
+                    e.meta.mtime -= 1;
+                    model.insert(path, e.clone());
+                    changes.push(Change::Upsert(e));
+                }
+            }
+            index.apply(&mut changes.into_iter()).expect("apply");
+            match next() % 6 {
+                0 => index.commit().expect("commit"),
+                1 => {
+                    index.publish().expect("publish");
+                    index.maintain(Maintenance::Compact).expect("compact");
+                }
+                _ => index.publish().expect("publish"),
+            }
+            agree(&index, &model, &format!("step {step}"));
+        }
+        index.commit().expect("last commit");
+        agree(&index, &model, "after the last commit");
+    }
+    let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    agree(&reopened, &model, "after a reopen");
+}
+
 /// Extension order is persisted for the broad list the GUI shows. Extensions
 /// have few values, so the order must hold both the primary key and the public
 /// newest-first/path-first tie order while still stopping after a page.
