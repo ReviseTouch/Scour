@@ -3579,6 +3579,147 @@ fn a_rescan_that_stops_seeing_a_file_still_removes_it() {
     );
 }
 
+/// Folder sizes follow the rows that die without the table being rebuilt, and
+/// an order by size reads the new totals before anything asks for a size: each
+/// round takes the big file out of the heaviest folders, so a stale total would
+/// put them first. One round kills past the list's limit and forces a build.
+#[test]
+fn folder_sizes_catch_up_with_deaths_and_the_size_order_reads_them() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut entries = Vec::new();
+    let mut ino = 0u64;
+    let mut next = || {
+        ino += 1;
+        ino
+    };
+    let folders: Vec<String> = (0..30).map(|k| format!("/d/f{k:02}")).collect();
+    entries.push(Entry {
+        id: EntryId::inode(SourceId(0), 66_310, next()),
+        path: "/d".into(),
+        is_dir: true,
+        meta: Meta {
+            mtime: NOW,
+            ..Meta::UNKNOWN
+        },
+    });
+    for (k, folder) in folders.iter().enumerate() {
+        entries.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, next()),
+            path: folder.clone(),
+            is_dir: true,
+            meta: Meta {
+                mtime: NOW,
+                size: 4096,
+                disk: 4096,
+                ..Meta::UNKNOWN
+            },
+        });
+        let big = 1_000_000 * (k as i64 + 1);
+        entries.push(Entry {
+            id: EntryId::inode(SourceId(0), 66_310, next()),
+            path: format!("{folder}/big"),
+            is_dir: false,
+            meta: Meta {
+                mtime: NOW,
+                size: big,
+                disk: big,
+                ..Meta::UNKNOWN
+            },
+        });
+        for j in 0..50 {
+            entries.push(Entry {
+                id: EntryId::inode(SourceId(0), 66_310, next()),
+                path: format!("{folder}/small-{j:02}"),
+                is_dir: false,
+                meta: Meta {
+                    mtime: NOW - j,
+                    size: 100 + k as i64,
+                    disk: 100 + k as i64,
+                    ..Meta::UNKNOWN
+                },
+            });
+        }
+    }
+    index
+        .apply(&mut entries.into_iter().map(Change::Upsert))
+        .expect("apply");
+    index.commit().expect("commit");
+    index.subtree_sizes(&[]).expect("warm the folder sizes");
+
+    let report = |path: &str| {
+        let r = index
+            .usage(&scour_core::UsageRequest {
+                path: path.into(),
+                top: 0,
+                query: Ast::default(),
+            })
+            .expect("usage");
+        (r.root.disk, r.root.files)
+    };
+    let check = |round: &str| {
+        // The order first, so nothing else has refreshed the table for it.
+        let hits = index
+            .search(&SearchRequest {
+                query: parse_at("kind:folder /d/f", 0),
+                sort: SortKey::Size,
+                descending: true,
+                page: Page {
+                    offset: 0,
+                    limit: 100,
+                    count_cap: 1_000,
+                },
+            })
+            .expect("search")
+            .hits;
+        let order: Vec<u64> = hits.iter().map(|h| report(&h.path).0).collect();
+        assert_eq!(
+            order.len(),
+            folders.len(),
+            "{round}: every folder is on the page"
+        );
+        assert!(
+            order.windows(2).all(|w| w[0] >= w[1]),
+            "{round}: sorted by a stale total: {order:?}"
+        );
+        let sizes = index.subtree_sizes(&folders).expect("sizes");
+        for (folder, size) in folders.iter().zip(sizes) {
+            assert_eq!(size, Some(report(folder)), "{round}: {folder}");
+        }
+    };
+    check("fresh");
+
+    // A few deaths a round: the heaviest two folders lose their big file.
+    for round in 0..4 {
+        let removed = [29 - 2 * round, 28 - 2 * round].map(|k| Change::RemoveSubtree {
+            path: format!("{}/big", folders[k]),
+        });
+        index.apply(&mut removed.into_iter()).expect("remove");
+        index.commit().expect("commit");
+        check(&format!("round {round}"));
+    }
+    // More deaths than the list keeps: 1,050 small files, then a few more.
+    let many: Vec<Change> = folders
+        .iter()
+        .take(21)
+        .flat_map(|f| {
+            (0..50).map(move |j| Change::RemoveSubtree {
+                path: format!("{f}/small-{j:02}"),
+            })
+        })
+        .collect();
+    index.apply(&mut many.into_iter()).expect("remove");
+    index.commit().expect("commit");
+    check("past the limit");
+    index
+        .apply(&mut std::iter::once(Change::RemoveSubtree {
+            path: format!("{}/big", folders[20]),
+        }))
+        .expect("remove");
+    index.commit().expect("commit");
+    check("after the build");
+}
+
 /// A folder's size agrees with the report, and keeps agreeing: the column comes
 /// from prefix sums over directory numbers and the report from `usage.rs`'s
 /// rollup, two routes to one number printed side by side. Held together across

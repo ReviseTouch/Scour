@@ -2227,7 +2227,12 @@ impl Index for NativeIndex {
 
         // Held for the whole loop, and only when the order depends on it.
         // A read guard, because nothing here builds: see the note at the call.
-        let folders = (req.sort == scour_core::SortKey::Size).then(|| self.sizes.read());
+        let folders = (req.sort == scour_core::SortKey::Size).then(|| {
+            // Catching up is a pass over the live bits, never a build.
+            let mut cache = self.sizes.write();
+            cache.fresh_rows(&inner.segments);
+            parking_lot::RwLockWriteGuard::downgrade(cache)
+        });
         for (which, live) in inner.segments.iter().enumerate() {
             rows += live.rows() as u64;
             let seg = &views[which];
