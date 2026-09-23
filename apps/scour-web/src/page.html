@@ -8,6 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>Scour</title>
+<link rel="icon" href="@LOGO@">
 </head>
 <body>
 
@@ -75,6 +76,13 @@
     color: var(--ink-3);
     flex: none;
     padding-top: 3px;
+  }
+  /* Inline, so the word's baseline stays the row's. */
+  .brand .logo {
+    width: 20px;
+    height: 20px;
+    margin-right: calc(var(--u) * 2);
+    vertical-align: middle;
   }
   /* With an empty query: a prompt glyph, an underline, a focus colour. */
   .qline {
@@ -1387,7 +1395,7 @@
 
   <div class="app">
     <div class="query">
-      <div class="brand">Scour</div>
+      <div class="brand"><img class="logo" src="@LOGO@" alt="">Scour</div>
       <div class="qline">
         <span class="prompt" aria-hidden="true">⌕</span>
         <div class="qfield">

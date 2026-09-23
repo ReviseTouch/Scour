@@ -102,7 +102,7 @@ command: scour-open
 # The menu entry and the icon are installed under the project's own name and
 # renamed here, so `packaging/scour.desktop` and `assets/scour.svg` stay the
 # one copy of each. This also rewrites the desktop file's `Icon=` key to the
-# app id; `Exec=scour-open` and `StartupWMClass=scour` are left alone.
+# app id; `Exec=scour-open` is left alone, `StartupWMClass` is set below.
 rename-desktop-file: scour.desktop
 rename-icon: scour
 
@@ -178,10 +178,12 @@ modules:
       # The menu entry, from the same file the tarball installs, so the two
       # cannot drift. `rename-desktop-file` and `rename-icon` below turn
       # `scour.desktop` into `com.revisetouch.Scour.desktop` and rewrite its
-      # `Icon=` key; `Exec=scour-open` and `StartupWMClass=scour` are left
-      # alone, and the class is what `slint::set_xdg_app_id("scour")` sets, so
-      # the task bar shows one entry and not two.
+      # `Icon=` key; `Exec=scour-open` is left alone. The class is set back to
+      # what `slint::set_xdg_app_id("scour")` sets: the file names the host
+      # browser's window, which there is none of here, and without the window's
+      # class the task bar shows two entries.
       - install -Dm644 packaging/scour.desktop /app/share/applications/scour.desktop
+      - sed -i 's/^StartupWMClass=.*/StartupWMClass=scour/' /app/share/applications/scour.desktop
 
       # The icon at every size an app store and a task bar ask for. The PNGs
       # are rendered here rather than committed, from the one SVG the rest of

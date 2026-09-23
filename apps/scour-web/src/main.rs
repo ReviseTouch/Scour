@@ -22,6 +22,22 @@ use scour_proto::{Request, Response};
 /// The page, built in, so that the binary is the whole of the program.
 const PAGE: &str = include_str!("page.html");
 
+/// The application's icon, the one the desktop shows. Written into the page as
+/// a data URL: every other path asks for the token, and a tab icon cannot.
+const LOGO: &str = include_str!("../../../assets/scour.svg");
+
+fn data_url(svg: &str) -> String {
+    let mut out = String::from("data:image/svg+xml,");
+    for b in svg.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~/:=;,!*'()".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// The page with its palette and its menu written in, built once. The colours
 /// live in [`scour_ui`], so this page and `theme.slint` cannot drift.
 fn page() -> &'static str {
@@ -67,6 +83,7 @@ fn page() -> &'static str {
             1,
         )
         .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
+        .replace("@LOGO@", &data_url(LOGO))
     })
 }
 
@@ -1574,6 +1591,29 @@ mod tests {
             scour_ui::MISTAKEN.len(),
             "page.html's MISTAKEN has words `scour_ui::MISTAKEN` does not"
         );
+    }
+
+    /// The icon beside the name and on the tab is the desktop's, decoded back
+    /// to the same bytes: a `+` or a raw `#` in a data URL breaks the picture.
+    #[test]
+    fn the_page_is_served_with_the_applications_icon() {
+        let served = page();
+        assert!(!served.contains("@LOGO@"), "a marker was left unreplaced");
+        let url = data_url(LOGO);
+        assert_eq!(served.matches(&url).count(), 2, "the tab and the corner");
+        let body = url.strip_prefix("data:image/svg+xml,").expect("prefix");
+        assert!(!body.contains(['+', '#', '"', ' ', '<', '>']), "{body:.80}");
+        let mut back = Vec::new();
+        let mut bytes = body.bytes();
+        while let Some(b) = bytes.next() {
+            if b == b'%' {
+                let hex: String = bytes.by_ref().take(2).map(char::from).collect();
+                back.push(u8::from_str_radix(&hex, 16).expect("hex"));
+            } else {
+                back.push(b);
+            }
+        }
+        assert_eq!(String::from_utf8(back).expect("utf-8"), LOGO);
     }
 
     /// A renamed marker makes the injection silently do nothing, and every

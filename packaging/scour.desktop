@@ -15,7 +15,10 @@
 # Naming `scour-gui` here would quietly override a choice made elsewhere.
 #
 # `StartupWMClass` has to match what the window calls itself, or the desktop
-# draws a second, iconless entry in the task bar beside the running one.
+# draws a second, iconless entry in the task bar beside the running one. It
+# names the browser face: under `--app` Chromium and Chrome call the window
+# after the page, not after `--class`. The window face, whose app id is
+# `scour`, is matched by this file's name instead.
 [Desktop Entry]
 Type=Application
 Name=Scour
@@ -30,4 +33,4 @@ Categories=Utility;FileTools;
 Keywords=search;find;file;everything;
 Keywords[tr]=ara;bul;dosya;arama;
 StartupNotify=true
-StartupWMClass=scour
+StartupWMClass=chrome-127.0.0.1__-Default

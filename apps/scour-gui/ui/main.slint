@@ -1301,14 +1301,24 @@ export component MainWindow inherits Window {
                 height: 35px;
                 spacing: 12px;
 
-                // The mark. Letter-spaced small capitals.
-                mark := Text {
-                    text: "SCOUR";
-                    color: Theme.ink-3;
-                    font-size: 12px;
-                    font-weight: 700;
-                    letter-spacing: 3.4px;
-                    vertical-alignment: center;
+                // The mark: the desktop's icon, then letter-spaced small capitals.
+                mark := HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    Image {
+                        source: @image-url("../../../assets/scour.svg");
+                        width: 20px;
+                        height: 20px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text {
+                        text: "SCOUR";
+                        color: Theme.ink-3;
+                        font-size: 12px;
+                        font-weight: 700;
+                        letter-spacing: 3.4px;
+                        vertical-alignment: center;
+                    }
                 }
 
                 // The box and its placeholder, stacked: Slint's `TextInput` has

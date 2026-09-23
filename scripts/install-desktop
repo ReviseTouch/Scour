@@ -47,7 +47,7 @@ Categories=Utility;FileTools;
 Keywords=search;find;file;everything;
 Keywords[tr]=ara;bul;dosya;arama;
 StartupNotify=true
-StartupWMClass=scour
+StartupWMClass=chrome-127.0.0.1__-Default
 ENTRY
 
 # There is one Scour entry, not one per face.
