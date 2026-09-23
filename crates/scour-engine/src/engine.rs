@@ -281,7 +281,7 @@ impl Shared {
 pub struct Engine {
     shared: Arc<Shared>,
     jobs: Sender<Job>,
-    changes: Sender<Change>,
+    changes: Sender<Box<Change>>,
     worker: Mutex<Option<JoinHandle<()>>>,
     prepare_stop: Sender<()>,
     preparer: Mutex<Option<JoinHandle<()>>>,
@@ -342,7 +342,9 @@ impl Engine {
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
         // Bounded: a burst of events slows the watcher rather than filling memory.
-        let (changes_tx, changes_rx) = crossbeam_channel::bounded::<Change>(65_536);
+        // Boxed: a bounded channel allocates every slot up front, and 65,536 of
+        // an entry apiece was 10 MB held for a queue that is nearly always empty.
+        let (changes_tx, changes_rx) = crossbeam_channel::bounded::<Box<Change>>(65_536);
         let worker = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
@@ -930,12 +932,12 @@ impl Drop for Engine {
 
 /// Hands a watcher's events to the worker.
 #[derive(Debug)]
-struct Forward(Sender<Change>);
+struct Forward(Sender<Box<Change>>);
 
 impl scour_core::ChangeSink for Forward {
     fn emit(&self, change: Change) {
         // A full channel slows the watcher rather than queueing the whole filesystem.
-        let _ = self.0.send(change);
+        let _ = self.0.send(Box::new(change));
     }
 }
 
@@ -991,7 +993,7 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>
 }
 
 /// The background thread: one loop for jobs, changes and the commit clock.
-fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
+fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>) {
     let mut dirty = false;
     // Set when a walk finishes with changes already queued behind it.
     let mut overdue = false;
@@ -1145,9 +1147,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                 Ok(c) => {
                     last_busy = Instant::now();
                     // A burst becomes one batch: a hundred changes cost barely one.
-                    let mut batch = vec![c];
+                    let mut batch = vec![*c];
                     while let Ok(more) = changes.try_recv() {
-                        batch.push(more);
+                        batch.push(*more);
                         if batch.len() >= 4_096 {
                             break;
                         }

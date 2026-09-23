@@ -368,6 +368,9 @@ impl DirMap {
                 }
             }
         });
+        // Grown by doubling while the walk ran; the room left over is a quarter
+        // of the list, kept for the few directories made after it.
+        map.nodes.shrink_to_fit();
         map
     }
 

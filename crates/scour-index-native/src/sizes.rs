@@ -22,7 +22,9 @@ use crate::segment::Live;
 #[derive(Debug, Default)]
 pub struct Prefix {
     disk: Vec<u64>,
-    files: Vec<u64>,
+    /// Counts, which no segment's rows can take past `u32`: half the bytes of
+    /// the `u64` it was, at 653,000 directories 2.6 MB.
+    files: Vec<u32>,
     /// What each *directory row* has under it, so a folder shown as `~13 GB`
     /// sorts as 13 GB rather than by its `Size` column, which is four kilobytes
     /// of entry table. In row order, so a lookup is a binary search.
@@ -82,13 +84,17 @@ impl Prefix {
             files[d] += 1;
         }
         // Shifted by one: after this `v[i]` is everything *before* `i`.
-        for v in [&mut *disk, &mut *files] {
-            let mut run = 0u64;
-            for slot in v.iter_mut() {
-                let own = *slot;
-                *slot = run;
-                run += own;
-            }
+        let mut run = 0u64;
+        for slot in disk.iter_mut() {
+            let own = *slot;
+            *slot = run;
+            run += own;
+        }
+        let mut run = 0u32;
+        for slot in files.iter_mut() {
+            let own = *slot;
+            *slot = run;
+            run += own;
         }
         // The rows' totals wait for an order that reads them: building them
         // decodes a path a directory, and a page of folders needs none of it.
@@ -255,7 +261,7 @@ impl Prefix {
                 disk += b.saturating_sub(*a);
             }
             if let (Some(a), Some(b)) = (self.files.get(from), self.files.get(to)) {
-                files += b.saturating_sub(*a);
+                files += u64::from(b.saturating_sub(*a));
             }
             let (gone_disk, gone_files) = self.gone_in(from as u32, to as u32);
             disk = disk.saturating_sub(gone_disk);
@@ -335,8 +341,8 @@ impl Cache {
         self.per_segment
             .values()
             .map(|p| {
-                ((p.disk.capacity() + p.files.capacity() + p.gone_disk.capacity())
-                    * std::mem::size_of::<u64>()
+                ((p.disk.capacity() + p.gone_disk.capacity()) * std::mem::size_of::<u64>()
+                    + p.files.capacity() * std::mem::size_of::<u32>()
                     + p.by_row.capacity() * std::mem::size_of::<(u32, i64)>()
                     + p.scopes.capacity() * std::mem::size_of::<[u32; 3]>()
                     + p.gone.capacity() * std::mem::size_of::<(u32, u64)>()
