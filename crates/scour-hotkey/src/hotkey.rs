@@ -100,6 +100,10 @@ impl Hotkey {
         match self.desktop() {
             Desktop::Gnome => {
                 gnome::bind(self.gsettings()?, key, &self.command())?;
+                // Without it the key still opens Scour, just not forward.
+                if self.tools.shell_extension {
+                    let _ = gnome::enable_extension(self.gsettings()?);
+                }
                 Ok(Applies::Now)
             }
             Desktop::Kde => {

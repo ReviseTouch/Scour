@@ -19,8 +19,8 @@ if [[ ! -x $WEB ]]; then
     exit 1
 fi
 
-# Already open, bridge and window both alive: leave it. The desktop cannot
-# raise a window from here under Wayland, and restarting it would lose the page.
+# Already open, bridge and window both alive: leave it. Restarting it would lose
+# the page; bringing it forward is `scour-open`'s, which asks the shell first.
 if pgrep -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
     && pgrep -f -- "--app=http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
     exit 0

@@ -198,14 +198,16 @@ write the binding: it shows the command to bind by hand in the desktop's own
 keyboard settings, `scour-open` or `flatpak run com.revisetouch.Scour`. The
 installer offers Super+F (`SCOUR_KEY=ctrl+alt+s` picks another,
 `SCOUR_KEY=none` skips it), and the window's first run offers it once. The key
-runs the launcher, so it opens whichever face you last switched to; for the
-window a second press brings the same window forward, and a second instance is
-never started.
+runs the launcher, so it opens whichever face you last switched to; pressed
+again while Scour is open, it brings the open window forward instead of
+starting a second one.
 
-Under GNOME on Wayland a program may not raise its own window; the window may
-be indicated in the taskbar instead of coming to the front. The Shell
-extension in `platform/gnome` provides this, and `scripts/install-desktop`
-installs it together with a binding.
+Under GNOME on Wayland only the shell may bring a window forward, so Scour
+ships a small Shell extension (`platform/gnome`) that does that one thing. The
+installer and the packages put it in place, and setting the key turns it on;
+GNOME loads a newly installed extension at the next login. Without it, or on
+another desktop, a second press still opens Scour; the window may be flagged
+in the taskbar instead of coming to the front.
 
 ### Watching the filesystem
 

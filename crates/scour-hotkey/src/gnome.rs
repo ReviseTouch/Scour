@@ -10,6 +10,10 @@ pub(crate) const SCHEMA: &str = "org.gnome.settings-daemon.plugins.media-keys";
 /// Our own entry; the installer wrote the same path, so the two agree.
 const PATH: &str = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/scour/";
 
+/// The extension in `platform/gnome`, which raises an open window for the key.
+pub(crate) const EXTENSION: &str = "scour@scour.local";
+const SHELL: &str = "org.gnome.shell";
+
 fn entry() -> String {
     format!("{SCHEMA}.custom-keybinding:{PATH}")
 }
@@ -41,6 +45,24 @@ pub(crate) fn bind(gsettings: &Path, key: &Key, command: &str) -> Result<(), Err
         run(
             gsettings,
             &["set", SCHEMA, "custom-keybindings", &format_list(&paths)],
+        )?;
+    }
+    Ok(())
+}
+
+/// Turn the extension on, unless somebody turned it off. A shell that has
+/// already found it starts it now, one that has not at the next login.
+pub(crate) fn enable_extension(gsettings: &Path) -> Result<(), Error> {
+    let off = parse_list(&run(gsettings, &["get", SHELL, "disabled-extensions"])?);
+    if off.iter().any(|u| u == EXTENSION) {
+        return Ok(());
+    }
+    let mut on = parse_list(&run(gsettings, &["get", SHELL, "enabled-extensions"])?);
+    if !on.iter().any(|u| u == EXTENSION) {
+        on.push(EXTENSION.to_owned());
+        run(
+            gsettings,
+            &["set", SHELL, "enabled-extensions", &format_list(&on)],
         )?;
     }
     Ok(())

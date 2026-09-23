@@ -20,7 +20,7 @@ PORTABLE=(
 step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 tmp=$(mktemp -t scour-page.XXXXXX.js)
-trap 'rm -f "$tmp"' EXIT
+trap 'rm -f "$tmp" "$tmp.mjs"' EXIT
 
 step "format"
 cargo fmt --check
@@ -37,6 +37,11 @@ if command -v node >/dev/null; then
     python3 scripts/page-script.py > "$tmp"
     node --check "$tmp"
     node --test packaging/tests/service-policy.test.cjs
+    # The Shell extension is a module, so node reads it as one; `gi://` imports
+    # are only resolved by GNOME's shell, and a syntax check does not resolve.
+    cp platform/gnome/scour@scour.local/extension.js "$tmp.mjs"
+    node --check "$tmp.mjs"
+    rm -f "$tmp.mjs"
     echo "  page.html: the script parses"
 else
     echo "  node is missing, so the page's script was not parsed" >&2

@@ -1,37 +1,37 @@
 /*
- * Show Scour.
+ * Bring an open Scour window to the front.
  *
- * Thirty lines of JavaScript in a Rust project needs a reason, and it is this:
- * on GNOME under Wayland **nothing outside the compositor can raise a window**.
- * Every ordinary route was tried against a running Scour window first —
+ * On GNOME under Wayland nothing outside the compositor can raise a window:
+ * `xdotool windowactivate` changes nothing, `org.gnome.Shell.FocusApp` is
+ * AccessDenied, and starting the program again opens a second window. So the
+ * key that opens Scour asks the shell first, through the one method below; it
+ * has no preferences, no indicator and no keybinding of its own.
  *
- *   xdotool windowactivate      the X property never changed; denied
- *   org.gnome.Shell.FocusApp    AccessDenied, like Eval and Introspect
- *   launching the app again     opened a second window, which is worse
- *
- * — so a shortcut that is supposed to bring the window forward has to be
- * handled by something running inside the shell. That is all this does. It has
- * no preferences, no indicator and no keybinding of its own: the shortcut
- * lives in GNOME's own settings, where it can be seen and changed, and calls
- * the method below.
- *
- * `activate()` is one call for both cases — it focuses the window when the app
- * is running and launches it when it is not — because that is exactly what the
- * shell does when its own icon is clicked.
+ * `Raise` never starts anything. Finding no window it answers false and the
+ * caller, `scour-open`, starts the face; activating the app instead would run
+ * the desktop entry, which is `scour-open` again.
  */
 
+import Meta from 'gi://Meta';
 import Gio from 'gi://Gio';
-import Shell from 'gi://Shell';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const NAME = 'org.scour.Shell';
 const PATH = '/org/scour/Shell';
-const APP = 'scour.desktop';
+
+// The window's app id. The browser's window is found by its process instead:
+// under `--app` Chromium names it after the page, not after `--class`.
+const CLASSES = ['scour', 'com.revisetouch.scour'];
 
 const IFACE = `
 <node>
   <interface name="org.scour.Shell">
-    <method name="Show"/>
+    <method name="Raise">
+      <arg type="au" direction="in" name="pids"/>
+      <arg type="s" direction="in" name="title"/>
+      <arg type="b" direction="out" name="raised"/>
+    </method>
   </interface>
 </node>`;
 
@@ -51,12 +51,18 @@ export default class ScourExtension extends Extension {
         this._owner = null;
     }
 
-    Show() {
-        const app = Shell.AppSystem.get_default().lookup_app(APP);
-        if (!app) {
-            logError(new Error(`${APP} is not installed`), 'scour');
-            return;
-        }
-        app.activate();
+    // The most recently used Scour window, on any workspace, minimised or not.
+    // `pids` are the faces' processes and, for the terminal face, the
+    // processes above it; one terminal process can own many windows, and
+    // `title` picks the one showing Scour. A title alone never matches.
+    Raise(pids, title) {
+        const windows = global.display.get_tab_list(Meta.TabList.NORMAL_ALL, null)
+            .filter(w => pids.includes(w.get_pid())
+                || CLASSES.includes((w.get_wm_class() ?? '').toLowerCase()));
+        const ours = windows.find(w => title && w.get_title() === title) ?? windows[0];
+        if (!ours)
+            return false;
+        Main.activateWindow(ours, global.display.get_current_time_roundtrip());
+        return true;
     }
 }

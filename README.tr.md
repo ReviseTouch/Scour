@@ -194,13 +194,15 @@ yazamaz: masaüstünün kendi klavye ayarlarından elle bağlanacak komutu
 gösterir, `scour-open` ya da `flatpak run com.revisetouch.Scour`. Kurucu
 Super+F'yi teklif eder (`SCOUR_KEY=ctrl+alt+s` başka bir tuş seçer,
 `SCOUR_KEY=none` atlar); pencere ilk açılışta bir kez teklif eder. Tuş
-başlatıcıyı çalıştırır, yani en son geçtiğin yüzü açar; pencerede ikinci
-basış aynı pencereyi öne getirir, ikinci bir kopya hiç başlatılmaz.
+başlatıcıyı çalıştırır, yani en son geçtiğin yüzü açar; Scour açıkken tekrar
+basınca ikinci bir kopya başlatmaz, açık pencereyi öne getirir.
 
-Wayland üzerinde GNOME bir programın kendi penceresini öne almasına izin
-vermez; pencere öne gelmek yerine görev çubuğunda işaretlenebilir.
-`platform/gnome` altındaki Shell eklentisi bunu sağlar; `scripts/install-desktop`
-eklentiyi bir bağlamayla birlikte kurar.
+Wayland üzerinde GNOME'da bir pencereyi yalnız kabuk öne getirebilir; bu
+yüzden Scour tek işi bu olan küçük bir Shell eklentisiyle gelir
+(`platform/gnome`). Kurucu ve paketler eklentiyi yerleştirir, tuşu ayarlamak
+onu açar; GNOME yeni kurulan bir eklentiyi bir sonraki oturum açılışında
+yükler. Eklenti yoksa ya da başka bir masaüstündeyse ikinci basış yine
+Scour'u açar; pencere öne gelmek yerine görev çubuğunda işaretlenebilir.
 
 ### Dosya sistemini izleme
 

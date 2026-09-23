@@ -40,7 +40,7 @@ GenericName=File Search
 GenericName[tr]=Dosya Arama
 Comment=Find any file on this machine, instantly
 Comment[tr]=Bu makinedeki her dosyayı anında bul
-Exec=$root/scripts/scour-app
+Exec=$root/scripts/scour-open
 Icon=scour
 Terminal=false
 Categories=Utility;FileTools;
@@ -72,7 +72,7 @@ path=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/scour/
 entry="$media.custom-keybinding:$path"
 
 gsettings set "$entry" name 'Scour'
-gsettings set "$entry" command "$root/scripts/scour-show"
+gsettings set "$entry" command "$root/scripts/scour-open"
 gsettings set "$entry" binding '<Control>quotedbl'
 
 # Anything else on the same accelerator is unbound: two commands on one is one

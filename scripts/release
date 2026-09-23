@@ -45,6 +45,8 @@ for f in scour.desktop scourd.service scour.service 'scour@.service' \
 done
 [ -f "$stage/packaging/scour.desktop" ] || { echo "missing packaging/scour.desktop" >&2; exit 1; }
 install -m644 "$here/assets/scour.svg" "$stage/assets/scour.svg"
+mkdir -p "$stage/platform/gnome/scour@scour.local"
+install -m644 "$here/platform/gnome/scour@scour.local"/* "$stage/platform/gnome/scour@scour.local/"
 # The raster sizes: the panels that cannot draw an SVG show nothing without them.
 "$here/scripts/icons" "$stage/assets/icons" >/dev/null
 install -m644 "$here/README.md" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"

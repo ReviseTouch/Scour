@@ -19,6 +19,39 @@ if [ -z "$face" ] && [ -r "$state" ]; then
     face="$(sed -n 's/.*"face"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$state" | head -1)"
 fi
 
+# Pressed again with Scour open, the key brings that window forward instead of
+# starting another. Under Wayland only the compositor may move focus, so this
+# asks the GNOME extension in `platform/gnome`; without it the face's own
+# launcher runs. Not when a face is named: that is a switch, and the face being
+# left is still open.
+raised() {
+    command -v gdbus >/dev/null || return 1
+    local uid pid pids=()
+    uid=$(id -u)
+    for pid in $(pgrep -u "$uid" -x scour-gui) \
+               $(pgrep -u "$uid" -f -- "--app=http://127.0.0.1:${SCOUR_APP_PORT:-7621}/"); do
+        pids+=("$pid")
+    done
+    # A terminal owns the terminal face's window, so every process above
+    # `scour-tui` is offered, and the title picks among a terminal's windows.
+    for pid in $(pgrep -u "$uid" -x scour-tui); do
+        while [ "${pid:-0}" -gt 1 ]; do
+            pids+=("$pid")
+            pid=$(awk '/^PPid:/ { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
+        done
+    done
+    [ ${#pids[@]} -gt 0 ] || return 1
+    local answer
+    answer=$(gdbus call --session --timeout 2 --dest org.scour.Shell \
+        --object-path /org/scour/Shell --method org.scour.Shell.Raise \
+        "@au [$(IFS=,; echo "${pids[*]}")]" "Scour" 2>/dev/null) || return 1
+    [ "$answer" = "(true,)" ]
+}
+
+if [ -z "${1:-}" ] && raised; then
+    exit 0
+fi
+
 # Beside this script first, then the installed copy — the order the faces use
 # on each other, so a build being tried out never starts the installed one.
 run() {

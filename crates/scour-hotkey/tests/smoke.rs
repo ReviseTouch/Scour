@@ -219,6 +219,44 @@ fn gnome_bind_read_rebind_clear() {
     let db = std::fs::read_to_string(dir.path().join("db")).expect("db");
     assert!(db.contains("custom-keybindings=@as []"), "{db}");
     assert!(!db.contains("binding="), "{db}");
+    // No extension installed, so the shell's list is left alone.
+    assert!(!db.contains("enabled-extensions"), "{db}");
+}
+
+#[cfg(unix)]
+#[test]
+fn gnome_turns_the_extension_on_unless_it_was_turned_off() {
+    let _turn = one_at_a_time();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gsettings = stub_gsettings(dir.path());
+    std::fs::write(
+        dir.path().join("db"),
+        "org.gnome.shell enabled-extensions=['gsconnect@andyholmes.github.io']\n",
+    )
+    .expect("seed");
+    let hk = Hotkey::new(Tools {
+        gsettings: Some(gsettings),
+        gnome_keys: true,
+        shell_extension: true,
+        ..Tools::default()
+    });
+    hk.bind(&key("super+f")).expect("bind");
+    hk.bind(&key("super+g")).expect("rebind");
+    let db = std::fs::read_to_string(dir.path().join("db")).expect("db");
+    assert!(
+        db.contains("enabled-extensions=['gsconnect@andyholmes.github.io', 'scour@scour.local']"),
+        "{db}"
+    );
+
+    // Somebody switched it off in the Extensions app: that stands.
+    std::fs::write(
+        dir.path().join("db"),
+        "org.gnome.shell disabled-extensions=['scour@scour.local']\n",
+    )
+    .expect("seed");
+    hk.bind(&key("super+f")).expect("bind");
+    let db = std::fs::read_to_string(dir.path().join("db")).expect("db");
+    assert!(!db.contains("enabled-extensions"), "{db}");
 }
 
 #[cfg(unix)]

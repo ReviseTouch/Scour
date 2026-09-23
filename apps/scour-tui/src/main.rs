@@ -112,7 +112,18 @@ fn main() -> Result<()> {
         ratatui::crossterm::event::EnableBracketedPaste
     )
     .is_ok();
+    // The title the key finds this terminal by when pressed again, pushed so
+    // that terminals keeping a stack get their own back on the way out.
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::style::Print("\x1b[22;0t"),
+        ratatui::crossterm::terminal::SetTitle("Scour")
+    );
     let outcome = run(&mut terminal, &mut state, &link, &waiting, &theme);
+    let _ = ratatui::crossterm::execute!(
+        std::io::stdout(),
+        ratatui::crossterm::style::Print("\x1b[23;0t")
+    );
     if mousing {
         let _ = ratatui::crossterm::execute!(
             std::io::stdout(),

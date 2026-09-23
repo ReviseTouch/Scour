@@ -56,6 +56,13 @@ for png in "$here"/assets/icons/hicolor/*/apps/scour.png; do
 done
 update-desktop-database "$share/applications" 2>/dev/null || true
 gtk-update-icon-cache -qtf "$icons" 2>/dev/null || true
+# GNOME's shell is the only thing that may bring an open window forward under
+# Wayland; this extension does that for the key. Binding the key turns it on.
+ext=$here/platform/gnome/scour@scour.local
+if [ -d "$ext" ]; then
+    mkdir -p "$share/gnome-shell/extensions/scour@scour.local"
+    install -m644 "$ext"/* "$share/gnome-shell/extensions/scour@scour.local/"
+fi
 
 # A key to open it, on the desktops that let a program set one. Super+F unless
 # `SCOUR_KEY` says otherwise; `SCOUR_KEY=none` skips this. Pressing it again

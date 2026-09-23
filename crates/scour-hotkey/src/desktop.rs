@@ -31,6 +31,9 @@ pub struct Tools {
     pub sandboxed: bool,
     /// The face's own executable; `scour-gui` beside it is what the key runs.
     pub exe: Option<PathBuf>,
+    /// Scour's GNOME Shell extension is where the shell looks for one: what
+    /// lets the key bring an open window forward.
+    pub shell_extension: bool,
 }
 
 impl Tools {
@@ -52,6 +55,7 @@ impl Tools {
             desktop_var: std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
             sandboxed,
             exe: std::env::current_exe().ok(),
+            shell_extension: !sandboxed && shell_extension_installed(),
         }
     }
 
@@ -93,6 +97,25 @@ impl Tools {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| name.to_owned())
     }
+}
+
+/// The user's data directory, then the system's, as the shell searches them.
+fn shell_extension_installed() -> bool {
+    let home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    let system = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
+    home.into_iter()
+        .chain(std::env::split_paths(&system))
+        .any(|dir| {
+            dir.join("gnome-shell/extensions")
+                .join(crate::gnome::EXTENSION)
+                .join("metadata.json")
+                .is_file()
+        })
 }
 
 /// The first executable of that name on `PATH`.
