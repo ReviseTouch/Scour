@@ -1951,14 +1951,48 @@ impl Index for NativeIndex {
                             bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
                         })
                     };
-                    (0..live.rows())
-                        .filter(|&row| {
+                    // Under a subtree, a row's directory number decides first:
+                    // it is one column read where the source is another, and a
+                    // block whose numbers miss every root is not read at all —
+                    // the zone map `kill_under` reads. Every row of every
+                    // segment was read here, write lock held, after each
+                    // subtree walk: 58% of an idle service's CPU.
+                    let in_scope = |row: usize| {
+                        let d = seg.dir_id(row);
+                        scopes.iter().any(|s| s.contains(d))
+                            || owns
+                                .iter()
+                                .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
+                    };
+                    let block_matters = |block: usize| {
+                        whole
+                            || match seg.cols.block_range(Field::DirId, block) {
+                                Some((lo, hi)) if lo >= 0 => {
+                                    let (lo, hi) = (lo as u32, hi as u32);
+                                    scopes.iter().any(|s| s.intersects(lo, hi))
+                                        || owns.iter().any(|(pd, _)| lo <= *pd && *pd <= hi)
+                                }
+                                _ => true,
+                            }
+                    };
+                    let rows = live.rows();
+                    let mut out = Vec::new();
+                    for block in 0..rows.div_ceil(crate::columns::BLOCK) {
+                        if !block_matters(block) {
+                            continue;
+                        }
+                        let from = block * crate::columns::BLOCK;
+                        let to = (from + crate::columns::BLOCK).min(rows);
+                        out.extend((from..to).filter(|&row| {
                             if !live.is_alive(row) {
                                 return false;
                             }
                             // The walk saw it and it had not changed, so it
                             // was not rewritten. That is a stamp.
                             if spared(row) {
+                                return false;
+                            }
+                            if !whole && !in_scope(row) {
                                 return false;
                             }
                             // **Another source's rows are not this walk's to
@@ -1969,22 +2003,12 @@ impl Index for NativeIndex {
                             }
                             // Somewhere the walk could not look. Its rows are
                             // not evidence of anything, so they stay.
-                            if !spare.is_empty()
+                            !(!spare.is_empty()
                                 && spare
-                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default()))
-                            {
-                                return false;
-                            }
-                            if whole {
-                                return true;
-                            }
-                            let d = seg.dir_id(row);
-                            scopes.iter().any(|s| s.contains(d))
-                                || owns
-                                    .iter()
-                                    .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
-                        })
-                        .collect()
+                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default())))
+                        }));
+                    }
+                    out
                 }
             };
             for row in victims {
