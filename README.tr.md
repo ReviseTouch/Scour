@@ -80,8 +80,8 @@ izleyicisi ne yazma sayacı olan kaynaklarda dakikada bir. Ölçümler ve onlar�
 ### Hazır sürümle
 
 ```bash
-tar xzf scour-0.2.0-alpha.2-linux-x86_64.tar.gz
-cd scour-0.2.0-alpha.2-linux-x86_64
+tar xzf scour-0.2.0-alpha.3-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.3-linux-x86_64
 ./install.sh
 ```
 
@@ -108,8 +108,8 @@ Ubuntu 24.04 ve Debian 11 konteynerlerinde kurulup çalıştırılmıştır.
 ### Debian, Ubuntu ve Fedora paketleri
 
 ```bash
-sudo apt install ./scour_0.2.0~alpha.2-1_amd64.deb      # Debian 11 ve üstü, Ubuntu 22.04 ve üstü
-sudo dnf install ./scour-0.2.0~alpha.2-1.x86_64.rpm     # Fedora
+sudo apt install ./scour_0.2.0.alpha.3-1_amd64.deb      # Debian 11 ve üstü, Ubuntu 22.04 ve üstü
+sudo dnf install ./scour-0.2.0.alpha.3-1.x86_64.rpm     # Fedora
 ```
 
 İkisi de yedi ikiliyi taşır: altısı `/usr/bin`'de, ayrıcalıklı `scour-watch`
