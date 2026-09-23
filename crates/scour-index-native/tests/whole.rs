@@ -255,6 +255,96 @@ fn the_stored_name_order_is_the_order_brute_force_gives() {
     );
 }
 
+/// A query that reads names can still take a stored text or path order when the
+/// count is small: it reads a name per position and gives up for the ordinary
+/// walk once a budget is spent. Both routes have to give brute force's answer —
+/// common terms that finish the page early, and rare ones that run out.
+#[test]
+fn a_name_reading_query_in_a_stored_order_is_what_brute_force_gives() {
+    let f = Fixture::new(16_000, 16_000);
+    let cap = 20u32;
+    let queries = [
+        "e",
+        "a",
+        "ra",
+        "o r",
+        "zzqx",
+        "rapor",
+        "e !kind:code",
+        "*.rs",
+        "ext:pdf",
+        "e kind:code",
+        "/home/u/ e",
+        "regex:^[a-c]",
+        "e size:>1k",
+    ];
+    for q in queries {
+        let all = brute_force(
+            &f.entries,
+            &parse_at(q, NOW),
+            SortKey::Name,
+            false,
+            usize::MAX,
+        );
+        for sort in [SortKey::Name, SortKey::Path, SortKey::Ext] {
+            for desc in [false, true] {
+                let every = brute_force(&f.entries, &parse_at(q, NOW), sort, desc, usize::MAX);
+                for (offset, limit) in [(0usize, 20usize), (5, 10)] {
+                    let res = f
+                        .index
+                        .search(&SearchRequest {
+                            query: parse_at(q, NOW),
+                            sort,
+                            descending: desc,
+                            page: Page {
+                                offset: offset as u32,
+                                limit: limit as u32,
+                                count_cap: cap,
+                            },
+                        })
+                        .expect("search");
+                    let got: Vec<&str> = res.hits.iter().map(|h| h.path.as_str()).collect();
+                    let want: Vec<&str> = every
+                        .iter()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|h| h.path.as_str())
+                        .collect();
+                    assert_eq!(
+                        got, want,
+                        "{q:?} by {sort:?} (desc={desc}) at {offset}+{limit}"
+                    );
+                    assert_eq!(
+                        res.total,
+                        (all.len() as u64).min(u64::from(cap)),
+                        "{q:?} by {sort:?}: the total"
+                    );
+                }
+            }
+        }
+    }
+    // And a common term really did stop early rather than read every name.
+    let res = f
+        .index
+        .search(&SearchRequest {
+            query: parse_at("e", NOW),
+            sort: SortKey::Name,
+            descending: false,
+            page: Page {
+                offset: 0,
+                limit: 20,
+                count_cap: cap,
+            },
+        })
+        .expect("search");
+    assert!(
+        res.rows_visited < f.entries.len() as u64 / 4,
+        "`e` by name read {} rows of {}",
+        res.rows_visited,
+        f.entries.len()
+    );
+}
+
 /// Extension order is persisted for the broad list the GUI shows. Extensions
 /// have few values, so the order must hold both the primary key and the public
 /// newest-first/path-first tie order while still stopping after a page.

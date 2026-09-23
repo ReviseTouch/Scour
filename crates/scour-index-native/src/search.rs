@@ -964,7 +964,56 @@ pub fn run_with(
     // caller has not built it, and a folder then sorts by its own `Size` column.
     folders: &[(u32, i64)],
 ) -> Found {
+    /* **A stored text or path order under a query that reads names**, tried
+     * first where it can pay: each position costs a name read from its block's
+     * start, so it wins only when matches are common, and is given up for the
+     * ordinary walk after a budget. `e` sorted by name was 223 ms of reading
+     * every name on 4.5 M rows to keep two hundred. */
+    let need = want.offset + want.limit;
+    let budget = need.max(want.count_cap).saturating_mul(NAMED_STREAM_TRIES);
+    if plan.needs_name()
+        && need > 0
+        && matches!(want.sort, SortKey::Name | SortKey::Path | SortKey::Ext)
+        && budget <= seg.rows() / NAMED_STREAM_SHARE
+        && let Some(found) = walk_segment(
+            seg,
+            plan,
+            want,
+            conceals.as_deref_mut(),
+            folders,
+            Some(budget),
+        )
+    {
+        return found;
+    }
+    walk_segment(seg, plan, want, conceals, folders, None)
+        .expect("a walk with no budget always answers")
+}
+
+/// Positions a name-reading stream may look at per row the page and the count
+/// need: it succeeds when one name in sixteen matches.
+const NAMED_STREAM_TRIES: usize = 16;
+
+/// The most of a segment such a stream may read before giving up, as a share:
+/// a name read at random costs about four read in order, so a thirty-second of
+/// the rows wasted is an eighth of the walk it falls back to.
+const NAMED_STREAM_SHARE: usize = 32;
+
+/// [`run_with`]'s walk. With `named`, a stored order is streamed even though the
+/// query reads names, for at most that many positions; `None` if they run out.
+fn walk_segment<'v>(
+    seg: &Segment<'_>,
+    plan: &Plan,
+    want: Wanted,
+    // Its own lifetime for the closure, so that a first try can borrow it briefly.
+    mut conceals: Option<&mut (dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool + 'v)>,
+    folders: &[(u32, i64)],
+    named: Option<usize>,
+) -> Option<Found> {
     let has_veto = conceals.is_some();
+    // A name-reading query streams only when asked to, and then reads the name.
+    let streams_names = named.is_some();
+    let reads_names = has_veto || plan.needs_name();
     // A `Cell` rather than a plain counter because the block loop below reads it
     // while the closure that increments it is alive.
     let counted = Cell::new(0usize);
@@ -1029,7 +1078,7 @@ pub fn run_with(
     let n_blocks = seg.rows().div_ceil(BLOCK);
     let path_stream = want.sort == SortKey::Path
         && need > 0
-        && !plan.needs_name()
+        && (!plan.needs_name() || streams_names)
         && seg.porder.is_some_and(|o| o.rows() == seg.rows())
         && blocks.len().saturating_mul(2) >= n_blocks;
     // The name equivalent of `path_stream`, over an order folded at build time as
@@ -1037,7 +1086,7 @@ pub fn run_with(
     // the sequential arena walk, whose locality this would discard.
     let name_stream = want.sort == SortKey::Name
         && need > 0
-        && !plan.needs_name()
+        && (!plan.needs_name() || streams_names)
         && seg.norder.is_some_and(|o| o.rows() == seg.rows())
         && blocks.len().saturating_mul(2) >= n_blocks;
     // Extensions have the same grouped tie semantics as names with far fewer
@@ -1045,7 +1094,7 @@ pub fn run_with(
     // large ties.
     let extension_stream = want.sort == SortKey::Ext
         && need > 0
-        && !plan.needs_name()
+        && (!plan.needs_name() || streams_names)
         && seg.eorder.is_some_and(|o| o.rows() == seg.rows())
         && blocks.len().saturating_mul(2) >= n_blocks;
     let text_stream = name_stream || extension_stream;
@@ -1216,6 +1265,15 @@ pub fn run_with(
     // Whether any candidate block was left unopened, which is what
     // [`Found::early_exit`] reports; `visit` sets `done` for the other way out.
     let mut skipped = false;
+    // What is left of a name-reading stream's budget; unlimited otherwise.
+    let mut tries = named.unwrap_or(usize::MAX);
+    let out_of_tries = |tries: &mut usize| {
+        if *tries == 0 {
+            return true;
+        }
+        *tries -= 1;
+        false
+    };
     let grouped_positions = seg
         .norder
         .filter(|_| name_stream)
@@ -1236,10 +1294,13 @@ pub fn run_with(
                     break;
                 };
                 for i in start..end {
+                    if out_of_tries(&mut tries) {
+                        return None;
+                    }
                     let Some(row) = positions.at(i) else {
                         continue;
                     };
-                    let name = if has_veto {
+                    let name = if reads_names {
                         seg.folded.get(row as usize).unwrap_or_default().as_bytes()
                     } else {
                         b""
@@ -1255,10 +1316,13 @@ pub fn run_with(
             }
         } else {
             for i in 0..positions.rows() {
+                if out_of_tries(&mut tries) {
+                    return None;
+                }
                 let Some(row) = positions.at(i) else {
                     continue;
                 };
-                let name = if has_veto {
+                let name = if reads_names {
                     seg.folded.get(row as usize).unwrap_or_default().as_bytes()
                 } else {
                     b""
@@ -1278,10 +1342,13 @@ pub fn run_with(
             let at = if want.descending { n - 1 - i } else { i };
             // A position naming a row this segment does not hold is damage the
             // reader has already refused to pass on.
+            if out_of_tries(&mut tries) {
+                return None;
+            }
             let Some(row) = positions.at(at) else {
                 continue;
             };
-            let name = if has_veto {
+            let name = if reads_names {
                 seg.folded.get(row as usize).unwrap_or_default().as_bytes()
             } else {
                 b""
@@ -1405,7 +1472,7 @@ pub fn run_with(
     // with.** Building a row reconstructs its front-coded path, and the merge
     // throws away all but the page: 401,438 paths for sixty, 1.43 s.
     if want.rank_only {
-        return Found {
+        return Some(Found {
             ranked: ranked
                 .into_iter()
                 .map(|(key, row)| Ranked {
@@ -1421,7 +1488,7 @@ pub fn run_with(
             early_exit: done,
             rows_visited: visited,
             ..Found::default()
-        };
+        });
     }
     kept = ranked.into_iter().map(|(_, row)| row).collect();
 
@@ -1454,7 +1521,7 @@ pub fn run_with(
         .take(want.limit)
         .collect();
 
-    Found {
+    Some(Found {
         hits,
         total: counted.get().min(want.count_cap) as u64,
         capped: counted.get() >= want.count_cap,
@@ -1462,7 +1529,7 @@ pub fn run_with(
         rows_visited: visited,
         rows_built,
         ..Found::default()
-    }
+    })
 }
 
 /// What a row sorts by, without its row being built. Sorting a million rows by
