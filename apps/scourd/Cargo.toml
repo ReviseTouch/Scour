@@ -39,7 +39,10 @@ scour-preview       = { workspace = true }
 scour-source-fs     = { workspace = true }
 anyhow              = { workspace = true }
 clap                = { workspace = true }
-ctrlc               = { workspace = true }
+# `termination`: SIGTERM and SIGHUP too. systemd stops a service with SIGTERM,
+# and without it the process died there, before the shutdown that writes down
+# what the index still held in memory.
+ctrlc               = { workspace = true, features = ["termination"] }
 serde               = { workspace = true }
 serde_json          = { workspace = true }
 

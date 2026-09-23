@@ -144,8 +144,8 @@ fn main() -> Result<()> {
         });
     }
     {
-        // Ctrl-C has to reach the accept loop, which is blocked in `accept`.
-        // Setting the flag and connecting once wakes it.
+        // Ctrl-C, and systemd's SIGTERM, have to reach the accept loop, which is
+        // blocked in `accept`. Setting the flag and connecting once wakes it.
         let (stop, addr) = (Arc::clone(&stop), addr.clone());
         let engine = Arc::clone(&engine);
         let _ = ctrlc::set_handler(move || {
