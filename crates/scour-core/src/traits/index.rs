@@ -53,6 +53,10 @@ pub trait Index: Send + Sync + Debug {
         self.commit()
     }
 
+    /// Stop holding memory a later read can have back cheaply — for an index of
+    /// mapped files, the pages a walk read end to end. Nothing is lost.
+    fn release_memory(&self) {}
+
     /// Remove everything one source ever put here. Returns how many rows went.
     /// For a source no longer configured: a sweep needs a walk, and a source that
     /// is gone will never walk again. Defaults to nothing removed.

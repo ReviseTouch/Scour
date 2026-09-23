@@ -2348,6 +2348,14 @@ impl Index for NativeIndex {
         self.persist_unwritten()
     }
 
+    fn release_memory(&self) {
+        for live in &self.inner.read().segments {
+            live.release_pages();
+        }
+        // And what a query's buffers left in glibc's arenas, freed but kept.
+        trim_allocator();
+    }
+
     fn publish(&self) -> Result<()> {
         // A large batch goes to disk as a commit would: memory holds a second's
         // trickle, not a walk.
@@ -2806,6 +2814,8 @@ impl Index for NativeIndex {
                     inner.staged_at.shrink_to_fit();
                 }
                 self.persist_unwritten()?;
+                // And the mapped pages whatever came before touched.
+                self.release_memory();
             }
             // Fold the head; leave the body alone. A search pays for the *number*
             // of segments: at 1,083,334 entries one answers `"rapor"` in 1.11 ms

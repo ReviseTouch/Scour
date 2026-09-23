@@ -40,6 +40,8 @@ pub struct Prefix {
     deaths: u64,
     /// The death count `by_row` was last brought up to.
     rows_deaths: u64,
+    /// Whether `by_row` and `scopes` have been built since the last build.
+    rows_ready: bool,
 }
 
 impl Prefix {
@@ -62,7 +64,6 @@ impl Prefix {
         self.disk.fill(0);
         self.files.fill(0);
         let (disk, files) = (&mut self.disk, &mut self.files);
-        let mut directory_rows = 0;
         for row in 0..seg.rows() {
             // A directory's `st_size` is its entry table, not content, so its
             // own row is skipped. A row's share of a hard link is `disk/links`.
@@ -70,7 +71,6 @@ impl Prefix {
                 continue;
             }
             if seg.num_of(Field::IsDir, row) != 0 {
-                directory_rows += 1;
                 continue;
             }
             let d = seg.dir_id(row) as usize;
@@ -90,6 +90,22 @@ impl Prefix {
                 run += own;
             }
         }
+        // The rows' totals wait for an order that reads them: building them
+        // decodes a path a directory, and a page of folders needs none of it.
+        self.by_row.clear();
+        self.by_row.shrink_to_fit();
+        self.scopes.clear();
+        self.scopes.shrink_to_fit();
+        self.rows_ready = false;
+
+        self.deaths = deaths;
+        self.rows_deaths = deaths;
+    }
+
+    /// What each directory row has under it, for an order by size: its scope
+    /// and its total, the build's less what died since. Asked for, not kept.
+    fn build_rows(&mut self, seg: &Segment<'_>) {
+        let directory_rows = seg.dirs.len();
         // The rows that *are* directories. `dir_id` is the parent; a bounded
         // cache reuses decoded parents rather than retaining one String each.
         self.by_row.clear();
@@ -113,25 +129,17 @@ impl Prefix {
             }
             path.push_str(name);
             let scope = seg.dirs.subtree(&path);
-            let mut total = 0i64;
-            if let Some(own) = scope.own {
-                let i = own as usize;
-                total += disk[i + 1].saturating_sub(disk[i]) as i64;
-            }
-            let (a, b) = (scope.below.start as usize, scope.below.end as usize);
-            if let (Some(from), Some(to)) = (disk.get(a), disk.get(b)) {
-                total += to.saturating_sub(*from) as i64;
-            }
-            self.by_row.push((row as u32, total));
-            self.scopes.push([
+            let bounds = [
                 scope.own.unwrap_or(u32::MAX),
                 scope.below.start,
                 scope.below.end,
-            ]);
+            ];
+            self.by_row.push((row as u32, self.scope_total(bounds)));
+            self.scopes.push(bounds);
         }
 
-        self.deaths = deaths;
-        self.rows_deaths = deaths;
+        self.rows_ready = true;
+        self.rows_deaths = self.deaths;
     }
 
     /// Catch up with the rows that died since the last look. Cheap: a pass over
@@ -228,7 +236,7 @@ impl Prefix {
 
     /// Bring the rows' totals up to the last look, for an order that reads them.
     fn refresh_rows(&mut self) {
-        if self.rows_deaths == self.deaths {
+        if !self.rows_ready || self.rows_deaths == self.deaths {
             return;
         }
         for i in 0..self.by_row.len() {
@@ -307,7 +315,11 @@ impl Cache {
             };
             let Ok(seg) = live.view() else { continue };
             prefix.refresh(&seg, live.deaths());
-            prefix.refresh_rows();
+            if prefix.rows_ready {
+                prefix.refresh_rows();
+            } else {
+                prefix.build_rows(&seg);
+            }
         }
     }
 

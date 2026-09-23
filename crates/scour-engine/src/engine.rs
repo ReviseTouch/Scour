@@ -147,6 +147,11 @@ struct Shared {
     /// Asks the preparing thread for a query's full ordered page. Bounded and
     /// tiny: only the newest request matters.
     prepare: Sender<Prepare>,
+    /// When a query last read the index, and whether one has since memory was
+    /// last released: the mapped pages a search reads are released a minute
+    /// after the last one, rather than kept resident by one burst of typing.
+    last_read: Mutex<Instant>,
+    read_since_release: std::sync::atomic::AtomicBool,
     /// How many of them there are. Read by the commit clock: zero means nobody is
     /// looking and the batching stands.
     watchers: AtomicU32,
@@ -195,6 +200,11 @@ const PREPARE_COST: u32 = 10;
 /// ceiling: on 1,474,650 files, everything over a megabyte is 18,723 of them.
 const CANDIDATES: u32 = 200_000;
 
+/// How long after the last query the index's mapped pages are released: long
+/// enough that typing never pays for it, short enough that a burst of searching
+/// is not kept resident for the rest of the day.
+const RELEASE_AFTER: Duration = Duration::from_secs(60);
+
 /// How much CSV goes into one frame of an export. A frame is a line of JSON, so a
 /// row per frame pays an envelope and a write each; 128 KB is about two thousand.
 const EXPORT_CHUNK: usize = 128 * 1024;
@@ -209,6 +219,12 @@ fn misread(query: &str) -> Vec<scour_core::Span> {
 }
 
 impl Shared {
+    /// A query is reading the index: the release clock starts again.
+    fn reading(&self) {
+        *self.last_read.lock() = Instant::now();
+        self.read_since_release.store(true, Ordering::Relaxed);
+    }
+
     /// What the walk skips, right now. A pointer copy under the read lock, so a
     /// caller that walks for a minute holds nothing a saved rule waits behind.
     fn scan(&self) -> Arc<ScanOptions> {
@@ -321,6 +337,8 @@ impl Engine {
             prepared_at: Mutex::new(Instant::now() - PREPARE_EVERY),
             prepare_floor: AtomicU64::new(PREPARE_EVERY.as_micros() as u64),
             prepare: prepare_tx,
+            last_read: Mutex::new(Instant::now()),
+            read_since_release: std::sync::atomic::AtomicBool::new(false),
         });
         let (jobs_tx, jobs_rx) = unbounded::<Job>();
         // Bounded: a burst of events slows the watcher rather than filling memory.
@@ -554,6 +572,7 @@ impl Engine {
         descending: bool,
         page: Page,
     ) -> Result<SearchResponse> {
+        self.shared.reading();
         let started = Instant::now();
         let mut res = self.page_of(query, sort, descending, page)?;
         // On every path, cached included: a warning that comes and goes teaches nothing.
@@ -696,6 +715,7 @@ impl Engine {
         columns: &[String],
         mut out: impl FnMut(String) -> bool,
     ) -> Result<u64> {
+        self.shared.reading();
         let sheet = if columns.is_empty() {
             scour_export::Sheet::new(scour_export::Sheet::default_columns())
         } else {
@@ -745,6 +765,7 @@ impl Engine {
 
     /// Every facet question about one query, answered from one walk.
     pub fn facets(&self, query: &str, by: Vec<scour_core::FacetBy>) -> Result<FacetResponse> {
+        self.shared.reading();
         let mut res = self.shared.index.facets(&FacetRequest {
             query: scour_query::parse(query),
             by,
@@ -786,6 +807,7 @@ impl Engine {
     }
 
     pub fn tree(&self, path: &str, depth: u32, limit: u32) -> Result<TreeNode> {
+        self.shared.reading();
         crate::tree::build(
             self.shared.index.as_ref(),
             path,
@@ -797,6 +819,7 @@ impl Engine {
     /// What a subtree weighs — all of it, or only the part a query names; an empty
     /// query is the `du` question. Parsed here, so a frontend sends only typed text.
     pub fn usage(&self, path: &str, top: u32, query: &str) -> Result<scour_core::UsageResponse> {
+        self.shared.reading();
         self.shared.index.usage(&scour_core::UsageRequest {
             path: path.to_owned(),
             top,
@@ -811,6 +834,7 @@ impl Engine {
         under: &str,
         opts: &scour_dupes::Options,
     ) -> Result<scour_dupes::Report> {
+        self.shared.reading();
         let mut query = format!("file: size:>={}", opts.min_size);
         if !under.is_empty() {
             // Quoted: an unquoted path with a space becomes two terms.
@@ -1053,6 +1077,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
         }
         if published {
             deadline!("persist", last_persist + shared.opts.persist_every);
+        }
+        if shared.read_since_release.load(Ordering::Relaxed) {
+            deadline!("release", *shared.last_read.lock() + RELEASE_AFTER);
         }
         // The held walks, flushed below in the same turn, so this cannot spin.
         if let Some(at) =
@@ -1311,6 +1338,14 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Change>) {
                 Err(e) => scour_core::note!("scourd: the index could not be written: {e}"),
             }
             last_persist = Instant::now();
+        }
+
+        // A minute after the last query, the pages it read go back to the kernel.
+        if shared.read_since_release.load(Ordering::Relaxed)
+            && shared.last_read.lock().elapsed() >= RELEASE_AFTER
+        {
+            shared.read_since_release.store(false, Ordering::Relaxed);
+            shared.index.release_memory();
         }
 
         // Volumes that were not there when they were last asked about.
@@ -1589,6 +1624,9 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     }
     if subtree.is_none() {
         pulses.scanned(source, began.elapsed());
+        // Recognising a whole source's unchanged rows read the index end to end:
+        // 162 MB left resident after a startup that nothing looked at again.
+        shared.index.release_memory();
     }
 
     let finished = report

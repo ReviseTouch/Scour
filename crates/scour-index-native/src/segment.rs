@@ -234,6 +234,28 @@ impl Live {
         }
     }
 
+    /// Hand the mapped pages back to the kernel's cache: the process stops
+    /// counting them, and the next read maps them again at a minor fault. A walk
+    /// that recognised four million unchanged rows left 162 MB of the index
+    /// resident that no query of the day came back for.
+    pub fn release_pages(&self) {
+        #[cfg(unix)]
+        for part in self
+            .maps
+            .iter()
+            .chain(self.porder.iter())
+            .chain(self.norder.iter())
+            .chain(self.eorder.iter())
+        {
+            if let Part::Mapped(m) = part {
+                // SAFETY: a shared, read-only mapping of a file nobody rewrites
+                // (see `open`): dropped pages come back with the same bytes, so
+                // a reader holding a slice sees nothing change.
+                let _ = unsafe { m.unchecked_advise(memmap2::UncheckedAdvice::DontNeed) };
+            }
+        }
+    }
+
     /// Take on another copy's live bits and its death count: the same segment,
     /// written down while rows kept dying in the copy that was being read.
     pub fn adopt_alive(&mut self, from: &Live) {
