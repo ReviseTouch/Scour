@@ -29,6 +29,10 @@ struct MemSource {
     cancelled: std::sync::atomic::AtomicBool,
     /// Make the walk take this long, so a change can arrive during one.
     slow_ms: AtomicU64,
+    /// Directories the walk reports it could not read and a retry would meet the
+    /// same — a permission refusal — and ones a retry might get past.
+    refused: AtomicU64,
+    failing: AtomicU64,
     /// Every `cover` and every `scan`, in the order they happened — the order is
     /// the property under test, and nothing else can see it.
     order: Arc<RwLock<Vec<&'static str>>>,
@@ -54,6 +58,8 @@ impl MemSource {
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            failing: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
             walked: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
@@ -85,6 +91,8 @@ impl MemSource {
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
+            failing: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
             walked: Arc::new(RwLock::new(Vec::new())),
             retuned: Arc::new(RwLock::new(Vec::new())),
@@ -204,12 +212,19 @@ impl Source for MemSource {
                 });
             }
         }
+        let refused = self.refused.load(Ordering::Relaxed);
+        let unreadable = refused + self.failing.load(Ordering::Relaxed);
         Ok(ScanReport {
             entries: n,
             vouched: match &opts.subtree {
                 Some(s) => vec![s.clone()],
                 None => self.roots.clone(),
             },
+            unreadable,
+            lasting: refused,
+            blind: (0..unreadable)
+                .map(|i| format!("{}/locked{i}", self.roots[0]))
+                .collect(),
             ..Default::default()
         })
     }
@@ -388,6 +403,31 @@ fn count(f: &Fixture, q: &str) -> u64 {
         .search(q, SortKey::Modified, true, Page::new(0, 1))
         .expect("search")
         .total
+}
+
+/// A permission refusal leaves a walk finished: walking again meets it again. A
+/// failure a retry might get past is still retried. Before, 493 refusals under a
+/// home directory walked it again four times after every start.
+#[test]
+fn a_walk_is_repeated_for_a_failure_but_not_for_a_refusal() {
+    let refused = fixture(50);
+    refused.source.refused.store(3, Ordering::Relaxed);
+    let failing = fixture(50);
+    failing.source.failing.store(1, Ordering::Relaxed);
+    refused.engine.rescan(None).expect("rescan");
+    failing.engine.rescan(None).expect("rescan");
+    // The first retry is ten seconds out, the same for both.
+    settle(&failing, |f| f.source.scans.load(Ordering::Relaxed) >= 2);
+    assert!(
+        failing.source.scans.load(Ordering::Relaxed) >= 2,
+        "a walk that could not read everything for a passing reason was not repeated"
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        refused.source.scans.load(Ordering::Relaxed),
+        1,
+        "a walk was repeated for refusals it would meet again"
+    );
 }
 
 #[test]

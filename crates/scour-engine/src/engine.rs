@@ -1631,9 +1631,11 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
         shared.index.release_memory();
     }
 
+    // Refusals and vanished directories leave a walk finished: a retry would
+    // find them the same, and their rows are spared either way.
     let finished = report
         .as_ref()
-        .is_ok_and(|r| !r.cancelled && r.unreadable == 0 && r.blind.is_empty());
+        .is_ok_and(|r| !r.cancelled && r.unreadable == r.lasting);
     let covered = scour_core::PrefixSet::new(vouched);
     let all_roots = src.describe().roots.iter().all(|root| covered.covers(root));
 

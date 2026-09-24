@@ -708,6 +708,12 @@ fn a_directory_that_cannot_be_read_is_named_so_the_sweep_can_spare_it() {
         "the unreadable directory was counted but not named: {:?}",
         report.blind
     );
+    // A refusal is what the next walk would meet as well, so it asks for none.
+    assert!(report.unreadable > 0);
+    assert_eq!(
+        report.lasting, report.unreadable,
+        "a permission refusal was taken for a failure a retry could get past"
+    );
 }
 
 #[test]

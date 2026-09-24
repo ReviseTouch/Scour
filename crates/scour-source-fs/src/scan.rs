@@ -110,6 +110,20 @@ fn where_of(e: &ignore::Error) -> Option<&std::path::Path> {
     }
 }
 
+/// Whether a second walk would find this place the same: refused by permission, or
+/// gone between being listed and being read. Anything else — an I/O error, a full
+/// file table — may be over by the next walk, and is what a retry is for.
+fn is_lasting(e: &ignore::Error) -> bool {
+    e.io_error().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            std::io::ErrorKind::PermissionDenied
+                | std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::NotADirectory
+        )
+    })
+}
+
 /// Which filesystem a path is on, or nothing if it cannot be asked.
 /// What matters is that it is the same at the end of a walk as at the start.
 fn device_of(p: &std::path::Path) -> Option<u64> {
@@ -350,6 +364,7 @@ impl Source for FsSource {
         let src_id = self.id;
         let excluded = AtomicU64::new(0);
         let unreadable = AtomicU64::new(0);
+        let lasting = AtomicU64::new(0);
         let entries = AtomicU64::new(0);
         let dirs = AtomicU64::new(0);
         let cancelled = AtomicBool::new(false);
@@ -362,8 +377,15 @@ impl Source for FsSource {
 
         std::thread::scope(|scope| {
             let walker_tx = tx.clone();
-            let (rules, excluded, unreadable, entries, dirs, cancelled) =
-                (&rules, &excluded, &unreadable, &entries, &dirs, &cancelled);
+            let (rules, excluded, unreadable, lasting, entries, dirs, cancelled) = (
+                &rules,
+                &excluded,
+                &unreadable,
+                &lasting,
+                &entries,
+                &dirs,
+                &cancelled,
+            );
             let walker = scope.spawn(move || {
                 builder.build_parallel().run(|| {
                     let tx = walker_tx.clone();
@@ -384,6 +406,9 @@ impl Source for FsSource {
                             Err(e) => {
                                 // Reported, not swallowed.
                                 unreadable.fetch_add(1, Ordering::Relaxed);
+                                if is_lasting(&e) {
+                                    lasting.fetch_add(1, Ordering::Relaxed);
+                                }
                                 // The path, not only the count: an unreadable
                                 // directory still holds its files and the sweep
                                 // must spare it — see `ScanReport::blind`.
@@ -473,6 +498,7 @@ impl Source for FsSource {
             dirs: dirs.load(Ordering::Relaxed),
             excluded: excluded.load(Ordering::Relaxed),
             unreadable: unreadable.load(Ordering::Relaxed),
+            lasting: lasting.load(Ordering::Relaxed),
             took_ms: started.elapsed().as_millis() as u64,
             cancelled: cancelled.load(Ordering::Relaxed),
             vouched,
@@ -538,5 +564,38 @@ pub(crate) fn entry_of(
         is_dir,
         meta,
         path: path.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_lasting;
+    use std::io::{Error, ErrorKind};
+
+    fn at_path(err: Error) -> ignore::Error {
+        ignore::Error::WithPath {
+            path: "/k/d".into(),
+            err: Box::new(ignore::Error::Io(err)),
+        }
+    }
+
+    #[test]
+    fn a_refusal_or_a_vanished_directory_is_lasting_and_nothing_else_is() {
+        assert!(is_lasting(&at_path(ErrorKind::PermissionDenied.into())));
+        assert!(is_lasting(&at_path(ErrorKind::NotFound.into())));
+        assert!(is_lasting(&at_path(ErrorKind::NotADirectory.into())));
+        // What a retry is for.
+        assert!(!is_lasting(&at_path(ErrorKind::TimedOut.into())));
+        #[cfg(unix)]
+        {
+            assert!(!is_lasting(&at_path(Error::from_raw_os_error(libc::EIO))));
+            assert!(!is_lasting(&at_path(Error::from_raw_os_error(
+                libc::EMFILE
+            ))));
+        }
+        assert!(!is_lasting(&ignore::Error::Loop {
+            ancestor: "/k".into(),
+            child: "/k/d".into(),
+        }));
     }
 }

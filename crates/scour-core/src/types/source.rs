@@ -100,6 +100,12 @@ pub struct ScanReport {
     pub excluded: u64,
     /// Directories that could not be read. Permission, mostly.
     pub unreadable: u64,
+    /// Of those, the ones a second walk would find the same: refused by
+    /// permission, or gone before they could be read. Only the rest make a walk
+    /// worth repeating — 493 refusals under a home directory repeated all of it
+    /// four times in the quarter hour after every start.
+    #[serde(default)]
+    pub lasting: u64,
     pub took_ms: u64,
     /// True when the walk stopped early because the sink asked it to.
     pub cancelled: bool,
