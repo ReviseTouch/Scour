@@ -126,8 +126,15 @@ pub fn reveal(paths: &[&Path]) {
         }
         seen
     };
+    // The window to bring forward is named after the folder it shows.
+    let title = paths[0]
+        .parent()
+        .and_then(Path::file_name)
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     std::thread::spawn(move || {
         if show_items(&uris) {
+            raise_file_manager(&title);
             return;
         }
         for dir in folders {
@@ -139,6 +146,71 @@ pub fn reveal(paths: &[&Path]) {
                 .spawn();
         }
     });
+}
+
+/// Bring the file manager's window forward, which it cannot do itself on GNOME
+/// under Wayland: with no activation token from the window that asked, a folder
+/// already open was selected in and left behind. Scour's Shell extension can,
+/// given the process and the window's title; without it nothing happens. Twice,
+/// because a window the file manager is still opening is not there to raise.
+fn raise_file_manager(title: &str) {
+    let Some(pid) = bus_owner_pid("org.freedesktop.FileManager1") else {
+        return;
+    };
+    for wait in [300, 600] {
+        std::thread::sleep(std::time::Duration::from_millis(wait));
+        let _ = std::process::Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--timeout",
+                "2",
+                "--dest",
+                "org.scour.Shell",
+                "--object-path",
+                "/org/scour/Shell",
+                "--method",
+                "org.scour.Shell.Raise",
+                &format!("@au [{pid}]"),
+                title,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// The process that owns a name on the session bus.
+fn bus_owner_pid(name: &str) -> Option<u32> {
+    let out = std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--timeout",
+            "2",
+            "--dest",
+            "org.freedesktop.DBus",
+            "--object-path",
+            "/org/freedesktop/DBus",
+            "--method",
+            "org.freedesktop.DBus.GetConnectionUnixProcessID",
+            name,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    uint_reply(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The number in a `gdbus` reply such as `(uint32 12345,)`.
+fn uint_reply(reply: &str) -> Option<u32> {
+    reply
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|w| !w.is_empty())
+        .nth(1)
+        .and_then(|w| w.parse().ok())
 }
 
 /// Ask the session's file manager to show these, through whichever bus tool
@@ -488,6 +560,12 @@ fn runnable(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_process_number_is_read_out_of_a_gdbus_reply() {
+        assert_eq!(uint_reply("(uint32 12345,)\n"), Some(12345));
+        assert_eq!(uint_reply(""), None);
+    }
 
     #[test]
     fn a_path_becomes_a_uri_no_bus_tool_can_misread() {
