@@ -555,6 +555,16 @@ fn main() -> Result<()> {
     relayout(&window, &table.borrow());
     // Read before the first search, so a pinned panel is open in the first frame.
     window.set_peeking(kept.preview);
+    // The panel's width lives beside the columns', under `peek`, for every face.
+    window.set_peek_min(scour_ui::preview::PANEL_MIN as f32);
+    window.set_peek_max(scour_ui::preview::PANEL_MAX as f32);
+    window.set_peek_width(
+        kept.widths
+            .get("peek")
+            .copied()
+            .unwrap_or(scour_ui::preview::PANEL_WIDE)
+            .clamp(scour_ui::preview::PANEL_MIN, scour_ui::preview::PANEL_MAX) as f32,
+    );
     let kept_layout = kept.layout;
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
@@ -864,6 +874,25 @@ fn main() -> Result<()> {
                 .widths
                 .insert(which.to_string(), now as u32);
             relayout(&w, &table.borrow());
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    widths: Some(table.borrow().widths.clone()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // The preview's width, kept with the columns' so the page opens at it too.
+    {
+        let link = Rc::clone(&link);
+        let table = Rc::clone(&table);
+        window.on_peek_resized(move |px| {
+            if px <= 0 {
+                table.borrow_mut().widths.remove("peek");
+            } else {
+                table.borrow_mut().widths.insert("peek".into(), px as u32);
+            }
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     widths: Some(table.borrow().widths.clone()),
@@ -1252,6 +1281,30 @@ fn main() -> Result<()> {
         let link = Rc::clone(&link);
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
+        // The fuller report, in the browser, on the same question. Not a switch
+        // of face: this window stays, and so does the face somebody prefers.
+        {
+            let weak = window.as_weak();
+            let state = Rc::clone(&state);
+            let cat = Rc::clone(&cat);
+            window.on_report_in_browser(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let Some(binary) = which("scour-open") else {
+                    return;
+                };
+                let query = state.borrow().query.clone();
+                let mut command = std::process::Command::new(binary);
+                command.arg("browser").env(
+                    "SCOUR_APP_GOTO",
+                    format!("q={}&tab=report", query_encoded(&query)),
+                );
+                scour_ui::faces::detach(&mut command);
+                match command.spawn() {
+                    Ok(_) => said(&w, t(&cat.borrow(), "starting…")),
+                    Err(e) => said(&w, format!("scour-open: {e}").into()),
+                }
+            });
+        }
         window.on_report_search(move || {
             stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
@@ -3891,6 +3944,8 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     window.set_face_go(t(cat, "open"));
     // The terminal one is offered when there is something to run.
     window.set_face_tui_ready(which("scour-tui").is_some() && which("scour-open").is_some());
+    window.set_report_web(t(cat, "Open the full report in the browser"));
+    window.set_report_web_ready(which("scour-open").is_some());
     window.set_lang_title(t(cat, "language"));
     window.set_rules_title(t(cat, "What is skipped"));
     window.set_rules_added_title(t(cat, "Added here"));
@@ -4199,6 +4254,20 @@ fn which(name: &str) -> Option<std::path::PathBuf> {
     std::env::split_paths(&path)
         .map(|dir| dir.join(name))
         .find(|p| p.is_file())
+}
+
+/// A query as one value of a URL's query string: everything but the unreserved
+/// characters escaped, so a `&` or a `#` in it stays in it.
+fn query_encoded(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for b in query.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Start another way of running Scour, detached and never waited for.

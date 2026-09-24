@@ -1761,3 +1761,9 @@ msgstr "Sil"
 
 msgid "SEND TO"
 msgstr "GÖNDER"
+
+msgid "drag to widen; double-click for the usual width"
+msgstr "genişletmek için sürükleyin; olağan genişlik için çift tıklayın"
+
+msgid "Open the full report in the browser"
+msgstr "Tam raporu tarayıcıda aç"

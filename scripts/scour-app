@@ -21,8 +21,22 @@ fi
 
 # Already open, bridge and window both alive: leave it. Restarting it would lose
 # the page; bringing it forward is `scour-open`'s, which asks the shell first.
+# `SCOUR_APP_GOTO` is a question from another face, already encoded:
+# `q=…&tab=report`. The page reads it once it has its settings.
+GOTO="${SCOUR_APP_GOTO:-}"
+
 if pgrep -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
     && pgrep -f -- "--app=http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+    # Running already: a question gets a window of its own onto the same bridge,
+    # whose address and token are on the running window's command line.
+    if [[ -n $GOTO ]]; then
+        line=$(pgrep -af -- "--app=http://127.0.0.1:$PORT/" | head -1)
+        running=$(printf '%s' "$line" | grep -oE -- "--app=http://127.0.0.1:$PORT/[^ ]*" | head -1 | cut -d= -f2-)
+        bin=$(printf '%s' "$line" | awk '{print $2}')
+        if [[ -n $running && -x $bin ]]; then
+            "$bin" --app="$running&$GOTO" --user-data-dir="$PROFILE" --class=scour >/dev/null 2>&1 &
+        fi
+    fi
     exit 0
 fi
 
@@ -63,6 +77,8 @@ fi
 
 # The size the page was last left at, said by the bridge before the URL; on a
 # first run most of the screen, and a plain default where no screen can be asked.
+[[ -n $GOTO ]] && url="$url&$GOTO"
+
 size=$(grep -oE 'window [0-9]+x[0-9]+' "$log" | head -1 | cut -d' ' -f2 || true)
 if [[ -z $size ]]; then
     # A first window: most of the screen. GNOME says its current mode and the

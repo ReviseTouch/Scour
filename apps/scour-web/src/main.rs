@@ -1778,6 +1778,19 @@ mod tests {
         }
     }
 
+    /// The preview's drag bounds are the shared ones, as the window's are.
+    #[test]
+    fn the_preview_is_dragged_within_the_shared_bounds() {
+        assert!(PAGE.contains(&format!(
+            "const PEEK_MIN = {};",
+            scour_ui::preview::PANEL_MIN
+        )));
+        assert!(PAGE.contains(&format!(
+            "const PEEK_MAX = {};",
+            scour_ui::preview::PANEL_MAX
+        )));
+    }
+
     /// The page is a single `<script>`, so one `SyntaxError` anywhere means
     /// none of it runs. Skipped where there is no `node`, and it says so.
     #[test]

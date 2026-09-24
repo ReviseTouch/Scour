@@ -917,8 +917,14 @@ export component MainWindow inherits Window {
     /// The ⋮ at the end of the header row, which is a column's worth of room
     /// that the columns themselves may not have.
     property <length> picker-w: 16px;
-    // The preview panel is furniture too: 380px the columns may not divide up.
-    property <length> peek-w: root.peeking ? 380px : 0px;
+    // The preview panel is furniture too: a width the columns may not divide up,
+    // dragged at its left edge within `scour_ui::preview`'s bounds.
+    in-out property <length> peek-width: 380px;
+    in property <length> peek-min: 200px;
+    in property <length> peek-max: 600px;
+    /// Let go after a drag; zero is a double-click, back to the usual width.
+    callback peek-resized(int);
+    property <length> peek-w: root.peeking ? root.peek-width : 0px;
 
     /// What there is for the columns to divide up.
     out property <length> lane: max(0px,
@@ -1104,6 +1110,10 @@ export component MainWindow inherits Window {
     in property <string> face-web;
     in property <string> face-web-note;
     in property <bool> face-tui-ready;
+    /// The browser's report is the fuller one; this opens it on the same question.
+    in property <string> report-web;
+    in property <bool> report-web-ready;
+    callback report-in-browser();
     in property <string> face-go;
     callback face-picked(string);
     // The same file, several times over.
@@ -1827,6 +1837,16 @@ export component MainWindow inherits Window {
                     }
                 }
                 Rectangle { }
+                if root.tab == "report" && root.report-web-ready: VerticalLayout {
+                    alignment: center;
+                    padding-right: 20px;
+                    Push {
+                        label: root.report-web;
+                        clicked => {
+                            root.report-in-browser();
+                        }
+                    }
+                }
             }
         }
 
@@ -3243,16 +3263,16 @@ export component MainWindow inherits Window {
             if root.peeking: Rectangle {
                 // Min and max, not `width`: the list's own minimum is wider than
                 // the window, and a `width` is a preference the layout squeezes.
-                min-width: 380px;
-                max-width: 380px;
+                min-width: root.peek-width;
+                max-width: root.peek-width;
                 horizontal-stretch: 0;
                 background: Theme.panel-2;
 
                 Rectangle {
                     x: 0;
-                    width: 1px;
+                    width: peekgrip.has-hover || peekgrip.pressed ? 2px : 1px;
                     height: parent.height;
-                    background: Theme.line;
+                    background: peekgrip.has-hover || peekgrip.pressed ? Theme.focus : Theme.line;
                 }
 
                 VerticalLayout {
@@ -3384,6 +3404,31 @@ export component MainWindow inherits Window {
                                 }
                             }
                         }
+                    }
+                }
+            
+                // The edge that sets the width, 7px like a column's, and last so
+                // it is above what the panel holds. The panel's edge moves with
+                // the pointer, so each move is measured from where it now is.
+                peekgrip := TouchArea {
+                    x: 0;
+                    width: 7px;
+                    height: parent.height;
+                    mouse-cursor: col-resize;
+                    moved => {
+                        if (self.pressed) {
+                            root.peek-width = max(root.peek-min,
+                                min(root.peek-max, root.peek-width - (self.mouse-x - self.pressed-x)));
+                        }
+                    }
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.up) {
+                            root.peek-resized(root.peek-width / 1px);
+                        }
+                    }
+                    double-clicked => {
+                        root.peek-width = 380px;
+                        root.peek-resized(0);
                     }
                 }
             }
