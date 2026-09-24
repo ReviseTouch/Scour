@@ -110,6 +110,57 @@ watched directory, the two builds alternated twice, 90 s each:
 
 The CPU did not move: the commits were disk time, not processor time.
 
+A subtree walk — a directory appearing, dozens a minute during a build — still
+synced two or three files with the lock held: the manifest when its rows were
+published, because a begun walk leaves it dirty and a publish saved a dirty
+manifest, then the live bitmaps and the manifest again at its sweep. On a disk
+busy with something else each sync took seconds and every search waited. Now a
+sweep removes in memory, as a publish does, and only a durable write saves the
+manifest. A build's load — a directory of twenty files every half second, one
+removed ten seconds later — with a waiting client and a search every 100 ms,
+alternated twice:
+
+| | before | after |
+|---|---:|---:|
+| writes | 41.3 / 41.3 MB/min | **7.0 / 4.6 MB/min** |
+| worker found waiting on a sync | 1.3% / 0.4% | **0.1% / 0.0%** |
+| CPU | 10.7% / 27.0% | 19.7% / 10.1% |
+| search p99 | 26.8 / 48.5 ms | 46.1 / 13.3 ms |
+
+The CPU and the slowest searches follow the whole-source walks that landed in
+each window, not the build — see the next section.
+
+## Walking again (2026-09-24)
+
+Each whole walk now leaves a line in the journal:
+
+```
+scourd: walked home in 3.8 s — 2545690 entries, 88 gone, 64 MB read from disk, 493 unreadable, first …
+```
+
+That line found the walks repeating themselves. A walk that met a directory it
+could not read counted as incomplete, and an incomplete walk is repeated: at
+twenty times its own duration, then two minutes, ten, an hour. A container's
+root-owned data under the home directory refused 493 directories and `/etc`
+refused 82, so every whole walk of both sources repeated itself for as long as
+the service ran. Right after a start the home directory was walked three more
+times in five minutes, and one 55 s window with a repeated walk in it cost
+15.2 CPU-seconds and 353 MB read from disk. A subtree walk that met a refusal
+queued a walk of its whole source.
+
+A refusal, or a directory gone before it could be read, is what the next walk
+meets too, so neither asks for a retry now; the rows under them are spared as
+before. An I/O error or a full file table still does.
+
+Warm, the three sources here walk in 3.8 s (2.55 M entries), 2.7–5.7 s (1.56 M,
+NTFS) and 0.5–1.5 s (0.5 M).
+
+The first walk into an empty index shows what it has found after one second,
+then after two, four, eight and every sixteen, and wakes a waiting window each
+time. Before, a window open on a fresh install heard nothing until the whole
+home directory had been walked, and the rows it could have shown arrived a
+hundred thousand at a time.
+
 ## The watcher
 
 One `fanotify` mark per volume, placed by `scour-watch` with `CAP_SYS_ADMIN`
