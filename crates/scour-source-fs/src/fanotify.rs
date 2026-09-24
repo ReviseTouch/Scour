@@ -53,6 +53,8 @@ const FAN_Q_OVERFLOW: u64 = 0x0000_4000;
 const FAN_EVENT_INFO_TYPE_DFID_NAME: u8 = 2;
 const FAN_ONDIR: u64 = 0x4000_0000;
 const FAN_CREATE: u64 = 0x0000_0100;
+const FAN_DELETE: u64 = 0x0000_0200;
+const FAN_MOVED_FROM: u64 = 0x0000_0040;
 const FAN_MOVED_TO: u64 = 0x0000_0080;
 const FAN_CLOSE_WRITE: u64 = 0x0000_0008;
 
@@ -605,6 +607,9 @@ struct Seen {
     name: String,
     fresh: bool,
     is_dir: bool,
+    /// A name came or went in the directory, which changes the directory's own
+    /// times — and the kernel says nothing about the directory.
+    entries: bool,
     /// The kernel says the content is final: a descriptor opened for writing was
     /// closed — `munmap` for a mapping. See [`crate::revisit::forget`].
     settled: bool,
@@ -691,6 +696,9 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
                                 name: name.to_owned(),
                                 fresh: mask & (FAN_CREATE | FAN_MOVED_TO) != 0,
                                 is_dir: mask & FAN_ONDIR != 0,
+                                entries: mask
+                                    & (FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO)
+                                    != 0,
                                 settled: mask & FAN_CLOSE_WRITE != 0,
                             });
                         }
@@ -996,6 +1004,8 @@ fn drain(fd: OwnedFd) {
 
         // Distinct paths a subscriber, keeping "this might be new" if any event said so.
         let mut batch: HashMap<(usize, String), (bool, bool, bool)> = HashMap::new();
+        // Directories whose names changed, looked at once each after their children.
+        let mut parents: std::collections::HashSet<(usize, String)> = Default::default();
         for ev in seen.drain(..) {
             // The subscriber that walked this directory owns the path. An event nobody
             // recognises is **dropped, not escalated**: it is almost always another
@@ -1014,11 +1024,21 @@ fn drain(fd: OwnedFd) {
             if subs[i].rules.excludes_path(&full) {
                 continue;
             }
+            // Its row's times moved with the name; a root has no row.
+            if ev.entries
+                && ev.name != "."
+                && let Some(own) = event_path(&dir, ".", &subs[i].roots)
+            {
+                parents.insert((i, own));
+            }
             let e = batch.entry((i, full)).or_insert((false, false, false));
             e.0 |= ev.fresh;
             e.1 |= ev.is_dir;
             e.2 |= ev.settled;
         }
+
+        // A directory that also spoke for itself is looked at with its own event.
+        parents.retain(|k| !batch.contains_key(k) && !subs[k.0].rules.excludes_path(&k.1));
 
         for ((i, full), (fresh, is_dir, settled)) in batch {
             let s = &mut subs[i];
@@ -1033,6 +1053,14 @@ fn drain(fd: OwnedFd) {
             } else {
                 crate::revisit::note(&full, s.id, s.real_modes, &s.sink, md.as_ref());
             }
+        }
+
+        // One `stat` a directory a window, for its times: a folder sorted by date
+        // stayed where it was when its last child came or went, until a walk —
+        // most of the rows a reconciling walk found changed were directories.
+        for (i, dir) in parents {
+            let s = &subs[i];
+            crate::watch::look(s.id, s.real_modes, &dir, false, s.sink.as_ref());
         }
     }
 }
