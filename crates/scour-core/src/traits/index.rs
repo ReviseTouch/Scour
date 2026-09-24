@@ -35,6 +35,19 @@ pub trait Index: Send + Sync + Debug {
         spare: &crate::types::PrefixSet,
     ) -> Result<u64>;
 
+    /// [`Index::sweep`] for directories looked at without their subdirectories:
+    /// only rows whose directory is one of `dirs` are judged. A directory it
+    /// removes takes its contents with it. Refused by an index that cannot.
+    fn sweep_children(
+        &self,
+        _source: SourceId,
+        _dirs: &[String],
+        _generation: u64,
+        _spare: &crate::types::PrefixSet,
+    ) -> Result<u64> {
+        Err(Error::unsupported("sweeping a directory's children"))
+    }
+
     /// End a pass that will not be swept and throw away what it noted. A walk that
     /// could not look must not sweep, but must still end: notes left behind pin
     /// their segments against compaction for good.

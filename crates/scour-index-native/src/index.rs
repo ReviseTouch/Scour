@@ -1136,6 +1136,213 @@ impl NativeIndex {
         Ok(())
     }
 
+    /// [`Index::sweep`] and [`Index::sweep_children`]: which rows a pass may
+    /// judge is all that differs.
+    fn sweep_reach(
+        &self,
+        source: SourceId,
+        under: &[String],
+        reach: Reach,
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> Result<u64> {
+        let began = Instant::now();
+        // A segment in the air holds rows this generation stamped; sweeping
+        // before it lands judges them by a walk that never saw them.
+        self.settle()?;
+        // The walk's own rows, made searchable in memory rather than by the flush
+        // below, which writes and syncs a segment with the lock held throughout:
+        // on a busy disk that held every search for seconds. A persist writes them.
+        self.publish_now()?;
+        let mut inner = self.inner.write();
+        // Whatever was staged since, which on the one worker thread is nothing.
+        self.publish_locked(&mut inner)?;
+        close_generation(&mut inner, generation);
+        let mut gone = 0u64;
+        // **Taken once, for every root of the walk.** These marks belong to the
+        // pass rather than to any one root: taken per root, the live index
+        // deleted three of its four roots on alternate walks.
+        let inner_seen = std::mem::take(&mut inner.seen);
+        let mut touched = vec![false; inner.segments.len()];
+        let tracing = std::env::var_os("SCOUR_SWEEP_TRACE").is_some();
+        let mut gone_paths: Vec<String> = Vec::new();
+        // Directories a children's sweep removed, whose own contents go with them.
+        let mut gone_dirs: Vec<String> = Vec::new();
+        for (i, live) in inner.segments.iter_mut().enumerate() {
+            if live.generation >= generation {
+                continue;
+            }
+            let victims: Vec<usize> = {
+                let seg = live.view()?;
+                // One root that is the whole tree makes every other root
+                // redundant, which is what `whole` has always meant.
+                let whole = reach == Reach::Under
+                    && (under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty());
+                let scopes: Vec<_> = match reach {
+                    Reach::Under => under.iter().map(|p| seg.dirs.subtree(p)).collect(),
+                    Reach::Children => Vec::new(),
+                };
+                // A children's sweep judges the rows whose directory is one of
+                // these, and nothing below them.
+                let kids: Vec<u32> = match reach {
+                    Reach::Under => Vec::new(),
+                    Reach::Children => under
+                        .iter()
+                        .filter_map(|p| {
+                            let p = p.trim_end_matches('/');
+                            seg.dirs.exact(if p.is_empty() { "/" } else { p })
+                        })
+                        .collect(),
+                };
+                // The swept directory's **own** row is not under itself: it lives
+                // in its parent and carries the parent's number, so the range
+                // check walks past it and the name answers for those few rows.
+                let owns: Vec<(u32, &str)> = if whole || reach == Reach::Children {
+                    Vec::new()
+                } else {
+                    under
+                        .iter()
+                        .filter_map(|p| {
+                            let p = p.trim_end_matches('/');
+                            let (parent, name) = p.rsplit_once('/')?;
+                            let parent = if parent.is_empty() { "/" } else { parent };
+                            Some((seg.dirs.exact(parent)?, name))
+                        })
+                        .collect()
+                };
+                // **No path is built per row, and that is the whole cost of this
+                // loop.** A row's directory number *is* its parent, so a
+                // descendant is in `scope.below` and a child is `scope.own`.
+                if !whole
+                    && scopes.iter().all(|s| s.is_empty())
+                    && owns.is_empty()
+                    && kids.is_empty()
+                {
+                    Vec::new()
+                } else {
+                    // Rows the walk found unchanged are stamped here rather than
+                    // by being rewritten. See `Inner::seen`.
+                    let seen = inner_seen.get(&live.number);
+                    let spared = |row: usize| {
+                        seen.is_some_and(|bits: &Vec<u8>| {
+                            bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
+                        })
+                    };
+                    // Under a subtree, a row's directory number decides first:
+                    // it is one column read where the source is another, and a
+                    // block whose numbers miss every root is not read at all —
+                    // the zone map `kill_under` reads. Every row of every
+                    // segment was read here, write lock held, after each
+                    // subtree walk: 58% of an idle service's CPU.
+                    let in_scope = |row: usize| {
+                        let d = seg.dir_id(row);
+                        kids.contains(&d)
+                            || scopes.iter().any(|s| s.contains(d))
+                            || owns
+                                .iter()
+                                .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
+                    };
+                    let block_matters = |block: usize| {
+                        whole
+                            || match seg.cols.block_range(Field::DirId, block) {
+                                Some((lo, hi)) if lo >= 0 => {
+                                    let (lo, hi) = (lo as u32, hi as u32);
+                                    kids.iter().any(|k| lo <= *k && *k <= hi)
+                                        || scopes.iter().any(|s| s.intersects(lo, hi))
+                                        || owns.iter().any(|(pd, _)| lo <= *pd && *pd <= hi)
+                                }
+                                _ => true,
+                            }
+                    };
+                    let rows = live.rows();
+                    let mut out = Vec::new();
+                    for block in 0..rows.div_ceil(crate::columns::BLOCK) {
+                        if !block_matters(block) {
+                            continue;
+                        }
+                        let from = block * crate::columns::BLOCK;
+                        let to = (from + crate::columns::BLOCK).min(rows);
+                        out.extend((from..to).filter(|&row| {
+                            if !live.is_alive(row) {
+                                return false;
+                            }
+                            // The walk saw it and it had not changed, so it
+                            // was not rewritten. That is a stamp.
+                            if spared(row) {
+                                return false;
+                            }
+                            if !whole && !in_scope(row) {
+                                return false;
+                            }
+                            // **Another source's rows are not this walk's to
+                            // judge.** A sweep speaks about one source, and where
+                            // roots overlap it was applied to both.
+                            if seg.source_of(row) != source {
+                                return false;
+                            }
+                            // Somewhere the walk could not look. Its rows are
+                            // not evidence of anything, so they stay.
+                            !(!spare.is_empty()
+                                && spare
+                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default())))
+                        }));
+                    }
+                    if reach == Reach::Children {
+                        gone_dirs.extend(
+                            out.iter()
+                                .filter(|&&row| seg.num(Field::IsDir, row) != 0)
+                                .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
+                        );
+                    }
+                    if tracing {
+                        gone_paths.extend(
+                            out.iter()
+                                .take(20 - gone_paths.len().min(20))
+                                .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
+                        );
+                    }
+                    out
+                }
+            };
+            for row in victims {
+                if live.kill(row) {
+                    gone += 1;
+                    touched[i] = true;
+                }
+            }
+        }
+        let dirty = inner
+            .segments
+            .iter()
+            .enumerate()
+            .filter_map(|(i, live)| touched[i].then_some(live.number))
+            .collect::<Vec<_>>();
+        // Killed in memory, like a published removal, and written by the next
+        // persist. Writing the bitmaps and the manifest here synced twice with
+        // the lock held after every subtree walk: seconds each on a busy disk,
+        // every search waiting. A crash before the persist brings the rows back
+        // until the next walk of that tree.
+        inner.dirty_alive.extend(dirty);
+        // A directory gone from its parent took its contents with it, and they
+        // are rows below a directory nobody listed: removed as a subtree is.
+        if !gone_dirs.is_empty() {
+            inner.hidden_prefixes.extend(gone_dirs);
+        }
+        // The manifest stops naming an emptied segment at the persist, and its
+        // files go after that: forgetting is the only part done now.
+        self.forget_empty(&mut inner);
+        if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
+            scour_core::note!("scourd: sweep {gone} satir sildi, {:.0?}", began.elapsed());
+        }
+        // What a walk found that the watcher had not said: the rows it removed and
+        // the ones it wrote. Twenty of each is enough to tell a miss from the
+        // churn of the walk's own seconds.
+        if tracing {
+            Self::trace_sweep(&inner, generation, &gone_paths);
+        }
+        Ok(gone)
+    }
+
     /// The paths a sweep removed and the first rows its pass wrote, into the
     /// journal. `SCOUR_SWEEP_TRACE` only: paths are the user's.
     fn trace_sweep(inner: &Inner, generation: u64, gone: &[String]) {
@@ -1997,6 +2204,14 @@ fn sweep_orphans(dir: &Path, meta: &Meta) {
     }
 }
 
+/// Which rows a sweep may judge: everything under its paths, or only the rows
+/// directly in them — a directory looked at again without its subdirectories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    Under,
+    Children,
+}
+
 /// Close a scan's compaction cohort before ordinary changes resume, or every
 /// later watcher commit keeps the scan's stamp and compaction sees body and
 /// trickle as one group: four one-row commits rewrote a 100,000-row segment,
@@ -2139,165 +2354,17 @@ impl Index for NativeIndex {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> Result<u64> {
-        let began = Instant::now();
-        // A segment in the air holds rows this generation stamped; sweeping
-        // before it lands judges them by a walk that never saw them.
-        self.settle()?;
-        // The walk's own rows, made searchable in memory rather than by the flush
-        // below, which writes and syncs a segment with the lock held throughout:
-        // on a busy disk that held every search for seconds. A persist writes them.
-        self.publish_now()?;
-        let mut inner = self.inner.write();
-        // Whatever was staged since, which on the one worker thread is nothing.
-        self.publish_locked(&mut inner)?;
-        close_generation(&mut inner, generation);
-        let mut gone = 0u64;
-        // **Taken once, for every root of the walk.** These marks belong to the
-        // pass rather than to any one root: taken per root, the live index
-        // deleted three of its four roots on alternate walks.
-        let inner_seen = std::mem::take(&mut inner.seen);
-        let mut touched = vec![false; inner.segments.len()];
-        let tracing = std::env::var_os("SCOUR_SWEEP_TRACE").is_some();
-        let mut gone_paths: Vec<String> = Vec::new();
-        for (i, live) in inner.segments.iter_mut().enumerate() {
-            if live.generation >= generation {
-                continue;
-            }
-            let victims: Vec<usize> = {
-                let seg = live.view()?;
-                // One root that is the whole tree makes every other root
-                // redundant, which is what `whole` has always meant.
-                let whole = under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty();
-                let scopes: Vec<_> = under.iter().map(|p| seg.dirs.subtree(p)).collect();
-                // The swept directory's **own** row is not under itself: it lives
-                // in its parent and carries the parent's number, so the range
-                // check walks past it and the name answers for those few rows.
-                let owns: Vec<(u32, &str)> = if whole {
-                    Vec::new()
-                } else {
-                    under
-                        .iter()
-                        .filter_map(|p| {
-                            let p = p.trim_end_matches('/');
-                            let (parent, name) = p.rsplit_once('/')?;
-                            let parent = if parent.is_empty() { "/" } else { parent };
-                            Some((seg.dirs.exact(parent)?, name))
-                        })
-                        .collect()
-                };
-                // **No path is built per row, and that is the whole cost of this
-                // loop.** A row's directory number *is* its parent, so a
-                // descendant is in `scope.below` and a child is `scope.own`.
-                if !whole && scopes.iter().all(|s| s.is_empty()) && owns.is_empty() {
-                    Vec::new()
-                } else {
-                    // Rows the walk found unchanged are stamped here rather than
-                    // by being rewritten. See `Inner::seen`.
-                    let seen = inner_seen.get(&live.number);
-                    let spared = |row: usize| {
-                        seen.is_some_and(|bits: &Vec<u8>| {
-                            bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
-                        })
-                    };
-                    // Under a subtree, a row's directory number decides first:
-                    // it is one column read where the source is another, and a
-                    // block whose numbers miss every root is not read at all —
-                    // the zone map `kill_under` reads. Every row of every
-                    // segment was read here, write lock held, after each
-                    // subtree walk: 58% of an idle service's CPU.
-                    let in_scope = |row: usize| {
-                        let d = seg.dir_id(row);
-                        scopes.iter().any(|s| s.contains(d))
-                            || owns
-                                .iter()
-                                .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
-                    };
-                    let block_matters = |block: usize| {
-                        whole
-                            || match seg.cols.block_range(Field::DirId, block) {
-                                Some((lo, hi)) if lo >= 0 => {
-                                    let (lo, hi) = (lo as u32, hi as u32);
-                                    scopes.iter().any(|s| s.intersects(lo, hi))
-                                        || owns.iter().any(|(pd, _)| lo <= *pd && *pd <= hi)
-                                }
-                                _ => true,
-                            }
-                    };
-                    let rows = live.rows();
-                    let mut out = Vec::new();
-                    for block in 0..rows.div_ceil(crate::columns::BLOCK) {
-                        if !block_matters(block) {
-                            continue;
-                        }
-                        let from = block * crate::columns::BLOCK;
-                        let to = (from + crate::columns::BLOCK).min(rows);
-                        out.extend((from..to).filter(|&row| {
-                            if !live.is_alive(row) {
-                                return false;
-                            }
-                            // The walk saw it and it had not changed, so it
-                            // was not rewritten. That is a stamp.
-                            if spared(row) {
-                                return false;
-                            }
-                            if !whole && !in_scope(row) {
-                                return false;
-                            }
-                            // **Another source's rows are not this walk's to
-                            // judge.** A sweep speaks about one source, and where
-                            // roots overlap it was applied to both.
-                            if seg.source_of(row) != source {
-                                return false;
-                            }
-                            // Somewhere the walk could not look. Its rows are
-                            // not evidence of anything, so they stay.
-                            !(!spare.is_empty()
-                                && spare
-                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default())))
-                        }));
-                    }
-                    if tracing {
-                        gone_paths.extend(
-                            out.iter()
-                                .take(20 - gone_paths.len().min(20))
-                                .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
-                        );
-                    }
-                    out
-                }
-            };
-            for row in victims {
-                if live.kill(row) {
-                    gone += 1;
-                    touched[i] = true;
-                }
-            }
-        }
-        let dirty = inner
-            .segments
-            .iter()
-            .enumerate()
-            .filter_map(|(i, live)| touched[i].then_some(live.number))
-            .collect::<Vec<_>>();
-        // Killed in memory, like a published removal, and written by the next
-        // persist. Writing the bitmaps and the manifest here synced twice with
-        // the lock held after every subtree walk: seconds each on a busy disk,
-        // every search waiting. A crash before the persist brings the rows back
-        // until the next walk of that tree.
-        inner.dirty_alive.extend(dirty);
-        // The manifest stops naming an emptied segment at the persist, and its
-        // files go after that: forgetting is the only part done now.
-        self.forget_empty(&mut inner);
-        if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
-            scour_core::note!("scourd: sweep {gone} satir sildi, {:.0?}", began.elapsed());
-        }
-        // What a walk found that the watcher had not said: the rows it removed and
-        // the ones it wrote. Twenty of each is enough to tell a miss from the
-        // churn of the walk's own seconds.
-        if tracing {
-            Self::trace_sweep(&inner, generation, &gone_paths);
-        }
-        Ok(gone)
+        self.sweep_reach(source, under, Reach::Under, generation, spare)
+    }
+
+    fn sweep_children(
+        &self,
+        source: SourceId,
+        dirs: &[String],
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> Result<u64> {
+        self.sweep_reach(source, dirs, Reach::Children, generation, spare)
     }
 
     /// Close a generation that ended without a sweep — a cancelled walk, an
@@ -3165,6 +3232,110 @@ mod tests {
             .expect("sweep");
         assert_eq!(index.fresh(generation), 2);
         assert_eq!(index.fresh(generation + 1), 0);
+    }
+
+    fn dir_row(source: u32, path: &str) -> Entry {
+        let mut e = row(source, path, 0);
+        e.is_dir = true;
+        e
+    }
+
+    /// A directory looked at again without its subdirectories: its children
+    /// are judged, what lies deeper is not — unless a listed directory holds it.
+    #[test]
+    fn a_childrens_sweep_judges_the_listed_directories_and_nothing_below() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        commit_rows(
+            &index,
+            [
+                row(0, "/w/d/kept.txt", 1),
+                row(0, "/w/d/deleted.txt", 2),
+                dir_row(0, "/w/d/y"),
+                row(0, "/w/d/y/deeper.txt", 3),
+                dir_row(0, "/w/d/y/z"),
+                row(0, "/w/d/y/z/also-deleted.txt", 4),
+                row(0, "/w/d/y/z/also-kept.txt", 5),
+                row(0, "/w/other/untouched.txt", 6),
+            ],
+        );
+        let generation = index.begin_generation().expect("generation");
+        // What listing `/w/d` and `/w/d/y/z` found, one level each.
+        publish_rows(
+            &index,
+            [
+                row(0, "/w/d/kept.txt", 1),
+                dir_row(0, "/w/d/y"),
+                row(0, "/w/d/y/z/also-kept.txt", 5),
+            ],
+        );
+        let gone = index
+            .sweep_children(
+                SourceId(0),
+                &["/w/d".to_string(), "/w/d/y/z/".to_string()],
+                generation,
+                &scour_core::PrefixSet::default(),
+            )
+            .expect("sweep");
+        assert_eq!(gone, 2);
+        assert_eq!(
+            paths(&index),
+            [
+                "/w/d/kept.txt",
+                "/w/d/y",
+                "/w/d/y/deeper.txt",
+                "/w/d/y/z",
+                "/w/d/y/z/also-kept.txt",
+                "/w/other/untouched.txt",
+            ]
+        );
+    }
+
+    /// A subdirectory gone from a listed directory goes with everything in it,
+    /// though nothing below it was listed.
+    #[test]
+    fn a_directory_a_childrens_sweep_removes_takes_its_contents() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        commit_rows(
+            &index,
+            [
+                row(0, "/w/d/kept.txt", 1),
+                dir_row(0, "/w/d/gone"),
+                row(0, "/w/d/gone/inside.txt", 2),
+                dir_row(0, "/w/d/gone/deeper"),
+                row(0, "/w/d/gone/deeper/further.txt", 3),
+                row(0, "/w/d/gone-but-a-file-beside.txt", 4),
+            ],
+        );
+        let generation = index.begin_generation().expect("generation");
+        publish_rows(
+            &index,
+            [
+                row(0, "/w/d/kept.txt", 1),
+                row(0, "/w/d/gone-but-a-file-beside.txt", 4),
+            ],
+        );
+        index
+            .sweep_children(
+                SourceId(0),
+                &["/w/d".to_string()],
+                generation,
+                &scour_core::PrefixSet::default(),
+            )
+            .expect("sweep");
+        index.publish().expect("publish");
+        assert_eq!(
+            paths(&index),
+            ["/w/d/gone-but-a-file-beside.txt", "/w/d/kept.txt"]
+        );
+        index.commit().expect("commit");
+        drop(index);
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(
+            paths(&reopened),
+            ["/w/d/gone-but-a-file-beside.txt", "/w/d/kept.txt"]
+        );
     }
 
     /// Two persists at once — a client's flush and the service's own — each
