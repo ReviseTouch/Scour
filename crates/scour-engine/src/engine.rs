@@ -1658,8 +1658,12 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
             ),
             _ => String::new(),
         };
+        // Beside `gone`, what the walk found that the watcher had not already
+        // said: the measure of whether this walk was needed at all.
+        let fresh = shared.index.fresh(generation);
         scour_core::note!(
-            "scourd: {how} {} in {:.1} s — {seen} entries, {gone} gone{read}{blind}",
+            "scourd: {how} {} in {:.1} s — {seen} entries, {fresh} new or changed, \
+             {gone} gone{read}{blind}",
             src.describe().name,
             began.elapsed().as_secs_f64()
         );

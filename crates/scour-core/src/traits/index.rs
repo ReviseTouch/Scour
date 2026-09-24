@@ -58,6 +58,12 @@ pub trait Index: Send + Sync + Debug {
     /// mapped files, the pages a walk read end to end. Nothing is lost.
     fn release_memory(&self) {}
 
+    /// How many rows a pass wrote as new or changed — what it found that was not
+    /// already known. Beside a sweep's count, it says whether a walk was needed.
+    fn fresh(&self, _generation: u64) -> u64 {
+        0
+    }
+
     /// Remove everything one source ever put here. Returns how many rows went.
     /// For a source no longer configured: a sweep needs a walk, and a source that
     /// is gone will never walk again. Defaults to nothing removed.

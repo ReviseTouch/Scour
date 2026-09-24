@@ -1136,6 +1136,27 @@ impl NativeIndex {
         Ok(())
     }
 
+    /// The paths a sweep removed and the first rows its pass wrote, into the
+    /// journal. `SCOUR_SWEEP_TRACE` only: paths are the user's.
+    fn trace_sweep(inner: &Inner, generation: u64, gone: &[String]) {
+        let mut fresh: Vec<String> = Vec::new();
+        for live in inner.segments.iter().filter(|s| s.generation == generation) {
+            let Ok(seg) = live.view() else { continue };
+            fresh.extend(
+                (0..live.rows())
+                    .filter(|&row| live.is_alive(row))
+                    .take(20 - fresh.len().min(20))
+                    .map(|row| seg.path(row, seg.names.get(row).unwrap_or_default())),
+            );
+        }
+        for p in gone {
+            scour_core::note!("scourd: sweep gone {p}");
+        }
+        for p in fresh {
+            scour_core::note!("scourd: sweep fresh {p}");
+        }
+    }
+
     /// Erase segments nothing is left alive in: an emptied segment left in the
     /// list is walked end to end by every query, 1,204,270 rows for nothing.
     fn forget_empty(&self, inner: &mut Inner) -> Vec<u64> {
@@ -2136,6 +2157,8 @@ impl Index for NativeIndex {
         // deleted three of its four roots on alternate walks.
         let inner_seen = std::mem::take(&mut inner.seen);
         let mut touched = vec![false; inner.segments.len()];
+        let tracing = std::env::var_os("SCOUR_SWEEP_TRACE").is_some();
+        let mut gone_paths: Vec<String> = Vec::new();
         for (i, live) in inner.segments.iter_mut().enumerate() {
             if live.generation >= generation {
                 continue;
@@ -2233,6 +2256,13 @@ impl Index for NativeIndex {
                                     .covers(&seg.path(row, seg.names.get(row).unwrap_or_default())))
                         }));
                     }
+                    if tracing {
+                        gone_paths.extend(
+                            out.iter()
+                                .take(20 - gone_paths.len().min(20))
+                                .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
+                        );
+                    }
                     out
                 }
             };
@@ -2260,6 +2290,12 @@ impl Index for NativeIndex {
         self.forget_empty(&mut inner);
         if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
             scour_core::note!("scourd: sweep {gone} satir sildi, {:.0?}", began.elapsed());
+        }
+        // What a walk found that the watcher had not said: the rows it removed and
+        // the ones it wrote. Twenty of each is enough to tell a miss from the
+        // churn of the walk's own seconds.
+        if tracing {
+            Self::trace_sweep(&inner, generation, &gone_paths);
         }
         Ok(gone)
     }
@@ -2363,6 +2399,18 @@ impl Index for NativeIndex {
         );
         saved?;
         self.persist_unwritten()
+    }
+
+    fn fresh(&self, generation: u64) -> u64 {
+        // A pass writes nothing for a row it found unchanged, so the rows stamped
+        // with its generation are exactly the ones it had to write.
+        let inner = self.inner.read();
+        inner
+            .segments
+            .iter()
+            .filter(|s| s.generation == generation)
+            .map(Live::live_rows)
+            .sum()
     }
 
     fn release_memory(&self) {
@@ -3091,6 +3139,32 @@ mod tests {
         drop(index);
         let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
         assert_eq!(paths(&reopened), ["/w/a.txt", "/w/c.txt", "/w/d.txt"]);
+    }
+
+    /// What a pass had to write: the new row and the changed one, not the row it
+    /// found as it was — however the rows were published or committed on the way.
+    #[test]
+    fn a_pass_counts_what_it_wrote_and_not_what_it_found_unchanged() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        commit_rows(&index, [row(0, "/w/same.txt", 1), row(0, "/w/grew.txt", 2)]);
+        let generation = index.begin_generation().expect("generation");
+        publish_rows(
+            &index,
+            [row(0, "/w/same.txt", 1), row(0, "/w/grew.txt", 20)],
+        );
+        index.commit().expect("commit during the walk");
+        publish_rows(&index, [row(0, "/w/new.txt", 3)]);
+        index
+            .sweep(
+                SourceId(0),
+                &["/w".to_string()],
+                generation,
+                &scour_core::PrefixSet::default(),
+            )
+            .expect("sweep");
+        assert_eq!(index.fresh(generation), 2);
+        assert_eq!(index.fresh(generation + 1), 0);
     }
 
     /// Two persists at once — a client's flush and the service's own — each
