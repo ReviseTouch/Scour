@@ -705,6 +705,31 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
     ok
 }
 
+/// The path an event is about. The kernel reports an event on a directory itself
+/// — its attributes, its removal — with the directory's own handle and the name
+/// `.`, which read as a child made a row called `.` in every directory whose mode
+/// or times changed: seven of them, removed by every reconciling walk and made
+/// again by the next such event. A root is not a row of its own, so its `.` is
+/// nobody's business.
+fn event_path(dir: &str, name: &str, roots: &[std::path::PathBuf]) -> Option<String> {
+    if name == "." {
+        let own = if dir.len() > 1 {
+            dir.trim_end_matches('/')
+        } else {
+            dir
+        };
+        let is_root = roots
+            .iter()
+            .any(|r| path::from_path(r).trim_end_matches('/') == own);
+        return (!is_root).then(|| own.to_owned());
+    }
+    Some(if dir.ends_with('/') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    })
+}
+
 /// Take the descriptor the helper left, if it left one.
 /// Absent is the ordinary case and not an error: [`try_start`] returns `None`.
 fn inherited() -> Option<OwnedFd> {
@@ -983,10 +1008,8 @@ fn drain(fd: OwnedFd) {
             }) else {
                 continue;
             };
-            let full = if dir.ends_with('/') {
-                format!("{dir}{}", ev.name)
-            } else {
-                format!("{dir}/{}", ev.name)
+            let Some(full) = event_path(&dir, &ev.name, &subs[i].roots) else {
+                continue;
             };
             if subs[i].rules.excludes_path(&full) {
                 continue;
@@ -1037,6 +1060,26 @@ fn note_new_mounts(fresh: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_on_a_directory_itself_is_about_the_directory_not_a_child_called_dot() {
+        let roots = [std::path::PathBuf::from("/home/u")];
+        assert_eq!(
+            event_path("/home/u/a/skills", ".", &roots).as_deref(),
+            Some("/home/u/a/skills")
+        );
+        assert_eq!(
+            event_path("/home/u/a", "note.txt", &roots).as_deref(),
+            Some("/home/u/a/note.txt")
+        );
+        // A root has no row of its own, so nothing is made for it.
+        assert_eq!(event_path("/home/u", ".", &roots), None);
+        assert_eq!(event_path("/home/u/", ".", &roots), None);
+        assert_eq!(
+            event_path("/home/u", "top.txt", &roots).as_deref(),
+            Some("/home/u/top.txt")
+        );
+    }
 
     /// [`DirMap::path_of`] as a test would rather read it: the reader keeps one
     /// buffer for the life of its thread.
