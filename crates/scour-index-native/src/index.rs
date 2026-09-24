@@ -294,9 +294,16 @@ pub struct NativeIndex {
     /// prefix sums is 90 ms over two million rows, which under `inner` would stop
     /// every search for that long. Taken *after* `inner` on every path.
     sizes: parking_lot::RwLock<crate::sizes::Cache>,
+    /// Held by whoever is writing published segments down. A client's flush
+    /// and the service's own persist both wrote the same segment, and one
+    /// truncated a file the other was opening: "`.alive` is 0 bytes".
+    persisting: parking_lot::Mutex<()>,
     /// A deterministic test-only pause after a fold snapshots its inputs.
     #[cfg(test)]
     fold_gate: parking_lot::Mutex<Option<std::sync::Arc<FoldGate>>>,
+    /// How many times a published segment has been written to disk.
+    #[cfg(test)]
+    unwritten_writes: std::sync::atomic::AtomicUsize,
     /// Released when this is dropped, or by the kernel if the process dies.
     /// Held for the lifetime of the index: every writing path goes through it.
     _lock: DirLock,
@@ -348,8 +355,11 @@ impl NativeIndex {
             )),
             build_failed: std::sync::atomic::AtomicUsize::new(0),
             sizes: parking_lot::RwLock::new(crate::sizes::Cache::default()),
+            persisting: parking_lot::Mutex::new(()),
             #[cfg(test)]
             fold_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            unwritten_writes: std::sync::atomic::AtomicUsize::new(0),
             _lock: lock,
         })
     }
@@ -1065,6 +1075,9 @@ impl NativeIndex {
     /// folded into one where a fold is allowed and each as it is where not, then
     /// the live bits and the manifest. Every sync the index owes, at once.
     fn persist_unwritten(&self) -> Result<()> {
+        // One at a time; the second finds the first's work done. Taken with no
+        // other lock held, and every caller comes here holding none.
+        let _one = self.persisting.lock();
         let groups = Self::unwritten_groups(&self.inner.read());
         for group in groups {
             // Refused while a walk has marked them, or overtaken by a commit:
@@ -1098,6 +1111,9 @@ impl NativeIndex {
             }
             (live.generation, live.bytes(), live.deaths())
         };
+        #[cfg(test)]
+        self.unwritten_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut written = self
             .disk_bytes
             .changing(|| Live::write(&self.dir, number, generation, &bytes))?;
@@ -3075,6 +3091,51 @@ mod tests {
         drop(index);
         let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
         assert_eq!(paths(&reopened), ["/w/a.txt", "/w/c.txt", "/w/d.txt"]);
+    }
+
+    /// Two persists at once — a client's flush and the service's own — each
+    /// wrote the same published segment: one truncated a file the other was
+    /// opening, and the flush answered that the index was corrupt.
+    #[test]
+    fn two_persists_at_once_write_a_published_segment_once() {
+        for round in 0..4 {
+            let tmp = tempfile::tempdir().expect("tmpdir");
+            let index =
+                std::sync::Arc::new(NativeIndex::open_or_create(tmp.path()).expect("create"));
+            let rows: Vec<Entry> = (0..20_000)
+                .map(|i| row(0, &format!("/w/d{}/f{i}.txt", i % 97), i as i64))
+                .collect();
+            publish_rows(&index, rows);
+            let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let persists: Vec<_> = (0..2)
+                .map(|_| {
+                    let (index, start) = (index.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        index.persist_unwritten()
+                    })
+                })
+                .collect();
+            for p in persists {
+                p.join()
+                    .expect("thread")
+                    .unwrap_or_else(|e| panic!("round {round}: {e}"));
+            }
+            assert_eq!(
+                index
+                    .unwritten_writes
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "round {round}: the segment was written by both"
+            );
+            drop(index);
+            let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+            assert_eq!(
+                reopened.stats().expect("stats").entries,
+                20_000,
+                "round {round}"
+            );
+        }
     }
 
     /// Every file of the index directory with its bytes, the lock aside.
