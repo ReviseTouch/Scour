@@ -25,7 +25,8 @@ pub trait Index: Send + Sync + Debug {
     /// Remove everything **this source** has under `under` that is not stamped with
     /// `generation`; returns how many went. One call per finished scan with every root
     /// it vouched for — the first consumes the pass's notes — and rows under `spare`,
-    /// the subtrees that walk could not enter, are left alone.
+    /// the subtrees that walk could not enter, are left alone. Like `apply`, searched
+    /// at once and durable at the next [`Index::commit`].
     fn sweep(
         &self,
         source: SourceId,

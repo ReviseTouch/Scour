@@ -1357,7 +1357,7 @@ fn forget_retries_a_failed_alive_write_and_survives_reopen() {
 /// A failed sweep must restore its unchanged-row stamps as well as its dirty
 /// bitmap, or retrying deletes the row the walk explicitly saw.
 #[test]
-fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
+fn a_sweeps_removals_survive_a_failed_write_and_land_with_the_next_commit() {
     fn all_paths(index: &NativeIndex) -> Vec<String> {
         index
             .search(&SearchRequest {
@@ -1393,23 +1393,12 @@ fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
             .expect("stamp keeper");
         index.commit().expect("commit stamp");
 
+        // The sweep writes nothing, so a blocked bitmap cannot stop it; the
+        // commit after it is what fails, and has to keep the removal for the next.
         let alive = tmp.path().join("seg-00000001.alive");
         let saved = tmp.path().join("saved-sweep-alive");
         std::fs::rename(&alive, &saved).expect("move bitmap aside");
         std::fs::create_dir(&alive).expect("block bitmap replacement");
-        assert!(
-            index
-                .sweep(
-                    SourceId(0),
-                    &["/w".to_string()],
-                    generation,
-                    &PrefixSet::default()
-                )
-                .is_err()
-        );
-
-        std::fs::remove_dir(&alive).expect("remove blocker");
-        std::fs::rename(&saved, &alive).expect("restore old bitmap");
         index
             .sweep(
                 SourceId(0),
@@ -1417,7 +1406,13 @@ fn sweep_restores_seen_marks_and_retries_a_failed_alive_write() {
                 generation,
                 &PrefixSet::default(),
             )
-            .expect("retry sweep");
+            .expect("sweep");
+        assert_eq!(all_paths(&index), ["/w/keeper.txt"]);
+        assert!(index.commit().is_err());
+
+        std::fs::remove_dir(&alive).expect("remove blocker");
+        std::fs::rename(&saved, &alive).expect("restore old bitmap");
+        index.commit().expect("retry commit");
     }
 
     let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");

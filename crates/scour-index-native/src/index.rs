@@ -633,10 +633,10 @@ impl NativeIndex {
             let mut held = self.building.0.lock();
             std::mem::take(&mut held.landed)
         };
+        // Nothing landed, nothing to record. A manifest left dirty by something
+        // else is saved by the next durable write, not by whoever settles first:
+        // that was a sync under the lock after every begun walk.
         if done.is_empty() {
-            if inner.meta_dirty {
-                self.save_meta(inner)?;
-            }
             return Ok(());
         }
         let mut added = false;
@@ -859,7 +859,7 @@ impl NativeIndex {
             && inner.hidden_prefixes.is_empty()
             && inner.dirty_alive.is_empty()
         {
-            if inner.meta_dirty {
+            if durable && inner.meta_dirty {
                 self.save_meta(inner)?;
             }
             return Ok(Pending::default());
@@ -959,8 +959,10 @@ impl NativeIndex {
         // other way round leaves a window in which it names files that are gone,
         // and the index will not open again.
         let gone = self.forget_empty(inner);
-        // Only a change the manifest records: publishing to memory makes none.
-        if inner.meta_dirty
+        // Only when durable: a publish is not a sync, and saving here synced the
+        // manifest under the lock whenever a walk had begun — twice a subtree walk.
+        if durable
+            && inner.meta_dirty
             && let Err(e) = self.save_meta(inner)
         {
             Self::restore(
@@ -2110,7 +2112,7 @@ impl Index for NativeIndex {
         self.publish_now()?;
         let mut inner = self.inner.write();
         // Whatever was staged since, which on the one worker thread is nothing.
-        self.flush(&mut inner)?;
+        self.publish_locked(&mut inner)?;
         close_generation(&mut inner, generation);
         let mut gone = 0u64;
         // **Taken once, for every root of the walk.** These marks belong to the
@@ -2231,17 +2233,15 @@ impl Index for NativeIndex {
             .enumerate()
             .filter_map(|(i, live)| touched[i].then_some(live.number))
             .collect::<Vec<_>>();
+        // Killed in memory, like a published removal, and written by the next
+        // persist. Writing the bitmaps and the manifest here synced twice with
+        // the lock held after every subtree walk: seconds each on a busy disk,
+        // every search waiting. A crash before the persist brings the rows back
+        // until the next walk of that tree.
         inner.dirty_alive.extend(dirty);
-        if let Err(error) = self.write_dirty_alive(&mut inner) {
-            inner.seen = inner_seen;
-            return Err(error);
-        }
-        // Same order as `flush`: forget, record, then unlink.
+        // The manifest stops naming an emptied segment at the persist, and its
+        // files go after that: forgetting is the only part done now.
         self.forget_empty(&mut inner);
-        if let Err(error) = self.save_meta(&mut inner) {
-            inner.seen = inner_seen;
-            return Err(error);
-        }
         if std::env::var_os("SCOUR_SPARE_TRACE").is_some() {
             scour_core::note!("scourd: sweep {gone} satir sildi, {:.0?}", began.elapsed());
         }
@@ -2256,7 +2256,8 @@ impl Index for NativeIndex {
         // The marks are worthless without the sweep that would have read them,
         // and a marked segment cannot be folded, which stops compaction.
         inner.seen.clear();
-        self.save_meta(&mut inner)
+        // Recorded by the next persist, as a sweep's ending is.
+        Ok(())
     }
 
     fn commit(&self) -> Result<()> {
@@ -3076,6 +3077,59 @@ mod tests {
         assert_eq!(paths(&reopened), ["/w/a.txt", "/w/c.txt", "/w/d.txt"]);
     }
 
+    /// Every file of the index directory with its bytes, the lock aside.
+    fn disk_state(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(|e| {
+                let e = e.ok()?;
+                let name = e.file_name().into_string().ok()?;
+                (name != "index.lock").then(|| (name, std::fs::read(e.path()).unwrap_or_default()))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// A subtree walk from beginning to sweep writes nothing: each of its
+    /// syncs was taken with the lock held, seconds apiece on a busy disk. The
+    /// removal is searched at once, lost to a crash, and kept by a commit.
+    #[test]
+    fn a_walk_and_its_sweep_write_nothing_until_the_commit() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let walk = |index: &NativeIndex| {
+            let generation = index.begin_generation().expect("generation");
+            publish_rows(index, [row(0, "/w/a.txt", 1), row(0, "/w/c.txt", 3)]);
+            index
+                .sweep(
+                    SourceId(0),
+                    &["/w".to_string()],
+                    generation,
+                    &scour_core::PrefixSet::default(),
+                )
+                .expect("sweep");
+            assert_eq!(paths(index), ["/w/a.txt", "/w/c.txt"]);
+        };
+        {
+            let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+            commit_rows(&index, [row(0, "/w/a.txt", 1), row(0, "/w/b.txt", 2)]);
+            let before = disk_state(tmp.path());
+            walk(&index);
+            assert!(
+                disk_state(tmp.path()) == before,
+                "the walk wrote to the index directory"
+            );
+            // No commit: dropped as a killed process leaves it.
+        }
+        let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&index), ["/w/a.txt", "/w/b.txt"]);
+        walk(&index);
+        index.commit().expect("commit");
+        drop(index);
+        let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+        assert_eq!(paths(&reopened), ["/w/a.txt", "/w/c.txt"]);
+    }
+
     fn block_existing_file(path: &Path) -> PathBuf {
         let saved = path.with_extension("test-saved");
         std::fs::rename(path, &saved).expect("move file aside");
@@ -3498,9 +3552,7 @@ mod tests {
             assert!(index.building.0.lock().landed.is_empty());
 
             std::fs::remove_dir(&manifest).expect("remove blocker");
-            index
-                .collect(&mut index.inner.write())
-                .expect("retry empty collection");
+            index.commit().expect("retry with an empty commit");
         }
 
         let reopened = NativeIndex::open_or_create(tmp.path()).expect("reopen");
