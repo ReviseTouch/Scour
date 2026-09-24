@@ -94,6 +94,12 @@ impl Live {
             &bytes.tri_post,
             &bytes.fnames,
         ];
+        // A number is written once, so anything already under it was left by a
+        // crash: a published segment is numbered before the manifest records the
+        // next number, and the index reopened hands it out again. Overwriting is
+        // not enough — an order file this segment does not have would be read as
+        // its own.
+        Live::erase(dir, number);
         // Synced: a manifest surviving a crash its segments did not is an
         // index that cannot be opened.
         for (ext, blob) in PARTS.iter().zip(blobs) {
@@ -855,5 +861,22 @@ mod tests {
             "a segment is nine files and all nine go — the path order included, \
              or an index that has been folded once leaks one per fold"
         );
+    }
+
+    #[test]
+    fn a_number_written_again_keeps_nothing_of_the_first() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let left = build(&[entry("/a/left.rs", 1, 1), entry("/b/over.rs", 2, 2)]);
+        assert!(!left.porder.is_empty());
+        Live::write(tmp.path(), 5, 0, &left).expect("write the crash's leftover");
+        let mut again = build(&[entry("/c/new.rs", 3, 3)]);
+        again.porder = Vec::new();
+        let seg = Live::write(tmp.path(), 5, 0, &again).expect("write again");
+        assert!(
+            seg.porder.is_none(),
+            "the leftover's order file was read as this one's"
+        );
+        let names: Vec<String> = seg.entries().expect("entries").map(|e| e.path).collect();
+        assert_eq!(names, ["/c/new.rs"]);
     }
 }
