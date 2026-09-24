@@ -1564,12 +1564,19 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
         st.scanned = 0;
     }
 
+    // Into an empty index, the rows are shown as they are found: nothing else can
+    // answer until this walk does. Any other walk only corrects what is already there.
+    let first = subtree.is_none() && shared.index.stats().is_ok_and(|s| s.entries == 0);
     let mut sink = ToIndex {
         index: Arc::clone(&shared.index),
         seen: 0,
         buffer: Vec::with_capacity(BATCH),
         stop: Arc::clone(shared),
         failed: false,
+        show: first.then(|| Show {
+            at: Instant::now() + SHOW_FIRST,
+            every: SHOW_FIRST,
+        }),
     };
     // Read once, here: a walk skips by one set of rules from beginning to end, and
     // a rule saved halfway through takes effect on the scan that follows.
@@ -1742,9 +1749,39 @@ struct ToIndex {
     /// A batch the index refused. The sweep removes everything the walk did not
     /// stamp, so one failed write would otherwise turn a scan into a deletion.
     failed: bool,
+    /// When a first walk next shows what it has found. `None` on any other walk.
+    show: Option<Show>,
 }
 
+/// A first walk's clock for making its rows searchable while it goes on.
+struct Show {
+    at: Instant,
+    every: Duration,
+}
+
+/// How soon a first walk's rows are searchable, and the most the wait between two
+/// showings grows to. A walk into an empty index otherwise told a waiting window
+/// nothing until it ended — minutes of an empty list on a fresh install.
+const SHOW_FIRST: Duration = Duration::from_secs(1);
+const SHOW_MOST: Duration = Duration::from_secs(16);
+
 impl ToIndex {
+    /// Make what the walk has found so far searchable and say so. The waits double,
+    /// so a long walk shows itself a dozen times rather than once a second.
+    fn show(&mut self) {
+        if let Err(e) = self.index.publish() {
+            // The rows stay staged and land with the walk; only the showing stops.
+            scour_core::note!("scourd: what the walk has found so far could not be shown: {e}");
+            self.show = None;
+            return;
+        }
+        self.stop.touched_now();
+        if let Some(s) = self.show.as_mut() {
+            s.every = (s.every * 2).min(SHOW_MOST);
+            s.at = Instant::now() + s.every;
+        }
+    }
+
     fn flush(&mut self) {
         if self.buffer.is_empty() {
             return;
@@ -1766,6 +1803,9 @@ impl EntrySink for ToIndex {
             // How far this walk has got, while it is still walking: written once a
             // batch, not once a row — a write lock every four thousand entries.
             self.stop.status.write().scanned = self.seen;
+            if self.show.as_ref().is_some_and(|s| Instant::now() >= s.at) {
+                self.show();
+            }
         }
         if self.stop.stop.load(Ordering::Relaxed) {
             Flow::Stop

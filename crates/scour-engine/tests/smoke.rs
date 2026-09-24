@@ -29,6 +29,9 @@ struct MemSource {
     cancelled: std::sync::atomic::AtomicBool,
     /// Make the walk take this long, so a change can arrive during one.
     slow_ms: AtomicU64,
+    /// Pause this long after every thousand entries: a walk still going when its
+    /// first rows ought to be showing.
+    drip_ms: AtomicU64,
     /// Directories the walk reports it could not read and a retry would meet the
     /// same — a permission refusal — and ones a retry might get past.
     refused: AtomicU64,
@@ -58,6 +61,7 @@ impl MemSource {
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
+            drip_ms: AtomicU64::new(0),
             refused: AtomicU64::new(0),
             failing: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
@@ -91,6 +95,7 @@ impl MemSource {
             offline: std::sync::atomic::AtomicBool::new(false),
             cancelled: std::sync::atomic::AtomicBool::new(false),
             slow_ms: AtomicU64::new(0),
+            drip_ms: AtomicU64::new(0),
             refused: AtomicU64::new(0),
             failing: AtomicU64::new(0),
             order: Arc::new(RwLock::new(Vec::new())),
@@ -204,6 +209,10 @@ impl Source for MemSource {
                 continue;
             }
             n += 1;
+            let drip = self.drip_ms.load(Ordering::Relaxed);
+            if drip > 0 && n % 1_000 == 0 {
+                std::thread::sleep(Duration::from_millis(drip));
+            }
             if sink.push(e.clone()).is_stop() {
                 return Ok(ScanReport {
                     entries: n,
@@ -403,6 +412,35 @@ fn count(f: &Fixture, q: &str) -> u64 {
         .search(q, SortKey::Modified, true, Page::new(0, 1))
         .expect("search")
         .total
+}
+
+/// A walk into an empty index shows what it has found while it goes on, and a
+/// waiting window hears about it: before, the list stayed empty until the end.
+#[test]
+fn a_first_walk_is_searchable_and_announced_before_it_ends() {
+    let f = fixture(40_000);
+    let walked = f.source.entries.read().len() as u64;
+    assert!(walked > 30_000, "long enough to outlast the first showing");
+    // About four seconds of walk; the first showing is due after one.
+    f.source.drip_ms.store(100, Ordering::Relaxed);
+    assert!(f.engine.status().cold);
+    f.engine.rescan(None).expect("rescan");
+    let st = f.engine.await_change(0, Duration::from_secs(20));
+    assert!(st.revision > 0, "nothing was announced");
+    assert!(st.scanning, "announced only once the walk had ended");
+    assert!(
+        st.entries > 0 && st.entries < walked,
+        "{} of {walked} searchable at the announcement",
+        st.entries
+    );
+    settle(&f, |f| {
+        !f.engine.status().scanning && f.engine.status().entries == walked
+    });
+    assert_eq!(
+        f.engine.status().entries,
+        walked,
+        "the walk's rows, each once"
+    );
 }
 
 /// A permission refusal leaves a walk finished: walking again meets it again. A
