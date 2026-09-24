@@ -83,8 +83,8 @@ in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 ### From a release
 
 ```bash
-tar xzf scour-0.2.0-alpha.3-linux-x86_64.tar.gz
-cd scour-0.2.0-alpha.3-linux-x86_64
+tar xzf scour-0.2.0-alpha.4-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.4-linux-x86_64
 ./install.sh
 ```
 
@@ -111,8 +111,8 @@ in clean Ubuntu 22.04, Ubuntu 24.04 and Debian 11 containers.
 ### Debian, Ubuntu and Fedora packages
 
 ```bash
-sudo apt install ./scour_0.2.0.alpha.3-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
-sudo dnf install ./scour-0.2.0.alpha.3-1.x86_64.rpm     # Fedora
+sudo apt install ./scour_0.2.0.alpha.4-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
+sudo dnf install ./scour-0.2.0.alpha.4-1.x86_64.rpm     # Fedora
 ```
 
 Both carry the seven binaries, six in `/usr/bin` and the privileged
