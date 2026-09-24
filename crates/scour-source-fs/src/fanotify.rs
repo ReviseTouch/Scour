@@ -970,9 +970,11 @@ fn drain(fd: OwnedFd) {
                     let now = mounts(&s);
                     let fresh: Vec<String> =
                         now.difference(&known).map(|(_, at)| at.clone()).collect();
+                    let gone: Vec<String> =
+                        known.difference(&now).map(|(_, at)| at.clone()).collect();
                     known = now;
-                    if !fresh.is_empty() {
-                        note_new_mounts(&fresh);
+                    if !fresh.is_empty() || !gone.is_empty() {
+                        note_mounts(&fresh, &gone);
                     }
                 }
             }
@@ -1068,26 +1070,98 @@ fn drain(fd: OwnedFd) {
 /// A filesystem that appeared after the marks were set.
 /// Its contents can still be indexed, but nothing here can watch it: a new
 /// filesystem is a new superblock and a mark needs a privilege this process lacks.
-fn note_new_mounts(fresh: &[String]) {
+/// A mount that went away is covered again — the directory under it is on the
+/// marked filesystem — and is looked at again, since its contents changed back.
+///
+/// Only mounts under a source's roots are that source's business. Every new
+/// mount on the machine used to count against every source: systemd mounting
+/// `/efi` when something read it left all three unwatched until a restart, and
+/// each was walked whole whenever its write counter moved — every minute.
+fn note_mounts(fresh: &[String], gone: &[String]) {
     let Ok(subs) = SUBS.lock() else { return };
     for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
-        for at in fresh {
-            if s.rules.excludes_path(at) {
-                continue;
-            }
-            if let Ok(mut u) = s.uncovered.lock()
-                && !u.contains(at)
-            {
-                u.push(at.clone());
-            }
-            s.sink.emit(Change::Rescan { path: at.clone() });
+        let fresh: Vec<String> = fresh
+            .iter()
+            .filter(|at| !s.rules.excludes_path(at))
+            .cloned()
+            .collect();
+        let look = match s.uncovered.lock() {
+            Ok(mut u) => cover_mounts(&mut u, &s.roots, &fresh, gone),
+            Err(_) => continue,
+        };
+        for at in look {
+            s.sink.emit(Change::Rescan { path: at });
         }
     }
+}
+
+/// What one source makes of mounts that came and went: the new ones under its
+/// roots join what it cannot watch, the vanished ones leave, and both are to be
+/// walked again. Returns the paths to walk.
+fn cover_mounts(
+    uncovered: &mut Vec<String>,
+    roots: &[std::path::PathBuf],
+    fresh: &[String],
+    gone: &[String],
+) -> Vec<String> {
+    let under = |at: &str| {
+        roots
+            .iter()
+            .any(|r| std::path::Path::new(at).starts_with(r))
+    };
+    let mut look = Vec::new();
+    for at in fresh.iter().filter(|at| under(at)) {
+        if !uncovered.contains(at) {
+            uncovered.push(at.clone());
+        }
+        look.push(at.clone());
+    }
+    for at in gone {
+        let was = uncovered.len();
+        uncovered.retain(|u| u != at);
+        if uncovered.len() != was || under(at) {
+            look.push(at.clone());
+        }
+    }
+    look
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mount_is_the_business_of_the_source_it_lands_in_and_only_while_it_is_there() {
+        let roots = [
+            std::path::PathBuf::from("/usr"),
+            std::path::PathBuf::from("/var"),
+        ];
+        let mut uncovered = Vec::new();
+        // `/efi` mounted on a read: nothing to do with these roots.
+        let look = cover_mounts(&mut uncovered, &roots, &["/efi".into()], &[]);
+        assert!(look.is_empty() && uncovered.is_empty(), "{uncovered:?}");
+        // A container's filesystem under `/var`: it cannot be watched, and it is walked.
+        let look = cover_mounts(
+            &mut uncovered,
+            &roots,
+            &["/var/lib/containers/x/merged".into()],
+            &[],
+        );
+        assert_eq!(look, ["/var/lib/containers/x/merged"]);
+        assert_eq!(uncovered, ["/var/lib/containers/x/merged"]);
+        // `/varnish` is not under `/var`.
+        cover_mounts(&mut uncovered, &roots, &["/varnish".into()], &[]);
+        assert_eq!(uncovered.len(), 1);
+        // Gone again: covered, and what was under it is walked.
+        let look = cover_mounts(
+            &mut uncovered,
+            &roots,
+            &[],
+            &["/var/lib/containers/x/merged".into(), "/efi".into()],
+        );
+        assert_eq!(look, ["/var/lib/containers/x/merged"]);
+        assert!(uncovered.is_empty());
+    }
 
     #[test]
     fn an_event_on_a_directory_itself_is_about_the_directory_not_a_child_called_dot() {
