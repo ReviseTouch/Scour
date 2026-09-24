@@ -1544,6 +1544,7 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
         return true;
     };
     let began = Instant::now();
+    let read_before = disk_read_bytes();
     // A generation the index could not open cannot reconcile: its rows would carry
     // the previous one, and the sweep would judge them by it.
     let generation = match shared.index.begin_generation() {
@@ -1594,10 +1595,11 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     let could_look = !vouched.is_empty();
     let trustworthy = report.as_ref().is_ok_and(|r| !r.cancelled) && could_look && !sink.failed;
     let mut ended = true;
+    let mut gone = 0;
     if trustworthy {
         // One call for every root the walk vouched for: the pass's notes of unchanged
         // rows are consumed by the first call, leaving later roots reconciled to nothing.
-        let gone = match shared.index.sweep(src.id(), &vouched, generation, &spare) {
+        gone = match shared.index.sweep(src.id(), &vouched, generation, &spare) {
             Ok(n) => n,
             // Half a reconciliation. The retry is the caller's; the rows that should
             // have gone are found again by the next full scan.
@@ -1625,6 +1627,35 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
         );
     }
     if subtree.is_none() {
+        // A whole source only: subtree walks come dozens a minute during a build.
+        // Without this line the journal could not say when a walk after a
+        // reboot had finished, or what it cost.
+        let read = match (read_before, disk_read_bytes()) {
+            (Some(a), Some(b)) => {
+                format!(", {} MB read from disk", b.saturating_sub(a) / 1_000_000)
+            }
+            _ => String::new(),
+        };
+        let how = if trustworthy {
+            "walked"
+        } else {
+            "stopped walking"
+        };
+        // Named: what is under an unreadable place is neither seen nor swept,
+        // and the first path says where to look.
+        let blind = match report.as_ref() {
+            Ok(r) if r.unreadable > 0 || !r.blind.is_empty() => format!(
+                ", {} unreadable, first {}",
+                r.unreadable.max(r.blind.len() as u64),
+                r.blind.first().map(String::as_str).unwrap_or("unnamed")
+            ),
+            _ => String::new(),
+        };
+        scour_core::note!(
+            "scourd: {how} {} in {:.1} s — {seen} entries, {gone} gone{read}{blind}",
+            src.describe().name,
+            began.elapsed().as_secs_f64()
+        );
         pulses.scanned(source, began.elapsed());
         // Recognising a whole source's unchanged rows read the index end to end:
         // 162 MB left resident after a startup that nothing looked at again.
@@ -1647,6 +1678,24 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     // A missing subtree alone is not a missing source. Any incomplete pass or
     // failed write needs a retry of the source to recover what it could not see.
     !sink.failed && ended && finished && (subtree.is_some() || (could_look && all_roots))
+}
+
+/// What this process has had read from the disk so far — the page cache's misses,
+/// not its reads. Linux only; a walk's cost is the difference across it.
+fn disk_read_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let io = std::fs::read_to_string("/proc/self/io").ok()?;
+        io.lines()
+            .find_map(|l| l.strip_prefix("read_bytes:"))?
+            .trim()
+            .parse()
+            .ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 /// How long to wait before looking again at a source whose roots were not there:
