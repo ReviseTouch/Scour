@@ -155,6 +155,19 @@ before. An I/O error or a full file table still does.
 Warm, the three sources here walk in 3.8 s (2.55 M entries), 2.7–5.7 s (1.56 M,
 NTFS) and 0.5–1.5 s (0.5 M).
 
+Every source used to be walked whole every thirty minutes, watched or not. One
+such round here, the machine under memory pressure: the home directory 14.6 s
+and 2.5 GB read, the NTFS volume 27.9 s and 2.0 GB, the system directories
+2.6 s — 26.8 CPU-seconds and 5 GB of reads, about 10 GB an hour. The NTFS
+volume found nothing in any round; the home directory, once two watcher bugs
+were fixed (a `.` row for every directory event, and a directory's own times
+left behind its children), found only files written through a memory mapping —
+SQLite `-wal` and `-shm`, a browser's cache, journald — which no watcher sees.
+A watched source is now checked once a day, when the kernel's pressure figures
+say the processor and the disk were waited on for under a tenth of the last
+minute, with one walker thread; a day late if that never happens. A source
+nobody watches keeps the thirty minutes.
+
 The first walk into an empty index shows what it has found after one second,
 then after two, four, eight and every sixteen, and wakes a waiting window each
 time. Before, a window open on a fresh install heard nothing until the whole

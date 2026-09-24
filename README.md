@@ -73,9 +73,9 @@ forty rows:
 The index is memory-mapped: it lives in the page cache and the kernel can
 reclaim it under pressure, so searching costs tens of megabytes of resident
 memory rather than the size of the index. Change notifications are not
-treated as complete: every source also receives a full reconciliation pass,
-every 30 minutes by default, and every minute on a source with neither a watch
-nor a write counter. The measurements and the commands that produced them are
+treated as complete: a watched source also receives a full reconciliation
+pass once a day, when the machine is quiet and with one thread; one without a
+watch every 30 minutes, and every minute if it has no write counter either. The measurements and the commands that produced them are
 in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 
 ## Installation

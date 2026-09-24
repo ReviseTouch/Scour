@@ -136,9 +136,13 @@ pub struct ServiceCfg {
     pub commit_idle_ms: u64,
     /// Recheck a source without a change feed or a readable pulse.
     pub poll_interval_secs: u64,
-    /// Reconcile even a quiet, watched source to recover silent event loss.
-    /// Expensive walks rest for at least twenty times their previous duration.
+    /// Reconcile a quiet source no live watcher covers, to recover silent event
+    /// loss. Expensive walks rest for at least twenty times their previous duration.
     pub reconcile_interval_secs: u64,
+    /// The same for a source a watcher covers, walked once the machine is quiet
+    /// and with one thread. Its watcher misses only what is written through a
+    /// memory mapping: every thirty minutes it cost 5 GB of reads a round here.
+    pub watched_reconcile_interval_secs: u64,
 }
 
 impl Default for ServiceCfg {
@@ -149,6 +153,7 @@ impl Default for ServiceCfg {
             commit_idle_ms: 15_000,
             poll_interval_secs: 60,
             reconcile_interval_secs: 1_800,
+            watched_reconcile_interval_secs: 86_400,
         }
     }
 }

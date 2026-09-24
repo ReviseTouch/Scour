@@ -6,6 +6,7 @@ fn older_configuration_receives_recovery_defaults() {
         toml::from_str("[service]\ncommit_idle_ms = 5000\n").expect("older config");
     assert_eq!(config.service.poll_interval_secs, 60);
     assert_eq!(config.service.reconcile_interval_secs, 1800);
+    assert_eq!(config.service.watched_reconcile_interval_secs, 86_400);
 }
 
 #[test]

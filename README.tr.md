@@ -70,9 +70,10 @@ ve kırk satır:
 
 İndeks bellek eşlemelidir: sayfa önbelleğinde yaşar ve çekirdek baskı
 altında geri alabilir; arama, indeksin tamamı kadar değil, onlarca megabayt
-yerleşik bellek ister. Değişiklik bildirimleri eksiksiz sayılmaz: her kaynak
-ayrıca tam bir eşitleme geçişi alır — varsayılan olarak 30 dakikada bir, ne
-izleyicisi ne yazma sayacı olan kaynaklarda dakikada bir. Ölçümler ve onları
+yerleşik bellek ister. Değişiklik bildirimleri eksiksiz sayılmaz: izlenen bir
+kaynak ayrıca günde bir kez, makine sessizken ve tek iş parçacığıyla tam bir
+eşitleme geçişi alır; izlenmeyen bir kaynak 30 dakikada bir, yazma sayacı da
+yoksa dakikada bir. Ölçümler ve onları
 üreten komutlar [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) dosyasındadır.
 
 ## Kurulum

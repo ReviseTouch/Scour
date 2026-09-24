@@ -57,7 +57,12 @@ pub struct EngineOptions {
     /// Full reconciliation when neither a watch nor a pulse is available.
     pub poll_interval: Duration,
     /// Safety pass even when a source appears quiet. Pulses are only hints.
+    /// Only for a source no watcher covers; see `watched_reconcile`.
     pub reconcile_interval: Duration,
+    /// The same for a watched source: once the machine is quiet, one thread.
+    /// Every thirty minutes it read 5 GB a round here and found nothing but
+    /// files written through a mapping, which no watcher sees.
+    pub watched_reconcile: Duration,
     /// How long a [`Change::Rescan`](scour_core::Change::Rescan) waits for its
     /// neighbours: 157 walks in twelve minutes of a build, 39.4 MB of writes.
     pub walk_debounce: Duration,
@@ -89,6 +94,7 @@ impl Default for EngineOptions {
             idle_after: Duration::from_secs(20),
             poll_interval: Duration::from_secs(60),
             reconcile_interval: Duration::from_secs(1_800),
+            watched_reconcile: Duration::from_secs(86_400),
             // Walks arrive at 13.3 a minute in bursts of 22 in five seconds: half a second is a real gap.
             walk_debounce: Duration::from_millis(500),
             // The worst a file in a brand-new directory waits; deliberately under `commit_idle`.
@@ -1016,6 +1022,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
         shared.sources.len(),
         shared.opts.poll_interval,
         shared.opts.reconcile_interval,
+        shared.opts.watched_reconcile,
     );
 
     loop {
@@ -1116,7 +1123,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                         // From here a fresh request is about what this walk has passed.
                         flag.store(false, Ordering::Release);
                     }
-                    if !scan(&shared, &mut pulses, source, subtree) {
+                    if !scan(&shared, &mut pulses, source, subtree, false) {
                         schedule_retry(&mut retries, &pulses, source);
                     } else if whole {
                         retries.retain(|(s, _, _)| *s != source);
@@ -1215,7 +1222,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             // inotify watches, an overflowed kernel buffer — so every source is walked.
             if path.is_empty() {
                 for i in 0..shared.sources.len() {
-                    if !scan(&shared, &mut pulses, i, None) {
+                    if !scan(&shared, &mut pulses, i, None, false) {
                         schedule_retry(&mut retries, &pulses, i);
                     }
                 }
@@ -1227,7 +1234,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                         h.cover(&path);
                     }
                 }
-                if !scan(&shared, &mut pulses, i, Some(path.clone())) {
+                if !scan(&shared, &mut pulses, i, Some(path.clone()), false) {
                     schedule_retry(&mut retries, &pulses, i);
                 }
             }
@@ -1247,7 +1254,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                 .map(|(i, _)| *i)
                 .collect();
             let readings: Vec<Option<u64>> = shared.sources.iter().map(|s| s.pulse()).collect();
-            pulses.decide(&readings, &watched)
+            pulses.decide(&readings, &watched, &crate::reconcile::machine_quiet)
         } else {
             Vec::new()
         };
@@ -1258,7 +1265,15 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             }
             match job {
                 Nudge::Reconcile => {
-                    if !scan(&shared, &mut pulses, source, None) {
+                    if !scan(&shared, &mut pulses, source, None, false) {
+                        schedule_retry(&mut retries, &pulses, source);
+                    }
+                    dirty = true;
+                    idle_done = false;
+                    last_busy = Instant::now();
+                }
+                Nudge::Check => {
+                    if !scan(&shared, &mut pulses, source, None, true) {
                         schedule_retry(&mut retries, &pulses, source);
                     }
                     dirty = true;
@@ -1272,7 +1287,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                         "scourd: source {source} has changed repeatedly with no events \
                          arriving — the watch is not covering it; rescanning"
                     );
-                    if !scan(&shared, &mut pulses, source, None) {
+                    if !scan(&shared, &mut pulses, source, None, false) {
                         schedule_retry(&mut retries, &pulses, source);
                     }
                     dirty = true;
@@ -1360,7 +1375,7 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                 .collect();
             retries.retain(|(_, at, _)| *at > now);
             for (source, attempt) in due {
-                if scan(&shared, &mut pulses, source, None) {
+                if scan(&shared, &mut pulses, source, None, false) {
                     scour_core::note!(
                         "scourd: {} is readable again",
                         shared.sources[source].describe().name
@@ -1539,7 +1554,13 @@ impl PendingWalks {
 
 /// Walk one source and reconcile what it holds, saying whether the walk could see
 /// what it came for. `false` means the roots were not there to be read.
-fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Option<String>) -> bool {
+fn scan(
+    shared: &Arc<Shared>,
+    pulses: &mut Pulses,
+    source: usize,
+    subtree: Option<String>,
+    gentle: bool,
+) -> bool {
     let Some(src) = shared.sources.get(source).cloned() else {
         return true;
     };
@@ -1580,10 +1601,14 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
     };
     // Read once, here: a walk skips by one set of rules from beginning to end, and
     // a rule saved halfway through takes effect on the scan that follows.
-    let opts = ScanOptions {
+    let mut opts = ScanOptions {
         subtree: subtree.clone(),
         ..(*shared.scan()).clone()
     };
+    // A check is nobody's wait: one thread, however many a walk is allowed.
+    if gentle {
+        opts.threads = 1;
+    }
     let report = src.scan(&opts, &mut sink);
     if let Err(e) = &report {
         scour_core::note!("scourd: a scan of {} failed: {e}", src.describe().name);
@@ -1643,10 +1668,10 @@ fn scan(shared: &Arc<Shared>, pulses: &mut Pulses, source: usize, subtree: Optio
             }
             _ => String::new(),
         };
-        let how = if trustworthy {
-            "walked"
-        } else {
-            "stopped walking"
+        let how = match (trustworthy, gentle) {
+            (false, _) => "stopped walking",
+            (true, true) => "checked",
+            (true, false) => "walked",
         };
         // Named: what is under an unreadable place is neither seen nor swept,
         // and the first path says where to look.

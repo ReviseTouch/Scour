@@ -60,6 +60,9 @@ pub fn build(config: &Config) -> Result<Engine> {
             rebuild_threshold: config.index.rebuild_threshold,
             poll_interval: Duration::from_secs(config.service.poll_interval_secs.max(1)),
             reconcile_interval: Duration::from_secs(config.service.reconcile_interval_secs.max(1)),
+            watched_reconcile: Duration::from_secs(
+                config.service.watched_reconcile_interval_secs.max(60),
+            ),
             // Raised to a window's fetch run and no further: a window records
             // a whole run of `scour_core::PAGE_ROWS` as loaded, so a lower
             // ceiling leaves rows that never arrive.
