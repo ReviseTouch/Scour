@@ -81,6 +81,128 @@ pub fn launch(opener: &Opener, path: &Path) -> std::io::Result<()> {
         .map(|_| ())
 }
 
+/// Show these paths in the file manager, each selected in its folder — what
+/// "open its folder" means to a person. Opening the folder alone did nothing
+/// when that folder was already open, and selected nothing when it was not.
+/// `org.freedesktop.FileManager1.ShowItems` is answered by Nautilus, Dolphin,
+/// Nemo, Caja and Thunar; where nothing answers, each folder is opened instead.
+/// Returns at once: the bus can start a file manager, which takes a second.
+pub fn reveal(paths: &[&Path]) {
+    if paths.is_empty() {
+        return;
+    }
+    let quiet = |mut c: std::process::Command| {
+        let _ = c
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    };
+    // Finder and Explorer each have the one verb for it.
+    if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").args(paths);
+        quiet(c);
+        return;
+    }
+    if cfg!(windows) {
+        for p in paths {
+            let mut c = std::process::Command::new("explorer");
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(p.as_os_str());
+            c.arg(arg);
+            quiet(c);
+        }
+        return;
+    }
+    let uris: Vec<String> = paths.iter().map(|p| file_uri(p)).collect();
+    let folders: Vec<std::path::PathBuf> = {
+        let mut seen = Vec::new();
+        for p in paths {
+            let dir = p.parent().unwrap_or(p).to_path_buf();
+            if !seen.contains(&dir) {
+                seen.push(dir);
+            }
+        }
+        seen
+    };
+    std::thread::spawn(move || {
+        if show_items(&uris) {
+            return;
+        }
+        for dir in folders {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(dir)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    });
+}
+
+/// Ask the session's file manager to show these, through whichever bus tool
+/// this machine has; false when neither could deliver it.
+fn show_items(uris: &[String]) -> bool {
+    let quiet = |mut c: std::process::Command| {
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let mut gdbus = std::process::Command::new("gdbus");
+    gdbus.args([
+        "call",
+        "--session",
+        "--timeout",
+        "10",
+        "--dest",
+        "org.freedesktop.FileManager1",
+        "--object-path",
+        "/org/freedesktop/FileManager1",
+        "--method",
+        "org.freedesktop.FileManager1.ShowItems",
+        &gvariant_strings(uris),
+        "",
+    ]);
+    if quiet(gdbus) {
+        return true;
+    }
+    let mut send = std::process::Command::new("dbus-send");
+    send.args([
+        "--session",
+        "--print-reply",
+        "--dest=org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1.ShowItems",
+        &format!("array:string:{}", uris.join(",")),
+        "string:",
+    ]);
+    quiet(send)
+}
+
+/// A `file://` URI: every byte outside the unreserved set and `/` escaped, so
+/// neither a space nor a quote nor a comma survives to confuse a bus tool.
+fn file_uri(path: &Path) -> String {
+    let mut out = String::from("file://");
+    for &b in path.as_os_str().as_encoded_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// An array of strings in GVariant's text form, which is what `gdbus` parses.
+/// The URIs are escaped already, so no quote can end one early.
+fn gvariant_strings(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|u| format!("'{u}'")).collect();
+    format!("[{}]", quoted.join(", "))
+}
+
 /// An `Exec=` line with its field codes resolved, split into words. `%f` is where
 /// the file goes; `%i %c %k` are dropped, since left in place they become literal
 /// arguments. An entry with no code at all still gets the path, appended.
@@ -366,6 +488,19 @@ fn runnable(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_becomes_a_uri_no_bus_tool_can_misread() {
+        assert_eq!(
+            file_uri(Path::new("/home/a/Çay listesi, 'son'.txt")),
+            "file:///home/a/%C3%87ay%20listesi%2C%20%27son%27.txt"
+        );
+        assert_eq!(file_uri(Path::new("/x/a-b_c.d~")), "file:///x/a-b_c.d~");
+        assert_eq!(
+            gvariant_strings(&["file:///a".into(), "file:///b%20c".into()]),
+            "['file:///a', 'file:///b%20c']"
+        );
+    }
 
     #[test]
     fn the_file_lands_where_the_entry_says_and_the_rest_of_the_codes_go() {

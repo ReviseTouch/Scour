@@ -75,6 +75,7 @@ scour-hotkey   = { workspace = true }
 scour-name     = { workspace = true }
 # Which programs claim a kind of file, for `Open with…`.
 scour-openers  = { workspace = true }
+scour-sendto   = { workspace = true }
 anyhow       = { workspace = true }
 # The same two flags the terminal face has, spelled the same way — and an
 # answer to `--version` that is not a window.

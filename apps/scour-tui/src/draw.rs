@@ -361,7 +361,15 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .collect(),
         ),
         Panel::Openers => (
-            app.say("OPEN WITH"),
+            if app
+                .openers
+                .first()
+                .is_some_and(|(id, _)| id.starts_with("send:"))
+            {
+                app.say("SEND TO")
+            } else {
+                app.say("OPEN WITH")
+            },
             app.openers
                 .iter()
                 .map(|(_, name)| (name.clone(), false).into())

@@ -42,6 +42,22 @@ impl From<std::io::Error> for Error {
     }
 }
 
+/// Remove a path for good: a file or a link as itself, a directory with all it
+/// holds. Nothing is followed — a link to a directory goes, and what it pointed
+/// at stays. What the menu offers beside the trash, and asks about first.
+pub fn erase(path: &Path) -> Result<(), Error> {
+    if path.file_name().is_none() {
+        return Err(Error::Unnamed(path.to_owned()));
+    }
+    let md = std::fs::symlink_metadata(path).map_err(|_| Error::Missing(path.to_owned()))?;
+    if md.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 /// Send one path to the trash and say where it ended up. A file, a directory or a
 /// symlink; a directory goes whole, since a rename moves a tree and never copies.
@@ -290,6 +306,39 @@ fn local_stamp() -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
+
+    #[test]
+    fn erasing_takes_a_file_a_tree_and_a_link_but_not_what_the_link_points_at() {
+        let tmp = std::env::temp_dir().join(format!("scour-erase-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("tree/deeper")).expect("mkdir");
+        std::fs::write(tmp.join("tree/deeper/f.txt"), b"x").expect("write");
+        std::fs::write(tmp.join("one.txt"), b"x").expect("write");
+        std::fs::create_dir_all(tmp.join("kept")).expect("mkdir");
+        std::fs::write(tmp.join("kept/inside.txt"), b"x").expect("write");
+        std::os::unix::fs::symlink(tmp.join("kept"), tmp.join("link")).expect("link");
+
+        super::erase(&tmp.join("one.txt")).expect("file");
+        super::erase(&tmp.join("tree")).expect("tree");
+        super::erase(&tmp.join("link")).expect("link");
+        assert!(!tmp.join("one.txt").exists());
+        assert!(!tmp.join("tree").exists());
+        assert!(std::fs::symlink_metadata(tmp.join("link")).is_err());
+        assert!(
+            tmp.join("kept/inside.txt").exists(),
+            "the link's target went too"
+        );
+
+        assert!(matches!(
+            super::erase(&tmp.join("never-was")),
+            Err(super::Error::Missing(_))
+        ));
+        assert!(matches!(
+            super::erase(std::path::Path::new("/")),
+            Err(super::Error::Unnamed(_))
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
     use super::*;
 
     /// A trash of our own, so the test never touches the desktop's.

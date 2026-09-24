@@ -1,0 +1,12 @@
+[package]
+name = "scour-sendto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# **Nothing.** "Send to" is a handful of programs the desktop already has —
+# `xdg-email`, `bluetooth-sendto`, `zip`, `cp` — and a directory or two it
+# already names. This crate finds which of them are here and starts one; it has
+# never heard of Scour.
+[dependencies]

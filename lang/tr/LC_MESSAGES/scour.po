@@ -1690,3 +1690,74 @@ msgstr "{files} dosya · diskte {disk} · {n} klasör"
 # promise of a scope: the window leaves the report scope where it is.
 msgid "Clicking a slice adds a kind: term to the query and opens the search tab."
 msgstr "Bir dilime tıklamak sorguya kind: terimini ekler ve arama sekmesini açar."
+
+# Send to: the menu item, the places, and what is said after.
+msgid "Send to…"
+msgstr "Gönder…"
+
+msgid "Send {n} to…"
+msgstr "{n} öğeyi gönder…"
+
+msgid "Desktop (as a link)"
+msgstr "Masaüstü (bağlantı olarak)"
+
+msgid "Mail recipient"
+msgstr "E-posta alıcısı"
+
+msgid "Bluetooth device"
+msgstr "Bluetooth aygıtı"
+
+msgid "Compressed archive"
+msgstr "Sıkıştırılmış arşiv"
+
+msgid "nowhere to send to on this machine"
+msgstr "bu makinede gönderilecek bir yer yok"
+
+msgid "a link is on the desktop"
+msgstr "masaüstüne bağlantı kondu"
+
+msgid "packing into {path}"
+msgstr "{path} içine sıkıştırılıyor"
+
+msgid "copying to {path}"
+msgstr "{path} konumuna kopyalanıyor"
+
+msgid "handed over"
+msgstr "gönderildi"
+
+msgid "that place is not there any more"
+msgstr "o yer artık yok"
+
+msgid "only files can be sent there"
+msgstr "oraya yalnızca dosya gönderilebilir"
+
+msgid "it is not there"
+msgstr "orada değil"
+
+msgid "not on this platform"
+msgstr "bu platformda yok"
+
+msgid "it could not be sent"
+msgstr "gönderilemedi"
+
+# Deleting for good: beside the trash, and it asks first.
+msgid "Delete permanently…"
+msgstr "Kalıcı olarak sil…"
+
+msgid "Delete {n} permanently…"
+msgstr "{n} öğeyi kalıcı olarak sil…"
+
+msgid "This cannot be undone."
+msgstr "Bu geri alınamaz."
+
+msgid "{n} deleted"
+msgstr "{n} öğe silindi"
+
+msgid "{n} could not be deleted"
+msgstr "{n} öğe silinemedi"
+
+msgid "Delete"
+msgstr "Sil"
+
+msgid "SEND TO"
+msgstr "GÖNDER"

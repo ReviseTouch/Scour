@@ -1721,6 +1721,36 @@
       if (j.error) throw new Error(j.error);
       return j;
     },
+    /* For good: the page has asked first, and nothing brings these back. */
+    erase: async (paths) => {
+      const r = await fetch(`/api/delete?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`delete: ${r.status}`);
+      const j = await r.json();
+      if (j.error) throw new Error(j.error);
+      return j;
+    },
+    /* Each one selected in its folder, in the file manager. */
+    reveal: async (paths) => {
+      const r = await fetch(`/api/reveal?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`reveal: ${r.status}`);
+      return r.json();
+    },
+    /* Asked each time the menu opens: a drive comes and goes. */
+    sendTargets: () => SERVICE.get("send-targets", {}),
+    send: async (to, paths) => {
+      const r = await fetch(`/api/send?${new URLSearchParams({ to, paths: paths.join("\n"), t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`send: ${r.status}`);
+      return r.json();
+    },
     /* The bridge renames; the service is told to look at both ends. */
     rename: async (path, name) => {
       const r = await fetch(`/api/rename?${new URLSearchParams({ path, name, t: TOKEN })}`, {
@@ -2827,6 +2857,7 @@
   function makeRow() {
     const tr = document.createElement("tr");
     tr.tabIndex = 0;
+    tr.draggable = true;
     tr.innerHTML = `<td class="age"><i></i></td>` + shownColumns().map(() => "<td></td>").join("");
     return tr;
   }
@@ -2836,6 +2867,7 @@
   function makeTile() {
     const tr = document.createElement("tr");
     tr.tabIndex = 0;
+    tr.draggable = true;
     const td = document.createElement("td");
     td.className = "tile";
     const rule = document.createElement("i");
@@ -4362,7 +4394,9 @@
     if (dirs.length > OPEN_MANY && !asking) { askFolders(); return; }
     asking = false;
     clearTimeout(askTimer);
-    for (const d of dirs) launch(d, "folder");
+    /* The files themselves, each selected in its folder: opening the folders
+       alone showed nothing, and did nothing to one already open. */
+    SERVICE.reveal([...SEL.keys()]).catch((err) => flash(String(err.message || err)));
     drawSelBar();
   }
 
@@ -4468,9 +4502,31 @@
       }
       return;
     }
+    /* What the menu prints beside its two removals. */
+    if (e.key === "Delete") {
+      const p = pathOf(row);
+      if (!p) return;
+      e.preventDefault();
+      const picked = SEL.size > 1 && SEL.has(p) ? [...SEL.keys()] : [p];
+      runAct(e.shiftKey ? "delete" : "trash", p, row.__row || null, picked, null);
+      return;
+    }
     if (e.key !== "Enter") return;
     const p = pathOf(row);
     if (p) { e.preventDefault(); launch(p, e.shiftKey ? "folder" : "file"); }
+  });
+
+  /* Out of the window: a file manager, a mail or a chat takes `text/uri-list`
+     as the files themselves. The whole selection goes when the row is in it. */
+  body.addEventListener("dragstart", (e) => {
+    const tr = e.target.closest && e.target.closest("tr");
+    const p = pathOf(tr);
+    if (!p || !e.dataTransfer) return;
+    const paths = SEL.size > 1 && SEL.has(p) ? [...SEL.keys()] : [p];
+    const uri = (x) => "file://" + x.split("/").map(encodeURIComponent).join("/");
+    e.dataTransfer.effectAllowed = "copyMove";
+    e.dataTransfer.setData("text/uri-list", paths.map(uri).join("\r\n"));
+    e.dataTransfer.setData("text/plain", paths.join("\n"));
   });
 
   /* The right-click menu. Built per press from `MENU`. */
@@ -4528,17 +4584,21 @@
     menu.querySelector("button").focus();
   }
 
-  menu.addEventListener("click", async (e) => {
+  menu.addEventListener("click", (e) => {
     const b = e.target.closest("button");
     const act = b && b.dataset && b.dataset.act;
     if (!act) return;
     const p = menu.dataset.path;
-    const row = menu.__row;
     const many = !menu.__alone && SEL.size > 1;
-    const picked = many ? [...SEL.keys()] : [p];
-    /* Whoever drew the row redraws it; the search list refreshes itself. */
-    const after = menu.__after;
     menu.hidden = true;
+    /* Whoever drew the row redraws it; the search list refreshes itself. */
+    runAct(act, p, menu.__row, many ? [...SEL.keys()] : [p], menu.__after);
+  });
+
+  /* What an item does, from the menu or from a key: `picked` is what it is
+     about, and `after` redraws a list the caller owns. */
+  async function runAct(act, p, row, picked, after) {
+    const many = picked.length > 1;
 
     /* Said once: the copy items differ only in what part of the path. */
     const put = (text, said) =>
@@ -4628,6 +4688,43 @@
         return;
       }
 
+      case "delete": {
+        /* Said in full: the label promised this question, and nothing brings
+           these back — not the trash, not the index. */
+        const said = many
+          ? T("Delete {n} permanently…", { n: fmt(picked.length) })
+          : T("Delete permanently…");
+        if (!confirm(said + "\n" + T("This cannot be undone.") + "\n\n" +
+                     picked.slice(0, 8).join("\n") + (picked.length > 8 ? "\n…" : ""))) return;
+        try {
+          const r = await SERVICE.erase(picked);
+          for (const x of picked) SEL.delete(x);
+          if (after) after(picked, r);
+          else q.dispatchEvent(new Event("input", { bubbles: true }));
+          flash(r.refused && r.refused.length
+            ? T("{n} could not be deleted", { n: fmt(r.refused.length) })
+            : T("{n} deleted", { n: fmt(r.gone) }));
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
+
+      case "send": {
+        /* The menu becomes the places, as "Open with…" becomes the programs. */
+        try {
+          const r = await SERVICE.sendTargets();
+          if (!r.targets.length) return flash(T("nowhere to send to on this machine"));
+          menu.innerHTML = r.targets.map((t) =>
+            `<button type="button" data-act="send:${escape_(t.id)}">` +
+            `${escape_(t.named ? t.label : T(t.label))}</button>`).join("");
+          menu.hidden = false;
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
+
       case "open-with": {
         /* The menu becomes the list rather than growing a submenu. */
         try {
@@ -4661,6 +4758,19 @@
       }
 
       default:
+        if (act.startsWith("send:")) {
+          try {
+            const r = await SERVICE.send(act.slice("send:".length), picked);
+            if (r.error) return flash(T(r.error));
+            flash(r.sent === "linked" ? T("a link is on the desktop")
+              : r.sent === "packing" ? T("packing into {path}", { path: r.at })
+              : r.sent === "copying" ? T("copying to {path}", { path: r.at })
+              : T("handed over"));
+          } catch (err) {
+            flash(String(err.message || err));
+          }
+          return;
+        }
         if (act.startsWith("open-with:")) {
           try {
             await SERVICE.openWith(p, act.slice("open-with:".length));
@@ -4672,7 +4782,7 @@
         /* An id the page has no answer for; the table is shared. */
         flash(T("not in this face yet"));
     }
-  });
+  }
   const hideMenu = () => { menu.hidden = true; };
   document.addEventListener("click", hideMenu);
   document.addEventListener("scroll", hideMenu, true);

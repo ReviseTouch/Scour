@@ -1441,7 +1441,7 @@ impl App {
         let folder = |p: &str| scour_ui::path::folder(p).to_string();
 
         // Everything but the two that ask closes the menu on the press.
-        if line.id != "trash" && line.id != "open-all" {
+        if line.id != "trash" && line.id != "open-all" && line.id != "delete" {
             self.panel = Panel::None;
             self.dirty = true;
         }
@@ -1451,17 +1451,15 @@ impl App {
                 launch(&first);
                 Want::Nothing
             }
+            // The row itself, selected in its folder: opening the folder alone
+            // did nothing to one already open, and showed nothing.
             "folder" => {
-                launch(&folder(&first));
+                scour_openers::reveal(&[std::path::Path::new(&first)]);
                 Want::Nothing
             }
             "folders" => {
-                let mut seen: Vec<String> = rows.iter().map(|p| folder(p)).collect();
-                seen.sort();
-                seen.dedup();
-                for dir in seen {
-                    launch(&dir);
-                }
+                let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+                scour_openers::reveal(&paths);
                 Want::Nothing
             }
             "clear" => {
@@ -1552,6 +1550,29 @@ impl App {
                 Want::Nothing
             }
 
+            "send" => {
+                // The places take the openers' panel, told apart by their ids.
+                self.openers = scour_sendto::targets()
+                    .into_iter()
+                    .map(|t| {
+                        let label = if t.named {
+                            t.label
+                        } else {
+                            self.say(&t.label).into_owned()
+                        };
+                        (format!("send:{}", t.id), label)
+                    })
+                    .collect();
+                if self.openers.is_empty() {
+                    self.note = self.say("nowhere to send to on this machine").into_owned();
+                    return Want::Nothing;
+                }
+                self.panel = Panel::Openers;
+                self.panel_at = 0;
+                self.dirty = true;
+                Want::Nothing
+            }
+
             "rename" => {
                 self.ask_title = self.say("Rename…").into_owned();
                 self.ask_text = leaf(&first);
@@ -1566,7 +1587,7 @@ impl App {
                 Want::Nothing
             }
 
-            "trash" | "open-all" => {
+            "trash" | "open-all" | "delete" => {
                 // Eight names and then how many are left: a list that runs off
                 // the panel is one nobody read before pressing yes.
                 let mut names: Vec<String> = rows.iter().take(8).map(|p| leaf(p)).collect();
@@ -1574,8 +1595,16 @@ impl App {
                     names.push(format!("… +{}", rows.len() - 8));
                 }
                 self.ask_title = format!("{}  —  {}", line.label, names.join(", "));
+                if line.id == "delete" {
+                    self.ask_title =
+                        format!("{}  {}", self.ask_title, self.say("This cannot be undone."));
+                }
                 self.ask_yes = self
-                    .say(if line.id == "trash" { "Move" } else { "Open" })
+                    .say(match line.id.as_str() {
+                        "trash" => "Move",
+                        "delete" => "Delete",
+                        _ => "Open",
+                    })
                     .into_owned();
                 self.ask_typing = false;
                 self.pending = Some((line.id.clone(), rows));
@@ -1601,6 +1630,25 @@ impl App {
         };
         self.panel = Panel::None;
         self.dirty = true;
+        // A place to send to rather than a program to open with.
+        if let Some(to) = id.strip_prefix("send:") {
+            let rows = self.menu_rows();
+            let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+            self.note = match scour_sendto::send(to, &paths) {
+                Ok(scour_sendto::Sent::Linked(_)) => {
+                    self.say("a link is on the desktop").into_owned()
+                }
+                Ok(scour_sendto::Sent::Handed) => self.say("handed over").into_owned(),
+                Ok(scour_sendto::Sent::Packing(at)) => self
+                    .say("packing into {path}")
+                    .replace("{path}", &at.to_string_lossy()),
+                Ok(scour_sendto::Sent::Copying(at)) => self
+                    .say("copying to {path}")
+                    .replace("{path}", &at.to_string_lossy()),
+                Err(e) => self.say(e.msgid()).into_owned(),
+            };
+            return Want::Nothing;
+        }
         let Some(path) = self.here().map(|h| h.path.clone()) else {
             return Want::Nothing;
         };
@@ -1647,6 +1695,23 @@ impl App {
                 launch(p);
             }
             return Want::Nothing;
+        }
+        if what == "delete" {
+            let mut gone = 0usize;
+            let mut refused: Option<String> = None;
+            for p in &paths {
+                match scour_trash::erase(std::path::Path::new(p)) {
+                    Ok(()) => gone += 1,
+                    Err(e) => {
+                        refused.get_or_insert_with(|| e.to_string());
+                    }
+                }
+            }
+            self.note = match refused {
+                Some(why) => why,
+                None => self.say("{n} deleted").replace("{n}", &gone.to_string()),
+            };
+            return Want::Recheck(paths);
         }
         // The move is this process's. The service is only told to look again.
         let mut gone = 0usize;

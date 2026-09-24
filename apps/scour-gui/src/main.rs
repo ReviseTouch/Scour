@@ -1621,11 +1621,13 @@ fn main() -> Result<()> {
 
             match id.as_str() {
                 "open" => open(&path),
-                "folder" => open(&folder(&path)),
+                // The row itself, selected in its folder: opening the folder
+                // alone did nothing to one already open, and showed nothing.
+                "folder" => scour_openers::reveal(&[std::path::Path::new(&path)]),
                 "folders" => {
-                    for dir in folders_of(&picks.borrow()) {
-                        open(&dir);
-                    }
+                    let paths: Vec<&std::path::Path> =
+                        chosen.iter().map(std::path::Path::new).collect();
+                    scour_openers::reveal(&paths);
                 }
                 "clear" => {
                     picks.borrow_mut().clear();
@@ -1718,6 +1720,35 @@ fn main() -> Result<()> {
                     w.set_menu_open(true);
                 }
 
+                "send" => {
+                    // The menu becomes the places, as it becomes the programs
+                    // for "Open with…"; a drive's name is its own.
+                    let found = scour_sendto::targets();
+                    if found.is_empty() {
+                        say(&w, t(&cat_now, "nowhere to send to on this machine"));
+                        return;
+                    }
+                    let model: Vec<MenuItem> = found
+                        .iter()
+                        .map(|o| MenuItem {
+                            id: format!("send:{}", o.id).into(),
+                            label: if o.named {
+                                o.label.as_str().into()
+                            } else {
+                                t(&cat_now, &o.label)
+                            },
+                            key: "".into(),
+                            rule: false,
+                            careful: false,
+                            heavy: false,
+                            on: false,
+                            off: false,
+                        })
+                        .collect();
+                    w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+                    w.set_menu_open(true);
+                }
+
                 "rename" => {
                     let was = leaf(&path);
                     w.set_ask_title(t(&cat_now, "Rename…"));
@@ -1731,13 +1762,15 @@ fn main() -> Result<()> {
                 }
 
                 // The two that ask first; everything above happens on the press.
-                "trash" | "open-all" => {
+                "trash" | "open-all" | "delete" => {
+                    let many = chosen.len() > 1;
                     let title = t(
                         &cat_now,
-                        if id == "trash" {
-                            "Move to trash"
-                        } else {
-                            "Open all {n}…"
+                        match (id.as_str(), many) {
+                            ("trash", _) => "Move to trash",
+                            ("delete", false) => "Delete permanently…",
+                            ("delete", true) => "Delete {n} permanently…",
+                            _ => "Open all {n}…",
                         },
                     )
                     .replace("{n}", &grouped(chosen.len() as u64));
@@ -1746,15 +1779,44 @@ fn main() -> Result<()> {
                     if chosen.len() > 8 {
                         body.push(format!("… +{}", grouped((chosen.len() - 8) as u64)));
                     }
+                    // Said before the names: nothing brings these back.
+                    if id == "delete" {
+                        body.insert(0, t(&cat_now, "This cannot be undone.").to_string());
+                    }
                     w.set_ask_title(title.into());
                     w.set_ask_body(body.join("\n").into());
-                    w.set_ask_yes(t(&cat_now, if id == "trash" { "Move" } else { "Open" }));
+                    w.set_ask_yes(t(
+                        &cat_now,
+                        match id.as_str() {
+                            "trash" => "Move",
+                            "delete" => "Delete",
+                            _ => "Open",
+                        },
+                    ));
                     w.set_ask_no(t(&cat_now, "Cancel"));
                     w.set_ask_typing(false);
                     *pending.borrow_mut() = Some((id.to_string(), chosen));
                     w.set_ask_open(true);
                 }
 
+                other if other.starts_with("send:") => {
+                    let paths: Vec<&std::path::Path> =
+                        chosen.iter().map(std::path::Path::new).collect();
+                    let said = match scour_sendto::send(&other["send:".len()..], &paths) {
+                        Ok(scour_sendto::Sent::Linked(_)) => {
+                            t(&cat_now, "a link is on the desktop")
+                        }
+                        Ok(scour_sendto::Sent::Handed) => t(&cat_now, "handed over"),
+                        Ok(scour_sendto::Sent::Packing(at)) => t(&cat_now, "packing into {path}")
+                            .replace("{path}", &at.to_string_lossy())
+                            .into(),
+                        Ok(scour_sendto::Sent::Copying(at)) => t(&cat_now, "copying to {path}")
+                            .replace("{path}", &at.to_string_lossy())
+                            .into(),
+                        Err(e) => t(&cat_now, e.msgid()),
+                    };
+                    say(&w, said);
+                }
                 other if other.starts_with("open-with:") => {
                     let wanted = &other["open-with:".len()..];
                     let name = leaf(&path);
@@ -1818,6 +1880,28 @@ fn main() -> Result<()> {
                 for p in &paths {
                     open(p);
                 }
+                return;
+            }
+            if what == "delete" {
+                let mut gone = 0usize;
+                let mut refused: Option<String> = None;
+                for p in &paths {
+                    match scour_trash::erase(std::path::Path::new(p)) {
+                        Ok(()) => gone += 1,
+                        Err(e) => {
+                            refused.get_or_insert_with(|| e.to_string());
+                        }
+                    }
+                }
+                recheck(&addr, paths);
+                w.set_hint(match refused {
+                    Some(why) => why.into(),
+                    None => t(&cat_now, "{n} deleted")
+                        .replace("{n}", &grouped(gone as u64))
+                        .into(),
+                });
+                let query = state.borrow().query.clone();
+                w.invoke_query_changed(query.into());
                 return;
             }
             // The move is this process's; the service is only told to look again.

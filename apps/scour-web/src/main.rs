@@ -290,6 +290,9 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     // Reading is `GET`, doing is `POST`: an `<img src>` must not open a file.
     let acting = req.path == "/api/open"
         || req.path == "/api/trash"
+        || req.path == "/api/delete"
+        || req.path == "/api/reveal"
+        || req.path == "/api/send"
         || req.path == "/api/rename"
         || req.path == "/api/open-with"
         || req.path == "/api/face"
@@ -358,6 +361,12 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/open" if doing.launch => api_open(&mut stream, client, &req, doing.run),
         "/api/open" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
         "/api/trash" => api_trash(&mut stream, client, &req),
+        "/api/delete" => api_delete(&mut stream, client, &req),
+        "/api/reveal" if doing.launch => api_reveal(&mut stream, client, &req),
+        "/api/reveal" => http::fail(&mut stream, "403 Forbidden", "opening is off (--no-launch)"),
+        "/api/send-targets" => api_send_targets(&mut stream),
+        "/api/send" if doing.launch => api_send(&mut stream, client, &req),
+        "/api/send" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
         "/api/rename" => api_rename(&mut stream, client, &req),
         "/api/openers" => api_openers(&mut stream, client, &req),
         "/api/open-with" if doing.launch => api_open_with(&mut stream, client, &req),
@@ -1194,6 +1203,115 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     );
 }
 
+/// The paths a request names, one a line, kept only where the index knows
+/// them: the fence every endpoint that changes the disk stands behind.
+fn fenced(client: &Mutex<Link>, raw: &str) -> (Vec<String>, Vec<String>) {
+    let mut known = Vec::new();
+    let mut refused = Vec::new();
+    for path in raw.split('\n').filter(|p| !p.is_empty()) {
+        if matches!(
+            call(
+                client,
+                Request::Stat {
+                    path: path.to_owned()
+                }
+            ),
+            Ok(Response::Stat(_))
+        ) {
+            known.push(path.to_owned());
+        } else {
+            refused.push(format!("{path}: not in the index"));
+        }
+    }
+    (known, refused)
+}
+
+/// Remove for good. The page asked first; this only does it, and tells the
+/// service to look again as the trash does.
+fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no paths");
+        return;
+    };
+    let (known, mut refused) = fenced(client, raw);
+    let mut gone = 0usize;
+    for path in &known {
+        match scour_trash::erase(std::path::Path::new(path)) {
+            Ok(()) => gone += 1,
+            Err(e) => refused.push(format!("{path}: {e}")),
+        }
+    }
+    if !known.is_empty() {
+        let _ = call(client, Request::Recheck { paths: known });
+    }
+    http::json(
+        stream,
+        &serde_json::json!({ "gone": gone, "refused": refused }),
+    );
+}
+
+/// Show these in the file manager, each selected in its folder.
+fn api_reveal(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+        http::fail(stream, "400 Bad Request", "no paths");
+        return;
+    };
+    let (known, refused) = fenced(client, raw);
+    let paths: Vec<&std::path::Path> = known.iter().map(std::path::Path::new).collect();
+    scour_openers::reveal(&paths);
+    http::json(
+        stream,
+        &serde_json::json!({ "shown": known.len(), "refused": refused }),
+    );
+}
+
+/// Where a selection can be sent on this machine now.
+fn api_send_targets(stream: &mut TcpStream) {
+    let targets: Vec<serde_json::Value> = scour_sendto::targets()
+        .into_iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "label": t.label,
+                "named": t.named,
+                "files_only": t.files_only,
+            })
+        })
+        .collect();
+    http::json(stream, &serde_json::json!({ "targets": targets }));
+}
+
+/// Send what the index knows of these to one of the places above.
+fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let (Some(raw), Some(to)) = (
+        req.param("paths").filter(|p| !p.is_empty()),
+        req.param("to").filter(|t| !t.is_empty()),
+    ) else {
+        http::fail(stream, "400 Bad Request", "no paths or no target");
+        return;
+    };
+    let (known, refused) = fenced(client, raw);
+    if known.is_empty() {
+        http::json(stream, &serde_json::json!({ "error": refused.join("\n") }));
+        return;
+    }
+    let paths: Vec<&std::path::Path> = known.iter().map(std::path::Path::new).collect();
+    let answer = match scour_sendto::send(to, &paths) {
+        Ok(scour_sendto::Sent::Linked(at)) => {
+            serde_json::json!({ "sent": "linked", "at": at.first().map(|p| p.to_string_lossy()) })
+        }
+        Ok(scour_sendto::Sent::Handed) => serde_json::json!({ "sent": "handed" }),
+        Ok(scour_sendto::Sent::Packing(at)) => {
+            serde_json::json!({ "sent": "packing", "at": at.to_string_lossy() })
+        }
+        Ok(scour_sendto::Sent::Copying(at)) => {
+            serde_json::json!({ "sent": "copying", "at": at.to_string_lossy() })
+        }
+        Err(e) => serde_json::json!({ "error": e.msgid(), "detail": e.to_string() }),
+    };
+    http::json(stream, &answer);
+}
+
 /// Open a path, or the folder holding it. The index is the fence: the service
 /// is asked first, so this cannot be pointed at `/etc/shadow`. An executable
 /// is run unless `--no-run`.
@@ -1244,12 +1362,23 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
         return;
     }
 
-    let want_folder = req.param("what") == Some("folder") || entry.is_dir;
+    // "Its folder" is the folder with this one selected in it: opening the
+    // folder alone did nothing when it was already open, and showed nothing.
+    if req.param("what") == Some("folder") {
+        scour_openers::reveal(&[p]);
+        http::json(
+            stream,
+            &serde_json::json!({ "opened": p.parent().unwrap_or(p).to_string_lossy() }),
+        );
+        return;
+    }
+    // A directory opened is that directory.
+    let want_folder = entry.is_dir;
     // Asked of the entry, not the disk: every file on an `ntfs3` mount with
     // `fmask=0022` is 0755, so the mode bit alone would try to run a PDF.
     let runnable = !want_folder && scour_core::runs_when_opened(entry.name(), entry.meta.mode);
     let run = runnable && may_run;
-    let target = if want_folder || (runnable && !run) {
+    let target = if runnable && !run {
         p.parent().unwrap_or(p).to_path_buf()
     } else {
         p.to_path_buf()

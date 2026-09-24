@@ -47,6 +47,7 @@ scour-trash   = { workspace = true }
 scour-name    = { workspace = true }
 # Which programs claim a kind of file, for `Open with…`.
 scour-openers = { workspace = true }
+scour-sendto  = { workspace = true }
 # The reader and the writer of the desktop's thumbnail cache have to be the
 # same lines; see `icons`. Dependency-free for the same reason `scour-preview`
 # is — where a picture lives is a question about a desktop, not about an index.

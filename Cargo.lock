@@ -5107,6 +5107,7 @@ dependencies = [
  "scour-preview",
  "scour-proto",
  "scour-query",
+ "scour-sendto",
  "scour-settings",
  "scour-thumbs",
  "scour-trash",
@@ -5252,6 +5253,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-sendto"
+version = "0.2.0-alpha.3"
+
+[[package]]
 name = "scour-settings"
 version = "0.2.0-alpha.3"
 dependencies = [
@@ -5310,6 +5315,7 @@ dependencies = [
  "scour-preview",
  "scour-proto",
  "scour-query",
+ "scour-sendto",
  "scour-settings",
  "scour-thumbs",
  "scour-trash",
@@ -5348,6 +5354,7 @@ dependencies = [
  "scour-openers",
  "scour-preview",
  "scour-proto",
+ "scour-sendto",
  "scour-thumbs",
  "scour-trash",
  "scour-ui",

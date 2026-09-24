@@ -1,8 +1,9 @@
 //! What the right-click menu offers, in one table every face reads, so three
 //! menus cannot drift apart — as [`COLUMNS`](crate::COLUMNS) does not.
 //!
-//! Everything here is safe to press: [`Weight::Careful`] items are reversible,
-//! and permanent deletion is not in the table — it needs a held modifier.
+//! Everything here is safe to press but one: [`Weight::Careful`] items are
+//! reversible, and permanent deletion — which is not — says so in its name,
+//! asks first, and stands behind the trash so a hand reaches the trash first.
 
 /// How dangerous an item is: the only thing a face renders differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +174,15 @@ pub const ITEMS: &[Item] = &[
         when: When::File,
         except: &[crate::faces::Face::Page],
     },
+    Item {
+        id: "send",
+        msgid: "Send to…",
+        key: "",
+        group: 2,
+        weight: Weight::Plain,
+        when: When::One,
+        except: &[],
+    },
     // ---- one row: change it ----------------------------------------------
     Item {
         id: "rename",
@@ -187,6 +197,15 @@ pub const ITEMS: &[Item] = &[
         id: "trash",
         msgid: "Move to trash",
         key: "Delete",
+        group: 3,
+        weight: Weight::Careful,
+        when: When::One,
+        except: &[],
+    },
+    Item {
+        id: "delete",
+        msgid: "Delete permanently…",
+        key: "Shift+Delete",
         group: 3,
         weight: Weight::Careful,
         when: When::One,
@@ -249,6 +268,15 @@ pub const ITEMS: &[Item] = &[
         except: &[crate::faces::Face::Page],
     },
     Item {
+        id: "send",
+        msgid: "Send {n} to…",
+        key: "",
+        group: 1,
+        weight: Weight::Plain,
+        when: When::Many,
+        except: &[],
+    },
+    Item {
         id: "csv",
         msgid: "Export as CSV…",
         key: "",
@@ -261,6 +289,15 @@ pub const ITEMS: &[Item] = &[
         id: "trash",
         msgid: "Move {n} to trash",
         key: "Delete",
+        group: 2,
+        weight: Weight::Careful,
+        when: When::Many,
+        except: &[],
+    },
+    Item {
+        id: "delete",
+        msgid: "Delete {n} permanently…",
+        key: "Shift+Delete",
         group: 2,
         weight: Weight::Careful,
         when: When::Many,
@@ -306,16 +343,30 @@ pub fn rule_before(previous: Option<&Item>, item: &Item) -> bool {
 mod tests {
     use super::*;
 
-    /// The rule the table exists to keep.
+    /// The rule the table exists to keep: one item cannot be undone, and it
+    /// says so, asks first, and stands right behind the trash for each shape.
     #[test]
-    fn nothing_in_the_menu_is_irreversible() {
-        for item in ITEMS {
+    fn the_one_irreversible_item_says_so_asks_first_and_follows_the_trash() {
+        for (at, item) in ITEMS.iter().enumerate() {
+            let permanent = item.msgid.to_lowercase().contains("permanent");
+            assert_eq!(item.id == "delete", permanent, "{}", item.msgid);
+            if item.id != "delete" {
+                continue;
+            }
             assert!(
-                item.id != "delete" && !item.msgid.to_lowercase().contains("permanent"),
-                "{} is in the menu and cannot be undone",
-                item.id
+                item.msgid.ends_with('…'),
+                "{} does not ask first",
+                item.msgid
+            );
+            assert_eq!(item.weight, Weight::Careful);
+            let before = &ITEMS[at - 1];
+            assert!(
+                before.id == "trash" && before.when == item.when && before.group == item.group,
+                "{} does not stand behind the trash",
+                item.msgid
             );
         }
+        assert_eq!(ITEMS.iter().filter(|i| i.id == "delete").count(), 2);
         // The one thing that changes the disk says where it went.
         let trash: Vec<_> = ITEMS.iter().filter(|i| i.id == "trash").collect();
         assert_eq!(trash.len(), 2, "one for a row, one for a selection");
