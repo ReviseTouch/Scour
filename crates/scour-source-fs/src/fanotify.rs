@@ -189,6 +189,48 @@ fn dir_key(at: &std::path::Path) -> Option<DirKey> {
     })
 }
 
+/// Every directory under `top`, top included, as the map records one: its key,
+/// its parent's key and its path. Pruned by the rules the map's own walk prunes
+/// by, and following no link, so the two agree on what a path is.
+fn directories_under(top: &str, rules: &Rules) -> Vec<(DirKey, Option<DirKey>, String)> {
+    use std::os::unix::fs::MetadataExt;
+    let key = |m: &std::fs::Metadata| DirKey {
+        dev: m.dev(),
+        ino: m.ino(),
+    };
+    let start = path::to_path(top);
+    let Ok(md) = std::fs::symlink_metadata(&start) else {
+        return Vec::new();
+    };
+    if !md.is_dir() || rules.excludes_path(top) {
+        return Vec::new();
+    }
+    let mut out = vec![(key(&md), start.parent().and_then(dir_key), top.to_owned())];
+    let mut stack = vec![(start, key(&md))];
+    while let Some((dir, at)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let p = e.path();
+            let text = path::from_path(&p);
+            if rules.excludes_path(&text) {
+                continue;
+            }
+            // `DirEntry::metadata` does not follow a link, and a link is no directory here.
+            let Ok(m) = e.metadata() else {
+                continue;
+            };
+            out.push((key(&m), Some(at), text));
+            stack.push((p, key(&m)));
+        }
+    }
+    out
+}
+
 /// The inode number a file handle carries, by filesystem — undocumented layouts,
 /// read anyway because `open_by_handle_at` needs a capability this process does
 /// not hold. `(type, length)` distinguishes them: tmpfs and ntfs3 both report type 1.
@@ -811,9 +853,34 @@ impl WatchHandle for FanWatch {
         self.uncovered.lock().map(|v| v.clone()).unwrap_or_default()
     }
 
-    /// Nothing to do, and that is the point of this backend: a filesystem mark covers
-    /// the superblock, so a directory created a moment ago is already watched.
-    fn cover(&self, _path: &str) {}
+    /// The mark already covers a directory created a moment ago; the map does not
+    /// know it. A tree made in a burst — `mkdir -p`, an archive opened, a clone —
+    /// reached the map as its top directory alone: the events naming the ones inside
+    /// were read before the top was learned, and dropped. Everything that happened
+    /// in those directories afterwards was dropped as well, until a walk of the
+    /// whole source: 73,759 rows in a day here, found by the daily check. So every
+    /// directory under a subtree about to be walked is learned first, by a walk of
+    /// its own under no lock.
+    fn cover(&self, path: &str) {
+        let Some(rules) = SUBS.lock().ok().and_then(|subs| {
+            subs.iter()
+                .find(|s| s.id == self.id)
+                .map(|s| Arc::clone(&s.rules))
+        }) else {
+            return;
+        };
+        let found = directories_under(path, &rules);
+        if found.is_empty() {
+            return;
+        }
+        if let Ok(mut subs) = SUBS.lock()
+            && let Some(s) = subs.iter_mut().find(|s| s.id == self.id)
+        {
+            for (key, parent, at) in &found {
+                s.map.insert_key(*key, *parent, at);
+            }
+        }
+    }
 
     /// Take the new rules, and rebuild the directory map behind them: the map is how
     /// an event gets a name, and a rule switched off re-opens a subtree it never heard
@@ -1129,6 +1196,46 @@ fn cover_mounts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_subtree_about_to_be_walked_is_learned_to_its_last_directory() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let top = tmp.path().join("t");
+        std::fs::create_dir_all(top.join("a/b/c")).expect("mkdir");
+        std::fs::create_dir_all(top.join("target/debug")).expect("mkdir");
+        std::fs::create_dir_all(tmp.path().join("elsewhere")).expect("mkdir");
+        std::fs::write(top.join("a/f.txt"), b"x").expect("write");
+        std::os::unix::fs::symlink(tmp.path().join("elsewhere"), top.join("a/link")).expect("link");
+        let rules = Rules::from_options(&ScanOptions {
+            exclude_dirs: vec!["target".into()],
+            ..ScanOptions::default()
+        });
+        let top_text = path::from_path(&top);
+        let found = directories_under(&top_text, &rules);
+        let mut names: Vec<String> = found
+            .iter()
+            .map(|(_, _, p)| p.trim_start_matches(top_text.as_str()).to_owned())
+            .collect();
+        names.sort();
+        // The top, every level below it; not the file, the link or the excluded tree.
+        assert_eq!(names, ["", "/a", "/a/b", "/a/b/c"]);
+        // Each hangs under the directory above it, so the map can name it.
+        let key_of = |rel: &str| {
+            found
+                .iter()
+                .find(|(_, _, p)| p.trim_start_matches(top_text.as_str()) == rel)
+                .map(|(k, _, _)| *k)
+        };
+        let parent_of = |rel: &str| {
+            found
+                .iter()
+                .find(|(_, _, p)| p.trim_start_matches(top_text.as_str()) == rel)
+                .and_then(|(_, parent, _)| *parent)
+        };
+        assert_eq!(parent_of("/a/b/c"), key_of("/a/b"));
+        assert_eq!(parent_of("/a"), key_of(""));
+        assert_eq!(parent_of(""), dir_key(tmp.path()));
+    }
 
     #[test]
     fn a_mount_is_the_business_of_the_source_it_lands_in_and_only_while_it_is_there() {
