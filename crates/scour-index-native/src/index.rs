@@ -1145,15 +1145,18 @@ impl NativeIndex {
             fresh.extend(
                 (0..live.rows())
                     .filter(|&row| live.is_alive(row))
-                    .take(20 - fresh.len().min(20))
                     .map(|row| seg.path(row, seg.names.get(row).unwrap_or_default())),
             );
         }
-        for p in gone {
-            scour_core::note!("scourd: sweep gone {p}");
-        }
-        for p in fresh {
-            scour_core::note!("scourd: sweep fresh {p}");
+        // Where they are, counted, before which they are: tens of thousands of
+        // rows say little one at a time and a great deal by folder.
+        for (what, paths) in [("gone", gone), ("fresh", fresh.as_slice())] {
+            for (dir, n) in by_folder(paths).into_iter().take(15) {
+                scour_core::note!("scourd: sweep {what} {n} under {dir}");
+            }
+            for p in paths.iter().take(10) {
+                scour_core::note!("scourd: sweep {what} {p}");
+            }
         }
     }
 
@@ -1997,6 +2000,19 @@ fn sweep_orphans(dir: &Path, meta: &Meta) {
     }
 }
 
+/// How many of these paths sit under each folder six levels down, most first.
+fn by_folder(paths: &[String]) -> Vec<(String, usize)> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for p in paths {
+        let parent = p.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let folder: String = parent.split('/').take(7).collect::<Vec<_>>().join("/");
+        *counts.entry(folder).or_default() += 1;
+    }
+    let mut out: Vec<(String, usize)> = counts.into_iter().collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out
+}
+
 /// Close a scan's compaction cohort before ordinary changes resume, or every
 /// later watcher commit keeps the scan's stamp and compaction sees body and
 /// trickle as one group: four one-row commits rewrote a 100,000-row segment,
@@ -2259,7 +2275,6 @@ impl Index for NativeIndex {
                     if tracing {
                         gone_paths.extend(
                             out.iter()
-                                .take(20 - gone_paths.len().min(20))
                                 .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
                         );
                     }
@@ -3165,6 +3180,25 @@ mod tests {
             .expect("sweep");
         assert_eq!(index.fresh(generation), 2);
         assert_eq!(index.fresh(generation + 1), 0);
+    }
+
+    #[test]
+    fn traced_rows_are_counted_by_the_folder_six_levels_down() {
+        let paths: Vec<String> = [
+            "/home/u/.config/app/Cache/a/b/c/one",
+            "/home/u/.config/app/Cache/a/b/two",
+            "/home/u/.config/app/Cache/a/three",
+            "/home/u/notes.txt",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            by_folder(&paths),
+            [
+                ("/home/u/.config/app/Cache/a".to_owned(), 3),
+                ("/home/u".to_owned(), 1)
+            ]
+        );
     }
 
     /// Two persists at once — a client's flush and the service's own — each
