@@ -1056,82 +1056,132 @@ fn drain(fd: OwnedFd) {
             libc::read(raw, b.as_mut_ptr().cast(), b.len())
         });
 
-        let Ok(mut subs) = SUBS.lock() else { return };
+        if !window(&mut seen, lost, &mut dir) {
+            return;
+        }
+    }
+}
+
+/// One window's events: read and taught to the map under the lock, sent after it.
+/// False when the lock is poisoned, which ends the reader.
+fn window(seen: &mut Vec<Seen>, lost: bool, dir: &mut String) -> bool {
+    // **The lock is for the map, and nothing is sent while it is held.** A send
+    // waits while the engine's queue is full, and the engine's worker takes this
+    // lock to learn a subtree before walking it: the two waited on each other for
+    // good, and nothing was indexed again until a restart. So the window is read
+    // and the map taught under the lock, and what to look at is done after it.
+    let mut looks: Vec<Look> = Vec::new();
+    let mut rescans: Vec<(Arc<dyn ChangeSink>, String)> = Vec::new();
+    {
+        let Ok(mut subs) = SUBS.lock() else {
+            return false;
+        };
 
         if lost {
             // Nothing in the overflow record says what was missed, so the subtree is the
             // only unit available — for everyone, because the queue was shared.
             for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
                 for r in &s.roots {
-                    s.sink.emit(Change::Rescan {
-                        path: path::from_path(r),
-                    });
+                    rescans.push((Arc::clone(&s.sink), path::from_path(r)));
                 }
             }
-            continue;
-        }
-
-        // Distinct paths a subscriber, keeping "this might be new" if any event said so.
-        let mut batch: HashMap<(usize, String), (bool, bool, bool)> = HashMap::new();
-        // Directories whose names changed, looked at once each after their children.
-        let mut parents: std::collections::HashSet<(usize, String)> = Default::default();
-        for ev in seen.drain(..) {
-            // The subscriber that walked this directory owns the path. An event nobody
-            // recognises is **dropped, not escalated**: it is almost always another
-            // source's tree, and a rescan of every root would turn traffic into a storm.
-            let Some(i) = subs.iter().enumerate().find_map(|(i, s)| {
-                if !s.live.load(Ordering::Relaxed) {
-                    return None;
+        } else {
+            // Distinct paths a subscriber, keeping "this might be new" if any event said so.
+            let mut batch: HashMap<(usize, String), (bool, bool, bool)> = HashMap::new();
+            // Directories whose names changed, looked at once each after their children.
+            let mut parents: std::collections::HashSet<(usize, String)> = Default::default();
+            for ev in seen.drain(..) {
+                // The subscriber that walked this directory owns the path. An event nobody
+                // recognises is **dropped, not escalated**: it is almost always another
+                // source's tree, and a rescan of every root would turn traffic into a storm.
+                let Some(i) = subs.iter().enumerate().find_map(|(i, s)| {
+                    if !s.live.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    s.map.path_of(ev.parent_ino, dir).then_some(i)
+                }) else {
+                    continue;
+                };
+                let Some(full) = event_path(dir, &ev.name, &subs[i].roots) else {
+                    continue;
+                };
+                if subs[i].rules.excludes_path(&full) {
+                    continue;
                 }
-                s.map.path_of(ev.parent_ino, &mut dir).then_some(i)
-            }) else {
-                continue;
-            };
-            let Some(full) = event_path(&dir, &ev.name, &subs[i].roots) else {
-                continue;
-            };
-            if subs[i].rules.excludes_path(&full) {
-                continue;
+                // Its row's times moved with the name; a root has no row.
+                if ev.entries
+                    && ev.name != "."
+                    && let Some(own) = event_path(dir, ".", &subs[i].roots)
+                {
+                    parents.insert((i, own));
+                }
+                let e = batch.entry((i, full)).or_insert((false, false, false));
+                e.0 |= ev.fresh;
+                e.1 |= ev.is_dir;
+                e.2 |= ev.settled;
             }
-            // Its row's times moved with the name; a root has no row.
-            if ev.entries
-                && ev.name != "."
-                && let Some(own) = event_path(&dir, ".", &subs[i].roots)
-            {
-                parents.insert((i, own));
-            }
-            let e = batch.entry((i, full)).or_insert((false, false, false));
-            e.0 |= ev.fresh;
-            e.1 |= ev.is_dir;
-            e.2 |= ev.settled;
-        }
 
-        // A directory that also spoke for itself is looked at with its own event.
-        parents.retain(|k| !batch.contains_key(k) && !subs[k.0].rules.excludes_path(&k.1));
+            // A directory that also spoke for itself is looked at with its own event.
+            parents.retain(|k| !batch.contains_key(k) && !subs[k.0].rules.excludes_path(&k.1));
 
-        for ((i, full), (fresh, is_dir, settled)) in batch {
-            let s = &mut subs[i];
-            if fresh && is_dir {
-                s.map.learn(&full);
+            for ((i, full), (fresh, is_dir, settled)) in batch {
+                let s = &mut subs[i];
+                if fresh && is_dir {
+                    s.map.learn(&full);
+                }
+                looks.push(Look {
+                    sink: Arc::clone(&s.sink),
+                    id: s.id,
+                    real_modes: s.real_modes,
+                    path: full,
+                    fresh,
+                    settled: Some(settled),
+                });
             }
-            let md = crate::watch::look(s.id, s.real_modes, &full, fresh, s.sink.as_ref());
-            // A write through a mapping produces no event, so a path that has just spoken
-            // is worth another look — unless the kernel has said the content is final.
-            if settled {
-                crate::revisit::forget(&full);
-            } else {
-                crate::revisit::note(&full, s.id, s.real_modes, &s.sink, md.as_ref());
-            }
-        }
 
-        // One `stat` a directory a window, for its times: a folder sorted by date
-        // stayed where it was when its last child came or went, until a walk —
-        // most of the rows a reconciling walk found changed were directories.
-        for (i, dir) in parents {
-            let s = &subs[i];
-            crate::watch::look(s.id, s.real_modes, &dir, false, s.sink.as_ref());
+            // One `stat` a directory a window, for its times: a folder sorted by date
+            // stayed where it was when its last child came or went, until a walk —
+            // most of the rows a reconciling walk found changed were directories.
+            for (i, dir) in parents {
+                let s = &subs[i];
+                looks.push(Look {
+                    sink: Arc::clone(&s.sink),
+                    id: s.id,
+                    real_modes: s.real_modes,
+                    path: dir,
+                    fresh: false,
+                    settled: None,
+                });
+            }
         }
     }
+
+    for (sink, at) in rescans {
+        sink.emit(Change::Rescan { path: at });
+    }
+    for l in looks {
+        let md = crate::watch::look(l.id, l.real_modes, &l.path, l.fresh, l.sink.as_ref());
+        // A write through a mapping produces no event, so a path that has just spoken
+        // is worth another look — unless the kernel has said the content is final.
+        match l.settled {
+            Some(true) => crate::revisit::forget(&l.path),
+            Some(false) => crate::revisit::note(&l.path, l.id, l.real_modes, &l.sink, md.as_ref()),
+            None => {}
+        }
+    }
+    true
+}
+
+/// One path a window has to look at, carried out of the lock with what looking needs.
+/// `settled` is whether the kernel said the content is final; `None` for a
+/// directory looked at only for its times.
+struct Look {
+    sink: Arc<dyn ChangeSink>,
+    id: SourceId,
+    real_modes: bool,
+    path: String,
+    fresh: bool,
+    settled: Option<bool>,
 }
 
 /// A filesystem that appeared after the marks were set.
@@ -1145,20 +1195,25 @@ fn drain(fd: OwnedFd) {
 /// `/efi` when something read it left all three unwatched until a restart, and
 /// each was walked whole whenever its write counter moved — every minute.
 fn note_mounts(fresh: &[String], gone: &[String]) {
-    let Ok(subs) = SUBS.lock() else { return };
-    for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
-        let fresh: Vec<String> = fresh
-            .iter()
-            .filter(|at| !s.rules.excludes_path(at))
-            .cloned()
-            .collect();
-        let look = match s.uncovered.lock() {
-            Ok(mut u) => cover_mounts(&mut u, &s.roots, &fresh, gone),
-            Err(_) => continue,
-        };
-        for at in look {
-            s.sink.emit(Change::Rescan { path: at });
+    // Sent after the lock, as the reader's window is: see there.
+    let mut rescans: Vec<(Arc<dyn ChangeSink>, String)> = Vec::new();
+    {
+        let Ok(subs) = SUBS.lock() else { return };
+        for s in subs.iter().filter(|s| s.live.load(Ordering::Relaxed)) {
+            let fresh: Vec<String> = fresh
+                .iter()
+                .filter(|at| !s.rules.excludes_path(at))
+                .cloned()
+                .collect();
+            let look = match s.uncovered.lock() {
+                Ok(mut u) => cover_mounts(&mut u, &s.roots, &fresh, gone),
+                Err(_) => continue,
+            };
+            rescans.extend(look.into_iter().map(|at| (Arc::clone(&s.sink), at)));
         }
+    }
+    for (sink, at) in rescans {
+        sink.emit(Change::Rescan { path: at });
     }
 }
 
@@ -1196,6 +1251,71 @@ fn cover_mounts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What stopped indexing for good: a send under the lock waited on a full
+    /// queue that the worker could not drain while it waited for the lock. Every
+    /// send a window makes, an overflow's included, must find the lock free.
+    #[test]
+    fn a_window_sends_nothing_while_it_holds_the_lock() {
+        #[derive(Debug, Default)]
+        struct Probe {
+            sent: std::sync::atomic::AtomicUsize,
+            locked: std::sync::atomic::AtomicUsize,
+        }
+        impl ChangeSink for Probe {
+            fn emit(&self, _change: Change) {
+                self.sent.fetch_add(1, Ordering::Relaxed);
+                if SUBS.try_lock().is_err() {
+                    self.locked.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("kok");
+        std::fs::create_dir_all(root.join("yeni")).expect("mkdir");
+        std::fs::write(root.join("f.txt"), b"x").expect("write");
+        let id = SourceId(4242);
+        let probe = Arc::new(Probe::default());
+        let mut map = DirMap::default();
+        let md = std::fs::symlink_metadata(&root).expect("stat");
+        map.insert(&md, None, &path::from_path(&root));
+        {
+            use std::os::unix::fs::MetadataExt;
+            let ino = md.ino();
+            SUBS.lock().expect("subs").push(Sub {
+                id,
+                real_modes: true,
+                rules: Arc::new(Rules::from_options(&ScanOptions::default())),
+                sink: probe.clone(),
+                roots: vec![root.clone()],
+                map,
+                threads: 1,
+                live: Arc::new(AtomicBool::new(true)),
+                uncovered: Arc::default(),
+            });
+            let event = |name: &str, fresh: bool, is_dir: bool| Seen {
+                parent_ino: ino,
+                name: name.into(),
+                fresh,
+                is_dir,
+                entries: fresh,
+                settled: true,
+            };
+            let mut seen = vec![event("f.txt", false, false), event("yeni", true, true)];
+            let mut dir = String::new();
+            assert!(window(&mut seen, false, &mut dir));
+            assert!(window(&mut Vec::new(), true, &mut dir), "an overflow");
+        }
+        SUBS.lock().expect("subs").retain(|s| s.id != id);
+        // A file, a new directory and its walk, and the overflow's walk of the root.
+        assert!(probe.sent.load(Ordering::Relaxed) >= 4);
+        assert_eq!(
+            probe.locked.load(Ordering::Relaxed),
+            0,
+            "sent with the lock held"
+        );
+    }
 
     #[test]
     fn a_subtree_about_to_be_walked_is_learned_to_its_last_directory() {
