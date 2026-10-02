@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.5" date="2026-10-02" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.5</url>
+      <description>
+        <p>Changes inside a folder tree made all at once — an archive unpacked, a repository cloned, packages installed — are seen as they happen, instead of at the next daily check.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.4" date="2026-09-24" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.4</url>
       <description>
