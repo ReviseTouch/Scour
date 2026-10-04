@@ -1,0 +1,26 @@
+# Scour's settings. Copy this to %APPDATA%\scour\config.toml,
+# or run:  scourd.exe --config config.toml
+#
+# `roots` is what gets indexed. Write paths with their drive letter.
+
+[[source]]
+name  = "documents"
+kind  = "local"
+roots = ['C:\Users\YOU\Documents', 'C:\Users\YOU\Downloads']
+watch = true
+
+# A whole drive works too; the first scan takes a while.
+# [[source]]
+# name  = "d-drive"
+# kind  = "local"
+# roots = ['D:\']
+# watch = true
+
+[scan]
+hidden          = true
+follow_symlinks = false
+threads         = 0      # 0 = chosen to suit the disk
+
+[exclude]
+dirs  = ["node_modules", "target", ".git", "$RECYCLE.BIN", "System Volume Information"]
+files = []

@@ -25,7 +25,7 @@ done
 for f in BENIOKU.txt README.txt; do
     sed "s/@VERSION@/$version/g" "$here/packaging/windows/$f" > "$stage/$f"
 done
-install -m644 "$here/packaging/windows/config-ornek.toml" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
+install -m644 "$here/packaging/windows/config-example.toml" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
 rm -f "$dist/$name.zip"
 ( cd "$dist" && zip -q -r "$name.zip" "$name" )
 rm -rf "$stage"

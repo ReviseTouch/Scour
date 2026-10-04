@@ -8,7 +8,7 @@ searched, the query language answered. Not tested beyond that.
 No installer, nothing written to the registry, no Visual C++ Redistributable
 needed (statically linked).
 
-1) Open config-ornek.toml, put your own folders in `roots`, save it as
+1) Open config-example.toml, put your own folders in `roots`, save it as
    config.toml in this folder.
 2) In a command prompt:   scourd.exe --config config.toml   (leave it open)
 3) In another:            scour.exe report      scour.exe *.pdf

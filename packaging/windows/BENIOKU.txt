@@ -11,7 +11,7 @@ Visual C++ Redistributable GEREKMİYOR (statik bağlandı).
 
 BAŞLARKEN
 ---------
-1) config-ornek.toml'u aç, `roots` satırını kendi klasörlerinle değiştir.
+1) config-example.toml'u aç, `roots` satırını kendi klasörlerinle değiştir.
    config.toml adıyla kaydet; bu klasörde bıraksan yeter.
 
 2) Bir komut istemi aç, bu klasöre gel ve servisi başlat:
