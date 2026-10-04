@@ -24,13 +24,16 @@ fi
 # `SCOUR_APP_GOTO` is a question from another face, already encoded:
 # `q=…&tab=report`. The page reads it once it has its settings.
 GOTO="${SCOUR_APP_GOTO:-}"
+# Only this account's: on a shared machine another person's window on the same
+# port would read as this one's, and its command line holds their token.
+me=$(id -u)
 
-if pgrep -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
-    && pgrep -f -- "--app=http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+if pgrep -u "$me" -f -- "scour-web --port $PORT" >/dev/null 2>&1 \
+    && pgrep -u "$me" -f -- "--app=http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
     # Running already: a question gets a window of its own onto the same bridge,
     # whose address and token are on the running window's command line.
     if [[ -n $GOTO ]]; then
-        line=$(pgrep -af -- "--app=http://127.0.0.1:$PORT/" | head -1)
+        line=$(pgrep -u "$me" -af -- "--app=http://127.0.0.1:$PORT/" | head -1)
         running=$(printf '%s' "$line" | grep -oE -- "--app=http://127.0.0.1:$PORT/[^ ]*" | head -1 | cut -d= -f2-)
         bin=$(printf '%s' "$line" | awk '{print $2}')
         if [[ -n $running && -x $bin ]]; then
@@ -47,12 +50,12 @@ holder=$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -
 if [[ -n $holder ]] && tr '\0' ' ' < "/proc/$holder/cmdline" 2>/dev/null | grep -q 'scour-web'; then
     kill "$holder" 2>/dev/null || true
 fi
-pkill -f -- "scour-web --port $PORT" 2>/dev/null || true
+pkill -u "$me" -f -- "scour-web --port $PORT" 2>/dev/null || true
 
 # And the window that bridge belonged to: a profile has one owner, so a window
 # whose process outlives it makes the next launch a stack of error dialogs.
 # The pattern is this port's app URL, narrower than `--class=scour` on purpose.
-pkill -f -- "--app=http://127.0.0.1:$PORT/" 2>/dev/null || true
+pkill -u "$me" -f -- "--app=http://127.0.0.1:$PORT/" 2>/dev/null || true
 # Chromium lets go of the profile as it goes; starting before it has is the
 # same failure by a shorter route.
 sleep 0.4

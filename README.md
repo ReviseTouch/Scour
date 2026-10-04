@@ -384,8 +384,9 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the file-kind taxonomy:
 Scour makes no network connections and sends nothing anywhere. The service
 listens on a socket in your runtime directory. The browser bridge listens on
 127.0.0.1 only, answers nothing without a token made fresh each run, refuses
-a request whose `Origin` or `Host` is not its own, and serves its page under a
-policy that runs no script but the page's. Nothing is deleted without asking:
+a request whose `Origin` or `Host` is not its own or, on Linux, that comes from
+another account's process, and serves its page under a policy that runs no
+script but the page's. Nothing is deleted without asking:
 the menus move files to the desktop's trash, and "Delete permanently" asks
 first. The MCP server's tools only read.
 

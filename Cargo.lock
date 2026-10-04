@@ -5342,6 +5342,7 @@ version = "0.2.0-alpha.5"
 dependencies = [
  "anyhow",
  "clap",
+ "libc",
  "scour-chart",
  "scour-config",
  "scour-core",

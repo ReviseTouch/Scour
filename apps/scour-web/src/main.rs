@@ -2,12 +2,14 @@
 //!
 //! Behind this port is an index of every file the user owns: 127.0.0.1 only
 //! with no flag to change it, a per-run token without which every route is
-//! 403, an `Origin` that must be ours, and `POST` for everything that acts.
+//! 403, an `Origin` and a `Host` that must be ours, a peer that must be this
+//! account's process, and `POST` for everything that acts.
 
 mod dupes;
 mod hotkey;
 mod http;
 mod icons;
+mod peer;
 
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -288,6 +290,15 @@ struct Doing {
 static QUICKLOOK: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
 
 fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, doing: Doing) {
+    // Another account's process, holding a token it read off a command line.
+    static ME: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    if let (Ok(peer), Ok(local)) = (stream.peer_addr(), stream.local_addr())
+        && let Some(theirs) = peer::owner(peer, local)
+        && Some(theirs) != *ME.get_or_init(peer::me)
+    {
+        http::fail(&mut stream, "403 Forbidden", "another account's connection");
+        return;
+    }
     let Some(req) = http::read_request(&stream) else {
         return;
     };
