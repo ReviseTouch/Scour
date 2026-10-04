@@ -40,31 +40,37 @@ const MAX_HEAD: usize = 16 * 1024;
 
 /// And how much of a body. The same bound and the same reason.
 ///
-/// [`scour_thumbs::Maker::BATCH`] paths at the longest a filesystem allows.
-const MAX_BODY: usize = 192 * 1024;
+/// A selection is sent whole, as one JSON array: ten thousand paths of four
+/// hundred bytes. Past it the request is refused, never acted on in part.
+const MAX_BODY: usize = 4 * 1024 * 1024;
 
 pub fn read_request(stream: &TcpStream) -> Option<Req> {
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
-    let mut line = String::new();
-    let mut read = 0usize;
+    parse(BufReader::new(stream.try_clone().ok()?))
+}
 
-    reader
-        .by_ref()
-        .take(MAX_HEAD as u64)
-        .read_line(&mut line)
-        .ok()?;
-    read += line.len();
+/// A request off a reader. `None` for anything past [`MAX_HEAD`] or
+/// [`MAX_BODY`]: refused, not cut — a cut header line read on as if whole, and
+/// a cut body is a JSON array of paths with its end missing.
+fn parse(mut reader: impl BufRead) -> Option<Req> {
+    let mut read = 0usize;
+    // Each line out of what is left of the ceiling, so one long line cannot
+    // grow the buffer past it; a line that hits the ceiling has no newline.
+    let mut line_of = |reader: &mut dyn BufRead| -> Option<String> {
+        let room = MAX_HEAD.checked_sub(read).filter(|r| *r > 0)?;
+        let mut line = String::new();
+        reader.take(room as u64).read_line(&mut line).ok()?;
+        read += line.len();
+        line.ends_with('\n').then_some(line)
+    };
+
+    let line = line_of(&mut reader)?;
     let mut parts = line.split_whitespace();
     let method = parts.next()?.to_owned();
     let target = parts.next()?.to_owned();
 
     let mut headers = HashMap::new();
     loop {
-        let mut h = String::new();
-        if read >= MAX_HEAD || reader.read_line(&mut h).ok()? == 0 {
-            break;
-        }
-        read += h.len();
+        let h = line_of(&mut reader)?;
         let h = h.trim_end();
         if h.is_empty() {
             break;
@@ -78,8 +84,10 @@ pub fn read_request(stream: &TcpStream) -> Option<Req> {
     let length = headers
         .get("content-length")
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(MAX_BODY);
+        .unwrap_or(0);
+    if length > MAX_BODY {
+        return None;
+    }
     let mut body = vec![0u8; length];
     if length > 0 && reader.read_exact(&mut body).is_err() {
         return None;
@@ -246,5 +254,38 @@ mod tests {
         // here once ended the connection's thread.
         assert_eq!(percent_decode("%aé"), "%aé");
         assert_eq!(percent_decode("%é"), "%é");
+    }
+
+    fn parsed(raw: &str) -> Option<Req> {
+        parse(std::io::Cursor::new(raw.as_bytes().to_vec()))
+    }
+
+    #[test]
+    fn a_request_past_the_ceilings_is_refused_not_cut() {
+        let ok =
+            parsed("GET /api/status?t=x HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n").expect("ordinary");
+        assert_eq!(
+            (ok.method.as_str(), ok.path.as_str()),
+            ("GET", "/api/status")
+        );
+        assert_eq!(ok.header("host"), Some("127.0.0.1:1"));
+
+        // One header of 20,000 bytes: past 16 KiB, and was answered 200.
+        let long = format!("GET / HTTP/1.1\r\nX-Test: {}\r\n\r\n", "x".repeat(20_000));
+        assert!(parsed(&long).is_none());
+        // Many short ones adding up to the same.
+        let many = format!("GET / HTTP/1.1\r\n{}\r\n", "X-A: b\r\n".repeat(3_000));
+        assert!(parsed(&many).is_none());
+        // A request line with no end in sight.
+        assert!(parsed(&format!("GET /{} HTTP/1.1", "a".repeat(20_000))).is_none());
+
+        let body = |n: usize| {
+            format!(
+                "POST / HTTP/1.1\r\nContent-Length: {n}\r\n\r\n{}",
+                "[".repeat(n)
+            )
+        };
+        assert_eq!(parsed(&body(10)).map(|r| r.body.len()), Some(10));
+        assert!(parsed(&body(MAX_BODY + 1)).is_none());
     }
 }
