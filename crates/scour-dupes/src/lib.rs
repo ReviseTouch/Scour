@@ -163,8 +163,10 @@ where
     for (size, mut paths) in pending {
         paths.sort();
         // Out of budget: a real size collision and a real possible saving, but
-        // it goes into the answer saying it is unconfirmed.
-        if read >= opts.read_budget {
+        // it goes into the answer saying it is unconfirmed. Asked before the
+        // reading, not after: a budget is what may be read, not where to stop.
+        let ends = paths.len() as u64 * size.min(2 * EDGE);
+        if read.saturating_add(ends) > opts.read_budget {
             unconfirmed += 1;
             out.push(Group {
                 size,
@@ -196,24 +198,24 @@ where
                 continue;
             }
             same.sort();
-            // Stage three: the bytes against the first of the group — a
-            // comparison and not a digest, since this decides a deletion.
-            if read >= opts.read_budget {
+            // Stage three: the bytes, a comparison and not a digest, since this
+            // decides a deletion. Each class of identical files is its own group.
+            let (classes, left, n) = partition(&same, size, opts.read_budget.saturating_sub(read));
+            read += n;
+            for class in classes.into_iter().filter(|c| c.len() > 1) {
+                out.push(Group {
+                    size,
+                    paths: class,
+                    certainty: Certainty::Content,
+                });
+            }
+            // What the budget did not reach still shares a size and its ends.
+            if left.len() > 1 {
                 unconfirmed += 1;
                 out.push(Group {
                     size,
-                    paths: same,
+                    paths: left,
                     certainty: Certainty::Edges,
-                });
-                continue;
-            }
-            let (confirmed, n) = confirm(&same, size);
-            read += n;
-            if confirmed.len() > 1 {
-                out.push(Group {
-                    size,
-                    paths: confirmed,
-                    certainty: Certainty::Content,
                 });
             }
         }
@@ -264,22 +266,41 @@ fn edges(path: &Path, size: u64) -> std::io::Result<(u64, u64)> {
     Ok((h.finish(), moved))
 }
 
-/// Which of these really are the first one, byte for byte. Against `paths[0]`
-/// and not pairwise: equality is transitive, and pairwise reads are quadratic.
-fn confirm(paths: &[String], size: u64) -> (Vec<String>, u64) {
-    let mut same = vec![paths[0].clone()];
+/// These, sorted into classes that are identical byte for byte, and how much
+/// was read. Each file is held against one member of each class found so far:
+/// equality is transitive, so that is enough — but only against the first of
+/// them all, `a b b` lost the two that matched each other. Stops before a
+/// comparison the budget cannot pay for (two whole files); what it had not
+/// reached comes back as the second list.
+fn partition(paths: &[String], size: u64, budget: u64) -> (Vec<Vec<String>>, Vec<String>, u64) {
+    let mut classes: Vec<Vec<String>> = Vec::new();
     let mut read = 0u64;
-    for other in &paths[1..] {
-        match identical(Path::new(&paths[0]), Path::new(other)) {
-            Ok(true) => {
-                same.push(other.clone());
-                read += size * 2;
+    for (at, path) in paths.iter().enumerate() {
+        let mut placed = false;
+        for class in &mut classes {
+            if read.saturating_add(size * 2) > budget {
+                return (classes, paths[at..].to_vec(), read);
             }
-            Ok(false) => read += size, // Parted early; a whole file's worth over-estimates.
-            Err(_) => {}
+            match identical(Path::new(&class[0]), Path::new(path)) {
+                Ok(true) => {
+                    read += size * 2;
+                    class.push(path.clone());
+                    placed = true;
+                    break;
+                }
+                Ok(false) => read += size, // Parted early; a whole file's worth over-estimates.
+                // Unreadable: no class, and no new one either.
+                Err(_) => {
+                    placed = true;
+                    break;
+                }
+            }
+        }
+        if !placed {
+            classes.push(vec![path.clone()]);
         }
     }
-    (same, read)
+    (classes, Vec::new(), read)
 }
 
 /// Which file a name is, where the platform can say: the device and the inode.
@@ -438,6 +459,66 @@ mod tests {
         );
         assert!(r.groups.is_empty(), "{:?}", r.groups);
         assert_eq!(r.read, 0);
+    }
+
+    /// Same ends, three files, the first unlike the other two. Held only
+    /// against the first, B and C were never compared and the pair was lost.
+    fn abc(d: &Dir) -> Vec<(String, u64)> {
+        let body = |mid: u8| {
+            let mut v = vec![b'X'; 4096];
+            v.extend(vec![mid; 16_384]);
+            v.extend(vec![b'Z'; 4096]);
+            v
+        };
+        vec![
+            d.file("dup_a.bin", &body(b'A')),
+            d.file("dup_b.bin", &body(b'B')),
+            d.file("dup_c.bin", &body(b'B')),
+        ]
+    }
+
+    #[test]
+    fn two_that_match_each_other_are_found_behind_one_that_matches_neither() {
+        let d = Dir::new("abc");
+        let files = abc(&d);
+        let r = find(files.clone(), &opts(20_000));
+        assert_eq!(r.groups.len(), 1, "{:?}", r.groups);
+        assert_eq!(
+            r.groups[0].paths,
+            vec![files[1].0.clone(), files[2].0.clone()]
+        );
+        assert_eq!(r.groups[0].certainty, Certainty::Content);
+        assert_eq!(r.waste, 24_576);
+    }
+
+    /// A budget is what may be read, asked before reading: one byte reads
+    /// nothing, rather than a whole size group's ends.
+    #[test]
+    fn a_budget_smaller_than_the_next_read_reads_nothing_more() {
+        let d = Dir::new("budget");
+        let r = find(
+            abc(&d),
+            &Options {
+                min_size: 20_000,
+                read_budget: 1,
+                top: 100,
+            },
+        );
+        assert_eq!(r.read, 0);
+        assert_eq!(r.unconfirmed, 1);
+        assert_eq!(r.groups[0].certainty, Certainty::Size);
+
+        // Enough for the ends and not for one comparison: ends, unconfirmed.
+        let r = find(
+            abc(&d),
+            &Options {
+                min_size: 20_000,
+                read_budget: 3 * 2 * EDGE,
+                top: 100,
+            },
+        );
+        assert!(r.read <= 3 * 2 * EDGE, "read {}", r.read);
+        assert_eq!(r.groups[0].certainty, Certainty::Edges);
     }
 
     /// Same size, same edges, different in the middle — an in-place edit.
