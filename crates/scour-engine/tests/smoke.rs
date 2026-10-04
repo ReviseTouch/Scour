@@ -318,14 +318,23 @@ impl scour_core::Index for Fragile {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> scour_core::Result<u64> {
-        if self
-            .sweep_failures
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_ok()
-        {
-            return Err(Error::Io {
-                detail: "injected sweep failure".into(),
-            });
+        // Not `fetch_update`: deprecated on newer compilers, and the name it
+        // became is newer than the MSRV.
+        let mut left = self.sweep_failures.load(Ordering::Relaxed);
+        while left > 0 {
+            match self.sweep_failures.compare_exchange_weak(
+                left,
+                left - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Err(Error::Io {
+                        detail: "injected sweep failure".into(),
+                    });
+                }
+                Err(now) => left = now,
+            }
         }
         self.inner.sweep(source, under, generation, spare)
     }

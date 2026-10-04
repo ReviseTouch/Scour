@@ -162,12 +162,13 @@ impl Prefix {
         // Taken out for the pass, which records deaths into `self` as it goes.
         let mut seen = std::mem::take(&mut self.seen);
         for (at, (was, now)) in seen
-            .chunks_exact(8)
-            .zip(seg.alive.chunks_exact(8))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(seg.alive.as_chunks::<8>().0)
             .enumerate()
         {
-            let word = |b: &[u8]| u64::from_le_bytes(b.try_into().unwrap_or([0; 8]));
-            let mut died = word(was) & !word(now);
+            let mut died = u64::from_le_bytes(*was) & !u64::from_le_bytes(*now);
             while died != 0 {
                 let row = at * 64 + died.trailing_zeros() as usize;
                 died &= died - 1;

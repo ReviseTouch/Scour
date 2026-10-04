@@ -1,8 +1,8 @@
 //! What this machine offers for a kind of file, including whether the starred
 //! choice is the one `xdg-mime query default` names.
 //!
-//!     cargo run -p scour-openers --example probe
-//!     cargo run -p scour-openers --example probe -- text/markdown image/png
+//!     cargo run -p scour-openers --example openers
+//!     cargo run -p scour-openers --example openers -- text/markdown image/png
 
 fn main() {
     let asked: Vec<String> = std::env::args().skip(1).collect();
