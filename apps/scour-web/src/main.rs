@@ -1132,7 +1132,7 @@ fn api_open_with(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) 
         .into_iter()
         .find(|o| o.id == id)
     {
-        Some(chosen) => match scour_openers::launch(&chosen, std::path::Path::new(path)) {
+        Some(chosen) => match scour_openers::launch(&chosen, &scour_core::path::to_path(path)) {
             Ok(()) => http::json(stream, &serde_json::json!({ "started": chosen.name })),
             Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
         },
@@ -1163,9 +1163,9 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         http::fail(stream, "404 Not Found", "not in the index");
         return;
     }
-    match scour_name::rename(std::path::Path::new(&path), name) {
+    match scour_name::rename(&scour_core::path::to_path(path), name) {
         Ok(now) => {
-            let now = now.to_string_lossy().into_owned();
+            let now = scour_core::path::from_path(&now);
             // Both ends: the old path is gone and the new one has appeared.
             let _ = call(
                 client,
@@ -1201,7 +1201,7 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
             refused.push(format!("{path}: not in the index"));
             continue;
         }
-        match scour_trash::trash(std::path::Path::new(path)) {
+        match scour_trash::trash(&scour_core::path::to_path(path)) {
             Ok(_) => gone.push(path.clone()),
             Err(e) => refused.push(format!("{path}: {e}")),
         }
@@ -1263,7 +1263,7 @@ fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let (known, mut refused) = fenced(client, &asked);
     let mut gone = 0usize;
     for path in &known {
-        match scour_trash::erase(std::path::Path::new(path)) {
+        match scour_trash::erase(&scour_core::path::to_path(path)) {
             Ok(()) => gone += 1,
             Err(e) => refused.push(format!("{path}: {e}")),
         }
@@ -1285,7 +1285,9 @@ fn api_reveal(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         return;
     }
     let (known, refused) = fenced(client, &asked);
-    let paths: Vec<&std::path::Path> = known.iter().map(std::path::Path::new).collect();
+    let native: Vec<std::path::PathBuf> =
+        known.iter().map(|p| scour_core::path::to_path(p)).collect();
+    let paths: Vec<&std::path::Path> = native.iter().map(std::path::PathBuf::as_path).collect();
     scour_openers::reveal(&paths);
     http::json(
         stream,
@@ -1324,7 +1326,9 @@ fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         http::json(stream, &serde_json::json!({ "error": refused.join("\n") }));
         return;
     }
-    let paths: Vec<&std::path::Path> = known.iter().map(std::path::Path::new).collect();
+    let native: Vec<std::path::PathBuf> =
+        known.iter().map(|p| scour_core::path::to_path(p)).collect();
+    let paths: Vec<&std::path::Path> = native.iter().map(std::path::PathBuf::as_path).collect();
     let answer = match scour_sendto::send(to, &paths) {
         Ok(scour_sendto::Sent::Linked(at)) => {
             serde_json::json!({ "sent": "linked", "at": at.first().map(|p| p.to_string_lossy()) })
@@ -1368,7 +1372,8 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
         }
     };
 
-    let p = std::path::Path::new(&entry.path);
+    let native = scour_core::path::to_path(&entry.path);
+    let p = native.as_path();
 
     // The desktop's own quick-look: a viewer rather than the handler the
     // extension names, which is why it is its own verb rather than a heuristic.
@@ -1474,7 +1479,8 @@ fn api_preview(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         }
     };
 
-    let p = std::path::Path::new(&entry.path);
+    let native = scour_core::path::to_path(&entry.path);
+    let p = native.as_path();
     let shape = scour_preview::shape_of(p, entry.is_dir);
 
     // The probe: a page must not learn a file is unshowable by fetching four

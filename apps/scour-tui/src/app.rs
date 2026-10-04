@@ -163,7 +163,7 @@ pub enum Want {
 /// standard stream closed.
 fn launch(path: &str) {
     let _ = std::process::Command::new("xdg-open")
-        .arg(path)
+        .arg(scour_core::path::to_path(path))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -982,7 +982,7 @@ impl App {
                 folders.dedup();
                 for folder in &folders {
                     let _ = std::process::Command::new("xdg-open")
-                        .arg(folder)
+                        .arg(scour_core::path::to_path(folder))
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -1454,11 +1454,14 @@ impl App {
             // The row itself, selected in its folder: opening the folder alone
             // did nothing to one already open, and showed nothing.
             "folder" => {
-                scour_openers::reveal(&[std::path::Path::new(&first)]);
+                scour_openers::reveal(&[scour_core::path::to_path(&first).as_path()]);
                 Want::Nothing
             }
             "folders" => {
-                let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+                let native: Vec<std::path::PathBuf> =
+                    rows.iter().map(|p| scour_core::path::to_path(p)).collect();
+                let paths: Vec<&std::path::Path> =
+                    native.iter().map(std::path::PathBuf::as_path).collect();
                 scour_openers::reveal(&paths);
                 Want::Nothing
             }
@@ -1514,7 +1517,10 @@ impl App {
                 Want::Nothing
             }
             "copy-file" => {
-                let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+                let native: Vec<std::path::PathBuf> =
+                    rows.iter().map(|p| scour_core::path::to_path(p)).collect();
+                let paths: Vec<&std::path::Path> =
+                    native.iter().map(std::path::PathBuf::as_path).collect();
                 self.note = match scour_clip::files(&paths) {
                     Ok(()) => self.say("path copied").into_owned(),
                     Err(e) => e.to_string(),
@@ -1647,7 +1653,10 @@ impl App {
         // A place to send to rather than a program to open with.
         if let Some(to) = id.strip_prefix("send:") {
             let rows = self.menu_rows();
-            let paths: Vec<&std::path::Path> = rows.iter().map(std::path::Path::new).collect();
+            let native: Vec<std::path::PathBuf> =
+                rows.iter().map(|p| scour_core::path::to_path(p)).collect();
+            let paths: Vec<&std::path::Path> =
+                native.iter().map(std::path::PathBuf::as_path).collect();
             self.note = match scour_sendto::send(to, &paths) {
                 Ok(scour_sendto::Sent::Linked(_)) => {
                     self.say("a link is on the desktop").into_owned()
@@ -1671,7 +1680,7 @@ impl App {
         if let Some(chosen) = scour_openers::openers(mime)
             .into_iter()
             .find(|o| o.id == id)
-            && let Err(e) = scour_openers::launch(&chosen, std::path::Path::new(&path))
+            && let Err(e) = scour_openers::launch(&chosen, &scour_core::path::to_path(&path))
         {
             self.note = e.to_string();
         }
@@ -1696,8 +1705,8 @@ impl App {
             let Some(from) = paths.first() else {
                 return Want::Nothing;
             };
-            return match scour_name::rename(std::path::Path::new(from), &typing) {
-                Ok(now) => Want::Recheck(vec![from.clone(), now.to_string_lossy().into_owned()]),
+            return match scour_name::rename(&scour_core::path::to_path(from), &typing) {
+                Ok(now) => Want::Recheck(vec![from.clone(), scour_core::path::from_path(&now)]),
                 Err(why) => {
                     self.note = self.say(why.msgid()).into_owned();
                     Want::Nothing
@@ -1714,7 +1723,7 @@ impl App {
             let mut gone = 0usize;
             let mut refused: Option<String> = None;
             for p in &paths {
-                match scour_trash::erase(std::path::Path::new(p)) {
+                match scour_trash::erase(&scour_core::path::to_path(p)) {
                     Ok(()) => gone += 1,
                     Err(e) => {
                         refused.get_or_insert_with(|| e.to_string());
@@ -1731,7 +1740,7 @@ impl App {
         let mut gone = 0usize;
         let mut refused: Option<String> = None;
         for p in &paths {
-            match scour_trash::trash(std::path::Path::new(p)) {
+            match scour_trash::trash(&scour_core::path::to_path(p)) {
                 Ok(_) => gone += 1,
                 Err(e) => {
                     refused.get_or_insert_with(|| e.to_string());

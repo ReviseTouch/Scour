@@ -1680,10 +1680,14 @@ fn main() -> Result<()> {
                 "open" => open(&path),
                 // The row itself, selected in its folder: opening the folder
                 // alone did nothing to one already open, and showed nothing.
-                "folder" => scour_openers::reveal(&[std::path::Path::new(&path)]),
+                "folder" => scour_openers::reveal(&[scour_core::path::to_path(&path).as_path()]),
                 "folders" => {
+                    let native: Vec<std::path::PathBuf> = chosen
+                        .iter()
+                        .map(|p| scour_core::path::to_path(p))
+                        .collect();
                     let paths: Vec<&std::path::Path> =
-                        chosen.iter().map(std::path::Path::new).collect();
+                        native.iter().map(std::path::PathBuf::as_path).collect();
                     scour_openers::reveal(&paths);
                 }
                 "clear" => {
@@ -1736,8 +1740,12 @@ fn main() -> Result<()> {
                     }
                 }
                 "copy-file" => {
+                    let native: Vec<std::path::PathBuf> = chosen
+                        .iter()
+                        .map(|p| scour_core::path::to_path(p))
+                        .collect();
                     let paths: Vec<&std::path::Path> =
-                        chosen.iter().map(std::path::Path::new).collect();
+                        native.iter().map(std::path::PathBuf::as_path).collect();
                     match scour_clip::files(&paths) {
                         Ok(()) => say(&w, t(&cat_now, "path copied")),
                         Err(e) => say(&w, format!("{e}").into()),
@@ -1872,8 +1880,12 @@ fn main() -> Result<()> {
                 }
 
                 other if other.starts_with("send:") => {
+                    let native: Vec<std::path::PathBuf> = chosen
+                        .iter()
+                        .map(|p| scour_core::path::to_path(p))
+                        .collect();
                     let paths: Vec<&std::path::Path> =
-                        chosen.iter().map(std::path::Path::new).collect();
+                        native.iter().map(std::path::PathBuf::as_path).collect();
                     let said = match scour_sendto::send(&other["send:".len()..], &paths) {
                         Ok(scour_sendto::Sent::Linked(_)) => {
                             t(&cat_now, "a link is on the desktop")
@@ -1899,7 +1911,7 @@ fn main() -> Result<()> {
                     {
                         Some(chosen) => {
                             if let Err(e) =
-                                scour_openers::launch(&chosen, std::path::Path::new(&path))
+                                scour_openers::launch(&chosen, &scour_core::path::to_path(&path))
                             {
                                 say(&w, format!("{e}").into());
                             }
@@ -1934,13 +1946,10 @@ fn main() -> Result<()> {
             if what == "rename" {
                 let Some(from) = paths.first() else { return };
                 let asked = w.get_ask_text().to_string();
-                match scour_name::rename(std::path::Path::new(from), &asked) {
+                match scour_name::rename(&scour_core::path::to_path(from), &asked) {
                     Ok(now) => {
                         // Both ends: one path is gone, the other has appeared.
-                        recheck(
-                            &addr,
-                            vec![from.clone(), now.to_string_lossy().into_owned()],
-                        );
+                        recheck(&addr, vec![from.clone(), scour_core::path::from_path(&now)]);
                         let query = state.borrow().query.clone();
                         w.invoke_query_changed(query.into());
                     }
@@ -1958,7 +1967,7 @@ fn main() -> Result<()> {
                 let mut gone = 0usize;
                 let mut refused: Option<String> = None;
                 for p in &paths {
-                    match scour_trash::erase(std::path::Path::new(p)) {
+                    match scour_trash::erase(&scour_core::path::to_path(p)) {
                         Ok(()) => gone += 1,
                         Err(e) => {
                             refused.get_or_insert_with(|| e.to_string());
@@ -1980,7 +1989,7 @@ fn main() -> Result<()> {
             let mut gone = 0usize;
             let mut refused: Option<String> = None;
             for p in &paths {
-                match scour_trash::trash(std::path::Path::new(p)) {
+                match scour_trash::trash(&scour_core::path::to_path(p)) {
                     Ok(_) => gone += 1,
                     Err(e) => {
                         refused.get_or_insert_with(|| e.to_string());
@@ -4006,7 +4015,9 @@ fn open(path: &str) {
     let cmd = "open";
     #[cfg(windows)]
     let cmd = "explorer";
-    let _ = std::process::Command::new(cmd).arg(path).spawn();
+    let _ = std::process::Command::new(cmd)
+        .arg(scour_core::path::to_path(path))
+        .spawn();
 }
 
 /// Write every string the window shows. It runs again when a language is picked.

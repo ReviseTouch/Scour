@@ -255,7 +255,7 @@ fn run(
         Request::Preview { path } => {
             let entry = engine.stat(&path)?;
             Response::Preview(scour_preview::look_at(
-                std::path::Path::new(&entry.path),
+                &scour_core::path::to_path(&entry.path),
                 entry.is_dir,
             ))
         }

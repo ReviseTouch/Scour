@@ -4,6 +4,9 @@
 //! No I/O, no search engine, no platform named. If an implementation crate
 //! needs another implementation crate, the abstraction it needs belongs here.
 
+/// Index paths and the operating system's, both ways: a name that is not
+/// UTF-8 is carried in a private-use range and must be decoded to be opened.
+pub mod path;
 pub mod text;
 pub mod traits;
 pub mod types;

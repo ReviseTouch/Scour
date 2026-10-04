@@ -1394,6 +1394,9 @@ msgstr "bu adda bir şey zaten var"
 msgid "that is the name it already has"
 msgstr "zaten bu adı taşıyor"
 
+msgid "the file could not be renamed"
+msgstr "dosya yeniden adlandırılamadı"
+
 # The button on the rename question. The menu item ends in an ellipsis because
 # it opens a question; the button does not, because it does the thing.
 msgid "Rename"

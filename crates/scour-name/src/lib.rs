@@ -26,6 +26,8 @@ pub enum Refusal {
     Taken,
     /// The same name it already has.
     Unchanged,
+    /// The filesystem said no, for a reason other than the name being taken.
+    Failed,
 }
 
 impl Refusal {
@@ -40,6 +42,7 @@ impl Refusal {
             Refusal::TooLong => "that name is too long",
             Refusal::Taken => "something is already called that",
             Refusal::Unchanged => "that is the name it already has",
+            Refusal::Failed => "the file could not be renamed",
         }
     }
 }
@@ -95,7 +98,8 @@ pub fn rename(path: &Path, new_name: &str) -> Result<PathBuf, Refusal> {
         Ok(()) => Ok(to),
         // Somebody won the race between the check above and this line.
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(Refusal::Taken),
-        Err(_) => Err(Refusal::Taken),
+        // Not "taken": a name that is free was being reported as used.
+        Err(_) => Err(Refusal::Failed),
     }
 }
 
