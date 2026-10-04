@@ -106,7 +106,7 @@ struct Args {
     #[arg(long)]
     no_launch: bool,
     /// Open the folder of an executable rather than running it. The default
-    /// is to run it: anyone holding the token can start any binary it can see.
+    /// is to run it once the page has asked and been told yes.
     #[arg(long)]
     no_run: bool,
     /// The command that opens the desktop's own quick-look, if the detected
@@ -1339,7 +1339,8 @@ fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Open a path, or the folder holding it. The index is the fence: the service
 /// is asked first, so this cannot be pointed at `/etc/shadow`. An executable
-/// is run unless `--no-run`.
+/// is run unless `--no-run`, and only once the page has asked and been told
+/// yes: a double-click in a downloaded folder must not start what it lands on.
 fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1403,6 +1404,10 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     // `fmask=0022` is 0755, so the mode bit alone would try to run a PDF.
     let runnable = !want_folder && scour_core::runs_when_opened(entry.name(), entry.meta.mode);
     let run = runnable && may_run;
+    if run && req.param("run") != Some("yes") {
+        http::json(stream, &serde_json::json!({ "ask_run": entry.name() }));
+        return;
+    }
     let target = if runnable && !run {
         p.parent().unwrap_or(p).to_path_buf()
     } else {

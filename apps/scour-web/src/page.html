@@ -4285,14 +4285,23 @@
   /* A browser cannot open a local file, so the bridge asks the desktop. Both
    * fences are the bridge's — the path must be one the index holds, and
    * anything runnable has its folder revealed instead. */
-  async function launch(path, what) {
+  async function launch(path, what, yes) {
     // Opening a result belongs in the history even without an Enter.
     remember(q.value);
     try {
       const q = new URLSearchParams({ path, what: what || "file", t: TOKEN });
+      if (yes) q.set("run", "yes");
       const r = await fetch(`/api/open?${q}`, { method: "POST" });
       const j = await r.json();
       if (j.error) { flash(j.error); return; }
+      /* A program: asked, as a file manager asks, before it is started. */
+      if (j.ask_run) {
+        if (confirm(T("Run {name}?", { name: j.ask_run }) + "\n\n" +
+                    T("This file is a program. Opening it starts it."))) {
+          launch(path, what, true);
+        }
+        return;
+      }
       if (j.ran) flash(T("Started {name}", { name: j.ran }));
       else if (j.folder_instead) flash(T("It runs when opened — its folder was opened instead"));
     } catch (e) { flash(T("could not open: {why}", { why: e.message || e })); }

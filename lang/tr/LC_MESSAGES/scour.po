@@ -673,6 +673,12 @@ msgstr "açılamadı: {why}"
 msgid "Started {name}"
 msgstr "{name} çalıştırıldı"
 
+msgid "Run {name}?"
+msgstr "{name} çalıştırılsın mı?"
+
+msgid "This file is a program. Opening it starts it."
+msgstr "Bu dosya bir program. Açmak onu çalıştırır."
+
 msgid "It runs when opened — its folder was opened instead"
 msgstr "Açılınca çalışan bir dosya — onun yerine klasörü açıldı"
 
