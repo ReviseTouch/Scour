@@ -4745,8 +4745,12 @@
         const said = many
           ? T("Delete {n} permanently…", { n: fmt(picked.length) })
           : T("Delete permanently…");
-        if (!confirm(said + "\n" + T("This cannot be undone.") + "\n\n" +
-                     picked.slice(0, 8).join("\n") + (picked.length > 8 ? "\n…" : ""))) return;
+        /* A folder's path reads like a file's; this one takes its tree with it. */
+        const isDir = (x) => !!(SEL.get(x) || (x === p ? row : null) || {}).is_dir;
+        const trees = picked.some(isDir) ? "\n" + T("Folders go with everything in them.") : "";
+        const named = picked.slice(0, 8).map((x) => (isDir(x) ? x + "/" : x));
+        if (!confirm(said + "\n" + T("This cannot be undone.") + trees + "\n\n" +
+                     named.join("\n") + (picked.length > 8 ? "\n…" : ""))) return;
         try {
           const r = await SERVICE.erase(picked);
           for (const x of picked) SEL.delete(x);

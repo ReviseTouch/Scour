@@ -1588,9 +1588,16 @@ impl App {
             }
 
             "trash" | "open-all" | "delete" => {
+                // A folder's name reads like a file's; it takes its tree with it.
+                // Asked of the disk: a pick remembers its size and not its kind.
+                let dir = |p: &String| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
                 // Eight names and then how many are left: a list that runs off
                 // the panel is one nobody read before pressing yes.
-                let mut names: Vec<String> = rows.iter().take(8).map(|p| leaf(p)).collect();
+                let mut names: Vec<String> = rows
+                    .iter()
+                    .take(8)
+                    .map(|p| if dir(p) { leaf(p) + "/" } else { leaf(p) })
+                    .collect();
                 if rows.len() > 8 {
                     names.push(format!("… +{}", rows.len() - 8));
                 }
@@ -1598,6 +1605,13 @@ impl App {
                 if line.id == "delete" {
                     self.ask_title =
                         format!("{}  {}", self.ask_title, self.say("This cannot be undone."));
+                    if rows.iter().any(dir) {
+                        self.ask_title = format!(
+                            "{}  {}",
+                            self.ask_title,
+                            self.say("Folders go with everything in them.")
+                        );
+                    }
                 }
                 self.ask_yes = self
                     .say(match line.id.as_str() {

@@ -1827,13 +1827,28 @@ fn main() -> Result<()> {
                         },
                     )
                     .replace("{n}", &grouped(chosen.len() as u64));
+                    // A folder's name reads like a file's; it takes its tree with it.
+                    let dir = |p: &String| {
+                        (*p == path && is_dir)
+                            || picks.borrow().values().any(|k| k.path == *p && k.is_dir)
+                    };
                     // Eight names and a count: a longer list is one nobody reads.
-                    let mut body: Vec<String> = chosen.iter().take(8).map(|p| leaf(p)).collect();
+                    let mut body: Vec<String> = chosen
+                        .iter()
+                        .take(8)
+                        .map(|p| if dir(p) { leaf(p) + "/" } else { leaf(p) })
+                        .collect();
                     if chosen.len() > 8 {
                         body.push(format!("… +{}", grouped((chosen.len() - 8) as u64)));
                     }
                     // Said before the names: nothing brings these back.
                     if id == "delete" {
+                        if chosen.iter().any(dir) {
+                            body.insert(
+                                0,
+                                t(&cat_now, "Folders go with everything in them.").to_string(),
+                            );
+                        }
                         body.insert(0, t(&cat_now, "This cannot be undone.").to_string());
                     }
                     w.set_ask_title(title.into());

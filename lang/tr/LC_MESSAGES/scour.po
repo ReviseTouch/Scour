@@ -1756,6 +1756,9 @@ msgstr "{n} öğeyi kalıcı olarak sil…"
 msgid "This cannot be undone."
 msgstr "Bu geri alınamaz."
 
+msgid "Folders go with everything in them."
+msgstr "Klasörler içindeki her şeyle birlikte gider."
+
 msgid "{n} deleted"
 msgstr "{n} öğe silindi"
 
