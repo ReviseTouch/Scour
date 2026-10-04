@@ -670,6 +670,12 @@ msgstr "kopyalanamadı"
 msgid "could not open: {why}"
 msgstr "açılamadı: {why}"
 
+msgid "Started {name}"
+msgstr "{name} çalıştırıldı"
+
+msgid "It runs when opened — its folder was opened instead"
+msgstr "Açılınca çalışan bir dosya — onun yerine klasörü açıldı"
+
 # --- the preview panel ---
 
 msgid "Preview"

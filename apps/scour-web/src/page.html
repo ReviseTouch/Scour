@@ -4293,7 +4293,8 @@
       const r = await fetch(`/api/open?${q}`, { method: "POST" });
       const j = await r.json();
       if (j.error) { flash(j.error); return; }
-      if (j.instead) flash(j.instead);
+      if (j.ran) flash(T("Started {name}", { name: j.ran }));
+      else if (j.folder_instead) flash(T("It runs when opened — its folder was opened instead"));
     } catch (e) { flash(T("could not open: {why}", { why: e.message || e })); }
   }
 

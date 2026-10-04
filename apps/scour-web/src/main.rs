@@ -1415,14 +1415,10 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
             stream,
             &serde_json::json!({
                 "opened": target.to_string_lossy(),
-                // Said, because nothing else on screen will say it was run.
-                "instead": if run {
-                    Some(format!("çalıştırıldı: {}", target.file_name().unwrap_or_default().to_string_lossy()))
-                } else if runnable {
-                    Some("bu dosya çalıştırılabilir — klasörü açıldı (--no-run)".to_string())
-                } else {
-                    None
-                },
+                // Said, because nothing else on screen will say it was run;
+                // the page words it, in the reader's language.
+                "ran": run.then(|| target.file_name().unwrap_or_default().to_string_lossy()),
+                "folder_instead": runnable && !run,
             }),
         ),
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),

@@ -162,7 +162,7 @@ fn expose_root(sb: &Sb) -> Option<String> {
     };
     if rc != 0 {
         eprintln!(
-            "scour-watch: {} icin subvolid=5 baglanamadi: {}",
+            "scour-watch: could not mount subvolid=5 of {}: {}",
             sb.source,
             err()
         );
@@ -212,14 +212,14 @@ fn mark(fd: libc::c_int, sb: &Sb) -> bool {
             sb.source,
             sb.fstype,
             if temp.is_some() {
-                "(superblock kokunden)"
+                "(through the superblock's root)"
             } else {
                 sb.at.as_str()
             }
         );
     } else {
         eprintln!(
-            "  ATLANDI      {:<14} {:<7} {}",
+            "  SKIPPED      {:<14} {:<7} {}",
             sb.source,
             sb.fstype,
             err()
@@ -464,7 +464,7 @@ pub(crate) fn main() -> ExitCode {
                 sb.fstype,
                 sb.at,
                 if sb.fstype == "btrfs" {
-                    "   (subvolid=5 gecici olarak baglanacak)"
+                    "   (subvolid=5 is mounted for a moment)"
                 } else {
                     ""
                 }
@@ -542,7 +542,7 @@ pub(crate) fn main() -> ExitCode {
     unsafe { libc::execvp(program.as_ptr(), argv_p.as_ptr()) };
 
     eprintln!(
-        "scour-watch: {} calistirilamadi: {}",
+        "scour-watch: could not run {}: {}",
         OsStr::from_bytes(command[0].as_bytes()).to_string_lossy(),
         err()
     );
