@@ -228,8 +228,8 @@ impl Scour {
     fn scour_duplicates(&self, Parameters(a): Parameters<DupeArgs>) -> Result<String, String> {
         self.call(Request::Duplicates {
             under: a.under,
-            min_size: a.min_mb.unwrap_or(1) * 1024 * 1024,
-            read_budget: a.budget_mb.unwrap_or(1024) * 1024 * 1024,
+            min_size: a.min_mb.unwrap_or(1).saturating_mul(1024 * 1024),
+            read_budget: a.budget_mb.unwrap_or(1024).saturating_mul(1024 * 1024),
             top: a.top.unwrap_or(20).min(200),
         })
     }

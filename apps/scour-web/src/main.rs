@@ -788,7 +788,10 @@ fn api_count(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// confirming reads disk, on a button.
 fn api_dupes(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let mb = |k: &str, d: u64| -> u64 {
-        req.param(k).and_then(|s| s.parse().ok()).unwrap_or(d) * 1024 * 1024
+        req.param(k)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(d)
+            .saturating_mul(1024 * 1024)
     };
     let request = Request::Duplicates {
         under: req.param("under").unwrap_or_default().to_owned(),

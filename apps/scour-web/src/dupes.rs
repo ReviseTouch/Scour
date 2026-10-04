@@ -21,7 +21,10 @@ const TIMED: usize = 600;
 /// 0 where the file is gone or sat past [`TIMED`].
 pub fn api_duplicates(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let mb = |k: &str, d: u64| -> u64 {
-        req.param(k).and_then(|s| s.parse().ok()).unwrap_or(d) * 1024 * 1024
+        req.param(k)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(d)
+            .saturating_mul(1024 * 1024)
     };
     let request = Request::Duplicates {
         under: req.param("under").unwrap_or_default().to_owned(),

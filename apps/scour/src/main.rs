@@ -460,8 +460,8 @@ fn build(args: &Args) -> Result<Request> {
             top,
         }) => Request::Duplicates {
             under: under.clone(),
-            min_size: min_mb * 1024 * 1024,
-            read_budget: budget_mb * 1024 * 1024,
+            min_size: min_mb.saturating_mul(1024 * 1024),
+            read_budget: budget_mb.saturating_mul(1024 * 1024),
             top: *top,
         },
         Some(Command::Du { path, top, query }) => Request::Usage {
