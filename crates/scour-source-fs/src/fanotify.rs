@@ -783,6 +783,32 @@ fn event_path(dir: &str, name: &str, roots: &[std::path::PathBuf]) -> Option<Str
 /// Take the descriptor the helper left, if it left one.
 /// Absent is the ordinary case and not an error: [`try_start`] returns `None`.
 fn inherited() -> Option<OwnedFd> {
+    let raw = handed()?;
+    // SAFETY: the descriptor is open — `fdinfo` for it was just read — and the
+    // environment variable is the helper's contract for handing over ownership,
+    // so nothing else in this process holds it.
+    Some(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+/// Close the helper's descriptor on every exec from here on. It crossed one
+/// exec to get here and must cross no other: a thumbnailer started on a
+/// downloaded file would otherwise read every name created on the disk.
+/// Called first thing, since a service that watches nothing never takes it.
+pub fn keep_from_children() {
+    if let Some(raw) = handed() {
+        // SAFETY: `handed` checked that the descriptor is open; only its flags change.
+        unsafe {
+            let f = libc::fcntl(raw, libc::F_GETFD);
+            if f >= 0 {
+                libc::fcntl(raw, libc::F_SETFD, f | libc::FD_CLOEXEC);
+            }
+        }
+    }
+}
+
+/// The descriptor the variable names, once it is known to be a group opened
+/// the way the reader needs.
+fn handed() -> Option<RawFd> {
     let raw: RawFd = std::env::var(FD_ENV).ok()?.trim().parse().ok()?;
     if raw < 0 {
         return None;
@@ -799,10 +825,7 @@ fn inherited() -> Option<OwnedFd> {
     if flags & REQUIRED_FLAGS != REQUIRED_FLAGS {
         return None;
     }
-    // SAFETY: the descriptor is open — `fdinfo` for it was just read — and the
-    // environment variable is the helper's contract for handing over ownership,
-    // so nothing else in this process holds it.
-    Some(unsafe { OwnedFd::from_raw_fd(raw) })
+    Some(raw)
 }
 
 /// One source's share of the one reader: a single group that cannot be split,

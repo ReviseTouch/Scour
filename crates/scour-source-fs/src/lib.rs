@@ -18,5 +18,7 @@ mod watch;
 pub mod fs;
 mod path;
 
+#[cfg(target_os = "linux")]
+pub use fanotify::keep_from_children;
 pub use rules::{Rules, platform_defaults};
 pub use scan::FsSource;

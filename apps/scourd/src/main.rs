@@ -58,6 +58,8 @@ fn cap_allocator_arenas() {
 fn cap_allocator_arenas() {}
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    scour_source_fs::keep_from_children();
     cap_allocator_arenas();
     let args = Args::parse();
     let (config, problem) = match &args.config {
