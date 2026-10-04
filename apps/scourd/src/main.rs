@@ -118,10 +118,10 @@ fn main() -> Result<()> {
 
     let engine = Arc::new(engine);
 
-    // Watching starts on its own thread: installing 342,000 inotify watches
-    // took 15.1 s here and no query needs them. The baseline walk goes after
-    // them, on the same thread — walking first leaves a window covered by
-    // neither the snapshot nor the watch.
+    // Watching starts on its own thread: the folder map a fanotify reader
+    // needs takes seconds to build and no query needs it. The baseline walk
+    // goes after it, on the same thread — walking first leaves a window
+    // covered by neither the snapshot nor the watch.
     {
         let engine = Arc::clone(&engine);
         std::thread::spawn(move || {
