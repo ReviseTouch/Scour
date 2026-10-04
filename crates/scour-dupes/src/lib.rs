@@ -107,19 +107,44 @@ pub fn find<I>(files: I, opts: &Options) -> Report
 where
     I: IntoIterator<Item = (String, u64)>,
 {
+    find_named(files.into_iter().map(|(p, size)| (p, size, 1)), opts)
+}
+
+/// The same, told how many names each file has (`st_nlink`). A file with more
+/// than one may be a hard link of another candidate, and only those are looked
+/// at before the budget allows anything: a size-only answer stays free.
+pub fn find_named<I>(files: I, opts: &Options) -> Report
+where
+    I: IntoIterator<Item = (String, u64, u64)>,
+{
     // Stage one: size to paths. No `stat`, no `open` — the caller had the sizes.
-    let mut by_size: HashMap<u64, Vec<String>> = HashMap::new();
+    let mut by_size: HashMap<u64, Vec<(String, u64)>> = HashMap::new();
     let mut candidates = 0u64;
-    for (path, size) in files {
+    for (path, size, links) in files {
         if size < opts.min_size {
             continue;
         }
         candidates += 1;
-        by_size.entry(size).or_default().push(path);
+        by_size.entry(size).or_default().push((path, links));
     }
 
     let mut pending: Vec<(u64, Vec<String>)> = by_size
         .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .map(|(size, mut named)| {
+            // Sorted first, so the name that stands for a linked file is the
+            // same one stage two keeps.
+            named.sort();
+            let mut files = std::collections::HashSet::new();
+            let paths = named
+                .into_iter()
+                .filter(|(p, links)| {
+                    *links < 2 || identity(Path::new(p)).is_none_or(|id| files.insert(id))
+                })
+                .map(|(p, _)| p)
+                .collect::<Vec<_>>();
+            (size, paths)
+        })
         .filter(|(_, paths)| paths.len() > 1)
         .collect();
     // Largest possible saving first, so a budget runs out where it is worth
@@ -151,7 +176,13 @@ where
 
         // Stage two: the ends, which is where nearly all differing files differ.
         let mut buckets: HashMap<u64, Vec<String>> = HashMap::new();
+        // Two names of one file — a hard link — are not two copies: deleting
+        // one gives back nothing. The first name, sorted, stands for the file.
+        let mut files = std::collections::HashSet::new();
         for p in paths {
+            if identity(Path::new(&p)).is_some_and(|id| !files.insert(id)) {
+                continue;
+            }
             // Dropped rather than fatal: one vanished file must not cost the
             // rest of the run its answer.
             if let Ok((mark, n)) = edges(Path::new(&p), size) {
@@ -251,9 +282,23 @@ fn confirm(paths: &[String], size: u64) -> (Vec<String>, u64) {
     (same, read)
 }
 
+/// Which file a name is, where the platform can say: the device and the inode.
+#[cfg(unix)]
+fn identity(p: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(p)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(not(unix))]
+fn identity(_: &Path) -> Option<(u64, u64)> {
+    None
+}
+
 /// Byte for byte, stopping at the first difference.
 fn identical(a: &Path, b: &Path) -> std::io::Result<bool> {
-    // One file under two names: a hard link needs no reading to be identical.
+    // The same path twice needs no reading.
     if a == b {
         return Ok(true);
     }
@@ -358,6 +403,41 @@ mod tests {
             r.proven, 10_000,
             "read and compared, so all of it is proven"
         );
+    }
+
+    /// Two names of one inode free nothing when one goes: they are one file,
+    /// and only the real copy beside them is waste.
+    #[test]
+    #[cfg(unix)]
+    fn a_hard_link_is_one_file_and_not_a_copy() {
+        let d = Dir::new("links");
+        let body = vec![b'h'; 6000];
+        let first = d.file("a-first", &body);
+        let link = d.0.join("b-link");
+        std::fs::hard_link(&first.0, &link).expect("link");
+        let link = (link.to_string_lossy().into_owned(), first.1);
+        let copy = d.file("c-copy", &body);
+
+        let r = find(vec![first.clone(), link.clone(), copy.clone()], &opts(1000));
+        assert_eq!(r.groups.len(), 1, "{:?}", r.groups);
+        assert_eq!(r.groups[0].paths, vec![first.0.clone(), copy.0]);
+        assert_eq!(r.waste, 6000, "one copy's worth, not two");
+
+        // Names of one file and nothing else are no group at all.
+        let r = find(vec![first.clone(), link.clone()], &opts(1000));
+        assert!(r.groups.is_empty(), "{:?}", r.groups);
+
+        // Told the names, a size-only answer knows it too, reading nothing.
+        let named = |(p, size): (String, u64)| (p, size, 2);
+        let r = find_named(
+            vec![named(first), named(link)],
+            &Options {
+                read_budget: 0,
+                ..opts(1000)
+            },
+        );
+        assert!(r.groups.is_empty(), "{:?}", r.groups);
+        assert_eq!(r.read, 0);
     }
 
     /// Same size, same edges, different in the middle — an in-place edit.

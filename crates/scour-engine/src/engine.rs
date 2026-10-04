@@ -858,11 +858,11 @@ impl Engine {
                 count_cap: CANDIDATES,
             },
         })?;
-        Ok(scour_dupes::find(
-            found
-                .hits
-                .into_iter()
-                .map(|h| (h.path, h.meta.size.max(0) as u64)),
+        Ok(scour_dupes::find_named(
+            found.hits.into_iter().map(|h| {
+                let (size, links) = (h.meta.size.max(0) as u64, h.meta.links.max(1) as u64);
+                (h.path, size, links)
+            }),
             opts,
         ))
     }
@@ -1218,8 +1218,8 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             shared.opts.walk_debounce,
             shared.opts.walk_debounce_cap,
         ) {
-            // An empty path means "I lost track and cannot say where" — exhausted
-            // inotify watches, an overflowed kernel buffer — so every source is walked.
+            // An empty path means "I lost track and cannot say where" — an
+            // overflowed kernel queue — so every source is walked.
             if path.is_empty() {
                 for i in 0..shared.sources.len() {
                     if !scan(&shared, &mut pulses, i, None, false) {

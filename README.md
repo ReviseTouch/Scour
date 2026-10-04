@@ -289,8 +289,8 @@ identical or merely share a size. Nothing is deleted on a size match. One
 copy in each group carries a keep mark, the newest by default; "Move the
 other N to trash" is enabled only after "Confirm by reading" has proved that
 group identical, asks once, and goes to the desktop's trash, never to an
-unlink. Every path has the search list's own menu. Hard links count as
-copies; trashing one frees nothing, and the page does not yet say so.
+unlink. Every path has the search list's own menu. Several names of one file
+(hard links) are one file, not copies: a group lists it under one name.
 
 ## MCP server
 

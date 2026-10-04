@@ -282,8 +282,8 @@ eşleşmesiyle hiçbir şey silinmez. Her grupta bir kopya "tut" işaretini taş
 varsayılan olarak en yenisi; "Diğer N tanesini çöp kutusuna taşı" yalnız
 "Okuyarak doğrula" o grubu kanıtladıktan sonra açılır, bir kez sorar ve
 masaüstünün çöp kutusuna gönderir, asla doğrudan silmez. Her yolun arama
-listesindeki menüsü vardır. Sabit bağlantılar kopya sayılır; birini çöpe
-taşımak yer açmaz ve sayfa bunu henüz söylemiyor.
+listesindeki menüsü vardır. Bir dosyanın birden çok adı (sabit bağlantılar)
+kopya değil tek dosyadır: grupta tek adla yer alır.
 
 ## MCP sunucusu
 
