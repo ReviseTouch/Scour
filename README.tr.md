@@ -372,6 +372,16 @@ kaba kuvvetle çalışan bir başvuru gerçeklemesiyle karşılaştırır.
 Ayrıntı: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); dosya türü
 sınıflandırması: [docs/TAXONOMY.md](docs/TAXONOMY.md). (Belgeler İngilizcedir.)
 
+## Gizlilik
+
+Scour hiçbir ağ bağlantısı kurmaz, hiçbir yere bir şey göndermez. Servis
+çalışma dizininizdeki bir sokette dinler. Tarayıcı köprüsü yalnız 127.0.0.1'de
+dinler, her çalıştırmada yeniden üretilen bir jeton olmadan hiçbir şeye cevap
+vermez, `Origin`'i ya da `Host`'u kendisi olmayan isteği reddeder ve sayfasını
+sayfanın kendi betiğinden başka betik çalıştırmayan bir politikayla sunar.
+Sormadan hiçbir şey silinmez: menüler dosyaları masaüstünün çöp kutusuna
+taşır, "Kalıcı olarak sil" önce sorar. MCP sunucusunun araçları yalnız okur.
+
 ## Diller
 
 Kaynak dili İngilizcedir. Çeviriler `lang/` altındaki gettext kataloglarıdır,

@@ -379,6 +379,16 @@ shape against a brute-force reference implementation.
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the file-kind taxonomy:
 [docs/TAXONOMY.md](docs/TAXONOMY.md).
 
+## Privacy
+
+Scour makes no network connections and sends nothing anywhere. The service
+listens on a socket in your runtime directory. The browser bridge listens on
+127.0.0.1 only, answers nothing without a token made fresh each run, refuses
+a request whose `Origin` or `Host` is not its own, and serves its page under a
+policy that runs no script but the page's. Nothing is deleted without asking:
+the menus move files to the desktop's trash, and "Delete permanently" asks
+first. The MCP server's tools only read.
+
 ## Languages
 
 English is the source language. Translations are gettext catalogues in

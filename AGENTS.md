@@ -124,10 +124,12 @@ something listens is a function the face passes in.
 ### Service — `scourd`
 
 `src/wire.rs` names the concrete index and source; nothing else does. Change
-feeds are hints: every source gets a full reconciliation pass
-(`reconcile_interval_secs`, default 1800; `poll_interval_secs`, default 60,
-for a source with neither a watch nor a pulse), resting at least twenty times
-the previous pass's cost. The privileged `scour-watch` helper places the
+feeds are hints: every source gets a full reconciliation pass — a watched
+one daily, once the machine is quiet, with one thread
+(`watched_reconcile_interval_secs`, default 86400); an unwatched one
+`reconcile_interval_secs`, default 1800; one with neither a watch nor a pulse
+`poll_interval_secs`, default 60 — resting at least twenty times the previous
+pass's cost. The privileged `scour-watch` helper places the
 `fanotify` marks, drops privilege and execs the daemon — one
 `scour@<user>.service` instance per account, its roots in
 `/etc/scour/<user>.conf`, its socket in that account's runtime directory.
