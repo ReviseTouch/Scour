@@ -69,7 +69,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                         (true, None) => "—".to_owned(),
                         (false, _) => format_size(h.meta.size as u64, BINARY),
                     },
-                    h.path
+                    shown(&h.path)
                 );
             }
             let total = if r.capped {
@@ -150,7 +150,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     })
                 );
                 for p in &g.paths {
-                    println!("            {p}");
+                    println!("            {}", shown(p));
                 }
             }
             // Two numbers: what was read and compared, then what merely shares
@@ -273,8 +273,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
         }
         Response::Tree { root, took_us: _ } => print_tree(root, ""),
         Response::Stat(e) => {
-            println!("{}{}", label("path"), e.path);
-            println!("{}{}", label("name"), e.name());
+            println!("{}{}", label("path"), shown(&e.path));
+            println!("{}{}", label("name"), shown(e.name()));
             println!("{}{}", label("kind"), kind_tag(e.kind()));
             if !e.is_dir {
                 println!(
@@ -408,7 +408,7 @@ fn print_tree(node: &TreeNode, prefix: &str) {
     };
     println!(
         "{prefix}{}{}{count}",
-        node.name,
+        shown(&node.name),
         if node.is_dir { "/" } else { "" }
     );
     let deeper = format!("{prefix}  ");
@@ -465,6 +465,26 @@ const BANDS: [&str; scour_core::AGE_BANDS] = [
 /// against — the same rule [`paint`] follows for colour.
 fn at_a_terminal() -> bool {
     std::io::IsTerminal::is_terminal(&std::io::stdout())
+}
+
+/// A name as a terminal may be handed it. A file can be called
+/// `\x1b]52;c;…\x07`, which a terminal reads as "put this on the clipboard";
+/// at a terminal every control character is a `?`, as `ls` shows it. A pipe
+/// gets the name as it is, byte for byte.
+fn shown(name: &str) -> std::borrow::Cow<'_, str> {
+    static TERMINAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    quoted(name, *TERMINAL.get_or_init(at_a_terminal))
+}
+
+fn quoted(name: &str, terminal: bool) -> std::borrow::Cow<'_, str> {
+    if terminal && name.chars().any(char::is_control) {
+        name.chars()
+            .map(|c| if c.is_control() { '?' } else { c })
+            .collect::<String>()
+            .into()
+    } else {
+        name.into()
+    }
 }
 
 /// Colour on top of that, and `NO_COLOR` takes it off again.
@@ -583,7 +603,7 @@ fn usage_block(u: &scour_core::UsageResponse, colour: bool, width: usize) -> Str
         format_size(u.root.bytes, BINARY),
         counted(u.root.files),
         t("files"),
-        u.root.path
+        shown(&u.root.path)
     );
     if let Some(strip) = age_strip(&u.root.age, colour, width) {
         out.push_str(&strip);
@@ -620,7 +640,7 @@ fn usage_block(u: &scour_core::UsageResponse, colour: bool, width: usize) -> Str
                 cells.to_owned()
             },
             " ".repeat(BAR - cells.chars().count()),
-            scour_ui::path::leaf(&c.path)
+            shown(scour_ui::path::leaf(&c.path))
         ));
     }
     if u.child_count as usize > u.children.len() {
@@ -1073,6 +1093,19 @@ pub fn faces(face: Option<&str>) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_cannot_talk_to_the_terminal_it_is_shown_on() {
+        let clip = "a\x1b]52;c;ZWNobyBoaQ==\x07b.txt";
+        assert_eq!(quoted(clip, true), "a?]52;c;ZWNobyBoaQ==?b.txt");
+        assert_eq!(quoted("line\nbreak", true), "line?break");
+        // A pipe is a program, which wants the name it can open.
+        assert_eq!(quoted(clip, false), clip);
+        assert!(matches!(
+            quoted("kütüphane", true),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
 
     /// The home the report was drawn from: twelve folders of sixty-three, the
     /// live figures `scour-chart`'s own test measures its shares against. Each
