@@ -112,12 +112,17 @@ fn percent_decode(s: &str) -> String {
                 out.push(b' ');
                 i += 1;
             }
-            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                Ok(byte) => {
+            // Bytes, not `&s[..]`: `%a` before a multi-byte letter is no
+            // character boundary, and slicing there panics.
+            b'%' if i + 2 < b.len() => match std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                Some(byte) => {
                     out.push(byte);
                     i += 3;
                 }
-                Err(_) => {
+                None => {
                     out.push(b'%');
                     i += 1;
                 }
@@ -132,6 +137,22 @@ fn percent_decode(s: &str) -> String {
 }
 
 pub fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) {
+    respond_with(stream, status, kind, "", body);
+}
+
+/// The page, under a policy: only its own script runs, so a file name that
+/// gets into the markup unescaped is text, not a program holding the token.
+pub fn page(stream: &mut TcpStream, body: &[u8], nonce: &str) {
+    let policy = format!(
+        "Content-Security-Policy: default-src 'self'; script-src 'nonce-{nonce}'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'self'; \
+         base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n\
+         Referrer-Policy: no-referrer\r\n"
+    );
+    respond_with(stream, "200 OK", "text/html; charset=utf-8", &policy, body);
+}
+
+fn respond_with(stream: &mut TcpStream, status: &str, kind: &str, extra: &str, body: &[u8]) {
     // `no-store`: these answers describe a filesystem that is being watched.
     let head = format!(
         "HTTP/1.1 {status}\r\n\
@@ -139,6 +160,7 @@ pub fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &[u8]) {
          Content-Length: {}\r\n\
          Cache-Control: no-store\r\n\
          X-Content-Type-Options: nosniff\r\n\
+         {extra}\
          Connection: close\r\n\r\n",
         body.len()
     );
@@ -220,5 +242,9 @@ mod tests {
         // A stray percent is text, not an error: filenames contain them.
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%zz"), "%zz");
+        // Unencoded letters a client other than a browser may send: a panic
+        // here once ended the connection's thread.
+        assert_eq!(percent_decode("%aé"), "%aé");
+        assert_eq!(percent_decode("%é"), "%é");
     }
 }

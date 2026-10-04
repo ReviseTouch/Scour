@@ -84,6 +84,7 @@ fn page() -> &'static str {
         )
         .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
         .replace("@LOGO@", &data_url(LOGO))
+        .replacen("<script>", &format!("<script nonce=\"{}\">", nonce()), 1)
     })
 }
 
@@ -204,6 +205,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Whether a `Host`, or an `Origin` past its scheme, names this bridge: the
+/// loopback address it listens on, or `localhost`, at its own port.
+fn ours(host: &str, port: u16) -> bool {
+    host.rsplit_once(':').is_some_and(|(name, p)| {
+        p.parse() == Ok(port) && (name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost"))
+    })
+}
+
+/// The nonce the page's one script carries; the policy runs nothing else.
+fn nonce() -> &'static str {
+    static NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NONCE.get_or_init(token)
+}
+
 /// A token nobody can guess.
 fn token() -> String {
     let mut bytes = [0u8; 16];
@@ -277,12 +292,13 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         return;
     };
 
-    // A browser cannot forge `Origin`: a foreign one is refused unread.
-    if let Some(origin) = req.header("origin")
-        && !origin.ends_with(&format!(
-            ":{}",
-            stream.local_addr().map(|a| a.port()).unwrap_or(0)
-        ))
+    // A browser cannot forge `Origin`: a foreign one is refused unread. Nor
+    // `Host`, which a name rebound to 127.0.0.1 still carries.
+    let port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
+    if req
+        .header("origin")
+        .is_some_and(|o| !o.strip_prefix("http://").is_some_and(|h| ours(h, port)))
+        || req.header("host").is_some_and(|h| !ours(h, port))
     {
         http::fail(&mut stream, "403 Forbidden", "cross-origin");
         return;
@@ -322,12 +338,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
     }
 
     match req.path.as_str() {
-        "/" => http::respond(
-            &mut stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            page().as_bytes(),
-        ),
+        "/" => http::page(&mut stream, page().as_bytes(), nonce()),
         "/api/search" => api_search(&mut stream, client, &req),
         "/api/csv" => api_csv(&mut stream, client, &req),
         "/api/count" => api_count(&mut stream, client, &req),
@@ -1606,6 +1617,38 @@ fn sort_of(s: Option<&str>) -> SortKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_this_bridge_by_its_own_names_is_ours() {
+        assert!(ours("127.0.0.1:7621", 7621));
+        assert!(ours("localhost:7621", 7621));
+        assert!(ours("LocalHost:7621", 7621));
+        // The old check read only the port, which a rebound name keeps.
+        assert!(!ours("evil.example:7621", 7621));
+        assert!(!ours("127.0.0.1.evil.example:7621", 7621));
+        assert!(!ours("127.0.0.1:7622", 7621));
+        assert!(!ours("127.0.0.1", 7621));
+        assert!(!ours("", 7621));
+    }
+
+    /// The policy runs the script carrying the nonce and nothing else, so the
+    /// page must carry it on its one script, and on nothing a name could reach.
+    #[test]
+    fn the_pages_one_script_carries_the_nonce_the_policy_names() {
+        let served = page();
+        assert_eq!(
+            served.matches("<script").count(),
+            1,
+            "a second script would not run"
+        );
+        assert!(served.contains(&format!("<script nonce=\"{}\">", nonce())));
+        assert_eq!(nonce().len(), 32);
+        let me = include_str!("main.rs");
+        assert!(me.contains(concat!(
+            "http::page(&mut stream, page()",
+            ".as_bytes(), nonce())"
+        )));
+    }
 
     #[test]
     fn two_tokens_from_one_process_are_not_the_same() {

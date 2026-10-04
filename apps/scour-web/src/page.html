@@ -6214,7 +6214,9 @@
     const where = !parts.length ? `<span>${all}</span>` : home + parts.map((seg, i) => {
       const path = "/" + parts.slice(0, i + 1).join("/");
       const last = i === parts.length - 1;
-      const label = last ? `<span>${seg}</span>` : `<button data-path="${path}">${seg}</button>`;
+      /* A folder may be named `<img onerror=…>`: everything here is escaped. */
+      const label = last ? `<span>${escape_(seg)}</span>`
+        : `<button data-path="${escape_(path)}">${escape_(seg)}</button>`;
       return `<span class="s">/</span>` + label;
     }).join("");
     /* Beside the scope, and escaped: a query is text somebody typed. */
