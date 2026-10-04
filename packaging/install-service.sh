@@ -4,11 +4,13 @@
 # instance. Read scour@.service and 50-scour-service.rules first.
 #
 #   sudo bash packaging/install-service.sh [--user NAME] [ROOT...]
+#   sudo /usr/libexec/scour/install-service [--user NAME] [ROOT...]   (packages)
 #
 # Run it again with another --user to add a second person; nothing belonging to
 # the first is touched. The account defaults to whoever ran sudo/pkexec and the
 # roots — the filesystems to mark — to /home. `scourd` must already be in that
-# account's ~/.local/bin, which install.sh puts there.
+# account's ~/.local/bin, which install.sh puts there, or in /usr/bin, where a
+# package does; the account's own copy wins.
 #
 # A machine still carrying the old single-user scour.service is migrated: that
 # unit is stopped, disabled and backed up, and its account and roots become the
@@ -56,10 +58,33 @@ home=$(getent passwd "$user" | cut -d: -f6)
 for r in "${roots[@]}"; do [[ -d $r ]] || { echo "not a directory: $r" >&2; exit 1; }; done
 
 scour_repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# A source checkout or an unpacked tarball carries the two templates beside
+# this script; a package keeps them in /usr/share/scour.
+templates=$scour_repo/packaging
+[[ -f $templates/scour@.service ]] || templates=/usr/share/scour
+[[ -f $templates/scour@.service && -f $templates/50-scour-service.rules ]] ||
+    { echo "scour@.service and 50-scour-service.rules not found beside this script or in /usr/share/scour" >&2; exit 1; }
+# A built helper is copied to root-owned /usr/local/libexec; a packaged one is
+# root-owned where it is, and the unit names it there.
 helper=$scour_repo/target/release/scour-watch
 [[ -x $helper ]] || helper=$scour_repo/bin/scour-watch
-[[ -x $helper ]] || { echo "scour-watch not found: cargo build --release -p scour-watch" >&2; exit 1; }
-[[ -x $home/.local/bin/scourd ]] || { echo "$home/.local/bin/scourd is missing: run install.sh as $user first" >&2; exit 1; }
+packaged=/usr/libexec/scour/scour-watch
+if [[ -x $helper ]]; then
+    helper_at=/usr/local/libexec/scour/scour-watch
+elif [[ -x $packaged && $(stat -c %u "$packaged") == 0 ]]; then
+    helper= helper_at=$packaged
+else
+    echo "scour-watch not found: cargo build --release -p scour-watch" >&2
+    exit 1
+fi
+if [[ -x $home/.local/bin/scourd ]]; then
+    scourd='~/.local/bin/scourd'
+elif [[ -x /usr/bin/scourd ]]; then
+    scourd=/usr/bin/scourd
+else
+    echo "no scourd for $user: run install.sh as $user first, or install the package" >&2
+    exit 1
+fi
 
 # Two writers race for the index lock and the loser restarts forever, so the
 # per-user unit has to be off before a system instance is enabled for the account.
@@ -72,14 +97,16 @@ if [[ -n $enabled ]]; then
 fi
 
 # The allow rule must never point at a privileged executable in a writable home.
-install -d -o root -g root -m755 /usr/local/libexec/scour /etc/scour /etc/polkit-1/rules.d
+install -d -o root -g root -m755 /usr/local/libexec/scour /etc/scour /etc/polkit-1/rules.d /etc/systemd/system
 stage=$(mktemp -d /usr/local/libexec/scour/install.XXXXXX)
 trap 'rm -rf -- "$stage"' EXIT
-install -o root -g root -m755 "$helper" "$stage/scour-watch"
+if [[ -n $helper ]]; then install -o root -g root -m755 "$helper" "$stage/scour-watch"; fi
 # Staged under the instance's own name so `systemd-analyze verify` resolves %i
 # exactly as systemd will; the file installed from it is the template.
-install -m644 "$scour_repo/packaging/scour@.service" "$stage/scour@$user.service"
-install -m644 "$scour_repo/packaging/50-scour-service.rules" "$stage/50-scour-service.rules"
+sed -e "/^\(ExecStart\|ConditionFileIsExecutable\)=/s|/usr/local/libexec/scour/scour-watch|$helper_at|" \
+    -e "/^ExecStart=/s|~/\.local/bin/scourd|$scourd|" \
+    "$templates/scour@.service" > "$stage/scour@$user.service"
+install -m644 "$templates/50-scour-service.rules" "$stage/50-scour-service.rules"
 printf '# Which filesystems scour@%s.service marks, space separated. Restart to apply.\nSCOUR_ROOTS=%s\n' \
     "$user" "${roots[*]}" > "$stage/$user.conf"
 # No specifier turns %i into a uid, and /run/user/<uid> is where the socket goes.
@@ -95,7 +122,7 @@ for f in /usr/local/libexec/scour/scour-watch "$old_unit" /etc/systemd/system/sc
     if [[ -e $f ]]; then cp -a -- "$f" "$backup/"; fi
 done
 
-mv -fT -- "$stage/scour-watch" /usr/local/libexec/scour/scour-watch
+if [[ -n $helper ]]; then mv -fT -- "$stage/scour-watch" /usr/local/libexec/scour/scour-watch; fi
 systemd-analyze verify "$stage/scour@$user.service"
 install -o root -g root -m644 "$stage/scour@$user.service" /etc/systemd/system/scour@.service
 install -d -o root -g root -m755 "$dropin"
@@ -123,4 +150,4 @@ install -o root -g root -m644 "$stage/50-scour-service.rules" /etc/polkit-1/rule
 systemctl enable "scour@$user.service"
 echo "Installed scour@$user.service (roots: ${roots[*]}). Backup: $backup"
 echo "$user can now start, stop and restart it without a prompt:  systemctl start scour@$user.service"
-echo "Another person on this machine:  sudo bash packaging/install-service.sh --user NAME [ROOT...]"
+echo "Another person on this machine:  sudo bash $0 --user NAME [ROOT...]"

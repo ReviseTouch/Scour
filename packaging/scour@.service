@@ -23,6 +23,9 @@
 Description=Scour file index for %i
 Documentation=https://github.com/ReviseTouch/Scour
 After=local-fs.target
+# A helper removed with its package skips the unit, rather than failing it
+# every five seconds for ever. The installer rewrites this beside ExecStart.
+ConditionFileIsExecutable=/usr/local/libexec/scour/scour-watch
 
 [Service]
 Type=simple

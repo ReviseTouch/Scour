@@ -73,8 +73,8 @@ altında geri alabilir; arama, indeksin tamamı kadar değil, onlarca megabayt
 yerleşik bellek ister. Değişiklik bildirimleri eksiksiz sayılmaz: izlenen bir
 kaynak ayrıca günde bir kez, makine sessizken ve tek iş parçacığıyla tam bir
 eşitleme geçişi alır; izlenmeyen bir kaynak 30 dakikada bir, yazma sayacı da
-yoksa dakikada bir. Ölçümler ve onları
-üreten komutlar [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) dosyasındadır.
+yoksa dakikada bir. Ölçümler ve onları üreten komutlar
+[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) dosyasındadır.
 
 ## Kurulum
 
@@ -101,10 +101,10 @@ arar, çıktısı durum dizinindeki `scourd.log`'a gidecek şekilde ayrı bir
 oturumda başlatır ve sokete en çok on saniye bekler. systemd gerekmez.
 `SCOUR_NO_AUTOSTART=1` bunu kapatır; komut satırı hiçbir şey başlatmaz.
 
-Sürüm ikilileri bir Debian 11 konteynerinde glibc 2.31'e göre derlenir:
-Debian 11, Ubuntu 22.04, RHEL 9 ve sonrası. Pencere ayrıca her masaüstünde
-bulunan `libfontconfig1`'i ister. Paket sıfırdan kurulmuş Ubuntu 22.04,
-Ubuntu 24.04 ve Debian 11 konteynerlerinde kurulup çalıştırılmıştır.
+Sürüm ikilileri bir Debian 11 konteynerinde derlenir ve en çok glibc 2.30
+ister: Debian 11, Ubuntu 22.04, RHEL 9 ve sonrası. Pencere ayrıca her
+masaüstünde bulunan `libfontconfig1`'i ister. Arşiv sıfırdan kurulmuş Ubuntu
+22.04 ve Fedora konteynerlerinde kurulup çalıştırılmıştır.
 
 ### Debian, Ubuntu ve Fedora paketleri
 
@@ -116,12 +116,15 @@ sudo dnf install ./scour-0.2.0.alpha.5-1.x86_64.rpm     # Fedora
 İkisi de yedi ikiliyi taşır: altısı `/usr/bin`'de, ayrıcalıklı `scour-watch`
 `/usr/libexec/scour/` altında; başlatıcılar, menü girdisi, dört boyda simge ve
 `/usr/lib/systemd/user/` altında kullanıcı birimi. Kurmak hiçbir şeyi
-başlatmaz: `systemctl --user enable --now scourd.service` ayrıcalıksız servisi
-başlatır; `/usr/share/doc/scour/` altında sistem birimi ve polkit kuralı örnek
-olarak, paketin neyi nereye koyduğunu anlatan bir notla durur. Pencerenin
-çalışırken yüklediği X11 ve Wayland kütüphaneleri zorunlu değil önerilidir;
-`--no-install-recommends` bir sunucuda yalnız komut satırını kurar. Ubuntu
-22.04, Ubuntu 24.04, Debian 12 ve Fedora 40 konteynerlerinde denenmiştir.
+başlatmaz: servis bulamayan her yüz onu kendisi başlatır,
+`systemctl --user enable --now scourd.service` ise oturumla başlatır.
+Değişiklikleri anında görmek, root isteyen tek adımdır (bkz. [Dosya sistemini
+izleme](#dosya-sistemini-izleme)): `sudo /usr/libexec/scour/install-service`.
+Paketin neyi nereye koyduğunu `/usr/share/doc/scour/PACKAGE-NOTES` anlatır.
+Pencerenin çalışırken yüklediği X11 ve Wayland kütüphaneleri zorunlu değil
+önerilidir; `--no-install-recommends` bir sunucuda yalnız komut satırını kurar.
+Sıfırdan kurulmuş Debian 11, Debian 12, Ubuntu 22.04, Ubuntu 24.04 ve Fedora
+konteynerlerinde kurulup çalıştırılmıştır.
 `scripts/package` ikisini derlenmiş ikililerden üretir; `cargo-deb`,
 `cargo-generate-rpm` ve `rsvg-convert` ister.
 
@@ -219,7 +222,8 @@ değişince o birimi yürüyerek eşitler; hiçbir değişiklik kaybolmaz, ancak
 görünür. Ağ ve FUSE bağlarının yazma sayacı yoktur; onlar işaret ister.
 
 ```bash
-sudo bash packaging/install-service.sh [--user AD] [KÖK...]   # root isteyen tek adım
+sudo bash packaging/install-service.sh [--user AD] [KÖK...]   # arşivden ya da kaynaktan
+sudo /usr/libexec/scour/install-service [--user AD] [KÖK...]  # paketten
 systemctl start scour@<kullanıcı>.service
 ```
 
@@ -229,12 +233,21 @@ Sistem birimi bir şablondur, hesap başına bir örnek çalışır.
 `scourd`'u onun adına çalıştırır; yani bir örnek yalnız hesabının okuyabildiğini
 indeksler ve soketi o hesabın kendi çalışma dizinindedir. Hesap `sudo`'yu
 çalıştıran kullanıcıya varsayılır. Kurucu yardımcıyı root'a ait
-`/usr/local/libexec/scour` altına koyar, şablonu ve her hesabın yalnız kendi
+`/usr/local/libexec/scour` altına koyar (paketinki zaten root'a ait olarak
+`/usr/libexec/scour` altındadır), şablonu ve her hesabın yalnız kendi
 örneğini parolasız başlatıp durdurmasına izin veren, başka hiçbir şeye izin
 vermeyen bir polkit kuralı kurar. İkinci bir kişi için `--user` ile yeniden
 çalıştırın; eski tek kullanıcılı `scour.service` kendiliğinden taşınır.
 Kurmadan önce iki dosyayı da okuyun. O hesabın kullanıcı birimi etkinse kurucu
 kapatılana kadar reddeder: `systemctl --user disable --now scourd.service`.
+
+İşaret bütün bir dosya sistemini kapsar. Bu yüzden birkaç kişinin paylaştığı
+bir makinede bir örneğe, işaretli dosya sisteminin herhangi bir yerinde —
+hesabının okuyamadığı klasörler dahil — oluşturulan, değişen ya da silinen
+dosyaların adları bildirilir; yolları ve içerikleri değil. Yürüdüğü bir
+klasörün altına yerleştiremediği her olayı atar, ama o adlar belleğinden
+geçer. Tek kişilik makinede bu bir şey değildir; paylaşılan makinede önce
+tartın.
 
 ### Ayarlar
 

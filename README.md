@@ -75,8 +75,9 @@ reclaim it under pressure, so searching costs tens of megabytes of resident
 memory rather than the size of the index. Change notifications are not
 treated as complete: a watched source also receives a full reconciliation
 pass once a day, when the machine is quiet and with one thread; one without a
-watch every 30 minutes, and every minute if it has no write counter either. The measurements and the commands that produced them are
-in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
+watch every 30 minutes, and every minute if it has no write counter either.
+The measurements and the commands that produced them are in
+[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 
 ## Installation
 
@@ -103,10 +104,10 @@ on `PATH`, start it detached with its output in `scourd.log` under the state
 directory, and wait up to ten seconds for the socket. This needs no systemd.
 `SCOUR_NO_AUTOSTART=1` turns it off; the command line never starts anything.
 
-The release binaries are built in a Debian 11 container against glibc 2.31:
-Debian 11, Ubuntu 22.04, RHEL 9 and everything later. The window also needs
-`libfontconfig1`, which every desktop has. The package was installed and run
-in clean Ubuntu 22.04, Ubuntu 24.04 and Debian 11 containers.
+The release binaries are built in a Debian 11 container and ask for glibc 2.30
+at most: Debian 11, Ubuntu 22.04, RHEL 9 and everything later. The window also
+needs `libfontconfig1`, which every desktop has. The tarball was installed and
+run in clean Ubuntu 22.04 and Fedora containers.
 
 ### Debian, Ubuntu and Fedora packages
 
@@ -118,12 +119,15 @@ sudo dnf install ./scour-0.2.0.alpha.5-1.x86_64.rpm     # Fedora
 Both carry the seven binaries, six in `/usr/bin` and the privileged
 `scour-watch` in `/usr/libexec/scour/`, the launchers, the menu entry, the
 icon at four sizes and the user unit in `/usr/lib/systemd/user/`. Installing
-starts nothing: `systemctl --user enable --now scourd.service` starts the
-unprivileged service, and `/usr/share/doc/scour/` holds the system unit and
-the polkit rule as examples with a note on what a package puts where. The X11
-and Wayland libraries the window loads at run time are recommended, not
-required, so `--no-install-recommends` gives the command line on a server.
-Tested in Ubuntu 22.04, Ubuntu 24.04, Debian 12 and Fedora 40 containers.
+starts nothing: any face starts the service when it finds none, and
+`systemctl --user enable --now scourd.service` starts it with the session.
+Watching changes as they happen is one more step, the only one that needs root
+(see [Watching the filesystem](#watching-the-filesystem)):
+`sudo /usr/libexec/scour/install-service`. `/usr/share/doc/scour/PACKAGE-NOTES`
+says what a package puts where. The X11 and Wayland libraries the window loads
+at run time are recommended, not required, so `--no-install-recommends` gives
+the command line on a server. Installed and run in clean Debian 11, Debian 12,
+Ubuntu 22.04, Ubuntu 24.04 and Fedora containers.
 `scripts/package` builds both from compiled binaries; it needs `cargo-deb`,
 `cargo-generate-rpm` and `rsvg-convert`.
 
@@ -225,7 +229,8 @@ no change is lost, but changes appear later. Network and FUSE mounts have no
 write counter and require the mark.
 
 ```bash
-sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # the only step that requires root
+sudo bash packaging/install-service.sh [--user NAME] [ROOT...]   # from the tarball or a checkout
+sudo /usr/libexec/scour/install-service [--user NAME] [ROOT...]  # from a package
 systemctl start scour@<user>.service
 ```
 
@@ -235,13 +240,21 @@ The system unit is a template with one instance per account.
 runs `scourd` as it, so an instance can only index what its account can read,
 and its socket is in that account's own runtime directory. The account
 defaults to the user who ran `sudo`. The installer places the helper under
-root-owned `/usr/local/libexec/scour`, installs the template, and installs a
-polkit rule that lets each account start, stop and restart its own instance
-without authentication and nothing else. Run it again with `--user` to add
+root-owned `/usr/local/libexec/scour` (a package's is already root-owned in
+`/usr/libexec/scour`), installs the template, and installs a polkit rule that
+lets each account start, stop and restart its own instance without
+authentication and nothing else. Run it again with `--user` to add
 another person; an older single-user `scour.service` is migrated. Read both
 files before installing. If the per-user unit is enabled for that account the
 installer refuses until it is off: `systemctl --user disable --now
 scourd.service`.
+
+A mark covers a whole filesystem. On a machine several people share, an
+instance is therefore told the names — not the paths, not the contents — of
+files created, changed or removed anywhere on a marked filesystem, including
+in folders its account cannot read. It drops every event it cannot place
+under a folder it walked, but those names pass through its memory. On a
+machine with one person that is nothing; on a shared one, weigh it first.
 
 ### Settings
 
