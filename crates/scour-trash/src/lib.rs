@@ -97,26 +97,80 @@ fn into(path: &Path, home: Option<PathBuf>) -> Result<PathBuf, Error> {
         None => path.clone(),
     };
 
-    let (claimed, mut info) = claim(&dir, &name)?;
     let stamp = local_stamp();
     let body = format!(
         "[Trash Info]\nPath={}\nDeletionDate={stamp}\n",
         encode(&recorded.to_string_lossy())
     );
-    info.write_all(body.as_bytes())?;
-    info.sync_all()?;
-    drop(info);
-
-    let landed = dir.join("files").join(&claimed);
-    match std::fs::rename(&path, &landed) {
-        Ok(()) => Ok(landed),
-        Err(e) => {
-            // The name was claimed and nothing moved into it; an orphan info
-            // file is a phantom row in every file manager's trash listing.
+    let mut from = 0;
+    loop {
+        let (n, claimed, mut info) = claim(&dir, &name, from)?;
+        let forget = || {
             let _ = std::fs::remove_file(dir.join("info").join(format!("{claimed}.trashinfo")));
-            Err(Error::Io(e))
+        };
+        if let Err(e) = info
+            .write_all(body.as_bytes())
+            .and_then(|()| info.sync_all())
+        {
+            forget();
+            return Err(Error::Io(e));
+        }
+        drop(info);
+
+        // Never onto something: `files/` can hold a name whose info file is
+        // gone, and a plain rename would replace what is there for good.
+        let landed = dir.join("files").join(&claimed);
+        match move_new(&path, &landed) {
+            Ok(()) => return Ok(landed),
+            Err(e) => {
+                // The name was claimed and nothing moved into it; an orphan info
+                // file is a phantom row in every file manager's trash listing.
+                forget();
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(Error::Io(e));
+                }
+                from = n + 1;
+            }
         }
     }
+}
+
+#[cfg(unix)]
+/// Rename, refusing to replace whatever is at `to`. Linux says so in one call;
+/// where it cannot — another kernel, a filesystem without the flag — a look
+/// first leaves only the gap between the look and the rename.
+fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let (Ok(a), Ok(b)) = (
+            std::ffi::CString::new(from.as_os_str().as_bytes()),
+            std::ffi::CString::new(to.as_os_str().as_bytes()),
+        ) else {
+            return Err(std::io::ErrorKind::InvalidInput.into());
+        };
+        // SAFETY: two NUL-terminated paths that outlive the call.
+        let rc = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                a.as_ptr(),
+                libc::AT_FDCWD,
+                b.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if !matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS)) {
+            return Err(e);
+        }
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    std::fs::rename(from, to)
 }
 
 #[cfg(unix)]
@@ -136,9 +190,10 @@ pub fn can_trash(path: &Path) -> bool {
 #[cfg(unix)]
 /// Claim a name by creating its info file, and return both. `create_new` in a
 /// loop: asking whether a name is free and then taking it leaves a gap to race in.
-fn claim(dir: &Path, name: &str) -> Result<(String, std::fs::File), Error> {
+/// A name whose data file is still in `files/` is not free either, info or no.
+fn claim(dir: &Path, name: &str, from: u32) -> Result<(u32, String, std::fs::File), Error> {
     let (stem, ext) = split_extension(name);
-    for n in 0u32..10_000 {
+    for n in from..10_000 {
         let candidate = if n == 0 {
             name.to_owned()
         } else if ext.is_empty() {
@@ -152,7 +207,14 @@ fn claim(dir: &Path, name: &str) -> Result<(String, std::fs::File), Error> {
             .create_new(true)
             .open(&at)
         {
-            Ok(f) => return Ok((candidate, f)),
+            Ok(f) => {
+                if std::fs::symlink_metadata(dir.join("files").join(&candidate)).is_ok() {
+                    drop(f);
+                    let _ = std::fs::remove_file(&at);
+                    continue;
+                }
+                return Ok((n, candidate, f));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(Error::Io(e)),
         }
@@ -379,6 +441,47 @@ mod tests {
         );
         assert!(note.contains("DeletionDate=20"), "{note}");
 
+        std::fs::remove_dir_all(&box_).ok();
+    }
+
+    /// `files/` can hold a name whose `.trashinfo` is gone — another program
+    /// lost it, or a crash between the two. Claiming only the info name and
+    /// renaming onto it replaced those bytes for good.
+    #[test]
+    fn a_file_left_in_the_trash_without_its_note_is_not_written_over() {
+        let box_ = sandbox();
+        let trash = box_.join("data/Trash");
+        std::fs::create_dir_all(trash.join("files")).unwrap();
+        std::fs::create_dir_all(trash.join("info")).unwrap();
+        std::fs::write(trash.join("files/orphan.txt"), b"OLD").unwrap();
+        let file = box_.join("orphan.txt");
+        std::fs::write(&file, b"NEW").unwrap();
+
+        let landed = into(&file, Some(trash.clone())).expect("trashed");
+        assert_eq!(
+            std::fs::read(trash.join("files/orphan.txt")).unwrap(),
+            b"OLD"
+        );
+        assert_eq!(landed, trash.join("files/orphan.1.txt"));
+        assert_eq!(std::fs::read(&landed).unwrap(), b"NEW");
+        assert!(trash.join("info/orphan.1.txt.trashinfo").exists());
+        assert!(
+            !trash.join("info/orphan.txt.trashinfo").exists(),
+            "the name it gave up is not left claimed"
+        );
+        std::fs::remove_dir_all(&box_).ok();
+    }
+
+    #[test]
+    fn a_move_onto_something_is_refused_not_made() {
+        let box_ = sandbox();
+        std::fs::write(box_.join("a"), b"a").unwrap();
+        std::fs::write(box_.join("b"), b"b").unwrap();
+        let e = move_new(&box_.join("a"), &box_.join("b")).expect_err("b is there");
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(box_.join("b")).unwrap(), b"b");
+        move_new(&box_.join("a"), &box_.join("c")).expect("c is free");
+        assert_eq!(std::fs::read(box_.join("c")).unwrap(), b"a");
         std::fs::remove_dir_all(&box_).ok();
     }
 
