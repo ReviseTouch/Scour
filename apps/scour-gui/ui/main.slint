@@ -1050,6 +1050,9 @@ export component MainWindow inherits Window {
     callback menu-at(int, length, length);
     /// One of the items was pressed.
     callback menu-pick(string);
+    /// A menu item asked for by its key rather than by the menu: about the
+    /// row the list has selected, whatever menu was last open.
+    callback key-action(string);
     /// The same overlay, holding the column switches instead of row actions.
     in-out property <bool> menu-columns: false;
     callback column-toggled(string);
@@ -1571,10 +1574,26 @@ export component MainWindow inherits Window {
                                 : min(0px, list.visible-height - root.rows.length * Theme.row-height);
                             return accept;
                         }
+                        // The keys the menu says, where the field does not need
+                        // them for its own text.
+                        if (e.text == Key.F2) {
+                            root.key-action("rename");
+                            return accept;
+                        }
+                        if (e.text == Key.Return && e.modifiers.control) {
+                            root.key-action("folder");
+                            return accept;
+                        }
                         if (e.text == Key.Return) {
                             // What was committed to is what the history takes.
                             root.query-committed();
                             root.activated(root.selected);
+                            return accept;
+                        }
+                        if (e.text == Key.Escape && root.ask-open) {
+                            // A question first: Escape is its no.
+                            root.ask-open = false;
+                            root.ask-answer(false);
                             return accept;
                         }
                         if (e.text == Key.Escape && root.panel != "") {
@@ -4129,6 +4148,17 @@ export component MainWindow inherits Window {
                 }
                 if root.ask-typing: Rectangle {
                     height: 30px;
+                    // The keys go here as it opens, from F2 as from the menu.
+                    // A beat later, not in `init`: that runs mid-layout, and
+                    // taking focus there asks for the layout being made.
+                    Timer {
+                        interval: 1ms;
+                        triggered => {
+                            self.running = false;
+                            renaming.focus();
+                            renaming.select-all();
+                        }
+                    }
                     border-radius: 3px;
                     border-width: 1px;
                     border-color: Theme.focus;
@@ -4145,10 +4175,21 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                             selection-background-color: Theme.selection;
                             selection-foreground-color: Theme.ink;
-                            // Enter is yes.
+                            // Back to the query when it closes.
+                            // Enter is yes, Escape no.
                             accepted => {
                                 root.ask-open = false;
                                 root.ask-answer(true);
+                                root.focus-query();
+                            }
+                            key-pressed(e) => {
+                                if (e.text == Key.Escape) {
+                                    root.ask-open = false;
+                                    root.ask-answer(false);
+                                    root.focus-query();
+                                    return accept;
+                                }
+                                return reject;
                             }
                         }
                     }
@@ -4176,6 +4217,7 @@ export component MainWindow inherits Window {
                             clicked => {
                                 root.ask-open = false;
                                 root.ask-answer(false);
+                                root.focus-query();
                             }
                         }
                     }
@@ -4200,6 +4242,7 @@ export component MainWindow inherits Window {
                             clicked => {
                                 root.ask-open = false;
                                 root.ask-answer(true);
+                                root.focus-query();
                             }
                         }
                     }

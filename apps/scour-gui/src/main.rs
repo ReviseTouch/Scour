@@ -81,6 +81,7 @@ fn named_key(name: &str) -> slint::SharedString {
         "pageup" => Key::PageUp.into(),
         "pagedown" => Key::PageDown.into(),
         "space" => " ".into(),
+        "f2" => Key::F2.into(),
         other => other.into(),
     }
 }
@@ -1554,6 +1555,19 @@ fn main() -> Result<()> {
             println!("{path}");
             if let Some(w) = weak.upgrade() {
                 w.set_hint(t(&cat, "path printed to the terminal"));
+            }
+        });
+    }
+
+    // A menu item by its key: about the selected row, so whatever path a
+    // menu set aside is dropped first.
+    {
+        let menu_path = Rc::clone(&menu_path);
+        let weak = window.as_weak();
+        window.on_key_action(move |id| {
+            menu_path.borrow_mut().take();
+            if let Some(w) = weak.upgrade() {
+                w.invoke_menu_pick(id);
             }
         });
     }
@@ -3649,8 +3663,10 @@ fn apply(
         // of changes does not queue a search per change.
         Got::Awake(reply) => {
             let Response::Status(st) = *reply else { return };
-            // Free: a wait is answered with the whole status.
+            // Free: a wait is answered with the whole status. The total too,
+            // or the meter kept dividing by what the index held at start-up.
             w.set_scanning(scanning_note(cat, &st));
+            state.borrow_mut().indexed = st.entries;
             // **A window nobody is using stops following.** Not "open" — *used*;
             // see [`AWAKE_FOR`], and `stir` undoes it within the frame.
             if state.borrow().stirred.elapsed() >= AWAKE_FOR {
