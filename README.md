@@ -273,9 +273,11 @@ name = "data"
 roots = ["/mnt/data", "/srv/media"]
 ```
 
-`scour stop` stops the service so that it starts again with the new file —
-the next face to open starts it, or `systemctl --user start scourd` where it
-runs as a unit. The system unit marks the filesystems named in
+To read an edited file the service has to start again. Started by a face,
+`scour stop` and then any face does it; under systemd, restart the unit
+instead — `systemctl --user restart scourd`, or `systemctl restart
+scour@<you>.service` for the system unit, since a service a face starts has
+no mark to watch with. The system unit marks the filesystems named in
 `/etc/scour/<you>.conf` and no others: a source on another disk is walked
 when that disk's write counter moves until the installer is run again with
 its root. The exclusion lists determine what is left out of the index;

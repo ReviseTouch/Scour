@@ -266,11 +266,14 @@ name = "veri"
 roots = ["/mnt/veri", "/srv/medya"]
 ```
 
-`scour stop` servisi durdurur, yeni dosyayla yeniden başlasın diye — açılan
-ilk yüz onu başlatır, birim olarak çalıştığı yerde `systemctl --user start
-scourd` başlatır. Sistem birimi yalnız `/etc/scour/<siz>.conf` dosyasında
-adı geçen dosya sistemlerini işaretler: başka bir diskteki kaynak, kurucu o
-kökle yeniden çalıştırılana kadar o diskin yazma sayacı oynadıkça yürünür.
+Değişen dosyayı okuması için servisin yeniden başlaması gerekir. Bir yüz
+başlattıysa `scour stop`, ardından herhangi bir yüz yeter; systemd altında
+birimi yeniden başlatın — `systemctl --user restart scourd`, sistem birimi
+için `systemctl restart scour@<siz>.service`; çünkü bir yüzün başlattığı
+servisin izlemek için işareti yoktur. Sistem birimi yalnız
+`/etc/scour/<siz>.conf` dosyasında adı geçen dosya sistemlerini işaretler:
+başka bir diskteki kaynak, kurucu o kökle yeniden çalıştırılana kadar o diskin
+yazma sayacı oynadıkça yürünür.
 Atlama listeleri indekse neyin girmediğini belirler; beklenen bir dosya
 çıkmıyorsa önce oraya bakın.
 

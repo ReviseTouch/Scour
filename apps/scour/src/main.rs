@@ -152,8 +152,8 @@ enum Command {
     Stats,
     /// Stop the service, to start it again with an edited config.toml.
     ///
-    /// The next face that opens starts it; so does `systemctl --user start
-    /// scourd` where it runs as a unit.
+    /// The next face that opens starts it. Under systemd, restart the unit
+    /// instead: a service a face starts has no fanotify mark.
     Stop,
     /// Walk the filesystem again.
     Rescan {
