@@ -258,8 +258,28 @@ machine with one person that is nothing; on a shared one, weigh it first.
 
 ### Settings
 
-Settings are in `~/.config/scour/config.toml`. The exclusion lists determine
-what is left out of the index; consult them when an expected file is missing.
+Settings are in `~/.config/scour/config.toml`; `scour where` prints where
+everything lives. With no file, Scour indexes your home directory. Each
+`[[source]]` is a set of folders indexed together, and listing any replaces
+that default, so name the home too:
+
+```toml
+[[source]]
+name = "home"
+roots = ["/home/you"]
+
+[[source]]
+name = "data"
+roots = ["/mnt/data", "/srv/media"]
+```
+
+`scour stop` stops the service so that it starts again with the new file —
+the next face to open starts it, or `systemctl --user start scourd` where it
+runs as a unit. The system unit marks the filesystems named in
+`/etc/scour/<you>.conf` and no others: a source on another disk is walked
+when that disk's write counter moves until the installer is run again with
+its root. The exclusion lists determine what is left out of the index;
+consult them when an expected file is missing.
 
 ## Query language
 

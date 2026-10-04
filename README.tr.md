@@ -251,8 +251,28 @@ tartın.
 
 ### Ayarlar
 
-Ayarlar `~/.config/scour/config.toml` dosyasındadır. Atlama listeleri indekse
-neyin girmediğini belirler; beklenen bir dosya çıkmıyorsa önce oraya bakın.
+Ayarlar `~/.config/scour/config.toml` dosyasındadır; `scour where` her şeyin
+nerede durduğunu yazar. Dosya yoksa Scour ev dizininizi indeksler. Her
+`[[source]]` birlikte indekslenen bir klasör kümesidir ve herhangi birini
+yazmak bu varsayılanın yerini alır; ev dizinini de yazın:
+
+```toml
+[[source]]
+name = "home"
+roots = ["/home/siz"]
+
+[[source]]
+name = "veri"
+roots = ["/mnt/veri", "/srv/medya"]
+```
+
+`scour stop` servisi durdurur, yeni dosyayla yeniden başlasın diye — açılan
+ilk yüz onu başlatır, birim olarak çalıştığı yerde `systemctl --user start
+scourd` başlatır. Sistem birimi yalnız `/etc/scour/<siz>.conf` dosyasında
+adı geçen dosya sistemlerini işaretler: başka bir diskteki kaynak, kurucu o
+kökle yeniden çalıştırılana kadar o diskin yazma sayacı oynadıkça yürünür.
+Atlama listeleri indekse neyin girmediğini belirler; beklenen bir dosya
+çıkmıyorsa önce oraya bakın.
 
 ## Sorgu dili
 

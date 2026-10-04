@@ -150,6 +150,11 @@ enum Command {
     Status,
     /// What the index contains.
     Stats,
+    /// Stop the service, to start it again with an edited config.toml.
+    ///
+    /// The next face that opens starts it; so does `systemctl --user start
+    /// scourd` where it runs as a unit.
+    Stop,
     /// Walk the filesystem again.
     Rescan {
         /// Narrow it to one subtree.
@@ -476,6 +481,7 @@ fn build(args: &Args) -> Result<Request> {
         Some(Command::Sources) => Request::Sources {},
         Some(Command::Status) => Request::Status {},
         Some(Command::Stats) => Request::Stats {},
+        Some(Command::Stop) => Request::Shutdown {},
         Some(Command::Rescan { path }) => Request::Rescan { path: path.clone() },
         Some(Command::Maintain { level }) => Request::Maintain {
             level: (*level).into(),
