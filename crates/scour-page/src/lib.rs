@@ -19,6 +19,9 @@ pub const KEPT: usize = 32;
 struct Held<T> {
     rows: Vec<T>,
     revision: u64,
+    /// Read again and no longer: whatever it is short of, the service does
+    /// not have. Keeps a page that is short for good from being asked forever.
+    settled: bool,
 }
 
 /// What a call changed, for a caller that has to tell a view about it. Said and
@@ -143,7 +146,16 @@ impl<T> Pages<T> {
             Some((out, revision)) if out == page => revision,
             _ => self.revision,
         };
-        self.held.insert(page, Held { rows, revision });
+        // The same length twice is all there is, whatever the count said.
+        let settled = self.held.get(&page).is_some_and(|h| h.rows.len() >= count);
+        self.held.insert(
+            page,
+            Held {
+                rows,
+                revision,
+                settled,
+            },
+        );
         if self.asked.map(|(out, _)| out) == Some(page) {
             self.asked = None;
         }
@@ -199,9 +211,18 @@ impl<T> Pages<T> {
         let from = Self::page_of(first.min(self.total - 1));
         let to = Self::page_of(last.min(self.total - 1));
         for page in from..=to {
+            // The last row of this page the eye can see, within the result.
+            let seen = last
+                .min(Self::start_of(page) + SPAN - 1)
+                .min(self.total - 1);
             match self.held.get(&page) {
                 None => return Some(page),
                 Some(held) if held.rows.is_empty() => return Some(page),
+                // A new question's first page is cut to a screenful; the rows
+                // past it are in the result and not in the page.
+                Some(held) if !held.settled && seen >= Self::start_of(page) + held.rows.len() => {
+                    return Some(page);
+                }
                 Some(held) if refresh && held.revision != self.revision => return Some(page),
                 Some(_) => {}
             }
@@ -352,6 +373,49 @@ mod tests {
             Some(25),
             "and the next question is about where it got to"
         );
+    }
+
+    /// The first page of a question is cut to a screenful. Scrolled past
+    /// it, the rest of the page was never asked for: on an index that did not
+    /// move, the rows below the first screen stayed blank.
+    #[test]
+    fn a_page_cut_short_is_read_whole_once_the_eye_goes_past_it() {
+        let mut p: Pages<usize> = Pages::default();
+        p.put(0, page_of(28, 0), 10_000);
+        assert_eq!(
+            p.next_page(0, 20, false, false),
+            None,
+            "all on screen is here"
+        );
+        assert_eq!(
+            p.next_page(20, 40, false, false),
+            Some(0),
+            "row 28 on is not"
+        );
+        p.put(0, page_of(SPAN, 0), 10_000);
+        assert_eq!(p.next_page(20, 40, false, false), None);
+        // A whole page and the next in sight: the next, not this one again.
+        assert_eq!(p.next_page(150, 250, false, false), Some(1));
+    }
+
+    #[test]
+    fn a_page_short_of_the_count_twice_is_not_asked_for_a_third_time() {
+        let mut p: Pages<usize> = Pages::default();
+        p.put(0, page_of(28, 0), 10_000);
+        assert_eq!(p.next_page(20, 40, false, false), Some(0));
+        p.put(0, page_of(28, 0), 10_000);
+        assert_eq!(
+            p.next_page(20, 40, false, false),
+            None,
+            "the service has no more"
+        );
+    }
+
+    #[test]
+    fn the_last_page_of_a_result_is_whole_however_short() {
+        let mut p: Pages<usize> = Pages::default();
+        p.put(2, page_of(17, 2 * SPAN), 2 * SPAN + 17);
+        assert_eq!(p.next_page(2 * SPAN, 2 * SPAN + 40, false, false), None);
     }
 
     #[test]
