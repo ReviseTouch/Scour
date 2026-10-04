@@ -34,7 +34,7 @@ mod ui {
 
 pub use ui::{
     Bar, Big, Cell, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule,
-    Scheme, Seg, Slice, Span, Theme,
+    Scheme, Seg, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -536,6 +536,10 @@ fn main() -> Result<()> {
         Rc::new(VecModel::default()),
     ];
     window.set_rows(ModelRc::from(rows.clone()));
+    // What the detail list draws: slots moved from row to row, never rebuilt.
+    let slots = rows::Slots::new(&rows);
+    window.set_slots(ModelRc::from(slots.clone()));
+    place(&window, &slots);
     window.set_lines(ModelRc::from(lines.clone()));
     window.set_facets(ModelRc::from(facets.clone()));
     window.set_rules_added(ModelRc::from(rules[0].clone()));
@@ -2050,15 +2054,31 @@ fn main() -> Result<()> {
         std::mem::forget(timer);
     }
 
-    // **What scrolled into sight.** See [`follow`] for the decision.
+    // **What scrolled into sight.** See [`follow`] for the decision. The slots
+    // first: this runs before the frame that shows the new position is drawn.
     {
         let rows = Rc::clone(&rows);
+        let slots = Rc::clone(&slots);
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let weak = window.as_weak();
+        // Restarted on every move, so it fires a moment after the last one.
+        let still = Rc::new(slint::Timer::default());
         window.on_moved(move || {
             stir(&state, &link);
             if let Some(w) = weak.upgrade() {
+                w.set_moving(true);
+                let weak = w.as_weak();
+                still.start(
+                    slint::TimerMode::SingleShot,
+                    std::time::Duration::from_millis(300),
+                    move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_moving(false);
+                        }
+                    },
+                );
+                place(&w, &slots);
                 follow(&w, &state, &link, &rows);
             }
         });
@@ -2067,6 +2087,7 @@ fn main() -> Result<()> {
     // a second is cheap to leave running and never what scrolling waits for.
     {
         let rows = Rc::clone(&rows);
+        let slots = Rc::clone(&slots);
         let lines = Rc::clone(&lines);
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
@@ -2086,6 +2107,7 @@ fn main() -> Result<()> {
                     0
                 });
                 lines.sync();
+                place(&w, &slots);
                 follow(&w, &state, &link, &rows);
                 pictures(&w, &state, &link, &rows, &lines);
                 peek(&w, &state, &link, &rows, &words.borrow().clone());
@@ -2109,6 +2131,78 @@ fn main() -> Result<()> {
     FIRST.with(|f| f.set(Some(launched)));
     if let Ok(scheme) = std::env::var("SCOUR_GUI_SCHEME") {
         window.global::<Theme>().set_dark(scheme != "light");
+    }
+
+    // How long the event loop was held, a second at a time: a tick every 2 ms
+    // that arrives late was kept waiting by a frame or by a callback. Average
+    // frame rates hide the one long frame a person sees as a stutter.
+    if std::env::var_os("SCOUR_GUI_STALLS").is_some() {
+        let last = std::cell::Cell::new(std::time::Instant::now());
+        let gaps = std::cell::RefCell::new(Vec::<f64>::new());
+        let since = std::cell::Cell::new(std::time::Instant::now());
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(2),
+            move || {
+                let now = std::time::Instant::now();
+                gaps.borrow_mut()
+                    .push(now.duration_since(last.replace(now)).as_secs_f64() * 1e3);
+                if since.get().elapsed() >= std::time::Duration::from_secs(1) {
+                    since.set(now);
+                    let mut g = std::mem::take(&mut *gaps.borrow_mut());
+                    g.sort_by(f64::total_cmp);
+                    let over = |ms: f64| g.iter().filter(|&&x| x > ms).count();
+                    // Busy is what each tick arrived past its 2 ms.
+                    let busy: f64 = g.iter().map(|x| (x - 2.0).max(0.0)).sum();
+                    eprintln!(
+                        "stalls: busy {busy:.0} ms/s · max {:.1} ms · p99 {:.1} · >20 ms {} · >33 ms {} · >50 ms {}",
+                        g.last().copied().unwrap_or(0.0),
+                        g.get(g.len() * 99 / 100).copied().unwrap_or(0.0),
+                        over(20.0),
+                        over(33.0),
+                        over(50.0),
+                    );
+                }
+            },
+        );
+    }
+
+    // A wheel turned over the middle of the window, `SCOUR_GUI_WHEEL=px` a
+    // notch, one every `SCOUR_GUI_SCROLL_MS`: the events a person sends, so
+    // only what a person moves is redrawn — `scroll_to` moves hidden views too.
+    if let Ok(px) = std::env::var("SCOUR_GUI_WHEEL")
+        && let Ok(px) = px.parse::<f32>()
+    {
+        let every = std::env::var("SCOUR_GUI_SCROLL_MS")
+            .ok()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(16);
+        let steps = std::env::var("SCOUR_GUI_WHEEL_STEPS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(400usize);
+        let weak = window.as_weak();
+        let done = std::cell::Cell::new(0usize);
+        let t = Box::leak(Box::new(slint::Timer::default()));
+        t.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(every),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                if done.get() >= steps {
+                    return;
+                }
+                done.set(done.get() + 1);
+                let size = w.window().size().to_logical(w.window().scale_factor());
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position: slint::LogicalPosition::new(size.width / 2.0, size.height / 2.0),
+                        delta_x: 0.0,
+                        delta_y: -px,
+                    });
+            },
+        );
     }
 
     // Scroll before the snapshot. A comma-separated list is walked a step at a
@@ -2661,6 +2755,14 @@ fn stir(state: &Rc<RefCell<State>>, link: &Rc<Link>) {
         let since = state.borrow().revision;
         link.send(Ask::Await { since });
     }
+}
+
+/// Put the detail list's slots on the rows in sight: one row above the first
+/// shown and the rest below, so a step either way finds a slot already there.
+fn place(w: &MainWindow, slots: &rows::Slots) {
+    let from = (w.get_first_row().max(0) as usize).saturating_sub(1);
+    slots.place(from, w.get_pool().max(1) as usize);
+    w.set_slot_from(from as i32);
 }
 
 /// Fetch the page the list is about to need, if it is not already coming.

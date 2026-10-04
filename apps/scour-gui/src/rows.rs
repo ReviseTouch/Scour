@@ -350,6 +350,8 @@ pub struct Rows {
     /// sweep skip a tick. May be too high, never too low: too low loses a picture.
     unlooked: Flag<usize>,
     notify: slint::ModelNotify,
+    /// The list's slots, told of every change the view is told of.
+    slots: RefCell<std::rc::Weak<Slots>>,
 }
 
 impl Default for Rows {
@@ -361,6 +363,7 @@ impl Default for Rows {
             resets: Flag::new(0),
             unlooked: Flag::new(0),
             notify: slint::ModelNotify::default(),
+            slots: RefCell::new(std::rc::Weak::new()),
         }
     }
 }
@@ -385,14 +388,18 @@ impl Rows {
         {
             let pages = self.pages.borrow();
             if pages.holds(page) {
+                let mut had = 0;
                 for kept in (0..SPAN).filter_map(|i| pages.at(page * SPAN + i)) {
                     let path = kept.row.path.to_string();
                     if kept.pic == Pic::Shown {
                         drawn.insert(path.clone(), kept.row.thumb.clone());
                     }
                     known.insert(path, kept.pic);
+                    had += 1;
                 }
-                for row in rows.iter_mut() {
+                // Only as far as the page reached before: a first page cut to a
+                // screenful, read whole, brings the rest of the page, not arrivals.
+                for row in rows.iter_mut().take(had) {
                     row.fresh = !row.path.is_empty() && !known.contains_key(row.path.as_str());
                     arrived |= row.fresh;
                 }
@@ -428,13 +435,21 @@ impl Rows {
         arrived
     }
 
+    /// One row is not what it was: the view and the slot showing it are told.
+    fn changed(&self, row: usize) {
+        self.notify.row_changed(row);
+        if let Some(slots) = self.slots.borrow().upgrade() {
+            slots.row_changed(row);
+        }
+    }
+
     /// Pass on what a page call changed, in the terms the view understands.
     fn tell(&self, change: scour_page::Change) {
         match change {
             scour_page::Change::Nothing => {}
             scour_page::Change::Rows { from, to } => {
                 for row in from..to {
-                    self.notify.row_changed(row);
+                    self.changed(row);
                 }
             }
             // Added/removed rather than reset: a reset rebuilds from the top,
@@ -456,6 +471,9 @@ impl Rows {
                     for row in from..to.min(now) {
                         self.notify.row_changed(row);
                     }
+                }
+                if let Some(slots) = self.slots.borrow().upgrade() {
+                    slots.refresh();
                 }
             }
         }
@@ -504,7 +522,7 @@ impl Rows {
             }
         }
         for row in cleared {
-            self.notify.row_changed(row);
+            self.changed(row);
         }
     }
 
@@ -584,7 +602,7 @@ impl Rows {
             }
         }
         for row in changed {
-            self.notify.row_changed(row);
+            self.changed(row);
         }
     }
 
@@ -651,7 +669,7 @@ impl Rows {
             }
         }
         for row in &drawn {
-            self.notify.row_changed(*row);
+            self.changed(*row);
         }
         (drawn.len(), ask)
     }
@@ -765,6 +783,123 @@ impl slint::Model for Rows {
             self.want.set(Some(row));
         }
         Some(Row::default())
+    }
+
+    fn model_tracker(&self) -> &dyn slint::ModelTracker {
+        &self.notify
+    }
+}
+
+/// The rows the detail list draws, one slot each, reused as the list moves.
+/// A `ListView` builds the row scrolling in and drops the one scrolling out,
+/// and Slint repaints the whole window for every element it frees: moving a
+/// row a frame cost twice what moving less than a row did. A slot is told its
+/// new row and keeps its elements, so a step down changes one slot.
+pub struct Slots {
+    rows: std::rc::Rc<Rows>,
+    /// Which row each slot shows; `None` past the end. Row `r` lives in slot
+    /// `r % len`, so the slots of the rows still on screen never move.
+    map: RefCell<Vec<Option<usize>>>,
+    /// The first row covered, kept for a refresh.
+    from: Flag<usize>,
+    notify: slint::ModelNotify,
+}
+
+impl Slots {
+    pub fn new(rows: &std::rc::Rc<Rows>) -> std::rc::Rc<Slots> {
+        let slots = std::rc::Rc::new(Slots {
+            rows: std::rc::Rc::clone(rows),
+            map: RefCell::new(Vec::new()),
+            from: Flag::new(0),
+            notify: slint::ModelNotify::default(),
+        });
+        *rows.slots.borrow_mut() = std::rc::Rc::downgrade(&slots);
+        slots
+    }
+
+    /// Cover `count` rows from `first`. A slot whose row is unchanged is not
+    /// told, which is the whole point.
+    pub fn place(&self, first: usize, count: usize) {
+        let count = count.max(1);
+        self.from.set(first);
+        let total = slint::Model::row_count(&*self.rows);
+        let was = self.map.borrow().len();
+        let mut changed = Vec::new();
+        {
+            let mut map = self.map.borrow_mut();
+            if was != count {
+                // Another length moves every row to another slot.
+                map.clear();
+                map.resize(count, None);
+            }
+            for row in first..first + count {
+                let slot = row % count;
+                let want = (row < total).then_some(row);
+                if map[slot] != want {
+                    map[slot] = want;
+                    changed.push(slot);
+                }
+            }
+        }
+        if count > was {
+            self.notify.row_added(was, count - was);
+        } else if count < was {
+            self.notify.row_removed(count, was - count);
+        }
+        for slot in changed {
+            self.notify.row_changed(slot);
+        }
+    }
+
+    /// Row `row` changed; the slot showing it, if any, is told.
+    fn row_changed(&self, row: usize) {
+        let len = self.map.borrow().len();
+        if len == 0 {
+            return;
+        }
+        let slot = row % len;
+        if self.map.borrow()[slot] == Some(row) {
+            self.notify.row_changed(slot);
+        }
+    }
+
+    /// The rows changed length: every slot again, past the end included.
+    fn refresh(&self) {
+        let len = self.map.borrow().len();
+        if len == 0 {
+            return;
+        }
+        self.place(self.from.get(), len);
+        for slot in 0..len {
+            self.notify.row_changed(slot);
+        }
+    }
+}
+
+impl slint::Model for Slots {
+    type Data = crate::Slot;
+
+    fn row_count(&self) -> usize {
+        self.map.borrow().len()
+    }
+
+    fn row_data(&self, slot: usize) -> Option<crate::Slot> {
+        let at = *self.map.borrow().get(slot)?;
+        Some(
+            match at.and_then(|row| Some((row, self.rows.row_data(row)?))) {
+                Some((row, data)) => crate::Slot {
+                    i: row as i32,
+                    row: data,
+                },
+                None => crate::Slot {
+                    i: -1,
+                    row: Row {
+                        thumb: blank(),
+                        ..Row::default()
+                    },
+                },
+            },
+        )
     }
 
     fn model_tracker(&self) -> &dyn slint::ModelTracker {
@@ -941,6 +1076,84 @@ mod model_tests {
         assert_eq!(table.as_ref().get().0.borrow()[2], ('-', 5_000_000, 4));
         assert_eq!(grid.as_ref().get().0.borrow()[2], ('-', 1_250_000, 1));
         assert_eq!(rows.held(), SPAN);
+    }
+
+    // Which slots were told they changed.
+    #[derive(Default)]
+    struct Told(RefCell<Vec<usize>>);
+
+    impl slint::private_unstable_api::re_exports::ModelChangeListener for Told {
+        fn row_changed(self: std::pin::Pin<&Self>, slot: usize) {
+            self.0.borrow_mut().push(slot);
+        }
+        fn row_added(self: std::pin::Pin<&Self>, _: usize, _: usize) {}
+        fn row_removed(self: std::pin::Pin<&Self>, _: usize, _: usize) {}
+        fn reset(self: std::pin::Pin<&Self>) {}
+    }
+
+    fn distinct(n: usize) -> Vec<Row> {
+        let paths: Vec<String> = (0..n).map(|i| format!("/r/{i}")).collect();
+        named(&paths.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// The point of the slots: a step down hands one slot a new row and leaves
+    /// the rest alone, so nothing on screen is rebuilt.
+    #[test]
+    fn a_step_down_moves_one_slot_and_tells_no_other() {
+        use slint::private_unstable_api::re_exports::ModelChangeListenerContainer;
+        let rows = std::rc::Rc::new(Rows::default());
+        rows.put(0, distinct(SPAN), Vec::new(), 10_000);
+        let slots = Slots::new(&rows);
+        slots.place(0, 10);
+        assert_eq!(slots.row_count(), 10);
+        for k in 0..10 {
+            assert_eq!(slots.row_data(k).map(|s| s.i), Some(k as i32));
+        }
+        let told = Box::pin(ModelChangeListenerContainer::<Told>::default());
+        slots
+            .model_tracker()
+            .attach_peer(told.as_ref().model_peer());
+        slots.place(1, 10);
+        assert_eq!(
+            *told.as_ref().get().0.borrow(),
+            [0],
+            "row 10 went to slot 0"
+        );
+        let s = slots.row_data(0).expect("slot");
+        assert_eq!((s.i, s.row.path.as_str()), (10, "/r/10"));
+        assert_eq!(
+            slots.row_data(1).map(|s| s.i),
+            Some(1),
+            "slot 1 kept its row"
+        );
+    }
+
+    #[test]
+    fn a_changed_row_tells_the_slot_showing_it_and_slots_past_the_end_are_empty() {
+        use slint::private_unstable_api::re_exports::ModelChangeListenerContainer;
+        let rows = std::rc::Rc::new(Rows::default());
+        rows.put(0, distinct(5), Vec::new(), 5);
+        let slots = Slots::new(&rows);
+        slots.place(0, 8);
+        assert_eq!(slots.row_data(4).map(|s| s.i), Some(4));
+        assert_eq!(slots.row_data(6).map(|s| s.i), Some(-1), "no row 6");
+        let told = Box::pin(ModelChangeListenerContainer::<Told>::default());
+        slots
+            .model_tracker()
+            .attach_peer(told.as_ref().model_peer());
+        rows.mark_picked(&["/r/3".to_string()].into_iter().collect());
+        assert_eq!(*told.as_ref().get().0.borrow(), [3]);
+    }
+
+    /// The first page of a question is cut to a screenful and later read whole:
+    /// the rows that brings are the rest of the page, not files that appeared.
+    #[test]
+    fn a_page_read_whole_after_a_cut_brings_no_arrivals() {
+        let rows = Rows::default();
+        rows.put(0, distinct(28), Vec::new(), 10_000);
+        let arrived = rows.put(0, distinct(SPAN), Vec::new(), 10_000);
+        assert!(!arrived, "nothing new appeared");
+        assert_eq!(rows.row_data(100).map(|r| r.fresh), Some(false));
     }
 
     #[test]

@@ -69,6 +69,13 @@ export struct Row {
     shot: bool,
 }
 
+/// A slot of the detail list and the row it is showing; `i` is -1 past the
+/// end. See `Slots` in `rows.rs`.
+export struct Slot {
+    i: int,
+    row: Row,
+}
+
 /// One line of the preview panel's fact list: a label and a value, both already
 /// formatted. Which facts, and in what order, is `scour_ui::preview::FACTS`.
 export struct Fact {
@@ -992,6 +999,20 @@ export component MainWindow inherits Window {
     }
     /// The first row of the result the list is showing, read off the viewport
     /// so the fetch decision never depends on the model reporting a miss.
+    /// The detail list's slots, filled from Rust: see `Slots` in `rows.rs`.
+    in property <[Slot]> slots;
+    /// The first row the slots cover, set by Rust with them.
+    in property <int> slot-from;
+    /// The list moved a moment ago; set and cleared by Rust.
+    in property <bool> moving;
+    /// How many slots the list wants: a screenful, a row half off the top, and
+    /// one each way to spare. Read by Rust, which places them.
+    out property <int> pool: Math.ceil(list.visible-height / Theme.row-height) + 3;
+    // A resize changes how many slots there are, before any timer comes round.
+    changed pool => { root.moved(); }
+    /// How wide a row is, from the columns: as a `ListView` read it off the rows.
+    property <length> row-w: root.cw.length == 0 ? 0px
+        : root.cx[root.cw.length - 1] + root.cw[root.cw.length - 1] + 12px;
     out property <int> first-row: root.grid
         ? max(0, Math.floor((0px - tiles.viewport-y) / root.tile-h)) * root.per-line
         : max(0, Math.floor((0px - list.viewport-y) / Theme.row-height));
@@ -2786,7 +2807,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                list := ListView {
+                list := ScrollView {
                     // The window draws its own, in the lane below. See `sb-`.
                     vertical-scrollbar-policy: ScrollBarPolicy.always-off;
                     // Capped to nothing rather than put behind an `if`: an id
@@ -2798,239 +2819,206 @@ export component MainWindow inherits Window {
                     min-height: 0px;
                     max-height: root.grid ? 0px : 100000px;
 
-                    // Over the model, not over a count: a `for` on an integer
-                    // builds every element at once and `ListView` stops being
-                    // lazy. `row_count` is the whole result, so the view sizes
-                    // its scrollbar from the real length and asks for what it draws.
-                    for here[i] in root.rows: Rectangle {
-                        height: Theme.row-height;
-                        // Never animated: selecting is where you are, not an
-                        // event that happened to the list. The arrival wash is
-                        // a separate layer with its own clock, below.
-                        background: (here.picked || i == root.selected) ? Theme.selection
-                            : rowtouch.has-hover ? Theme.hover
-                            : transparent;
+                    // Slots that are never destroyed, not a `ListView`: that one
+                    // drops the row scrolling out and builds the one scrolling
+                    // in, and Slint repaints the whole window for every element
+                    // it frees. Rust moves a slot to its new row — see `Slots`.
+                    // The length is the whole result, so the scrollbar is too.
+                    viewport-height: root.rows.length * Theme.row-height;
+                    viewport-width: max(self.visible-width, root.row-w);
+                    // The slots' origin, at the first row they cover. Inside it a
+                    // slot is at most a screen down: positions a million rows
+                    // down are past what a 32-bit float keeps to the pixel, and
+                    // rows placed there drew 16px apart instead of 30.
+                    Rectangle {
+                        y: root.slot-from * Theme.row-height;
+                        width: parent.width;
+                        height: root.slots.length * Theme.row-height;
+                        for slot in root.slots: Rectangle {
+                            property <int> i: slot.i;
+                            property <Row> here: slot.row;
+                            visible: slot.i >= 0;
+                            x: 0px;
+                            y: (i - root.slot-from) * Theme.row-height;
+                            width: parent.width;
+                            height: Theme.row-height;
+                            // Never animated: selecting is where you are, not an
+                            // event that happened to the list. The arrival wash is
+                            // a separate layer with its own clock, below.
+                            background: (here.picked || i == root.selected) ? Theme.selection
+                                : rowtouch.has-hover ? Theme.hover
+                                : transparent;
 
-                        // The arrival wash: translucent, so a row that is both
-                        // new and selected shows both, and it fades away.
-                        Rectangle {
-                            background: here.fresh ? Theme.t0.with-alpha(0.22) : transparent;
-                            animate background { duration: 1600ms; easing: ease-out; }
-                        }
-
-                        // Where the keyboard is, which is not what is selected:
-                        // a ring, because a fourth shade of blue would read as
-                        // "more selected", which is not a thing.
-                        if i == root.selected: Rectangle {
-                            background: transparent;
-                            border-width: 1px;
-                            border-color: Theme.focus;
-                        }
-
-                        rowtouch := TouchArea {
-                            clicked => {
-                                root.selected = i;
-                                root.focus-query();
-                                root.tip-text = root.tip-pending;
-                            }
-                            double-clicked => {
-                                root.selected = i;
-                                root.activated(i);
-                            }
-                            // A press, not a click: a click carries no modifiers
-                            // here, and `Ctrl` and `Shift` change what it means.
-                            pointer-event(e) => {
-                                if (e.kind == PointerEventKind.down
-                                    && e.button == PointerEventButton.left) {
-                                    root.selected = i;
-                                    root.pick(i, e.modifiers.control || e.modifiers.meta,
-                                        e.modifiers.shift);
-                                }
-                                if (e.button == PointerEventButton.right
-                                    && e.kind == PointerEventKind.down) {
-                                    root.selected = i;
-                                    // Right-clicking outside the selection selects what
-                                    // was right-clicked: a menu must be about what is
-                                    // under the pointer.
-                                    root.menu-at(i, self.absolute-position.x + self.mouse-x,
-                                        self.absolute-position.y + self.mouse-y);
+                            // The arrival wash: translucent, so a row that is both
+                            // new and selected shows both, and it fades away. Not
+                            // while the list moves: a slot handed from a new row
+                            // to an old one would fade on the wrong row.
+                            Rectangle {
+                                background: here.fresh ? Theme.t0.with-alpha(0.22) : transparent;
+                                animate background {
+                                    duration: root.moving ? 0ms : 1600ms;
+                                    easing: ease-out;
                                 }
                             }
-                        }
 
-                        Rectangle {
-                            x: 0;
-                            // Fixed: the stripe is the age, and an arrival does
-                            // not change it. The wash behind the row says that.
-                            width: 3px;
-                            height: parent.height;
-                            background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
-                                 : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
-                                 : here.age == 4 ? Theme.t4 : Theme.t5;
-                        }
-
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            spacing: 8px;
-
-                            // The kind's icon, spelled out one kind at a time:
-                            // `@image-url` is resolved at build time. Tinted
-                            // from `scour-ui`. A conditional rather than a zero
-                            // width, which would still take the row's spacing.
-                            if root.iconed: VerticalLayout {
-                                alignment: center;
-                                width: 15px;
-                            // No thumbnail in a detail row: `thumb` is drawn in
-                            // the grid, where a picture is the question.
-                            if here.ktoken == "folder": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/folder.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "doc": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/doc.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "code": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/code.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "image": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/image.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "video": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/video.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "media": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/media.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "audio": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/audio.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "archive": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/archive.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "exec": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/exec.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "data": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/data.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "config": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/config.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "font": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/font.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "build": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/build.svg");
-                                colorize: here.tint;
-                            }
-                            if here.ktoken == "file": Image {
-                                width: 15px;
-                                height: 15px;
-                                source: @image-url("icons/file.svg");
-                                colorize: here.tint;
-                            }
+                            // Where the keyboard is, which is not what is selected:
+                            // a ring, because a fourth shade of blue would read as
+                            // "more selected", which is not a thing.
+                            // Shown, not built: a slot is never rebuilt, see `pool`.
+                            Rectangle {
+                                visible: i == root.selected;
+                                background: transparent;
+                                border-width: 1px;
+                                border-color: Theme.focus;
                             }
 
-                            // One loop over the cells: which columns are shown
-                            // is a person's choice. The name is found by `id`,
-                            // and the icon's room comes out of the name's width.
-                            for c[ci] in here.cells: HorizontalLayout {
-                                // As wide as its heading, icon included: taking
-                                // the icon off twice shifts every later column.
-                                width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 23px : 0px));
-
-                                if c.id == "name": Marked {
-                                    pre: c.pre;
-                                    hit: c.hit;
-                                    post: c.post;
-                                    colour: here.is-dir ? Theme.q-key : Theme.ink;
-                                    width: parent.width;
-                                    // The row's pointer, in this cell, judged
-                                    // by the column table rather than by this
-                                    // element's geometry: a `changed` binding
-                                    // that reads geometry recurses while the
-                                    // repeater lays out. The row owns the touch
-                                    // area, so no click is taken from it.
-                                    property <bool> under: rowtouch.has-hover
-                                        && rowtouch.mouse-x >= root.cx[ci]
-                                        && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
-                                    changed under => {
-                                        if (self.under && self.preferred-width > self.width) {
-                                            root.tip-pending = c.pre + c.hit + c.post;
-                                            root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
-                                            root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
-                                        } else if (root.tip-pending == c.pre + c.hit + c.post) {
-                                            root.tip-pending = "";
-                                            root.tip-text = "";
-                                        }
+                            rowtouch := TouchArea {
+                                clicked => {
+                                    root.selected = i;
+                                    root.focus-query();
+                                    root.tip-text = root.tip-pending;
+                                }
+                                double-clicked => {
+                                    root.selected = i;
+                                    root.activated(i);
+                                }
+                                // A press, not a click: a click carries no modifiers
+                                // here, and `Ctrl` and `Shift` change what it means.
+                                pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.down
+                                        && e.button == PointerEventButton.left) {
+                                        root.selected = i;
+                                        root.pick(i, e.modifiers.control || e.modifiers.meta,
+                                            e.modifiers.shift);
+                                    }
+                                    if (e.button == PointerEventButton.right
+                                        && e.kind == PointerEventKind.down) {
+                                        root.selected = i;
+                                        // Right-clicking outside the selection selects what
+                                        // was right-clicked: a menu must be about what is
+                                        // under the pointer.
+                                        root.menu-at(i, self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y);
                                     }
                                 }
+                            }
 
-                                if c.id != "name": Text {
-                                    width: root.cw[ci];
-                                    text: c.text;
-                                    // The age is the stamp's own colour; `-1` is
-                                    // a column that is not a time at all.
-                                    color: c.dim ? Theme.ink-3
-                                         : c.age < 0 ? (c.right ? Theme.ink-2 : Theme.ink-3)
-                                         : c.age == 0 ? Theme.t0 : c.age == 1 ? Theme.t1
-                                         : c.age == 2 ? Theme.t2 : c.age == 3 ? Theme.t3
-                                         : c.age == 4 ? Theme.t4 : Theme.t5;
-                                    // An empty family is the window's own.
-                                    font-family: c.mono ? Fonts.mono : "";
-                                    font-size: c.mono ? 11.5px : Fonts.small;
-                                    horizontal-alignment: c.right ? right : left;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                    property <bool> under: rowtouch.has-hover
-                                        && rowtouch.mouse-x >= root.cx[ci]
-                                        && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
-                                    changed under => {
-                                        if (self.under && self.preferred-width > self.width) {
-                                            root.tip-pending = c.text;
-                                            root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
-                                            root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
-                                        } else if (root.tip-pending == c.text) {
-                                            root.tip-pending = "";
-                                            root.tip-text = "";
+                            Rectangle {
+                                x: 0;
+                                // Fixed: the stripe is the age, and an arrival does
+                                // not change it. The wash behind the row says that.
+                                width: 3px;
+                                height: parent.height;
+                                background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
+                                     : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
+                                     : here.age == 4 ? Theme.t4 : Theme.t5;
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 8px;
+
+                                // The kind's icon, spelled out one kind at a time:
+                                // `@image-url` is resolved at build time. Tinted
+                                // from `scour-ui`. A conditional rather than a zero
+                                // width, which would still take the row's spacing.
+                                if root.iconed: VerticalLayout {
+                                    alignment: center;
+                                    width: 15px;
+                                // No thumbnail in a detail row: `thumb` is drawn in
+                                // the grid, where a picture is the question. One image
+                                // whose source follows the kind, not one conditional
+                                // each: a slot is never rebuilt, see `pool`.
+                                Image {
+                                    width: 15px;
+                                    height: 15px;
+                                    source: here.ktoken == "folder" ? @image-url("icons/folder.svg")
+                                        : here.ktoken == "doc" ? @image-url("icons/doc.svg")
+                                        : here.ktoken == "code" ? @image-url("icons/code.svg")
+                                        : here.ktoken == "image" ? @image-url("icons/image.svg")
+                                        : here.ktoken == "video" ? @image-url("icons/video.svg")
+                                        : here.ktoken == "media" ? @image-url("icons/media.svg")
+                                        : here.ktoken == "audio" ? @image-url("icons/audio.svg")
+                                        : here.ktoken == "archive" ? @image-url("icons/archive.svg")
+                                        : here.ktoken == "exec" ? @image-url("icons/exec.svg")
+                                        : here.ktoken == "data" ? @image-url("icons/data.svg")
+                                        : here.ktoken == "config" ? @image-url("icons/config.svg")
+                                        : here.ktoken == "font" ? @image-url("icons/font.svg")
+                                        : here.ktoken == "build" ? @image-url("icons/build.svg")
+                                        : here.ktoken == "file" ? @image-url("icons/file.svg")
+                                        : @image-url("");
+                                    colorize: here.tint;
+                                }
+                                }
+
+                                // One loop over the cells: which columns are shown
+                                // is a person's choice. The name is found by `id`,
+                                // and the icon's room comes out of the name's width.
+                                // Over the headings, which change only when the columns
+                                // do: a loop over the row's own cells would rebuild
+                                // every cell of a slot each time the slot moved on.
+                                for h[ci] in root.heads: HorizontalLayout {
+                                    property <Cell> c: here.cells[ci];
+                                    // As wide as its heading, icon included: taking
+                                    // the icon off twice shifts every later column.
+                                    width: max(0px, root.cw[ci] - (ci == 0 && root.iconed ? 23px : 0px));
+
+                                    if h.id == "name": Marked {
+                                        pre: c.pre;
+                                        hit: c.hit;
+                                        post: c.post;
+                                        colour: here.is-dir ? Theme.q-key : Theme.ink;
+                                        width: parent.width;
+                                        // The row's pointer, in this cell, judged
+                                        // by the column table rather than by this
+                                        // element's geometry: a `changed` binding
+                                        // that reads geometry recurses while the
+                                        // repeater lays out. The row owns the touch
+                                        // area, so no click is taken from it.
+                                        property <bool> under: rowtouch.has-hover
+                                            && rowtouch.mouse-x >= root.cx[ci]
+                                            && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
+                                        changed under => {
+                                            if (self.under && self.preferred-width > self.width) {
+                                                root.tip-pending = c.pre + c.hit + c.post;
+                                                root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
+                                                root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
+                                            } else if (root.tip-pending == c.pre + c.hit + c.post) {
+                                                root.tip-pending = "";
+                                                root.tip-text = "";
+                                            }
+                                        }
+                                    }
+
+                                    if h.id != "name": Text {
+                                        width: root.cw[ci];
+                                        text: c.text;
+                                        // The age is the stamp's own colour; `-1` is
+                                        // a column that is not a time at all.
+                                        color: c.dim ? Theme.ink-3
+                                             : c.age < 0 ? (c.right ? Theme.ink-2 : Theme.ink-3)
+                                             : c.age == 0 ? Theme.t0 : c.age == 1 ? Theme.t1
+                                             : c.age == 2 ? Theme.t2 : c.age == 3 ? Theme.t3
+                                             : c.age == 4 ? Theme.t4 : Theme.t5;
+                                        // An empty family is the window's own.
+                                        font-family: c.mono ? Fonts.mono : "";
+                                        font-size: c.mono ? 11.5px : Fonts.small;
+                                        horizontal-alignment: c.right ? right : left;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        property <bool> under: rowtouch.has-hover
+                                            && rowtouch.mouse-x >= root.cx[ci]
+                                            && rowtouch.mouse-x < root.cx[ci] + root.cw[ci];
+                                        changed under => {
+                                            if (self.under && self.preferred-width > self.width) {
+                                                root.tip-pending = c.text;
+                                                root.tip-x = rowtouch.absolute-position.x + rowtouch.mouse-x + 14px;
+                                                root.tip-y = rowtouch.absolute-position.y + rowtouch.height + 2px;
+                                            } else if (root.tip-pending == c.text) {
+                                                root.tip-pending = "";
+                                                root.tip-text = "";
+                                            }
                                         }
                                     }
                                 }
