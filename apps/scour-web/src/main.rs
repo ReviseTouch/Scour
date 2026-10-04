@@ -542,14 +542,8 @@ fn api_icon(stream: &mut TcpStream, req: &http::Req) {
 /// says which paths have one now, and the page fetches those from `/api/icon`.
 fn api_thumb(stream: &mut TcpStream, addr: &str, req: &http::Req) {
     // In the body, not the query: a request line past 16 KiB is cut rather
-    // than refused. Newline-separated, the one byte a filename cannot hold.
-    let files: Vec<String> = req
-        .body
-        .split('\n')
-        .map(str::trim_end)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect();
+    // than refused.
+    let files = paths_in(req);
     if files.is_empty() {
         http::json(stream, &serde_json::json!({ "ready": [], "ran": 0 }));
         return;
@@ -1190,15 +1184,11 @@ fn api_rename(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// only if the index holds the path; the move is this process's, with this
 /// user's permissions, and [`Request::Recheck`] only re-reads.
 fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+    let asked = paths_in(req);
+    if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
         return;
-    };
-    let asked: Vec<String> = raw
-        .split('\n')
-        .filter(|p| !p.is_empty())
-        .map(str::to_owned)
-        .collect();
+    }
 
     let mut gone = Vec::new();
     let mut refused = Vec::new();
@@ -1228,12 +1218,23 @@ fn api_trash(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     );
 }
 
-/// The paths a request names, one a line, kept only where the index knows
-/// them: the fence every endpoint that changes the disk stands behind.
-fn fenced(client: &Mutex<Link>, raw: &str) -> (Vec<String>, Vec<String>) {
+/// The paths a request carries: a JSON array of strings in its body. Not one
+/// a line — a name may hold a newline, and `victim\nsuffix.txt` split there
+/// sent `victim` to the trash.
+fn paths_in(req: &http::Req) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(&req.body)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Those paths, kept only where the index knows them: the fence every
+/// endpoint that changes the disk stands behind.
+fn fenced(client: &Mutex<Link>, asked: &[String]) -> (Vec<String>, Vec<String>) {
     let mut known = Vec::new();
     let mut refused = Vec::new();
-    for path in raw.split('\n').filter(|p| !p.is_empty()) {
+    for path in asked {
         if matches!(
             call(
                 client,
@@ -1254,11 +1255,12 @@ fn fenced(client: &Mutex<Link>, raw: &str) -> (Vec<String>, Vec<String>) {
 /// Remove for good. The page asked first; this only does it, and tells the
 /// service to look again as the trash does.
 fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+    let asked = paths_in(req);
+    if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
         return;
-    };
-    let (known, mut refused) = fenced(client, raw);
+    }
+    let (known, mut refused) = fenced(client, &asked);
     let mut gone = 0usize;
     for path in &known {
         match scour_trash::erase(std::path::Path::new(path)) {
@@ -1277,11 +1279,12 @@ fn api_delete(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Show these in the file manager, each selected in its folder.
 fn api_reveal(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    let Some(raw) = req.param("paths").filter(|p| !p.is_empty()) else {
+    let asked = paths_in(req);
+    if asked.is_empty() {
         http::fail(stream, "400 Bad Request", "no paths");
         return;
-    };
-    let (known, refused) = fenced(client, raw);
+    }
+    let (known, refused) = fenced(client, &asked);
     let paths: Vec<&std::path::Path> = known.iter().map(std::path::Path::new).collect();
     scour_openers::reveal(&paths);
     http::json(
@@ -1308,14 +1311,15 @@ fn api_send_targets(stream: &mut TcpStream) {
 
 /// Send what the index knows of these to one of the places above.
 fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
-    let (Some(raw), Some(to)) = (
-        req.param("paths").filter(|p| !p.is_empty()),
-        req.param("to").filter(|t| !t.is_empty()),
-    ) else {
+    let asked = paths_in(req);
+    let Some(to) = req
+        .param("to")
+        .filter(|t| !t.is_empty() && !asked.is_empty())
+    else {
         http::fail(stream, "400 Bad Request", "no paths or no target");
         return;
     };
-    let (known, refused) = fenced(client, raw);
+    let (known, refused) = fenced(client, &asked);
     if known.is_empty() {
         http::json(stream, &serde_json::json!({ "error": refused.join("\n") }));
         return;
@@ -1632,6 +1636,26 @@ fn sort_of(s: Option<&str>) -> SortKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name may hold a newline. Split on one, `victim\nsuffix.txt` named
+    /// `victim`, and the trash took the file nobody had chosen.
+    #[test]
+    fn a_path_with_a_newline_in_it_arrives_as_one_path() {
+        let posted = |body: String| http::Req {
+            method: "POST".into(),
+            path: "/api/trash".into(),
+            query: Default::default(),
+            headers: Default::default(),
+            body,
+        };
+        let names = ["/d/victim\nsuffix.txt", "/d/\"q\" ı İ\r"];
+        let req = posted(serde_json::to_string(&names).unwrap());
+        assert_eq!(paths_in(&req), names);
+        // Anything but an array of strings is no paths, never a guess at some.
+        for body in ["", "/d/victim", "{\"paths\":[]}", "[1, 2]"] {
+            assert!(paths_in(&posted(body.into())).is_empty(), "{body:?}");
+        }
+    }
 
     #[test]
     fn only_this_bridge_by_its_own_names_is_ours() {

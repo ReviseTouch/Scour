@@ -1719,11 +1719,13 @@
       { method: "POST" },
     ).catch(() => {}),
     /* The bridge moves them with this user's permissions; the service is only
-       told to look again. */
+       told to look again. Paths travel as a JSON array in the body: a name
+       may hold a newline, and a list split on one names other files. */
     trash: async (paths) => {
-      const r = await fetch(`/api/trash?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+      const r = await fetch(`/api/trash?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
         cache: "no-store",
+        body: JSON.stringify(paths),
       });
       if (!r.ok) throw new Error(`trash: ${r.status}`);
       const j = await r.json();
@@ -1732,9 +1734,10 @@
     },
     /* For good: the page has asked first, and nothing brings these back. */
     erase: async (paths) => {
-      const r = await fetch(`/api/delete?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+      const r = await fetch(`/api/delete?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
         cache: "no-store",
+        body: JSON.stringify(paths),
       });
       if (!r.ok) throw new Error(`delete: ${r.status}`);
       const j = await r.json();
@@ -1743,9 +1746,10 @@
     },
     /* Each one selected in its folder, in the file manager. */
     reveal: async (paths) => {
-      const r = await fetch(`/api/reveal?${new URLSearchParams({ paths: paths.join("\n"), t: TOKEN })}`, {
+      const r = await fetch(`/api/reveal?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
         cache: "no-store",
+        body: JSON.stringify(paths),
       });
       if (!r.ok) throw new Error(`reveal: ${r.status}`);
       return r.json();
@@ -1753,9 +1757,10 @@
     /* Asked each time the menu opens: a drive comes and goes. */
     sendTargets: () => SERVICE.get("send-targets", {}),
     send: async (to, paths) => {
-      const r = await fetch(`/api/send?${new URLSearchParams({ to, paths: paths.join("\n"), t: TOKEN })}`, {
+      const r = await fetch(`/api/send?${new URLSearchParams({ to, t: TOKEN })}`, {
         method: "POST",
         cache: "no-store",
+        body: JSON.stringify(paths),
       });
       if (!r.ok) throw new Error(`send: ${r.status}`);
       return r.json();
@@ -1787,7 +1792,7 @@
       const r = await fetch(`/api/thumb?${new URLSearchParams({ t: TOKEN })}`, {
         method: "POST",
         cache: "no-store",
-        body: paths.join("\n"),
+        body: JSON.stringify(paths),
       });
       if (!r.ok) throw new Error(`thumb: ${r.status}`);
       return r.json();
