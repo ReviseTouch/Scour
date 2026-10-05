@@ -13,3 +13,7 @@ workspace = true
 
 [dependencies]
 scour-core = { workspace = true }
+
+# The account's locale on Windows, where no variable says it.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Globalization"] }

@@ -144,13 +144,22 @@ pub fn system_language() -> String {
             return v.split('.').next().unwrap_or(v).to_owned();
         }
     }
+    // No such variable on Windows: the account's own locale, `tr-TR`.
     #[cfg(windows)]
-    {
-        // No environment variable on Windows; English until a face asks the system.
-        return "en".into();
+    if let Some(tag) = windows_locale() {
+        return tag;
     }
-    #[cfg(not(windows))]
     "en".into()
+}
+
+#[cfg(windows)]
+fn windows_locale() -> Option<String> {
+    use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+    let mut buf = [0u16; 85];
+    // SAFETY: a buffer of LOCALE_NAME_MAX_LENGTH, its length passed with it.
+    let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+    let name = String::from_utf16_lossy(buf.get(..usize::try_from(n).ok()?.checked_sub(1)?)?);
+    (!name.is_empty()).then_some(name)
 }
 
 #[cfg(test)]

@@ -233,8 +233,20 @@ impl Config {
     }
 
     /// Fill in what a bare file leaves out: the home directory as a source, and
-    /// the platform's list of things no index should hold.
+    /// the platform's list of things no index should hold. On Windows every
+    /// fixed disk instead, one source each, as Everything does: a person there
+    /// looks for files on D: as often as in their profile.
     fn with_defaults_filled(mut self) -> Self {
+        if self.sources.is_empty() {
+            #[cfg(windows)]
+            self.sources
+                .extend(fixed_drives().into_iter().map(|root| SourceCfg {
+                    name: drive_source_name(&root),
+                    kind: SourceKindCfg::Local,
+                    roots: vec![root],
+                    watch: true,
+                }));
+        }
         if self.sources.is_empty() {
             let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf());
             self.sources.push(SourceCfg {
@@ -284,6 +296,39 @@ impl Config {
     }
 }
 
+/// `C:\\` becomes `drive-c`: a source name is a config key and a wire word.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn drive_source_name(root: &std::path::Path) -> String {
+    let letter = root
+        .to_string_lossy()
+        .chars()
+        .next()
+        .unwrap_or('x')
+        .to_ascii_lowercase();
+    format!("drive-{letter}")
+}
+
+/// The drive letters that are fixed disks — not removable, optical or network:
+/// those come and go, and a walk of a network share is a walk of somebody's
+/// server.
+#[cfg(windows)]
+fn fixed_drives() -> Vec<std::path::PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
+    const DRIVE_FIXED: u32 = 3;
+    // SAFETY: no arguments; a bit mask of the letters in use.
+    let mask = unsafe { GetLogicalDrives() };
+    (0..26u8)
+        .filter(|i| mask & (1 << i) != 0)
+        .filter_map(|i| {
+            let root = format!("{}:\\", char::from(b'A' + i));
+            let wide: Vec<u16> = root.encode_utf16().chain([0]).collect();
+            // SAFETY: a NUL-terminated string that outlives the call.
+            (unsafe { GetDriveTypeW(wide.as_ptr()) } == DRIVE_FIXED)
+                .then(|| std::path::PathBuf::from(root))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +340,12 @@ mod tests {
         let back: Config = toml::from_str(&text).expect("deserialise");
         assert_eq!(c, back);
         assert_eq!(c.sources.len(), 1, "a bare config still indexes something");
+    }
+
+    #[test]
+    fn a_drive_is_a_source_named_for_its_letter() {
+        assert_eq!(drive_source_name(std::path::Path::new("C:\\")), "drive-c");
+        assert_eq!(drive_source_name(std::path::Path::new("D:\\")), "drive-d");
     }
 
     #[test]

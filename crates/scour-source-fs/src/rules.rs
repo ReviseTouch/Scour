@@ -335,15 +335,9 @@ pub fn platform_defaults() -> (Vec<String>, Vec<String>, Vec<String>) {
     }
     #[cfg(windows)]
     {
-        paths.extend(
-            [
-                "C:/Windows/WinSxS",
-                "C:/Windows/Temp",
-                "C:/$Recycle.Bin",
-                "C:/System Volume Information",
-            ]
-            .map(String::from),
-        );
+        paths.extend(["C:/Windows/WinSxS", "C:/Windows/Temp"].map(String::from));
+        // On every drive, not only C:, now that every fixed drive is a source.
+        dirs.extend(["$Recycle.Bin", "System Volume Information"].map(String::from));
     }
 
     // Everywhere: churn, not content. `target` is 852,437 of 2,986,545 entries

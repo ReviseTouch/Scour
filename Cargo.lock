@@ -5045,6 +5045,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml 1.1.4+spec-1.1.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5115,6 +5116,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "windows",
 ]
 
 [[package]]
@@ -5129,6 +5131,7 @@ name = "scour-i18n"
 version = "0.2.0-alpha.6"
 dependencies = [
  "scour-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
