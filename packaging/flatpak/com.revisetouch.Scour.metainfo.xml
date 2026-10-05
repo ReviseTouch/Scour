@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.6" date="2026-10-05" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.6</url>
+      <description>
+        <p>Security and file-safety fixes found in a review and an outside QA pass: a folder name could run script in the browser page, another account could use the browser bridge, a name with a newline in it sent another file to the trash, and the trash could write over a file already in it. Scrolling the window is smoother, and rows below the first screen no longer stay blank.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.5" date="2026-10-02" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.5</url>
       <description>
