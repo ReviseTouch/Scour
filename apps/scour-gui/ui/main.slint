@@ -425,7 +425,7 @@ component Sheet inherits Rectangle {
     // scroller: a `ScrollView` asks for very little, which collapses the panel.
     height: min(root.room-h - 120px, sheet-body.preferred-height + 76px);
     background: Theme.panel;
-    border-width: 1px;
+    border-width: Theme.hair;
     border-color: Theme.line;
     border-radius: 4px;
     // No `z`: Slint hoists an element with one into a pass the hit test does
@@ -486,12 +486,16 @@ component Sheet inherits Rectangle {
 // view switch beside it: something done to the window, not to what it shows.
 component Tool inherits Rectangle {
     in property <string> glyph;
+    /// Drawn instead of the glyph when given: a symbol is only as good as the
+    /// fonts of the machine, and Windows' have none of these.
+    in property <image> icon;
+    in property <bool> has-icon: false;
     in property <bool> on;
     callback clicked();
 
     width: 18px;
     height: 18px;
-    border-width: 1px;
+    border-width: Theme.hair;
     border-radius: 3px;
     border-color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
 
@@ -499,7 +503,7 @@ component Tool inherits Rectangle {
         clicked => { root.clicked(); }
     }
 
-    Text {
+    if !root.has-icon: Text {
         text: root.glyph;
         color: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-3;
         font-size: 11px;
@@ -508,6 +512,14 @@ component Tool inherits Rectangle {
         vertical-alignment: center;
         width: parent.width;
         height: parent.height;
+    }
+    if root.has-icon: Image {
+        source: root.icon;
+        colorize: root.on ? Theme.q-key : touch.has-hover ? Theme.ink : Theme.ink-3;
+        width: 12px;
+        height: 12px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
 }
 
@@ -520,7 +532,7 @@ component Push inherits Rectangle {
 
     width: text.preferred-width + 24px;
     height: 26px;
-    border-width: 1px;
+    border-width: Theme.hair;
     border-radius: 3px;
     border-color: root.asking ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
     background: touch.has-hover ? Theme.hover : transparent;
@@ -652,7 +664,7 @@ component RuleRow inherits Rectangle {
             Rectangle {
                 width: 12px;
                 height: 12px;
-                border-width: 1px;
+                border-width: Theme.hair;
                 border-radius: 2px;
                 border-color: root.off ? Theme.line : Theme.q-key;
                 background: root.off ? transparent : Theme.q-key;
@@ -1053,6 +1065,8 @@ export component MainWindow inherits Window {
     /// A menu item asked for by its key rather than by the menu: about the
     /// row the list has selected, whatever menu was last open.
     callback key-action(string);
+    /// Ctrl with + or - (1, -1), or 0: everything bigger, smaller, as it was.
+    callback zoom-step(int);
     /// The same overlay, holding the column switches instead of row actions.
     in-out property <bool> menu-columns: false;
     callback column-toggled(string);
@@ -1298,7 +1312,7 @@ export component MainWindow inherits Window {
         width: parent.width - 40px;
         height: parent.height - 40px;
         background: Theme.panel;
-        border-width: 1px;
+        border-width: Theme.hair;
         border-color: Theme.line;
         border-radius: 3px;
         clip: true;
@@ -1364,7 +1378,7 @@ export component MainWindow inherits Window {
                     clip: true;
                     background: Theme.panel-2;
                     border-radius: 4px;
-                    border-width: 1px;
+                    border-width: Theme.hair;
                     border-color: input.has-focus ? Theme.focus : Theme.line;
                     animate border-color { duration: 120ms; }
                     // One number for all three layers: the coloured text, the
@@ -1576,6 +1590,18 @@ export component MainWindow inherits Window {
                         }
                         // The keys the menu says, where the field does not need
                         // them for its own text.
+                        if (e.modifiers.control && (e.text == "+" || e.text == "=")) {
+                            root.zoom-step(1);
+                            return accept;
+                        }
+                        if (e.modifiers.control && e.text == "-") {
+                            root.zoom-step(-1);
+                            return accept;
+                        }
+                        if (e.modifiers.control && e.text == "0") {
+                            root.zoom-step(0);
+                            return accept;
+                        }
                         if (e.text == Key.F2) {
                             root.key-action("rename");
                             return accept;
@@ -1628,12 +1654,13 @@ export component MainWindow inherits Window {
                         y: (field.height - 22px) / 2;
                         border-radius: 3px;
                         background: chevron.has-hover || root.past-open ? Theme.hover : Theme.panel-2;
-                        Text {
-                            text: "▾";
-                            color: root.past-open ? Theme.ink : Theme.ink-3;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
+                        Image {
+                            source: @image-url("icons/tools/chevron.svg");
+                            colorize: root.past-open ? Theme.ink : Theme.ink-3;
+                            width: 12px;
+                            height: 12px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                         }
                         chevron := TouchArea {
                             // The pointer, not the click: by the time a click
@@ -1788,10 +1815,10 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
-                        Tool { glyph: "⇄"; clicked => { root.tool-clicked("faces"); } }
+                        Tool { icon: @image-url("icons/tools/faces.svg"); has-icon: true; clicked => { root.tool-clicked("faces"); } }
                         Tool { glyph: "文"; clicked => { root.tool-clicked("language"); } }
-                        Tool { glyph: "⊘"; clicked => { root.tool-clicked("rules"); } }
-                        Tool { glyph: "⤓"; clicked => { root.tool-clicked("export"); } }
+                        Tool { icon: @image-url("icons/tools/rules.svg"); has-icon: true; clicked => { root.tool-clicked("rules"); } }
+                        Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
                         Tool { glyph: "?"; clicked => { root.tool-clicked("help"); } }
                     }
                 }
@@ -1812,28 +1839,32 @@ export component MainWindow inherits Window {
                         // With the view switch: a preview panel changes what is
                         // being read, not what the program is doing.
                         Tool {
-                            glyph: "◫";
+                            icon: @image-url("icons/tools/peek.svg");
+                            has-icon: true;
                             on: root.peeking;
                             clicked => {
                                 root.peek-toggled();
                             }
                         }
                         Tool {
-                            glyph: "≣";
+                            icon: @image-url("icons/tools/detail.svg");
+                            has-icon: true;
                             on: root.view-mode == "detail";
                             clicked => {
                                 root.view-clicked("detail");
                             }
                         }
                         Tool {
-                            glyph: "▦";
+                            icon: @image-url("icons/tools/icons.svg");
+                            has-icon: true;
                             on: root.view-mode == "icons";
                             clicked => {
                                 root.view-clicked("icons");
                             }
                         }
                         Tool {
-                            glyph: "▣";
+                            icon: @image-url("icons/tools/large.svg");
+                            has-icon: true;
                             on: root.view-mode == "large";
                             clicked => {
                                 root.view-clicked("large");
@@ -2485,7 +2516,7 @@ export component MainWindow inherits Window {
             // The way into a search scoped to this folder.
             Rectangle {
                 background: Theme.panel-2;
-                border-width: 1px;
+                border-width: Theme.hair;
                 border-color: Theme.line-soft;
                 border-radius: 3px;
 
@@ -2814,12 +2845,13 @@ export component MainWindow inherits Window {
                                     root.columns-clicked(self.absolute-position.x,
                                         self.absolute-position.y + self.height);
                                 }
-                                Text {
-                                    text: "⋮";
-                                    color: parent.has-hover ? Theme.ink : Theme.ink-3;
-                                    font-size: 14px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: @image-url("icons/tools/columns.svg");
+                                    colorize: parent.has-hover ? Theme.ink : Theme.ink-3;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
                                 }
                             }
                         }
@@ -2887,7 +2919,7 @@ export component MainWindow inherits Window {
                             Rectangle {
                                 visible: i == root.selected;
                                 background: transparent;
-                                border-width: 1px;
+                                border-width: Theme.hair;
                                 border-color: Theme.focus;
                             }
 
@@ -3085,7 +3117,7 @@ export component MainWindow inherits Window {
                                 // rows for why a ring rather than a shade.
                                 if (i * root.per-line + c) == root.selected: Rectangle {
                                     background: transparent;
-                                    border-width: 1px;
+                                    border-width: Theme.hair;
                                     border-color: Theme.focus;
                                 }
 
@@ -3664,7 +3696,7 @@ export component MainWindow inherits Window {
             // height, so a shorter box would be overflowed by its own rows.
             height: root.past.length * 26px + 8px;
             background: Theme.panel-2;
-            border-width: 1px;
+            border-width: Theme.hair;
             border-color: Theme.line;
             border-radius: 4px;
             drop-shadow-blur: 12px;
@@ -3791,7 +3823,7 @@ export component MainWindow inherits Window {
                     height: 26px;
 
                     Rectangle {
-                        border-width: 1px;
+                        border-width: Theme.hair;
                         border-radius: 3px;
                         border-color: Theme.line;
                         background: Theme.panel;
@@ -3826,7 +3858,7 @@ export component MainWindow inherits Window {
                     height: 26px;
 
                     Rectangle {
-                        border-width: 1px;
+                        border-width: Theme.hair;
                         border-radius: 3px;
                         border-color: Theme.line;
                         background: Theme.panel;
@@ -3989,7 +4021,7 @@ export component MainWindow inherits Window {
                     height: 26px;
 
                     Rectangle {
-                        border-width: 1px;
+                        border-width: Theme.hair;
                         border-radius: 3px;
                         border-color: Theme.line;
                         background: Theme.panel;
@@ -4119,7 +4151,7 @@ export component MainWindow inherits Window {
             width: 420px;
             height: ask-sheet.preferred-height;
             background: Theme.panel;
-            border-width: 1px;
+            border-width: Theme.hair;
             border-color: Theme.line;
             border-radius: 3px;
             drop-shadow-blur: 26px;
@@ -4160,7 +4192,7 @@ export component MainWindow inherits Window {
                         }
                     }
                     border-radius: 3px;
-                    border-width: 1px;
+                    border-width: Theme.hair;
                     border-color: Theme.focus;
                     background: Theme.panel-2;
                     HorizontalLayout {
@@ -4203,7 +4235,7 @@ export component MainWindow inherits Window {
                         width: no-text.preferred-width + 26px;
                         height: 28px;
                         border-radius: 3px;
-                        border-width: 1px;
+                        border-width: Theme.hair;
                         border-color: Theme.line;
                         background: no-hit.has-hover ? Theme.hover : transparent;
                         no-text := Text {
@@ -4229,7 +4261,7 @@ export component MainWindow inherits Window {
                         background: yes-hit.has-hover
                             ? Theme.danger.transparentize(0.78)
                             : Theme.danger.transparentize(0.88);
-                        border-width: 1px;
+                        border-width: Theme.hair;
                         border-color: Theme.danger.transparentize(0.6);
                         yes-text := Text {
                             text: root.ask-yes;
@@ -4277,7 +4309,7 @@ export component MainWindow inherits Window {
             width: 258px;
             height: items.preferred-height;
             background: Theme.panel;
-            border-width: 1px;
+            border-width: Theme.hair;
             border-color: Theme.line;
             border-radius: 3px;
             drop-shadow-blur: 18px;
@@ -4380,7 +4412,7 @@ export component MainWindow inherits Window {
         y: root.tip-y + self.height > root.height - 8px
             ? root.tip-y - self.height - Theme.row-height - 4px : root.tip-y;
         background: Theme.panel;
-        border-width: 1px;
+        border-width: Theme.hair;
         border-color: Theme.line;
         border-radius: 3px;
         drop-shadow-blur: 12px;

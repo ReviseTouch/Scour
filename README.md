@@ -152,11 +152,13 @@ the sandbox, so the command line and the MCP server are reached as
 live under `~/.var/app/com.revisetouch.Scour/`, apart from a tarball install.
 `packaging/flatpak/README.md` has the rest.
 
-**Windows.** The workspace builds for `x86_64-pc-windows-msvc`, and the
-release includes a zip. The binaries were started once on one Windows machine:
-the service indexed and the command line searched. The window, live watching,
-network and FAT32 volumes have not been tested there, and there is no USN
-journal reader, so the first scan walks the disk. **macOS** compiles and has
+**Windows.** The release includes a zip; `install.cmd` in it installs for
+the account, with no administrator: the files to `%LOCALAPPDATA%\Programs\Scour`,
+a Start menu entry, and that folder on PATH. The window asks once whether to
+start Scour with Windows. Every fixed drive is indexed by default. It has been
+run on a few Windows machines and under Wine; network and FAT32 volumes have
+not been tried, and there is no USN journal reader, so the first scan walks
+each drive. **macOS** compiles and has
 not been run. A CI job checks that all three targets compile.
 
 ### From source

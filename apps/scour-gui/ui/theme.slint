@@ -42,6 +42,9 @@ export struct Scheme {
 }
 
 export global Theme {
+    // A one-pixel line, kept at least one device pixel: drawn below a whole
+    // pixel, as a zoom under 1 asks, a border is not drawn at all. Rust sets it.
+    in-out property <length> hair: 1px;
     in property <bool> dark: Palette.color-scheme != ColorScheme.light;
     in property <Scheme> dark-scheme;
     in property <Scheme> light-scheme;

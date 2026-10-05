@@ -443,7 +443,7 @@ pub fn draw_biggest(w: &MainWindow, scope: &str, hits: &[scour_core::Hit]) {
         .iter()
         .take(BIGGEST)
         .map(|h| Big {
-            name: h.name().into(),
+            name: crate::rows::shown_name(h).into(),
             dir: under_scope(&h.path, scope, DIR_ROOM).into(),
             size: compact_bytes(bytes(h)).into(),
             share: bytes(h) as f32 / most as f32,

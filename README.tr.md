@@ -148,11 +148,13 @@ ve `flatpak run --command=scour-mcp com.revisetouch.Scour` ile ulaşılır.
 Ayarlar ve indeks `~/.var/app/com.revisetouch.Scour/` altında, tarball
 kurulumundan ayrı durur. Gerisi `packaging/flatpak/README.md` dosyasındadır.
 
-**Windows.** Çalışma alanı `x86_64-pc-windows-msvc` için derlenir ve sürümde
-bir zip vardır. İkililer bir Windows makinesinde bir kez başlatılmıştır:
-servis indeksledi, komut satırı aradı. Pencere, canlı izleme, ağ ve FAT32
-birimleri orada test edilmemiştir; USN günlüğü okuyucusu yoktur, ilk tarama
-diski yürür. **macOS** derlenir, çalıştırılmamıştır. Bir CI işi üç hedefin de
+**Windows.** Sürümde bir zip vardır; içindeki `install.cmd` yönetici izni
+istemeden hesaba kurar: dosyaları `%LOCALAPPDATA%\Programs\Scour`'a, Başlat
+menüsüne bir girdi, o klasörü de PATH'e. Pencere bir kez Windows ile birlikte
+başlasın mı diye sorar. Varsayılan olarak bütün sabit sürücüler indekslenir.
+Birkaç Windows makinesinde ve Wine altında çalıştırılmıştır; ağ ve FAT32
+birimleri denenmemiştir, USN günlüğü okuyucusu yoktur, ilk tarama her sürücüyü
+yürür. **macOS** derlenir, çalıştırılmamıştır. Bir CI işi üç hedefin de
 derlendiğini denetler.
 
 ### Kaynaktan

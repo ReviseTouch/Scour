@@ -389,7 +389,7 @@ enum Lane {
 
 /// Have a service at `addr`, starting one if nobody else has. At most once for
 /// the whole program, whichever lane arrives first; the others wait here.
-fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
+pub fn boot(addr: &str, log: &std::path::Path) -> scour_launch::Outcome {
     scour_launch::ensure_once(&scour_launch::Autostart::new(
         addr,
         log.to_path_buf(),

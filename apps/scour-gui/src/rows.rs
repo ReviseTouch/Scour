@@ -146,7 +146,7 @@ fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
 
     match id {
         "name" => {
-            let (pre, hit, post) = split_at_match(h.name(), terms);
+            let (pre, hit, post) = split_at_match(shown_name(h), terms);
             Cell {
                 pre: pre.into(),
                 hit: hit.into(),
@@ -191,6 +191,15 @@ fn cell_of(h: &Hit, id: &str, shape: &Shape, terms: &[String]) -> Cell {
     }
 }
 
+/// What the name column says. A drive's root has no name of its own — `C:/`
+/// ends in its separator — so it is called by its path, as Explorer calls it.
+pub fn shown_name(h: &Hit) -> &str {
+    match h.name() {
+        "" => h.path.trim_end_matches('/'),
+        name => name,
+    }
+}
+
 pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
     let cells: Vec<Cell> = shape
         .columns
@@ -199,7 +208,7 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         .collect();
     Row {
         cells: slint::ModelRc::new(slint::VecModel::from(cells)),
-        name: h.name().into(),
+        name: shown_name(h).into(),
         path: h.path.as_str().into(),
         fresh,
         ktoken: h.kind.token().into(),

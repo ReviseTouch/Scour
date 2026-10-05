@@ -1586,6 +1586,12 @@ msgstr "Scour'u her yerden aç: Super+F'yi bağla"
 msgid "Bind Super+F"
 msgstr "Super+F'yi bağla"
 
+msgid "Keep the index current: start Scour with Windows?"
+msgstr "İndeks güncel kalsın: Scour Windows ile birlikte başlasın mı?"
+
+msgid "Start with Windows"
+msgstr "Windows ile başlat"
+
 msgid "Not now"
 msgstr "Şimdi değil"
 

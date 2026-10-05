@@ -2461,14 +2461,16 @@
   function writeName(td, f, terms) {
     // Rewritten whole: the marked run moves with every keystroke.
     td.replaceChildren();
-    const at = span(f.name, terms);
+    // A drive's root has no name of its own: `C:/` is called by its path.
+    const name = f.name || f.path.replace(/\/+$/, "");
+    const at = span(name, terms);
     if (!at) {
-      td.append(f.name);
+      td.append(name);
       return;
     }
     const mark = document.createElement("mark");
-    mark.textContent = f.name.slice(at[0], at[0] + at[1]);
-    td.append(f.name.slice(0, at[0]), mark, f.name.slice(at[0] + at[1]));
+    mark.textContent = name.slice(at[0], at[0] + at[1]);
+    td.append(name.slice(0, at[0]), mark, name.slice(at[0] + at[1]));
   }
 
   function span(name, terms) {

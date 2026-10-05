@@ -101,8 +101,16 @@ pub fn words(w: &MainWindow, cat: &Catalogue) {
     w.set_key_copy(t(cat, "Copy"));
     w.set_key_remove(t(cat, "Remove"));
     w.set_key_hint(t(cat, "for example super+f or ctrl+alt+s"));
-    w.set_key_nudge_text(t(cat, "Open Scour from anywhere: bind Super+F"));
-    w.set_key_nudge_yes(t(cat, "Bind Super+F"));
+    // On Windows the first-run line asks the other thing worth asking once:
+    // nothing here can bind a key there, and a service that starts with the
+    // system is what keeps the index current between windows.
+    if crate::autostart::OFFERED {
+        w.set_key_nudge_text(t(cat, "Keep the index current: start Scour with Windows?"));
+        w.set_key_nudge_yes(t(cat, "Start with Windows"));
+    } else {
+        w.set_key_nudge_text(t(cat, "Open Scour from anywhere: bind Super+F"));
+        w.set_key_nudge_yes(t(cat, "Bind Super+F"));
+    }
     w.set_key_nudge_no(t(cat, "Not now"));
     draw(w, cat);
 }
@@ -229,7 +237,11 @@ pub fn wire(w: &MainWindow, link: &Rc<Link>, cat: &Rc<RefCell<Rc<Catalogue>>>) {
                     ..Default::default()
                 },
             });
-            if yes && let Ok(key) = Key::parse(OFFERED) {
+            if yes && crate::autostart::OFFERED {
+                if let Err(e) = crate::autostart::set(true) {
+                    DESK.with(|d| d.borrow_mut().nudge_error = e);
+                }
+            } else if yes && let Ok(key) = Key::parse(OFFERED) {
                 w.set_key_typed(OFFERED.into());
                 work(Deed::Bind { key, nudge: true });
             }
@@ -259,7 +271,11 @@ fn draw(w: &MainWindow, cat: &Catalogue) {
         });
         w.set_key_error(d.error.as_str().into());
         w.set_key_preview(d.preview.as_str().into());
-        w.set_key_nudge(nudge(d.status.as_ref(), d.can_bind, d.seen));
+        w.set_key_nudge(if crate::autostart::OFFERED {
+            !d.seen
+        } else {
+            nudge(d.status.as_ref(), d.can_bind, d.seen)
+        });
         w.set_key_nudge_error(d.nudge_error.as_str().into());
     });
 }

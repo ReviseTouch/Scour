@@ -1,10 +1,15 @@
+// A window, not a console program: without this Windows opens a console
+// window behind it for its standard output.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! The Scour window.
 //!
 //! A frontend only: no index, no walk, everything over a socket. Service
 //! calls run on worker threads and return as events ([`link`]); query
 //! meaning is the engine's; a reply for a superseded keystroke is dropped.
 
+mod autostart;
 mod hotkey;
+mod install;
 mod link;
 mod report;
 mod rows;
@@ -415,6 +420,16 @@ struct Args {
     /// Talk to a service listening here
     #[arg(long)]
     socket: Option<String>,
+    // Start the service if none is running, and leave without a window: what
+    // the Run key says at login on Windows. See `autostart`.
+    #[arg(long, hide = true)]
+    start_service: bool,
+    // Install for this account, or take that away again: Windows' `install.cmd`
+    // and `uninstall.cmd`. See `install`.
+    #[arg(long, hide = true)]
+    install: bool,
+    #[arg(long, hide = true)]
+    uninstall: bool,
     /// Start with this query
     #[arg(short, long, default_value = "")]
     query: String,
@@ -423,10 +438,19 @@ struct Args {
 fn main() -> Result<()> {
     // `--version` and `--help` answer and leave, before any socket or window.
     let args = <Args as clap::Parser>::parse();
+    if args.install || args.uninstall {
+        install::run(args.install);
+        return Ok(());
+    }
     let launched = std::time::Instant::now();
     let config = scour_config::Config::load_or_default().0;
     // A window from a desktop entry has nowhere for standard error to go.
     crash_log(&config.state_dir());
+    if args.start_service {
+        let addr = args.socket.clone().unwrap_or_else(|| config.socket());
+        let _ = link::boot(&addr, &config.state_dir().join("scourd.log"));
+        return Ok(());
+    }
 
     // One window. A second start hands over to the first and leaves.
     #[cfg(unix)]
@@ -582,6 +606,7 @@ fn main() -> Result<()> {
     window
         .window()
         .set_size(slint::LogicalSize::new(opened_at.0, opened_at.1));
+    ZOOM.with(|z| z.set(kept_zoom(kept.view.get("slint"))));
     trace(&format!("opening at {:.0}x{:.0}", opened_at.0, opened_at.1));
     let addr = match &args.socket {
         Some(given) => given.clone(),
@@ -2122,6 +2147,9 @@ fn main() -> Result<()> {
             std::time::Duration::from_millis(100),
             move || {
                 let Some(w) = weak.upgrade() else { return };
+                // The zoom again if the desktop put its own scale back — a
+                // move to another monitor does.
+                apply_zoom(&w);
                 // The window is what knows how wide a line is: mode and width
                 // both decide it, and both change without asking.
                 lines.per_line(if w.get_grid() {
@@ -2654,6 +2682,42 @@ fn main() -> Result<()> {
                 slint::quit_event_loop().ok();
             },
         );
+    }
+    // Ctrl and + or - make everything bigger or smaller, Ctrl+0 puts it back.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_zoom_step(move |step| {
+            let Some(w) = weak.upgrade() else { return };
+            let now = ZOOM.with(std::cell::Cell::get);
+            let next = match step {
+                0 => default_zoom(),
+                s => ((now + 0.1 * s as f32) * 20.0).round() / 20.0,
+            }
+            .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+            ZOOM.with(|z| z.set(next));
+            apply_zoom(&w);
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    view: std::collections::BTreeMap::from([(
+                        "slint".to_owned(),
+                        serde_json::json!({ "zoom": next }),
+                    )]),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    // The first frame is drawn at the desktop's scale; the zoom follows at once.
+    {
+        let weak = window.as_weak();
+        slint::Timer::single_shot(std::time::Duration::ZERO, move || {
+            if let Some(w) = weak.upgrade() {
+                apply_zoom(&w);
+                // A scale change takes the focus with it.
+                w.invoke_focus_query();
+            }
+        });
     }
     window.run().context("the event loop failed")?;
     #[cfg(unix)]
@@ -4630,10 +4694,62 @@ fn kept_size(view: Option<&serde_json::Value>) -> Option<(f32, f32)> {
     (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
 }
 
-/// The window's size now, in logical pixels.
+/// The window's size now, in the desktop's logical pixels — not the zoomed
+/// ones, or a window opened at a kept size would grow with every zoom.
 fn window_size(win: &slint::Window) -> (f32, f32) {
-    let size = win.size().to_logical(win.scale_factor());
+    let size = win.size().to_logical(native_scale(win));
     (size.width, size.height)
+}
+
+thread_local! {
+    /// How much bigger or smaller than the desktop's scale everything is drawn.
+    static ZOOM: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+}
+
+/// How far the zoom goes either way.
+const ZOOM_RANGE: (f32, f32) = (0.6, 1.6);
+
+/// What the zoom starts at. Smaller on Windows: its desktop scales a laptop's
+/// full-HD screen to 125%, a quarter bigger than the same screen here, and
+/// this window was sized on a desktop that does not.
+fn default_zoom() -> f32 {
+    if cfg!(windows) { 0.85 } else { 1.0 }
+}
+
+/// The zoom a person left, under `view.slint.zoom`, or the default.
+fn kept_zoom(view: Option<&serde_json::Value>) -> f32 {
+    view.and_then(|v| v.get("zoom"))
+        .and_then(serde_json::Value::as_f64)
+        .map(|z| z as f32)
+        .filter(|z| z.is_finite())
+        .unwrap_or_else(default_zoom)
+        .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1)
+}
+
+/// The scale the desktop gives this window, whatever the zoom made of it.
+fn native_scale(win: &slint::Window) -> f32 {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    win.with_winit_window(|ww| ww.scale_factor() as f32)
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .unwrap_or_else(|| win.scale_factor())
+}
+
+/// Draw at the desktop's scale times the zoom, if it is not already.
+fn apply_zoom(w: &MainWindow) {
+    let win = w.window();
+    let want = native_scale(win) * ZOOM.with(std::cell::Cell::get);
+    if (win.scale_factor() - want).abs() > 0.001 {
+        w.global::<Theme>()
+            .set_hair(if want >= 1.0 { 1.0 } else { 1.05 / want });
+        // The window keeps its pixels; what changes is how many logical ones
+        // they hold. Said as a resize too, or the old logical size is laid out
+        // in a corner of the window and the rest left unpainted.
+        let physical = win.size();
+        win.dispatch_event(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor: want });
+        win.dispatch_event(slint::platform::WindowEvent::Resized {
+            size: physical.to_logical(want),
+        });
+    }
 }
 
 /// The screen this window is on, in logical pixels. `None` until there is a
@@ -4646,7 +4762,7 @@ fn screen_size(win: &slint::Window) -> Option<(f32, f32)> {
     // is drawn on at 1.667 — and a size compared against the window's has to be
     // in the window's frame. Measured here: 3200x2000 at 2 is 1600x1000 and
     // wrong; over 1.667 it is 1920x1200, which is the screen.
-    let scale = win.scale_factor();
+    let scale = native_scale(win);
     win.with_winit_window(|ww| {
         let logical = |on: i_slint_backend_winit::winit::monitor::MonitorHandle| {
             let size = on.size();

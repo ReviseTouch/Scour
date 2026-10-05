@@ -1,7 +1,8 @@
-# Scour's settings. Copy this to %APPDATA%\scour\config.toml,
-# or run:  scourd.exe --config config.toml
+# Scour's settings. They live in %APPDATA%\scour\config\config.toml, which
+# the first start writes with one source for every fixed drive.
 #
-# `roots` is what gets indexed. Write paths with their drive letter.
+# `roots` is what gets indexed. Write paths with their drive letter. Listing
+# any source here replaces the drives, so list everything you want indexed.
 
 [[source]]
 name  = "documents"

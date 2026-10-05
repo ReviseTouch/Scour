@@ -22,8 +22,9 @@ for b in scour scourd scour-gui scour-tui scour-web scour-mcp; do
     [ -f "$built/$b.exe" ] || { echo "missing $built/$b.exe — build first" >&2; exit 1; }
     install -m755 "$built/$b.exe" "$stage/$b.exe"
 done
-for f in BENIOKU.txt README.txt; do
-    sed "s/@VERSION@/$version/g" "$here/packaging/windows/$f" > "$stage/$f"
+# CRLF in the zip, whatever the checkout has: Notepad and cmd.exe are the readers.
+for f in BENIOKU.txt README.txt install.cmd uninstall.cmd; do
+    sed -e "s/@VERSION@/$version/g" -e 's/\r\?$/\r/' "$here/packaging/windows/$f" > "$stage/$f"
 done
 install -m644 "$here/packaging/windows/config-example.toml" "$here/LICENSE-MIT" "$here/LICENSE-APACHE" "$stage/"
 rm -f "$dist/$name.zip"

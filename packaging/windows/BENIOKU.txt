@@ -1,59 +1,52 @@
 Scour @VERSION@ — Windows, DENEYSEL
 =======================================
 
-Ne olduğu: Linux'ta günlük kullanılan bir dosya arama aracının Windows
-derlemesi. Gerçek Windows'ta bir öğleden sonra, bir makinede denendi: servis
-indeksledi, komut satırı aradı, sorgu dili cevap verdi. Kapsamlı test
-yapılmadı; ilk denenlerden birisin.
+Linux'ta günlük kullanılan bir dosya arama aracının Windows derlemesi. Birkaç
+Windows makinesinde çalıştırıldı; Linux sürümü kadar sınanmadı.
 
-Kurulum yok. Hiçbir şey kurmuyor, kayıt defterine dokunmuyor.
-Visual C++ Redistributable GEREKMİYOR (statik bağlandı).
+Yönetici izni gerekmez, Visual C++ Redistributable gerekmez (statik bağlı).
 
-BAŞLARKEN
----------
-1) config-example.toml'u aç, `roots` satırını kendi klasörlerinle değiştir.
-   config.toml adıyla kaydet; bu klasörde bıraksan yeter.
+KURULUM
+-------
+install.cmd'ye çift tıkla. Scour'u %LOCALAPPDATA%\Programs\Scour'a kopyalar,
+Başlat menüsüne ve o klasörü PATH'e ekler, pencereyi açar. Pencere bir kez
+Windows ile birlikte başlasın mı diye sorar; evet dersen indeks pencereler
+arasında da güncel kalır, açılışta hiçbir pencere açılmaz.
 
-2) Bir komut istemi aç, bu klasöre gel ve servisi başlat:
-       scourd.exe --config config.toml
-   İlk tarama klasörlerinin büyüklüğüne göre saniyeler-dakikalar sürer.
-   Bu pencereyi açık bırak.
+Bütün sabit sürücüler indekslenir — C:, D: ve diğerleri; USB bellek, DVD ve
+ağ sürücüleri değil. İlk tarama her sürücüyü yürür, biraz sürer.
 
-3) İkinci bir komut isteminde ara:
-       scour.exe rapor
-       scour.exe *.pdf
-       scour.exe "ext:xlsx size:>10mb"
-   Uçbirimde beş satır gösterir; daha fazlası için  -n 40  ekle.
+Kurmadan: bu klasördeki scour-gui.exe'yi çalıştır, servisi kendisi başlatır.
 
-DİĞER YÜZLER (servis çalışırken)
---------------------------------
-   scour-gui.exe     pencere
-   scour-tui.exe     tam ekran uçbirim arayüzü
-   scour-web.exe     tarayıcıda açar
-   scour-mcp.exe     MCP sunucusu (yapay zekâ araçları için)
+AYARLAR
+-------
+%APPDATA%\scour\config\config.toml, ilk açılışta yazılır. Başka klasörler
+için [[source]] olarak ekle, config-example.toml nasıl olduğunu gösterir.
+Oraya yazılan kaynak sürücülerin yerini alır, istediğin her şeyi yaz.
+Sonra servisi yeniden başlat: Scour'u kapat, Görev Yöneticisi'nde scourd.exe'yi
+sonlandır, Scour'u yeniden aç.
+
+DİĞER YÜZLER
+------------
+   scour            komut satırı:  scour rapor   scour *.pdf
+   scour-tui        tam ekran uçbirim
+   scour-web        tarayıcıda
+   scour-mcp        MCP sunucusu (yapay zekâ araçları için)
 
 SORGU DİLİ
 ----------
    boşluk        VE          |  VEYA          ! DEĞİL
    "iki kelime"  tam ifade    *  ?  joker
    ext:pdf   kind:image   size:>10mb   dm:7d   under:C:\Yol
-   scour.exe syntax   tam başvuru
+   scour syntax   tam başvuru
 
-NE BEKLEMEMELİSİN
------------------
-* Canlı izleme (watch = true) Windows'ta denenmedi. Çalışmazsa
-  watch = false yap; servis yine de düzenli olarak tarayıp günceller.
-* Everything kadar hızlı ilk tarama bekleme: Everything NTFS'in USN
-  günlüğünü okur, bu sürüm okumuyor. Arama hızı benzer, ilk tarama değil.
-* Pencere (scour-gui.exe) Windows'ta denenmedi. Açılmazsa scour-tui.exe
-  ya da scour-web.exe dene; ikisi de aynı servisi kullanır.
-* Ağ sürücüleri ve FAT32 denenmedi.
+KALDIRMAK
+---------
+%LOCALAPPDATA%\Programs\Scour içindeki uninstall.cmd'yi çalıştır. İndeks ve
+ayarlar %LOCALAPPDATA%\scour ve %APPDATA%\scour'da kalır; temiz bir başlangıç
+için onları da sil.
 
-BİR ŞEY OLMAZSA
----------------
-scourd.exe'nin penceresindeki satırları kopyala; hata orada yazıyor.
-
-Kaldırmak: bu klasörü sil. Bir de indeks klasörünü (config'de `dir`
-verdiysen orası, vermediysen %LOCALAPPDATA%\scour).
+Denenmeyenler: ağ ve FAT32 sürücüleri. USN günlüğü okuyucusu henüz yok:
+arama beklediğin hızda, ilk tarama değil.
 
 Lisans: MIT VEYA Apache-2.0 (iki dosya da yanında).
