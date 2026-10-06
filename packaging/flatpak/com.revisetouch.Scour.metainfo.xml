@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.7" date="2026-10-06" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.7</url>
+      <description>
+        <p>Windows: an installer for the account, starting with Windows, every fixed drive indexed, and a smaller window. Every platform: icons in place of symbol characters, and a zoom with Ctrl and plus or minus.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.6" date="2026-10-05" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.6</url>
       <description>
