@@ -43,7 +43,14 @@ for b in scour scourd scour-gui scour-tui scour-web scour-watch scour-mcp; do
 done
 install -m755 "$here/scripts/scour-open" "$bin/scour-open"
 install -m755 "$here/scripts/scour-app" "$bin/scour-app"
-install -m644 "$here/packaging/scour.desktop" "$share/applications/scour.desktop"
+# The launcher by its full path: a menu reads no shell profile, so on a
+# distribution that leaves ~/.local/bin off PATH a bare name hides the entry —
+# GLib drops an entry whose program it cannot find.
+# Quoted when it has a space, as the desktop entry format asks.
+launcher=$bin/scour-open
+case "$launcher" in *" "*) launcher="\"$launcher\"" ;; esac
+sed "s|^Exec=scour-open\$|Exec=$launcher|" "$here/packaging/scour.desktop" > "$share/applications/scour.desktop"
+chmod 644 "$share/applications/scour.desktop"
 install -m644 "$here/assets/scour.svg" "$icons/scalable/apps/scour.svg"
 # The raster sizes as well: GNOME's shell reads the SVG, but KDE's task
 # manager, XFCE, LXQt and the older docks look for a PNG at the size they
@@ -146,7 +153,7 @@ cat <<'TXT'
 
   Use it:
 
-      scour rapor         # search from the terminal
+      scour invoice       # search from the terminal
       scour-gui           # the window   (also in the application menu)
       scour-tui           # the terminal face
       scour-web           # opens in a browser

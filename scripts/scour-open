@@ -52,12 +52,17 @@ if [ -z "${1:-}" ] && raised; then
     exit 0
 fi
 
-# Beside this script first, then the installed copy — the order the faces use
-# on each other, so a build being tried out never starts the installed one.
+# A build beside this checkout first, then the face installed beside this
+# script, then PATH — the order the faces use on each other, so a build being
+# tried out never starts the installed one. Beside matters: ~/.local/bin is
+# not on every distribution's PATH, and a menu entry has no shell profile.
 run() {
     local name="$1"
     if [ -x "$here/../target/release/$name" ]; then
         exec "$here/../target/release/$name"
+    fi
+    if [ -x "$here/$name" ]; then
+        exec "$here/$name"
     fi
     exec "$name"
 }
@@ -71,6 +76,7 @@ case "$face" in
         # what is installed. A list and not a loop: each takes its command after
         # a different flag.
         cmd="$here/../target/release/scour-tui"
+        [ -x "$cmd" ] || cmd="$here/scour-tui"
         [ -x "$cmd" ] || cmd="scour-tui"
         if [ -n "${TERMINAL:-}" ]; then exec "$TERMINAL" -e "$cmd"; fi
         if command -v xdg-terminal-exec >/dev/null; then exec xdg-terminal-exec "$cmd"; fi
