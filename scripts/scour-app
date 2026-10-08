@@ -103,13 +103,17 @@ fi
 size=${size/x/,}
 
 browser=""
-for b in chromium google-chrome-stable google-chrome brave vivaldi; do
+# `chromium-browser` is Fedora's and RHEL's name for the same program.
+for b in chromium chromium-browser google-chrome-stable google-chrome brave vivaldi; do
     if command -v "$b" >/dev/null; then browser=$b; break; fi
 done
 if [[ -z $browser ]]; then
     # Firefox has no `--app`; `--kiosk` takes the whole screen but is not a tab.
+    # A profile of its own, and made first: Firefox refuses one that does not
+    # exist, and a Chromium profile is no use to it.
     if command -v firefox >/dev/null; then
-        exec firefox --kiosk --new-instance --profile "$PROFILE" "$url"
+        mkdir -p "$PROFILE-firefox"
+        exec firefox --kiosk --new-instance --profile "$PROFILE-firefox" "$url"
     fi
     echo "no browser found to host the window; the bridge is at $url" >&2
     exit 1

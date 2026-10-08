@@ -464,10 +464,15 @@ fn main() -> Result<()> {
     let cat: Rc<RefCell<Rc<Catalogue>>> = Rc::new(RefCell::new(Rc::new(Catalogue::for_language(
         &language(&kept, &config),
     ))));
-    // `scour`, the desktop entry's own name: that is how a Wayland desktop
-    // finds the icon and the menu entry for a window.
-    let _ = slint::set_xdg_app_id("scour");
     let window = MainWindow::new().context("the window could not be created")?;
+    // `scour`, the desktop entry's own name: that is how a Wayland desktop
+    // finds the icon and the menu entry for a window. **After `new`, before
+    // the window is shown**: before any component exists Slint has no
+    // platform and refuses with `NoPlatform`, and every desktop then drew a
+    // generic icon; the winit window that carries the id is made on showing.
+    if let Err(e) = slint::set_xdg_app_id("scour") {
+        eprintln!("scour-gui: the window's app id could not be set: {e}");
+    }
     #[cfg(unix)]
     answer_the_next_start(claim.listener.try_clone()?, window.as_weak());
     dress(&window);

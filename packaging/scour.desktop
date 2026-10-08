@@ -16,9 +16,10 @@
 #
 # `StartupWMClass` has to match what the window calls itself, or the desktop
 # draws a second, iconless entry in the task bar beside the running one. It
-# names the browser face: under `--app` Chromium and Chrome call the window
-# after the page, not after `--class`. The window face, whose app id is
-# `scour`, is matched by this file's name instead.
+# names the window face, whose app id is `scour`: GNOME would also match it by
+# this file's name, KDE does not once a class names something else. The
+# browser face's window, which Chromium calls after the page whatever
+# `--class` says, has a hidden entry of its own, `chrome-127.0.0.1__-Default.desktop`.
 [Desktop Entry]
 Type=Application
 Name=Scour
@@ -33,4 +34,4 @@ Categories=Utility;FileTools;
 Keywords=search;find;file;everything;
 Keywords[tr]=ara;bul;dosya;arama;
 StartupNotify=true
-StartupWMClass=chrome-127.0.0.1__-Default
+StartupWMClass=scour

@@ -37,13 +37,15 @@ install -m755 "$here/scripts/scour-open" "$here/scripts/scour-app" "$stage/scrip
 # Whatever packaging/ currently holds, because install.sh's closing text tells
 # the reader to run install-service.sh out of this directory. The system unit
 # has been both `scour.service` and `scour@.service`; ship the one that exists.
-for f in scour.desktop scourd.service scour.service 'scour@.service' \
+for f in scour.desktop chrome-127.0.0.1__-Default.desktop scourd.service scour.service 'scour@.service' \
          install-service.sh 50-scour-service.rules; do
     if [ -f "$here/packaging/$f" ]; then
         install -m644 "$here/packaging/$f" "$stage/packaging/$f"
     fi
 done
-[ -f "$stage/packaging/scour.desktop" ] || { echo "missing packaging/scour.desktop" >&2; exit 1; }
+for f in scour.desktop chrome-127.0.0.1__-Default.desktop; do
+    [ -f "$stage/packaging/$f" ] || { echo "missing packaging/$f" >&2; exit 1; }
+done
 install -m644 "$here/assets/scour.svg" "$stage/assets/scour.svg"
 mkdir -p "$stage/platform/gnome/scour@scour.local"
 install -m644 "$here/platform/gnome/scour@scour.local"/* "$stage/platform/gnome/scour@scour.local/"

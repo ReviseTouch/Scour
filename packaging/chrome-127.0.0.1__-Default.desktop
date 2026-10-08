@@ -1,0 +1,18 @@
+# The browser face's window, for the task bar and nothing else: under `--app`
+# Chromium and Chrome give the window the app id chrome-127.0.0.1__-Default,
+# after the page, whatever `--class` says. KDE looks a window's icon up by the
+# desktop file named after its app id, not by `StartupWMClass`, so this file
+# carries that name; GNOME matches either. Without it the window has a generic
+# icon. Hidden from the menu, where `scour.desktop` is the one Scour.
+[Desktop Entry]
+Type=Application
+Name=Scour
+GenericName=File Search
+GenericName[tr]=Dosya Arama
+Comment=Find any file on this machine, instantly
+Comment[tr]=Bu makinedeki her dosyayı anında bul
+Exec=scour-app
+Icon=scour
+Terminal=false
+NoDisplay=true
+StartupWMClass=chrome-127.0.0.1__-Default

@@ -47,8 +47,12 @@ Categories=Utility;FileTools;
 Keywords=search;find;file;everything;
 Keywords[tr]=ara;bul;dosya;arama;
 StartupNotify=true
-StartupWMClass=chrome-127.0.0.1__-Default
+StartupWMClass=scour
 ENTRY
+# The browser face's window, which Chromium names after the page: see
+# packaging/chrome-127.0.0.1__-Default.desktop.
+sed "s|^Exec=scour-app\$|Exec=$root/scripts/scour-app|" "$root/packaging/chrome-127.0.0.1__-Default.desktop" \
+    > "$apps/chrome-127.0.0.1__-Default.desktop"
 
 # There is one Scour entry, not one per face.
 rm -f "$apps/scour-app.desktop"

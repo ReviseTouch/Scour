@@ -50,7 +50,11 @@ install -m755 "$here/scripts/scour-app" "$bin/scour-app"
 launcher=$bin/scour-open
 case "$launcher" in *" "*) launcher="\"$launcher\"" ;; esac
 sed "s|^Exec=scour-open\$|Exec=$launcher|" "$here/packaging/scour.desktop" > "$share/applications/scour.desktop"
-chmod 644 "$share/applications/scour.desktop"
+# The browser face's window, so the task bar draws it with the icon too.
+browser=$bin/scour-app
+case "$browser" in *" "*) browser="\"$browser\"" ;; esac
+sed "s|^Exec=scour-app\$|Exec=$browser|" "$here/packaging/chrome-127.0.0.1__-Default.desktop" > "$share/applications/chrome-127.0.0.1__-Default.desktop"
+chmod 644 "$share/applications/scour.desktop" "$share/applications/chrome-127.0.0.1__-Default.desktop"
 install -m644 "$here/assets/scour.svg" "$icons/scalable/apps/scour.svg"
 # The raster sizes as well: GNOME's shell reads the SVG, but KDE's task
 # manager, XFCE, LXQt and the older docks look for a PNG at the size they
