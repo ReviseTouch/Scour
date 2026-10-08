@@ -84,8 +84,8 @@ The measurements and the commands that produced them are in
 ### From a release
 
 ```bash
-tar xzf scour-0.2.0-alpha.7-linux-x86_64.tar.gz
-cd scour-0.2.0-alpha.7-linux-x86_64
+tar xzf scour-0.2.0-alpha.8-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.8-linux-x86_64
 ./install.sh
 ```
 
@@ -112,8 +112,8 @@ run in clean Ubuntu 22.04 and Fedora containers.
 ### Debian, Ubuntu and Fedora packages
 
 ```bash
-sudo apt install ./scour_0.2.0.alpha.7-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
-sudo dnf install ./scour-0.2.0.alpha.7-1.x86_64.rpm     # Fedora
+sudo apt install ./scour_0.2.0.alpha.8-1_amd64.deb      # Debian 11 and later, Ubuntu 22.04 and later
+sudo dnf install ./scour-0.2.0.alpha.8-1.x86_64.rpm     # Fedora
 ```
 
 Both carry the seven binaries, six in `/usr/bin` and the privileged
