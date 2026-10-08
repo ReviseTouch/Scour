@@ -32,6 +32,10 @@ struct Args {
     check: bool,
 }
 
+/// The exit status for "another scourd has this index": `EX_TEMPFAIL`, which
+/// `SuccessExitStatus=` in `scourd.service` names.
+const BUSY: i32 = 75;
+
 /// How many heaps glibc may keep. See [`cap_allocator_arenas`].
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 const ARENAS: libc::c_int = 2;
@@ -74,7 +78,18 @@ fn main() -> Result<()> {
     }
 
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
-    let engine = wire::build(&config)?;
+    let engine = match wire::build(&config) {
+        Ok(engine) => engine,
+        // Somebody already serves this index — a face started one, or the
+        // system unit did. Not a failure to retry: `scourd.service` counts
+        // this status as success, so it stops instead of restarting every
+        // five seconds for as long as the other one lives.
+        Err(e) if matches!(e.downcast_ref(), Some(scour_core::Error::IndexBusy { .. })) => {
+            eprintln!("scourd: {e:#}");
+            std::process::exit(BUSY);
+        }
+        Err(e) => return Err(e),
+    };
 
     #[cfg(feature = "memory-trace")]
     if let Some(path) = std::env::var_os("SCOUR_MEMORY_RESCAN") {

@@ -118,9 +118,10 @@ sudo dnf install ./scour-0.2.0.alpha.7-1.x86_64.rpm     # Fedora
 
 Both carry the seven binaries, six in `/usr/bin` and the privileged
 `scour-watch` in `/usr/libexec/scour/`, the launchers, the menu entry, the
-icon at four sizes and the user unit in `/usr/lib/systemd/user/`. Installing
-starts nothing: any face starts the service when it finds none, and
-`systemctl --user enable --now scourd.service` starts it with the session.
+icon at four sizes and the user unit in `/usr/lib/systemd/user/`, which the
+package enables for every account: the service starts with each session from
+the next login on, and until then any face starts it when it finds none.
+`systemctl --user mask scourd.service` turns it off for one account.
 Watching changes as they happen is one more step, the only one that needs root
 (see [Watching the filesystem](#watching-the-filesystem)):
 `sudo /usr/libexec/scour/install-service`. `/usr/share/doc/scour/PACKAGE-NOTES`

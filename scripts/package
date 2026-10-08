@@ -59,16 +59,17 @@ The six programs are in /usr/bin. The privileged one, the fanotify helper, is
 root-owned at /usr/libexec/scour/scour-watch: a package may not write to
 /usr/local, where the source installer puts its own copy.
 
-Installing this package starts nothing. Any face starts the service when it
-finds none; with the session, it is
+Installing this package enables the user unit for every account
+(/etc/systemd/user/default.target.wants/scourd.service), so the service
+starts with each session from the next login on; until then any face starts
+it when it finds none. For one account it is turned off with
 
-    systemctl --user enable --now scourd.service
+    systemctl --user mask scourd.service
 
 That service watches nothing live: it walks again when a volume's write
 counter moves and on its periodic pass. Seeing changes as they happen needs a
 fanotify mark, which needs root once:
 
-    systemctl --user disable --now scourd.service    # if it was enabled
     sudo /usr/libexec/scour/install-service [--user NAME] [ROOT...]
     systemctl start scour@$USER.service
 
@@ -76,9 +77,9 @@ It installs a system unit template (/usr/share/scour/scour@.service), one
 instance per account, which marks the filesystems under ROOT (default /home),
 drops to the account and runs /usr/bin/scourd as it; and a polkit rule
 (/usr/share/scour/50-scour-service.rules) that lets each account start, stop
-and restart its own instance and nothing else. Read both first. Install one
-service or the other, never both — two writers race for the index lock and
-the loser restarts forever.
+and restart its own instance and nothing else. Read both first. The user
+unit steps aside for an account whose instance is enabled; the installer
+stops one that is running.
 NOTES
 
 # What the binaries actually need. There is no dpkg-shlibdeps and no rpm on

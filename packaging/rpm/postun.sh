@@ -7,5 +7,8 @@ if [ "$1" = 0 ]; then
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
     fi
+    # The enable post.sh made; the unit file is already gone, so by hand.
+    rm -f /etc/systemd/user/default.target.wants/scourd.service /var/lib/scour/user-unit-enabled
+    rmdir /var/lib/scour 2>/dev/null || true
 fi
 exit 0

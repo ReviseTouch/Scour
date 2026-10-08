@@ -1,5 +1,7 @@
 #!/bin/sh
-# The same two caches, now that the entry and the icon are gone.
+# The same two caches, now that the entry and the icon are gone, and the
+# enable postinst made. The unit file is already gone, so the link goes by
+# hand; an install after a removal starts afresh.
 set -e
 
 case "$1" in
@@ -10,6 +12,8 @@ remove | purge)
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
     fi
+    rm -f /etc/systemd/user/default.target.wants/scourd.service /var/lib/scour/user-unit-enabled
+    rmdir /var/lib/scour 2>/dev/null || true
     ;;
 esac
 exit 0

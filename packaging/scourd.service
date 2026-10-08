@@ -19,12 +19,18 @@
 Description=Scour file index
 Documentation=https://github.com/ReviseTouch/Scour
 After=graphical-session.target
+# The packages enable this unit for every account, so it steps aside on its
+# own for an account whose system instance is enabled instead.
+ConditionPathExists=!/etc/systemd/system/multi-user.target.wants/scour@%u.service
 
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/scourd
 Restart=on-failure
 RestartSec=5
+# 75 is scourd finding its index held by another scourd — one a face started,
+# say. That one is serving; restarting this one would only fail again.
+SuccessExitStatus=75
 # The index is derived from the filesystem, so nothing here is worth
 # protecting from a kill -9; what matters is that only one writer exists,
 # which scourd enforces with a lock on its own directory.

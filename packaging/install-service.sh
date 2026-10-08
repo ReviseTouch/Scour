@@ -148,6 +148,13 @@ systemctl daemon-reload
 # Load the trusted unit before opening its lifecycle permission.
 install -o root -g root -m644 "$stage/50-scour-service.rules" /etc/polkit-1/rules.d/50-scour-service.rules
 systemctl enable "scour@$user.service"
+# A package enables scourd.service for every account. From the next login it
+# steps aside by itself (its ConditionPathExists names the link just made),
+# but one running now still holds the index, and the instance would lose it.
+if [[ -e /etc/systemd/user/default.target.wants/scourd.service ]]; then
+    systemctl --machine="$user@" --user stop scourd.service 2>/dev/null ||
+        echo "If $user's scourd.service is running, stop it first: systemctl --user stop scourd.service"
+fi
 echo "Installed scour@$user.service (roots: ${roots[*]}). Backup: $backup"
 echo "$user can now start, stop and restart it without a prompt:  systemctl start scour@$user.service"
 echo "Another person on this machine:  sudo bash $0 --user NAME [ROOT...]"
