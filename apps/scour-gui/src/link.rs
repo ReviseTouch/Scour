@@ -426,9 +426,17 @@ fn spawn_lane(
             if client.is_none() {
                 // A second try, because the first failure is what starts a
                 // service; `boot` blocks here until one is listening or gone.
+                // The line this leaves on screen is the last one said, so it
+                // carries why the start failed, or where the service wrote
+                // when it started and then went away: "no such file" alone
+                // hides both.
                 let opened = Client::connect(&addr).or_else(|e| {
-                    boot(&addr, &log);
-                    Client::connect(&addr).map_err(|_| e)
+                    let booted = boot(&addr, &log);
+                    Client::connect(&addr).map_err(|_| match booted.reason() {
+                        Some(why) => why.to_string(),
+                        None if booted.running() => format!("{e} (see {})", log.display()),
+                        None => e.to_string(),
+                    })
                 });
                 match opened {
                     Ok(c) => {
@@ -441,7 +449,7 @@ fn spawn_lane(
                     Err(e) => {
                         if !was_down {
                             was_down = true;
-                            sink(Got::Down(e.to_string()));
+                            sink(Got::Down(e));
                         }
                         continue;
                     }
