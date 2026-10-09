@@ -296,6 +296,8 @@ pub struct App {
     /// no hover of its own, so these two are the whole of it.
     pub hover: Spot,
     pub pressed: Spot,
+    /// The row last clicked and when, for telling a double-click from two.
+    pub clicked: Option<(usize, std::time::Instant)>,
     /// True while the key list is over everything.
     pub helping: bool,
     /// The query cut into runs, for drawing it in colour. Empty until the
@@ -392,6 +394,7 @@ impl Default for App {
             revision: 0,
             hover: Spot::default(),
             pressed: Spot::default(),
+            clicked: None,
             helping: false,
             spans: Vec::new(),
             kinds: Vec::new(),
@@ -980,14 +983,16 @@ impl App {
                     .collect();
                 folders.sort_unstable();
                 folders.dedup();
-                for folder in &folders {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(scour_core::path::to_path(folder))
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn();
-                }
+                // Each picked row selected in its folder, as the window and
+                // the page show them; the count below is still of folders.
+                let native: Vec<std::path::PathBuf> = self
+                    .picked
+                    .keys()
+                    .map(|p| scour_core::path::to_path(p))
+                    .collect();
+                let paths: Vec<&std::path::Path> =
+                    native.iter().map(std::path::PathBuf::as_path).collect();
+                scour_openers::reveal(&paths);
                 self.note = self
                     .say("opening {n} folders")
                     .replace("{n}", &folders.len().to_string());

@@ -105,8 +105,9 @@ struct Args {
     /// Refuse `/api/open` entirely, so the page can only look.
     #[arg(long)]
     no_launch: bool,
-    /// Open the folder of an executable rather than running it. The default
-    /// is to run it once the page has asked and been told yes.
+    /// Never run an executable, not even from the menu's Open. Without it a
+    /// double-click still shows one in its folder; only Open offers to run it,
+    /// once the page has asked and been told yes.
     #[arg(long)]
     no_run: bool,
     /// The command that opens the desktop's own quick-look, if the detected
@@ -1347,8 +1348,10 @@ fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 
 /// Open a path, or the folder holding it. The index is the fence: the service
 /// is asked first, so this cannot be pointed at `/etc/shadow`. An executable
-/// is run unless `--no-run`, and only once the page has asked and been told
-/// yes: a double-click in a downloaded folder must not start what it lands on.
+/// is shown selected in its folder — a double-click in a downloaded folder
+/// must not start what it lands on — unless the menu's "Open" asked to run it
+/// (`ask=1`), and then only once the page has asked and been told yes, and
+/// never under `--no-run`.
 fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_run: bool) {
     let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
         http::fail(stream, "400 Bad Request", "no path");
@@ -1412,16 +1415,25 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     // Asked of the entry, not the disk: every file on an `ntfs3` mount with
     // `fmask=0022` is 0755, so the mode bit alone would try to run a PDF.
     let runnable = !want_folder && scour_core::runs_when_opened(entry.name(), entry.meta.mode);
-    let run = runnable && may_run;
+    let asked = req.param("ask") == Some("1") || req.param("run") == Some("yes");
+    let run = runnable && may_run && asked;
     if run && req.param("run") != Some("yes") {
         http::json(stream, &serde_json::json!({ "ask_run": entry.name() }));
         return;
     }
-    let target = if runnable && !run {
-        p.parent().unwrap_or(p).to_path_buf()
-    } else {
-        p.to_path_buf()
-    };
+    // Not run: shown selected in its folder, as the window shows it.
+    if runnable && !run {
+        scour_openers::reveal(&[p]);
+        http::json(
+            stream,
+            &serde_json::json!({
+                "opened": p.parent().unwrap_or(p).to_string_lossy(),
+                "folder_instead": true,
+            }),
+        );
+        return;
+    }
+    let target = p.to_path_buf();
 
     // Started in the directory it lives in, beside what it reads.
     let mut cmd = if run {
@@ -1446,7 +1458,6 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
                 // Said, because nothing else on screen will say it was run;
                 // the page words it, in the reader's language.
                 "ran": run.then(|| target.file_name().unwrap_or_default().to_string_lossy()),
-                "folder_instead": runnable && !run,
             }),
         ),
         Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),

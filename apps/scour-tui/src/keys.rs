@@ -466,6 +466,27 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                 // Plain: this row alone. `Ctrl`: this as well. `Shift`: the run.
                 Spot::Row(row) => {
                     app.in_rail = false;
+                    // The second click on one row within the double-click time:
+                    // the location shows the row in its folder, anywhere else
+                    // opens it, as Enter does.
+                    let now = std::time::Instant::now();
+                    let double = m.modifiers.is_empty()
+                        && app.clicked.is_some_and(|(r, at)| {
+                            r == row && now.duration_since(at) < DOUBLE_CLICK
+                        });
+                    app.clicked = (!double).then_some((row, now));
+                    if double {
+                        let (width, _) = size;
+                        let from = if width >= 100 && app.rail { crate::draw::RAIL_WIDE } else { 0 };
+                        let on_location = crate::draw::column_at(
+                            m.column.saturating_sub(from),
+                            width - from,
+                            &app.columns,
+                        )
+                        .is_some_and(|c| app.columns[c].id == "path");
+                        app.go(row);
+                        return open(app, on_location);
+                    }
                     if m.modifiers.contains(KeyModifiers::SHIFT) {
                         app.pick_to(row)
                     } else if m.modifiers.contains(KeyModifiers::CONTROL) {
@@ -625,19 +646,32 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     Spot::Row(at)
 }
 
-/// Hand the row under the cursor to the desktop — or its folder. Detached: a
-/// file manager that takes seconds to start must not hold the keyboard.
+/// How long two clicks on one row may be apart and still be one double-click.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Hand the row under the cursor to the desktop — or show it selected in its
+/// folder. Detached: a file manager that takes seconds to start must not hold
+/// the keyboard. **A program is shown, never started**: a search lists whatever
+/// is in Downloads and in unpacked archives, as the window and the page say.
 fn open(app: &mut App, folder: bool) -> Want {
     let Some(hit) = app.here() else {
         return Want::Nothing;
     };
-    let path = if folder {
-        scour_ui::path::folder(&hit.path).to_string()
-    } else {
-        hit.path.clone()
-    };
+    let native = scour_core::path::to_path(&hit.path);
+    let runs = !hit.is_dir && scour_core::runs_when_opened(hit.name(), hit.meta.mode);
+    let name = hit.name().to_owned();
+    if folder || runs {
+        scour_openers::reveal(&[native.as_path()]);
+        if runs && !folder {
+            app.note = app
+                .say("{name} is a program: shown in its folder, not run")
+                .replace("{name}", &name);
+            app.dirty = true;
+        }
+        return Want::Nothing;
+    }
     let _ = std::process::Command::new("xdg-open")
-        .arg(&path)
+        .arg(&native)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

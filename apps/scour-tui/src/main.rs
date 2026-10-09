@@ -40,7 +40,7 @@ struct Args {
     #[arg(long, value_name = "KEYS")]
     press: Option<String>,
     /// Click here before drawing: `--click "5:6,110:21"` — column:row, from
-    /// the top left.
+    /// the top left; `column:row:2` clicks twice in one place.
     #[arg(long, value_name = "COL:ROW")]
     click: Option<String>,
 }
@@ -212,24 +212,31 @@ fn snap(
     if !click.is_empty() {
         settle(state, link, waiting, 600);
     }
+    // `col:row`, or `col:row:n` for n clicks in one place at once — `2` is a
+    // double-click, which the 400 ms settle between clicks would split.
     for at in click.split(',').filter(|n| !n.trim().is_empty()) {
-        let (col, row) = at.trim().split_once(':').unwrap_or(("0", "0"));
+        let mut parts = at.trim().split(':');
+        let col = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let row = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let times: u32 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
         let press = ratatui::crossterm::event::MouseEvent {
             kind: ratatui::crossterm::event::MouseEventKind::Down(
                 ratatui::crossterm::event::MouseButton::Left,
             ),
-            column: col.parse().unwrap_or(0),
-            row: row.parse().unwrap_or(0),
+            column: col,
+            row,
             modifiers: ratatui::crossterm::event::KeyModifiers::NONE,
         };
-        act(keys::mouse(state, press, (w, h)), link);
         let release = ratatui::crossterm::event::MouseEvent {
             kind: ratatui::crossterm::event::MouseEventKind::Up(
                 ratatui::crossterm::event::MouseButton::Left,
             ),
             ..press
         };
-        act(keys::mouse(state, release, (w, h)), link);
+        for _ in 0..times.max(1) {
+            act(keys::mouse(state, press, (w, h)), link);
+            act(keys::mouse(state, release, (w, h)), link);
+        }
         settle(state, link, waiting, 400);
     }
     // A last, longer wait for whatever the final key set going: sorting by size

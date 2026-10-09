@@ -4291,12 +4291,14 @@
 
   /* A browser cannot open a local file, so the bridge asks the desktop. Both
    * fences are the bridge's — the path must be one the index holds, and
-   * anything runnable has its folder revealed instead. */
-  async function launch(path, what, yes) {
+   * anything runnable is shown in its folder instead. `ask` is the menu's
+   * "Open": the one way that offers to run a program. */
+  async function launch(path, what, yes, ask) {
     // Opening a result belongs in the history even without an Enter.
     remember(q.value);
     try {
       const q = new URLSearchParams({ path, what: what || "file", t: TOKEN });
+      if (ask) q.set("ask", "1");
       if (yes) q.set("run", "yes");
       const r = await fetch(`/api/open?${q}`, { method: "POST" });
       const j = await r.json();
@@ -4305,7 +4307,7 @@
       if (j.ask_run) {
         if (confirm(T("Run {name}?", { name: j.ask_run }) + "\n\n" +
                     T("This file is a program. Opening it starts it."))) {
-          launch(path, what, true);
+          launch(path, what, true, true);
         }
         return;
       }
@@ -4677,7 +4679,7 @@
     switch (act) {
       case "clear":   return clearSel();
       case "folders": return openFolders();
-      case "open":    return launch(p, "file");
+      case "open":    return launch(p, "file", false, true);
       case "folder":  return launch(p, "folder");
 
       case "open-all": {
