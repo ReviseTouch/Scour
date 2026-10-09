@@ -280,6 +280,25 @@ fn meter(w: &MainWindow, count: String, ms: String, rows: String) {
     w.set_meter(slint::SharedString::new());
 }
 
+/// What a person's last act came to, held on the status line for a few
+/// seconds. Not [`said`]: the search that follows a trash or a rename answers
+/// within milliseconds and would write over the sentence before it was read.
+fn told(w: &MainWindow, sentence: slint::SharedString) {
+    thread_local! {
+        static CLEAR: slint::Timer = slint::Timer::default();
+    }
+    w.set_notice(sentence);
+    let weak = w.as_weak();
+    // One timer, restarted: a second act's sentence gets its own four seconds.
+    CLEAR.with(|t| {
+        t.start(slint::TimerMode::SingleShot, std::time::Duration::from_secs(4), move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_notice(slint::SharedString::new());
+            }
+        });
+    });
+}
+
 /// A sentence instead of numbers: connecting, refused, not running.
 fn said(w: &MainWindow, sentence: slint::SharedString) {
     w.set_meter_count(slint::SharedString::new());
@@ -1471,7 +1490,7 @@ fn main() -> Result<()> {
                 println!("{}", pick.path);
             }
             if let Some(w) = weak.upgrade() {
-                w.set_hint(t(&cat, "path printed to the terminal"));
+                told(&w, t(&cat, "path printed to the terminal"));
             }
         });
     }
@@ -1506,15 +1525,59 @@ fn main() -> Result<()> {
         let state = Rc::clone(&state);
         let link = Rc::clone(&link);
         let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
         window.on_activated(move |i| {
             stir(&state, &link);
             let query = full_query(&state.borrow());
             remember(&state, &link, &query);
-            if let Some(w) = weak.upgrade() {
-                w.set_has_past(!state.borrow().past.is_empty());
-            }
-            if let Some(path) = path_of(&rows, i) {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_has_past(!state.borrow().past.is_empty());
+            let Some((path, runs)) = usize::try_from(i).ok().and_then(|r| rows.opening_at(r)) else {
+                return;
+            };
+            // **A program is shown, never started**: a search lists whatever
+            // is in Downloads and in unpacked archives, and a double-click is
+            // too easy to make for that to run it. Its folder, with it selected.
+            if runs {
+                scour_openers::reveal(&[scour_core::path::to_path(&path).as_path()]);
+                let name = path.rsplit('/').next().unwrap_or(&path);
+                // The status line, not `hint`: that is the empty field's
+                // placeholder, and the field holds a query here.
+                told(
+                    &w,
+                    t(&cat.borrow(), "{name} is a program: shown in its folder, not run")
+                        .replace("{name}", name)
+                        .into(),
+                );
+            } else {
                 open(&path);
+            }
+        });
+    }
+    // A double-click: on the location, the row in its folder; anywhere else
+    // what Enter does. Which column is read off the column table, the one the
+    // rows and the header are drawn from.
+    {
+        let rows = Rc::clone(&rows);
+        let weak = window.as_weak();
+        window.on_opened_at(move |i, x| {
+            let Some(w) = weak.upgrade() else { return };
+            let (heads, cx, cw) = (w.get_heads(), w.get_cx(), w.get_cw());
+            let column = (0..heads.row_count()).find(|&c| {
+                let (Some(at), Some(wide)) = (cx.row_data(c), cw.row_data(c)) else {
+                    return false;
+                };
+                x >= at && x < at + wide
+            });
+            let on_location = column
+                .and_then(|c| heads.row_data(c))
+                .is_some_and(|h| h.id == "path");
+            if on_location {
+                if let Some(path) = path_of(&rows, i) {
+                    scour_openers::reveal(&[scour_core::path::to_path(&path).as_path()]);
+                }
+            } else {
+                w.invoke_activated(i);
             }
         });
     }
@@ -1562,14 +1625,11 @@ fn main() -> Result<()> {
     }
     {
         let rows = Rc::clone(&rows);
+        // The row selected in its folder, as the menu's "open its folder" does:
+        // opening the folder alone selected nothing.
         window.on_reveal(move |i| {
             if let Some(path) = path_of(&rows, i) {
-                let dir = match path.rfind('/') {
-                    Some(0) => "/",
-                    Some(at) => &path[..at],
-                    None => ".",
-                };
-                open(dir);
+                scour_openers::reveal(&[scour_core::path::to_path(&path).as_path()]);
             }
         });
     }
@@ -1584,7 +1644,7 @@ fn main() -> Result<()> {
             };
             println!("{path}");
             if let Some(w) = weak.upgrade() {
-                w.set_hint(t(&cat, "path printed to the terminal"));
+                told(&w, t(&cat, "path printed to the terminal"));
             }
         });
     }
@@ -1712,7 +1772,9 @@ fn main() -> Result<()> {
             } else {
                 vec![path.clone()]
             };
-            let say = |w: &MainWindow, msg: slint::SharedString| w.set_hint(msg);
+            // The status line: `hint` is the empty field's placeholder, unseen while
+            // the field holds the query these rows came from.
+            let say = |w: &MainWindow, msg: slint::SharedString| told(w, msg);
             let folder = |p: &str| match p.rfind('/') {
                 Some(0) => "/".to_string(),
                 Some(at) => p[..at].to_string(),
@@ -1997,7 +2059,7 @@ fn main() -> Result<()> {
                         let query = state.borrow().query.clone();
                         w.invoke_query_changed(query.into());
                     }
-                    Err(why) => w.set_hint(t(&cat_now, why.msgid())),
+                    Err(why) => told(&w, t(&cat_now, why.msgid())),
                 }
                 return;
             }
@@ -2019,7 +2081,7 @@ fn main() -> Result<()> {
                     }
                 }
                 recheck(&addr, paths);
-                w.set_hint(match refused {
+                told(&w, match refused {
                     Some(why) => why.into(),
                     None => t(&cat_now, "{n} deleted")
                         .replace("{n}", &grouped(gone as u64))
@@ -2041,7 +2103,7 @@ fn main() -> Result<()> {
                 }
             }
             recheck(&addr, paths);
-            w.set_hint(match refused {
+            told(&w, match refused {
                 Some(why) => why.into(),
                 None => t(&cat_now, "{n} moved to trash")
                     .replace("{n}", &grouped(gone as u64))
@@ -2567,6 +2629,36 @@ fn main() -> Result<()> {
                         w.window().dispatch_event(e);
                     }
                     y += step;
+                },
+            );
+        } else if let [x, y, n] = point[..] {
+            // `x,y,n`: n clicks in one place, at once — `2` is a double-click.
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            let after = std::env::var("SCOUR_GUI_CLICK_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(2500);
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(after),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let at = slint::LogicalPosition::new(x, y);
+                    trace(&format!("synthetic {n} clicks at {x},{y}"));
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                            position: at,
+                        });
+                    let button = slint::platform::PointerEventButton::Left;
+                    for _ in 0..n as u32 {
+                        w.window().dispatch_event(
+                            slint::platform::WindowEvent::PointerPressed { position: at, button },
+                        );
+                        w.window().dispatch_event(
+                            slint::platform::WindowEvent::PointerReleased { position: at, button },
+                        );
+                    }
                 },
             );
         } else if let [x, y] = point[..] {

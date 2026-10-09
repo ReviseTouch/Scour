@@ -628,6 +628,9 @@ msgstr "{n} klasör"
 msgid "path printed to the terminal"
 msgstr "yol terminale yazıldı"
 
+msgid "{name} is a program: shown in its folder, not run"
+msgstr "{name} bir program: çalıştırılmadı, klasöründe gösterildi"
+
 msgid "Copy the paths"
 msgstr "Yolları kopyala"
 

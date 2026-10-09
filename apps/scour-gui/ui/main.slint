@@ -67,6 +67,9 @@ export struct Row {
     // Whether `thumb` holds one, said as a flag: asking the `image` its width
     // once per glyph condition per row took an idle window from 22% to 49%.
     shot: bool,
+    // Opening it would start a program (`scour_core::runs_when_opened`): a
+    // double-click shows it in its folder instead.
+    runs: bool,
 }
 
 /// A slot of the detail list and the row it is showing; `i` is -1 past the
@@ -792,14 +795,25 @@ component Head inherits Rectangle {
 
 // A name with the match picked out. Monospace: a file name is read character
 // by character, an `l` against a `1`.
-component Marked inherits HorizontalLayout {
+component Marked inherits Rectangle {
     in property <string> pre;
     in property <string> hit;
     in property <string> post;
     in property <brush> colour: Theme.ink;
-    spacing: 0px;
+    // What the whole name would take, for the tooltip's "does it fit".
+    preferred-width: before.preferred-width + label.preferred-width + after.preferred-width;
+    // **Placed by hand and clipped**: in a layout the marked part kept its
+    // own width and a name matched whole ran over the next columns. Each
+    // part gets what is left after the ones before it, so a long name is cut
+    // from its end, the mark included.
+    clip: true;
+    property <length> pre-w: min(before.preferred-width, root.width);
+    property <length> hit-w: min(label.preferred-width, root.width - self.pre-w);
 
-    Text {
+    before := Text {
+        x: 0px;
+        width: root.pre-w;
+        height: root.height;
         text: root.pre;
         color: root.colour;
         font-family: Fonts.mono;
@@ -808,25 +822,31 @@ component Marked inherits HorizontalLayout {
         vertical-alignment: center;
     }
 
-    // Not a conditional element: one of those is left out of the parent's
-    // `spacing`, so the name shifts sideways the moment a match appears.
+    // Not a conditional element, so a slot is never rebuilt when a match
+    // appears; an empty mark is a transparent box of no width.
     Rectangle {
+        x: root.pre-w;
+        width: root.hit-w;
+        height: label.preferred-height;
+        y: (root.height - self.height) / 2;
         background: root.hit == "" ? transparent : Theme.mark;
         border-radius: 2px;
-        width: label.preferred-width;
-        // The text's own height: the layout slot is taller than the row.
-        height: label.preferred-height;
-        y: (parent.height - self.height) / 2;
+        clip: true;
         label := Text {
+            width: parent.width;
             text: root.hit;
             color: Theme.mark-ink;
             font-family: Fonts.mono;
-        font-size: 13px;
+            font-size: 13px;
+            overflow: elide;
             vertical-alignment: center;
         }
     }
 
-    Text {
+    after := Text {
+        x: root.pre-w + root.hit-w;
+        width: max(0px, root.width - root.pre-w - root.hit-w);
+        height: root.height;
         text: root.post;
         color: root.colour;
         font-family: Fonts.mono;
@@ -834,9 +854,6 @@ component Marked inherits HorizontalLayout {
         overflow: elide;
         vertical-alignment: center;
     }
-
-    // Eats the rest of the width so the name stays left.
-    Rectangle { }
 }
 
 export component MainWindow inherits Window {
@@ -874,6 +891,10 @@ export component MainWindow inherits Window {
     in property <string> axis-week;
     in property <string> axis-today;
     in property <string> meter;
+    // What a person's last act came to — moved to the trash, copied, not run —
+    // shown over the meter for a few seconds, so the search that follows the
+    // act does not write over it at once. Rust clears it.
+    in property <string> notice;
     // The same line in pieces, when it is the numeric one. See the meter row.
     in property <string> meter-count;
     in property <string> meter-ms;
@@ -1043,6 +1064,9 @@ export component MainWindow inherits Window {
     // --- what Rust listens for --------------------------------------------
     callback query-changed(string);
     callback activated(int);
+    /// A double-click on a row, and where along it: the location column shows
+    /// the row in its folder, the rest open it as `activated` does.
+    callback opened-at(int, length);
     callback reveal(int);
     // --- the right-click menu -------------------------------------------
     // The window owns none of the meaning: Rust fills `menu` from
@@ -1721,7 +1745,15 @@ export component MainWindow inherits Window {
                 // Three claims of different weight: the count is the answer,
                 // the cost wears the "today" hue, the walk stays quiet. `meter`
                 // holds the sentences that are not numbers; never both at once.
-                if root.meter-count != "": HorizontalLayout {
+                if root.notice != "": Text {
+                    text: root.notice;
+                    color: Theme.ink-2;
+                    font-size: 11.5px;
+                    letter-spacing: 0.2px;
+                    vertical-alignment: center;
+                }
+
+                if root.notice == "" && root.meter-count != "": HorizontalLayout {
                     spacing: 6px;
 
                     Text {
@@ -1773,7 +1805,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                if root.meter-count == "": Text {
+                if root.notice == "" && root.meter-count == "": Text {
                     text: root.meter;
                     color: Theme.ink-3;
                     font-size: 11.5px;
@@ -2931,7 +2963,7 @@ export component MainWindow inherits Window {
                                 }
                                 double-clicked => {
                                     root.selected = i;
-                                    root.activated(i);
+                                    root.opened-at(i, self.mouse-x);
                                 }
                                 // A press, not a click: a click carries no modifiers
                                 // here, and `Ctrl` and `Shift` change what it means.

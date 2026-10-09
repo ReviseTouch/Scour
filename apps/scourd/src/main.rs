@@ -168,7 +168,13 @@ fn main() -> Result<()> {
         let _ = ctrlc::set_handler(move || {
             stop.store(true, Ordering::Relaxed);
             engine.shutdown();
-            let _ = scour_ipc::Client::connect(&addr);
+            // Nothing else wakes `accept`. With the socket's file gone — a
+            // runtime directory cleared under a running service — the connect
+            // fails and the loop would wait for ever; the index is committed
+            // by now, so the process leaves instead.
+            if scour_ipc::Client::connect(&addr).is_err() {
+                std::process::exit(0);
+            }
         });
     }
 

@@ -219,6 +219,7 @@ pub fn row_of(h: &Hit, terms: &[String], shape: &Shape, fresh: bool) -> Row {
         // Empty; filled in after the row is on screen by `look_for_pictures`.
         thumb: blank(),
         shot: false,
+        runs: !h.is_dir && scour_core::runs_when_opened(h.name(), h.meta.mode),
     }
 }
 
@@ -724,6 +725,15 @@ impl Rows {
             .at(row)
             .map(|k| k.row.path.to_string())
             .filter(|p| !p.is_empty())
+    }
+
+    /// The path of a row and whether opening it would start a program.
+    pub fn opening_at(&self, row: usize) -> Option<(String, bool)> {
+        let pages = self.pages.borrow();
+        pages
+            .at(row)
+            .map(|k| (k.row.path.to_string(), k.row.runs))
+            .filter(|(p, _)| !p.is_empty())
     }
 
     /// How long the result is.
