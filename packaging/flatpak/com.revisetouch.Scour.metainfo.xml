@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.9" date="2026-10-09" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.9</url>
+      <description>
+        <p>The window tells the desktop it is Scour again, so the dock and the task bar show its icon; the browser face finds Chromium on Fedora.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.8" date="2026-10-09" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.8</url>
       <description>
