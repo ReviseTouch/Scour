@@ -81,8 +81,8 @@ yoksa dakikada bir. Ölçümler ve onları üreten komutlar
 ### Hazır sürümle
 
 ```bash
-tar xzf scour-0.2.0-alpha.9-linux-x86_64.tar.gz
-cd scour-0.2.0-alpha.9-linux-x86_64
+tar xzf scour-0.2.0-alpha.10-linux-x86_64.tar.gz
+cd scour-0.2.0-alpha.10-linux-x86_64
 ./install.sh
 ```
 
@@ -109,8 +109,8 @@ masaüstünde bulunan `libfontconfig1`'i ister. Arşiv sıfırdan kurulmuş Ubun
 ### Debian, Ubuntu ve Fedora paketleri
 
 ```bash
-sudo apt install ./scour_0.2.0.alpha.9-1_amd64.deb      # Debian 11 ve üstü, Ubuntu 22.04 ve üstü
-sudo dnf install ./scour-0.2.0.alpha.9-1.x86_64.rpm     # Fedora
+sudo apt install ./scour_0.2.0.alpha.10-1_amd64.deb      # Debian 11 ve üstü, Ubuntu 22.04 ve üstü
+sudo dnf install ./scour-0.2.0.alpha.10-1.x86_64.rpm     # Fedora
 ```
 
 İkisi de yedi ikiliyi taşır: altısı `/usr/bin`'de, ayrıcalıklı `scour-watch`
