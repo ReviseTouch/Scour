@@ -116,9 +116,11 @@ sudo dnf install ./scour-0.2.0.alpha.9-1.x86_64.rpm     # Fedora
 İkisi de yedi ikiliyi taşır: altısı `/usr/bin`'de, ayrıcalıklı `scour-watch`
 `/usr/libexec/scour/` altında; başlatıcılar, menü girdisi, dört boyda simge ve
 `/usr/lib/systemd/user/` altında kullanıcı birimi; paket bu birimi her hesap
-için açar: servis bir sonraki oturum açılışından itibaren oturumla başlar, o
-zamana kadar servis bulamayan her yüz onu kendisi başlatır. Bir hesap için
-kapatmak: `systemctl --user mask scourd.service`.
+için açar ve kurulum sırasında açık olan oturumlarda başlatır: servis her
+oturumla, o hesabın yetkisiyle çalışır, pencere açık olsun olmasın. Yükseltme
+onu yeni ikiliyle yeniden başlatır, paketi kaldırmak durdurur. Bir hesap için
+kapatmak `systemctl --user mask scourd.service`, değiştirmek
+`systemctl --user edit scourd.service` ile.
 Değişiklikleri anında görmek, root isteyen tek adımdır (bkz. [Dosya sistemini
 izleme](#dosya-sistemini-izleme)): `sudo /usr/libexec/scour/install-service`.
 Paketin neyi nereye koyduğunu `/usr/share/doc/scour/PACKAGE-NOTES` anlatır.

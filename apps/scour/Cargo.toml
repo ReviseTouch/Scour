@@ -85,8 +85,8 @@ extended-description = """
 Scour keeps every file and folder of the configured volumes in an index of \
 its own, updates it as the filesystem changes, and answers searches from it \
 in milliseconds. One service and five faces: a command line, a window, a \
-terminal interface, a browser page and an MCP server. The service starts with \
-each session from the next login on."""
+terminal interface, a browser page and an MCP server. The service runs with \
+each session, as that account."""
 depends           = "libc6 (>= 2.30), libgcc-s1 (>= 4.2), libfontconfig1"
 recommends        = "libwayland-client0, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcursor1, libxi6, fontconfig, desktop-file-utils"
 suggests          = "xdg-utils, wl-clipboard | xclip | xsel"
@@ -131,6 +131,7 @@ summary = "Local file index and search"
 # No rpm on the build machine, so nothing can read the ELF headers for us.
 auto-req = "disabled"
 post_install_script   = "packaging/rpm/post.sh"
+pre_uninstall_script  = "packaging/rpm/preun.sh"
 post_uninstall_script = "packaging/rpm/postun.sh"
 assets = [
     { source = "target/package/bin/scour",       dest = "/usr/bin/scour",       mode = "755" },

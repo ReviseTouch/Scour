@@ -60,11 +60,13 @@ root-owned at /usr/libexec/scour/scour-watch: a package may not write to
 /usr/local, where the source installer puts its own copy.
 
 Installing this package enables the user unit for every account
-(/etc/systemd/user/default.target.wants/scourd.service), so the service
-starts with each session from the next login on; until then any face starts
-it when it finds none. For one account it is turned off with
+(/etc/systemd/user/default.target.wants/scourd.service) and starts it in the
+sessions open at the time, so the service runs with each session, as that
+account. An upgrade restarts it on the new binary; removing the package stops
+it. For one account it is turned off, or changed, with
 
     systemctl --user mask scourd.service
+    systemctl --user edit scourd.service
 
 That service watches nothing live: it walks again when a volume's write
 counter moves and on its periodic pass. Seeing changes as they happen needs a
