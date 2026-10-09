@@ -539,12 +539,14 @@ pub const WIDE: u32 = 1900;
 /// widths add up to `avail` exactly at every size, which is the property the
 /// whole thing exists for; only a room narrower than one pixel a column fails.
 ///
-/// Four moves: what each column asks for (a drag, else its own width, else a
-/// share of what is left that slides from [`Column::near`] to [`Column::far`]);
-/// share out the remainder, a column at its [`Column::max`] dropping out; take
-/// back the overflow in proportion to what each has above its floor; and below
-/// [`floor_width`] let the floors give way together rather than draw a column
-/// off the right-hand edge.
+/// **A dragged column is exactly as wide as it was dragged**, whichever it is:
+/// the stretching columns nobody dragged take what is left, sharing it by a
+/// share that slides from [`Column::near`] to [`Column::far`], each up to its
+/// [`Column::max`]. When that does not fit, room is taken back in turn: from
+/// the undragged stretching columns, down to their floors; then from the
+/// dragged ones, so a drag stops where the rest are on their floors; then
+/// from every column. Below [`floor_width`] the floors give way together
+/// rather than draw a column off the right-hand edge.
 ///
 /// `chosen` is the width a person dragged that column to, or `None`. Zero
 /// counts as `None`, as the settings file means it.
@@ -558,41 +560,32 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
         .map(|c| chosen(c.id).filter(|w| *w > 0))
         .collect();
 
-    // The room, less the columns that never stretch. A dragged one stays in
-    // the budget — see `DRAG_CAP` — so narrowing the window is shared.
-    let taken: u32 = cols
-        .iter()
-        .zip(&set)
-        .filter(|(c, _)| c.near == 0)
-        .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
-        .sum();
-    let budget = avail.saturating_sub(taken);
-    let stretchy: Vec<usize> = (0..cols.len()).filter(|&i| cols[i].near > 0).collect();
-
+    // What each asks for: a drag, else its own width; never under its floor.
     let mut w: Vec<u32> = cols
         .iter()
         .zip(&set)
         .map(|(c, s)| s.unwrap_or(c.width).max(c.min))
         .collect();
-    // A dragged width is a wish, not a lock: honoured while there is room, and
-    // capped at this share of the stretching budget when there is not, so a
-    // narrowing window shrinks both text columns instead of one. 45 rather
-    // than 60, at which the location fell from 942px to 212 before the dragged
-    // column moved. A floor under the column's own sliding share, not a ceiling.
-    const DRAG_CAP: u32 = 45;
+    // The stretching columns nobody dragged share what everything else left.
+    let free: Vec<usize> = (0..cols.len())
+        .filter(|&i| cols[i].near > 0 && set[i].is_none())
+        .collect();
+    let taken: u32 = (0..cols.len())
+        .filter(|i| !free.contains(i))
+        .map(|i| w[i])
+        .sum();
+    let budget = avail.saturating_sub(taken);
+    let weight: u32 = free.iter().map(|&i| share_at(cols[i], avail)).sum();
     let mut handed = 0;
-    for (n, &i) in stretchy.iter().enumerate() {
-        let want = match set[i] {
-            // Dragged: what was asked for while it fits a fair share, and
-            // never less than the column would have had untouched.
-            Some(chosen) => {
-                let fair = share_at(cols[i], avail).max(DRAG_CAP * 10);
-                chosen.min(budget * fair / 1000)
-            }
-            // Not dragged and last: whatever the others left, so the shares
-            // add up to the budget exactly however they rounded.
-            None if n + 1 == stretchy.len() => budget.saturating_sub(handed),
-            None => budget * share_at(cols[i], avail) / 1000,
+    for (n, &i) in free.iter().enumerate() {
+        // The last takes what the others left, so the shares add up to the
+        // budget exactly however they rounded.
+        let want = if n + 1 == free.len() {
+            budget.saturating_sub(handed)
+        } else {
+            (budget * share_at(cols[i], avail))
+                .checked_div(weight)
+                .unwrap_or(0)
         };
         handed += want;
         w[i] = want.max(cols[i].min);
@@ -605,7 +598,14 @@ pub fn lay_out(ids: &[&str], chosen: impl Fn(&str) -> Option<u32>, avail: u32) -
     if sum < avail {
         share_out(&cols, &set, &mut w, avail - sum);
     } else if sum > avail {
-        take_back(&cols, &mut w, sum - avail);
+        let dragged: Vec<usize> = (0..cols.len())
+            .filter(|&i| cols[i].near > 0 && set[i].is_some())
+            .collect();
+        let every: Vec<usize> = (0..cols.len()).collect();
+        let mut over = sum - avail;
+        for from in [&free, &dragged, &every] {
+            over = take_back(&cols, &mut w, over, from);
+        }
         squash(&mut w, avail);
     }
     w
@@ -643,7 +643,15 @@ fn share_out(cols: &[&Column], set: &[Option<u32>], w: &mut [u32], spare: u32) {
             })
             .collect();
         let weight: u32 = open.iter().map(|&i| u32::from(cols[i].far).max(1)).sum();
-        if left == 0 || weight == 0 {
+        if left == 0 {
+            return;
+        }
+        // Every stretching column dragged or at its ceiling: the last of them
+        // takes the rest, or a strip of empty row shows past the last column.
+        if weight == 0 {
+            if let Some(i) = (0..cols.len()).rev().find(|&i| cols[i].near > 0) {
+                w[i] += left;
+            }
             return;
         }
         let mut spent = 0;
@@ -695,16 +703,16 @@ fn squash(w: &mut [u32], avail: u32) {
     w[widest] = avail.saturating_sub(spent).max(1);
 }
 
-/// Move 3: take `over` back, in proportion to what each column has to spare.
-fn take_back(cols: &[&Column], w: &mut [u32], over: u32) {
+/// Take `over` back from the columns in `from`, in proportion to what each has
+/// above its floor. Returns what could not be taken from them.
+fn take_back(cols: &[&Column], w: &mut [u32], over: u32, from: &[usize]) -> u32 {
     let mut left = over;
     loop {
-        let open: Vec<usize> = (0..cols.len()).filter(|&i| w[i] > cols[i].min).collect();
+        let open: Vec<usize> = from.iter().copied().filter(|&i| w[i] > cols[i].min).collect();
         let room: u32 = open.iter().map(|&i| w[i] - cols[i].min).sum();
-        // Every column on its floor and the window still too narrow: nothing
-        // here can fix that, and `squash` takes over.
+        // Every one of them on its floor: the next tier, or `squash`, goes on.
         if left == 0 || room == 0 {
-            return;
+            return left;
         }
         let take = left.min(room);
         let mut taken = 0;
@@ -719,7 +727,7 @@ fn take_back(cols: &[&Column], w: &mut [u32], over: u32) {
             taken += share;
         }
         if taken == 0 {
-            return;
+            return left;
         }
         left -= taken;
     }
@@ -835,36 +843,75 @@ mod column_tests {
         }
     }
 
-    /// A dragged width is a wish, not a lock: honoured while there is room,
-    /// following its own share down when there is not.
+    /// A drag is honoured exactly: past the name's ceiling, past half the
+    /// room, and whatever it is beside. The location pays for it first.
     #[test]
-    fn a_dragged_column_gives_way_too_once_there_is_no_room() {
-        let pinned = |id: &str| (id == "name").then_some(359);
+    fn a_dragged_column_is_as_wide_as_it_was_dragged() {
         let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        let free = lay_out(DEFAULT_COLUMNS, |_| None, 1100);
 
-        // Wide: exactly what was asked for.
-        let wide = lay_out(DEFAULT_COLUMNS, pinned, 1621);
-        assert_eq!(at(&wide, "name"), 359, "the drag was not honoured");
-
-        // Narrow: it moved, and it is not the location paying alone any more.
-        let tight = lay_out(DEFAULT_COLUMNS, pinned, 850);
-        assert!(at(&tight, "name") < 300, "the dragged column barely moved");
-
-        for avail in (400..1700).step_by(11) {
-            let w = lay_out(DEFAULT_COLUMNS, pinned, avail);
-            let free = lay_out(DEFAULT_COLUMNS, |_| None, avail);
-            assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
-            // Never wider than asked for…
-            assert!(at(&w, "name") <= 359, "a drag grew at {avail}px");
-            // …and never narrower than it would have been untouched, which
-            // would turn asking for a width into a penalty for having asked.
-            assert!(
-                at(&w, "name") >= at(&free, "name").min(359),
-                "at {avail}px the drag cost it: {} against {}",
-                at(&w, "name"),
-                at(&free, "name")
-            );
+        // Wider than its automatic ceiling and than any share it would get.
+        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(640), 1100);
+        assert_eq!(at(&w, "name"), 640, "the drag was not honoured: {w:?}");
+        assert_eq!(w.iter().sum::<u32>(), 1100);
+        // The location gave the room; the fixed columns did not move.
+        assert!(at(&w, "path") < at(&free, "path"));
+        for id in ["kind", "mtime", "size"] {
+            assert_eq!(at(&w, id), at(&free, id), "`{id}` paid for the name");
         }
+
+        // Narrower than it would have been is honoured too, and the location
+        // takes the room.
+        let w = lay_out(DEFAULT_COLUMNS, |id| (id == "name").then_some(150), 1100);
+        assert_eq!(at(&w, "name"), 150);
+        assert!(at(&w, "path") > at(&free, "path"));
+
+        // A fixed column and a stretching one dragged at once: both kept.
+        let w = lay_out(
+            DEFAULT_COLUMNS,
+            |id| match id {
+                "name" => Some(500),
+                "kind" => Some(200),
+                _ => None,
+            },
+            1300,
+        );
+        assert_eq!((at(&w, "name"), at(&w, "kind")), (500, 200), "{w:?}");
+        assert_eq!(w.iter().sum::<u32>(), 1300);
+    }
+
+    /// A drag stops where the rest are on their floors: the location goes
+    /// first, then the dragged column itself, and the sum is the room at
+    /// every size.
+    #[test]
+    fn a_drag_past_the_room_stops_at_the_floors() {
+        let at = |w: &[u32], id: &str| w[DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap()];
+        let pinned = |id: &str| (id == "name").then_some(800);
+        for avail in (400..3000).step_by(13) {
+            let w = lay_out(DEFAULT_COLUMNS, pinned, avail);
+            assert_eq!(w.iter().sum::<u32>(), avail, "at {avail}px: {w:?}");
+            assert!(at(&w, "name") <= 800, "a drag grew at {avail}px");
+            // While the name is short of what was asked, the location is on
+            // its floor: the dragged column is the second to give way.
+            if at(&w, "name") < 800 && avail >= floor_width(DEFAULT_COLUMNS) {
+                assert_eq!(at(&w, "path"), column("path").unwrap().min, "at {avail}px: {w:?}");
+            }
+        }
+    }
+
+    /// Every stretching column dragged: the row is still filled to the edge.
+    #[test]
+    fn with_every_stretching_column_dragged_the_row_is_still_full() {
+        let w = lay_out(
+            DEFAULT_COLUMNS,
+            |id| match id {
+                "name" => Some(300),
+                "path" => Some(300),
+                _ => None,
+            },
+            1800,
+        );
+        assert_eq!(w.iter().sum::<u32>(), 1800, "{w:?}");
     }
 
     /// What the sliding shares are for: the two text columns trade places as

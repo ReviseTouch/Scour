@@ -921,13 +921,22 @@ fn main() -> Result<()> {
                 return;
             };
             let now = (was + delta).max(floor);
-            // What is kept is what was asked for: a drag during a squeeze renders
-            // narrower than the pointer went.
             table
                 .borrow_mut()
                 .widths
                 .insert(which.to_string(), now as u32);
             relayout(&w, &table.borrow());
+            // A drag past where the column stops — the others on their floors —
+            // keeps what is on screen, not where the pointer went: kept, the
+            // overshoot came back as a width nobody saw once the window grew.
+            if let Some(shown) = w.get_cw().row_data(at)
+                && shown < now
+            {
+                table
+                    .borrow_mut()
+                    .widths
+                    .insert(which.to_string(), shown as u32);
+            }
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     widths: Some(table.borrow().widths.clone()),
@@ -2700,6 +2709,50 @@ fn main() -> Result<()> {
                             );
                         },
                     );
+                },
+            );
+        }
+    }
+
+    // `SCOUR_GUI_DRAG=x1,y,x2`: after `SCOUR_GUI_CLICK_MS`, press at x1, move
+    // to x2 in 10px steps a frame apart, let go — a hand on a column's edge.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_DRAG") {
+        let n: Vec<f32> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if let [from, y, to] = n[..] {
+            let after: u64 = std::env::var("SCOUR_GUI_CLICK_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(2500);
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            let mut tick = 0u64;
+            let mut x = from;
+            let mut done = false;
+            let button = slint::platform::PointerEventButton::Left;
+            t.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(16),
+                move || {
+                    tick += 1;
+                    let Some(w) = weak.upgrade() else { return };
+                    if done || tick * 16 < after {
+                        return;
+                    }
+                    let win = w.window();
+                    let at = |x: f32| slint::LogicalPosition::new(x, y);
+                    if tick * 16 < after + 16 {
+                        win.dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at(x) });
+                        win.dispatch_event(slint::platform::WindowEvent::PointerPressed { position: at(x), button });
+                        trace(&format!("drag from {x},{y}"));
+                        return;
+                    }
+                    x = if (to - x).abs() <= 10.0 { to } else { x + 10.0f32.copysign(to - x) };
+                    win.dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at(x) });
+                    if x == to {
+                        win.dispatch_event(slint::platform::WindowEvent::PointerReleased { position: at(x), button });
+                        trace(&format!("drag let go at {x},{y}"));
+                        done = true;
+                    }
                 },
             );
         }

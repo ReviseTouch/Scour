@@ -3738,33 +3738,24 @@
     return Math.floor((c.near * 10 * (1000 - t) + c.far * 10 * t) / 1000);
   }
 
-  /* A wish, not a lock: it gives way, but never below its untouched share. */
-  const DRAG_CAP = 450;
-
+  /* A dragged column is exactly as wide as it was dragged; the stretching
+     columns nobody dragged share what is left. `scour_ui::lay_out`. */
   function layOut(cols, room) {
     const chosen = cols.map((c) => !!WIDTHS[c.id]);
-    const base = cols.map((c, i) =>
+    const w = cols.map((c, i) =>
       Math.max(c.min, (chosen[i] ? WIDTHS[c.id] : 0) || c.w || 120));
-    /* Only the columns that never stretch come off the top. */
+    const free = [];
+    cols.forEach((c, i) => { if (c.near > 0 && !chosen[i]) free.push(i); });
     let taken = 0;
-    cols.forEach((c, i) => { if (!c.near) taken += base[i]; });
+    w.forEach((x, i) => { if (!free.includes(i)) taken += x; });
     const budget = Math.max(0, room - taken);
-
-    const w = base.slice();
-    const stretchy = [];
-    cols.forEach((c, i) => { if (c.near > 0) stretchy.push(i); });
+    const weight = free.reduce((a, i) => a + shareAt(cols[i], room), 0);
     let handed = 0;
-    stretchy.forEach((i, n) => {
-      let want;
-      if (chosen[i]) {
-        const fair = Math.max(shareAt(cols[i], room), DRAG_CAP);
-        want = Math.min(WIDTHS[cols[i].id], Math.floor((budget * fair) / 1000));
-      } else if (n + 1 === stretchy.length) {
-        /* The last takes what the others left, however they rounded. */
-        want = Math.max(0, budget - handed);
-      } else {
-        want = Math.floor((budget * shareAt(cols[i], room)) / 1000);
-      }
+    free.forEach((i, n) => {
+      /* The last takes what the others left, however they rounded. */
+      const want = n + 1 === free.length ? Math.max(0, budget - handed)
+        : !weight ? 0
+        : Math.floor((budget * shareAt(cols[i], room)) / weight);
       handed += want;
       w[i] = Math.max(want, cols[i].min);
       if (cols[i].max) w[i] = Math.max(Math.min(w[i], cols[i].max), cols[i].min);
@@ -3772,7 +3763,16 @@
 
     const sum = w.reduce((a, b) => a + b, 0);
     if (sum < room) shareOut(cols, chosen, w, room - sum);
-    else if (sum > room) { takeBack(cols, w, sum - room); squash(w, room); }
+    else if (sum > room) {
+      /* In turn: the undragged, then the dragged, then everything. */
+      const dragged = [];
+      cols.forEach((c, i) => { if (c.near > 0 && chosen[i]) dragged.push(i); });
+      let over = sum - room;
+      for (const from of [free, dragged, cols.map((_, i) => i)]) {
+        over = takeBack(cols, w, over, from);
+      }
+      squash(w, room);
+    }
     return w;
   }
 
@@ -3802,7 +3802,15 @@
         if (!chosen[i] && cols[i].near > 0 && (!cols[i].max || w[i] < cols[i].max)) open.push(i);
       }
       const weight = open.reduce((a, i) => a + Math.max(1, cols[i].far), 0);
-      if (!left || !weight) return;
+      if (!left) return;
+      /* Every stretching column dragged or at its ceiling: the last of them
+         takes the rest, or empty row shows past the last column. */
+      if (!weight) {
+        for (let i = cols.length - 1; i >= 0; i--) {
+          if (cols[i].near > 0) { w[i] += left; break; }
+        }
+        return;
+      }
       let spent = 0;
       open.forEach((i, n) => {
         /* The last takes the rounding, or a hairline moves with the window. */
@@ -3819,16 +3827,14 @@
     }
   }
 
-  /* Move 3: take back what does not fit, in proportion to the room each
-     column has above its floor. */
-  function takeBack(cols, w, over) {
+  /* Take `over` back from the columns in `from`, in proportion to the room
+     each has above its floor; what could not be taken is returned. */
+  function takeBack(cols, w, over, from) {
     let left = over;
     for (;;) {
-      const open = [];
-      for (let i = 0; i < cols.length; i++) if (w[i] > cols[i].min) open.push(i);
+      const open = from.filter((i) => w[i] > cols[i].min);
       const room = open.reduce((a, i) => a + (w[i] - cols[i].min), 0);
-      /* Every column is on its floor: `.scroll` scrolls sideways from here. */
-      if (!left || !room) return;
+      if (!left || !room) return left;
       const take = Math.min(left, room);
       let taken = 0;
       open.forEach((i, n) => {
@@ -3839,7 +3845,7 @@
         w[i] -= share;
         taken += share;
       });
-      if (!taken) return;
+      if (!taken) return left;
       left -= taken;
     }
   }
@@ -4122,6 +4128,12 @@
       document.body.classList.remove("resizing");
       grip.removeEventListener("pointermove", move);
       grip.removeEventListener("pointerup", up);
+      /* Dragged past where the column stops — the others on their floors —
+         what is kept is what is on screen, not where the pointer went:
+         kept, the overshoot came back as a width nobody saw. */
+      const col = th.dataset.col;
+      const shown = Math.round(th.getBoundingClientRect().width);
+      if (WIDTHS[col] && shown < WIDTHS[col]) WIDTHS[col] = shown;
       saveWidths();
       painted = "";
       repaint(true);

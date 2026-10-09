@@ -2028,10 +2028,25 @@ mod tests {
                 )
             })
             .collect();
+        // Three sets of drags: a modest one, one past the room that has to
+        // stop at the floors, and a fixed column dragged beside a stretching one.
+        let drags: [&[(&str, u32)]; 3] = [
+            &[("name", 359)],
+            &[("name", 900)],
+            &[("name", 500), ("kind", 200)],
+        ];
+        let sets: Vec<String> = drags
+            .iter()
+            .map(|d| {
+                let pairs: Vec<String> = d.iter().map(|(id, w)| format!("\"{id}\":{w}")).collect();
+                format!("{{{}}}", pairs.join(","))
+            })
+            .collect();
         let harness = format!(
-            "const WIDTHS = {{\"name\": 359}};\n{}\nconst cols = [{}];\nconst out = [];\n             for (let r = 200; r <= 3600; r += 7) out.push(layOut(cols, r));\n             console.log(JSON.stringify(out));\n",
+            "let WIDTHS = {{}};\n{}\nconst cols = [{}];\nconst out = [];\n             for (const set of [{}]) {{ WIDTHS = set;\n             for (let r = 200; r <= 3600; r += 7) out.push(layOut(cols, r)); }}\n             console.log(JSON.stringify(out));\n",
             &PAGE[from..to],
-            cols.join(",")
+            cols.join(","),
+            sets.join(",")
         );
         let path = std::env::temp_dir().join("scour-layout-check.js");
         std::fs::write(&path, &harness).expect("writing the harness out");
@@ -2065,16 +2080,18 @@ mod tests {
             .collect();
 
         let mut n = 0;
-        for (i, room) in (200..=3600).step_by(7).enumerate() {
-            let want = scour_ui::lay_out(
-                scour_ui::DEFAULT_COLUMNS,
-                |id| (id == "name").then_some(359),
-                room,
-            );
-            assert_eq!(rows[i], want, "at {room}px the page and the crate differ");
-            n += 1;
+        for d in drags {
+            for room in (200..=3600).step_by(7) {
+                let want = scour_ui::lay_out(
+                    scour_ui::DEFAULT_COLUMNS,
+                    |id| d.iter().find(|(k, _)| *k == id).map(|(_, w)| *w),
+                    room,
+                );
+                assert_eq!(rows[n], want, "at {room}px with {d:?} the page and the crate differ");
+                n += 1;
+            }
         }
-        assert!(n > 400, "only {n} widths were compared");
+        assert!(n > 1200, "only {n} widths were compared");
     }
 
     /// The report's arithmetic exists twice: in `scour-chart`, which the window
