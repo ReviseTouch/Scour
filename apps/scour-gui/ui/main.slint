@@ -417,7 +417,8 @@ component Sheet inherits Rectangle {
     in property <length> room-w;
     in property <length> room-h;
 
-    /// Pressed the ×, or clicked outside it.
+    /// Pressed the ×. A press outside it is the window's: see the catch
+    /// before the panels.
     callback dismissed();
 
     visible: root.open;
@@ -3766,6 +3767,17 @@ export component MainWindow inherits Window {
 
         }
 
+        // A press anywhere outside an open panel closes it, and goes no
+        // further: it is not also a press on the row under it. Before the
+        // panels, so a press on one reaches the panel first.
+        if root.panel != "": TouchArea {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            clicked => { root.panel = ""; }
+        }
+
         // The panels. Drawn last so they are over the list, and only ever one
         // open at a time.
         Sheet {
@@ -3787,6 +3799,7 @@ export component MainWindow inherits Window {
         Sheet {
             title: root.faces-title;
             open: root.panel == "faces";
+            dismissed => { root.panel = ""; }
             room-w: root.width - 40px;
             room-h: root.height - 40px;
             changed open => {
