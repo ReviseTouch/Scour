@@ -2714,6 +2714,35 @@ fn main() -> Result<()> {
         }
     }
 
+    // `SCOUR_GUI_SIDEWAYS=x,y,px`: after `SCOUR_GUI_CLICK_MS`, one sideways
+    // wheel step of px at x,y — a touchpad pushing a panel's content across.
+    if let Ok(spec) = std::env::var("SCOUR_GUI_SIDEWAYS") {
+        let n: Vec<f32> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if let [x, y, px] = n[..] {
+            let after = std::env::var("SCOUR_GUI_CLICK_MS")
+                .ok()
+                .and_then(|ms| ms.parse().ok())
+                .unwrap_or(2500);
+            let weak = window.as_weak();
+            let t = Box::leak(Box::new(slint::Timer::default()));
+            t.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(after),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    let position = slint::LogicalPosition::new(x, y);
+                    w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                    w.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                        position,
+                        delta_x: -px,
+                        delta_y: 0.0,
+                    });
+                    trace(&format!("sideways {px} at {x},{y}"));
+                },
+            );
+        }
+    }
+
     // `SCOUR_GUI_DRAG=x1,y,x2`: after `SCOUR_GUI_CLICK_MS`, press at x1, move
     // to x2 in 10px steps a frame apart, let go — a hand on a column's edge.
     if let Ok(spec) = std::env::var("SCOUR_GUI_DRAG") {

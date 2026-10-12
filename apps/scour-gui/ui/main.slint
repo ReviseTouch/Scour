@@ -1329,6 +1329,14 @@ export component MainWindow inherits Window {
 
     forward-focus: input;
 
+    // The ground round the card closes an open panel too; the card has its
+    // own catch, under its panels.
+    if root.panel != "": TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => { root.panel = ""; }
+    }
+
     // A card on a ground: 20px all round, a 1px line, a 3px corner. No shadow —
     // the compositor draws the window's own, and two read as a border.
     Rectangle {
