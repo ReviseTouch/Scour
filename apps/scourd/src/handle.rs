@@ -21,15 +21,30 @@ pub struct Kept {
     /// back into what the walk skips by [`crate::wire`], from the same function
     /// the service started with, so the engine and the panel cannot drift.
     pub config: scour_config::Config,
+    /// Disks put off until the service starts again, by id. Not a setting:
+    /// "not now" is forgotten on purpose.
+    pub later: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Kept {
+    /// What would be indexed now: the disks found, and what was said about them.
+    pub fn plan(&self) -> crate::disks::Plan {
+        let settings = self
+            .settings
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        let later = self.later.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        crate::disks::plan(&self.config, &scour_volumes::look(), &settings, &later)
+    }
+
     pub fn open(dir: PathBuf, config: scour_config::Config) -> Kept {
         Kept {
             settings: Mutex::new(scour_settings::Settings::load(&dir)),
             dir,
             maker: scour_thumbs::Maker::default(),
             config,
+            later: Mutex::default(),
         }
     }
 }
@@ -250,6 +265,16 @@ fn run(
             }
         }
         Request::Places {} => Response::Places(scour_places::look()),
+        Request::Volumes {} => Response::Volumes {
+            disks: kept.plan().disks,
+        },
+        Request::Postpone { volume } => {
+            kept.later
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(volume);
+            Response::Accepted
+        }
         // `stat` first, and that is the fence: only a path the index holds may
         // be looked at, and no frontend has to remember that.
         Request::Preview { path } => {
@@ -287,13 +312,22 @@ fn run(
         Request::Sources {} => Response::Sources {
             sources: engine.sources(),
         },
-        Request::Status {} => Response::Status(engine.status()),
+        Request::Status {} => Response::Status(scour_core::Status {
+            asking: kept.plan().asking(),
+            ..engine.status()
+        }),
         // The only request that blocks, so the ceiling is here: a caller asking
         // to sleep for a day would hold a connection thread for a day.
-        Request::Await { since, timeout_ms } => Response::Status(engine.await_change(
-            since,
-            std::time::Duration::from_millis(timeout_ms.min(60_000) as u64),
-        )),
+        Request::Await { since, timeout_ms } => {
+            let status = engine.await_change(
+                since,
+                std::time::Duration::from_millis(timeout_ms.min(60_000) as u64),
+            );
+            Response::Status(scour_core::Status {
+                asking: kept.plan().asking(),
+                ..status
+            })
+        }
         Request::Stats {} => Response::Stats(engine.stats()?),
         Request::Rescan { path } => {
             engine.rescan(path)?;

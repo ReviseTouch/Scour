@@ -12,7 +12,12 @@ use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
 use scour_source_fs::{FsSource, platform_defaults};
 
-pub fn build(config: &Config) -> Result<Engine> {
+/// The engine over these sources, each with the other sources' roots it
+/// leaves alone — [`crate::disks::Plan::sources`].
+pub fn build(
+    config: &Config,
+    planned: &[(scour_config::SourceCfg, Vec<std::path::PathBuf>)],
+) -> Result<Engine> {
     let dir = index_dir(config);
     // One engine, so a line rather than a match; a second one is a second arm
     // here and nothing anywhere else.
@@ -20,7 +25,7 @@ pub fn build(config: &Config) -> Result<Engine> {
 
     // The number a source's rows carry is remembered, not counted: a position
     // in the configuration array would rebind every row when sources move.
-    let names: Vec<String> = config.sources.iter().map(|s| s.name.clone()).collect();
+    let names: Vec<String> = planned.iter().map(|(s, _)| s.name.clone()).collect();
     let assigned = crate::sources::assign(&dir, &names);
     for id in &assigned.dropped {
         match index.forget(SourceId(*id)) {
@@ -30,15 +35,15 @@ pub fn build(config: &Config) -> Result<Engine> {
         }
     }
 
-    let sources: Vec<Arc<dyn Source>> = config
-        .sources
+    let sources: Vec<Arc<dyn Source>> = planned
         .iter()
         .zip(&assigned.ids)
-        .map(|(s, id)| {
+        .map(|((s, skip), id)| {
             Arc::new(
                 FsSource::new(SourceId(*id), s.name.clone(), s.roots.clone())
                     .with_kind(s.kind.into())
-                    .with_watch(s.watch),
+                    .with_watch(s.watch)
+                    .with_skip(skip.clone()),
             ) as Arc<dyn Source>
         })
         .collect();

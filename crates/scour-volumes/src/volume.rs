@@ -41,4 +41,25 @@ impl Kind {
     pub fn is_built_in(self) -> bool {
         matches!(self, Kind::System | Kind::Fixed)
     }
+
+    /// The name the wire uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::System => "system",
+            Kind::Fixed => "fixed",
+            Kind::Removable => "removable",
+            Kind::Network => "network",
+        }
+    }
+}
+
+impl Volume {
+    /// What to call it: its label, or where it is when it has none.
+    pub fn name(&self) -> &str {
+        if self.label.is_empty() {
+            self.roots.first().map_or("", String::as_str)
+        } else {
+            &self.label
+        }
+    }
 }

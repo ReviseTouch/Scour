@@ -239,6 +239,27 @@ steady state.
   which compares every query shape against `scour-mock::brute_force`. That
   comparison found three bugs a timing benchmark had called a success.
 
+## The system disk as a source (2026-10-13)
+
+What indexing every disk adds on this machine: `/` with the home directory and
+`/mnt` left out, into an index of its own, the cache warm from daily use.
+
+```
+printf '[index]\ndir = "/var/tmp/r/index"\n[[source]]\nname = "system"\nroots = ["/"]\nwatch = false\n[exclude]\npaths = ["/home", "/mnt", "/run/media", "/media"]\n' > /var/tmp/r/config.toml
+time target/container/release/scourd --config /var/tmp/r/config.toml --scan-only
+```
+
+| | |
+|---|---:|
+| entries | 622,344 |
+| walk | 3.4 s |
+| CPU | 1.5 s user, 2.0 s system |
+| read from disk | 473 MB |
+| index | 49 MB |
+
+Unwatched, the walk is repeated when the disk's write counter moves, resting at
+least twenty times its own cost: at most every 68 s while the machine is busy.
+
 ## Reproducing
 
 ```sh

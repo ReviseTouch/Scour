@@ -39,6 +39,13 @@ pub struct Settings {
     /// one value in two lists is two rules. Never [`scour_core::ScanOptions::deny`].
     #[serde(default)]
     pub exclude_off: Vec<String>,
+    /// Disks indexed because somebody said yes — plugged-in and network ones,
+    /// which are asked about first — by `scour_volumes::Volume::id`.
+    #[serde(default)]
+    pub volumes_on: Vec<String>,
+    /// Disks somebody took out, or said no to, by the same id. Out wins over on.
+    #[serde(default)]
+    pub volumes_off: Vec<String>,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -105,6 +112,10 @@ pub struct Change {
     pub exclude_allow: Option<Vec<String>>,
     /// See [`Settings::exclude_off`]. Rule ids, replaced outright.
     pub exclude_off: Option<Vec<String>>,
+    /// See [`Settings::volumes_on`]. Replaced outright.
+    pub volumes_on: Option<Vec<String>>,
+    /// See [`Settings::volumes_off`]. Replaced outright.
+    pub volumes_off: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub widths: Option<BTreeMap<String, u32>>,
     pub sort: Option<String>,
@@ -148,6 +159,12 @@ impl Change {
         }
         if let Some(v) = self.exclude_off {
             to.exclude_off = v;
+        }
+        if let Some(v) = self.volumes_on {
+            to.volumes_on = v;
+        }
+        if let Some(v) = self.volumes_off {
+            to.volumes_off = v;
         }
         if let Some(v) = self.columns {
             to.columns = v;

@@ -152,6 +152,8 @@ pub struct FsSource {
     medium: crate::fs::Medium,
     /// One per root, decided at construction: neither filesystem nor device changes under a mount.
     probes: Vec<crate::pulse::Probe>,
+    /// Other sources' roots under these, which this one does not go into.
+    skip: Vec<String>,
 }
 
 impl FsSource {
@@ -178,6 +180,7 @@ impl FsSource {
             traits,
             medium,
             probes,
+            skip: Vec::new(),
         }
     }
 
@@ -220,6 +223,12 @@ impl FsSource {
     /// Expressed by withholding the capability rather than by a flag to remember.
     pub fn with_watch(mut self, watch: bool) -> Self {
         self.watch = watch;
+        self
+    }
+
+    /// Leave these alone: other sources' roots under this one's. See `skip`.
+    pub fn with_skip(mut self, skip: Vec<PathBuf>) -> Self {
+        self.skip = skip.iter().map(|p| path::from_path(p)).collect();
         self
     }
 
@@ -303,7 +312,7 @@ impl Source for FsSource {
         &self,
         opts: &ScanOptions,
     ) -> Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>> {
-        let rules = Rules::from_options(opts);
+        let rules = Rules::from_options(&crate::skip::own(opts, &self.skip));
         Some(Box::new(move |path: &str, is_dir: bool| {
             let name = path.rsplit('/').next().unwrap_or(path);
             rules.excludes(path, name, is_dir)
@@ -312,6 +321,7 @@ impl Source for FsSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport> {
         let started = Instant::now();
+        let opts = &*crate::skip::own(opts, &self.skip);
         let rules = Rules::from_options(opts);
         let roots: Vec<PathBuf> = match &opts.subtree {
             Some(s) => vec![path::to_path(s)],
@@ -507,7 +517,14 @@ impl Source for FsSource {
     }
 
     fn watch(&self, opts: &ScanOptions, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>> {
-        crate::watch::start(self.clone(), opts, sink)
+        let inner = crate::watch::start(self.clone(), &crate::skip::own(opts, &self.skip), sink)?;
+        if self.skip.is_empty() {
+            return Ok(inner);
+        }
+        Ok(Box::new(crate::skip::Skipping {
+            inner,
+            skip: self.skip.clone(),
+        }))
     }
 
     /// One `stat` a path, straight into the sink — see [`Source::recheck`].

@@ -5243,6 +5243,7 @@ dependencies = [
  "scour-preview",
  "scour-settings",
  "scour-thumbs",
+ "scour-volumes",
  "serde",
  "serde_json",
 ]
@@ -5397,6 +5398,7 @@ dependencies = [
  "scour-settings",
  "scour-source-fs",
  "scour-thumbs",
+ "scour-volumes",
  "serde",
  "serde_json",
  "tempfile",

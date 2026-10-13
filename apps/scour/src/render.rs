@@ -252,6 +252,28 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             }
         }
+        Response::Volumes { disks } => {
+            for d in disks {
+                let v = &d.volume;
+                let size = if v.size == 0 {
+                    String::new()
+                } else {
+                    format_size(v.size, BINARY)
+                };
+                println!(
+                    "{:<26} {:<16} {:>10}  {}{}",
+                    t(scour_ui::disks::state(d.state.as_str())),
+                    t(scour_ui::disks::kind(v.kind.as_str())),
+                    size,
+                    shown(&v.roots.join("  ")),
+                    if v.label.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  ({})", shown(&v.label))
+                    }
+                );
+            }
+        }
         Response::Places(p) => {
             println!("{}{}", label("home"), p.home);
             for place in &p.places {

@@ -3,6 +3,7 @@
 //! — and this crate has no dependencies. What is shared is the vocabulary,
 //! never the layout: which colour means "a field name", how tall a row is.
 
+pub mod disks;
 pub mod faces;
 pub mod format;
 pub mod path;

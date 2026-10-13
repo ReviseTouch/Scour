@@ -45,7 +45,7 @@ Dependencies flow downwards and **never** upwards.
 | **search** | `scour-engine` | which rows answer, in what order | who is asking |
 | **source** | `scour-source-fs`, `scour-watch` | walking and watching the filesystem | the inside of the index |
 | **transport** | `scour-proto`, `scour-ipc` | the shape of a question and an answer, framing | what either means |
-| **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
+| **shared presentation** | `scour-ui`, `scour-page`, `scour-i18n`, `scour-settings`, `scour-places`, `scour-volumes`, `scour-thumbs` | every question all faces must answer the same way | drawing tools |
 | **faces** | `scour-web`, `scour-gui`, `scour-tui`, `scour` | drawing, keys, the pointer | the index, the filesystem, the engine |
 
 **A face never links the engine.** All four learn everything they know over
@@ -70,6 +70,7 @@ shared crate:
 | `scour-settings` | columns and their order, widths, language, layout, **which face opens**, skip rules | the four faces' shared memory; `config.toml` stays the file written by hand |
 | `scour-i18n` | the catalogue, and the **order of languages**: chosen → `config.toml` → desktop → English | `.po` files; English msgids in code. The order is written once, in `choose()` |
 | `scour-places` | the desktop's own folders, which volumes record reads | a question about the machine, not about the index |
+| `scour-volumes` | which disks the machine has, and whether each is the system's, built in, plugged in or on a network | the service decides what to index from it and the faces draw it; macOS answers nothing yet |
 | `scour-thumbs` | where the thumbnail cache is, which kinds are never worth a look, who may make one | the one rule that says which row earns four `stat`s; the page and the window ask the same question |
 
 Anything needed by two interfaces belongs here.

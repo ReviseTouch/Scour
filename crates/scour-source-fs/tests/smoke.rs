@@ -740,3 +740,28 @@ fn a_root_that_changes_underneath_the_walk_is_not_vouched_for() {
         "a root that vanished was still being reconciled against"
     );
 }
+
+/// `/` walked as one disk must not walk `/home` when `/home` is a disk of its
+/// own: another source's root under this one is left to that source, by the
+/// walk and by the test the index sweeps with.
+#[test]
+fn a_root_given_to_another_source_is_not_walked() {
+    let (dir, src) = tree();
+    let src = src.with_skip(vec![dir.path().join("src")]);
+    let (paths, _) = scan(&src, &ScanOptions::default());
+    let got = rel(&paths, dir.path());
+    assert!(
+        got.iter().all(|p| !p.starts_with("src")),
+        "walked into another source: {got:?}"
+    );
+    assert!(got.iter().any(|p| p == "keep/notlar.txt"), "{got:?}");
+    let skips = src.excluder(&ScanOptions::default()).expect("an excluder");
+    let inside = format!(
+        "{}/src/main.rs",
+        dir.path().to_string_lossy().replace('\\', "/")
+    );
+    assert!(
+        skips(&inside, false),
+        "the sweep would keep another source's rows"
+    );
+}

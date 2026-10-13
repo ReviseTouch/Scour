@@ -101,6 +101,8 @@ enum Command {
     Rules,
     /// This desktop's own folders, and which volumes record read times.
     Places,
+    /// The disks this machine has, and whether each is indexed.
+    Volumes,
     /// What can be shown of a file, and the head of it when that is text.
     Preview { path: String },
     /// What a folder weighs, and which of its children weigh the most.
@@ -476,6 +478,7 @@ fn build(args: &Args) -> Result<Request> {
         },
         Some(Command::Rules) => Request::Rules {},
         Some(Command::Places) => Request::Places {},
+        Some(Command::Volumes) => Request::Volumes {},
         Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},

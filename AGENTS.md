@@ -72,7 +72,9 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `usage` | | `path`, `top` → what a subtree weighs; hard links charged `disk / links` per name |
 | `explain` | | `query`, `cursor` → the sentence, the coloured spans, completions — without running it |
 | `duplicates` | | `under`, `min_size`, `read_budget`, `top` → same-size groups and how many were **read** and proved identical |
-| `sources`, `status`, `stats`, `syntax`, `places`, `rules` | | facts, never sentences |
+| `sources`, `status`, `stats`, `syntax`, `places`, `rules` | | facts, never sentences; `status.asking` counts the disks waiting to be asked about |
+| `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual`. A yes or a lasting no is `set-settings` (`volumes_on`, `volumes_off`) |
+| `postpone` | ✓ | `volume` (a disk's id) → not asked about again until the service starts again |
 | `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, which face opens. A change names only what it touches |
 | `await` | | `since`, `timeout_ms` → a `Status` when the index would answer differently. One blocked thread instead of a poll; also what tells the service somebody is looking |
 | `thumbnails` | ✓ | starts the desktop's own thumbnailers, at most four at once — bounded here because the bound is the machine's |
@@ -123,7 +125,11 @@ something listens is a function the face passes in.
 
 ### Service — `scourd`
 
-`src/wire.rs` names the concrete index and source; nothing else does. Change
+`src/wire.rs` names the concrete index and source; nothing else does. The
+sources are `config.toml`'s when a person wrote any; otherwise every disk
+`scour-volumes` finds — built-in ones without asking, plugged-in and network
+ones once chosen — each leaving the others' roots under its own alone
+(`src/disks.rs`). Change
 feeds are hints: every source gets a full reconciliation pass — a watched
 one daily, once the machine is quiet, with one thread
 (`watched_reconcile_interval_secs`, default 86400); an unwatched one

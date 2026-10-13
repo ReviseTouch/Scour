@@ -1794,3 +1794,37 @@ msgstr "genişletmek için sürükleyin; olağan genişlik için çift tıklayı
 
 msgid "Open the full report in the browser"
 msgstr "Tam raporu tarayıcıda aç"
+
+# Disks: what kind each is, whether it is indexed, and the question a new one is asked.
+msgid "system disk"
+msgstr "sistem diski"
+
+msgid "built in"
+msgstr "dahili"
+
+msgid "plugged in"
+msgstr "takılı"
+
+msgid "on the network"
+msgstr "ağda"
+
+msgid "indexed, chosen"
+msgstr "indeksli, seçildi"
+
+msgid "set in config.toml"
+msgstr "config.toml'da ayarlı"
+
+msgid "left out"
+msgstr "dışarıda"
+
+msgid "waiting for an answer"
+msgstr "cevap bekliyor"
+
+msgid "not now"
+msgstr "şimdi değil"
+
+msgid "{name} is on the network. Index it too?"
+msgstr "{name} ağda. Bu da indekslensin mi?"
+
+msgid "{name} was plugged in. Index it too?"
+msgstr "{name} takıldı. Bu da indekslensin mi?"

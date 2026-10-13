@@ -13,6 +13,8 @@ mod pulse;
 mod revisit;
 mod rules;
 mod scan;
+/// Other sources' roots, which a source does not go into.
+mod skip;
 mod watch;
 
 pub mod fs;

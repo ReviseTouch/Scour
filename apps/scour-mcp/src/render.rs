@@ -179,6 +179,20 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
+        Response::Volumes { disks } => {
+            let mut out = String::new();
+            for d in disks {
+                let v = &d.volume;
+                out.push_str(&format!(
+                    "{}\t{}\t{}\t{}\n",
+                    d.state.as_str(),
+                    v.kind.as_str(),
+                    v.roots.join(" "),
+                    v.name()
+                ));
+            }
+            out
+        }
         Response::Places(p) => {
             let mut out = format!("home: {}\n", p.home);
             for place in &p.places {

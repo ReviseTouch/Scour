@@ -183,6 +183,14 @@ pub enum Request {
     /// Where this person keeps things, and what the volumes under them record. Asked
     /// of the service because it runs where the files are.
     Places {},
+    /// The disks this machine has, and for each whether it is indexed, left out,
+    /// or waiting for somebody to say. A yes or a lasting no is a settings change.
+    Volumes {},
+    /// Not now: stop asking about this disk until the service starts again.
+    /// `volume`, not `id`: a call's own `id` is its number, and they share one object.
+    Postpone {
+        volume: String,
+    },
     /// Make the pictures this desktop has not made yet. How many decoders may run at
     /// once is one number for the whole machine: one [`scour_thumbs::Maker`], in
     /// `scourd`. It **runs a program on the file**, so it is fenced like `stat`.
@@ -267,6 +275,56 @@ pub struct DupGroup {
     /// read end to end, which is "identical" rather than "the same size".
     pub certainty: String,
 }
+/// A disk and what is being done about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Disk {
+    pub volume: scour_volumes::Volume,
+    pub state: DiskState,
+}
+
+/// Whether a disk is indexed, and who decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiskState {
+    /// Built in, and indexed without asking.
+    Auto,
+    /// Somebody said yes.
+    Chosen,
+    /// `config.toml` names it; it is changed there.
+    Configured,
+    /// Somebody took it out, or said no.
+    Off,
+    /// Plugged in or on a network, and nobody has said.
+    Asking,
+    /// Asked, and put off until the service starts again.
+    Later,
+    /// Built in, but `config.toml` lists the sources, so only if chosen.
+    Manual,
+}
+
+impl DiskState {
+    /// Its files are in the index.
+    pub fn indexed(self) -> bool {
+        matches!(
+            self,
+            DiskState::Auto | DiskState::Chosen | DiskState::Configured
+        )
+    }
+
+    /// The name the wire uses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiskState::Auto => "auto",
+            DiskState::Chosen => "chosen",
+            DiskState::Configured => "configured",
+            DiskState::Off => "off",
+            DiskState::Asking => "asking",
+            DiskState::Later => "later",
+            DiskState::Manual => "manual",
+        }
+    }
+}
+
 /// How long an unqualified [`Request::Await`] waits: a quiet machine costs one round
 /// trip a minute, and a client that has lost its connection finds out.
 fn default_wait_ms() -> u32 {
@@ -351,6 +409,9 @@ pub enum Response {
         off: Vec<String>,
     },
     Places(scour_places::Places),
+    Volumes {
+        disks: Vec<Disk>,
+    },
     Preview(scour_preview::Look),
     Thumbnails(scour_thumbs::Made),
     Explain {
@@ -392,6 +453,7 @@ impl Request {
             // It starts programs and writes files. Nothing about the index changes,
             // but this predicate is a security boundary, not a classification.
             | Request::Thumbnails { .. }
+            | Request::Postpone { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
             | Request::Export { .. }
@@ -401,6 +463,7 @@ impl Request {
             | Request::Stat { .. }
             | Request::Rules {}
             | Request::Places {}
+            | Request::Volumes {}
             | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
@@ -428,6 +491,8 @@ impl Request {
             | Request::Tree { .. }
             | Request::Stat { .. }
             | Request::Places {}
+            | Request::Volumes {}
+            | Request::Postpone { .. }
             | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
@@ -457,6 +522,8 @@ impl Request {
             Request::Tree { .. } => "tree",
             Request::Stat { .. } => "stat",
             Request::Places {} => "places",
+            Request::Volumes {} => "volumes",
+            Request::Postpone { .. } => "postpone",
             Request::Preview { .. } => "preview",
             Request::Thumbnails { .. } => "thumbnails",
             Request::Usage { .. } => "usage",
@@ -545,6 +612,21 @@ mod tests {
         assert_eq!(page.limit, 200);
     }
 
+    /// The faces word a disk by these names, so they must be serde's own.
+    #[test]
+    fn a_disks_wire_names_are_the_ones_serde_writes() {
+        use DiskState::*;
+        for st in [Auto, Chosen, Configured, Off, Asking, Later, Manual] {
+            let json = serde_json::to_string(&st).expect("state");
+            assert_eq!(json, format!("\"{}\"", st.as_str()));
+        }
+        use scour_volumes::Kind;
+        for k in [Kind::System, Kind::Fixed, Kind::Removable, Kind::Network] {
+            let json = serde_json::to_string(&k).expect("kind");
+            assert_eq!(json, format!("\"{}\"", k.as_str()));
+        }
+    }
+
     #[test]
     fn every_request_round_trips() {
         let all = [
@@ -573,6 +655,10 @@ mod tests {
             Request::Explain {
                 query: "size:abc".into(),
                 cursor: Some(4),
+            },
+            Request::Volumes {},
+            Request::Postpone {
+                volume: "uuid:abc".into(),
             },
             Request::Sources {},
             Request::Status {},
@@ -623,6 +709,19 @@ mod tests {
                 capped: true,
                 misread: vec![scour_core::Span::new(0, 3, scour_core::Role::BadValue)],
                 took_us: 0,
+            },
+            Response::Volumes {
+                disks: vec![Disk {
+                    volume: scour_volumes::Volume {
+                        id: "uuid:abc".into(),
+                        roots: vec!["/mnt/yedek".into()],
+                        label: "Yedek".into(),
+                        kind: scour_volumes::Kind::Removable,
+                        fs: "exfat".into(),
+                        size: 64 << 30,
+                    },
+                    state: DiskState::Asking,
+                }],
             },
             Response::Facets(FacetResponse::default()),
             Response::Tree {
@@ -750,6 +849,20 @@ mod tests {
         ] {
             assert!(!r.streams(), "{} answers in one frame", r.name());
         }
+    }
+
+    /// A request's fields share one object with the call's number.
+    #[test]
+    fn a_disk_is_named_beside_the_calls_own_id() {
+        let call: Call =
+            serde_json::from_str(r#"{"id":7,"op":"postpone","volume":"uuid:abc"}"#).expect("parse");
+        assert_eq!(call.id, 7);
+        assert_eq!(
+            call.request,
+            Request::Postpone {
+                volume: "uuid:abc".into()
+            }
+        );
     }
 
     /// The two fields a live client leaves out most of the time.

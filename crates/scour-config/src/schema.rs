@@ -200,10 +200,11 @@ impl Config {
                     }),
                 ),
             },
+            // Written without sources: a list here is a person's choice, and
+            // none means every disk, decided by the service each time it starts.
             Err(_) => {
-                let c = Config::default().with_defaults_filled();
-                let err = c.save().err();
-                (c, err)
+                let err = Config::default().save().err();
+                (Config::default().with_defaults_filled(), err)
             }
         }
     }
@@ -259,6 +260,18 @@ impl Config {
         self
     }
 
+    /// Whether the sources were chosen by a person rather than left to the
+    /// disks found. What an earlier first start wrote — the home directory
+    /// alone, or one `drive-x` per fixed drive — and what [`Config::load_or_default`]
+    /// fills in are not a choice.
+    pub fn sources_given(&self) -> bool {
+        let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf());
+        !self
+            .sources
+            .iter()
+            .all(|s| is_default_source(s, home.as_deref()))
+    }
+
     /// The scan options these settings describe.
     pub fn scan_options(&self) -> ScanOptions {
         ScanOptions {
@@ -297,6 +310,20 @@ impl Config {
 }
 
 /// `C:\\` becomes `drive-c`: a source name is a config key and a wire word.
+/// One of the shapes a first start used to write: the home directory as
+/// `home`, or a whole drive as `drive-x`.
+fn is_default_source(s: &SourceCfg, home: Option<&std::path::Path>) -> bool {
+    let [root] = s.roots.as_slice() else {
+        return false;
+    };
+    let whole_drive = |r: &std::path::Path| {
+        let t = r.to_string_lossy();
+        t.len() == 3 && t.ends_with(":\\") && t.as_bytes()[0].is_ascii_alphabetic()
+    };
+    (s.name == "home" && Some(root.as_path()) == home)
+        || (s.name.starts_with("drive-") && whole_drive(root))
+}
+
 #[cfg_attr(not(windows), allow(dead_code))]
 fn drive_source_name(root: &std::path::Path) -> String {
     let letter = root
@@ -332,6 +359,35 @@ fn fixed_drives() -> Vec<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a first start wrote is not a choice; a disk somebody added is.
+    #[test]
+    fn only_sources_a_person_wrote_count_as_given() {
+        assert!(!Config::default().sources_given());
+        assert!(!Config::default().with_defaults_filled().sources_given());
+        let drives = |names: &[&str]| Config {
+            sources: names
+                .iter()
+                .map(|n| SourceCfg {
+                    name: format!("drive-{n}"),
+                    roots: vec![PathBuf::from(format!("{}:\\", n.to_uppercase()))],
+                    ..SourceCfg::default()
+                })
+                .collect(),
+            ..Config::default()
+        };
+        assert!(
+            !drives(&["c", "d"]).sources_given(),
+            "alpha.7's drives are a default"
+        );
+        let mut mine = Config::default().with_defaults_filled();
+        mine.sources.push(SourceCfg {
+            name: "depo".into(),
+            roots: vec!["/mnt/depo".into()],
+            ..SourceCfg::default()
+        });
+        assert!(mine.sources_given());
+    }
 
     #[test]
     fn a_default_config_round_trips_through_toml() {

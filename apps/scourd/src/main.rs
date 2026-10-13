@@ -2,6 +2,7 @@
 //! implementation. `NativeIndex` and `FsSource` appear in [`wire`] and nowhere
 //! else, so replacing the search engine is a change to one line here.
 
+mod disks;
 mod handle;
 mod sources;
 mod wire;
@@ -78,7 +79,13 @@ fn main() -> Result<()> {
     }
 
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
-    let engine = match wire::build(&config) {
+    // Beside the index rather than in the config file, which is hand-edited.
+    // Beside *this* index, not the default one: everything the config points
+    // at moves together, or `--config` is not the isolation it claims to be.
+    // Before the engine: what a person said about the disks decides its sources.
+    let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
+    let plan = kept.plan();
+    let engine = match wire::build(&config, &plan.sources) {
         Ok(engine) => engine,
         // Somebody already serves this index — a face started one, or the
         // system unit did. Not a failure to retry: `scourd.service` counts
@@ -178,10 +185,6 @@ fn main() -> Result<()> {
         });
     }
 
-    // Beside the index rather than in the config file, which is hand-edited.
-    // Beside *this* index, not the default one: everything the config points
-    // at moves together, or `--config` is not the isolation it claims to be.
-    let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
     let handler_engine = Arc::clone(&engine);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();

@@ -36,6 +36,10 @@ pub struct Status {
     /// could come back different. Compared with `!=`, never `>`, since a restarted
     /// service starts from zero. `Await` returns when it differs from a client's.
     pub revision: u64,
+    /// Disks plugged in or on a network that nobody has said yes or no to. The
+    /// service fills it in; the engine knows nothing of disks.
+    #[serde(default)]
+    pub asking: u32,
 }
 
 /// One node of a directory listing, answered from the index rather than the
