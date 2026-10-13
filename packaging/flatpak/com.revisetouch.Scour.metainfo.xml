@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.11" date="2026-10-13" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.11</url>
+      <description>
+        <p>A dragged column is as wide as it was dragged. A double-click on the location shows the file in its folder, and a program is shown rather than run. Long names stay in their column, and the panels close.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.10" date="2026-10-09" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.10</url>
       <description>
