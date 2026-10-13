@@ -56,8 +56,30 @@ pub fn plan(
     if sources.is_empty() && volumes.is_empty() {
         sources = config.sources.clone();
     }
-    let sources = with_skips(sources);
+    let mut sources = with_skips(sources);
+    fence(&mut sources, volumes);
     Plan { sources, disks }
+}
+
+/// A disk's source stops at every other disk mounted inside it, indexed or
+/// not: `/` chosen with `/mnt/depo` left out must not walk into it anyway.
+/// Sources written by hand walk as they always have.
+fn fence(sources: &mut [(SourceCfg, Vec<PathBuf>)], volumes: &[Volume]) {
+    for (s, skip) in sources.iter_mut() {
+        if !volumes.iter().any(|v| v.id == s.name) {
+            continue;
+        }
+        let inside = volumes
+            .iter()
+            .filter(|v| v.id != s.name)
+            .flat_map(|v| v.roots.iter().map(PathBuf::from))
+            .filter(|r| s.roots.iter().any(|mine| r != mine && r.starts_with(mine)));
+        for r in inside {
+            if !skip.contains(&r) {
+                skip.push(r);
+            }
+        }
+    }
 }
 
 fn state_of(
@@ -181,8 +203,11 @@ mod tests {
         );
         assert_eq!(names(&p), ["uuid:sys", "uuid:depo"]);
         assert_eq!(p.asking(), 2);
-        // `/` leaves `/mnt/depo` to its own source.
-        assert_eq!(p.sources[0].1, [PathBuf::from("/mnt/depo")]);
+        // `/` leaves `/mnt/depo` to its own source, and the two waiting alone.
+        assert_eq!(
+            p.sources[0].1,
+            ["/mnt/depo", "/run/media/u/Yedek", "/srv/nas"].map(PathBuf::from)
+        );
         assert!(p.sources[1].1.is_empty());
     }
 
@@ -206,6 +231,11 @@ mod tests {
         );
         assert_eq!(names(&p), ["uuid:sys", "uuid:usb"]);
         assert_eq!(p.sources[1].0.kind, SourceKindCfg::Removable);
+        // A disk left out or not yet answered for is not walked through `/`.
+        assert_eq!(
+            p.sources[0].1,
+            ["/run/media/u/Yedek", "/mnt/depo", "/srv/nas"].map(PathBuf::from)
+        );
         assert_eq!(p.asking(), 0);
     }
 
@@ -242,7 +272,7 @@ mod tests {
         assert_eq!(names(&p), ["home", "depo", "uuid:sys"]);
         assert_eq!(
             p.sources[2].1,
-            [PathBuf::from("/home/u"), PathBuf::from("/mnt/depo")]
+            ["/home/u", "/mnt/depo", "/run/media/u/Yedek", "/srv/nas"].map(PathBuf::from)
         );
     }
 

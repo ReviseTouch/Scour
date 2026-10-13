@@ -12,21 +12,27 @@ use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
 use scour_source_fs::{FsSource, platform_defaults};
 
-/// The engine over these sources, each with the other sources' roots it
-/// leaves alone — [`crate::disks::Plan::sources`].
-pub fn build(
-    config: &Config,
-    planned: &[(scour_config::SourceCfg, Vec<std::path::PathBuf>)],
-) -> Result<Engine> {
-    let dir = index_dir(config);
+/// The index this configuration points at, opened once for the life of the
+/// process: an engine replaced when the disks change takes the same one.
+pub fn open(config: &Config) -> Result<Arc<dyn Index>> {
     // One engine, so a line rather than a match; a second one is a second arm
     // here and nothing anywhere else.
-    let index: Arc<dyn Index> = Arc::new(open_index(&dir)?);
+    Ok(Arc::new(open_index(&index_dir(config))?))
+}
 
+/// The engine over these sources, each with the other sources' roots it
+/// leaves alone — [`crate::disks::Plan::sources`]. A source no longer planned
+/// loses its rows here, so the engine before this one must have stopped.
+pub fn engine(
+    config: &Config,
+    index: Arc<dyn Index>,
+    planned: &[(scour_config::SourceCfg, Vec<std::path::PathBuf>)],
+    first_revision: u64,
+) -> Engine {
     // The number a source's rows carry is remembered, not counted: a position
     // in the configuration array would rebind every row when sources move.
     let names: Vec<String> = planned.iter().map(|(s, _)| s.name.clone()).collect();
-    let assigned = crate::sources::assign(&dir, &names);
+    let assigned = crate::sources::assign(&index_dir(config), &names);
     for id in &assigned.dropped {
         match index.forget(SourceId(*id)) {
             Ok(0) => {}
@@ -48,7 +54,7 @@ pub fn build(
         })
         .collect();
 
-    Ok(Engine::new(
+    Engine::new(
         sources,
         index,
         EngineOptions {
@@ -72,9 +78,10 @@ pub fn build(
             // a whole run of `scour_core::PAGE_ROWS` as loaded, so a lower
             // ceiling leaves rows that never arrive.
             result_limit: config.ui.result_limit.max(scour_core::PAGE_ROWS),
+            first_revision,
             ..EngineOptions::default()
         },
-    ))
+    )
 }
 
 /// Open the index, rebuilding it from nothing if an older Scour wrote it. The

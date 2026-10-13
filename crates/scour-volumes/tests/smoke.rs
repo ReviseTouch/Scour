@@ -138,3 +138,18 @@ fn this_machine_has_a_system_volume() {
         "no `/` among {v:?}"
     );
 }
+
+/// Nothing mounted while it waits: it comes back at the timeout, saying no.
+/// A mount at that moment would make this a yes, which is why the bound is
+/// the only thing asserted when it is one.
+#[test]
+fn waiting_with_nothing_mounted_ends_at_the_timeout() {
+    let mut changes = scour_volumes::Changes::new();
+    let began = std::time::Instant::now();
+    let changed = changes.wait(std::time::Duration::from_millis(150));
+    let took = began.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+    if !changed {
+        assert!(took >= std::time::Duration::from_millis(140), "{took:?}");
+    }
+}

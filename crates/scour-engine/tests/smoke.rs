@@ -2005,3 +2005,54 @@ fn a_prepared_relative_time_query_expires_without_a_file_event() {
         "the cached cutoff must move with the clock"
     );
 }
+
+/// What the service does when the disks change: the engine is stopped and a
+/// new one takes the same index. The rows stay, the count goes on from where
+/// it was, and the old engine dropped late leaves the new one working.
+#[test]
+fn a_new_engine_over_the_same_index_keeps_the_rows_and_the_count() {
+    let dir = tempfile::tempdir().expect("temp");
+    let index: Arc<dyn scour_core::Index> =
+        Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let fs = generate(&MockOptions {
+        files: 300,
+        ..Default::default()
+    });
+    let wanted = fs.entries.len() as u64;
+    let quick = || EngineOptions {
+        commit_interval: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let old = Engine::new(
+        vec![MemSource::new(fs.entries.clone())],
+        Arc::clone(&index),
+        quick(),
+    );
+    old.rescan(None).expect("rescan");
+    assert!(old.walking(), "a walk asked for is owed until it ends");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while (old.walking() || old.status().entries < wanted) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(!old.walking());
+    let seen = old.status().revision;
+    old.shutdown();
+
+    let new = Engine::new(
+        vec![MemSource::new(fs.entries)],
+        Arc::clone(&index),
+        EngineOptions {
+            first_revision: seen + 1,
+            ..quick()
+        },
+    );
+    drop(old);
+    let status = new.status();
+    assert_eq!(status.entries, wanted);
+    assert_eq!(status.revision, seen + 1);
+    new.nudge();
+    let began = Instant::now();
+    let after = new.await_change(seen + 1, Duration::from_secs(5));
+    assert_eq!(after.revision, seen + 2);
+    assert!(began.elapsed() < Duration::from_secs(1));
+}

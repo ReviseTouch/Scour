@@ -312,7 +312,7 @@ impl Source for FsSource {
         &self,
         opts: &ScanOptions,
     ) -> Option<Box<dyn Fn(&str, bool) -> bool + Send + Sync>> {
-        let rules = Rules::from_options(&crate::skip::own(opts, &self.skip));
+        let rules = Rules::from_options(&crate::skip::own(opts, &self.roots, &self.skip));
         Some(Box::new(move |path: &str, is_dir: bool| {
             let name = path.rsplit('/').next().unwrap_or(path);
             rules.excludes(path, name, is_dir)
@@ -321,7 +321,7 @@ impl Source for FsSource {
 
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport> {
         let started = Instant::now();
-        let opts = &*crate::skip::own(opts, &self.skip);
+        let opts = &*crate::skip::own(opts, &self.roots, &self.skip);
         let rules = Rules::from_options(opts);
         let roots: Vec<PathBuf> = match &opts.subtree {
             Some(s) => vec![path::to_path(s)],
@@ -517,12 +517,14 @@ impl Source for FsSource {
     }
 
     fn watch(&self, opts: &ScanOptions, sink: Box<dyn ChangeSink>) -> Result<Box<dyn WatchHandle>> {
-        let inner = crate::watch::start(self.clone(), &crate::skip::own(opts, &self.skip), sink)?;
-        if self.skip.is_empty() {
-            return Ok(inner);
-        }
+        let inner = crate::watch::start(
+            self.clone(),
+            &crate::skip::own(opts, &self.roots, &self.skip),
+            sink,
+        )?;
         Ok(Box::new(crate::skip::Skipping {
             inner,
+            roots: self.roots.clone(),
             skip: self.skip.clone(),
         }))
     }

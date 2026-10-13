@@ -20,13 +20,18 @@ const DRIVE_CDROM: u32 = 5;
 
 /// Every drive letter with a volume behind it now.
 pub fn look() -> Vec<Volume> {
-    // SAFETY: no arguments; a bit per letter.
-    let mask = unsafe { GetLogicalDrives() };
+    let mask = letters();
     let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
     (0..26u8)
         .filter(|i| mask & (1 << i) != 0)
         .filter_map(|i| drive(char::from(b'A' + i), &system))
         .collect()
+}
+
+/// A bit per drive letter in use: what changes when a disk comes or goes.
+pub fn letters() -> u32 {
+    // SAFETY: no arguments.
+    unsafe { GetLogicalDrives() }
 }
 
 fn wide(s: &str) -> Vec<u16> {

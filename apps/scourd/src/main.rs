@@ -4,6 +4,7 @@
 
 mod disks;
 mod handle;
+mod live;
 mod sources;
 mod wire;
 
@@ -85,8 +86,8 @@ fn main() -> Result<()> {
     // Before the engine: what a person said about the disks decides its sources.
     let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
     let plan = kept.plan();
-    let engine = match wire::build(&config, &plan.sources) {
-        Ok(engine) => engine,
+    let index = match wire::open(&config) {
+        Ok(index) => index,
         // Somebody already serves this index — a face started one, or the
         // system unit did. Not a failure to retry: `scourd.service` counts
         // this status as success, so it stops instead of restarting every
@@ -97,6 +98,7 @@ fn main() -> Result<()> {
         }
         Err(e) => return Err(e),
     };
+    let engine = wire::engine(&config, Arc::clone(&index), &plan.sources, 0);
 
     #[cfg(feature = "memory-trace")]
     if let Some(path) = std::env::var_os("SCOUR_MEMORY_RESCAN") {
@@ -138,43 +140,23 @@ fn main() -> Result<()> {
         engine.sources().len()
     );
 
-    let engine = Arc::new(engine);
-
-    // Watching starts on its own thread: the folder map a fanotify reader
-    // needs takes seconds to build and no query needs it. The baseline walk
-    // goes after it, on the same thread — walking first leaves a window
-    // covered by neither the snapshot nor the watch.
-    {
-        let engine = Arc::clone(&engine);
-        std::thread::spawn(move || {
-            // One call, because the order inside it is the invariant that a
-            // test can hold on to. See `Engine::cover_then_walk`.
-            match engine.cover_then_walk(want_scan) {
-                Ok((n, skipped)) if skipped.is_empty() => {
-                    scour_core::note!("scourd: watching {n} source(s)");
-                }
-                Ok((n, skipped)) => {
-                    // Named, so it can be acted on, but briefly: one unreadable
-                    // tree produced 191 paths, and the shared prefix is the
-                    // useful part of them.
-                    scour_core::note!(
-                        "scourd: watching {n} source(s); {} subtree(s) unreadable, under {}",
-                        skipped.len(),
-                        common_prefix(&skipped)
-                    );
-                }
-                Err(e) => scour_core::note!("scourd: the first walk could not start: {e}"),
-            }
-        });
-    }
+    let live = Arc::new(live::Live::new(engine, index, plan));
+    let kept = Arc::new(kept);
+    let walk = if want_scan {
+        live::Walk::All
+    } else {
+        live::Walk::Nothing
+    };
+    live::start(live.engine(), walk);
+    live::follow_disks(Arc::clone(&live), Arc::clone(&kept));
     {
         // Ctrl-C, and systemd's SIGTERM, have to reach the accept loop, which is
         // blocked in `accept`. Setting the flag and connecting once wakes it.
         let (stop, addr) = (Arc::clone(&stop), addr.clone());
-        let engine = Arc::clone(&engine);
+        let live = Arc::clone(&live);
         let _ = ctrlc::set_handler(move || {
             stop.store(true, Ordering::Relaxed);
-            engine.shutdown();
+            live.shutdown();
             // Nothing else wakes `accept`. With the socket's file gone — a
             // runtime directory cleared under a running service — the connect
             // fails and the loop would wait for ever; the index is committed
@@ -185,7 +167,7 @@ fn main() -> Result<()> {
         });
     }
 
-    let handler_engine = Arc::clone(&engine);
+    let handler_live = Arc::clone(&live);
     let handler_stop = Arc::clone(&stop);
     let wake_addr = addr.clone();
     server.serve(
@@ -201,11 +183,11 @@ fn main() -> Result<()> {
                     let _ = scour_ipc::Client::connect(&addr);
                 });
             }
-            handle::dispatch(&handler_engine, &kept, req, emit)
+            handle::dispatch(&handler_live, &kept, req, emit)
         },
         Arc::clone(&stop),
     );
-    engine.shutdown();
+    live.shutdown();
     Ok(())
 }
 
@@ -320,7 +302,7 @@ fn proc_kb(text: &str, key: &str) -> u64 {
 
 /// The deepest directory every one of these paths is inside: what turns a list
 /// of 191 skipped subtrees into one line somebody reads.
-fn common_prefix(paths: &[String]) -> String {
+pub(crate) fn common_prefix(paths: &[String]) -> String {
     let Some(first) = paths.first() else {
         return String::new();
     };

@@ -765,3 +765,30 @@ fn a_root_given_to_another_source_is_not_walked() {
         "the sweep would keep another source's rows"
     );
 }
+
+/// A stick mounted under `/run/media`, which the built-in `/run` rule skips:
+/// a path rule over the whole source is not its rule, the ones inside it are.
+#[test]
+fn a_root_under_an_excluded_path_is_walked_by_the_rules_inside_it() {
+    let (dir, src) = tree();
+    let opts = ScanOptions {
+        exclude_paths: vec![
+            dir.path()
+                .parent()
+                .expect("parent")
+                .to_string_lossy()
+                .into(),
+            dir.path().join("keep").to_string_lossy().into(),
+        ],
+        exclude_dirs: vec!["node_modules".into()],
+        ..ScanOptions::default()
+    };
+    let (paths, _) = scan(&src, &opts);
+    let got = rel(&paths, dir.path());
+    assert!(got.iter().any(|p| p == "src/main.rs"), "{got:?}");
+    assert!(got.iter().all(|p| !p.starts_with("keep")), "{got:?}");
+    assert!(
+        got.iter().all(|p| !p.starts_with("node_modules")),
+        "{got:?}"
+    );
+}

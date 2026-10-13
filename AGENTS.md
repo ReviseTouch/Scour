@@ -128,8 +128,14 @@ something listens is a function the face passes in.
 `src/wire.rs` names the concrete index and source; nothing else does. The
 sources are `config.toml`'s when a person wrote any; otherwise every disk
 `scour-volumes` finds — built-in ones without asking, plugged-in and network
-ones once chosen — each leaving the others' roots under its own alone
-(`src/disks.rs`). Change
+ones once chosen — each leaving the others' roots under its own alone, and
+a disk's source every other disk mounted inside it (`src/disks.rs`). A path
+rule over a whole source is not that source's rule: `/run` stays skipped and
+a stick under `/run/media` is still walked. A disk that comes or goes, or an
+answer about one, replaces the engine in place over the same index
+(`src/live.rs`): the old one stops first, only new sources are walked unless
+a walk was cut short, a source no longer planned loses its rows, and the
+revision count goes on. Change
 feeds are hints: every source gets a full reconciliation pass — a watched
 one daily, once the machine is quiet, with one thread
 (`watched_reconcile_interval_secs`, default 86400); an unwatched one

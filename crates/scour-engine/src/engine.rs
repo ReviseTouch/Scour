@@ -76,6 +76,10 @@ pub struct EngineOptions {
     /// written down. A commit was a segment and fourteen syncs a second while a
     /// window watched; a crash now costs this much, and the next walk finds it.
     pub persist_every: Duration,
+    /// Where [`Status::revision`] starts. An engine that replaces another over
+    /// the same index continues its count, or a client that saw the old one's
+    /// number could wait on the new one until that number comes round again.
+    pub first_revision: u64,
 }
 
 impl Default for EngineOptions {
@@ -102,6 +106,7 @@ impl Default for EngineOptions {
             // `commit_watched`, exactly: a waiter cannot be shown what has not been written.
             await_hold: Duration::from_millis(1_000),
             persist_every: Duration::from_secs(30),
+            first_revision: 0,
         }
     }
 }
@@ -315,6 +320,7 @@ impl Engine {
         let scan = RwLock::new(Arc::new(std::mem::take(&mut opts.scan)));
         let source_count = sources.len();
         let await_hold = opts.await_hold;
+        let first_revision = opts.first_revision;
         let shared = Arc::new(Shared {
             status: RwLock::new(Status {
                 sources: sources.len() as u32,
@@ -329,7 +335,7 @@ impl Engine {
             queued: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
             stop: AtomicBool::new(false),
             watches: Mutex::new(Vec::new()),
-            revision: AtomicU64::new(0),
+            revision: AtomicU64::new(first_revision),
             waiters: (Mutex::new(()), Condvar::new()),
             // A hold ago, so the session's first change is announced as it happens.
             wake_at: Mutex::new(
@@ -438,23 +444,34 @@ impl Engine {
                     subtree,
                 })
             }
-            None => {
-                for i in 0..self.shared.sources.len() {
-                    if self.shared.queued[i].swap(true, Ordering::AcqRel) {
-                        continue;
-                    }
-                    if let Err(e) = self.send(Job::Scan {
-                        source: i,
-                        subtree: None,
-                    }) {
-                        // Nothing will clear it, because nothing will run it.
-                        self.shared.queued[i].store(false, Ordering::Release);
-                        return Err(e);
-                    }
-                }
-                Ok(())
-            }
+            None => (0..self.shared.sources.len()).try_for_each(|i| self.queue_whole(i)),
         }
+    }
+
+    /// Queue a full walk of the source with this name: one just added.
+    pub fn walk_source(&self, name: &str) -> Result<()> {
+        let idx = self
+            .shared
+            .sources
+            .iter()
+            .position(|s| s.describe().name == name)
+            .ok_or_else(|| Error::NotFound { path: name.into() })?;
+        self.queue_whole(idx)
+    }
+
+    fn queue_whole(&self, i: usize) -> Result<()> {
+        if self.shared.queued[i].swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let sent = self.send(Job::Scan {
+            source: i,
+            subtree: None,
+        });
+        if sent.is_err() {
+            // Nothing will clear it, because nothing will run it.
+            self.shared.queued[i].store(false, Ordering::Release);
+        }
+        sent
     }
 
     /// Look at these paths again, now: a watcher takes three to eight seconds, too
@@ -906,12 +923,29 @@ impl Engine {
         s
     }
 
-    /// Stop watching, finish what is queued, and commit.
+    /// Waiters are told to look again: something a face shows changed outside
+    /// the index, such as a disk waiting for an answer.
+    pub fn nudge(&self) {
+        self.shared.touched_now();
+    }
+
+    /// A walk running, or one asked for that has not started: what an engine
+    /// stopped now would leave undone.
+    pub fn walking(&self) -> bool {
+        self.shared.scanning.load(Ordering::Relaxed)
+            || self.shared.queued.iter().any(|q| q.load(Ordering::Acquire))
+    }
+
+    /// Stop watching, finish what is queued, and commit. Once: the second call
+    /// — `Drop`, from whichever request held the engine last — may come after
+    /// another engine has taken the index over.
     pub fn shutdown(&self) {
         // Never hold the watch lock across a join: the consumer takes it too.
         {
             let _held = self.shared.waiters.0.lock();
-            self.shared.stop.store(true, Ordering::Release);
+            if self.shared.stop.swap(true, Ordering::AcqRel) {
+                return;
+            }
         }
         self.shared.waiters.1.notify_all();
         let handles = std::mem::take(&mut *self.shared.watches.lock());

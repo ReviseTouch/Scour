@@ -2,6 +2,7 @@
 //! or on a network. A question about the machine, asked the same way for the
 //! service and every face; it knows nothing about an index.
 
+mod changes;
 mod classify;
 mod look;
 mod mountinfo;
@@ -12,6 +13,7 @@ mod linux;
 #[cfg(windows)]
 mod windows;
 
+pub use changes::Changes;
 pub use classify::{Probe, volumes};
 pub use look::look;
 pub use mountinfo::{Mount, parse as parse_mountinfo};
