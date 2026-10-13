@@ -8,6 +8,9 @@
 /// when a privileged helper has handed the descriptor over.
 #[cfg(target_os = "linux")]
 mod fanotify;
+/// Which filesystems that descriptor can hear.
+#[cfg(target_os = "linux")]
+mod marks;
 mod pulse;
 /// Looking again at what a mapped write never announced.
 mod revisit;

@@ -12,6 +12,11 @@ use scour_engine::{Engine, EngineOptions};
 use scour_index_native::NativeIndex;
 use scour_source_fs::{FsSource, platform_defaults};
 
+/// How seldom the system's disk is walked when nothing watches it. Its pulse
+/// moves every two seconds — the journal alone — so walking it as often as its
+/// cost allows is walking it all the time.
+const SYSTEM_PATIENCE: Duration = Duration::from_secs(600);
+
 /// The index this configuration points at, opened once for the life of the
 /// process: an engine replaced when the disks change takes the same one.
 pub fn open(config: &Config) -> Result<Arc<dyn Index>> {
@@ -26,12 +31,12 @@ pub fn open(config: &Config) -> Result<Arc<dyn Index>> {
 pub fn engine(
     config: &Config,
     index: Arc<dyn Index>,
-    planned: &[(scour_config::SourceCfg, Vec<std::path::PathBuf>)],
+    planned: &[crate::disks::Planned],
     first_revision: u64,
 ) -> Engine {
     // The number a source's rows carry is remembered, not counted: a position
     // in the configuration array would rebind every row when sources move.
-    let names: Vec<String> = planned.iter().map(|(s, _)| s.name.clone()).collect();
+    let names: Vec<String> = planned.iter().map(|p| p.source.name.clone()).collect();
     let assigned = crate::sources::assign(&index_dir(config), &names);
     for id in &assigned.dropped {
         match index.forget(SourceId(*id)) {
@@ -44,12 +49,18 @@ pub fn engine(
     let sources: Vec<Arc<dyn Source>> = planned
         .iter()
         .zip(&assigned.ids)
-        .map(|((s, skip), id)| {
+        .map(|(p, id)| {
+            let s = &p.source;
             Arc::new(
                 FsSource::new(SourceId(*id), s.name.clone(), s.roots.clone())
                     .with_kind(s.kind.into())
                     .with_watch(s.watch)
-                    .with_skip(skip.clone()),
+                    .with_skip(p.skip.clone())
+                    .with_patience(if p.system {
+                        SYSTEM_PATIENCE
+                    } else {
+                        Duration::ZERO
+                    }),
             ) as Arc<dyn Source>
         })
         .collect();

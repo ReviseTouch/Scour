@@ -12,9 +12,18 @@ use scour_volumes::{Kind, Volume};
 /// What the service indexes, and what it says about every disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
-    /// Each with the roots of other sources under its own, which it leaves alone.
-    pub sources: Vec<(SourceCfg, Vec<PathBuf>)>,
+    pub sources: Vec<Planned>,
     pub disks: Vec<Disk>,
+}
+
+/// One source to build: what it is, the roots under its own that it leaves
+/// to others, and whether it is the system's disk — walked seldom when
+/// nothing watches it, since its pulse never rests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    pub source: SourceCfg,
+    pub skip: Vec<PathBuf>,
+    pub system: bool,
 }
 
 impl Plan {
@@ -42,11 +51,15 @@ pub fn plan(
         Vec::new()
     };
     let mut sources = given.clone();
+    let mut system = HashSet::new();
     let mut disks = Vec::new();
     for v in volumes {
         let state = state_of(v, &given, config.sources_given(), settings, later);
         if matches!(state, DiskState::Auto | DiskState::Chosen) {
             sources.push(source_of(v));
+            if v.kind == Kind::System {
+                system.insert(v.id.clone());
+            }
         }
         disks.push(Disk {
             volume: v.clone(),
@@ -56,27 +69,63 @@ pub fn plan(
     if sources.is_empty() && volumes.is_empty() {
         sources = config.sources.clone();
     }
-    let mut sources = with_skips(sources);
-    fence(&mut sources, volumes);
-    Plan { sources, disks }
+    if !config.sources_given()
+        && let Some(home) = home_apart(config, &sources, volumes)
+    {
+        sources.insert(0, home);
+    }
+    let mut planned: Vec<Planned> = with_skips(sources)
+        .into_iter()
+        .map(|(source, skip)| Planned {
+            system: system.contains(&source.name),
+            source,
+            skip,
+        })
+        .collect();
+    fence(&mut planned[given.len()..], volumes);
+    Plan {
+        sources: planned,
+        disks,
+    }
 }
 
-/// A disk's source stops at every other disk mounted inside it, indexed or
-/// not: `/` chosen with `/mnt/depo` left out must not walk into it anyway.
-/// Sources written by hand walk as they always have.
-fn fence(sources: &mut [(SourceCfg, Vec<PathBuf>)], volumes: &[Volume]) {
-    for (s, skip) in sources.iter_mut() {
-        if !volumes.iter().any(|v| v.id == s.name) {
-            continue;
-        }
+/// The home folder as a source of its own when the disk holding it is
+/// indexed: it keeps its own pace while the rest of the system disk waits,
+/// and the name the default source always had, so its rows stay.
+fn home_apart(config: &Config, sources: &[SourceCfg], volumes: &[Volume]) -> Option<SourceCfg> {
+    let home = config.sources.iter().find(|s| s.name == "home")?;
+    let [root] = home.roots.as_slice() else {
+        return None;
+    };
+    let held = sources
+        .iter()
+        .flat_map(|s| &s.roots)
+        .any(|r| root != r && root.starts_with(r));
+    let a_disk = volumes
+        .iter()
+        .flat_map(|v| &v.roots)
+        .any(|r| Path::new(r) == root);
+    (held && !a_disk).then(|| home.clone())
+}
+
+/// The service's own sources stop at every disk mounted inside them, indexed
+/// or not: `/` chosen with `/mnt/depo` left out must not walk into it anyway.
+/// Sources written by hand walk as they always have, and are not passed here.
+fn fence(sources: &mut [Planned], volumes: &[Volume]) {
+    for p in sources.iter_mut() {
         let inside = volumes
             .iter()
-            .filter(|v| v.id != s.name)
+            .filter(|v| v.id != p.source.name)
             .flat_map(|v| v.roots.iter().map(PathBuf::from))
-            .filter(|r| s.roots.iter().any(|mine| r != mine && r.starts_with(mine)));
+            .filter(|r| {
+                p.source
+                    .roots
+                    .iter()
+                    .any(|mine| r != mine && r.starts_with(mine))
+            });
         for r in inside {
-            if !skip.contains(&r) {
-                skip.push(r);
+            if !p.skip.contains(&r) {
+                p.skip.push(r);
             }
         }
     }
@@ -181,7 +230,7 @@ mod tests {
     }
 
     fn names(p: &Plan) -> Vec<&str> {
-        p.sources.iter().map(|(s, _)| s.name.as_str()).collect()
+        p.sources.iter().map(|p| p.source.name.as_str()).collect()
     }
 
     #[test]
@@ -205,10 +254,10 @@ mod tests {
         assert_eq!(p.asking(), 2);
         // `/` leaves `/mnt/depo` to its own source, and the two waiting alone.
         assert_eq!(
-            p.sources[0].1,
+            p.sources[0].skip,
             ["/mnt/depo", "/run/media/u/Yedek", "/srv/nas"].map(PathBuf::from)
         );
-        assert!(p.sources[1].1.is_empty());
+        assert!(p.sources[1].skip.is_empty());
     }
 
     #[test]
@@ -230,10 +279,10 @@ mod tests {
             ]
         );
         assert_eq!(names(&p), ["uuid:sys", "uuid:usb"]);
-        assert_eq!(p.sources[1].0.kind, SourceKindCfg::Removable);
+        assert_eq!(p.sources[1].source.kind, SourceKindCfg::Removable);
         // A disk left out or not yet answered for is not walked through `/`.
         assert_eq!(
-            p.sources[0].1,
+            p.sources[0].skip,
             ["/run/media/u/Yedek", "/mnt/depo", "/srv/nas"].map(PathBuf::from)
         );
         assert_eq!(p.asking(), 0);
@@ -271,9 +320,49 @@ mod tests {
         let p = plan(&config, &machine(), &settings, &HashSet::new());
         assert_eq!(names(&p), ["home", "depo", "uuid:sys"]);
         assert_eq!(
-            p.sources[2].1,
+            p.sources[2].skip,
             ["/home/u", "/mnt/depo", "/run/media/u/Yedek", "/srv/nas"].map(PathBuf::from)
         );
+    }
+
+    /// One partition with everything on it, and nothing written: the home
+    /// folder is the old default source, apart, and `/` is the system's.
+    #[test]
+    fn the_home_folder_inside_the_system_disk_is_a_source_of_its_own() {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let config = Config {
+            sources: vec![SourceCfg {
+                name: "home".into(),
+                roots: vec![home.clone()],
+                ..SourceCfg::default()
+            }],
+            ..Config::default()
+        };
+        assert!(!config.sources_given(), "the default is not a choice");
+        let p = plan(
+            &config,
+            &[disk("uuid:sys", "/", Kind::System)],
+            &Settings::default(),
+            &HashSet::new(),
+        );
+        assert_eq!(names(&p), ["home", "uuid:sys"]);
+        assert!(!p.sources[0].system && p.sources[1].system);
+        assert_eq!(p.sources[1].skip, [home]);
+
+        // Taken out with its disk.
+        let settings = Settings {
+            volumes_off: vec!["uuid:sys".into()],
+            ..Settings::default()
+        };
+        let p = plan(
+            &config,
+            &[disk("uuid:sys", "/", Kind::System)],
+            &settings,
+            &HashSet::new(),
+        );
+        assert!(p.sources.is_empty());
     }
 
     #[test]

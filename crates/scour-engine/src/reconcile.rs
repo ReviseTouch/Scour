@@ -26,6 +26,8 @@ pub(crate) struct Pulses {
     walked: Vec<Instant>,
     pulse_floor: Vec<Duration>,
     scan_rest: Vec<Duration>,
+    /// Each source's own least wait, [`scour_core::Source::patience`].
+    patience: Vec<Duration>,
     /// When a change last arrived for each source, so a watcher that has gone
     /// quiet can be told from a disk that is quiet.
     moved_since_event: Vec<u32>,
@@ -63,6 +65,7 @@ impl Pulses {
             walked: vec![Instant::now() - Self::FLOOR; n],
             pulse_floor: vec![Self::FLOOR; n],
             scan_rest: vec![Duration::ZERO; n],
+            patience: vec![Duration::ZERO; n],
             moved_since_event: vec![0; n],
             checked: Instant::now(),
             poll,
@@ -84,6 +87,13 @@ impl Pulses {
         self.checked.elapsed() >= Self::EVERY
     }
 
+    /// A source that waits longer than its cost alone says: see
+    /// [`scour_core::Source::patience`].
+    pub(crate) fn be_patient(&mut self, source: usize, least: Duration) {
+        self.patience[source] = least;
+        self.pulse_floor[source] = self.pulse_floor[source].max(least);
+    }
+
     /// Record a completed full pass, including its cost. Subtree scans cannot
     /// vouch for the rest of a source and must not postpone these deadlines.
     pub(crate) fn scanned(&mut self, source: usize, cost: Duration) {
@@ -97,7 +107,7 @@ impl Pulses {
         self.whole_at[source] = now;
         self.pending[source] = false;
         let rest = self.scan_rest[source];
-        self.pulse_floor[source] = Self::FLOOR.max(rest);
+        self.pulse_floor[source] = Self::FLOOR.max(rest).max(self.patience[source]);
         self.fallback[source] = now + self.poll.max(rest);
         self.safety[source] = now + self.reconcile.max(rest);
     }
@@ -264,6 +274,24 @@ mod pulse_tests {
             "a movement that arrived early is still acted on: {out:?}"
         );
         assert!(!p.pending[0], "and only once");
+    }
+
+    /// The system disk unwatched: its pulse moves every two seconds, and its
+    /// own patience, not its cost, says how often that is worth a walk.
+    #[test]
+    fn a_patient_source_waits_out_its_patience_after_a_walk() {
+        let mut p = quiet(1);
+        p.be_patient(0, Duration::from_secs(600));
+        p.scanned(0, Duration::from_millis(600));
+        assert_eq!(p.pulse_floor[0], Duration::from_secs(600));
+        p.walked[0] = Instant::now() - Duration::from_secs(60);
+        assert!(
+            p.decide(&[Some(2)], &[], &|| true).is_empty(),
+            "a minute is not enough"
+        );
+        p.walked[0] = Instant::now() - Duration::from_secs(600);
+        let out = p.decide(&[Some(3)], &[], &|| true);
+        assert!(matches!(out.as_slice(), [(0, Nudge::Reconcile)]), "{out:?}");
     }
 
     #[test]

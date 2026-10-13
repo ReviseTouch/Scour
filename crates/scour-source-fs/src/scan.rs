@@ -154,6 +154,8 @@ pub struct FsSource {
     probes: Vec<crate::pulse::Probe>,
     /// Other sources' roots under these, which this one does not go into.
     skip: Vec<String>,
+    /// See [`scour_core::Source::patience`].
+    patience: std::time::Duration,
 }
 
 impl FsSource {
@@ -181,6 +183,7 @@ impl FsSource {
             medium,
             probes,
             skip: Vec::new(),
+            patience: std::time::Duration::ZERO,
         }
     }
 
@@ -232,6 +235,12 @@ impl FsSource {
         self
     }
 
+    /// Walked no oftener than this when nothing watches it, however its pulse moves.
+    pub fn with_patience(mut self, least: std::time::Duration) -> Self {
+        self.patience = least;
+        self
+    }
+
     pub fn with_kind(mut self, kind: SourceKind) -> Self {
         self.kind = kind;
         self
@@ -277,6 +286,10 @@ impl Source for FsSource {
 
     /// The roots' pulses, folded into one number.
     /// Folded because any root moving is a yes; `None` only when none can be asked.
+    fn patience(&self) -> std::time::Duration {
+        self.patience
+    }
+
     fn pulse(&self) -> Option<u64> {
         let mut any = false;
         let mut folded = 0u64;

@@ -961,6 +961,10 @@ pub fn try_start(
     opts: &ScanOptions,
     sink: Arc<dyn ChangeSink>,
 ) -> Option<Result<Box<dyn WatchHandle>>> {
+    // Marked or not: a group that cannot hear these roots watches nothing.
+    if !crate::marks::covered(handed()?, source.roots()) {
+        return None;
+    }
     // The descriptor is taken once: two owners is a double close, and two readers
     // of one group is half the events each.
     let first = READER.get().is_none();

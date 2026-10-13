@@ -47,7 +47,8 @@ pub fn start(
         "scourd: no fanotify mark for {name} — it will not be watched live. On a root with \
          a block device behind it, changes are still found by walking when the source's \
          pulse moves, which is slower to notice; on a network or FUSE mount there is no \
-         pulse to read and it will not be reconciled at all. \
+         pulse to read, and it is walked again on a timer — `poll_interval_secs`, or \
+         twenty times the last walk's length if that is longer. \
          To watch it properly: `sudo scour-watch -- scourd`.",
     );
     Err(Error::unsupported(

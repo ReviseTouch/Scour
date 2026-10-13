@@ -1058,6 +1058,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
         shared.opts.reconcile_interval,
         shared.opts.watched_reconcile,
     );
+    for (i, src) in shared.sources.iter().enumerate() {
+        pulses.be_patient(i, src.patience());
+    }
 
     loop {
         // Wait for the next thing that has to happen, not a tick: each deadline below

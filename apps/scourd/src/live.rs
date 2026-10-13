@@ -109,7 +109,7 @@ impl Live {
             Walk::Named(
                 plan.sources
                     .iter()
-                    .map(|(s, _)| s.name.clone())
+                    .map(|p| p.source.name.clone())
                     .filter(|n| !had.contains(n))
                     .collect(),
             )

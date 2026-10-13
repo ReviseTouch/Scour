@@ -130,7 +130,12 @@ something listens is a function the face passes in.
 sources are `config.toml`'s when a person wrote any; otherwise every disk
 `scour-volumes` finds — built-in ones without asking, plugged-in and network
 ones once chosen — each leaving the others' roots under its own alone, and
-a disk's source every other disk mounted inside it (`src/disks.rs`). A path
+a disk's source every other disk mounted inside it (`src/disks.rs`). When
+nothing was written and the home folder sits inside an indexed disk, it is
+the `home` source it always was, and the system disk around it is walked no
+oftener than every ten minutes when nothing watches it. A source is watched
+by `fanotify` only if each of its roots is on a filesystem the helper marked
+(`/proc/self/fdinfo`); a disk mounted later, or on a network, is polled. A path
 rule over a whole source is not that source's rule: `/run` stays skipped and
 a stick under `/run/media` is still walked. A disk that comes or goes, or an
 answer about one, replaces the engine in place over the same index

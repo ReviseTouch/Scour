@@ -77,6 +77,13 @@ pub trait Source: Send + Sync + Debug {
         None
     }
 
+    /// The least time between two walks a moving pulse may ask for, when
+    /// nothing watches this source. Long for one whose pulse never rests and
+    /// which holds little anybody is waiting to find: the system's own files.
+    fn patience(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
     /// Walk everything and push it into the sink. Returns when the walk is done or
     /// the sink asked it to stop; the report says which.
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport>;
