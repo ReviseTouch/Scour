@@ -5,6 +5,7 @@
 //! 403, an `Origin` and a `Host` that must be ours, a peer that must be this
 //! account's process, and `POST` for everything that acts.
 
+mod disks;
 mod dupes;
 mod hotkey;
 mod http;
@@ -38,6 +39,24 @@ fn data_url(svg: &str) -> String {
         }
     }
     out
+}
+
+/// How a disk is spoken of, by wire name: `scour_ui::disks`, so every face
+/// says the same. Msgids, translated by the page.
+fn disk_words() -> serde_json::Value {
+    use scour_ui::disks::{KINDS, STATES, kind, question, state};
+    let table = |names: &[&str], word: fn(&str) -> &'static str| -> serde_json::Value {
+        names
+            .iter()
+            .map(|n| ((*n).to_owned(), serde_json::Value::from(word(n))))
+            .collect::<serde_json::Map<_, _>>()
+            .into()
+    };
+    serde_json::json!({
+        "kinds": table(&KINDS, kind),
+        "states": table(&STATES, state),
+        "questions": table(&KINDS, question),
+    })
 }
 
 /// The page with its palette and its menu written in, built once. The colours
@@ -85,6 +104,7 @@ fn page() -> &'static str {
             1,
         )
         .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
+        .replacen("/* @DISKS@ */ {}", &disk_words().to_string(), 1)
         .replace("@LOGO@", &data_url(LOGO))
         .replacen("<script>", &format!("<script nonce=\"{}\">", nonce()), 1)
     })
@@ -325,6 +345,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/open-with"
         || req.path == "/api/face"
         || req.path == "/api/thumb"
+        || req.path == "/api/volume"
         || (req.path == "/api/settings" && req.param("set").is_some())
         // Reading the desktop's key is a `GET`; writing one carries a body.
         || (req.path == "/api/hotkey" && !req.body.is_empty());
@@ -357,6 +378,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/kinds" => api_kinds(&mut stream, client, &req),
         "/api/strings" => api_strings(&mut stream, client, &req),
         "/api/places" => api_places(&mut stream, client),
+        "/api/volumes" => disks::api_volumes(&mut stream, client),
+        "/api/volume" => disks::api_volume(&mut stream, client, &req),
         "/api/rules" => api_rules(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),
@@ -941,6 +964,8 @@ fn status_json(s: &scour_core::Status) -> serde_json::Value {
         // ordering by path 1.9 ms against 21.5, and one rebuild puts it back.
         "unsorted": s.unsorted,
         "rebuild_advised": s.rebuild_advised,
+        // Disks waiting for a yes or a no: the page asks for them when this moves.
+        "asking": s.asking,
     })
 }
 
@@ -1842,6 +1867,19 @@ mod tests {
             }
         }
         assert_eq!(String::from_utf8(back).expect("utf-8"), LOGO);
+    }
+
+    #[test]
+    fn the_page_is_served_with_the_disk_words_the_shared_crate_holds() {
+        let served = page();
+        assert!(
+            !served.contains("/* @DISKS@ */"),
+            "nothing replaced the marker"
+        );
+        assert!(served.contains(&format!(
+            "\"removable\":\"{}\"",
+            scour_ui::disks::kind("removable")
+        )));
     }
 
     /// A renamed marker makes the injection silently do nothing, and every

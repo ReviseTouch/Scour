@@ -8,6 +8,8 @@ use scour_core::{
     Completion, Entry, Error, FacetBy, FacetResponse, IndexStats, MaintReport, Maintenance, Page,
     SearchResponse, SortKey, SourceInfo, Span, Status, TreeNode, UsageResponse,
 };
+/// What a disk is, named here so a face that reads a [`Disk`] needs no other crate.
+pub use scour_volumes::{Kind as VolumeKind, Volume};
 use serde::{Deserialize, Serialize};
 
 /// The protocol version. Bumped when an existing message changes shape;
@@ -184,8 +186,14 @@ pub enum Request {
     /// of the service because it runs where the files are.
     Places {},
     /// The disks this machine has, and for each whether it is indexed, left out,
-    /// or waiting for somebody to say. A yes or a lasting no is a settings change.
+    /// or waiting for somebody to say.
     Volumes {},
+    /// Index this disk, or leave it out for good: a yes or a no to the question,
+    /// and the switch in a disks panel.
+    Choose {
+        volume: String,
+        index: bool,
+    },
     /// Not now: stop asking about this disk until the service starts again.
     /// `volume`, not `id`: a call's own `id` is its number, and they share one object.
     Postpone {
@@ -454,6 +462,7 @@ impl Request {
             // but this predicate is a security boundary, not a classification.
             | Request::Thumbnails { .. }
             | Request::Postpone { .. }
+            | Request::Choose { .. }
             | Request::Shutdown {} => true,
             Request::Search { .. }
             | Request::Export { .. }
@@ -493,6 +502,7 @@ impl Request {
             | Request::Places {}
             | Request::Volumes {}
             | Request::Postpone { .. }
+            | Request::Choose { .. }
             | Request::Preview { .. }
             | Request::Usage { .. }
             | Request::Duplicates { .. }
@@ -524,6 +534,7 @@ impl Request {
             Request::Places {} => "places",
             Request::Volumes {} => "volumes",
             Request::Postpone { .. } => "postpone",
+            Request::Choose { .. } => "choose",
             Request::Preview { .. } => "preview",
             Request::Thumbnails { .. } => "thumbnails",
             Request::Usage { .. } => "usage",
@@ -659,6 +670,10 @@ mod tests {
             Request::Volumes {},
             Request::Postpone {
                 volume: "uuid:abc".into(),
+            },
+            Request::Choose {
+                volume: "uuid:abc".into(),
+                index: true,
             },
             Request::Sources {},
             Request::Status {},

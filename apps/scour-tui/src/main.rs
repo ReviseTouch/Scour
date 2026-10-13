@@ -5,6 +5,7 @@
 //! the keyboard and the service, and the caret is the terminal's own.
 
 mod app;
+mod disks;
 mod draw;
 mod icons;
 mod keys;
@@ -194,6 +195,7 @@ fn snap(
                 builtin,
                 off,
             })) => state.ruled(added, config, builtin, off),
+            Ok(Beat::Reply(Got::Disks(disks))) => state.disks_came(disks),
             // A picture of a machine with no service running shows the same
             // line the interactive loop would.
             Ok(Beat::Reply(Got::Booting)) => state.booting(),
@@ -407,6 +409,7 @@ fn run(
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Disks(disks)) => state.disks_came(disks),
             Beat::Reply(Got::Hotkey {
                 desktop,
                 key,
@@ -437,9 +440,10 @@ fn run(
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
-            Beat::Reply(Got::Awake(revision, walked, stale)) => {
+            Beat::Reply(Got::Awake(revision, walked, stale, asking)) => {
                 state.scanning = walked;
                 state.rebuild_advised = stale;
+                act(state.disks_moved(asking), link);
                 let want = state.awake(revision);
                 act(want, link);
                 // A beat before waiting again: during a scan the index moves
@@ -508,6 +512,7 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
                 builtin,
                 off,
             }) => state.ruled(added, config, builtin, off),
+            Beat::Reply(Got::Disks(disks)) => state.disks_came(disks),
             Beat::Reply(Got::Hotkey {
                 desktop,
                 key,
@@ -524,9 +529,10 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
-            Beat::Reply(Got::Awake(revision, walked, stale)) => {
+            Beat::Reply(Got::Awake(revision, walked, stale, asking)) => {
                 state.scanning = walked;
                 state.rebuild_advised = stale;
+                act(state.disks_moved(asking), link);
                 let want = state.awake(revision);
                 act(want, link);
             }
@@ -624,6 +630,12 @@ fn act(want: Want, link: &Link) {
             });
         }
         Want::Rules => link.later(Ask::Rules),
+        Want::Disks => link.later(Ask::Volumes),
+        // The list after the answer, on the same lane: it says what the answer did.
+        Want::Disk { volume, what } => {
+            link.later(Ask::Disk { volume, what });
+            link.later(Ask::Volumes);
+        }
         // On the slow lane: a keystroke must not queue behind a stat of paths.
         Want::Recheck(paths) => link.later(Ask::Recheck(paths)),
         Want::Report(path) => {

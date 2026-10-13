@@ -921,6 +921,28 @@
   }
   form.add button:hover { border-color: var(--ink-3); }
 
+  /* A disk: its name, then what it is, then where it is mounted. */
+  ul.disks .disk { display: flex; flex-direction: column; min-width: 0; }
+  ul.disks .disk .name { color: var(--ink); }
+  ul.disks .disk .aside { color: var(--ink-3); font-size: 11px; }
+  ul.disks li { padding: 4px 0; }
+  .about.asking { color: var(--q-key); }
+  .disk-ask {
+    display: flex; align-items: center; gap: calc(var(--u) * 2);
+    padding: 6px 12px; border-bottom: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink); font-size: 12px;
+  }
+  .disk-ask[hidden] { display: none; }
+  .disk-ask .said { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .disk-ask button {
+    background: none; color: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 2px;
+    padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .disk-ask button.yes { border-color: var(--q-key); color: var(--q-key); }
+  .disk-ask button:hover { border-color: var(--ink-3); }
+
   /* The desktop's key. The field and its buttons are `form.add`'s, so the two
      places in this sheet that take typing look like one. */
   .hk-now { margin: 0 0 calc(var(--u) * 2); }
@@ -1447,6 +1469,9 @@
         <button type="button" id="rules" class="about" aria-haspopup="dialog"
                 aria-expanded="false" data-t-title="what is skipped"
                 data-t-aria="the rules that keep files out of the index">⊘</button>
+        <button type="button" id="disks" class="about" aria-haspopup="dialog"
+                aria-expanded="false" data-t-title="disks"
+                data-t-aria="the disks this machine has, and which are indexed">⛁</button>
         <button type="button" id="csv" class="about"
                 data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
         <button type="button" id="about" class="about" aria-pressed="false"
@@ -1485,6 +1510,22 @@
       <p class="why" data-t="Saving a change starts a scan, so the index catches up on its own. Searching keeps working while it runs."></p>
       <p class="why" data-t="Switching a rule off does not delete it — that is how the two groups nobody can edit are still yours to turn off."></p>
     </div>
+    <div id="disks-panel" class="sheet" hidden role="dialog" aria-modal="false"
+         data-t-aria="disks">
+      <h2 data-t="Disks"></h2>
+      <p class="why" data-t="Every disk on this machine. A built-in one is indexed unless switched off; one plugged in or on the network is asked about first."></p>
+      <div id="disks-body"></div>
+      <p class="why" data-t="Switching a disk on walks it; switching one off takes its files out of the index."></p>
+    </div>
+
+    <!-- A disk that came and has not been answered for. One at a time. -->
+    <div id="disk-ask" class="disk-ask" hidden role="status">
+      <span class="said"></span>
+      <button type="button" class="yes" data-do="index" data-t="Index it"></button>
+      <button type="button" data-do="later" data-t="Not now"></button>
+      <button type="button" data-do="leave" data-t="Never"></button>
+    </div>
+
     <div class="tabs" role="tablist">
       <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
       <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
@@ -1686,6 +1727,8 @@
   /* Injected from `scour-ui`, so every face draws one list; a test reads the
    * marker out of the served page. */
   const MENU = /* @MENU@ */ [];
+  /* The same, for how a disk is spoken of: kind, state and question by wire name. */
+  const DISKS = /* @DISKS@ */ {};
 
   const SERVICE = {
     async get(route, params, signal) {
@@ -1823,6 +1866,16 @@
       return j;
     },
     status: () => SERVICE.get("status", {}),
+    volumes: () => SERVICE.get("volumes", {}),
+    /* `what` is `index`, `leave` or `later`. */
+    answerDisk: async (id, what) => {
+      const r = await fetch(`/api/volume?${new URLSearchParams({ id, do: what, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`volume: ${r.status}`);
+      return r.json();
+    },
     /* The one request meant to be slow: it answers when the index would. */
     wait: (rev, ms) => SERVICE.get("wait", { rev, ms }),
     /* What can be shown, asked before anything is fetched: the bridge looks
@@ -1877,7 +1930,7 @@
 
   const fmt = (n) => NUMBERS.format(n);
   const bytes = (n) => {
-    const u = ["B", "KB", "MB", "GB"];
+    const u = ["B", "KB", "MB", "GB", "TB"];
     let i = 0, v = n;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i === 0 ? v : v.toFixed(v < 10 ? 1 : 0)) + " " + u[i];
@@ -5148,6 +5201,7 @@
   let LAST_STATUS = null;
   function applyStatus(s) {
     LAST_STATUS = s;
+    disksMoved(s.asking || 0);
     TOTAL = s.entries;
     TOTAL_KNOWN = true;
     let moved = false;
@@ -5607,6 +5661,8 @@
     /* The two lines nothing else rewrites until something happens. */
     drawCost();
     if (LAST_STATUS) applyStatus(LAST_STATUS);
+    drawAsk();
+    if (!disksPanel.hidden) drawDisks();
     /* `drawPeek` returns early for the row it shows, so the labels stay. */
     if (PEEK.on && !peek.hidden) {
       const row = focusedRow();
@@ -5963,6 +6019,88 @@
     drawRules();
   });
   /* No rescan button: saving a rule is what asks for the walk. */
+
+  /* The disks: a panel that switches them, and a bar that asks about one that
+     came. Asked for again whenever the count waiting moves; the service
+     announces that like any other change. */
+  const disksPanel = document.getElementById("disks-panel");
+  const disksBtn = document.getElementById("disks");
+  const diskAsk = document.getElementById("disk-ask");
+  let DISK_LIST = [];
+  let DISKS_ASKING = -1;
+  const INDEXED = new Set(["auto", "chosen", "configured"]);
+  const diskName = (v) => v.label || v.roots[0] || v.id;
+  const diskWord = (table, key) => T((DISKS[table] || {})[key] || key);
+
+  const drawDisks = () => {
+    const rows = DISK_LIST.map(({ volume: v, state }) => {
+      const on = INDEXED.has(state);
+      const size = v.size ? " · " + bytes(v.size) : "";
+      return `<li class="${on ? "" : "off"}">` +
+        `<label><input type="checkbox" class="onoff" data-id="${esc(v.id)}"` +
+        ` ${on ? "checked" : ""} ${state === "configured" ? "disabled" : ""}` +
+        ` aria-label="${esc(T("index this disk"))}" />` +
+        `<span class="disk"><span class="name">${esc(diskName(v))}</span>` +
+        `<span class="aside">${esc(diskWord("kinds", v.kind) + size + " · " +
+                                   diskWord("states", state))}</span>` +
+        `<code>${esc(v.roots.join("  "))}</code></span></label></li>`;
+    }).join("");
+    document.getElementById("disks-body").innerHTML = rows
+      ? `<ul class="rules disks">${rows}</ul>`
+      : `<p class="why">${esc(T("No disks were found."))}</p>`;
+  };
+
+  const drawAsk = () => {
+    const d = DISK_LIST.find((x) => x.state === "asking");
+    diskAsk.hidden = !d;
+    disksBtn.classList.toggle("asking", !!d);
+    if (!d) return;
+    diskAsk.dataset.id = d.volume.id;
+    const question = (DISKS.questions || {})[d.volume.kind] || "{name}";
+    diskAsk.querySelector(".said").textContent = T(question, { name: diskName(d.volume) });
+  };
+
+  const loadDisks = () =>
+    SERVICE.volumes()
+      .then((r) => {
+        DISK_LIST = r.disks || [];
+        drawAsk();
+        if (!disksPanel.hidden) drawDisks();
+      })
+      .catch(() => {});
+
+  function disksMoved(asking) {
+    if (asking === DISKS_ASKING) return;
+    DISKS_ASKING = asking;
+    loadDisks();
+  }
+
+  const answerDisk = (id, what) =>
+    SERVICE.answerDisk(id, what).then(loadDisks).catch((e) => console.warn("disk:", e));
+
+  diskAsk.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-do]");
+    if (!b || !diskAsk.dataset.id) return;
+    diskAsk.hidden = true;
+    answerDisk(diskAsk.dataset.id, b.dataset.do);
+  });
+  disksBtn.addEventListener("click", () => {
+    const open = disksPanel.hidden;
+    disksPanel.hidden = !open;
+    disksBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) { drawDisks(); loadDisks(); }
+  });
+  disksPanel.addEventListener("change", (e) => {
+    const box = e.target.closest(".onoff");
+    if (!box) return;
+    answerDisk(box.dataset.id, box.checked ? "index" : "leave");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !disksPanel.hidden) {
+      disksPanel.hidden = true;
+      disksBtn.setAttribute("aria-expanded", "false");
+    }
+  });
 
   const langBtn = document.getElementById("lang");
   const langMenu = document.createElement("div");

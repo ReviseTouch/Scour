@@ -65,6 +65,13 @@ pub enum Ask {
     },
     /// What the walk skips, in three groups.
     Rules,
+    /// The disks, and what each is: for the panel and the question.
+    Volumes,
+    /// An answer about a disk: `index`, `leave` or `later`.
+    Disk {
+        volume: String,
+        what: String,
+    },
     /// Wait until the index is no longer at `since`, then say so. This is what
     /// makes the list live: the window searches again and asks to wait once more.
     Await {
@@ -150,6 +157,8 @@ pub enum Got {
     },
     Thumbnails(Box<Response>),
     Rules(Box<Response>),
+    /// The disks, or that an answer about one was taken.
+    Volumes(Box<Response>),
     /// What the desktop says about Scour's key, or what writing it did. Not a
     /// reply from the service: `scour-hotkey` spawns processes and answers on
     /// this same inbox, so the window has one place where work comes back.
@@ -235,6 +244,8 @@ impl Freshness {
             // Asked once and never superseded.
             Ask::Places
             | Ask::Rules
+            | Ask::Volumes
+            | Ask::Disk { .. }
             | Ask::Status
             | Ask::Await { .. }
             | Ask::Remember { .. }
@@ -311,6 +322,8 @@ impl Link {
             | Ask::Count { .. }
             | Ask::Places
             | Ask::Rules
+            | Ask::Volumes
+            | Ask::Disk { .. }
             | Ask::Status
             | Ask::Remember { .. }
             | Ask::Usage { .. }
@@ -381,6 +394,8 @@ enum Lane {
     Peek,
     /// The exclusion rules.
     Rules,
+    /// The disks, and answers about them.
+    Volumes,
     /// What the service is holding.
     Status,
     /// The long poll that keeps the list live.
@@ -602,6 +617,18 @@ fn spawn_lane(
                 Ask::Peek { path } => (0, Request::Preview { path }, Lane::Peek),
                 Ask::PeekFacts { path } => (0, Request::Stat { path }, Lane::Peek),
                 Ask::Rules => (0, Request::Rules {}, Lane::Rules),
+                Ask::Volumes => (0, Request::Volumes {}, Lane::Volumes),
+                Ask::Disk { volume, what } => (
+                    0,
+                    match what.as_str() {
+                        "later" => Request::Postpone { volume },
+                        how => Request::Choose {
+                            volume,
+                            index: how == "index",
+                        },
+                    },
+                    Lane::Volumes,
+                ),
                 Ask::Status => (0, Request::Status {}, Lane::Status),
                 Ask::Await { since } => (
                     0,
@@ -673,6 +700,7 @@ fn spawn_lane(
                         },
                         Lane::Thumbnails => Got::Thumbnails(reply),
                         Lane::Rules => Got::Rules(reply),
+                        Lane::Volumes => Got::Volumes(reply),
                         Lane::Status => Got::Status(reply),
                         Lane::Await => Got::Awake(reply),
                         Lane::Explain => Got::Explain {
@@ -697,6 +725,7 @@ fn spawn_lane(
                             Lane::Facets | Lane::Count => ReplyRevision::Query(revision),
                             Lane::Places
                             | Lane::Rules
+                            | Lane::Volumes
                             | Lane::Status
                             | Lane::Await
                             | Lane::Usage

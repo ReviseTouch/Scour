@@ -82,6 +82,8 @@ pub enum Panel {
     None,
     /// What the walk skips, and which of those are switched off.
     Rules,
+    /// The disks, and the question about one that came.
+    Disks,
     /// Which of the two languages to speak.
     Language,
     /// The desktop's key that opens Scour: what it is, and typing another.
@@ -146,6 +148,13 @@ pub enum Want {
     Peek(String),
     /// Replace the list of switched-off rules.
     OffRules(Vec<String>),
+    /// Ask for the disks.
+    Disks,
+    /// Answer about a disk: `index`, `leave` or `later`.
+    Disk {
+        volume: String,
+        what: String,
+    },
     /// Remember a preference.
     Remember(scour_settings::Change),
     /// Ask the desktop about its key, or change it.
@@ -273,6 +282,11 @@ pub struct App {
     /// The skip rules as the service last reported them, kept from the answer:
     /// switching one off means sending back the whole list.
     pub rules: Vec<(String, String, bool, bool)>,
+    /// The disks as the service last listed them.
+    pub disks: Vec<scour_proto::Disk>,
+    /// How many waited for an answer at the last status; the list is asked
+    /// for again when that moves. `None` until the first.
+    pub disks_asking: Option<u32>,
     /// What the desktop last said about the key that opens Scour: which
     /// desktop it is, the combination if there is one, what it runs, and
     /// whether this program may write one here. Empty until it is asked.
@@ -381,6 +395,8 @@ impl Default for App {
             ask_yes: String::new(),
             openers: Vec::new(),
             rules: Vec::new(),
+            disks: Vec::new(),
+            disks_asking: None,
             key_desktop: String::new(),
             key_bound: None,
             key_command: String::new(),
@@ -900,7 +916,7 @@ impl App {
 
     /// The tools, in the order they are drawn, and the key that also does it.
     /// The labels are msgids: [`crate::draw::tool_spans`] measures and looks up.
-    pub fn tools(&self) -> [(&'static str, &'static str); 7] {
+    pub fn tools(&self) -> [(&'static str, &'static str); 8] {
         [
             ("faces", "^U"),
             ("lang", "^L"),
@@ -911,6 +927,7 @@ impl App {
             // Beside the peek key: both are about the row the cursor is on.
             ("menu", "F4"),
             ("keys", "F1"),
+            ("disks", "^D"),
         ]
     }
 
@@ -938,6 +955,7 @@ impl App {
                 self.open_menu();
                 Want::Nothing
             }
+            7 => self.open_disks(),
             _ => {
                 self.helping = !self.helping;
                 self.dirty = true;
@@ -1765,6 +1783,7 @@ impl App {
     pub fn panel_lines(&self) -> usize {
         match self.panel {
             Panel::Rules => self.rules.len(),
+            Panel::Disks => self.disk_lines(),
             Panel::Language => 2,
             // The line typed into and the one that removes. The state under
             // them is drawn but not walked: a cursor on a fact is a press that

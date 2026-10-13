@@ -75,6 +75,10 @@ pub enum Ask {
     Rules,
     /// Switch a rule off or on: the whole list, replaced.
     OffRules(Vec<String>),
+    /// The disks, and what each is.
+    Volumes,
+    /// An answer about a disk: `index`, `leave` or `later`.
+    Disk { volume: String, what: String },
     /// Remember something small — the language, the face.
     Remember(scour_settings::Change),
     /// The whole result as a spreadsheet, written where the caller says.
@@ -128,6 +132,8 @@ pub enum Got {
         builtin: Vec<(String, String)>,
         off: Vec<String>,
     },
+    /// The disks, for the panel and the question.
+    Disks(Vec<scour_proto::Disk>),
     /// Exactly how many match.
     Counted { generation: u64, total: u64 },
     /// The query cut into runs: where each starts, how long, and what it is.
@@ -138,7 +144,8 @@ pub enum Got {
     /// The index moved: its revision, how far a walk has got when one is
     /// running, and whether the index has grown an unsorted tail worth
     /// rebuilding — a week of use takes ordering by path from 1.9 ms to 21.5.
-    Awake(u64, Option<u64>, bool),
+    /// And how many disks wait for an answer.
+    Awake(u64, Option<u64>, bool, u32),
     /// A spreadsheet is being written, and how much of it so far: the whole
     /// index is 400,000 rows and 100 MB, and a still screen reads as a crash.
     Writing(u64),
@@ -477,6 +484,14 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                 top: 12,
             },
             Ask::Rules => Request::Rules {},
+            Ask::Volumes => Request::Volumes {},
+            Ask::Disk { volume, what } => match what.as_str() {
+                "later" => Request::Postpone { volume },
+                how => Request::Choose {
+                    volume,
+                    index: how == "index",
+                },
+            },
             Ask::Recheck(paths) => Request::Recheck { paths },
             Ask::OffRules(off) => Request::SetSettings {
                 change: scour_settings::Change {
@@ -577,6 +592,12 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             }
             // Nothing here reads the settings object; asking again is the check.
             Ok(Response::Settings(_)) => {}
+            // A preference kept, a disk answered for: what it did comes back
+            // by its own road — the next status, or the list asked after it.
+            Ok(Response::Accepted) => {}
+            Ok(Response::Volumes { disks }) => {
+                let _ = out.send(Got::Disks(disks));
+            }
             Ok(Response::Explain { spans, .. }) => {
                 let _ = out.send(Got::Explained { generation, spans });
             }
@@ -588,6 +609,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                     st.revision,
                     st.scanning.then_some(st.scanned),
                     st.rebuild_advised,
+                    st.asking,
                 ));
             }
             Ok(Response::Preview(look)) => {

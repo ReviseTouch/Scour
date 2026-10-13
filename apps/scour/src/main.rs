@@ -102,7 +102,14 @@ enum Command {
     /// This desktop's own folders, and which volumes record read times.
     Places,
     /// The disks this machine has, and whether each is indexed.
-    Volumes,
+    Volumes {
+        /// Index this disk, by the id at the end of its line.
+        #[arg(long, value_name = "ID", conflicts_with = "leave")]
+        index: Option<String>,
+        /// Leave this disk out for good.
+        #[arg(long, value_name = "ID")]
+        leave: Option<String>,
+    },
     /// What can be shown of a file, and the head of it when that is text.
     Preview { path: String },
     /// What a folder weighs, and which of its children weigh the most.
@@ -478,7 +485,17 @@ fn build(args: &Args) -> Result<Request> {
         },
         Some(Command::Rules) => Request::Rules {},
         Some(Command::Places) => Request::Places {},
-        Some(Command::Volumes) => Request::Volumes {},
+        Some(Command::Volumes { index, leave }) => match (index, leave) {
+            (Some(volume), _) => Request::Choose {
+                volume: volume.clone(),
+                index: true,
+            },
+            (_, Some(volume)) => Request::Choose {
+                volume: volume.clone(),
+                index: false,
+            },
+            _ => Request::Volumes {},
+        },
         Some(Command::Preview { path }) => Request::Preview { path: path.clone() },
         Some(Command::Syntax) => Request::Syntax {},
         Some(Command::Sources) => Request::Sources {},

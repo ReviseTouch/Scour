@@ -8,6 +8,7 @@
 //! meaning is the engine's; a reply for a superseded keystroke is dropped.
 
 mod autostart;
+mod disks;
 mod hotkey;
 mod install;
 mod link;
@@ -38,7 +39,7 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cell, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule,
+    Bar, Big, Cell, Disk, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule,
     Scheme, Seg, Slice, Slot, Span, Theme,
 };
 
@@ -174,6 +175,11 @@ struct State {
     added_files: Vec<String>,
     /// The switched-off list last sent, unconfirmed: `Rules` answers coalesce.
     sent_off: Option<Vec<String>>,
+    /// How many disks were waiting for an answer at the last status; the list
+    /// is asked for again when that moves. `None` until the first.
+    disks_asking: Option<u32>,
+    /// The disk the question is about, which an answer names.
+    asked_disk: String,
     /// What the three rule lists were last built from. A model that is replaced
     /// takes its rows with it, so an answer saying nothing new must change nothing.
     rules_shown: [String; 3],
@@ -558,6 +564,8 @@ fn main() -> Result<()> {
         added_dirs: Vec::new(),
         added_files: Vec::new(),
         sent_off: None,
+        disks_asking: None,
+        asked_disk: String::new(),
         rules_shown: Default::default(),
         exclude_off: Vec::new(),
         scope: String::new(),
@@ -860,12 +868,44 @@ fn main() -> Result<()> {
                     if !open && other == "rules" {
                         link.send(Ask::Rules);
                     }
+                    if !open && other == "disks" {
+                        link.send(Ask::Volumes);
+                    }
                     // The desktop may have been changed in its own settings
                     // since this window started; the row must not be stale.
                     if !open && other == "faces" {
                         hotkey::work(hotkey::Deed::Look);
                     }
                 }
+            }
+        });
+    }
+
+    // A disk switched in the panel, or the question answered. The bar goes at
+    // once; the list that comes back says what the answer did.
+    {
+        let link = Rc::clone(&link);
+        window.on_disk_toggled(move |id, on| {
+            link.send(Ask::Disk {
+                volume: id.to_string(),
+                what: if on { "index" } else { "leave" }.into(),
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        window.on_disk_answered(move |what| {
+            let volume = std::mem::take(&mut state.borrow_mut().asked_disk);
+            if let Some(w) = weak.upgrade() {
+                w.set_disk_question("".into());
+            }
+            if !volume.is_empty() {
+                link.send(Ask::Disk {
+                    volume,
+                    what: what.to_string(),
+                });
             }
         });
     }
@@ -3826,6 +3866,14 @@ fn apply(
                 .collect();
             w.set_dupes(ModelRc::new(VecModel::from(list)));
         }
+        // The list, or an answer taken: then the list again, which says what
+        // the answer did.
+        Got::Volumes(reply) => match *reply {
+            Response::Volumes { disks } => {
+                state.borrow_mut().asked_disk = disks::draw(w, cat, &disks);
+            }
+            _ => link.send(Ask::Volumes),
+        },
         // The exclusion rules, in the service's three groups. Only what a window
         // added can be deleted; any of them can be switched off.
         Got::Rules(reply) => {
@@ -3946,6 +3994,7 @@ fn apply(
         // of changes does not queue a search per change.
         Got::Awake(reply) => {
             let Response::Status(st) = *reply else { return };
+            disks_moved(state, link, st.asking);
             // Free: a wait is answered with the whole status. The total too,
             // or the meter kept dividing by what the index held at start-up.
             w.set_scanning(scanning_note(cat, &st));
@@ -3999,6 +4048,7 @@ fn apply(
         // claim from the same over one.
         Got::Status(reply) => {
             let Response::Status(st) = *reply else { return };
+            disks_moved(state, link, st.asking);
             // The first revision, and the start of the long poll.
             {
                 let mut s = state.borrow_mut();
@@ -4321,6 +4371,7 @@ fn open(path: &str) {
 
 /// Write every string the window shows. It runs again when a language is picked.
 fn words(window: &MainWindow, cat: &Catalogue) {
+    disks::words(window, cat);
     // Punctuation is part of the language, and this runs whenever it changes.
     MARKS.with(|m| {
         m.set((
@@ -4847,6 +4898,16 @@ fn snapshot(window: &MainWindow, path: &str) {
 }
 
 /// Bytes, the way the meter says them: `636,4 MB`.
+/// The disks waiting for an answer, from a status: when the count moves, the
+/// list is asked for, which carries the question.
+fn disks_moved(state: &Rc<RefCell<State>>, link: &Link, asking: u32) {
+    let mut s = state.borrow_mut();
+    if s.disks_asking != Some(asking) {
+        s.disks_asking = Some(asking);
+        link.send(Ask::Volumes);
+    }
+}
+
 fn compact_bytes(n: u64) -> String {
     scour_ui::format::compact_bytes(n, marks().1)
 }
@@ -5337,6 +5398,8 @@ mod tests {
             added_dirs: Vec::new(),
             added_files: Vec::new(),
             sent_off: None,
+            disks_asking: None,
+            asked_disk: String::new(),
             rules_shown: Default::default(),
             exclude_off: Vec::new(),
             scope: String::new(),
@@ -5391,6 +5454,8 @@ mod tests {
             stirred: std::time::Instant::now(),
             dozing: false,
             sent_off: None,
+            disks_asking: None,
+            asked_disk: String::new(),
             rules_shown: Default::default(),
             indexed: 0,
             generation: 4,

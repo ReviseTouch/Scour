@@ -55,6 +55,28 @@ impl Live {
         self.plan.lock().unwrap_or_else(|p| p.into_inner()).asking()
     }
 
+    /// Not now: not asked about again until the service starts again.
+    pub fn postpone(&self, kept: &Kept, volume: String) {
+        kept.later
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(volume);
+        self.replan(kept);
+    }
+
+    /// A yes or a lasting no, written where the change happens: a killed
+    /// process never gets to write anything.
+    pub fn choose(&self, kept: &Kept, volume: &str, index: bool) {
+        {
+            let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
+            held.choose(volume, index);
+            if let Err(e) = held.save(&kept.dir) {
+                scour_core::note!("scourd: settings could not be written: {e}");
+            }
+        }
+        self.replan(kept);
+    }
+
     /// Look at the disks again, after one came or went or somebody answered.
     /// A change only in what a face shows wakes the faces; a change in what is
     /// indexed replaces the engine.

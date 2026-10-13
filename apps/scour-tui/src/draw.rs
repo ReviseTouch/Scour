@@ -235,6 +235,22 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 })
                 .collect(),
         ),
+        Panel::Disks => {
+            let (title, lines) = app.disk_panel();
+            (
+                title.into(),
+                lines
+                    .into_iter()
+                    .map(|(text, dimmed, rule)| PanelLine {
+                        text,
+                        key: String::new(),
+                        dimmed,
+                        careful: false,
+                        rule,
+                    })
+                    .collect(),
+            )
+        }
         // Spelled in themselves, as in `scour_i18n::LANGUAGES`: a reader may
         // not recognise what the language they are reading calls theirs.
         Panel::Language => (
@@ -645,6 +661,15 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
         parts.push(Span::styled(
             app.say(scour_ui::REBUILD_ADVISED),
             Style::new().fg(theme.not()),
+        ));
+    }
+    // A disk that came, asked about until somebody answers: the key opens
+    // the panel that holds the answers.
+    if let Some(question) = app.disk_question() {
+        parts.push(Span::styled("  ·  ", dim));
+        parts.push(Span::styled(
+            format!("{question} ^D"),
+            Style::new().fg(theme.key()),
         ));
     }
     if app.rows_visited > 0 && std::env::var("SCOUR_TRACE").is_ok() {

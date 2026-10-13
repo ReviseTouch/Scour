@@ -261,7 +261,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                     format_size(v.size, BINARY)
                 };
                 println!(
-                    "{:<26} {:<16} {:>10}  {}{}",
+                    "{:<26} {:<16} {:>10}  {}{}  {}",
                     t(scour_ui::disks::state(d.state.as_str())),
                     t(scour_ui::disks::kind(v.kind.as_str())),
                     size,
@@ -270,7 +270,8 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                         String::new()
                     } else {
                         format!("  ({})", shown(&v.label))
-                    }
+                    },
+                    v.id
                 );
             }
         }

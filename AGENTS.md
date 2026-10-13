@@ -73,7 +73,8 @@ fields, never a bare string; `every_response_round_trips` guards it.
 | `explain` | | `query`, `cursor` → the sentence, the coloured spans, completions — without running it |
 | `duplicates` | | `under`, `min_size`, `read_budget`, `top` → same-size groups and how many were **read** and proved identical |
 | `sources`, `status`, `stats`, `syntax`, `places`, `rules` | | facts, never sentences; `status.asking` counts the disks waiting to be asked about |
-| `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual`. A yes or a lasting no is `set-settings` (`volumes_on`, `volumes_off`) |
+| `volumes` | | every disk `scour-volumes` finds, each with its state: `auto`, `chosen`, `configured`, `off`, `asking`, `later`, `manual` |
+| `choose` | ✓ | `volume`, `index` → a yes or a lasting no; kept in the settings as `volumes_on` / `volumes_off` |
 | `postpone` | ✓ | `volume` (a disk's id) → not asked about again until the service starts again |
 | `settings` / `set-settings` | ✓ | what a person chose — columns, widths, sort, language, layout, which face opens. A change names only what it touches |
 | `await` | | `since`, `timeout_ms` → a `Status` when the index would answer differently. One blocked thread instead of a poll; also what tells the service somebody is looking |

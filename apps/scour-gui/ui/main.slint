@@ -128,6 +128,17 @@ export struct Rule {
     removable: bool,
 }
 
+// One disk: whether it is indexed, what it is, and where it is mounted. A disk
+// `config.toml` names is `fixed`: only the file changes it.
+export struct Disk {
+    id: string,
+    name: string,
+    aside: string,
+    roots: string,
+    on: bool,
+    fixed: bool,
+}
+
 // One folder in the report: what it weighs, what share of its parent that is,
 // and how those bytes are spread over the six age bands.
 export struct Kid {
@@ -727,6 +738,82 @@ component RuleRow inherits Rectangle {
     }
 }
 
+/// A disk in the disks panel: the row switches it, three lines say which.
+component DiskRow inherits Rectangle {
+    in property <string> name;
+    in property <string> aside;
+    in property <string> roots;
+    in property <bool> on;
+    in property <bool> fixed;
+    callback toggled();
+
+    height: layout.preferred-height;
+    border-radius: 3px;
+    background: touch.has-hover && !root.fixed ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        clicked => {
+            if (!root.fixed) {
+                root.toggled();
+            }
+        }
+    }
+
+    layout := HorizontalLayout {
+        padding: 4px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 3px;
+            Rectangle {
+                width: 12px;
+                height: 12px;
+                border-width: Theme.hair;
+                border-radius: 2px;
+                border-color: !root.on ? Theme.line : root.fixed ? Theme.ink-3 : Theme.q-key;
+                background: !root.on ? transparent : root.fixed ? Theme.ink-3 : Theme.q-key;
+
+                Text {
+                    text: root.on ? "✓" : "";
+                    color: Theme.panel;
+                    font-size: 9px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 1px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: root.name;
+                color: root.on ? Theme.ink : Theme.ink-2;
+                font-size: 12px;
+                overflow: elide;
+            }
+            Text {
+                text: root.aside;
+                color: Theme.ink-3;
+                font-size: 11px;
+                overflow: elide;
+            }
+            Text {
+                text: root.roots;
+                color: Theme.ink-3;
+                font-family: Fonts.mono;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+    }
+}
+
 component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
@@ -1200,7 +1287,7 @@ export component MainWindow inherits Window {
     in property <string> head-files;
     callback report-open(string);
 
-    // Which panel is open, if any: "", "help", "faces", "language", "rules".
+    // Which panel is open, if any: "", "help", "faces", "language", "rules", "disks".
     in-out property <string> panel: "";
     in property <string> help-title;
     in property <string> help-body;
@@ -1228,6 +1315,21 @@ export component MainWindow inherits Window {
     callback rule-added(string);
     callback language-picked(string);
     callback rule-toggled(string);
+    // --- the disks ---------------------------------------------------------
+    in property <[Disk]> disks;
+    in property <string> disks-title;
+    in property <string> disks-note;
+    in property <string> disks-after;
+    in property <string> disks-none;
+    /// The question about a disk that came; empty while none is waiting.
+    in property <string> disk-question;
+    in property <string> disk-yes;
+    in property <string> disk-later;
+    in property <string> disk-never;
+    /// A disk switched in the panel: its id, and whether it is now indexed.
+    callback disk-toggled(string, bool);
+    /// `index`, `later` or `leave`, about the disk the question names.
+    callback disk-answered(string);
     // --- the desktop's key ------------------------------------------------
     // Every one of these is written from Rust after a worker has spoken to the
     // desktop: nothing here asks, and nothing here parses a combination.
@@ -1859,6 +1961,7 @@ export component MainWindow inherits Window {
                         Tool { icon: @image-url("icons/tools/faces.svg"); has-icon: true; clicked => { root.tool-clicked("faces"); } }
                         Tool { glyph: "文"; clicked => { root.tool-clicked("language"); } }
                         Tool { icon: @image-url("icons/tools/rules.svg"); has-icon: true; clicked => { root.tool-clicked("rules"); } }
+                        Tool { icon: @image-url("icons/tools/disks.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("disks"); } }
                         Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
                         Tool { glyph: "?"; clicked => { root.tool-clicked("help"); } }
                     }
@@ -1911,6 +2014,55 @@ export component MainWindow inherits Window {
                                 root.view-clicked("large");
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // A disk that came and has not been answered for, one at a time.
+        if root.disk-question != "": Rectangle {
+            height: 36px;
+            background: Theme.panel;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 8px;
+
+                Text {
+                    text: root.disk-question;
+                    color: Theme.ink;
+                    font-size: Fonts.small;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.disk-yes;
+                        asking: true;
+                        clicked => { root.disk-answered("index"); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.disk-later;
+                        clicked => { root.disk-answered("later"); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.disk-never;
+                        clicked => { root.disk-answered("leave"); }
                     }
                 }
             }
@@ -4011,6 +4163,31 @@ export component MainWindow inherits Window {
                     on: root.language == l.token;
                     clicked => { root.language-picked(l.token); }
                 }
+            }
+        }
+
+        Sheet {
+            title: root.disks-title;
+            open: root.panel == "disks";
+            dismissed => { root.panel = ""; }
+            room-w: root.width - 40px;
+            room-h: root.height - 40px;
+
+            VerticalLayout {
+                spacing: 4px;
+                alignment: start;
+
+                Note { text: root.disks-note; }
+                for d[i] in root.disks: DiskRow {
+                    name: d.name;
+                    aside: d.aside;
+                    roots: d.roots;
+                    on: d.on;
+                    fixed: d.fixed;
+                    toggled => { root.disk-toggled(d.id, !d.on); }
+                }
+                if root.disks.length == 0: Note { text: root.disks-none; }
+                Note { text: root.disks-after; }
             }
         }
 

@@ -1,6 +1,20 @@
 //! How a disk is spoken of, by the names the wire gives its kind and state:
 //! one wording for every face, and English msgids for `scour-i18n`.
 
+/// Every kind the wire names, for a face that builds its table up front.
+pub const KINDS: [&str; 4] = ["system", "fixed", "removable", "network"];
+
+/// Every state the wire names.
+pub const STATES: [&str; 7] = [
+    "auto",
+    "chosen",
+    "configured",
+    "off",
+    "asking",
+    "later",
+    "manual",
+];
+
 /// What kind of disk it is.
 pub fn kind(token: &str) -> &'static str {
     match token {
@@ -38,22 +52,12 @@ mod tests {
 
     #[test]
     fn every_name_the_wire_uses_has_its_own_words() {
-        let kinds = ["system", "fixed", "removable", "network"];
-        let mut seen: Vec<&str> = kinds.iter().map(|k| kind(k)).collect();
+        let mut seen: Vec<&str> = KINDS.iter().map(|k| kind(k)).collect();
         seen.dedup();
-        assert_eq!(seen.len(), kinds.len());
-        let states = [
-            "auto",
-            "chosen",
-            "configured",
-            "off",
-            "asking",
-            "later",
-            "manual",
-        ];
-        let mut seen: Vec<&str> = states.iter().map(|s| state(s)).collect();
+        assert_eq!(seen.len(), KINDS.len());
+        let mut seen: Vec<&str> = STATES.iter().map(|s| state(s)).collect();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), states.len());
+        assert_eq!(seen.len(), STATES.len());
     }
 }

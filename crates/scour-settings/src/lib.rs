@@ -112,10 +112,6 @@ pub struct Change {
     pub exclude_allow: Option<Vec<String>>,
     /// See [`Settings::exclude_off`]. Rule ids, replaced outright.
     pub exclude_off: Option<Vec<String>>,
-    /// See [`Settings::volumes_on`]. Replaced outright.
-    pub volumes_on: Option<Vec<String>>,
-    /// See [`Settings::volumes_off`]. Replaced outright.
-    pub volumes_off: Option<Vec<String>>,
     pub columns: Option<Vec<String>>,
     pub widths: Option<BTreeMap<String, u32>>,
     pub sort: Option<String>,
@@ -159,12 +155,6 @@ impl Change {
         }
         if let Some(v) = self.exclude_off {
             to.exclude_off = v;
-        }
-        if let Some(v) = self.volumes_on {
-            to.volumes_on = v;
-        }
-        if let Some(v) = self.volumes_off {
-            to.volumes_off = v;
         }
         if let Some(v) = self.columns {
             to.columns = v;
@@ -236,6 +226,19 @@ fn merge(into: &mut Value, patch: Value) {
 }
 
 impl Settings {
+    /// Index this disk, or leave it out for good: the one way the two lists
+    /// change, so a disk is never in both.
+    pub fn choose(&mut self, volume: &str, index: bool) {
+        self.volumes_on.retain(|v| v != volume);
+        self.volumes_off.retain(|v| v != volume);
+        let to = if index {
+            &mut self.volumes_on
+        } else {
+            &mut self.volumes_off
+        };
+        to.push(volume.to_owned());
+    }
+
     /// Put a query at the front, once. Deduplicated by exact text, so searching the
     /// same thing twice moves it up rather than appearing twice.
     pub fn remember(&mut self, query: &str) {
@@ -284,6 +287,17 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_disk_chosen_again_moves_between_the_lists() {
+        let mut s = Settings::default();
+        s.choose("uuid:a", true);
+        s.choose("uuid:b", false);
+        s.choose("uuid:a", false);
+        s.choose("uuid:a", false);
+        assert!(s.volumes_on.is_empty());
+        assert_eq!(s.volumes_off, ["uuid:b", "uuid:a"]);
+    }
 
     fn dir(name: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("scour-settings-{name}"));

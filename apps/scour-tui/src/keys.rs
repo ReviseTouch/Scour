@@ -29,6 +29,7 @@ pub const MAP: &[(&str, &str)] = &[
     ("Tab", "the rail, and back"),
     ("Ctrl+K", "what is skipped"),
     ("Ctrl+L", "language"),
+    ("Ctrl+D", "disks"),
     ("Ctrl+B", "the key that opens Scour"),
     ("Ctrl+U", "which face to run"),
     ("Ctrl+E", "write the result as a spreadsheet"),
@@ -184,6 +185,7 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.show(Panel::Language);
             return Want::Nothing;
         }
+        KeyCode::Char('d') if ctrl => return app.open_disks(),
         KeyCode::Char('b') if ctrl => {
             app.show(Panel::Key);
             // Asked when it opens, like the skip list: the desktop can have
@@ -349,6 +351,7 @@ fn panel_press(app: &mut App) -> Want {
             Some(off) => Want::OffRules(off),
             None => Want::Nothing,
         },
+        Panel::Disks => app.press_disk(),
         Panel::Language => app.speak(app.panel_at),
         // Nothing to press where nothing can be bound: the panel is a sentence.
         Panel::Key if !app.key_can => Want::Nothing,

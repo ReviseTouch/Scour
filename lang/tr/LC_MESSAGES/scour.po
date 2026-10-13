@@ -1828,3 +1828,34 @@ msgstr "{name} ağda. Bu da indekslensin mi?"
 
 msgid "{name} was plugged in. Index it too?"
 msgstr "{name} takıldı. Bu da indekslensin mi?"
+
+# The disks panel and the question bar, in every face.
+msgid "disks"
+msgstr "diskler"
+
+msgid "Disks"
+msgstr "Diskler"
+
+msgid "the disks this machine has, and which are indexed"
+msgstr "bu makinenin diskleri ve hangilerinin indekslendiği"
+
+msgid "Every disk on this machine. A built-in one is indexed unless switched off; one plugged in or on the network is asked about first."
+msgstr "Bu makinedeki her disk. Dahili bir disk kapatılmadıkça indekslenir; takılan ya da ağdaki bir disk için önce sorulur."
+
+msgid "Switching a disk on walks it; switching one off takes its files out of the index."
+msgstr "Bir diski açmak onu tarar; kapatmak dosyalarını indeksten çıkarır."
+
+msgid "Index it"
+msgstr "İndeksle"
+
+msgid "Never"
+msgstr "Asla"
+
+msgid "index this disk"
+msgstr "bu diski indeksle"
+
+msgid "No disks were found."
+msgstr "Disk bulunamadı."
+
+msgid "DISKS"
+msgstr "DİSKLER"

@@ -161,11 +161,9 @@ fn run(
         Request::SetSettings { change } => {
             let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
             let before = rules_of(&held);
-            let disks = (held.volumes_on.clone(), held.volumes_off.clone());
             // Folded in, not assigned: what it does not name is another
             // frontend's.
             change.apply(&mut held);
-            let disks_changed = disks != (held.volumes_on.clone(), held.volumes_off.clone());
             if let Err(e) = held.save(&kept.dir) {
                 scour_core::note!("scourd: settings could not be written: {e}");
             }
@@ -232,13 +230,6 @@ fn run(
                         ),
                     }
                 }
-            } else {
-                drop(held);
-            }
-            // A disk answered for: a new engine, after the lock, which the
-            // plan reads.
-            if disks_changed {
-                live.replan(kept);
             }
             Response::Accepted
         }
@@ -281,11 +272,11 @@ fn run(
             disks: live.plan().disks,
         },
         Request::Postpone { volume } => {
-            kept.later
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(volume);
-            live.replan(kept);
+            live.postpone(kept, volume);
+            Response::Accepted
+        }
+        Request::Choose { volume, index } => {
+            live.choose(kept, &volume, index);
             Response::Accepted
         }
         // `stat` first, and that is the fence: only a path the index holds may

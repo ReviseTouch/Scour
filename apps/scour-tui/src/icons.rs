@@ -92,6 +92,7 @@ pub fn of_tool(at: usize) -> &'static str {
         1 => "\u{f1ab}",
         2 => "\u{f05e}",
         3 => "\u{f019}",
+        7 => "\u{f0a0}",
         _ => "\u{f11c}",
     }
 }
