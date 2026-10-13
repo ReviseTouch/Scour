@@ -1,0 +1,24 @@
+[package]
+name        = "scour-volumes"
+description = "Which disks this machine has, and what kind each is."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **`serde`, and the system's own calls.** Nothing here knows what an index
+# is: it asks the machine what is mounted and says what each volume is. `serde`
+# is here because the answer crosses the wire, as `scour-places`' does.
+[dependencies]
+serde = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }

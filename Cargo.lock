@@ -5333,6 +5333,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-volumes"
+version = "0.2.0-alpha.11"
+dependencies = [
+ "libc",
+ "serde",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "scour-watch"
 version = "0.2.0-alpha.11"
 dependencies = [

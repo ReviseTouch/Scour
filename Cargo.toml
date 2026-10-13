@@ -21,6 +21,7 @@ members = [
     "crates/scour-export",
     "crates/scour-settings",
     "crates/scour-places",
+    "crates/scour-volumes",
     "crates/scour-page",
     "crates/scour-launch",
     "crates/scour-hotkey",
@@ -78,6 +79,7 @@ scour-sendto         = { path = "crates/scour-sendto" }
 scour-export        = { path = "crates/scour-export" }
 scour-settings      = { path = "crates/scour-settings" }
 scour-places        = { path = "crates/scour-places" }
+scour-volumes       = { path = "crates/scour-volumes" }
 scour-page          = { path = "crates/scour-page" }
 scour-launch        = { path = "crates/scour-launch" }
 scour-hotkey        = { path = "crates/scour-hotkey" }
@@ -130,8 +132,10 @@ regex       = "1"
 libc        = "0.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_SystemServices",
 ] }
 
