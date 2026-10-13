@@ -291,11 +291,15 @@ fn told(w: &MainWindow, sentence: slint::SharedString) {
     let weak = w.as_weak();
     // One timer, restarted: a second act's sentence gets its own four seconds.
     CLEAR.with(|t| {
-        t.start(slint::TimerMode::SingleShot, std::time::Duration::from_secs(4), move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_notice(slint::SharedString::new());
-            }
-        });
+        t.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_secs(4),
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_notice(slint::SharedString::new());
+                }
+            },
+        );
     });
 }
 
@@ -1541,7 +1545,8 @@ fn main() -> Result<()> {
             remember(&state, &link, &query);
             let Some(w) = weak.upgrade() else { return };
             w.set_has_past(!state.borrow().past.is_empty());
-            let Some((path, runs)) = usize::try_from(i).ok().and_then(|r| rows.opening_at(r)) else {
+            let Some((path, runs)) = usize::try_from(i).ok().and_then(|r| rows.opening_at(r))
+            else {
                 return;
             };
             // **A program is shown, never started**: a search lists whatever
@@ -1554,9 +1559,12 @@ fn main() -> Result<()> {
                 // placeholder, and the field holds a query here.
                 told(
                     &w,
-                    t(&cat.borrow(), "{name} is a program: shown in its folder, not run")
-                        .replace("{name}", name)
-                        .into(),
+                    t(
+                        &cat.borrow(),
+                        "{name} is a program: shown in its folder, not run",
+                    )
+                    .replace("{name}", name)
+                    .into(),
                 );
             } else {
                 open(&path);
@@ -2090,12 +2098,15 @@ fn main() -> Result<()> {
                     }
                 }
                 recheck(&addr, paths);
-                told(&w, match refused {
-                    Some(why) => why.into(),
-                    None => t(&cat_now, "{n} deleted")
-                        .replace("{n}", &grouped(gone as u64))
-                        .into(),
-                });
+                told(
+                    &w,
+                    match refused {
+                        Some(why) => why.into(),
+                        None => t(&cat_now, "{n} deleted")
+                            .replace("{n}", &grouped(gone as u64))
+                            .into(),
+                    },
+                );
                 let query = state.borrow().query.clone();
                 w.invoke_query_changed(query.into());
                 return;
@@ -2112,12 +2123,15 @@ fn main() -> Result<()> {
                 }
             }
             recheck(&addr, paths);
-            told(&w, match refused {
-                Some(why) => why.into(),
-                None => t(&cat_now, "{n} moved to trash")
-                    .replace("{n}", &grouped(gone as u64))
-                    .into(),
-            });
+            told(
+                &w,
+                match refused {
+                    Some(why) => why.into(),
+                    None => t(&cat_now, "{n} moved to trash")
+                        .replace("{n}", &grouped(gone as u64))
+                        .into(),
+                },
+            );
             let query = state.borrow().query.clone();
             w.invoke_query_changed(query.into());
             let _ = (&link, &model);
@@ -2661,12 +2675,16 @@ fn main() -> Result<()> {
                         });
                     let button = slint::platform::PointerEventButton::Left;
                     for _ in 0..n as u32 {
-                        w.window().dispatch_event(
-                            slint::platform::WindowEvent::PointerPressed { position: at, button },
-                        );
-                        w.window().dispatch_event(
-                            slint::platform::WindowEvent::PointerReleased { position: at, button },
-                        );
+                        w.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                                position: at,
+                                button,
+                            });
+                        w.window()
+                            .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                                position: at,
+                                button,
+                            });
                     }
                 },
             );
@@ -2717,7 +2735,10 @@ fn main() -> Result<()> {
     // `SCOUR_GUI_SIDEWAYS=x,y,px`: after `SCOUR_GUI_CLICK_MS`, one sideways
     // wheel step of px at x,y — a touchpad pushing a panel's content across.
     if let Ok(spec) = std::env::var("SCOUR_GUI_SIDEWAYS") {
-        let n: Vec<f32> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let n: Vec<f32> = spec
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
         if let [x, y, px] = n[..] {
             let after = std::env::var("SCOUR_GUI_CLICK_MS")
                 .ok()
@@ -2731,12 +2752,14 @@ fn main() -> Result<()> {
                 move || {
                     let Some(w) = weak.upgrade() else { return };
                     let position = slint::LogicalPosition::new(x, y);
-                    w.window().dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
-                    w.window().dispatch_event(slint::platform::WindowEvent::PointerScrolled {
-                        position,
-                        delta_x: -px,
-                        delta_y: 0.0,
-                    });
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position });
+                    w.window()
+                        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                            position,
+                            delta_x: -px,
+                            delta_y: 0.0,
+                        });
                     trace(&format!("sideways {px} at {x},{y}"));
                 },
             );
@@ -2746,7 +2769,10 @@ fn main() -> Result<()> {
     // `SCOUR_GUI_DRAG=x1,y,x2`: after `SCOUR_GUI_CLICK_MS`, press at x1, move
     // to x2 in 10px steps a frame apart, let go — a hand on a column's edge.
     if let Ok(spec) = std::env::var("SCOUR_GUI_DRAG") {
-        let n: Vec<f32> = spec.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let n: Vec<f32> = spec
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
         if let [from, y, to] = n[..] {
             let after: u64 = std::env::var("SCOUR_GUI_CLICK_MS")
                 .ok()
@@ -2770,15 +2796,29 @@ fn main() -> Result<()> {
                     let win = w.window();
                     let at = |x: f32| slint::LogicalPosition::new(x, y);
                     if tick * 16 < after + 16 {
-                        win.dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at(x) });
-                        win.dispatch_event(slint::platform::WindowEvent::PointerPressed { position: at(x), button });
+                        win.dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                            position: at(x),
+                        });
+                        win.dispatch_event(slint::platform::WindowEvent::PointerPressed {
+                            position: at(x),
+                            button,
+                        });
                         trace(&format!("drag from {x},{y}"));
                         return;
                     }
-                    x = if (to - x).abs() <= 10.0 { to } else { x + 10.0f32.copysign(to - x) };
-                    win.dispatch_event(slint::platform::WindowEvent::PointerMoved { position: at(x) });
+                    x = if (to - x).abs() <= 10.0 {
+                        to
+                    } else {
+                        x + 10.0f32.copysign(to - x)
+                    };
+                    win.dispatch_event(slint::platform::WindowEvent::PointerMoved {
+                        position: at(x),
+                    });
                     if x == to {
-                        win.dispatch_event(slint::platform::WindowEvent::PointerReleased { position: at(x), button });
+                        win.dispatch_event(slint::platform::WindowEvent::PointerReleased {
+                            position: at(x),
+                            button,
+                        });
                         trace(&format!("drag let go at {x},{y}"));
                         done = true;
                     }

@@ -708,7 +708,11 @@ fn squash(w: &mut [u32], avail: u32) {
 fn take_back(cols: &[&Column], w: &mut [u32], over: u32, from: &[usize]) -> u32 {
     let mut left = over;
     loop {
-        let open: Vec<usize> = from.iter().copied().filter(|&i| w[i] > cols[i].min).collect();
+        let open: Vec<usize> = from
+            .iter()
+            .copied()
+            .filter(|&i| w[i] > cols[i].min)
+            .collect();
         let room: u32 = open.iter().map(|&i| w[i] - cols[i].min).sum();
         // Every one of them on its floor: the next tier, or `squash`, goes on.
         if left == 0 || room == 0 {
@@ -894,7 +898,11 @@ mod column_tests {
             // While the name is short of what was asked, the location is on
             // its floor: the dragged column is the second to give way.
             if at(&w, "name") < 800 && avail >= floor_width(DEFAULT_COLUMNS) {
-                assert_eq!(at(&w, "path"), column("path").unwrap().min, "at {avail}px: {w:?}");
+                assert_eq!(
+                    at(&w, "path"),
+                    column("path").unwrap().min,
+                    "at {avail}px: {w:?}"
+                );
             }
         }
     }

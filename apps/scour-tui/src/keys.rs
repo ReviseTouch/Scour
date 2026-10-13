@@ -477,7 +477,11 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.clicked = (!double).then_some((row, now));
                     if double {
                         let (width, _) = size;
-                        let from = if width >= 100 && app.rail { crate::draw::RAIL_WIDE } else { 0 };
+                        let from = if width >= 100 && app.rail {
+                            crate::draw::RAIL_WIDE
+                        } else {
+                            0
+                        };
                         let on_location = crate::draw::column_at(
                             m.column.saturating_sub(from),
                             width - from,

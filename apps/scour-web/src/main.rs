@@ -2087,7 +2087,10 @@ mod tests {
                     |id| d.iter().find(|(k, _)| *k == id).map(|(_, w)| *w),
                     room,
                 );
-                assert_eq!(rows[n], want, "at {room}px with {d:?} the page and the crate differ");
+                assert_eq!(
+                    rows[n], want,
+                    "at {room}px with {d:?} the page and the crate differ"
+                );
                 n += 1;
             }
         }
