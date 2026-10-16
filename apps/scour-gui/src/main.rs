@@ -167,8 +167,6 @@ struct State {
     query: String,
     sort: String,
     descending: bool,
-    /// The whole term the rail has active, if any.
-    facet: Option<String>,
     /// The rules this window added, as reported: deleting one sends the list back.
     added_paths: Vec<String>,
     added_dirs: Vec<String>,
@@ -559,7 +557,6 @@ fn main() -> Result<()> {
         query: String::new(),
         sort: "relevance".into(),
         descending: true,
-        facet: None,
         added_paths: Vec::new(),
         added_dirs: Vec::new(),
         added_files: Vec::new(),
@@ -780,7 +777,7 @@ fn main() -> Result<()> {
             // Laid over the text as it is now, so a deletion shows this frame.
             if let Some(w) = weak.upgrade() {
                 let s = state.borrow();
-                let runs = painted(&full_query(&s), &s.spans);
+                let runs = painted(&s.query, &s.spans);
                 w.set_spans(ModelRc::new(VecModel::from(runs)));
                 if w.get_past_open() {
                     let lines = past_matching(&s.past, &s.query);
@@ -820,34 +817,19 @@ fn main() -> Result<()> {
     }
 
     // --- the rail ---------------------------------------------------------
+    // A press writes its term into the text, as the page does: a filter kept
+    // apart from the field can be neither seen nor deleted there.
     {
-        let state = state.clone();
-        let link = link.clone();
-        let facets = facets.clone();
-        let model = Rc::clone(&rows);
         let weak = window.as_weak();
         window.on_facet_clicked(move |token| {
-            stir(&state, &link);
-            let token = token.to_string();
-            {
-                let mut s = state.borrow_mut();
-                // Clicking the active one clears it — the rule all faces share.
-                s.facet = scour_ui::query::pressed(s.facet.as_deref(), &token);
-                s.advance_query();
-            }
-            facets.set_vec(Vec::new());
-            let rows = match weak.upgrade() {
-                Some(w) => {
-                    let s = state.borrow();
-                    w.set_active_facet(s.facet.clone().unwrap_or_default().into());
-                    w.set_busy(true);
-                    w.get_visible_rows().max(0) as u32
-                }
-                None => 60,
-            };
-            dispatch(&state, &link, &model, rows);
+            let Some(w) = weak.upgrade() else { return };
+            let text = scour_ui::query::toggle(&w.get_query(), &token);
+            w.set_query(text.as_str().into());
+            w.invoke_query_changed(text.into());
+            w.invoke_caret_to_end();
         });
     }
+    window.on_term_on(|text, token| scour_ui::query::has_term(&text, &token));
 
     // Five buttons: four open a panel, the fifth writes a file. A second press
     // closes the panel.
@@ -1424,11 +1406,9 @@ fn main() -> Result<()> {
             {
                 let mut s = state.borrow_mut();
                 s.query = query.clone();
-                s.facet = None;
                 s.advance_query();
             }
             w.set_query(query.as_str().into());
-            w.set_active_facet(slint::SharedString::new());
             w.set_tab("search".into());
             dispatch(&state, &link, &model, w.get_visible_rows().max(0) as u32);
         });
@@ -3383,10 +3363,10 @@ fn boundary(text: &str, want: usize) -> usize {
     at
 }
 
-/// The query as the engine gets it: what was typed, plus whatever filter is
-/// pressed. The filter is a whole term — the rail, ribbon and scopes share a slot.
+/// The query as the engine gets it: what is in the field, the rail's terms
+/// included — a press writes them there.
 fn full_query(s: &State) -> String {
-    scour_ui::query::compose(&s.query, s.facet.as_deref())
+    s.query.trim().to_owned()
 }
 
 /// What the rail and the ribbon are counted over: the typed query, without the
@@ -5395,7 +5375,6 @@ mod tests {
             query: "rapor".into(),
             sort: "relevance".into(),
             descending: true,
-            facet: None,
             added_paths: Vec::new(),
             added_dirs: Vec::new(),
             added_files: Vec::new(),
@@ -5410,22 +5389,12 @@ mod tests {
             down: false,
         };
         assert_eq!(full_query(&s), "rapor");
-
-        // The slot holds a whole term: the ribbon and the scopes share it, so
-        // gluing `kind:` on in front produced `kind:dm:38d`.
-        s.facet = Some("kind:image".into());
-        assert_eq!(full_query(&s), "rapor kind:image");
-        s.facet = Some("under:/home/u/Belgeler".into());
-        assert_eq!(full_query(&s), "rapor under:/home/u/Belgeler");
-        s.facet = Some("dm:38d".into());
+        // A pressed term is in the text, so the engine is asked the text.
+        s.query = scour_ui::query::toggle(&s.query, "dm:38d");
         assert_eq!(full_query(&s), "rapor dm:38d");
-
-        s.query = "  ".into();
-        assert_eq!(full_query(&s), "dm:38d");
-
-        // The rail is counted over what was typed, never over the term it offered.
-        s.query = "rapor".into();
-        assert_eq!(facet_query(&s), "rapor");
+        // The rail is counted over the text; `scour_query::without` takes the
+        // rail's own field out before it is asked.
+        assert_eq!(facet_query(&s), "rapor dm:38d");
     }
 
     /// **The doze is a clock, and the clock is the whole feature.** Both edges.
@@ -5485,7 +5454,6 @@ mod tests {
             query: "rapor".into(),
             sort: "modified".into(),
             descending: true,
-            facet: None,
             added_paths: Vec::new(),
             added_dirs: Vec::new(),
             added_files: Vec::new(),

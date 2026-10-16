@@ -1147,7 +1147,10 @@ export component MainWindow inherits Window {
     // every keystroke, or the caret jumps.
     in-out property <string> query;
     in-out property <int> selected: 0;
-    in-out property <string> active-facet;
+    /// Whether a rail term is in the query as typed. Asked of Rust, which
+    /// knows how a term is spelled; handed the text, so it is asked again
+    /// whenever the text changes.
+    pure callback term-on(string, string) -> bool;
 
     // --- what Rust listens for --------------------------------------------
     callback query-changed(string);
@@ -1765,13 +1768,6 @@ export component MainWindow inherits Window {
                         if (e.text == Key.Escape && root.picked > 0) {
                             // Then the selection, before the query: the smaller undo.
                             root.pick-dropped();
-                            return accept;
-                        }
-                        // An empty field: what is left to take back is the
-                        // rail's filter, which is in force but not in the text.
-                        if ((e.text == Key.Backspace || e.text == Key.Escape)
-                                && self.text == "" && root.active-facet != "") {
-                            root.facet-clicked(root.active-facet);
                             return accept;
                         }
                         if (e.text == Key.Escape) {
@@ -2932,7 +2928,7 @@ export component MainWindow inherits Window {
                         label: f.label;
                         count: f.count;
                         share: f.share;
-                        on: root.active-facet == f.token;
+                        on: root.term-on(root.query, f.token);
                         clicked => { root.facet-clicked(f.token); }
                     }
 
@@ -2960,7 +2956,7 @@ export component MainWindow inherits Window {
                         label: sc.label;
                         count: sc.count;
                         share: sc.share;
-                        on: root.active-facet == sc.token;
+                        on: root.term-on(root.query, sc.token);
                         clicked => { root.facet-clicked(sc.token); }
                     }
 
@@ -2988,7 +2984,7 @@ export component MainWindow inherits Window {
                         label: sz.label;
                         count: sz.count;
                         share: sz.share;
-                        on: root.active-facet == sz.token;
+                        on: root.term-on(root.query, sz.token);
                         clicked => { root.facet-clicked(sz.token); }
                     }
                     }

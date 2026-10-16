@@ -54,9 +54,89 @@ pub const SIZES: [(&str, &str); 3] = [
     ("= 0", "size:0"),
 ];
 
+/// The terms of a query as typed: split on spaces outside double quotes, so
+/// `under:"/home/u/My Files"` is one term.
+pub fn terms(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut quoted) = (None, false);
+    for (i, c) in text.char_indices() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                start.get_or_insert(i);
+            }
+            c if c.is_whitespace() && !quoted => {
+                if let Some(s) = start.take() {
+                    out.push(&text[s..i]);
+                }
+            }
+            _ => {
+                start.get_or_insert(i);
+            }
+        }
+    }
+    if let Some(s) = start {
+        out.push(&text[s..]);
+    }
+    out
+}
+
+fn field(term: &str) -> Option<String> {
+    let bare = term.strip_prefix('!').unwrap_or(term);
+    bare.split_once(':').map(|(f, _)| f.to_lowercase())
+}
+
+/// Whether this filter is in the query, written as a term of its own.
+pub fn has_term(text: &str, term: &str) -> bool {
+    terms(text).iter().any(|t| t.eq_ignore_ascii_case(term))
+}
+
+/// Pressing a filter, as the page does: the term goes into the text, where it
+/// can be seen and deleted. One per field — another value replaces it, the
+/// same one takes it out.
+///
+/// ```
+/// # use scour_ui::query::toggle;
+/// assert_eq!(toggle("rapor", "kind:doc"), "rapor kind:doc");
+/// assert_eq!(toggle("rapor kind:doc", "kind:image"), "rapor kind:image");
+/// assert_eq!(toggle("rapor kind:doc", "kind:doc"), "rapor");
+/// ```
+pub fn toggle(text: &str, term: &str) -> String {
+    let mut parts: Vec<&str> = terms(text);
+    let want = field(term);
+    match parts
+        .iter()
+        .position(|t| want.is_some() && field(t) == want)
+    {
+        Some(at) if parts[at].eq_ignore_ascii_case(term) => {
+            parts.remove(at);
+        }
+        Some(at) => parts[at] = term,
+        None => parts.push(term),
+    }
+    parts.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_quoted_place_is_one_term_and_toggles_as_one() {
+        let q = r#"rapor under:"/home/u/My Files" size:>1mb"#;
+        assert_eq!(
+            terms(q),
+            ["rapor", r#"under:"/home/u/My Files""#, "size:>1mb"]
+        );
+        assert!(has_term(q, r#"under:"/home/u/My Files""#));
+        assert!(!has_term(q, "kind:doc"));
+        assert_eq!(toggle(q, r#"under:"/home/u/My Files""#), "rapor size:>1mb");
+        assert_eq!(
+            toggle(q, r#"under:"/srv""#),
+            r#"rapor under:"/srv" size:>1mb"#
+        );
+        assert_eq!(toggle("", "dm:7d"), "dm:7d");
+    }
 
     #[test]
     fn a_filter_is_appended_to_what_was_typed() {
