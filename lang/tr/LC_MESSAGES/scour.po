@@ -1859,3 +1859,6 @@ msgstr "Disk bulunamadı."
 
 msgid "DISKS"
 msgstr "DİSKLER"
+
+msgid "text copied"
+msgstr "metin kopyalandı"

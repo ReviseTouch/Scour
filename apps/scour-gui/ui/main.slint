@@ -814,6 +814,44 @@ component DiskRow inherits Rectangle {
     }
 }
 
+/// A filter in the query, and the `×` that takes it out.
+component Chip inherits Rectangle {
+    in property <string> term;
+    callback dropped();
+
+    height: 20px;
+    width: label.preferred-width + 30px;
+    border-radius: 10px;
+    border-width: Theme.hair;
+    border-color: shut.has-hover ? Theme.ink-3 : Theme.line;
+    background: Theme.panel-2;
+
+    label := Text {
+        x: 9px;
+        text: root.term;
+        color: Theme.ink-2;
+        font-family: Fonts.mono;
+        font-size: 11px;
+        vertical-alignment: center;
+        height: parent.height;
+    }
+    shut := TouchArea {
+        x: parent.width - 20px;
+        width: 18px;
+        mouse-cursor: pointer;
+        clicked => { root.dropped(); }
+        Text {
+            text: "×";
+            color: shut.has-hover ? Theme.ink : Theme.ink-3;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+    }
+}
+
 component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
@@ -1022,6 +1060,13 @@ export component MainWindow inherits Window {
     in property <bool> peek-has-shot;
     /// The head of the file, when it is text.
     in property <string> peek-text;
+    /// What is selected in the preview's text, as byte offsets into it: kept
+    /// here because the field is inside an `if`, out of reach by name.
+    in-out property <int> peek-from;
+    in-out property <int> peek-to;
+    /// Copy this much of a text, by byte offsets, through the desktop's own
+    /// clipboard helper.
+    callback copy-span(string, int, int);
     /// Said instead of either, when there is neither.
     in property <string> peek-note;
     in property <[Fact]> peek-facts;
@@ -1419,6 +1464,11 @@ export component MainWindow inherits Window {
     // is a misreading. Empty when there is nothing worth reading back.
     in property <string> reading;
     in property <bool> reading-warn;
+    /// The terms of the query that name a field, each a chip whose `×` takes
+    /// it out of the text in one press. Asked of Rust with the text, so the
+    /// row follows every keystroke.
+    pure callback chips-of(string) -> [string];
+    callback chip-dropped(string);
 
     // `SCOUR_TRACE=1`: print what the two layers of the query field measure on
     // every caret move. They have to agree character for character.
@@ -1464,7 +1514,7 @@ export component MainWindow inherits Window {
         Rectangle {
             // 16px above the box, 12px below, the box 26px of 20px monospace.
             // Taller when the query is read back — see `reading`.
-            height: root.reading == "" ? 63px : 82px;
+            height: root.reading == "" && root.chips-of(root.query).length == 0 ? 63px : 84px;
             background: Theme.panel;
 
             // The line between the query and what is under it. A plain rule:
@@ -1670,6 +1720,15 @@ export component MainWindow inherits Window {
                     // Down and up move through the results without leaving the
                     // field: type, glance, press Enter.
                     key-pressed(e) => {
+                        // Ctrl+C with nothing selected here copies what is
+                        // selected in the preview: the drag there may not have
+                        // taken the keyboard with it.
+                        if (e.modifiers.control && (e.text == "c" || e.text == "C")
+                                && self.anchor-position-byte-offset == self.cursor-position-byte-offset
+                                && root.peek-from != root.peek-to) {
+                            root.copy-span(root.peek-text, root.peek-from, root.peek-to);
+                            return accept;
+                        }
                         // `Alt+↓` opens what was searched before; plain `↓`
                         // still walks into the results.
                         if (e.text == Key.DownArrow && e.modifiers.alt) {
@@ -1827,13 +1886,24 @@ export component MainWindow inherits Window {
                 // What the engine read, in words: the colours say what each
                 // piece is, this says why the answer is what it is. Shown only
                 // when there is something worth saying — `Role::is_telling`.
-                if root.reading != "": Text {
-                    text: root.reading;
-                    color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
-                    font-size: 11.5px;
-                    font-weight: 500;
-                    letter-spacing: 0.12px;
-                    overflow: elide;
+                if root.reading != "" || root.chips-of(root.query).length > 0: HorizontalLayout {
+                    spacing: 6px;
+                    height: 20px;
+
+                    for chip in root.chips-of(root.query): Chip {
+                        term: chip;
+                        dropped => { root.chip-dropped(chip); }
+                    }
+                    Text {
+                        text: root.reading;
+                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
+                        font-size: 11.5px;
+                        font-weight: 500;
+                        letter-spacing: 0.12px;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
         }
@@ -3574,6 +3644,9 @@ export component MainWindow inherits Window {
                         if !root.peek-has-shot && root.peek-text != "": Flickable {
                             width: parent.width;
                             height: parent.height;
+                            // The wheel scrolls; a drag selects. An interactive
+                            // flickable takes the drag for itself.
+                            interactive: false;
                             viewport-width: self.width;
                             viewport-height: body.preferred-height;
 
@@ -3585,6 +3658,20 @@ export component MainWindow inherits Window {
                                 TextInput {
                                     text: root.peek-text;
                                     read-only: true;
+                                    // Read as the caret moves, not on change: a
+                                    // `changed` handler missed the last step of a drag.
+                                    cursor-position-changed(p) => {
+                                        root.peek-from = self.anchor-position-byte-offset;
+                                        root.peek-to = self.cursor-position-byte-offset;
+                                    }
+                                    key-pressed(e) => {
+                                        if (e.modifiers.control && (e.text == "c" || e.text == "C")) {
+                                            root.copy-span(self.text, self.anchor-position-byte-offset,
+                                                self.cursor-position-byte-offset);
+                                            return accept;
+                                        }
+                                        return reject;
+                                    }
                                     single-line: false;
                                     color: Theme.ink-2;
                                     font-family: Fonts.mono;

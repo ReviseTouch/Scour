@@ -830,6 +830,38 @@ fn main() -> Result<()> {
         });
     }
     window.on_term_on(|text, token| scour_ui::query::has_term(&text, &token));
+    // Through `scour-clip`, as copying a path is: the helper holds the text on
+    // Wayland after this window has lost the keyboard.
+    {
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        window.on_copy_span(move |text, from, to| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some(part) = span_of(&text, from, to) else {
+                return;
+            };
+            match scour_clip::text(part) {
+                Ok(()) => told(&w, t(&cat.borrow(), "text copied")),
+                Err(e) => told(&w, format!("{e}").into()),
+            }
+        });
+    }
+    window.on_chips_of(|text| {
+        let chips: Vec<slint::SharedString> = scour_ui::query::filters(&text)
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        ModelRc::new(VecModel::from(chips))
+    });
+    // The same toggle a rail press is: the term is in the text, so it goes.
+    {
+        let weak = window.as_weak();
+        window.on_chip_dropped(move |term| {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_facet_clicked(term);
+            }
+        });
+    }
 
     // Five buttons: four open a panel, the fifth writes a file. A second press
     // closes the panel.
@@ -4888,6 +4920,13 @@ fn disks_moved(state: &Rc<RefCell<State>>, link: &Link, asking: u32) {
         s.disks_asking = Some(asking);
         link.send(Ask::Volumes);
     }
+}
+
+/// The text between two byte offsets, in either order, or nothing when they
+/// meet or fall inside a character.
+fn span_of(text: &str, a: i32, b: i32) -> Option<&str> {
+    let (from, to) = (a.min(b).max(0) as usize, a.max(b).max(0) as usize);
+    text.get(from..to.min(text.len())).filter(|s| !s.is_empty())
 }
 
 fn compact_bytes(n: u64) -> String {

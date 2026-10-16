@@ -81,9 +81,21 @@ pub fn terms(text: &str) -> Vec<&str> {
     out
 }
 
+/// The field a term names, if it names one: letters before a colon, so a
+/// time like `10:30` is a word.
 fn field(term: &str) -> Option<String> {
     let bare = term.strip_prefix('!').unwrap_or(term);
-    bare.split_once(':').map(|(f, _)| f.to_lowercase())
+    let (f, _) = bare.split_once(':')?;
+    (!f.is_empty() && f.chars().all(char::is_alphabetic)).then(|| f.to_lowercase())
+}
+
+/// The terms that name a field — `kind:doc`, `!ext:log` — each shown as a
+/// chip under the query, whose `×` takes it out with [`toggle`].
+pub fn filters(text: &str) -> Vec<&str> {
+    terms(text)
+        .into_iter()
+        .filter(|t| field(t).is_some())
+        .collect()
 }
 
 /// Whether this filter is in the query, written as a term of its own.
@@ -136,6 +148,8 @@ mod tests {
             r#"rapor under:"/srv" size:>1mb"#
         );
         assert_eq!(toggle("", "dm:7d"), "dm:7d");
+        assert_eq!(filters(q), [r#"under:"/home/u/My Files""#, "size:>1mb"]);
+        assert_eq!(filters("rapor !ext:log 10:30"), ["!ext:log"]);
     }
 
     #[test]
