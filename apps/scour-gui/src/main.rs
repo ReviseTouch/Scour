@@ -3166,10 +3166,12 @@ fn list_length(counted: usize, offset: usize, got: usize, asked: usize, served: 
 }
 
 fn send_search(state: &Rc<RefCell<State>>, link: &Rc<Link>, offset: u32, limit: u32) {
-    // Beside the search, on the same lane and with the same coalescing.
+    // Beside the search, on the same lane and with the same coalescing. What
+    // was typed, not the rail's filter: the colours are drawn over the field,
+    // and a term painted there that is not in it cannot be deleted.
     let (query_revision, query) = {
         let s = state.borrow();
-        (s.query_revision, full_query(&s))
+        (s.query_revision, s.query.clone())
     };
     link.send(Ask::Explain {
         query_revision,
@@ -3710,7 +3712,7 @@ fn apply(
             else {
                 return;
             };
-            let query = full_query(&state.borrow());
+            let query = state.borrow().query.clone();
             state.borrow_mut().spans = spans;
             let runs = painted(&query, &state.borrow().spans);
             w.set_spans(ModelRc::new(VecModel::from(runs)));

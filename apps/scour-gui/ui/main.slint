@@ -1767,6 +1767,13 @@ export component MainWindow inherits Window {
                             root.pick-dropped();
                             return accept;
                         }
+                        // An empty field: what is left to take back is the
+                        // rail's filter, which is in force but not in the text.
+                        if ((e.text == Key.Backspace || e.text == Key.Escape)
+                                && self.text == "" && root.active-facet != "") {
+                            root.facet-clicked(root.active-facet);
+                            return accept;
+                        }
                         if (e.text == Key.Escape) {
                             if (self.text == "") {
                                 return accept;
@@ -3577,12 +3584,18 @@ export component MainWindow inherits Window {
                             body := VerticalLayout {
                                 padding: 12px;
                                 alignment: start;
-                                Text {
+                                // A field that cannot be typed into, so the text
+                                // can be selected and copied.
+                                TextInput {
                                     text: root.peek-text;
+                                    read-only: true;
+                                    single-line: false;
                                     color: Theme.ink-2;
                                     font-family: Fonts.mono;
                                     font-size: 11.5px;
                                     wrap: word-wrap;
+                                    selection-background-color: Theme.selection;
+                                    selection-foreground-color: Theme.ink;
                                 }
                             }
                         }
