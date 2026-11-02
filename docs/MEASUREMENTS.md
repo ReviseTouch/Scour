@@ -260,6 +260,27 @@ time target/container/release/scourd --config /var/tmp/r/config.toml --scan-only
 Unwatched, the walk is repeated when the disk's write counter moves, resting at
 least twenty times its own cost: at most every 68 s while the machine is busy.
 
+## A path term skips blocks (2026-11-02)
+
+A term with a separator can only match a row whose folder holds it, or ends
+with the part before its last slash. Those folders are known once a query, so
+a block whose folder numbers hold none of them is not read — the zone map
+`under:` already used. Two services side by side on two copies of this
+machine's index (6.29 M entries), queries alternated, median of seven:
+
+| query | before | after | rows read before → after |
+|---|---:|---:|---:|
+| `Projeler/Scour` | 146 ms | 61 ms | 5.77 M → 0.84 M |
+| `projeler/scour/crates` | 147 ms | 54 ms | 5.77 M → 0.28 M |
+| `Belgeler/rapor` | 148 ms | 61 ms | 5.77 M → 0.84 M |
+| `src/main` | 149 ms | 69 ms | 5.77 M → 1.26 M |
+| `depo/PROJELER/Colpan` | 116 ms | 46 ms | 4.12 M → 0.18 M |
+| `a/b` | 149 ms | 112 ms | 5.77 M → 3.27 M |
+| `/home/hasan/.config` | 59 ms | 47 ms | 0.91 M → 0.22 M |
+
+The same matches in every row. What is left is mostly reading the folder table
+once to find those folders.
+
 ## Reproducing
 
 ```sh

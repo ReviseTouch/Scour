@@ -373,6 +373,11 @@ pub struct PathSet {
     /// whenever it holds no separator. `path:rapor` matches `/home/u/x/rapor.pdf`
     /// on the name alone, and a set of directories cannot see that.
     in_name: Option<Needle>,
+    /// How many directories up to each number can hold a match, for a term with
+    /// a separator — where only `whole` and `ending` can answer. A block whose
+    /// directory numbers hold none of them is not read: the zone map `under:`
+    /// already skips on. Empty when the name could answer instead.
+    reach: Vec<u32>,
 }
 
 impl PathSet {
@@ -390,6 +395,7 @@ impl PathSet {
             ending: vec![false; count],
             tail: tail.as_bytes().to_vec(),
             in_name: None,
+            reach: Vec::new(),
         };
         let needle = Needle::new(term);
         let mut fold = Folded::default();
@@ -401,7 +407,29 @@ impl PathSet {
             set.whole[id] = needle.found_in(folded);
             set.ending[id] = folded.ends_with(head.as_bytes());
         });
+        if set.in_name.is_none() {
+            set.reach.reserve_exact(count + 1);
+            let mut n = 0u32;
+            set.reach.push(0);
+            for (w, e) in set.whole.iter().zip(&set.ending) {
+                n += u32::from(*w || *e);
+                set.reach.push(n);
+            }
+        }
         set
+    }
+
+    /// Can a block whose directory numbers run from `lo` to `hi` hold a match?
+    fn admits(&self, lo: u32, hi: u32) -> bool {
+        if self.reach.is_empty() {
+            return true;
+        }
+        let at = |i: u32| self.reach.get(i as usize).copied();
+        match (at(lo), at(hi.saturating_add(1))) {
+            (Some(below), Some(through)) => through > below,
+            // A number past the table: say yes rather than guess.
+            _ => true,
+        }
     }
 }
 
@@ -636,6 +664,12 @@ impl Plan {
                 },
                 Test::DirIn(scope) => match seg.cols.block_range(Field::DirId, block) {
                     Some((lo, hi)) if lo >= 0 => scope.intersects(lo as u32, hi as u32),
+                    _ => true,
+                },
+                // The same zone map, asked whether any directory in the block's
+                // range can hold the path term.
+                Test::PathIn(set) => match seg.cols.block_range(Field::DirId, block) {
+                    Some((lo, hi)) if lo >= 0 => set.admits(lo as u32, hi as u32),
                     _ => true,
                 },
                 // The same zone map, read as a range of discriminants: a block
