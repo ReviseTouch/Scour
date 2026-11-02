@@ -32,9 +32,10 @@ const WINDOW: Duration = Duration::from_millis(200);
 /// the speed, so it is sized for the batch: about 3,600 events at 71 bytes each.
 const BUF: usize = 256 * 1024;
 
-/// The most events one window collects before it stops and says it lost track.
-/// The kernel queue is unlimited, so this is the memory bound the deadline is not:
-/// about 20 MB of [`Seen`], reached to within one buffer — [`parse`] empties one.
+/// The most events one window collects before it stops; the rest are read by the
+/// next. The kernel queue is unlimited, so this is the memory bound the deadline
+/// is not: about 20 MB of [`Seen`], reached to within one buffer — [`parse`]
+/// empties one.
 const MAX_SEEN: usize = 262_144;
 
 /// The capacity one window may leave behind for the next.
@@ -751,8 +752,12 @@ struct Seen {
 }
 
 /// Collect one window's events, and say whether anything was lost.
-/// [`MAX_SEEN`] and the two-second deadline both report lost rather than
-/// complete: a truncated window called complete has a sweep delete rows that exist.
+/// Only the kernel can say that, with its overflow record. [`MAX_SEEN`] and the
+/// two-second deadline end a window, and lose nothing: the group's queue is
+/// unlimited, so what was not read waits there for the next window. They used
+/// to report lost, and a `cargo clean` — 850,000 events, most under an excluded
+/// `target` and counted before any rule — sent every root of every source to
+/// be walked again.
 fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) -> isize) -> bool {
     seen.clear();
     // Before the window, so the last burst's peak does not become the floor.
@@ -769,15 +774,14 @@ fn fill(buf: &mut [u8], seen: &mut Vec<Seen>, mut read: impl FnMut(&mut [u8]) ->
         if !parse(&buf[..n as usize], seen) {
             lost = true;
         }
-        // The memory bound, checked before the time one — see [`MAX_SEEN`].
+        // The memory bound, checked before the time one — see [`MAX_SEEN`]. The
+        // rest stays queued in the kernel and opens the next window.
         if seen.len() >= MAX_SEEN {
-            lost = true;
             break;
         }
         // A burst larger than the buffer is read out here, but not forever: at
         // 4.6 million events a second, two seconds is far past any real batch.
         if Instant::now() > deadline {
-            lost = true;
             break;
         }
     }
@@ -2156,9 +2160,9 @@ mod tests {
         });
 
         assert!(
-            lost,
-            "a window that stopped early must say so, or the events it never \
-             read are treated as events that never happened"
+            !lost,
+            "a window cut at the ceiling lost nothing: the rest wait in the kernel's \
+             unlimited queue, and calling it lost walked every root again"
         );
         // `parse` empties a whole buffer before the length is looked at.
         assert!(
@@ -2175,6 +2179,37 @@ mod tests {
             calls < MAX_SEEN,
             "the deadline ended the window, not the cap"
         );
+    }
+
+    /// A burst past the ceiling is read over several windows, every event
+    /// once, none of them called lost.
+    #[test]
+    fn a_burst_past_the_ceiling_is_read_in_windows_and_nothing_is_lost() {
+        let mut buf = vec![0u8; BUF];
+        let mut seen: Vec<Seen> = Vec::new();
+        let stream = buffer_of(1_000);
+        // 600,000 events in the queue: more than two windows' worth.
+        let mut left = 600usize;
+        let mut total = 0usize;
+        let mut windows = 0usize;
+        loop {
+            let lost = fill(&mut buf, &mut seen, |b| {
+                if left == 0 {
+                    return 0;
+                }
+                left -= 1;
+                b[..stream.len()].copy_from_slice(&stream);
+                stream.len() as isize
+            });
+            assert!(!lost, "window {windows} called itself lost");
+            if seen.is_empty() {
+                break;
+            }
+            total += seen.len();
+            windows += 1;
+        }
+        assert_eq!(total, 600_000);
+        assert!(windows >= 3, "{windows} windows");
     }
 
     #[test]
