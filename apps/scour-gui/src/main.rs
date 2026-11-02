@@ -4405,15 +4405,7 @@ fn recheck(addr: &str, paths: Vec<String>) {
 
 /// Hand a path to the desktop, spawned and forgotten.
 fn open(path: &str) {
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(windows)]
-    let cmd = "explorer";
-    let _ = std::process::Command::new(cmd)
-        .arg(scour_core::path::to_path(path))
-        .spawn();
+    let _ = scour_openers::open(scour_core::path::to_path(path).as_os_str());
 }
 
 /// Write every string the window shows. It runs again when a language is picked.

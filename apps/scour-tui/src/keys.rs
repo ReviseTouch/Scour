@@ -694,12 +694,7 @@ fn open(app: &mut App, folder: bool) -> Want {
         }
         return Want::Nothing;
     }
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&native)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let _ = scour_openers::open(native.as_os_str());
     Want::Nothing
 }
 

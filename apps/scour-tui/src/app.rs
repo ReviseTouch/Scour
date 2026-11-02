@@ -171,12 +171,7 @@ pub enum Want {
 /// Hand a path to the desktop, and forget about it: detached, with every
 /// standard stream closed.
 fn launch(path: &str) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(scour_core::path::to_path(path))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let _ = scour_openers::open(scour_core::path::to_path(path).as_os_str());
 }
 
 /// One drawn line of the menu: a flattened `scour_ui::menu::Item`, its label

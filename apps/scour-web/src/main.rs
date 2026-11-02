@@ -283,11 +283,7 @@ fn token() -> String {
 }
 
 fn open(url: &str) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    let _ = scour_openers::open(std::ffi::OsStr::new(url));
 }
 
 /// Start the service nobody started, on a thread, and say so on standard
@@ -1511,21 +1507,18 @@ fn api_open(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req, may_r
     let target = p.to_path_buf();
 
     // Started in the directory it lives in, beside what it reads.
-    let mut cmd = if run {
-        let mut c = std::process::Command::new(&target);
-        c.current_dir(target.parent().unwrap_or(&target));
-        c
+    let started = if run {
+        std::process::Command::new(&target)
+            .current_dir(target.parent().unwrap_or(&target))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|_| ())
     } else {
-        let mut c = std::process::Command::new("xdg-open");
-        c.arg(&target);
-        c
+        scour_openers::open(target.as_os_str())
     };
-    match cmd
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+    match started {
         Ok(_) => http::json(
             stream,
             &serde_json::json!({

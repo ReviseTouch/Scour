@@ -81,6 +81,27 @@ pub fn launch(opener: &Opener, path: &Path) -> std::io::Result<()> {
         .map(|_| ())
 }
 
+/// Hand a file, a folder or an address to the desktop's own opener, as a
+/// double-click in the file manager would: `xdg-open`, `open`, `explorer`.
+/// Spawned and forgotten, every standard stream closed. Whether it would *run*
+/// something is the caller's question — see `scour_core::runs_when_opened`.
+pub fn open(target: &std::ffi::OsStr) -> std::io::Result<()> {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
 /// Show these paths in the file manager, each selected in its folder — what
 /// "open its folder" means to a person. Opening the folder alone did nothing
 /// when that folder was already open, and selected nothing when it was not.
@@ -138,12 +159,7 @@ pub fn reveal(paths: &[&Path]) {
             return;
         }
         for dir in folders {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(dir)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
+            let _ = open(dir.as_os_str());
         }
     });
 }
