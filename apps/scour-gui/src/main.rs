@@ -1826,7 +1826,7 @@ fn main() -> Result<()> {
             };
             trace(&format!("drag-out row {row}: {} path(s)", paths.len()));
             if !paths.is_empty() {
-                drag::files(&w, &paths, x, y);
+                drag::files(&w, paths, x, y);
             }
         });
     }

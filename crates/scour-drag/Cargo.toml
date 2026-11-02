@@ -16,7 +16,29 @@ workspace = true
 # the window's own connection, with a queue of this crate's. `wayland-client`
 # and `wayland-backend` are already in the tree for the toolkit's clipboard.
 [dependencies]
+raw-window-handle = "0.6"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
 wayland-client  = "0.31"
 wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
+x11rb           = "0.13"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+# Named by `#[implement]`'s expansion, so it has to be a direct dependency.
+windows-core = "0.62"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2            = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit    = "0.3"

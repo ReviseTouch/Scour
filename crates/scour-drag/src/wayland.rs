@@ -24,23 +24,14 @@ use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 
+use crate::Refused;
+
 /// What a drop target may ask for, best first.
 const URI_LIST: &str = "text/uri-list";
 const PLAIN: &str = "text/plain;charset=utf-8";
 
-/// Why a drag did not start.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Refused {
-    /// The compositor offers no drag and drop, or no pointer.
-    Unsupported,
-    /// No press is held: a drag has to begin on one.
-    NoPress,
-    /// The connection failed.
-    Broken,
-}
-
 /// The window's drag, while it lives.
-pub struct Wayland {
+pub(crate) struct Wayland {
     conn: Connection,
     queue: EventQueue<State>,
     state: State,
