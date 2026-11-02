@@ -4432,6 +4432,11 @@ fn words(window: &MainWindow, cat: &Catalogue) {
         ))
     });
     columns(window, cat);
+    let kinds: Vec<String> = scour_core::Kind::ALL
+        .iter()
+        .map(|k| cat.get(k.msgid()).to_string())
+        .collect();
+    window.set_kind_words(kinds.join("\n").into());
     window.set_tab_search(t(cat, "Search"));
     window.set_tab_report(t(cat, "Report"));
     // The rail's first section is the kinds, and the page calls it `Kind`.
@@ -4716,10 +4721,21 @@ impl Table {
 fn relayout(window: &MainWindow, table: &Table) {
     let ids = table.ids();
     let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+    // The kind column holds a word from a short list, so it is as wide as
+    // the widest word plus its gap and does not breathe with the answer: the
+    // room moves between the name and the location only.
+    let kind = (window.get_kind_width() > 0.0).then(|| window.get_kind_width().ceil() as u32 + 14);
     let widths = scour_ui::lay_out(
         &ids,
         // Zero is "nobody has touched it", the same as in the settings file.
-        |id| table.widths.get(id).copied().filter(|v| *v > 0),
+        |id| {
+            table
+                .widths
+                .get(id)
+                .copied()
+                .filter(|v| *v > 0)
+                .or(if id == "kind" { kind } else { None })
+        },
         window.get_lane().max(0.0) as u32,
     );
     if widths.len() != ids.len() {

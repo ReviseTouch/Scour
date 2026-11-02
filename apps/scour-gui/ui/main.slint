@@ -1111,6 +1111,10 @@ export component MainWindow inherits Window {
     /// to the widest text they hold, and every face's mono is its own width.
     out property <length> name-advance: name-probe.preferred-width / 20;
     out property <length> cell-advance: cell-probe.preferred-width / 20;
+    /// Every kind's word, one a line, in the language shown: the kind column
+    /// is as wide as the widest of them and stays so, whatever the answer.
+    in property <string> kind-words;
+    out property <length> kind-width: kind-probe.preferred-width;
 
     // The widths every row and the heading are handed, adding up to `lane`
     // exactly. A dragged width wins over a computed one; zero means untouched.
@@ -4769,6 +4773,11 @@ export component MainWindow inherits Window {
         text: "00000000000000000000";
         font-family: Fonts.mono;
         font-size: 13px;
+    }
+    kind-probe := Text {
+        visible: false;
+        text: root.kind-words;
+        font-size: Fonts.small;
     }
     cell-probe := Text {
         visible: false;
