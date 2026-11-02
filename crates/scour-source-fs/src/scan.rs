@@ -152,6 +152,11 @@ pub struct FsSource {
     medium: crate::fs::Medium,
     /// One per root, decided at construction: neither filesystem nor device changes under a mount.
     probes: Vec<crate::pulse::Probe>,
+    /// btrfs subvolumes mounted under the roots, which the walk goes into and
+    /// whose changes no root's `ctransid` shows: without them a change in
+    /// `/var/log` waited for the half-hourly check. Other sources' roots are
+    /// taken out in [`FsSource::with_skip`].
+    nested: Vec<PathBuf>,
     /// Other sources' roots under these, which this one does not go into.
     skip: Vec<String>,
     /// See [`scour_core::Source::patience`].
@@ -173,6 +178,7 @@ impl FsSource {
             .reduce(|a, b| if a.threads(64) <= b.threads(64) { a } else { b })
             .unwrap_or(crate::fs::Medium::Unknown);
         let probes = roots.iter().map(|r| crate::pulse::probe_for(r)).collect();
+        let nested = roots.iter().flat_map(|r| crate::pulse::nested(r)).collect();
         Self {
             id,
             name: name.into(),
@@ -182,6 +188,7 @@ impl FsSource {
             traits,
             medium,
             probes,
+            nested,
             skip: Vec::new(),
             patience: std::time::Duration::ZERO,
         }
@@ -231,6 +238,8 @@ impl FsSource {
 
     /// Leave these alone: other sources' roots under this one's. See `skip`.
     pub fn with_skip(mut self, skip: Vec<PathBuf>) -> Self {
+        self.nested
+            .retain(|n| !skip.iter().any(|s| n == s || n.starts_with(s)));
         self.skip = skip.iter().map(|p| path::from_path(p)).collect();
         self
     }
@@ -296,6 +305,13 @@ impl Source for FsSource {
         for (root, probe) in self.roots.iter().zip(&self.probes) {
             if let Some(n) = crate::pulse::read(root, probe) {
                 any = true;
+                folded = folded.rotate_left(17) ^ n;
+            }
+        }
+        // Measured here: `/` and `/var/log` each moved twice a minute, so the
+        // system disk was already walked as often as its patience allows.
+        for sub in &self.nested {
+            if let Some(n) = crate::pulse::subvolume(sub) {
                 folded = folded.rotate_left(17) ^ n;
             }
         }

@@ -1915,7 +1915,10 @@ fn a_stopped_engine_paces_whoever_asks_it_to_wait() {
     assert!(took < Duration::from_secs(2), "held for {took:?}");
     let began = Instant::now();
     f.engine.await_change(rev, Duration::from_millis(200));
-    assert!(began.elapsed() < Duration::from_millis(600), "past its own timeout");
+    assert!(
+        began.elapsed() < Duration::from_millis(600),
+        "past its own timeout"
+    );
 }
 
 #[test]

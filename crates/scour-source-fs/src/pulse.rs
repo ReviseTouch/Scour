@@ -45,6 +45,22 @@ mod linux {
         }
     }
 
+    /// One subvolume's `ctransid`, for [`nested`]'s paths.
+    pub fn subvolume(path: &Path) -> Option<u64> {
+        ctransid(path)
+    }
+
+    /// The btrfs subvolumes mounted under a btrfs root, each with a `ctransid`
+    /// of its own that the root's never moves for: `/var/log`, `/srv`, `/opt`
+    /// on the layouts distributions install. Read once; see [`super::nested_in`].
+    pub fn nested(root: &Path) -> Vec<std::path::PathBuf> {
+        if fs_magic(root) != Some(BTRFS_MAGIC) {
+            return Vec::new();
+        }
+        let table = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        super::nested_in(&table, root)
+    }
+
     fn fs_magic(root: &Path) -> Option<i64> {
         let path = std::ffi::CString::new(root.as_os_str().as_encoded_bytes()).ok()?;
         let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
@@ -132,6 +148,87 @@ mod linux {
     pub fn read(_root: &Path, _probe: &Probe) -> Option<u64> {
         None
     }
+    pub fn nested(_root: &Path) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+    pub fn subvolume(_path: &Path) -> Option<u64> {
+        None
+    }
 }
 
-pub use linux::{Probe, probe_for, read};
+pub use linux::{Probe, nested, probe_for, read, subvolume};
+
+/// The btrfs mount points strictly under `root` in a `mountinfo` table, in
+/// the table's order. By path component: `/srv2` is not under `/srv`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn nested_in(mountinfo: &str, root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for line in mountinfo.lines() {
+        let Some((head, tail)) = line.split_once(" - ") else {
+            continue;
+        };
+        if tail.split_whitespace().next() != Some("btrfs") {
+            continue;
+        }
+        let Some(point) = head.split_whitespace().nth(4) else {
+            continue;
+        };
+        let point = std::path::PathBuf::from(unescape(point));
+        if point != root && point.starts_with(root) && !out.contains(&point) {
+            out.push(point);
+        }
+    }
+    out
+}
+
+/// `mountinfo` writes a space, a tab, a newline and a backslash as octal.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unescape(field: &str) -> String {
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && let Ok(n) = u8::from_str_radix(&field[i + 1..i + 4], 8)
+        {
+            out.push(n);
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This machine's table, cut down: `/` is `@`, and four subvolumes hang
+    /// under it; `/home` is another source's root and is taken out by the
+    /// source, not here; NTFS is not btrfs.
+    #[test]
+    fn the_subvolumes_under_a_root_are_found_by_component() {
+        let table = "\
+60 1 0:35 /@ / rw,noatime - btrfs /dev/nvme1n1p5 rw\n\
+61 60 0:36 /@home /home rw,noatime - btrfs /dev/nvme1n1p5 rw\n\
+62 60 0:37 /@log /var/log rw,noatime - btrfs /dev/nvme1n1p5 rw\n\
+63 60 0:38 /@srv /srv rw,noatime - btrfs /dev/nvme1n1p5 rw\n\
+64 60 0:39 /@x /srv2 rw - btrfs /dev/nvme1n1p5 rw\n\
+65 60 0:40 /@sp /var/with\\040space rw - btrfs /dev/nvme1n1p5 rw\n\
+70 60 259:8 / /mnt/depo rw - ntfs3 /dev/nvme0n1p2 rw\n";
+        let found = nested_in(table, std::path::Path::new("/"));
+        let found: Vec<_> = found
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            found,
+            ["/home", "/var/log", "/srv", "/srv2", "/var/with space"]
+        );
+        let under_srv = nested_in(table, std::path::Path::new("/srv"));
+        assert!(under_srv.is_empty(), "{under_srv:?}");
+    }
+}
