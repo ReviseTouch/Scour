@@ -279,8 +279,11 @@ fn run(
             live.choose(kept, &volume, index);
             Response::Accepted
         }
-        // `stat` first, and that is the fence: only a path the index holds may
-        // be looked at, and no frontend has to remember that.
+        // `stat` first, and that is the fence: only a path under a source's
+        // root may be looked at — a skipped one too, which this account could
+        // open anyway — and no frontend has to remember that. The preview
+        // itself opens regular files only: a named pipe would hold this
+        // thread for ever.
         Request::Preview { path } => {
             let entry = engine.stat(&path)?;
             Response::Preview(scour_preview::look_at(

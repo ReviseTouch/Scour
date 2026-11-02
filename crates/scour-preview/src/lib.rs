@@ -193,10 +193,24 @@ pub fn shape_of(path: &std::path::Path, is_dir: bool) -> Shape {
     }
 }
 
+/// Open a regular file, and refuse anything else before opening it. Opening a
+/// named pipe for reading waits for a writer — for ever, on a thread that
+/// was answering a click — and a device such as `/dev/zero` never ends. The
+/// `stat` follows a link, as the open would, and does not block.
+pub fn open_file(path: &std::path::Path) -> std::io::Result<File> {
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    File::open(path)
+}
+
 /// Is the head of this file readable: valid UTF-8 with no NUL? The NUL rejects
 /// binaries, the UTF-8 check other encodings. An empty file is text.
 fn looks_like_text(path: &std::path::Path) -> bool {
-    let Ok(mut f) = File::open(path) else {
+    let Ok(mut f) = open_file(path) else {
         return false;
     };
     let mut head = vec![0u8; SNIFF];
@@ -217,7 +231,7 @@ fn looks_like_text(path: &std::path::Path) -> bool {
 /// The head of a file as text, whether that is all of it, and the file's length.
 /// Lossy: a file that sniffed as text can still hold one bad byte further in.
 pub fn text_head(path: &std::path::Path) -> std::io::Result<(String, bool, u64)> {
-    let f = File::open(path)?;
+    let f = open_file(path)?;
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut buf = Vec::with_capacity(TEXT_CAP.min(len.max(1)) as usize);
     f.take(TEXT_CAP).read_to_end(&mut buf)?;
@@ -231,13 +245,13 @@ pub fn text_head(path: &std::path::Path) -> std::io::Result<(String, bool, u64)>
 /// The length, or `None` past [`IMAGE_CAP`] — where the caller should report the
 /// size instead of sending the file.
 pub fn whole_len(path: &std::path::Path) -> std::io::Result<Option<u64>> {
-    let len = File::open(path)?.metadata()?.len();
+    let len = open_file(path)?.metadata()?.len();
     Ok((len <= IMAGE_CAP).then_some(len))
 }
 
 /// How long is it? A range answer needs the length first.
 pub fn len_of(path: &std::path::Path) -> std::io::Result<u64> {
-    Ok(File::open(path)?.metadata()?.len())
+    Ok(open_file(path)?.metadata()?.len())
 }
 
 /// Write `count` bytes starting at `from` into `out`, and never more: the length
@@ -249,7 +263,7 @@ pub fn write_span(
     count: u64,
     out: &mut dyn Write,
 ) -> std::io::Result<u64> {
-    let mut f = File::open(path)?;
+    let mut f = open_file(path)?;
     if from > 0 {
         f.seek(SeekFrom::Start(from))?;
     }
@@ -303,6 +317,32 @@ mod tests {
         let p = std::env::temp_dir().join(format!("scour-preview-{name}"));
         std::fs::write(&p, bytes).expect("write");
         p
+    }
+
+    /// A named pipe is looked at and refused, never opened: opening one for
+    /// reading waits for a writer, which held a service thread and the
+    /// window's slow lane for as long as the window lived.
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_refused_without_waiting_for_a_writer() {
+        let p = std::env::temp_dir().join(format!("scour-preview-pipe-{}", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let made = std::process::Command::new("mkfifo").arg(&p).status();
+        if !made.is_ok_and(|s| s.success()) {
+            eprintln!("no mkfifo here; skipped");
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let at = p.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(look_at(&at, false));
+        });
+        let look = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("looking at a named pipe waited for a writer");
+        let _ = std::fs::remove_file(&p);
+        assert_eq!(look.shape, "none");
+        assert!(text_head(&p).is_err());
     }
 
     #[test]
