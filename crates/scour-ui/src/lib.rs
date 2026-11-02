@@ -704,6 +704,77 @@ fn squash(w: &mut [u32], avail: u32) {
     w[widest] = avail.saturating_sub(spent).max(1);
 }
 
+/// Move 5, where a face knows what its rows hold: **a column wider than
+/// anything in it gives the difference to one that is cutting its text.** A
+/// list of short names under long locations otherwise kept half the row empty
+/// beside the names while the locations elided.
+///
+/// `need` is the widest text the column has to show, in the same pixels as
+/// `w`, or `None` where nobody measured. Only the stretching columns nobody
+/// dragged give or take: a drag is kept exactly, here as in [`lay_out`]. What
+/// moves is what one side can spare and the other can use, whichever is less,
+/// so the widths still add up to what they did; no column goes under its
+/// floor, and room nobody is short of stays where it was.
+pub fn fit_to(
+    ids: &[&str],
+    chosen: impl Fn(&str) -> Option<u32>,
+    need: impl Fn(&str) -> Option<u32>,
+    w: &mut [u32],
+) {
+    let cols: Vec<&Column> = ids.iter().filter_map(|id| column(id)).collect();
+    if cols.len() != w.len() {
+        return;
+    }
+    let mut spare = vec![0u32; w.len()];
+    let mut short = vec![0u32; w.len()];
+    for (i, c) in cols.iter().enumerate() {
+        if c.near == 0 || chosen(c.id).is_some_and(|x| x > 0) {
+            continue;
+        }
+        let Some(n) = need(c.id) else { continue };
+        let keep = n.max(c.min);
+        if w[i] > keep {
+            spare[i] = w[i] - keep;
+        } else if n > w[i] {
+            short[i] = n - w[i];
+            // A ceiling holds against this too: past it, the name elides.
+            if c.max > 0 {
+                short[i] = short[i].min(c.max.saturating_sub(w[i]));
+            }
+        }
+    }
+    let have: u32 = spare.iter().sum();
+    let want: u32 = short.iter().sum();
+    let moved = have.min(want);
+    if moved == 0 {
+        return;
+    }
+    // Each side in proportion, the last of each taking the rounding, so what
+    // leaves is exactly what arrives.
+    let shift = |amounts: &[u32], total: u32| -> Vec<u32> {
+        let at: Vec<usize> = (0..amounts.len()).filter(|&i| amounts[i] > 0).collect();
+        let mut out = vec![0u32; amounts.len()];
+        let mut handed = 0;
+        for &i in &at {
+            out[i] = (u64::from(moved) * u64::from(amounts[i]) / u64::from(total)) as u32;
+            handed += out[i];
+        }
+        // What rounding left over goes to whoever still has room for it;
+        // `moved` is at most each side's total, so it always fits.
+        for &i in &at {
+            let more = (moved - handed).min(amounts[i] - out[i]);
+            out[i] += more;
+            handed += more;
+        }
+        out
+    };
+    let give = shift(&spare, have);
+    let take = shift(&short, want);
+    for i in 0..w.len() {
+        w[i] = w[i] - give[i] + take[i];
+    }
+}
+
 /// Take `over` back from the columns in `from`, in proportion to what each has
 /// above its floor. Returns what could not be taken from them.
 fn take_back(cols: &[&Column], w: &mut [u32], over: u32, from: &[usize]) -> u32 {
@@ -984,6 +1055,88 @@ mod column_tests {
                 Some(2),
                 "at {avail}px the location stopped being the widest: {w:?}"
             );
+        }
+    }
+
+    /// Short names under long locations: the room beside the names goes to
+    /// the locations, and only as much as they need.
+    #[test]
+    fn short_names_hand_their_room_to_long_locations() {
+        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
+        let mut w = lay_out(DEFAULT_COLUMNS, |_| None, 1100);
+        let before = w.clone();
+        let need = |id: &str| match id {
+            "name" => Some(120),
+            "path" => Some(before[at("path")] + 150),
+            _ => None,
+        };
+        fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+        assert_eq!(w.iter().sum::<u32>(), 1100);
+        assert_eq!(
+            w[at("path")],
+            before[at("path")] + 150,
+            "{before:?} → {w:?}"
+        );
+        assert_eq!(w[at("name")], before[at("name")] - 150);
+        // The fixed columns are not touched.
+        assert_eq!(w[at("mtime")], before[at("mtime")]);
+    }
+
+    /// The other way round, and never under the name's own floor.
+    #[test]
+    fn long_names_take_from_short_locations_down_to_the_floor() {
+        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
+        let mut w = lay_out(DEFAULT_COLUMNS, |_| None, 1000);
+        let before = w.clone();
+        let need = |id: &str| match id {
+            "name" => Some(5000),
+            "path" => Some(10),
+            _ => None,
+        };
+        fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+        assert_eq!(w.iter().sum::<u32>(), 1000);
+        assert!(w[at("path")] >= column("path").unwrap().min);
+        assert!(w[at("path")] < before[at("path")], "{before:?} → {w:?}");
+        // Up to its ceiling and no further, or until the location is on its floor.
+        let name = column("name").unwrap();
+        assert!(
+            w[at("name")] == name.max.max(before[at("name")])
+                || w[at("path")] == column("path").unwrap().min,
+            "{before:?} → {w:?}"
+        );
+    }
+
+    /// A drag is kept exactly, whatever the rows hold.
+    #[test]
+    fn a_dragged_column_neither_gives_nor_takes() {
+        let at = |id| DEFAULT_COLUMNS.iter().position(|i| *i == id).unwrap();
+        let chosen = |id: &str| (id == "name").then_some(600);
+        let mut w = lay_out(DEFAULT_COLUMNS, chosen, 1300);
+        let before = w.clone();
+        fit_to(
+            DEFAULT_COLUMNS,
+            chosen,
+            |id| Some(if id == "path" { 2000 } else { 40 }),
+            &mut w,
+        );
+        assert_eq!(w, before);
+        assert_eq!(w[at("name")], 600);
+    }
+
+    /// Whatever is measured, the total stays the room.
+    #[test]
+    fn fitting_keeps_the_total_at_every_size() {
+        for avail in (200..3000).step_by(37) {
+            for (n, p) in [(10, 3000), (3000, 10), (300, 300), (0, 0), (700, 1200)] {
+                let mut w = lay_out(DEFAULT_COLUMNS, |_| None, avail);
+                let need = |id: &str| match id {
+                    "name" => Some(n),
+                    "path" => Some(p),
+                    _ => None,
+                };
+                fit_to(DEFAULT_COLUMNS, |_| None, need, &mut w);
+                assert_eq!(w.iter().sum::<u32>(), avail, "{avail}px {n}/{p}: {w:?}");
+            }
         }
     }
 

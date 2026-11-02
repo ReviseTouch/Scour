@@ -1105,6 +1105,9 @@ fn main() -> Result<()> {
                         .iter()
                         .filter_map(|id| scour_ui::column(id))
                         .collect();
+                    // The widths too: a drag is the other half of how a table
+                    // was left, and the only one with no other way back.
+                    t.widths.retain(|k, _| k == "peek");
                 } else {
                     t.toggle(&id);
                 }
@@ -1116,6 +1119,7 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     columns: Some(table.borrow().ids()),
+                    widths: id.is_empty().then(|| table.borrow().widths.clone()),
                     ..Default::default()
                 },
             });
@@ -3554,6 +3558,14 @@ fn apply(
             // Beside the page rather than on it: Slint counts in 32 bits.
             let weights: Vec<i64> = r.hits.iter().map(|h| h.meta.size.max(0)).collect();
             let n = page.len();
+            // A new question's first page decides how the row is divided up;
+            // later pages and refreshes leave it, or it moves under the reader.
+            if offset == 0 && state.borrow().rewind {
+                table
+                    .borrow_mut()
+                    .measure(&page, w.get_name_advance(), w.get_cell_advance());
+                relayout(w, &table.borrow());
+            }
             let any_fresh = {
                 let mut s = state.borrow_mut();
                 let counted = s
@@ -4604,6 +4616,11 @@ struct Table {
     /// What each column was dragged to, for **every** column and not only the
     /// showing ones: `Change::widths` replaces the map rather than merging.
     widths: std::collections::BTreeMap<String, u32>,
+    /// The widest text each column holds in the answer on screen, in pixels:
+    /// what `scour_ui::fit_to` hands room by. Measured when a question's first
+    /// page lands and not as the list scrolls, so the columns do not shift
+    /// under a reading eye.
+    need: std::collections::BTreeMap<String, u32>,
 }
 
 impl Table {
@@ -4624,6 +4641,42 @@ impl Table {
         Table {
             shown,
             widths: kept.widths.clone(),
+            need: Default::default(),
+        }
+    }
+
+    /// Measure the stretching columns against these rows. `name` and `cell`
+    /// are one character of the mono face at the name's size and the other
+    /// cells', as the window measured them.
+    fn measure(&mut self, page: &[Row], name: f32, cell: f32) {
+        self.need.clear();
+        // What is on screen and a little past it: one deep path further down
+        // should not decide the columns for the rows a person is reading.
+        let seen = &page[..page.len().min(60)];
+        for (ci, c) in self.shown.iter().enumerate() {
+            if c.near == 0 {
+                continue;
+            }
+            let widest = seen
+                .iter()
+                .filter_map(|r| r.cells.row_data(ci))
+                // The name is held in three parts around the match.
+                .map(|x| {
+                    [&x.text, &x.pre, &x.hit, &x.post]
+                        .iter()
+                        .map(|t| t.chars().count())
+                        .sum::<usize>()
+                })
+                .max();
+            let Some(chars) = widest else { continue };
+            // The name's icon, its gap, and a few pixels so the last letter is
+            // not against the next column.
+            let px = if c.id == "name" {
+                23.0 + chars as f32 * name + 6.0
+            } else {
+                chars as f32 * cell + 6.0
+            };
+            self.need.insert(c.id.to_owned(), px.ceil() as u32);
         }
     }
 
@@ -4672,6 +4725,13 @@ fn relayout(window: &MainWindow, table: &Table) {
     if widths.len() != ids.len() {
         return;
     }
+    let mut widths = widths;
+    scour_ui::fit_to(
+        &ids,
+        |id| table.widths.get(id).copied().filter(|v| *v > 0),
+        |id| table.need.get(id).copied(),
+        &mut widths,
+    );
     let px: Vec<f32> = widths.iter().map(|w| *w as f32).collect();
     // Where each column starts inside the row: the row's 12px padding, then
     // every earlier column and the 8px gap after it. Handed over so a cell can
@@ -5556,6 +5616,7 @@ mod tests {
         let table = Table {
             shown: scour_ui::COLUMNS.iter().collect(),
             widths: Default::default(),
+            need: Default::default(),
         };
         let heads = heads_of(&table, &cat);
         assert_eq!(heads.len(), scour_ui::COLUMNS.len());
@@ -5576,6 +5637,7 @@ mod tests {
             // Deliberately not the table's own order.
             shown: vec![col("size"), col("name")],
             widths: Default::default(),
+            need: Default::default(),
         };
         // `path` outranks `size` in `COLUMNS`, so it lands in front of it.
         t.toggle("path");

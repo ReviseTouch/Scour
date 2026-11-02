@@ -1106,6 +1106,11 @@ export component MainWindow inherits Window {
     /// Rust, not a binding: it is two passes with a per-column floor and ceiling.
     callback relayout(length);
     changed lane => { root.relayout(root.lane); }
+    /// One character of the monospaced face at the two sizes the rows draw it
+    /// in, measured rather than guessed: Rust sizes the name and the location
+    /// to the widest text they hold, and every face's mono is its own width.
+    out property <length> name-advance: name-probe.preferred-width / 20;
+    out property <length> cell-advance: cell-probe.preferred-width / 20;
 
     // The widths every row and the heading are handed, adding up to `lane`
     // exactly. A dragged width wins over a computed one; zero means untouched.
@@ -4663,73 +4668,77 @@ export component MainWindow inherits Window {
             // Kept on screen: near the pointer, never past the edge.
             x: min(root.menu-x, root.width - self.width - 8px);
             y: min(root.menu-y, root.height - self.height - 8px);
-            width: 258px;
+            width: 280px;
             height: items.preferred-height;
-            background: Theme.panel;
+            // A step off the ground in either scheme, so it reads as above the
+            // list rather than cut out of it.
+            background: Theme.dark ? Theme.panel-2 : Theme.panel;
             border-width: Theme.hair;
             border-color: Theme.line;
-            border-radius: 3px;
-            drop-shadow-blur: 18px;
-            drop-shadow-color: #00000070;
-            drop-shadow-offset-y: 6px;
+            border-radius: 8px;
+            // A popover's shadow: soft and far, not a dark rim.
+            drop-shadow-blur: 32px;
+            drop-shadow-color: Theme.dark ? #00000090 : #0000002e;
+            drop-shadow-offset-y: 12px;
 
             items := VerticalLayout {
-                padding: 5px;
+                padding: 6px;
 
                 for it[i] in root.menu: VerticalLayout {
                     // A rule where the group changes: the gap is what a hand
                     // travelling down the list stops at.
                     if it.rule: Rectangle {
-                        height: 7px;
+                        height: 9px;
                         Rectangle {
-                            y: 3px;
-                            x: 6px;
-                            width: parent.width - 12px;
-                            height: 1px;
+                            y: 4px;
+                            x: 8px;
+                            width: parent.width - 16px;
+                            height: Theme.hair;
                             background: Theme.line;
                         }
                     }
 
                     Rectangle {
-                        height: 26px;
-                        border-radius: 2px;
-                        background: hit.has-hover
-                            ? (it.careful ? Theme.danger.transparentize(0.88) : Theme.hover)
-                            : transparent;
+                        height: 32px;
+                        border-radius: 5px;
+                        // Careful items look like the rest until the pointer is
+                        // on one: red down the menu at rest reads as an alarm.
+                        background: !hit.has-hover || it.off ? transparent
+                            : it.careful ? Theme.danger.transparentize(0.84)
+                            : Theme.dark ? Theme.line : Theme.hover;
 
                         HorizontalLayout {
-                            padding-left: 10px;
-                            padding-right: 10px;
-                            spacing: 12px;
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 10px;
 
                             // A lane for the tick, kept even when empty, so a
                             // label does not shuffle sideways when switched on.
                             if root.menu-columns: Text {
                                 text: it.on ? "✓" : "";
-                                color: Theme.q-key;
-                                font-size: 11px;
+                                color: Theme.focus;
+                                font-size: 13px;
                                 vertical-alignment: center;
-                                width: 12px;
+                                width: 14px;
                             }
 
                             Text {
                                 text: it.label;
-                                color: it.off ? Theme.line
-                                     : it.careful ? Theme.danger
-                                     : it.heavy ? Theme.ink-3
-                                     : Theme.ink-2;
-                                font-size: 12.5px;
+                                color: it.off ? Theme.ink-3
+                                     : it.careful && hit.has-hover ? Theme.danger
+                                     : Theme.ink;
+                                opacity: it.off ? 0.55 : 1;
+                                font-size: 13.5px;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
                             // The shortcut, quieter than the label: it is there
-                            // to be learned, not read.
+                            // to be learned, not read. A label, so not in mono.
                             Text {
                                 text: it.key;
                                 color: Theme.ink-3;
-                                font-family: Fonts.mono;
-                                font-size: 10.5px;
+                                font-size: 12px;
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
                             }
@@ -4738,6 +4747,7 @@ export component MainWindow inherits Window {
                         // Declared after the text, so it is above it: order is
                         // what decides which element takes the press.
                         hit := TouchArea {
+                            enabled: !it.off;
                             clicked => {
                                 root.menu-open = false;
                                 if (root.menu-columns) {
@@ -4751,6 +4761,20 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Never drawn: what `name-advance` and `cell-advance` measure.
+    name-probe := Text {
+        visible: false;
+        text: "00000000000000000000";
+        font-family: Fonts.mono;
+        font-size: 13px;
+    }
+    cell-probe := Text {
+        visible: false;
+        text: "00000000000000000000";
+        font-family: Fonts.mono;
+        font-size: 11.5px;
     }
 
     // A moment's rest before the tip appears; a click skips it.
