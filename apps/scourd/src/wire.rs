@@ -95,11 +95,25 @@ pub fn engine(
     )
 }
 
-/// Open the index, rebuilding it from nothing if an older Scour wrote it. The
-/// decision is here because only this file knows every source is a local
-/// filesystem that can be read again, and a cold index is scanned on start.
+/// Open the index, rebuilding it from nothing if an older Scour wrote it or it
+/// is damaged. The decision is here because only this file knows every source
+/// is a filesystem that can be read again, and a cold index is scanned on
+/// start. A damaged one used to stop the service for good: it failed to open,
+/// systemd started it again five seconds later, and that went on for ever.
 fn open_index(dir: &std::path::Path) -> Result<NativeIndex> {
     match NativeIndex::open_or_create(dir) {
+        Err(scour_core::Error::IndexCorrupt { detail }) => {
+            let aside = set_aside(dir)
+                .with_context(|| format!("moving the damaged index at {}", dir.display()))?;
+            eprintln!(
+                "scourd: the index at {} is damaged ({detail}); it was moved to {} and is \
+                 being built again from the disks",
+                dir.display(),
+                aside.display()
+            );
+            NativeIndex::open_or_create(dir)
+                .with_context(|| format!("opening the index at {}", dir.display()))
+        }
         Err(scour_core::Error::IndexOutdated { found, expected }) => {
             eprintln!(
                 "scourd: the index at {} is format {found} and this build writes {expected}; \
@@ -113,6 +127,20 @@ fn open_index(dir: &std::path::Path) -> Result<NativeIndex> {
         }
         other => other.with_context(|| format!("opening the index at {}", dir.display())),
     }
+}
+
+/// Move a damaged index beside itself, as `native.damaged`, rather than delete
+/// it: the files are what anyone will want to look at. One is kept; an older
+/// one goes, or a disk that keeps damaging it fills up with copies.
+fn set_aside(dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let mut name = dir.file_name().unwrap_or_default().to_os_string();
+    name.push(".damaged");
+    let aside = dir.with_file_name(name);
+    if aside.exists() {
+        std::fs::remove_dir_all(&aside)?;
+    }
+    std::fs::rename(dir, &aside)?;
+    Ok(aside)
 }
 
 /// Where the index files go: a subdirectory, so a second engine beside this one
@@ -219,6 +247,29 @@ fn switch_off(list: &mut Vec<String>, kind: &str, added: &scour_settings::Settin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A damaged index is moved aside and a new one opened, so the service
+    /// comes up and scans; it used to fail to start for as long as it was tried.
+    #[test]
+    fn a_damaged_index_is_moved_aside_and_built_again() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("native");
+        drop(NativeIndex::open_or_create(&dir).expect("a new index"));
+        std::fs::write(dir.join("native-index.json"), "{ not json").expect("damage it");
+        let opened = open_index(&dir);
+        assert!(opened.is_ok(), "{:?}", opened.err());
+        let aside = root.path().join("native.damaged");
+        assert!(
+            aside.join("native-index.json").is_file(),
+            "the damaged files are kept"
+        );
+        // A second time keeps one copy, the newest.
+        drop(opened);
+        std::fs::write(dir.join("native-index.json"), "{ again").expect("damage it");
+        assert!(open_index(&dir).is_ok());
+        let kept = std::fs::read_to_string(aside.join("native-index.json")).expect("read");
+        assert_eq!(kept, "{ again");
+    }
 
     /// The rules with nothing switched off: never `scan_options`, which reads
     /// the real settings file and makes a test depend on the desktop it runs on.
