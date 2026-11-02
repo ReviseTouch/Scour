@@ -98,8 +98,7 @@ impl Live {
     }
 
     fn swap(&self, kept: &Kept, plan: &Plan) {
-        let mut slot = self.engine.write().unwrap_or_else(|p| p.into_inner());
-        let old = Arc::clone(&slot);
+        let old = self.engine();
         // A walk cut short is started again, everywhere: which sources it had
         // reached is not known from outside. Otherwise only new sources walk.
         let walk = if old.walking() {
@@ -115,6 +114,11 @@ impl Live {
             )
         };
         let revision = old.status().revision + 1;
+        // Stopped outside the engine's lock, and the old one keeps answering
+        // reads from the shared index meanwhile. The stop joins the worker,
+        // which can sit in a `stat` on a disk that stopped answering; under the
+        // write lock every request in the service waited with it. The new one
+        // is only built after: it drops the rows of sources that are gone.
         old.shutdown();
         let new = Arc::new(crate::wire::engine(
             &kept.config,
@@ -122,8 +126,7 @@ impl Live {
             &plan.sources,
             revision,
         ));
-        *slot = Arc::clone(&new);
-        drop(slot);
+        *self.engine.write().unwrap_or_else(|p| p.into_inner()) = Arc::clone(&new);
         scour_core::note!(
             "scourd: the disks changed · {} sources now",
             new.sources().len()

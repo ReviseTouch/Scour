@@ -892,6 +892,19 @@ impl Engine {
     /// [`Status::revision`] seen. Waiting puts commits on `commit_watched`.
     pub fn await_change(&self, since: u64, timeout: Duration) -> Status {
         let deadline = Instant::now() + timeout;
+        // Asked of an engine already stopped, which never changes again:
+        // answering at once had a face ask again at once, a spin for as long
+        // as a swap's stop takes — and a disk that stopped answering makes that
+        // long. A second, within the timeout. A waiter the stop wakes is not
+        // held: that is the stop telling it to look elsewhere.
+        if self.shared.stop.load(Ordering::Acquire) {
+            std::thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_secs(1)),
+            );
+            return self.status();
+        }
         self.shared.watchers.fetch_add(1, Ordering::Relaxed);
         {
             let mut held = self.shared.waiters.0.lock();

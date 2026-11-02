@@ -1901,6 +1901,23 @@ fn shutdown_wakes_a_client_waiting_on_an_unchanged_index() {
     });
 }
 
+/// Asking a stopped engine to wait is answered after a pause, not at once: a
+/// face that asks again at once spun for as long as a disk swap's stop took.
+#[test]
+fn a_stopped_engine_paces_whoever_asks_it_to_wait() {
+    let f = fixture(0);
+    f.engine.shutdown();
+    let rev = f.engine.status().revision;
+    let began = Instant::now();
+    f.engine.await_change(rev, Duration::from_secs(3));
+    let took = began.elapsed();
+    assert!(took >= Duration::from_millis(900), "answered in {took:?}");
+    assert!(took < Duration::from_secs(2), "held for {took:?}");
+    let began = Instant::now();
+    f.engine.await_change(rev, Duration::from_millis(200));
+    assert!(began.elapsed() < Duration::from_millis(600), "past its own timeout");
+}
+
 #[test]
 fn an_explicit_flush_announces_the_new_revision() {
     let f = fixture(0);
