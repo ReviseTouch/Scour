@@ -124,6 +124,16 @@ pub const FEATURES: &[Feature] = &[
         faces: [Has, Has, Has, Has],
     },
     Feature {
+        id: "drag-out",
+        what: "rows dragged into another program, as the files themselves",
+        faces: [
+            Part("by way of the window's drag tray: a browser hands a page's file on as text"),
+            Has,
+            Part("by way of the window's drag tray: the terminal's window is the terminal's"),
+            Never("a printed list is not under a pointer"),
+        ],
+    },
+    Feature {
         id: "report",
         what: "what the index holds: the largest, the duplicates, what a folder weighs",
         faces: [Has, Has, Has, Has],

@@ -24,8 +24,10 @@ use windows::core::{BOOL, HRESULT, Ref, implement};
 
 use crate::Refused;
 
-#[derive(Debug)]
-pub(crate) struct Windows;
+#[derive(Debug, Default)]
+pub(crate) struct Windows {
+    dropped: bool,
+}
 
 impl Windows {
     pub fn files(&mut self, paths: &[&Path]) -> Result<(), Refused> {
@@ -41,7 +43,12 @@ impl Windows {
         if r.is_err() {
             return Err(Refused::Broken);
         }
+        self.dropped = r == DRAGDROP_S_DROP && effect != DROPEFFECT(0);
         Ok(())
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.dropped
     }
 }
 

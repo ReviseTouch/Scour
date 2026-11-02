@@ -341,6 +341,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/delete"
         || req.path == "/api/reveal"
         || req.path == "/api/send"
+        || req.path == "/api/drag"
         || req.path == "/api/rename"
         || req.path == "/api/open-with"
         || req.path == "/api/face"
@@ -413,6 +414,8 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/send-targets" => api_send_targets(&mut stream),
         "/api/send" if doing.launch => api_send(&mut stream, client, &req),
         "/api/send" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
+        "/api/drag" if doing.launch => api_drag(&mut stream, client, &req),
+        "/api/drag" => http::fail(&mut stream, "403 Forbidden", "launching is off"),
         "/api/rename" => api_rename(&mut stream, client, &req),
         "/api/openers" => api_openers(&mut stream, client, &req),
         "/api/open-with" if doing.launch => api_open_with(&mut stream, client, &req),
@@ -1369,6 +1372,33 @@ fn api_send(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
         Err(e) => serde_json::json!({ "error": e.msgid(), "detail": e.to_string() }),
     };
     http::json(stream, &answer);
+}
+
+/// Open the window's drag tray for these paths. A page cannot drag a file out:
+/// Chromium hands its `file://` on as `about:blank#`, and `DownloadURL` is not
+/// read on Linux. The tray is a window of its own, whose drag is real.
+fn api_drag(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let asked = paths_in(req);
+    let (known, refused) = fenced(client, &asked);
+    if known.is_empty() {
+        http::json(stream, &serde_json::json!({ "error": refused.join("\n") }));
+        return;
+    }
+    let Some(binary) = beside_or_path("scour-gui") else {
+        http::json(
+            stream,
+            &serde_json::json!({ "error": "scour-gui is not installed" }),
+        );
+        return;
+    };
+    let mut command = std::process::Command::new(&binary);
+    command.arg("--drag").args(&known);
+    // Its own process group, or closing this server closes the tray.
+    scour_ui::faces::detach(&mut command);
+    match command.spawn() {
+        Ok(_) => http::json(stream, &serde_json::json!({ "opened": known.len() })),
+        Err(e) => http::json(stream, &serde_json::json!({ "error": e.to_string() })),
+    }
 }
 
 /// Open a path, or the folder holding it. The index is the fence: the service

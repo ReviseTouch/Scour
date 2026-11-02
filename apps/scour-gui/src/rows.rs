@@ -73,7 +73,7 @@ pub fn split_at_match<'a>(name: &'a str, terms: &[String]) -> (&'a str, &'a str,
 
 /// The colour a kind's icon is drawn in, or the window's quiet ink when the
 /// kind has none.
-fn tint_of(token: &str) -> slint::Brush {
+pub(crate) fn tint_of(token: &str) -> slint::Brush {
     match scour_ui::kind_colour(token) {
         Some(c) => {
             let (a, r, g, b) = c.argb();

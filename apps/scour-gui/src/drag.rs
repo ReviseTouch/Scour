@@ -6,8 +6,6 @@ use std::path::Path;
 
 use slint::ComponentHandle;
 
-use crate::MainWindow;
-
 thread_local! {
     // Leaked, never dropped: it holds the window's own connection, which is
     // gone by the time a thread-local would be.
@@ -19,8 +17,8 @@ thread_local! {
 /// Attach once the window is on screen, before the first press: on Wayland
 /// a pointer bound during a press never hears of that press. Tried until it
 /// takes — the window may not exist yet when this is first called.
-pub fn prepare(w: &MainWindow) {
-    attach_once(w);
+pub fn prepare<C: ComponentHandle + 'static>(w: &C) {
+    attach_once(w.window());
     let weak = w.as_weak();
     IDLE.with(|t| {
         t.start(
@@ -28,7 +26,7 @@ pub fn prepare(w: &MainWindow) {
             std::time::Duration::from_secs(2),
             move || {
                 let Some(w) = weak.upgrade() else { return };
-                attach_once(&w);
+                attach_once(w.window());
                 // Wayland's pointer hears every motion, which waits until
                 // read: read every two seconds, a few microseconds each.
                 let pumping = with_drag(|d| {
@@ -45,8 +43,15 @@ pub fn prepare(w: &MainWindow) {
 
 /// Drag these files out of the window, where `x`, `y` is the pointer.
 /// Started just after the press's handler returns: on Windows the drag runs
-/// a loop of its own until the drop.
-pub fn files(w: &MainWindow, paths: Vec<String>, x: f32, y: f32) {
+/// a loop of its own until the drop. `ended` hears whether a target took
+/// them, once the drag is over; never, when it did not start.
+pub fn files<C: ComponentHandle + 'static>(
+    w: &C,
+    paths: Vec<String>,
+    x: f32,
+    y: f32,
+    ended: impl FnOnce(bool) + 'static,
+) {
     let weak = w.as_weak();
     slint::Timer::single_shot(std::time::Duration::ZERO, move || {
         let Some(w) = weak.upgrade() else { return };
@@ -72,17 +77,23 @@ pub fn files(w: &MainWindow, paths: Vec<String>, x: f32, y: f32) {
                 button: slint::platform::PointerEventButton::Left,
             });
         // What the drop target asks for after the drop is answered from here.
+        let ended = RefCell::new(Some(ended));
         PUMP.with(|t| {
             t.start(
                 slint::TimerMode::Repeated,
                 std::time::Duration::from_millis(30),
-                || {
+                move || {
                     let going = with_drag(|d| {
                         d.pump();
                         d.dragging()
                     });
                     if going != Some(true) {
                         PUMP.with(slint::Timer::stop);
+                        let taken = with_drag(|d| d.dropped()).unwrap_or(false);
+                        crate::trace(&format!("drag: over, taken: {taken}"));
+                        if let Some(f) = ended.borrow_mut().take() {
+                            f(taken);
+                        }
                     }
                 },
             )
@@ -94,7 +105,7 @@ fn with_drag<T>(f: impl FnOnce(&mut scour_drag::Dragger) -> T) -> Option<T> {
     DRAG.with(|cell| cell.borrow_mut().as_mut().map(|d| f(d)))
 }
 
-fn attach_once(w: &MainWindow) {
+fn attach_once(w: &slint::Window) {
     DRAG.with(|cell| {
         let mut held = cell.borrow_mut();
         if held.is_none() {
@@ -104,10 +115,10 @@ fn attach_once(w: &MainWindow) {
 }
 
 /// The window's own handles, made into a drag where the desktop has one.
-fn attach(w: &MainWindow) -> Option<scour_drag::Dragger> {
+fn attach(w: &slint::Window) -> Option<scour_drag::Dragger> {
     use i_slint_backend_winit::WinitWindowAccessor;
     use i_slint_backend_winit::winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-    let found = w.window().with_winit_window(|ww| {
+    let found = w.with_winit_window(|ww| {
         let display = ww.display_handle().ok()?.as_raw();
         let window = ww.window_handle().ok()?.as_raw();
         // SAFETY: both are this window's, and it lives as long as the process.

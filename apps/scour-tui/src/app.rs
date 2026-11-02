@@ -1439,6 +1439,44 @@ impl App {
         self.dirty = true;
     }
 
+    /// What a drag from this row carries: the selection when the row is in
+    /// it, else the row alone — what a file manager does.
+    pub fn drag_rows(&self, row: usize) -> Vec<String> {
+        let Some(hit) = self.pages.at(row) else {
+            return Vec::new();
+        };
+        if self.picked.len() > 1 && self.picked.contains_key(&hit.path) {
+            self.picked.keys().cloned().collect()
+        } else {
+            vec![hit.path.clone()]
+        }
+    }
+
+    /// Drag these out by way of the window's drag tray: a terminal's window is
+    /// the terminal's, so no drag can start from here.
+    pub fn drag_out(&mut self, paths: &[String]) -> Want {
+        if paths.is_empty() {
+            return Want::Nothing;
+        }
+        let mut command = std::process::Command::new(sibling("scour-gui"));
+        command
+            .arg("--drag")
+            .args(paths)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // Its own process group, or closing this terminal closes the tray.
+        scour_ui::faces::detach(&mut command);
+        self.note = match command.spawn() {
+            Ok(_) => self
+                .say("drag them from the window that opened")
+                .into_owned(),
+            Err(e) => format!("scour-gui: {e}"),
+        };
+        self.dirty = true;
+        Want::Nothing
+    }
+
     /// Which rows the menu is about: the selection, or the row under it.
     fn menu_rows(&self) -> Vec<String> {
         if self.picked.len() > 1 {
@@ -1551,6 +1589,7 @@ impl App {
                 Want::Nothing
             }
             "details" => Want::Peek(first.clone()),
+            "drag" => self.drag_out(&rows),
             "csv" => self.write_sheet(),
 
             "open-with" => {
@@ -1947,6 +1986,16 @@ impl App {
     pub fn here(&self) -> Option<&Hit> {
         self.pages.at(self.cursor)
     }
+}
+
+/// Another of Scour's programs: beside this one when installed together, else
+/// on the `PATH`.
+fn sibling(name: &str) -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|here| Some(here.parent()?.join(name)))
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| name.into())
 }
 
 #[cfg(test)]

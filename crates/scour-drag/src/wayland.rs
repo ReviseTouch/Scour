@@ -56,6 +56,8 @@ struct State {
     press: Option<u32>,
     /// The drag under way: its source and what it offers.
     source: Option<(WlDataSource, Payload)>,
+    /// The last drag ended in a drop that was taken.
+    dropped: bool,
 }
 
 struct Payload {
@@ -127,6 +129,7 @@ impl Wayland {
                 .collect::<Vec<_>>()
                 .join("\n"),
         };
+        self.state.dropped = false;
         if let Some((old, _)) = self.state.source.replace((source, payload)) {
             old.destroy();
         }
@@ -142,6 +145,10 @@ impl Wayland {
     /// A drag is under way: it has neither been dropped nor cancelled.
     pub fn dragging(&self) -> bool {
         self.state.source.is_some()
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.state.dropped
     }
 }
 
@@ -284,10 +291,15 @@ impl Dispatch<WlDataSource, ()> for State {
                     write_all(fd, body.as_bytes());
                 }
             }
-            // Over, either way: the source goes with it.
-            wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished => {
-                source.destroy();
+            // Over, either way: the source goes with it. Mutter follows a
+            // finished drop with a cancel for the same source; the first word
+            // stands, or every drop reads as refused.
+            wl_data_source::Event::Cancelled | wl_data_source::Event::DndFinished
+                if state.source.as_ref().is_some_and(|(s, _)| s == source) =>
+            {
+                state.dropped = matches!(event, wl_data_source::Event::DndFinished);
                 state.source = None;
+                source.destroy();
             }
             _ => {}
         }

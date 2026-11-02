@@ -15,6 +15,7 @@ mod install;
 mod link;
 mod report;
 mod rows;
+mod tray;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -40,8 +41,8 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cell, Disk, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem, Row, Rule,
-    Scheme, Seg, Slice, Slot, Span, Theme,
+    Bar, Big, Cell, Disk, DragTray, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem,
+    Row, Rule, Scheme, Seg, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -461,6 +462,9 @@ struct Args {
     /// Start with this query
     #[arg(short, long, default_value = "")]
     query: String,
+    /// Open a small window to drag these files from, into another program
+    #[arg(long, num_args = 1.., value_name = "PATH")]
+    drag: Vec<String>,
 }
 
 fn main() -> Result<()> {
@@ -474,6 +478,11 @@ fn main() -> Result<()> {
     let config = scour_config::Config::load_or_default().0;
     // A window from a desktop entry has nowhere for standard error to go.
     crash_log(&config.state_dir());
+    // Not the one window: the page and the terminal open one per drag, and it
+    // needs no service.
+    if !args.drag.is_empty() {
+        return tray::run(&args.drag, &config);
+    }
     if args.start_service {
         let addr = args.socket.clone().unwrap_or_else(|| config.socket());
         let _ = link::boot(&addr, &config.state_dir().join("scourd.log"));
@@ -1830,7 +1839,7 @@ fn main() -> Result<()> {
             };
             trace(&format!("drag-out row {row}: {} path(s)", paths.len()));
             if !paths.is_empty() {
-                drag::files(&w, paths, x, y);
+                drag::files(&w, paths, x, y, |_| {});
             }
         });
     }
@@ -4574,7 +4583,7 @@ fn dress(window: &MainWindow) {
 /// A monospace face this machine actually has. **"monospace" is not a family,
 /// and Slint does not treat it as one**: parley falls through to a sans, where
 /// `M` is 18.86 px wide and `i` 5.98 under a layer drawn on top of it.
-fn mono_family() -> String {
+pub(crate) fn mono_family() -> String {
     if let Ok(named) = std::env::var("SCOUR_GUI_MONO") {
         return named;
     }
@@ -4786,7 +4795,7 @@ fn heads_of(table: &Table, cat: &Catalogue) -> Vec<HeadInfo> {
 }
 
 /// One `scour-ui` palette, in the shape the window's generated struct wants.
-fn scheme(p: &scour_ui::Palette) -> Scheme {
+pub(crate) fn scheme(p: &scour_ui::Palette) -> Scheme {
     let c = |x: &scour_ui::Rgba| {
         let (a, r, g, b) = x.argb();
         slint::Brush::SolidColor(slint::Color::from_argb_u8(a, r, g, b))
@@ -5051,7 +5060,7 @@ fn grouped(n: u64) -> String {
 
 /// The language the window should speak: what a face's menu chose
 /// (`scour_settings::Settings::language`), then the config, then the desktop.
-fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> String {
+pub(crate) fn language(kept: &scour_settings::Settings, cfg: &scour_config::Config) -> String {
     scour_i18n::choose(&kept.language, &cfg.ui.language)
 }
 

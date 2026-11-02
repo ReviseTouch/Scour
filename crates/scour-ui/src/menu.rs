@@ -174,6 +174,17 @@ pub const ITEMS: &[Item] = &[
         when: When::File,
         except: &[crate::faces::Face::Page],
     },
+    // The page and the terminal open the window's drag tray; the window
+    // drags the row itself.
+    Item {
+        id: "drag",
+        msgid: "Drag as a file…",
+        key: "",
+        group: 2,
+        weight: Weight::Plain,
+        when: When::One,
+        except: &[crate::faces::Face::Window],
+    },
     Item {
         id: "send",
         msgid: "Send to…",
@@ -266,6 +277,15 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[crate::faces::Face::Page],
+    },
+    Item {
+        id: "drag",
+        msgid: "Drag {n} as files…",
+        key: "",
+        group: 1,
+        weight: Weight::Plain,
+        when: When::Many,
+        except: &[crate::faces::Face::Window],
     },
     Item {
         id: "send",

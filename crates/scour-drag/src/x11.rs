@@ -35,6 +35,7 @@ const FINISH: Duration = Duration::from_secs(5);
 #[derive(Debug, Default)]
 pub(crate) struct X11 {
     busy: Arc<AtomicBool>,
+    dropped: Arc<AtomicBool>,
 }
 
 impl X11 {
@@ -60,11 +61,14 @@ impl X11 {
         }
         let payload = Payload::of(paths);
         let busy = Arc::clone(&self.busy);
+        let dropped = Arc::clone(&self.dropped);
         busy.store(true, Ordering::Release);
+        dropped.store(false, Ordering::Release);
         std::thread::Builder::new()
             .name("scour-drag-x11".into())
             .spawn(move || {
-                let _ = run(&conn, root, &payload);
+                let taken = run(&conn, root, &payload).unwrap_or(false);
+                dropped.store(taken, Ordering::Release);
                 busy.store(false, Ordering::Release);
             })
             .map(|_| ())
@@ -76,6 +80,10 @@ impl X11 {
 
     pub fn dragging(&self) -> bool {
         self.busy.load(Ordering::Acquire)
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.dropped.load(Ordering::Acquire)
     }
 }
 
@@ -143,8 +151,9 @@ impl Atoms {
     }
 }
 
-/// The drag, from the first tick to the target saying it is done.
-fn run(conn: &RustConnection, root: Window, payload: &Payload) -> Option<()> {
+/// The drag, from the first tick to the target saying it is done; true when
+/// a target took the drop.
+fn run(conn: &RustConnection, root: Window, payload: &Payload) -> Option<bool> {
     let atoms = Atoms::new(conn)?;
     // A source window of this connection's: the target's answers come here.
     let source = conn.generate_id().ok()?;
@@ -217,17 +226,22 @@ fn run(conn: &RustConnection, root: Window, payload: &Payload) -> Option<()> {
         std::thread::sleep(TICK);
     }
 
-    match over {
+    let taken = match over {
         Some(t) if accepted => {
             send(conn, t, atoms.drop, [source, 0, CURRENT_TIME, 0, 0]);
             conn.flush().ok()?;
             finish(conn, &atoms, payload);
+            true
         }
-        Some(t) => send(conn, t, atoms.leave, [source, 0, 0, 0, 0]),
-        None => {}
-    }
+        Some(t) => {
+            send(conn, t, atoms.leave, [source, 0, 0, 0, 0]);
+            false
+        }
+        None => false,
+    };
     let _ = conn.destroy_window(source);
-    conn.flush().ok()
+    conn.flush().ok()?;
+    Some(taken)
 }
 
 /// Serve the target's requests for the files until it says it has them.

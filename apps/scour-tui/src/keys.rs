@@ -425,6 +425,13 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                 let at = m.row.saturating_sub(crate::draw::LIST_TOP).min(high);
                 app.drag_bar(at, high)
             }
+            // Pulled off its row: a drag out, which the window's tray does.
+            // The press is spent, so the release selects nothing.
+            Spot::Row(row) if spot != app.pressed => {
+                app.pressed = Spot::Nothing;
+                let paths = app.drag_rows(row);
+                app.drag_out(&paths)
+            }
             _ => Want::Nothing,
         },
         MouseEventKind::ScrollDown => match spot {

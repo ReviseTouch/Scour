@@ -69,7 +69,7 @@ impl Dragger {
                 Inner::X11(crate::x11::X11::new()?)
             }
             #[cfg(windows)]
-            (_, RawWindowHandle::Win32(_)) => Inner::Windows(crate::windows::Windows),
+            (_, RawWindowHandle::Win32(_)) => Inner::Windows(crate::windows::Windows::default()),
             #[cfg(target_os = "macos")]
             (_, RawWindowHandle::AppKit(w)) => {
                 // SAFETY: the caller vouches for the view.
@@ -127,6 +127,28 @@ impl Dragger {
             Inner::Wayland(it) => it.pump(),
             #[allow(unreachable_patterns)]
             _ => {}
+        }
+    }
+
+    /// The last drag ended with a target taking the files, rather than
+    /// cancelled or let go where nothing takes them.
+    pub fn dropped(&self) -> bool {
+        match &self.inner {
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+            ))]
+            Inner::Wayland(it) => it.dropped(),
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "ios", target_os = "android"))
+            ))]
+            Inner::X11(it) => it.dropped(),
+            #[cfg(windows)]
+            Inner::Windows(it) => it.dropped(),
+            #[cfg(target_os = "macos")]
+            Inner::Mac(it) => it.dropped(),
+            Inner::Nothing => false,
         }
     }
 

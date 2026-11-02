@@ -1862,3 +1862,21 @@ msgstr "DİSKLER"
 
 msgid "text copied"
 msgstr "metin kopyalandı"
+
+# The drag window's line under the file's name: `scour-gui --drag`, opened by
+# the page and the terminal, which cannot drag a file out themselves.
+msgid "Drag from here into another program"
+msgstr "Buradan başka bir programa sürükle"
+
+msgid "Could not open the drag window: {e}"
+msgstr "Sürükleme penceresi açılamadı: {e}"
+
+msgid "Drag as a file…"
+msgstr "Dosya olarak sürükle…"
+
+msgid "Drag {n} as files…"
+msgstr "{n} öğeyi dosya olarak sürükle…"
+
+# The terminal's note once the drag window is open.
+msgid "drag them from the window that opened"
+msgstr "açılan pencereden sürükleyin"

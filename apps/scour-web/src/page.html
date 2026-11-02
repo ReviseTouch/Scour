@@ -1808,6 +1808,16 @@
       if (!r.ok) throw new Error(`send: ${r.status}`);
       return r.json();
     },
+    /* The window's drag tray, which can do what a page cannot. */
+    drag: async (paths) => {
+      const r = await fetch(`/api/drag?${new URLSearchParams({ t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify(paths),
+      });
+      if (!r.ok) throw new Error(`drag: ${r.status}`);
+      return r.json();
+    },
     /* The bridge renames; the service is told to look at both ends. */
     rename: async (path, name) => {
       const r = await fetch(`/api/rename?${new URLSearchParams({ path, name, t: TOKEN })}`, {
@@ -4650,17 +4660,20 @@
     if (p) { e.preventDefault(); launch(p, e.shiftKey ? "folder" : "file"); }
   });
 
-  /* Out of the window: a file manager, a mail or a chat takes `text/uri-list`
-     as the files themselves. The whole selection goes when the row is in it. */
+  /* Out of the window, by way of the window's drag tray: Chromium will not
+     let a page hand out a file — a `file://` in `text/uri-list` arrives as
+     `about:blank#`, and a file manager made a text file of the path. The
+     browser's own drag is cancelled; the tray opens with the files in it.
+     The whole selection goes when the row is in it. */
   body.addEventListener("dragstart", (e) => {
     const tr = e.target.closest && e.target.closest("tr");
     const p = pathOf(tr);
-    if (!p || !e.dataTransfer) return;
+    if (!p) return;
+    e.preventDefault();
     const paths = SEL.size > 1 && SEL.has(p) ? [...SEL.keys()] : [p];
-    const uri = (x) => "file://" + x.split("/").map(encodeURIComponent).join("/");
-    e.dataTransfer.effectAllowed = "copyMove";
-    e.dataTransfer.setData("text/uri-list", paths.map(uri).join("\r\n"));
-    e.dataTransfer.setData("text/plain", paths.join("\n"));
+    SERVICE.drag(paths)
+      .then((r) => { if (r.error) flash(T("Could not open the drag window: {e}", { e: r.error })); })
+      .catch((err) => flash(String(err.message || err)));
   });
 
   /* The right-click menu. Built per press from `MENU`. */
@@ -4789,6 +4802,15 @@
         return;
       }
 
+      case "drag": {
+        try {
+          const r = await SERVICE.drag(picked);
+          if (r.error) flash(T("Could not open the drag window: {e}", { e: r.error }));
+        } catch (err) {
+          flash(String(err.message || err));
+        }
+        return;
+      }
       case "csv": {
         const b = document.getElementById("csv");
         if (b) b.click();

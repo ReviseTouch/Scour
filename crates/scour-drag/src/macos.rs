@@ -25,6 +25,7 @@ use crate::Refused;
 pub(crate) struct Mac {
     view: Retained<NSView>,
     busy: Rc<Cell<bool>>,
+    dropped: Rc<Cell<bool>>,
     /// Kept while a session lives: AppKit holds its source weakly.
     source: Option<Retained<Source>>,
 }
@@ -39,6 +40,7 @@ impl std::fmt::Debug for Mac {
 
 struct Ivars {
     busy: Rc<Cell<bool>>,
+    dropped: Rc<Cell<bool>>,
 }
 
 define_class!(
@@ -63,15 +65,16 @@ define_class!(
         }
 
         #[unsafe(method(draggingSession:endedAtPoint:operation:))]
-        fn ended(&self, _session: &NSDraggingSession, _at: NSPoint, _op: NSDragOperation) {
+        fn ended(&self, _session: &NSDraggingSession, _at: NSPoint, op: NSDragOperation) {
+            self.ivars().dropped.set(op != NSDragOperation::None);
             self.ivars().busy.set(false);
         }
     }
 );
 
 impl Source {
-    fn new(mtm: MainThreadMarker, busy: Rc<Cell<bool>>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { busy });
+    fn new(mtm: MainThreadMarker, busy: Rc<Cell<bool>>, dropped: Rc<Cell<bool>>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { busy, dropped });
         // SAFETY: NSObject's designated initialiser.
         unsafe { msg_send![super(this), init] }
     }
@@ -87,6 +90,7 @@ impl Mac {
         Some(Mac {
             view: view.retain(),
             busy: Rc::default(),
+            dropped: Rc::default(),
             source: None,
         })
     }
@@ -117,8 +121,9 @@ impl Mac {
                 item
             })
             .collect();
-        let source = Source::new(mtm, Rc::clone(&self.busy));
+        let source = Source::new(mtm, Rc::clone(&self.busy), Rc::clone(&self.dropped));
         self.busy.set(true);
+        self.dropped.set(false);
         let _session = self.view.beginDraggingSessionWithItems_event_source(
             &NSArray::from_retained_slice(&items),
             &event,
@@ -130,5 +135,9 @@ impl Mac {
 
     pub fn dragging(&self) -> bool {
         self.busy.get()
+    }
+
+    pub fn dropped(&self) -> bool {
+        self.dropped.get()
     }
 }
