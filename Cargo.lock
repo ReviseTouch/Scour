@@ -5058,6 +5058,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "scour-drag"
+version = "0.2.0-alpha.11"
+dependencies = [
+ "wayland-backend",
+ "wayland-client",
+]
+
+[[package]]
 name = "scour-dupes"
 version = "0.2.0-alpha.11"
 
@@ -5096,6 +5104,7 @@ dependencies = [
  "scour-clip",
  "scour-config",
  "scour-core",
+ "scour-drag",
  "scour-hotkey",
  "scour-i18n",
  "scour-icon",

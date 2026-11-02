@@ -1431,6 +1431,10 @@ export component MainWindow inherits Window {
     /// A row was picked: which, whether to add to the selection, and whether
     /// to take the run from the last one picked.
     callback pick(int, bool, bool);
+    /// A row pulled far enough to be a drag: the row, and where the pointer is.
+    callback drag-out(int, length, length);
+    /// Set when a press has become a drag, until the press ends.
+    in-out property <bool> dragging-out;
     callback pick-copied();
     callback pick-opened();
     callback pick-dropped();
@@ -3199,9 +3203,23 @@ export component MainWindow inherits Window {
                                     root.selected = i;
                                     root.opened-at(i, self.mouse-x);
                                 }
+                                // Eight pixels from the press: past a click's wobble,
+                                // short of anything a hand means as a selection.
+                                moved => {
+                                    if (!root.dragging-out
+                                        && (abs(self.mouse-x - self.pressed-x) > 8px
+                                            || abs(self.mouse-y - self.pressed-y) > 8px)) {
+                                        root.dragging-out = true;
+                                        root.drag-out(i, self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
                                 // A press, not a click: a click carries no modifiers
                                 // here, and `Ctrl` and `Shift` change what it means.
                                 pointer-event(e) => {
+                                    if (e.kind == PointerEventKind.up) {
+                                        root.dragging-out = false;
+                                    }
                                     if (e.kind == PointerEventKind.down
                                         && e.button == PointerEventButton.left) {
                                         root.selected = i;
@@ -3396,7 +3414,20 @@ export component MainWindow inherits Window {
                                         root.selected = i * root.per-line + c;
                                         root.activated(root.selected);
                                     }
+                                    moved => {
+                                        if (!root.dragging-out
+                                            && (abs(self.mouse-x - self.pressed-x) > 8px
+                                                || abs(self.mouse-y - self.pressed-y) > 8px)) {
+                                            root.dragging-out = true;
+                                            root.drag-out(i * root.per-line + c,
+                                                self.absolute-position.x + self.mouse-x,
+                                                self.absolute-position.y + self.mouse-y);
+                                        }
+                                    }
                                     pointer-event(e) => {
+                                        if (e.kind == PointerEventKind.up) {
+                                            root.dragging-out = false;
+                                        }
                                         if (e.kind != PointerEventKind.down) {
                                             return;
                                         }

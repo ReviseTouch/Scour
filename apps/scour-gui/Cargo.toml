@@ -67,6 +67,7 @@ scour-places   = { workspace = true }
 # each is a subprocess rather than a binding.
 scour-trash    = { workspace = true }
 scour-clip     = { workspace = true }
+scour-drag     = { workspace = true }
 # The desktop's key that opens Scour: gsettings on GNOME, kwriteconfig on KDE,
 # and a command to bind by hand anywhere else. Every call spawns a process, so
 # the window makes them on a thread of its own.

@@ -15,6 +15,7 @@ members = [
     "crates/scour-dupes",
     "crates/scour-trash",
     "crates/scour-clip",
+    "crates/scour-drag",
     "crates/scour-name",
     "crates/scour-openers",
     "crates/scour-sendto",
@@ -73,6 +74,7 @@ scour-preview       = { path = "crates/scour-preview" }
 scour-dupes         = { path = "crates/scour-dupes" }
 scour-trash         = { path = "crates/scour-trash" }
 scour-clip           = { path = "crates/scour-clip" }
+scour-drag           = { path = "crates/scour-drag" }
 scour-name           = { path = "crates/scour-name" }
 scour-openers        = { path = "crates/scour-openers" }
 scour-sendto         = { path = "crates/scour-sendto" }

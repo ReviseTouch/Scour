@@ -1,0 +1,22 @@
+[package]
+name        = "scour-drag"
+description = "Dragging files out of a window into another program."
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+publish.workspace      = true
+
+[lints]
+workspace = true
+
+# **The display server's own drag, and nothing of Scour's.** A toolkit that
+# cannot start a drag outside its window is handed one: on Wayland through
+# the window's own connection, with a queue of this crate's. `wayland-client`
+# and `wayland-backend` are already in the tree for the toolkit's clipboard.
+[dependencies]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client  = "0.31"
+wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }

@@ -9,6 +9,7 @@
 
 mod autostart;
 mod disks;
+mod drag;
 mod hotkey;
 mod install;
 mod link;
@@ -1806,6 +1807,30 @@ fn main() -> Result<()> {
         });
     }
 
+    // A row pulled out of the window: the selection when the row is in it,
+    // otherwise the row alone — what a file manager does.
+    {
+        let rows = Rc::clone(&rows);
+        let picks = Rc::clone(&picks);
+        let weak = window.as_weak();
+        window.on_drag_out(move |row, x, y| {
+            let Some(w) = weak.upgrade() else { return };
+            let row = usize::try_from(row).unwrap_or(0);
+            let paths: Vec<String> = {
+                let picks = picks.borrow();
+                if picks.len() > 1 && picks.contains_key(&row) {
+                    picks.values().map(|p| p.path.clone()).collect()
+                } else {
+                    rows.what_at(row).map(|(p, _, _)| p).into_iter().collect()
+                }
+            };
+            trace(&format!("drag-out row {row}: {} path(s)", paths.len()));
+            if !paths.is_empty() {
+                drag::files(&w, &paths, x, y);
+            }
+        });
+    }
+
     // What a pending question is about. **The paths are taken when the menu is
     // pressed**: a watched index can move a row out from under a selection.
     let pending: Rc<RefCell<Option<(String, Vec<String>)>>> = Rc::new(RefCell::new(None));
@@ -2987,6 +3012,7 @@ fn main() -> Result<()> {
                 apply_zoom(&w);
                 // A scale change takes the focus with it.
                 w.invoke_focus_query();
+                drag::prepare(&w);
             }
         });
     }
