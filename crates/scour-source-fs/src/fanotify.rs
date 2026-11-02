@@ -67,6 +67,92 @@ struct DirKey {
     ino: u64,
 }
 
+/// Which filesystem a directory is on and, on btrfs, which subvolume: what an
+/// event says about its parent beside the inode, and what a device is asked
+/// once. **An inode number alone names nothing**: here 2.6% of the NTFS
+/// volume's directories and 2.7% of `/`'s share one with a directory in the
+/// home folder, and every btrfs subvolume's root is 256. An event offered by
+/// number alone went to whichever map knew that number first — the wrong
+/// path, a `stat` that failed, and the real change missed until the daily check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct FsTag {
+    /// `__kernel_fsid_t`, as the event and `statfs` both give it.
+    fsid: [u32; 2],
+    /// The subvolume, from a btrfs handle; `None` on every other filesystem.
+    root: Option<u64>,
+}
+
+impl FsTag {
+    /// Whether an event with tag `event` can be about a directory on this one.
+    /// btrfs mixes the subvolume into the low half of `statfs`'s fsid, and which
+    /// subvolume's fsid an event carries depends on the path the helper marked —
+    /// measured: `@tmp` `d30e8e93:6f61cd83`, `@home` `d30e8e93:6f61cd87`. So on
+    /// btrfs the high half names the filesystem and the handle the subvolume.
+    /// An event with no fsid — a test's — goes anywhere, as every event used to.
+    fn holds(&self, event: &FsTag) -> bool {
+        if event.fsid == [0, 0] {
+            return true;
+        }
+        match (self.root, event.root) {
+            (Some(mine), Some(theirs)) => mine == theirs && self.fsid[0] == event.fsid[0],
+            (None, None) => self.fsid == event.fsid,
+            _ => false,
+        }
+    }
+
+    /// Ask the directory at `path`: `statfs` for the fsid, its own handle for the
+    /// subvolume. `None` when either cannot be had, which matches any event.
+    fn of(path: &str) -> Option<FsTag> {
+        let c = std::ffi::CString::new(path).ok()?;
+        // SAFETY: a zeroed `statfs` is valid to write into, and `c` outlives the call.
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return None;
+        }
+        // SAFETY: `fsid_t` is two `c_int`s with a private name; same size and layout.
+        let fsid: [i32; 2] = unsafe { std::mem::transmute(st.f_fsid) };
+        // `struct file_handle`: bytes u32, type i32, then the handle. As u32s, so
+        // the header is aligned.
+        let mut raw = [0u32; 2 + 32];
+        raw[0] = 128;
+        let mut mount_id: libc::c_int = 0;
+        // SAFETY: `raw` is a `file_handle` header with room for the 128 bytes it
+        // declares; `c` and `mount_id` outlive the call.
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_name_to_handle_at,
+                libc::AT_FDCWD,
+                c.as_ptr(),
+                raw.as_mut_ptr(),
+                &mut mount_id as *mut libc::c_int,
+                0,
+            )
+        };
+        if rc != 0 {
+            return None;
+        }
+        let kind = raw[1] as i32;
+        let len = (raw[0] as usize).min(128);
+        let bytes: Vec<u8> = raw[2..]
+            .iter()
+            .flat_map(|w| w.to_ne_bytes())
+            .take(len)
+            .collect();
+        Some(FsTag {
+            fsid: [fsid[0] as u32, fsid[1] as u32],
+            root: btrfs_root(kind, &bytes),
+        })
+    }
+}
+
+/// The subvolume a btrfs handle names: `u64` at 8, after the inode.
+fn btrfs_root(fh_type: i32, bytes: &[u8]) -> Option<u64> {
+    match (fh_type, bytes.len()) {
+        (0x4d..=0x4f, 20..) => Some(u64::from_le_bytes(bytes.get(8..16)?.try_into().ok()?)),
+        _ => None,
+    }
+}
+
 /// One name in [`NameArena`]. The field order keeps this at eight bytes: a
 /// component is at most `NAME_MAX`, a chunk one MiB, both far below `u16::MAX`.
 #[derive(Debug, Clone, Copy)]
@@ -273,9 +359,11 @@ struct DirMap {
     /// [`DirMap::path_of`]: that would name a path no scan of this source produces.
     outside: HashMap<DirKey, u32>,
     /// Device candidates an event's inode is looked up against.
-    /// The event gives an inode but no device — btrfs reports the superblock's fsid
-    /// whatever subvolume it came from — so the inode is offered to each in turn.
+    /// The event gives an inode and an [`FsTag`] but no device number, so the
+    /// inode is offered to each device whose tag says it can be there.
     devices: Vec<u64>,
+    /// Beside `devices`, one each: asked once, when the device is first met.
+    tags: Vec<Option<FsTag>>,
 }
 
 /// How many directories a walker thread gathers before handing them over.
@@ -436,6 +524,7 @@ impl DirMap {
     fn insert_key(&mut self, key: DirKey, parent: Option<DirKey>, path: &str) {
         if !self.devices.contains(&key.dev) {
             self.devices.push(key.dev);
+            self.tags.push(FsTag::of(path));
         }
         // A directory that is its own parent would be a chain that never reaches a root:
         // every event below it unresolvable, with only the depth cap before a spin.
@@ -518,18 +607,20 @@ impl DirMap {
     /// The path of the directory this inode names, written into `out`.
     /// The caller's buffer, because there is no path anywhere to borrow. False leaves
     /// `out` empty: a chain that misses a component names a different file.
-    fn path_of(&self, ino: u64, out: &mut String) -> bool {
+    fn path_of(&self, ino: u64, tag: &FsTag, out: &mut String) -> bool {
         out.clear();
-        let Some(id) = self.node_of(ino) else {
+        let Some(id) = self.node_of(ino, tag) else {
             return false;
         };
         self.write_path(id, out)
     }
 
-    fn node_of(&self, ino: u64) -> Option<u32> {
+    fn node_of(&self, ino: u64, tag: &FsTag) -> Option<u32> {
         self.devices
             .iter()
-            .find_map(|&dev| self.by_key.get(&DirKey { dev, ino }).copied())
+            .zip(&self.tags)
+            .filter(|(_, mine)| mine.is_none_or(|m| m.holds(tag)))
+            .find_map(|(&dev, _)| self.by_key.get(&DirKey { dev, ino }).copied())
     }
 
     /// Every component of this node's path, root first — names rather than node
@@ -646,6 +737,8 @@ fn mountinfo() -> Option<std::fs::File> {
 /// whether the entry might be new.
 struct Seen {
     parent_ino: u64,
+    /// Where the parent is: an inode number means nothing without it.
+    parent_fs: FsTag,
     name: String,
     fresh: bool,
     is_dir: bool,
@@ -728,6 +821,12 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
                     if body + hb <= p + info_len
                         && let Some(ino) = handle_ino(ht, &buf[body..body + hb])
                     {
+                        let half =
+                            |at: usize| u32::from_le_bytes(buf[at..at + 4].try_into().unwrap());
+                        let parent_fs = FsTag {
+                            fsid: [half(p + 4), half(p + 8)],
+                            root: btrfs_root(ht, &buf[body..body + hb]),
+                        };
                         let tail = &buf[body + hb..p + info_len];
                         let n = tail.iter().position(|&c| c == 0).unwrap_or(tail.len());
                         if n > 0
@@ -735,6 +834,7 @@ fn parse(buf: &[u8], out: &mut Vec<Seen>) -> bool {
                         {
                             out.push(Seen {
                                 parent_ino: ino,
+                                parent_fs,
                                 name: name.to_owned(),
                                 fresh: mask & (FAN_CREATE | FAN_MOVED_TO) != 0,
                                 is_dir: mask & FAN_ONDIR != 0,
@@ -1145,7 +1245,9 @@ fn window(seen: &mut Vec<Seen>, lost: bool, dir: &mut String) -> bool {
                     if !s.live.load(Ordering::Relaxed) {
                         return None;
                     }
-                    s.map.path_of(ev.parent_ino, dir).then_some(i)
+                    s.map
+                        .path_of(ev.parent_ino, &ev.parent_fs, dir)
+                        .then_some(i)
                 }) else {
                     continue;
                 };
@@ -1343,6 +1445,7 @@ mod tests {
             });
             let event = |name: &str, fresh: bool, is_dir: bool| Seen {
                 parent_ino: ino,
+                parent_fs: FsTag::default(),
                 name: name.into(),
                 fresh,
                 is_dir,
@@ -1519,7 +1622,7 @@ mod tests {
     /// buffer for the life of its thread.
     fn resolved(map: &DirMap, ino: u64) -> Option<String> {
         let mut out = String::new();
-        map.path_of(ino, &mut out).then_some(out)
+        map.path_of(ino, &FsTag::default(), &mut out).then_some(out)
     }
 
     /// The full-path arena this replaced, kept as the explicit control.
@@ -1909,6 +2012,132 @@ mod tests {
         assert_eq!(seen[0].parent_ino, 4242);
         assert_eq!(seen[0].name, "rapor.pdf");
         assert!(seen[0].fresh, "FAN_CREATE means the entry may be new");
+    }
+
+    /// The fsid is read from the record, and a btrfs handle gives its subvolume:
+    /// the handle the probe above caught in `@tmp`, subvolume 261.
+    #[test]
+    fn an_event_says_which_filesystem_and_subvolume_it_is_from() {
+        let mut e = event(0, "x");
+        // fsid as the kernel wrote it for `@tmp` here.
+        e[28..32].copy_from_slice(&0xd30e_8e93u32.to_le_bytes());
+        e[32..36].copy_from_slice(&0x6f61_cd83u32.to_le_bytes());
+        let handle: [u8; 20] = [
+            0, 1, 0, 0, 0, 0, 0, 0, 5, 1, 0, 0, 0, 0, 0, 0, 0x0b, 0, 0, 0,
+        ];
+        let mut b = e[..24 + 12].to_vec();
+        b.extend_from_slice(&20u32.to_le_bytes());
+        b.extend_from_slice(&0x4di32.to_le_bytes());
+        b.extend_from_slice(&handle);
+        b.extend_from_slice(b"x\0");
+        let info_len = (b.len() - 24) as u16;
+        b[26..28].copy_from_slice(&info_len.to_le_bytes());
+        let total = b.len() as u32;
+        b[0..4].copy_from_slice(&total.to_le_bytes());
+        let mut seen = Vec::new();
+        assert!(parse(&b, &mut seen));
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].parent_ino, 256);
+        assert_eq!(
+            seen[0].parent_fs,
+            FsTag {
+                fsid: [0xd30e_8e93, 0x6f61_cd83],
+                root: Some(261)
+            }
+        );
+    }
+
+    /// The rule, on the numbers measured here: btrfs folds the subvolume into
+    /// the fsid's low half, so `@home`'s directory takes an event whose fsid is
+    /// `@tmp`'s as long as the handle names `@home`; another filesystem does not.
+    #[test]
+    fn a_directory_takes_only_events_from_where_it_is() {
+        let home = FsTag {
+            fsid: [0xd30e_8e93, 0x6f61_cd87],
+            root: Some(257),
+        };
+        let ev = |root: u64| FsTag {
+            fsid: [0xd30e_8e93, 0x6f61_cd83],
+            root: Some(root),
+        };
+        assert!(home.holds(&ev(257)));
+        assert!(!home.holds(&ev(261)), "another subvolume");
+        let other_btrfs = FsTag {
+            fsid: [0x1234_5678, 0x6f61_cd87],
+            root: Some(257),
+        };
+        assert!(
+            !other_btrfs.holds(&ev(257)),
+            "another btrfs with a subvolume 257"
+        );
+        let ntfs = FsTag {
+            fsid: [0x5a34_36bf, 0x225a_3464],
+            root: None,
+        };
+        assert!(ntfs.holds(&FsTag {
+            fsid: ntfs.fsid,
+            root: None
+        }));
+        assert!(!ntfs.holds(&ev(257)));
+        assert!(!home.holds(&FsTag {
+            fsid: ntfs.fsid,
+            root: None
+        }));
+        assert!(
+            ntfs.holds(&FsTag::default()),
+            "an event without an fsid goes anywhere"
+        );
+    }
+
+    /// Two directories with one inode number on two filesystems: an event goes
+    /// to the one its filesystem names, whichever was learned first. Before, the
+    /// first learned took it.
+    #[test]
+    fn one_inode_number_on_two_filesystems_is_two_directories() {
+        let mut map = DirMap::default();
+        map.insert_key(
+            DirKey {
+                dev: 1,
+                ino: 146_968,
+            },
+            None,
+            "/home/u/server",
+        );
+        map.insert_key(
+            DirKey {
+                dev: 2,
+                ino: 146_968,
+            },
+            None,
+            "/mnt/depo/cli",
+        );
+        let home = FsTag {
+            fsid: [0xd30e_8e93, 0x6f61_cd87],
+            root: Some(257),
+        };
+        let depo = FsTag {
+            fsid: [0x5a34_36bf, 0x225a_3464],
+            root: None,
+        };
+        map.tags = vec![Some(home), Some(depo)];
+        let mut out = String::new();
+        assert!(map.path_of(146_968, &depo, &mut out));
+        assert_eq!(out, "/mnt/depo/cli");
+        assert!(map.path_of(146_968, &home, &mut out));
+        assert_eq!(out, "/home/u/server");
+        let elsewhere = FsTag {
+            fsid: [1, 2],
+            root: None,
+        };
+        assert!(!map.path_of(146_968, &elsewhere, &mut out), "known nowhere");
+    }
+
+    /// A real directory answers both questions: what `of` asks the kernel works.
+    #[test]
+    fn a_directory_can_be_asked_where_it_is() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let tag = FsTag::of(&path::from_path(tmp.path())).expect("statfs and a handle");
+        assert_ne!(tag.fsid, [0, 0]);
     }
 
     #[test]
@@ -2436,7 +2665,7 @@ mod tests {
             for (map, inos) in maps.iter().zip(&order) {
                 for &ino in inos {
                     let mut fresh = String::new();
-                    if map.path_of(ino, &mut fresh) {
+                    if map.path_of(ino, &FsTag::default(), &mut fresh) {
                         sink += std::hint::black_box(fresh).len();
                     }
                 }
@@ -2446,7 +2675,7 @@ mod tests {
             let began = Instant::now();
             for (map, inos) in maps.iter().zip(&order) {
                 for &ino in inos {
-                    if map.path_of(ino, &mut buffer) {
+                    if map.path_of(ino, &FsTag::default(), &mut buffer) {
                         sink += buffer.len();
                     }
                 }
