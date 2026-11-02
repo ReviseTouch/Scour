@@ -816,14 +816,41 @@ pub fn runs_when_opened(name: &str, mode: i64) -> bool {
     if kind_of(false, name, mode) == Kind::Exec {
         return true;
     }
+    let ext = crate::text::DefaultFolder::of(ext_str(name));
     matches!(
-        crate::text::DefaultFolder::of(ext_str(name)).as_str(),
+        ext.as_str(),
         // Executed by the desktop, or by the shell it hands them to.
         "desktop" | "sh" | "bash" | "zsh" | "ksh" | "fish" | "ps1"
         // Windows, where there is no bit to ask about.
         | "scr" | "lnk" | "vbs" | "wsf" | "jar"
-    )
+    ) || (cfg!(windows) && WINDOWS_RUNS.contains(&ext.as_str()))
 }
+
+/// What Windows runs on a double-click and a Linux desktop opens in an editor:
+/// Script Host's own (`js` `jse` `vbe` `wsh`), `mshta`'s `hta`, a control
+/// panel item, a snap-in, a registry merge, an internet shortcut, a ClickOnce
+/// application, an old program information file and an Explorer command.
+/// Only there: on Linux a `.js` is somebody's code and opening it is reading it.
+const WINDOWS_RUNS: &[&str] = &[
+    "js",
+    "jse",
+    "vbe",
+    "wsh",
+    "hta",
+    "cpl",
+    "msc",
+    "reg",
+    "url",
+    "application",
+    "appref-ms",
+    "pif",
+    "scf",
+    "inf",
+    "msix",
+    "appx",
+    "msixbundle",
+    "appxbundle",
+];
 
 /// Which of the two id tables to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1034,6 +1061,10 @@ mod tests {
         for name in ["setup.sh", "start.desktop", "build.ps1", "thing.lnk"] {
             assert_ne!(kind_of(false, name, 0o644), Kind::Exec, "{name}");
             assert!(runs_when_opened(name, 0o644), "{name}");
+        }
+        // Run by Windows on a double-click, read on Linux.
+        for name in ["fatura.js", "a.hta", "a.vbe", "ayar.reg", "kisayol.url"] {
+            assert_eq!(runs_when_opened(name, 0o644), cfg!(windows), "{name}");
         }
     }
 
