@@ -841,8 +841,10 @@ struct Sub {
     /// What [`walk_threads`] answered when the map was built, kept so that rebuilding
     /// it in [`WatchHandle::retune`] need not ask an `FsSource` out of reach.
     threads: usize,
-    /// Cleared when the handle is dropped; the entry stays, because an index has to
-    /// keep meaning what it meant.
+    /// Cleared when the handle is dropped, and the entry taken out with it. Also
+    /// what a handle finds its own entry by: a source keeps its id across an
+    /// engine swap, so after one there were two entries under it, and `cover`
+    /// and `retune` found the first — the dead one.
     live: Arc<AtomicBool>,
     uncovered: Arc<Mutex<Vec<String>>>,
 }
@@ -863,8 +865,10 @@ impl std::fmt::Debug for Sub {
 
 #[derive(Debug)]
 struct FanWatch {
-    /// Which subscription in [`SUBS`] is this one's, for [`WatchHandle::retune`].
+    /// Which source this is, for the record; the entry is found by `live`.
+    #[allow(dead_code)]
     id: SourceId,
+    /// Shared with this handle's entry in [`SUBS`], and how it is found there.
     live: Arc<AtomicBool>,
     /// Filesystems that appeared after the marks were set: not covered, and not
     /// coverable from here, so they are named for the layer above to report.
@@ -887,7 +891,7 @@ impl WatchHandle for FanWatch {
     fn cover(&self, path: &str) {
         let Some(rules) = SUBS.lock().ok().and_then(|subs| {
             subs.iter()
-                .find(|s| s.id == self.id)
+                .find(|s| self.owns(s))
                 .map(|s| Arc::clone(&s.rules))
         }) else {
             return;
@@ -897,7 +901,7 @@ impl WatchHandle for FanWatch {
             return;
         }
         if let Ok(mut subs) = SUBS.lock()
-            && let Some(s) = subs.iter_mut().find(|s| s.id == self.id)
+            && let Some(s) = subs.iter_mut().find(|s| self.owns(s))
         {
             for (key, parent, at) in &found {
                 s.map.insert_key(*key, *parent, at);
@@ -912,14 +916,14 @@ impl WatchHandle for FanWatch {
         let rules = Arc::new(Rules::from_options(opts));
         let Some((roots, threads)) = SUBS.lock().ok().and_then(|subs| {
             subs.iter()
-                .find(|s| s.id == self.id)
+                .find(|s| self.owns(s))
                 .map(|s| (s.roots.clone(), s.threads))
         }) else {
             return;
         };
         let map = DirMap::build(&roots, &rules, threads);
         if let Ok(mut subs) = SUBS.lock()
-            && let Some(s) = subs.iter_mut().find(|s| s.id == self.id)
+            && let Some(s) = subs.iter_mut().find(|s| self.owns(s))
         {
             s.rules = rules;
             s.map = map;
@@ -927,15 +931,31 @@ impl WatchHandle for FanWatch {
     }
 
     /// Leave the reader running: it serves every source, so one stopping is no reason
-    /// to take it down. The subscription goes quiet and the thread stays.
+    /// to take it down. The subscription goes, and the thread stays.
     fn stop(self: Box<Self>) {
+        self.leave();
+    }
+}
+
+impl FanWatch {
+    fn owns(&self, sub: &Sub) -> bool {
+        Arc::ptr_eq(&sub.live, &self.live)
+    }
+
+    /// Go quiet and take this entry out, map and all: a swapped-out engine's
+    /// entry held a whole source's directory map, tens of megabytes, for good.
+    /// The reader uses positions in [`SUBS`] only while it holds the lock.
+    fn leave(&self) {
         self.live.store(false, Ordering::Relaxed);
+        if let Ok(mut subs) = SUBS.lock() {
+            subs.retain(|s| !self.owns(s));
+        }
     }
 }
 
 impl Drop for FanWatch {
     fn drop(&mut self) {
-        self.live.store(false, Ordering::Relaxed);
+        self.leave();
     }
 }
 
@@ -1341,6 +1361,64 @@ mod tests {
             probe.locked.load(Ordering::Relaxed),
             0,
             "sent with the lock held"
+        );
+    }
+
+    /// After an engine swap a source has a new subscription under the same id.
+    /// The new handle must teach its own map, and the old one must leave: the
+    /// old entry used to stay, and `cover` and `retune` found it first.
+    #[test]
+    fn a_swapped_source_teaches_its_own_map_and_the_old_one_leaves() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("kok");
+        std::fs::create_dir_all(root.join("a/b")).expect("mkdir");
+        #[derive(Debug)]
+        struct Quiet;
+        impl ChangeSink for Quiet {
+            fn emit(&self, _change: Change) {}
+        }
+        let id = SourceId(4343);
+        let sub = |live: &Arc<AtomicBool>| Sub {
+            id,
+            real_modes: true,
+            rules: Arc::new(Rules::from_options(&ScanOptions::default())),
+            sink: Arc::new(Quiet),
+            roots: vec![root.clone()],
+            map: DirMap::default(),
+            threads: 1,
+            live: Arc::clone(live),
+            uncovered: Arc::default(),
+        };
+        let old_live = Arc::new(AtomicBool::new(true));
+        let new_live = Arc::new(AtomicBool::new(true));
+        SUBS.lock().expect("subs").push(sub(&old_live));
+        SUBS.lock().expect("subs").push(sub(&new_live));
+        let old = FanWatch {
+            id,
+            live: old_live,
+            uncovered: Arc::default(),
+        };
+        let new = FanWatch {
+            id,
+            live: new_live,
+            uncovered: Arc::default(),
+        };
+        Box::new(old).stop();
+        new.cover(&path::from_path(&root));
+        let (entries, learned) = {
+            let subs = SUBS.lock().expect("subs");
+            let mine: Vec<_> = subs.iter().filter(|s| s.id == id).collect();
+            (
+                mine.len(),
+                mine.first().map(|s| s.map.by_key.len()).unwrap_or(0),
+            )
+        };
+        drop(new);
+        assert_eq!(entries, 1, "the stopped subscription is still there");
+        assert!(learned >= 2, "the live map learned {learned} directories");
+        assert!(
+            SUBS.lock().expect("subs").iter().all(|s| s.id != id),
+            "dropped, gone"
         );
     }
 
