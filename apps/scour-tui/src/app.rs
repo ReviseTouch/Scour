@@ -193,6 +193,9 @@ pub struct MenuLine {
     pub careful: bool,
     /// Asks before it acts — drawn dim.
     pub heavy: bool,
+    /// One of the few across the top, a word each, walked with left and right.
+    /// They come first in [`App::menu`].
+    pub strip: bool,
 }
 
 /// The whole state of the terminal.
@@ -264,6 +267,10 @@ pub struct App {
     /// The menu as it stands, built when it is opened. Held rather than rebuilt
     /// per frame: the row under it can move while it is up.
     pub menu: Vec<MenuLine>,
+    /// What the menu is about: the row's name, or how many are picked; and
+    /// where it is and what it weighs, or what the selection comes to.
+    pub menu_title: String,
+    pub menu_detail: String,
     /// What a pending question is about: the item id, and the paths it was
     /// asked about. Taken when the question is answered, whichever way.
     pub pending: Option<(String, Vec<String>)>,
@@ -388,6 +395,8 @@ impl Default for App {
                 .filter_map(|id| scour_ui::column(id))
                 .collect(),
             menu: Vec::new(),
+            menu_title: String::new(),
+            menu_detail: String::new(),
             pending: None,
             ask_title: String::new(),
             ask_typing: false,
@@ -1420,9 +1429,23 @@ impl App {
         };
         let picked = self.picked.len();
         let count = scour_ui::format::grouped(picked.max(1) as u64, self.mark().0);
+        let all: Vec<_> =
+            scour_ui::menu::items_for(picked, hit.is_dir, scour_ui::faces::Face::Terminal)
+                .collect();
         self.menu.clear();
+        for item in scour_ui::menu::strip(&all) {
+            self.menu.push(MenuLine {
+                id: item.id.to_string(),
+                label: self.say(item.short).into_owned(),
+                key: item.key.to_string(),
+                rule: false,
+                careful: item.weight == scour_ui::menu::Weight::Careful,
+                heavy: false,
+                strip: true,
+            });
+        }
         let mut last: Option<u8> = None;
-        for item in scour_ui::menu::items_for(picked, hit.is_dir, scour_ui::faces::Face::Terminal) {
+        for item in scour_ui::menu::list(&all) {
             self.menu.push(MenuLine {
                 id: item.id.to_string(),
                 label: self.say(item.msgid).replace("{n}", &count),
@@ -1430,13 +1453,83 @@ impl App {
                 rule: last.is_some_and(|l| l != item.group),
                 careful: item.weight == scour_ui::menu::Weight::Careful,
                 heavy: item.weight == scour_ui::menu::Weight::Heavy,
+                strip: false,
             });
             last = Some(item.group);
         }
+        let decimal = self.mark().1;
+        if picked > 1 {
+            let dirs = self.picked.keys().filter(|p| self.is_dir_picked(p)).count();
+            let files = picked - dirs;
+            let bytes: i64 = self.picked.values().map(|b| (*b).max(0)).sum();
+            let mark = self.mark().0;
+            let mut said = Vec::new();
+            if files > 0 {
+                said.push(
+                    self.say("{n} files")
+                        .replace("{n}", &scour_ui::format::grouped(files as u64, mark)),
+                );
+            }
+            if dirs > 0 {
+                said.push(
+                    self.say("{n} folders")
+                        .replace("{n}", &scour_ui::format::grouped(dirs as u64, mark)),
+                );
+            }
+            if files > 0 {
+                said.push(scour_ui::format::size(bytes as u64, decimal));
+            }
+            self.menu_title = self.say("{n} selected").replace("{n}", &count);
+            self.menu_detail = said.join(" · ");
+        } else {
+            let folder = scour_ui::path::folder(&hit.path);
+            let folder = match std::env::var("HOME") {
+                Ok(home)
+                    if !home.is_empty()
+                        && (folder == home || folder.starts_with(&format!("{home}/"))) =>
+                {
+                    format!("~{}", &folder[home.len()..])
+                }
+                _ => folder.to_string(),
+            };
+            self.menu_title = hit.name().to_string();
+            self.menu_detail = if hit.is_dir {
+                folder
+            } else {
+                format!(
+                    "{folder} · {}",
+                    scour_ui::format::size(hit.meta.size.max(0) as u64, decimal)
+                )
+            };
+        }
         self.panel = Panel::Menu;
-        self.panel_at = 0;
+        // On the list's first item, which opens: Enter means what it always did.
+        self.panel_at = self.strip_len();
         self.note.clear();
         self.dirty = true;
+    }
+
+    /// How many of the menu's items sit in the strip across its top.
+    pub fn strip_len(&self) -> usize {
+        self.menu.iter().take_while(|m| m.strip).count()
+    }
+
+    /// Whether a picked path is a folder: the selection keeps sizes, and a
+    /// folder's is zero by how it was picked.
+    fn is_dir_picked(&self, path: &str) -> bool {
+        self.picked.get(path).is_some_and(|b| *b == 0)
+            && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+    }
+
+    /// Left and right in the menu's strip; nothing elsewhere.
+    pub fn panel_side(&mut self, by: isize) -> bool {
+        let strip = self.strip_len();
+        if self.panel != Panel::Menu || self.panel_at >= strip || strip == 0 {
+            return false;
+        }
+        self.panel_at = self.panel_at.saturating_add_signed(by).min(strip - 1);
+        self.dirty = true;
+        true
     }
 
     /// What a drag from this row carries: the selection when the row is in
@@ -1844,6 +1937,29 @@ impl App {
     pub fn panel_walk(&mut self, by: isize) {
         let lines = self.panel_lines();
         if lines == 0 {
+            return;
+        }
+        // The strip is one row: down leaves it for the list, up from the
+        // list's first item enters it at its start.
+        let strip = if self.panel == Panel::Menu {
+            self.strip_len()
+        } else {
+            0
+        };
+        if strip > 0 {
+            if self.panel_at < strip {
+                if by > 0 {
+                    self.panel_at = strip.min(lines - 1);
+                }
+            } else if self.panel_at == strip && by < 0 {
+                self.panel_at = 0;
+            } else {
+                self.panel_at = self
+                    .panel_at
+                    .saturating_add_signed(by)
+                    .clamp(strip, lines - 1);
+            }
+            self.dirty = true;
             return;
         }
         self.panel_at = self

@@ -567,12 +567,15 @@ fn named(name: &str) -> ratatui::crossterm::event::KeyEvent {
         "enter" => KeyCode::Enter,
         "backspace" => KeyCode::Backspace,
         "esc" => KeyCode::Esc,
-        "f1" => KeyCode::F(1),
-        "f2" => KeyCode::F(2),
-        "f3" => KeyCode::F(3),
         "left" => KeyCode::Left,
         "right" => KeyCode::Right,
-        other => KeyCode::Char(other.chars().next().unwrap_or(' ')),
+        f if f.len() > 1 && f.starts_with('f') && f[1..].parse::<u8>().is_ok() => {
+            KeyCode::F(f[1..].parse().unwrap_or(1))
+        }
+        one if one.chars().count() == 1 => KeyCode::Char(one.chars().next().unwrap_or(' ')),
+        // A name it does not know is a mistake, not a letter to type: it once
+        // typed the `f` of `f3` into the query and three tries went to waste.
+        other => panic!("--press: no key called {other:?}"),
     };
     KeyEvent::new(code, mods)
 }

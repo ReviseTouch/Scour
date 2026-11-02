@@ -1279,33 +1279,76 @@
     tbody tr.fresh::after { display: none; }
   }
 
+  /* A popover: a step off the ground, a soft far shadow, 32 px rows and
+     13.5 px labels — the window's menu, measure for measure. */
   .rowmenu {
     position: fixed; z-index: 60;
-    background: var(--panel); border: 1px solid var(--line);
-    border-radius: 3px; padding: 3px;
-    box-shadow: 0 14px 36px -18px rgba(0,0,0,.8);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.45);
     display: flex; flex-direction: column; min-width: 168px;
+    /* Hung on `body`, outside the frame that sets the face. */
+    font-family: var(--sans); color: var(--ink);
   }
+  :root[data-theme="light"] .rowmenu { background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .rowmenu { background: var(--panel); box-shadow: 0 12px 32px rgba(0,0,0,.18); }
+  }
+  .rowmenu.row { width: 300px; box-sizing: border-box; }
   .rowmenu[hidden] { display: none; }
   .rowmenu button {
     background: none; border: 0; text-align: left;
-    font: inherit; font-size: 12.5px; color: var(--ink-2);
-    padding: calc(var(--u) * 1.5) calc(var(--u) * 2.5);
-    border-radius: 2px; cursor: pointer;
+    font: inherit; font-size: 13.5px; color: var(--ink);
+    height: 32px; padding: 0 12px 0 10px; flex: none;
+    border-radius: 5px; cursor: pointer;
   }
-  .rowmenu button { display: flex; align-items: center; gap: calc(var(--u) * 3); }
+  .rowmenu button { display: flex; align-items: center; gap: 10px; }
+  .rowmenu .mi { width: 16px; height: 16px; flex: none; color: var(--ink-2); display: flex; }
+  .rowmenu .mi svg { width: 16px; height: 16px; }
+  .rowmenu button:hover .mi, .rowmenu button:focus-visible .mi { color: var(--ink); }
   /* The shortcut, quieter than the label: it is there to be learned, not read. */
   .mkey {
-    margin-left: auto; font-family: var(--mono); font-size: 10.5px;
-    color: var(--ink-3); letter-spacing: .02em;
+    margin-left: auto; font-size: 12px; color: var(--ink-3);
   }
   /* A rule between groups: a hand must not reach the delete by momentum. */
-  .mline { height: 1px; background: var(--line); margin: 3px calc(var(--u) * 1.5); }
-  /* Reversible, but it changes something. */
-  .rowmenu button.w-careful { color: var(--danger); }
-  .rowmenu button.w-careful:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .mline { height: 1px; background: var(--line); margin: 4px 8px; flex: none; }
+  /* What the menu is about: the row's name, where it is, what it weighs. */
+  .mhead { display: flex; align-items: center; gap: 10px; padding: 6px 10px 10px; min-width: 0; }
+  .mhead .mk {
+    width: 28px; height: 28px; border-radius: 6px; flex: none;
+    background: var(--line); display: flex; align-items: center; justify-content: center;
+  }
+  .mhead .mk .ico {
+    display: block; width: 18px; height: 18px;
+    background-color: var(--k, var(--ink-3));
+    -webkit-mask: var(--g) center / 18px 18px no-repeat;
+    mask: var(--g) center / 18px 18px no-repeat;
+  }
+  .mhead .mk .mi { width: 18px; height: 18px; color: var(--q-key); }
+  .mhead .mk .mi svg { width: 18px; height: 18px; }
+  .mhead .mt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mhead b { font-size: 13.5px; font-weight: 600; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mhead small { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The strip: the few wanted most, a word each under a drawing. */
+  .mstrip { display: flex; gap: 2px; padding-bottom: 4px; }
+  .rowmenu .mstrip button {
+    flex: 1 1 0; min-width: 0; height: 56px; padding: 0 2px;
+    flex-direction: column; justify-content: center; gap: 5px;
+    font-size: 11.5px; color: var(--ink-2); text-align: center;
+  }
+  .rowmenu .mstrip button .mi { width: 18px; height: 18px; }
+  .rowmenu .mstrip button .mi svg { width: 18px; height: 18px; }
+  .rowmenu .mstrip button:hover, .rowmenu .mstrip button:focus-visible { color: var(--ink); }
+  /* Reversible, but it changes something: red only under the pointer. */
+  .rowmenu button.w-careful:hover, .rowmenu button.w-careful:focus-visible,
+  .rowmenu button.w-careful:hover .mi, .rowmenu button.w-careful:focus-visible .mi { color: var(--danger); }
+  .rowmenu button.w-careful:hover, .rowmenu button.w-careful:focus-visible {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+  }
   /* It starts more programs or takes long enough to notice, and asks first. */
-  .rowmenu button.w-heavy { color: var(--ink-3); }
+  .rowmenu button.w-heavy { color: var(--ink-2); }
   .rowmenu.cols { max-height: 60vh; overflow-y: auto; }
   .rowmenu.cols .tick {
     display: inline-block; width: 14px; color: var(--q-val); font-size: 11px;
@@ -1387,7 +1430,7 @@
     --g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.3' stroke-linejoin='round'%3E%3Cpath d='M8 2.4 13.4 5.2 8 8l-5.4-2.8z'/%3E%3Cpath d='M2.6 5.2v5.6L8 13.6l5.4-2.8V5.2M8 8v5.6'/%3E%3C/svg%3E"); }
 
   .rowmenu button:hover, .rowmenu button:focus-visible {
-    background: var(--line-soft); color: var(--ink); outline: none;
+    background: var(--line); color: var(--ink); outline: none;
   }
 
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
@@ -1727,6 +1770,8 @@
   /* Injected from `scour-ui`, so every face draws one list; a test reads the
    * marker out of the served page. */
   const MENU = /* @MENU@ */ [];
+  /* The menu's drawings by name, `scour-ui`'s files, in the text's colour. */
+  const MENU_ICONS = /* @MENUICONS@ */ {};
   /* The same, for how a disk is spoken of: kind, state and question by wire name. */
   const DISKS = /* @DISKS@ */ {};
 
@@ -4709,16 +4754,49 @@
                         : w === "one" ? !many
                         : w === "file" ? (!many && !dir)
                         : (!many && dir));
-    let html = "", last = null;
-    for (const it of MENU) {
-      if (!shape(it.when)) continue;
+    const icon = (name) => name && MENU_ICONS[name]
+      ? `<span class="mi" aria-hidden="true">${MENU_ICONS[name]}</span>` : "";
+    const items = MENU.filter((it) => shape(it.when));
+    /* What it is about: the row, or what the selection comes to. */
+    let html = "";
+    if (many) {
+      const rows = [...SEL.values()].filter(Boolean);
+      const dirs = rows.filter((f) => f.is_dir).length;
+      const files = rows.length - dirs;
+      const weight = rows.filter((f) => !f.is_dir).reduce((a, f) => a + (f.size || 0), 0);
+      const said = [];
+      if (files) said.push(T("{n} files", { n: fmt(files) }));
+      if (dirs) said.push(T("{n} folders", { n: fmt(dirs) }));
+      if (files) said.push(bytes(weight));
+      html += `<div class="mhead"><span class="mk">${icon("stack")}</span><span class="mt">` +
+        `<b>${escape_(T("{n} selected", { n: fmt(SEL.size) }))}</b>` +
+        `<small>${escape_(said.join(" · "))}</small></span></div>`;
+    } else {
+      const name = p.slice(p.lastIndexOf("/") + 1);
+      const up = p.slice(0, p.lastIndexOf("/")) || "/";
+      const folder = HOME && (up === HOME || up.startsWith(HOME + "/")) ? "~" + up.slice(HOME.length) : up;
+      const k = dir ? "folder" : (row && row.ktoken) || "file";
+      const where = dir || !row || row.size == null ? folder : folder + " · " + bytes(row.size);
+      html += `<div class="mhead"><span class="mk"><span class="ico k-${GLYPHS.has(k) ? k : "file"}"></span></span>` +
+        `<span class="mt"><b>${escape_(name)}</b><small>${escape_(where)}</small></span></div>`;
+    }
+    const label = (msgid) => escape_(T(msgid, { n: fmt(alone ? 1 : SEL.size || 1) }));
+    const strip = items.filter((it) => it.short);
+    if (strip.length) {
+      html += '<div class="mstrip">' + strip.map((it) =>
+        `<button type="button" data-act="${it.id}" class="w-${it.weight}" title="${label(it.msgid)}">` +
+        `${icon(it.icon)}${escape_(T(it.short))}</button>`).join("") + "</div>";
+    }
+    html += '<div class="mline"></div>';
+    let last = null;
+    for (const it of items.filter((it) => !it.short)) {
       if (last !== null && it.group !== last) html += '<div class="mline"></div>';
       last = it.group;
-      const label = escape_(T(it.msgid, { n: fmt(alone ? 1 : SEL.size || 1) }));
       const key = it.key ? `<span class="mkey">${escape_(it.key)}</span>` : "";
-      html += `<button type="button" data-act="${it.id}" class="w-${it.weight}">${label}${key}</button>`;
+      html += `<button type="button" data-act="${it.id}" class="w-${it.weight}">${icon(it.icon)}${label(it.msgid)}${key}</button>`;
     }
     menu.innerHTML = html;
+    menu.classList.add("row");
     menu.dataset.path = p;
     /* The row itself: three items ask what kind or how big it is. */
     menu.__row = row;

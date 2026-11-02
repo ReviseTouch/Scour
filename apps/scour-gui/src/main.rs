@@ -1077,6 +1077,7 @@ fn main() -> Result<()> {
                         on,
                         // The last one standing cannot be turned off.
                         off: on && table.shown.len() == 1,
+                        ..Default::default()
                     }
                 })
                 .collect();
@@ -1089,7 +1090,10 @@ fn main() -> Result<()> {
                 heavy: false,
                 on: false,
                 off: false,
+                ..Default::default()
             });
+            w.set_menu_strip(ModelRc::default());
+            w.set_menu_title("".into());
             w.set_menu(ModelRc::new(VecModel::from(model)));
             w.set_menu_x(x);
             w.set_menu_y(y);
@@ -1759,29 +1763,16 @@ fn main() -> Result<()> {
             // A row of the list, so the selection is what the menu is about.
             menu_path.borrow_mut().take();
             let picked = picks.borrow().len();
-            let is_dir = rows
-                .what_at(usize::try_from(i).unwrap_or(0))
-                .map(|(_, d, _)| d)
-                .unwrap_or(false);
-            let mut model: Vec<MenuItem> = Vec::new();
-            let mut last: Option<u8> = None;
-            for item in scour_ui::menu::items_for(picked, is_dir, scour_ui::faces::Face::Window) {
-                model.push(MenuItem {
-                    id: item.id.into(),
-                    // Through the catalogue's own `{n}`, wherever it puts it.
-                    label: t(&cat, item.msgid)
-                        .replace("{n}", &grouped(picked.max(1) as u64))
-                        .into(),
-                    key: item.key.into(),
-                    rule: last.is_some_and(|l| l != item.group),
-                    careful: item.weight == scour_ui::menu::Weight::Careful,
-                    heavy: item.weight == scour_ui::menu::Weight::Heavy,
-                    on: false,
-                    off: false,
-                });
-                last = Some(item.group);
+            let here = rows.what_at(usize::try_from(i).unwrap_or(0));
+            let is_dir = here.as_ref().is_some_and(|(_, d, _)| *d);
+            let (strip, list) = menu_parts(&cat, picked, is_dir);
+            if picked > 1 {
+                menu_heading_many(&w, &cat, &picks.borrow());
+            } else if let Some((path, is_dir, bytes)) = &here {
+                menu_heading(&w, path, *is_dir, *bytes);
             }
-            w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+            w.set_menu_strip(slint::ModelRc::new(slint::VecModel::from(strip)));
+            w.set_menu(slint::ModelRc::new(slint::VecModel::from(list)));
             w.set_menu_x(x);
             w.set_menu_y(y);
             w.set_menu_open(true);
@@ -1798,22 +1789,13 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
             *menu_path.borrow_mut() = Some(path.to_string());
-            let mut model: Vec<MenuItem> = Vec::new();
-            let mut last: Option<u8> = None;
-            for item in scour_ui::menu::items_for(1, false, scour_ui::faces::Face::Window) {
-                model.push(MenuItem {
-                    id: item.id.into(),
-                    label: t(&cat, item.msgid).replace("{n}", "1").into(),
-                    key: item.key.into(),
-                    rule: last.is_some_and(|l| l != item.group),
-                    careful: item.weight == scour_ui::menu::Weight::Careful,
-                    heavy: item.weight == scour_ui::menu::Weight::Heavy,
-                    on: false,
-                    off: false,
-                });
-                last = Some(item.group);
-            }
-            w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
+            let (strip, list) = menu_parts(&cat, 1, false);
+            let bytes = std::fs::metadata(path.as_str())
+                .map(|m| m.len() as i64)
+                .unwrap_or(-1);
+            menu_heading(&w, &path, false, bytes);
+            w.set_menu_strip(slint::ModelRc::new(slint::VecModel::from(strip)));
+            w.set_menu(slint::ModelRc::new(slint::VecModel::from(list)));
             w.set_menu_x(x);
             w.set_menu_y(y);
             w.set_menu_open(true);
@@ -1992,8 +1974,10 @@ fn main() -> Result<()> {
                             heavy: false,
                             on: false,
                             off: false,
+                            ..Default::default()
                         })
                         .collect();
+                    w.set_menu_strip(slint::ModelRc::default());
                     w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
                     w.set_menu_open(true);
                 }
@@ -2021,8 +2005,10 @@ fn main() -> Result<()> {
                             heavy: false,
                             on: false,
                             off: false,
+                            ..Default::default()
                         })
                         .collect();
+                    w.set_menu_strip(slint::ModelRc::default());
                     w.set_menu(slint::ModelRc::new(slint::VecModel::from(model)));
                     w.set_menu_open(true);
                 }
@@ -4606,6 +4592,100 @@ pub(crate) fn mono_family() -> String {
         // No fontconfig: the old string, which draws in the sans.
         asked.unwrap_or_else(|| "monospace".to_owned())
     }
+}
+
+/// The right-click menu for one shape of selection, as `scour_ui::menu` splits
+/// it: the strip of short words across the top, and the list under it.
+fn menu_parts(cat: &Catalogue, picked: usize, is_dir: bool) -> (Vec<MenuItem>, Vec<MenuItem>) {
+    use scour_ui::menu::Weight;
+    let all: Vec<_> =
+        scour_ui::menu::items_for(picked, is_dir, scour_ui::faces::Face::Window).collect();
+    let n = grouped(picked.max(1) as u64);
+    let strip = scour_ui::menu::strip(&all)
+        .into_iter()
+        .map(|item| MenuItem {
+            id: item.id.into(),
+            label: t(cat, item.short),
+            key: item.key.into(),
+            careful: item.weight == Weight::Careful,
+            icon: item.icon.into(),
+            ..Default::default()
+        })
+        .collect();
+    let mut last: Option<u8> = None;
+    let list = scour_ui::menu::list(&all)
+        .into_iter()
+        .map(|item| {
+            let rule = last.is_some_and(|l| l != item.group);
+            last = Some(item.group);
+            MenuItem {
+                id: item.id.into(),
+                // Through the catalogue's own `{n}`, wherever it puts it.
+                label: t(cat, item.msgid).replace("{n}", &n).into(),
+                key: item.key.into(),
+                rule,
+                careful: item.weight == Weight::Careful,
+                heavy: item.weight == Weight::Heavy,
+                icon: item.icon.into(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    (strip, list)
+}
+
+/// The menu's heading for one row: its name, where it is and what it weighs,
+/// beside its kind's drawing. A folder's weight is not known without asking.
+fn menu_heading(w: &MainWindow, path: &str, is_dir: bool, bytes: i64) {
+    let name = scour_ui::path::leaf(path);
+    let kind = scour_core::kind_of(is_dir, name, 0);
+    let folder = tray::home_tilde(scour_ui::path::folder(path));
+    w.set_menu_title(name.into());
+    w.set_menu_detail(if is_dir || bytes < 0 {
+        folder.into()
+    } else {
+        format!(
+            "{folder} · {}",
+            scour_ui::format::size(bytes as u64, marks().1)
+        )
+        .into()
+    });
+    w.set_menu_ktoken(kind.token().into());
+    w.set_menu_tint(rows::tint_of(kind.token()));
+}
+
+/// The menu's heading for a selection: how many, of which kind, and what the
+/// files among them come to.
+fn menu_heading_many(
+    w: &MainWindow,
+    cat: &Catalogue,
+    picks: &std::collections::BTreeMap<usize, rows::Pick>,
+) {
+    let dirs = picks.values().filter(|p| p.is_dir).count();
+    let files = picks.len() - dirs;
+    let bytes: i64 = picks
+        .values()
+        .filter(|p| !p.is_dir)
+        .map(|p| p.bytes.max(0))
+        .sum();
+    let mut said = Vec::new();
+    if files > 0 {
+        said.push(t(cat, "{n} files").replace("{n}", &grouped(files as u64)));
+    }
+    if dirs > 0 {
+        said.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
+    }
+    if files > 0 {
+        said.push(scour_ui::format::size(bytes as u64, marks().1));
+    }
+    w.set_menu_title(
+        t(cat, "{n} selected")
+            .replace("{n}", &grouped(picks.len() as u64))
+            .into(),
+    );
+    w.set_menu_detail(said.join(" · ").into());
+    w.set_menu_ktoken("stack".into());
+    w.set_menu_tint(rows::tint_of(""));
 }
 
 /// The column headings and their widths, from `scour-ui`; painting is not shared.

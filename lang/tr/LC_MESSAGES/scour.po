@@ -1880,3 +1880,15 @@ msgstr "{n} öğeyi dosya olarak sürükle…"
 # The terminal's note once the drag window is open.
 msgid "drag them from the window that opened"
 msgstr "açılan pencereden sürükleyin"
+
+# The menu's strip: a word each, under a drawing. Short on purpose; "File",
+# "Name" and "Rename" are already above.
+msgid "Path"
+msgstr "Yol"
+
+msgid "Trash"
+msgstr "Çöpe"
+
+# The menu's heading over a selection: "9 files · 3 folders · 48 MiB".
+msgid "{n} files"
+msgstr "{n} dosya"

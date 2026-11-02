@@ -125,6 +125,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 app.panel_walk(1);
                 return Want::Nothing;
             }
+            // Along the menu's strip; elsewhere the caret in the query.
+            KeyCode::Left if app.panel_side(-1) => return Want::Nothing,
+            KeyCode::Right if app.panel_side(1) => return Want::Nothing,
             KeyCode::Enter | KeyCode::Char(' ') => return panel_press(app),
             _ => {}
         }
@@ -563,6 +566,13 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     use crate::draw::{LIST_TOP, QUERY_HIGH, RAIL_TOP, RAIL_WIDE};
     let (width, height) = size;
 
+    if app.panel == Panel::Menu {
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        return match crate::draw::menu_item_at(app, area, col, row) {
+            Some(at) => Spot::Panel(at),
+            None => Spot::Nothing,
+        };
+    }
     if app.panel != Panel::None {
         let area = ratatui::layout::Rect::new(0, 0, width, height);
         let lines = app.panel_lines();

@@ -118,6 +118,8 @@ export struct MenuItem {
     on: bool,
     // Cannot be pressed — the last column standing is this.
     off: bool,
+    // Which drawing stands beside it, by `scour_ui::menu` name; empty for none.
+    icon: string,
 }
 
 // One skip rule. Off is a note kept beside the index, not a deletion, so the
@@ -984,6 +986,36 @@ component Marked inherits Rectangle {
     }
 }
 
+// One of the menu's drawings, by its `scour_ui::menu` name. The files are
+// `scour-ui`'s, which hands the same ones to the page. `@image-url` is
+// resolved at build time, so every name is spelled out.
+component MenuIcon inherits Image {
+    in property <string> name;
+    source: root.name == "open" ? @image-url("../../../crates/scour-ui/icons/menu/open.svg")
+        : root.name == "apps" ? @image-url("../../../crates/scour-ui/icons/menu/apps.svg")
+        : root.name == "folder" ? @image-url("../../../crates/scour-ui/icons/menu/folder.svg")
+        : root.name == "up" ? @image-url("../../../crates/scour-ui/icons/menu/up.svg")
+        : root.name == "search" ? @image-url("../../../crates/scour-ui/icons/menu/search.svg")
+        : root.name == "kind" ? @image-url("../../../crates/scour-ui/icons/menu/kind.svg")
+        : root.name == "dupes" ? @image-url("../../../crates/scour-ui/icons/menu/dupes.svg")
+        : root.name == "weight" ? @image-url("../../../crates/scour-ui/icons/menu/weight.svg")
+        : root.name == "skip" ? @image-url("../../../crates/scour-ui/icons/menu/skip.svg")
+        : root.name == "path" ? @image-url("../../../crates/scour-ui/icons/menu/path.svg")
+        : root.name == "name" ? @image-url("../../../crates/scour-ui/icons/menu/name.svg")
+        : root.name == "copy" ? @image-url("../../../crates/scour-ui/icons/menu/copy.svg")
+        : root.name == "drag" ? @image-url("../../../crates/scour-ui/icons/menu/drag.svg")
+        : root.name == "send" ? @image-url("../../../crates/scour-ui/icons/menu/send.svg")
+        : root.name == "rename" ? @image-url("../../../crates/scour-ui/icons/menu/rename.svg")
+        : root.name == "trash" ? @image-url("../../../crates/scour-ui/icons/menu/trash.svg")
+        : root.name == "delete" ? @image-url("../../../crates/scour-ui/icons/menu/delete.svg")
+        : root.name == "info" ? @image-url("../../../crates/scour-ui/icons/menu/info.svg")
+        : root.name == "csv" ? @image-url("../../../crates/scour-ui/icons/menu/csv.svg")
+        : root.name == "clear" ? @image-url("../../../crates/scour-ui/icons/menu/clear.svg")
+        : root.name == "stack" ? @image-url("../../../crates/scour-ui/icons/menu/stack.svg")
+        : root.name == "chevron" ? @image-url("../../../crates/scour-ui/icons/menu/chevron.svg")
+        : @image-url("");
+}
+
 export component MainWindow inherits Window {
     title: "Scour";
     icon: @image-url("../../../assets/scour.svg");
@@ -1220,6 +1252,13 @@ export component MainWindow inherits Window {
     // `scour_ui::menu` and answers `menu-pick` with the id that comes back.
     in property <[MenuItem]> menu;
     in-out property <bool> menu-open: false;
+    /// The few that sit across the top, a word each under a drawing.
+    in property <[MenuItem]> menu-strip;
+    /// What the menu is about: a row's name and where it is, or a selection.
+    in property <string> menu-title;
+    in property <string> menu-detail;
+    in property <string> menu-ktoken;
+    in property <brush> menu-tint;
     /// The whole text of the cell under the pointer, shown when the cell had
     /// to cut it. `tip-pending` is what the pointer is on; `tip-text` is what
     /// is drawn, after a moment's rest or on a click.
@@ -4674,7 +4713,7 @@ export component MainWindow inherits Window {
             // Kept on screen: near the pointer, never past the edge.
             x: min(root.menu-x, root.width - self.width - 8px);
             y: min(root.menu-y, root.height - self.height - 8px);
-            width: 280px;
+            width: 300px;
             height: items.preferred-height;
             // A step off the ground in either scheme, so it reads as above the
             // list rather than cut out of it.
@@ -4689,6 +4728,122 @@ export component MainWindow inherits Window {
 
             items := VerticalLayout {
                 padding: 6px;
+
+                // What the menu is about. Not for the column picker, which is
+                // about the table.
+                if !root.menu-columns && root.menu-title != "": HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 6px;
+                    padding-bottom: 10px;
+                    spacing: 10px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 6px;
+                            background: Theme.dark ? Theme.line : Theme.panel-2;
+                            Image {
+                                width: 18px;
+                                height: 18px;
+                                source: root.menu-ktoken == "stack" ? @image-url("../../../crates/scour-ui/icons/menu/stack.svg")
+                                    : root.menu-ktoken == "folder" ? @image-url("icons/folder.svg")
+                                    : root.menu-ktoken == "doc" ? @image-url("icons/doc.svg")
+                                    : root.menu-ktoken == "code" ? @image-url("icons/code.svg")
+                                    : root.menu-ktoken == "image" ? @image-url("icons/image.svg")
+                                    : root.menu-ktoken == "video" ? @image-url("icons/video.svg")
+                                    : root.menu-ktoken == "media" ? @image-url("icons/media.svg")
+                                    : root.menu-ktoken == "audio" ? @image-url("icons/audio.svg")
+                                    : root.menu-ktoken == "archive" ? @image-url("icons/archive.svg")
+                                    : root.menu-ktoken == "exec" ? @image-url("icons/exec.svg")
+                                    : root.menu-ktoken == "data" ? @image-url("icons/data.svg")
+                                    : root.menu-ktoken == "config" ? @image-url("icons/config.svg")
+                                    : root.menu-ktoken == "font" ? @image-url("icons/font.svg")
+                                    : root.menu-ktoken == "build" ? @image-url("icons/build.svg")
+                                    : @image-url("icons/file.svg");
+                                colorize: root.menu-ktoken == "stack" ? Theme.focus : root.menu-tint;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text {
+                            text: root.menu-title;
+                            color: Theme.ink;
+                            font-size: 13.5px;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.menu-detail;
+                            color: Theme.ink-3;
+                            font-family: Fonts.mono;
+                            font-size: 11.5px;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                // The strip: the few that are wanted most, a press away. Red
+                // only under the pointer, as in the list.
+                if !root.menu-columns && root.menu-strip.length > 0: HorizontalLayout {
+                    spacing: 2px;
+                    padding-bottom: 4px;
+
+                    for s in root.menu-strip: Rectangle {
+                        height: 56px;
+                        horizontal-stretch: 1;
+                        border-radius: 6px;
+                        background: !press.has-hover ? transparent
+                            : s.careful ? Theme.danger.transparentize(0.84)
+                            : Theme.dark ? Theme.line : Theme.hover;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 5px;
+                            HorizontalLayout {
+                                alignment: center;
+                                MenuIcon {
+                                    name: s.icon;
+                                    width: 18px;
+                                    height: 18px;
+                                    colorize: !press.has-hover ? Theme.ink-2
+                                        : s.careful ? Theme.danger : Theme.ink;
+                                }
+                            }
+                            Text {
+                                text: s.label;
+                                color: !press.has-hover ? Theme.ink-2
+                                    : s.careful ? Theme.danger : Theme.ink;
+                                font-size: 11.5px;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        press := TouchArea {
+                            clicked => {
+                                root.menu-open = false;
+                                root.menu-pick(s.id);
+                            }
+                        }
+                    }
+                }
+
+                if !root.menu-columns && (root.menu-title != "" || root.menu-strip.length > 0): Rectangle {
+                    height: 9px;
+                    Rectangle {
+                        y: 4px;
+                        x: 8px;
+                        width: parent.width - 16px;
+                        height: Theme.hair;
+                        background: Theme.line;
+                    }
+                }
 
                 for it[i] in root.menu: VerticalLayout {
                     // A rule where the group changes: the gap is what a hand
@@ -4714,7 +4869,7 @@ export component MainWindow inherits Window {
                             : Theme.dark ? Theme.line : Theme.hover;
 
                         HorizontalLayout {
-                            padding-left: 12px;
+                            padding-left: 10px;
                             padding-right: 12px;
                             spacing: 10px;
 
@@ -4726,6 +4881,19 @@ export component MainWindow inherits Window {
                                 font-size: 13px;
                                 vertical-alignment: center;
                                 width: 14px;
+                            }
+
+                            // Signal in the ink: the drawing goes to full ink
+                            // under the pointer and nothing else moves.
+                            if it.icon != "": VerticalLayout {
+                                alignment: center;
+                                MenuIcon {
+                                    name: it.icon;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: it.careful && hit.has-hover ? Theme.danger
+                                        : hit.has-hover ? Theme.ink : Theme.ink-2;
+                                }
                             }
 
                             Text {

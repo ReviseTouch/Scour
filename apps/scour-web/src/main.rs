@@ -59,6 +59,23 @@ fn disk_words() -> serde_json::Value {
     })
 }
 
+/// The menu's drawings, by name, drawn in whatever colour the text around
+/// them is: the window reads the same files from `scour-ui`.
+fn menu_icons() -> serde_json::Value {
+    scour_ui::menu::ICONS
+        .iter()
+        .chain(&["stack", "chevron"])
+        .filter_map(|name| {
+            let svg = scour_ui::menu::icon_svg(name)?
+                .trim()
+                .replace("stroke=\"#000\"", "stroke=\"currentColor\"")
+                .replace(" width=\"24\" height=\"24\"", "");
+            Some(((*name).to_owned(), serde_json::Value::String(svg)))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 /// The page with its palette and its menu written in, built once. The colours
 /// live in [`scour_ui`], so this page and `theme.slint` cannot drift.
 fn page() -> &'static str {
@@ -83,6 +100,8 @@ fn page() -> &'static str {
                         "msgid": i.msgid,
                         "key": i.key,
                         "group": i.group,
+                        "icon": i.icon,
+                        "short": i.short,
                         "weight": match i.weight {
                             scour_ui::menu::Weight::Plain => "plain",
                             scour_ui::menu::Weight::Careful => "careful",
@@ -104,6 +123,7 @@ fn page() -> &'static str {
             1,
         )
         .replacen("/* @MENU@ */ []", &menu.to_string(), 1)
+        .replacen("/* @MENUICONS@ */ {}", &menu_icons().to_string(), 1)
         .replacen("/* @DISKS@ */ {}", &disk_words().to_string(), 1)
         .replace("@LOGO@", &data_url(LOGO))
         .replacen("<script>", &format!("<script nonce=\"{}\">", nonce()), 1)
@@ -1941,6 +1961,14 @@ mod tests {
                 )),
                 "the page was served without {:?}",
                 item.msgid
+            );
+        }
+        // And every drawing the menu names, which the page looks up by name.
+        assert!(!served.contains("/* @MENUICONS@ */"));
+        for name in scour_ui::menu::ICONS {
+            assert!(
+                served.contains(&format!("\"{name}\":\"<svg")),
+                "no drawing for {name}"
             );
         }
     }

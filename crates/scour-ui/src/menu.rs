@@ -4,6 +4,10 @@
 //! Everything here is safe to press but one: [`Weight::Careful`] items are
 //! reversible, and permanent deletion — which is not — says so in its name,
 //! asks first, and stands behind the trash so a hand reaches the trash first.
+//!
+//! A menu is drawn in two parts: a strip of a few short words across the top
+//! (the items with a [`Item::short`]) and the list below it. The trash is in
+//! the strip; permanent deletion stays at the foot of the list, behind a rule.
 
 /// How dangerous an item is: the only thing a face renders differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,11 +52,17 @@ pub struct Item {
     /// Faces that cannot perform this one, because of the platform rather than
     /// a gap: a browser cannot put a *file* on the clipboard.
     pub except: &'static [crate::faces::Face],
+    /// Which drawing stands beside it, by name; each face holds its own set.
+    pub icon: &'static str,
+    /// Set for the few that sit in the strip across the top of the menu, a
+    /// press away, rather than in its list: the strip's own short word, and
+    /// the catalogue key for it. Empty for everything in the list.
+    pub short: &'static str,
 }
 
 /// The whole menu, in the order it is drawn. Order is meaning: the first group
 /// is under the pointer when the menu opens, and a rule sits before the
-/// trash so a travelling hand stops short of it.
+/// permanent deletion so a travelling hand stops short of it.
 pub const ITEMS: &[Item] = &[
     // ---- one row: open ---------------------------------------------------
     Item {
@@ -63,6 +73,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::One,
         except: &[],
+        icon: "open",
+        short: "",
     },
     Item {
         id: "open-with",
@@ -72,6 +84,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::File,
         except: &[],
+        icon: "apps",
+        short: "",
     },
     Item {
         id: "folder",
@@ -81,6 +95,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::File,
         except: &[],
+        icon: "folder",
+        short: "",
     },
     Item {
         id: "folder",
@@ -90,6 +106,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Folder,
         except: &[],
+        icon: "up",
+        short: "",
     },
     // ---- one row: ask the index something else ---------------------------
     Item {
@@ -100,6 +118,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::File,
         except: &[],
+        icon: "search",
+        short: "",
     },
     Item {
         id: "search-here",
@@ -109,6 +129,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Folder,
         except: &[],
+        icon: "search",
+        short: "",
     },
     Item {
         id: "search-kind",
@@ -118,6 +140,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::File,
         except: &[],
+        icon: "kind",
+        short: "",
     },
     Item {
         id: "duplicates",
@@ -127,6 +151,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::File,
         except: &[],
+        icon: "dupes",
+        short: "",
     },
     Item {
         id: "usage",
@@ -136,6 +162,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Folder,
         except: &[],
+        icon: "weight",
+        short: "",
     },
     Item {
         id: "skip",
@@ -145,8 +173,21 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Folder,
         except: &[],
+        icon: "skip",
+        short: "",
     },
     // ---- one row: the clipboard ------------------------------------------
+    Item {
+        id: "copy-file",
+        msgid: "Copy the file",
+        key: "",
+        group: 2,
+        weight: Weight::Plain,
+        when: When::File,
+        except: &[crate::faces::Face::Page],
+        icon: "copy",
+        short: "File",
+    },
     Item {
         id: "copy-path",
         msgid: "Copy the path",
@@ -155,6 +196,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::One,
         except: &[],
+        icon: "path",
+        short: "Path",
     },
     Item {
         id: "copy-name",
@@ -164,15 +207,19 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::One,
         except: &[],
+        icon: "name",
+        short: "Name",
     },
     Item {
-        id: "copy-file",
-        msgid: "Copy the file",
+        id: "send",
+        msgid: "Send to…",
         key: "",
         group: 2,
         weight: Weight::Plain,
-        when: When::File,
-        except: &[crate::faces::Face::Page],
+        when: When::One,
+        except: &[],
+        icon: "send",
+        short: "",
     },
     // The page and the terminal open the window's drag tray; the window
     // drags the row itself.
@@ -184,15 +231,19 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::One,
         except: &[crate::faces::Face::Window],
+        icon: "drag",
+        short: "",
     },
     Item {
-        id: "send",
-        msgid: "Send to…",
-        key: "",
+        id: "details",
+        msgid: "Details",
+        key: "Space",
         group: 2,
         weight: Weight::Plain,
         when: When::One,
         except: &[],
+        icon: "info",
+        short: "",
     },
     // ---- one row: change it ----------------------------------------------
     Item {
@@ -203,6 +254,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Careful,
         when: When::One,
         except: &[],
+        icon: "rename",
+        short: "Rename",
     },
     Item {
         id: "trash",
@@ -212,6 +265,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Careful,
         when: When::One,
         except: &[],
+        icon: "trash",
+        short: "Trash",
     },
     Item {
         id: "delete",
@@ -221,16 +276,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Careful,
         when: When::One,
         except: &[],
-    },
-    // ---- one row: look closer --------------------------------------------
-    Item {
-        id: "details",
-        msgid: "Details",
-        key: "Space",
-        group: 4,
-        weight: Weight::Plain,
-        when: When::One,
-        except: &[],
+        icon: "delete",
+        short: "",
     },
     // ---- a selection ------------------------------------------------------
     Item {
@@ -241,6 +288,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[],
+        icon: "folder",
+        short: "",
     },
     Item {
         id: "open-all",
@@ -250,24 +299,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Heavy,
         when: When::Many,
         except: &[],
-    },
-    Item {
-        id: "copy-path",
-        msgid: "Copy {n} paths",
-        key: "Ctrl+C",
-        group: 1,
-        weight: Weight::Plain,
-        when: When::Many,
-        except: &[],
-    },
-    Item {
-        id: "copy-name",
-        msgid: "Copy {n} names",
-        key: "Ctrl+Shift+C",
-        group: 1,
-        weight: Weight::Plain,
-        when: When::Many,
-        except: &[],
+        icon: "open",
+        short: "",
     },
     Item {
         id: "copy-file",
@@ -277,6 +310,30 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[crate::faces::Face::Page],
+        icon: "copy",
+        short: "File",
+    },
+    Item {
+        id: "copy-path",
+        msgid: "Copy {n} paths",
+        key: "Ctrl+C",
+        group: 1,
+        weight: Weight::Plain,
+        when: When::Many,
+        except: &[],
+        icon: "path",
+        short: "Path",
+    },
+    Item {
+        id: "copy-name",
+        msgid: "Copy {n} names",
+        key: "Ctrl+Shift+C",
+        group: 1,
+        weight: Weight::Plain,
+        when: When::Many,
+        except: &[],
+        icon: "name",
+        short: "Name",
     },
     Item {
         id: "drag",
@@ -286,6 +343,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[crate::faces::Face::Window],
+        icon: "drag",
+        short: "",
     },
     Item {
         id: "send",
@@ -295,6 +354,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[],
+        icon: "send",
+        short: "",
     },
     Item {
         id: "csv",
@@ -304,6 +365,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[],
+        icon: "csv",
+        short: "",
     },
     Item {
         id: "trash",
@@ -313,6 +376,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Careful,
         when: When::Many,
         except: &[],
+        icon: "trash",
+        short: "Trash",
     },
     Item {
         id: "delete",
@@ -322,6 +387,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Careful,
         when: When::Many,
         except: &[],
+        icon: "delete",
+        short: "",
     },
     Item {
         id: "clear",
@@ -331,6 +398,8 @@ pub const ITEMS: &[Item] = &[
         weight: Weight::Plain,
         when: When::Many,
         except: &[],
+        icon: "clear",
+        short: "",
     },
 ];
 
@@ -351,6 +420,63 @@ pub fn items_for(
             When::File => !many && !is_dir,
             When::Folder => !many && is_dir,
         })
+}
+
+/// Every drawing an [`Item::icon`] names: a face holds one of each.
+pub const ICONS: &[&str] = &[
+    "open", "apps", "folder", "up", "search", "kind", "dupes", "weight", "skip", "path", "name",
+    "copy", "drag", "send", "rename", "trash", "delete", "info", "csv", "clear",
+];
+
+/// The drawing by that name, as an SVG drawn in black at 24 px with a 1.6
+/// stroke: [`ICONS`], plus `stack` (a selection's heading) and `chevron` (an
+/// item that opens beside the menu). The window reads the same files by path;
+/// the page is handed these.
+pub fn icon_svg(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "open" => include_str!("../icons/menu/open.svg"),
+        "apps" => include_str!("../icons/menu/apps.svg"),
+        "folder" => include_str!("../icons/menu/folder.svg"),
+        "up" => include_str!("../icons/menu/up.svg"),
+        "search" => include_str!("../icons/menu/search.svg"),
+        "kind" => include_str!("../icons/menu/kind.svg"),
+        "dupes" => include_str!("../icons/menu/dupes.svg"),
+        "weight" => include_str!("../icons/menu/weight.svg"),
+        "skip" => include_str!("../icons/menu/skip.svg"),
+        "path" => include_str!("../icons/menu/path.svg"),
+        "name" => include_str!("../icons/menu/name.svg"),
+        "copy" => include_str!("../icons/menu/copy.svg"),
+        "drag" => include_str!("../icons/menu/drag.svg"),
+        "send" => include_str!("../icons/menu/send.svg"),
+        "rename" => include_str!("../icons/menu/rename.svg"),
+        "trash" => include_str!("../icons/menu/trash.svg"),
+        "delete" => include_str!("../icons/menu/delete.svg"),
+        "info" => include_str!("../icons/menu/info.svg"),
+        "csv" => include_str!("../icons/menu/csv.svg"),
+        "clear" => include_str!("../icons/menu/clear.svg"),
+        "stack" => include_str!("../icons/menu/stack.svg"),
+        "chevron" => include_str!("../icons/menu/chevron.svg"),
+        _ => return None,
+    })
+}
+
+/// The strip across the top: the items that have a short word, in order.
+pub fn strip(items: &[&'static Item]) -> Vec<&'static Item> {
+    items
+        .iter()
+        .copied()
+        .filter(|i| !i.short.is_empty())
+        .collect()
+}
+
+/// The list under the strip: everything else, in order. Rules are worked out
+/// over this, not over the whole menu: the strip has none.
+pub fn list(items: &[&'static Item]) -> Vec<&'static Item> {
+    items
+        .iter()
+        .copied()
+        .filter(|i| i.short.is_empty())
+        .collect()
 }
 
 /// Where a rule goes: true when this item starts a new group. Given to the
@@ -429,6 +555,45 @@ mod tests {
             for i in &items[1..] {
                 assert!(i.group >= last, "{} went backwards", i.id);
                 last = i.group;
+            }
+        }
+    }
+
+    /// The strip holds a handful, has a drawing for each, and never holds the
+    /// one item that cannot be undone; and every item names a drawing there is.
+    #[test]
+    fn the_strip_is_short_and_permanent_deletion_stays_in_the_list() {
+        for name in ICONS.iter().chain(&["stack", "chevron"]) {
+            assert!(
+                icon_svg(name).is_some_and(|s| s.starts_with("<svg")),
+                "{name}"
+            );
+        }
+        for item in ITEMS {
+            assert!(
+                ICONS.contains(&item.icon),
+                "{}: no drawing called {}",
+                item.id,
+                item.icon
+            );
+            assert!(item.short.is_empty() || item.id != "delete");
+        }
+        for face in [
+            crate::faces::Face::Page,
+            crate::faces::Face::Window,
+            crate::faces::Face::Terminal,
+        ] {
+            for (selected, is_dir) in [(1usize, false), (1, true), (12, false)] {
+                let all: Vec<_> = items_for(selected, is_dir, face).collect();
+                let top = strip(&all);
+                assert!(
+                    (3..=5).contains(&top.len()),
+                    "{face:?} {selected}/{is_dir}: {}",
+                    top.len()
+                );
+                assert!(top.iter().any(|i| i.id == "trash"));
+                let rest = list(&all);
+                assert!(rest.iter().any(|i| i.id == "delete"));
             }
         }
     }

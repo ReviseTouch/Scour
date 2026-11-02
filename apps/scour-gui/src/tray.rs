@@ -104,7 +104,7 @@ pub fn run(asked: &[String], config: &scour_config::Config) -> Result<()> {
 }
 
 /// `~/Belgeler` rather than `/home/hasan/Belgeler`: read in passing.
-fn home_tilde(folder: &str) -> String {
+pub(crate) fn home_tilde(folder: &str) -> String {
     match std::env::var("HOME") {
         Ok(home) if !home.is_empty() && folder.starts_with(&home) => {
             let rest = &folder[home.len()..];
