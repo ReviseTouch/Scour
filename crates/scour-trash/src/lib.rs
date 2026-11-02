@@ -404,10 +404,14 @@ mod tests {
     use super::*;
 
     /// A trash of our own, so the test never touches the desktop's.
+    /// A directory of its own per call. The clock alone was not enough: two
+    /// tests running side by side took one name, and one removed the other's.
     fn sandbox() -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let at = std::env::temp_dir().join(format!(
-            "scour-trash-test-{}-{}",
+            "scour-trash-test-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

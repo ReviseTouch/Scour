@@ -1405,11 +1405,17 @@ fn cover_mounts(
 mod tests {
     use super::*;
 
+    /// The tests that use the one [`SUBS`] list, one at a time: the lock test
+    /// asks whether anyone holds that lock, and a neighbour holding it for its
+    /// own reasons made it fail.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
     /// What stopped indexing for good: a send under the lock waited on a full
     /// queue that the worker could not drain while it waited for the lock. Every
     /// send a window makes, an overflow's included, must find the lock free.
     #[test]
     fn a_window_sends_nothing_while_it_holds_the_lock() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         #[derive(Debug, Default)]
         struct Probe {
             sent: std::sync::atomic::AtomicUsize,
@@ -1476,6 +1482,7 @@ mod tests {
     /// old entry used to stay, and `cover` and `retune` found it first.
     #[test]
     fn a_swapped_source_teaches_its_own_map_and_the_old_one_leaves() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().expect("tmp");
         let root = tmp.path().join("kok");
         std::fs::create_dir_all(root.join("a/b")).expect("mkdir");
