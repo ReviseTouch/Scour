@@ -85,6 +85,13 @@ fn main() -> Result<()> {
     // The table's shape, for the same reason as the language: the first frame
     // is the one somebody left, not a default that lasts an instant.
     state.columns_from(&kept.columns);
+    // The settings screen shows these, and the theme is drawn in from the start.
+    state.theme = kept.theme.clone();
+    state.face_default = kept.face.clone();
+    state.language_choice = kept.language.clone();
+    state.removable = kept.removable.clone();
+    state.network = kept.network.clone();
+    state.folders = kept.folders.clone();
 
     if let Some(size) = args.once.clone() {
         let outcome = snap(

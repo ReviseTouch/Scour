@@ -423,84 +423,6 @@ component Note inherits Text {
 // A panel over the window: help, the rules, the languages. One component,
 // because all three are a card that opens over the list, closes on Escape or
 // on a click outside, and does not move what is under it.
-component Sheet inherits Rectangle {
-    in property <string> title;
-    in property <bool> open;
-
-    // Placed by whoever puts it in the window: a component cannot read its own
-    // parent's size in Slint.
-    in property <length> room-w;
-    in property <length> room-h;
-
-    /// Pressed the ×. A press outside it is the window's: see the catch
-    /// before the panels.
-    callback dismissed();
-
-    visible: root.open;
-    x: root.room-w - self.width - 20px;
-    y: 64px;
-    width: min(400px, root.room-w - 40px);
-    // As tall as what is in it, up to a ceiling. Measured from inside the
-    // scroller: a `ScrollView` asks for very little, which collapses the panel.
-    height: min(root.room-h - 120px, sheet-body.preferred-height + 76px);
-    background: Theme.panel;
-    border-width: Theme.hair;
-    border-color: Theme.line;
-    border-radius: 4px;
-    // No `z`: Slint hoists an element with one into a pass the hit test does
-    // not follow, so every press goes through it. Last child is what wins.
-    
-
-    // A way out that is visible. Drawn over the layout rather than in it, so
-    // the title keeps the full width.
-    shut := TouchArea {
-        x: parent.width - 30px;
-        y: 10px;
-        width: 22px;
-        height: 22px;
-        mouse-cursor: pointer;
-        clicked => { root.dismissed(); }
-        Rectangle {
-            background: shut.has-hover ? Theme.hover : transparent;
-            border-radius: 3px;
-            Text {
-                text: "×";
-                color: shut.has-hover ? Theme.ink : Theme.ink-3;
-                font-size: 16px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-        }
-    }
-
-    body := VerticalLayout {
-        padding: 16px;
-        padding-right: 34px;
-        spacing: 8px;
-
-        Text {
-            text: root.title;
-            color: Theme.ink;
-            font-size: 13px;
-            font-weight: 650;
-            letter-spacing: 2px;
-            height: 20px;
-        }
-
-        // Scrolls, so what is in the panel is either shown or reachable: the
-        // height is free to be whatever fits, and the ceiling above caps it.
-        ScrollView {
-            vertical-stretch: 1;
-            viewport-height: sheet-body.preferred-height;
-            sheet-body := VerticalLayout {
-                spacing: 8px;
-                padding-right: 6px;
-                @children
-            }
-        }
-    }
-}
-
 // One of the window's own controls. Square, 18px, and the same shape as the
 // view switch beside it: something done to the window, not to what it shows.
 component Tool inherits Rectangle {
@@ -1016,6 +938,152 @@ component MenuIcon inherits Image {
         : @image-url("");
 }
 
+// One section in the settings' side list.
+component NavRow inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> on;
+    in property <string> badge;
+    callback clicked();
+    height: 34px;
+    border-radius: 6px;
+    background: root.on ? (Theme.dark ? Theme.line : Theme.hover)
+        : nav-hit.has-hover ? (Theme.dark ? Theme.line-soft : Theme.hover) : transparent;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 16px;
+                height: 16px;
+                source: root.icon;
+                colorize: root.on || nav-hit.has-hover ? Theme.ink : Theme.ink-2;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.on ? Theme.ink : Theme.ink-2;
+            font-size: 13.5px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.badge != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 18px;
+                width: max(18px, badge-text.preferred-width + 10px);
+                border-radius: 9px;
+                background: Theme.focus;
+                badge-text := Text {
+                    text: root.badge;
+                    color: Theme.ground;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    nav-hit := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// A choice of a few, side by side: the one in force is raised.
+component Choice inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> values;
+    in property <string> value;
+    callback picked(string);
+    height: 32px;
+    border-radius: 7px;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    background: Theme.dark ? Theme.ground : Theme.panel-2;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        for l[i] in root.labels: Rectangle {
+            border-radius: 5px;
+            background: root.values[i] == root.value ? (Theme.dark ? Theme.line : Theme.panel)
+                : seg-hit.has-hover ? Theme.hover : transparent;
+            min-width: seg-label.preferred-width + 22px;
+            seg-label := Text {
+                text: l;
+                color: root.values[i] == root.value || seg-hit.has-hover ? Theme.ink : Theme.ink-2;
+                font-size: 12.5px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            seg-hit := TouchArea {
+                clicked => { root.picked(root.values[i]); }
+            }
+        }
+    }
+}
+
+// One setting: what it is and a line on what it does, the control at the right.
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    min-height: 54px;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 14px;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 2px;
+            Text {
+                text: root.label;
+                color: Theme.ink;
+                font-size: 13.5px;
+            }
+            if root.note != "": Text {
+                text: root.note;
+                color: Theme.ink-3;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+// A group of settings on a raised card, a hairline between rows.
+component Card inherits Rectangle {
+    background: Theme.dark ? Theme.panel : Theme.panel;
+    border-width: Theme.hair;
+    border-color: Theme.line;
+    border-radius: 8px;
+    VerticalLayout {
+        padding: 2px;
+        @children
+    }
+}
+
+// Small capitals over a group of settings.
+component SectionHead inherits Text {
+    color: Theme.ink-3;
+    font-size: 11px;
+    letter-spacing: 0.6px;
+    height: 26px;
+    vertical-alignment: bottom;
+}
+
 export component MainWindow inherits Window {
     title: "Scour";
     icon: @image-url("../../../assets/scour.svg");
@@ -1387,6 +1455,70 @@ export component MainWindow inherits Window {
 
     // Which panel is open, if any: "", "help", "faces", "language", "rules", "disks".
     in-out property <string> panel: "";
+
+    // --- the settings --------------------------------------------------
+    // One page for what used to be four panels. `panel == "settings"` opens it
+    // on `settings-section`: general, view, disks, rules, keys, about.
+    in-out property <string> settings-section: "general";
+    in property <string> settings-title;
+    in property <string> settings-foot;
+    in property <[string]> section-ids: ["general", "view", "disks", "rules", "keys", "about"];
+    in property <[string]> section-labels;
+    in property <[string]> section-leads;
+    in property <string> set-language;
+    in property <string> set-language-note;
+    /// The languages offered, with the desktop's own first; the token is what
+    /// `language-picked` sends, empty for the desktop's.
+    in property <[string]> lang-labels;
+    in property <[string]> lang-tokens;
+    /// What was chosen, which is empty when nobody chose: not `language`, the
+    /// language in force.
+    in property <string> language-choice;
+    in property <string> set-face;
+    in property <string> set-face-note;
+    in property <[string]> face-labels;
+    in property <string> face-default;
+    in property <string> set-switch;
+    in property <string> set-theme;
+    in property <string> set-theme-note;
+    in property <[string]> theme-labels;
+    in property <string> set-layout;
+    in property <[string]> layout-labels;
+    in property <string> set-columns;
+    in property <string> set-columns-note;
+    in property <string> set-columns-push;
+    in property <string> set-preview;
+    in property <string> set-preview-note;
+    in property <bool> preview-on;
+    in property <string> set-later;
+    in property <string> set-removable;
+    in property <string> set-removable-note;
+    in property <[string]> removable-labels;
+    in property <string> removable-choice;
+    in property <string> set-network;
+    in property <string> set-network-note;
+    in property <[string]> network-labels;
+    in property <string> network-choice;
+    in property <string> set-folders;
+    in property <string> set-folders-note;
+    in property <[string]> folders;
+    in property <string> folder-hint;
+    in property <string> folder-add;
+    in property <string> folder-error;
+    in-out property <string> folder-typed;
+    in property <string> about-body;
+    callback settings-picked(string);
+    callback theme-picked(string);
+    callback face-default-picked(string);
+    callback policy-picked(string, string);
+    callback folder-added(string);
+    callback folder-dropped(string);
+    changed panel => {
+        // Nothing stays armed behind a closed page.
+        if (self.panel != "settings") {
+            root.armed-face = "";
+        }
+    }
     in property <string> help-title;
     in property <string> help-body;
     in property <string> lang-title;
@@ -1873,6 +2005,11 @@ export component MainWindow inherits Window {
                             root.ask-answer(false);
                             return accept;
                         }
+                        // Ctrl+, opens the settings, as in most programs.
+                        if (e.text == "," && e.modifiers.control) {
+                            root.tool-clicked("settings");
+                            return accept;
+                        }
                         if (e.text == Key.Escape && root.panel != "") {
                             // A panel first: Escape closes what is on top.
                             root.panel = "";
@@ -2085,12 +2222,9 @@ export component MainWindow inherits Window {
                     alignment: center;
                     HorizontalLayout {
                         spacing: 2px;
-                        Tool { icon: @image-url("icons/tools/faces.svg"); has-icon: true; clicked => { root.tool-clicked("faces"); } }
-                        Tool { glyph: "文"; clicked => { root.tool-clicked("language"); } }
-                        Tool { icon: @image-url("icons/tools/rules.svg"); has-icon: true; clicked => { root.tool-clicked("rules"); } }
-                        Tool { icon: @image-url("icons/tools/disks.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("disks"); } }
                         Tool { icon: @image-url("icons/tools/export.svg"); has-icon: true; clicked => { root.tool-clicked("export"); } }
-                        Tool { glyph: "?"; clicked => { root.tool-clicked("help"); } }
+                        // Faces, language, disks, skips and the keys: one page.
+                        Tool { icon: @image-url("icons/tools/settings.svg"); has-icon: true; on: root.disk-question != ""; clicked => { root.tool-clicked("settings"); } }
                     }
                 }
 
@@ -4115,35 +4249,341 @@ export component MainWindow inherits Window {
             clicked => { root.panel = ""; }
         }
 
-        // The panels. Drawn last so they are over the list, and only ever one
-        // open at a time.
-        Sheet {
-            title: root.help-title;
-            open: root.panel == "help";
-            dismissed => { root.panel = ""; }
-            room-w: root.width - 40px;
-            room-h: root.height - 40px;
+        // The panels were here; the settings are a page of their own, below.
+    // --- the question that comes before a change --------------------------
+    // Same shape as the menu overlay: a full-window sheet so the click that
+    // answers does not also land on the list. This one dims what is behind it.
+    if root.ask-open: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: #00000066;
 
-            Text {
-                text: root.help-body;
-                color: Theme.ink-2;
-                font-size: 12.5px;
-                wrap: word-wrap;
-                vertical-alignment: top;
+        TouchArea {
+            // Clicking away is "no": a stray press lands on the safe answer.
+            clicked => {
+                root.ask-open = false;
+                root.ask-answer(false);
             }
         }
 
-        Sheet {
-            title: root.faces-title;
-            open: root.panel == "faces";
-            dismissed => { root.panel = ""; }
-            room-w: root.width - 40px;
-            room-h: root.height - 40px;
-            changed open => {
-                // Nothing stays armed behind a closed panel.
-                root.armed-face = "";
-            }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            width: 420px;
+            height: ask-sheet.preferred-height;
+            background: Theme.panel;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            border-radius: 3px;
+            drop-shadow-blur: 26px;
+            drop-shadow-color: #00000080;
 
+            // Swallows the click, or the sheet behind answers "no".
+            TouchArea { }
+
+            ask-sheet := VerticalLayout {
+                padding: 20px;
+                spacing: 12px;
+
+                Text {
+                    text: root.ask-title;
+                    color: Theme.ink;
+                    font-size: 14px;
+                    font-weight: 650;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.ask-body;
+                    color: Theme.ink-3;
+                    font-family: Fonts.mono;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+                if root.ask-typing: Rectangle {
+                    height: 30px;
+                    // The keys go here as it opens, from F2 as from the menu.
+                    // A beat later, not in `init`: that runs mid-layout, and
+                    // taking focus there asks for the layout being made.
+                    Timer {
+                        interval: 1ms;
+                        triggered => {
+                            self.running = false;
+                            renaming.focus();
+                            renaming.select-all();
+                        }
+                    }
+                    border-radius: 3px;
+                    border-width: Theme.hair;
+                    border-color: Theme.focus;
+                    background: Theme.panel-2;
+                    HorizontalLayout {
+                        padding-left: 9px;
+                        padding-right: 9px;
+                        renaming := TextInput {
+                            text <=> root.ask-text;
+                            color: Theme.ink;
+                            font-family: Fonts.mono;
+                            font-size: 12.5px;
+                            single-line: true;
+                            vertical-alignment: center;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.ink;
+                            // Back to the query when it closes.
+                            // Enter is yes, Escape no.
+                            accepted => {
+                                root.ask-open = false;
+                                root.ask-answer(true);
+                                root.focus-query();
+                            }
+                            key-pressed(e) => {
+                                if (e.text == Key.Escape) {
+                                    root.ask-open = false;
+                                    root.ask-answer(false);
+                                    root.focus-query();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 4px; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    Rectangle {
+                        width: no-text.preferred-width + 26px;
+                        height: 28px;
+                        border-radius: 3px;
+                        border-width: Theme.hair;
+                        border-color: Theme.line;
+                        background: no-hit.has-hover ? Theme.hover : transparent;
+                        no-text := Text {
+                            text: root.ask-no;
+                            color: Theme.ink-2;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        no-hit := TouchArea {
+                            clicked => {
+                                root.ask-open = false;
+                                root.ask-answer(false);
+                                root.focus-query();
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: yes-text.preferred-width + 26px;
+                        height: 28px;
+                        border-radius: 3px;
+                        background: yes-hit.has-hover
+                            ? Theme.danger.transparentize(0.78)
+                            : Theme.danger.transparentize(0.88);
+                        border-width: Theme.hair;
+                        border-color: Theme.danger.transparentize(0.6);
+                        yes-text := Text {
+                            text: root.ask-yes;
+                            color: Theme.danger;
+                            font-size: 12.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                        }
+                        yes-hit := TouchArea {
+                            clicked => {
+                                root.ask-open = false;
+                                root.ask-answer(true);
+                                root.focus-query();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
+    // --- the settings page -------------------------------------------------
+    // Over everything but the menu and the question, which can open from it.
+    if root.panel == "settings": Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: #00000066;
+
+        TouchArea {
+            clicked => { root.panel = ""; }
+        }
+
+        Rectangle {
+            width: min(880px, root.width - 40px);
+            height: min(640px, root.height - 40px);
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            background: Theme.dark ? Theme.panel-2 : Theme.panel;
+            border-width: Theme.hair;
+            border-color: Theme.line;
+            border-radius: 10px;
+            clip: true;
+            drop-shadow-blur: 48px;
+            drop-shadow-color: Theme.dark ? #000000a0 : #00000033;
+            drop-shadow-offset-y: 18px;
+
+            // Presses inside are the page's, not the scrim's.
+            TouchArea { }
+
+            HorizontalLayout {
+                Rectangle {
+                    width: 210px;
+                    background: Theme.dark ? Theme.panel : Theme.panel-2;
+                    VerticalLayout {
+                        padding-top: 18px;
+                        padding-bottom: 16px;
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 2px;
+                        Text {
+                            text: root.settings-title;
+                            color: Theme.ink;
+                            font-size: 16px;
+                            font-weight: 600;
+                            height: 34px;
+                            x: 10px;
+                        }
+                        NavRow {
+                            label: root.section-labels[0];
+                            icon: @image-url("icons/tools/settings-general.svg");
+                            on: root.settings-section == "general";
+                            clicked => { root.settings-picked("general"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[1];
+                            icon: @image-url("icons/tools/detail.svg");
+                            on: root.settings-section == "view";
+                            clicked => { root.settings-picked("view"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[2];
+                            icon: @image-url("icons/tools/disks.svg");
+                            on: root.settings-section == "disks";
+                            badge: root.disk-question != "" ? "1" : "";
+                            clicked => { root.settings-picked("disks"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[3];
+                            icon: @image-url("icons/tools/rules.svg");
+                            on: root.settings-section == "rules";
+                            clicked => { root.settings-picked("rules"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[4];
+                            icon: @image-url("icons/tools/settings-keys.svg");
+                            on: root.settings-section == "keys";
+                            clicked => { root.settings-picked("keys"); }
+                        }
+                        NavRow {
+                            label: root.section-labels[5];
+                            icon: @image-url("icons/tools/settings-about.svg");
+                            on: root.settings-section == "about";
+                            clicked => { root.settings-picked("about"); }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                        Text {
+                            text: root.settings-foot;
+                            color: Theme.ink-3;
+                            font-size: 11.5px;
+                            wrap: word-wrap;
+                            x: 10px;
+                            width: parent.width - 20px;
+                        }
+                    }
+                }
+                Rectangle {
+                    width: Theme.hair;
+                    background: Theme.line;
+                }
+
+                VerticalLayout {
+                    padding-top: 20px;
+                    padding-left: 26px;
+                    padding-right: 26px;
+                    padding-bottom: 16px;
+                    spacing: 4px;
+
+                    Text {
+                        text: root.section-labels[root.section-ids.length > 0 ? (
+                            root.settings-section == "general" ? 0
+                            : root.settings-section == "view" ? 1
+                            : root.settings-section == "disks" ? 2
+                            : root.settings-section == "rules" ? 3
+                            : root.settings-section == "keys" ? 4 : 5) : 0];
+                        color: Theme.ink;
+                        font-size: 18px;
+                        font-weight: 600;
+                    }
+                    Text {
+                        text: root.section-leads[
+                            root.settings-section == "general" ? 0
+                            : root.settings-section == "view" ? 1
+                            : root.settings-section == "disks" ? 2
+                            : root.settings-section == "rules" ? 3
+                            : root.settings-section == "keys" ? 4 : 5];
+                        color: Theme.ink-2;
+                        font-size: 12.5px;
+                        wrap: word-wrap;
+                    }
+                    Rectangle { height: 8px; }
+
+                    ScrollView {
+                        vertical-stretch: 1;
+                        viewport-height: page-body.preferred-height;
+                        page-body := VerticalLayout {
+                            spacing: 6px;
+                            padding-right: 8px;
+                            alignment: start;
+
+                            if root.settings-section == "general": VerticalLayout {
+                                spacing: 6px;
+                                Card {
+                                    SettingRow {
+                                        label: root.set-language;
+                                        note: root.set-language-note;
+                                        Choice {
+                                            labels: root.lang-labels;
+                                            values: root.lang-tokens;
+                                            value: root.language-choice;
+                                            picked(v) => { root.language-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-face;
+                                        note: root.set-face-note;
+                                        Choice {
+                                            labels: root.face-labels;
+                                            values: ["window", "browser", "tui"];
+                                            value: root.face-default;
+                                            picked(v) => { root.face-default-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-theme;
+                                        note: root.set-theme-note;
+                                        Choice {
+                                            labels: root.theme-labels;
+                                            values: ["", "light", "dark"];
+                                            value: Theme.chosen;
+                                            picked(v) => { root.theme-picked(v); }
+                                        }
+                                    }
+                                }
+                                SectionHead { text: root.set-switch; }
             VerticalLayout {
                 spacing: 2px;
                 alignment: start;
@@ -4321,35 +4761,79 @@ export component MainWindow inherits Window {
                     wrap: word-wrap;
                 }
             }
-        }
+        
+                            }
 
-        Sheet {
-            title: root.lang-title;
-            open: root.panel == "language";
-            dismissed => { root.panel = ""; }
-            room-w: root.width - 40px;
-            room-h: root.height - 40px;
+                            if root.settings-section == "view": VerticalLayout {
+                                spacing: 6px;
+                                Card {
+                                    SettingRow {
+                                        label: root.set-layout;
+                                        Choice {
+                                            labels: root.layout-labels;
+                                            values: ["detail", "icons", "large"];
+                                            value: root.view-mode;
+                                            picked(v) => { root.view-clicked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-columns;
+                                        note: root.set-columns-note;
+                                        cols-push := Push {
+                                            label: root.set-columns-push;
+                                            clicked => {
+                                                root.columns-clicked(
+                                                    self.absolute-position.x,
+                                                    self.absolute-position.y + self.height + 4px);
+                                            }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-preview;
+                                        note: root.set-preview-note;
+                                        Push {
+                                            label: root.preview-on ? "✓" : "—";
+                                            asking: root.preview-on;
+                                            clicked => { root.peek-toggled(); }
+                                        }
+                                    }
+                                }
+                            }
 
-            VerticalLayout {
-                spacing: 2px;
-                alignment: start;
-
-                for l[i] in root.languages: FacetRow {
-                    label: l.label;
-                    count: l.count;
-                    on: root.language == l.token;
-                    clicked => { root.language-picked(l.token); }
-                }
-            }
-        }
-
-        Sheet {
-            title: root.disks-title;
-            open: root.panel == "disks";
-            dismissed => { root.panel = ""; }
-            room-w: root.width - 40px;
-            room-h: root.height - 40px;
-
+                            if root.settings-section == "disks": VerticalLayout {
+                                spacing: 6px;
+                                if root.disk-question != "": Rectangle {
+                                    border-radius: 8px;
+                                    border-width: Theme.hair;
+                                    border-color: Theme.focus;
+                                    background: Theme.focus.transparentize(0.9);
+                                    HorizontalLayout {
+                                        padding: 10px;
+                                        spacing: 8px;
+                                        Text {
+                                            text: root.disk-question;
+                                            color: Theme.ink;
+                                            font-size: 12.5px;
+                                            vertical-alignment: center;
+                                            horizontal-stretch: 1;
+                                            wrap: word-wrap;
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Push { label: root.disk-later; clicked => { root.disk-answered("later"); } }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Push { label: root.disk-never; clicked => { root.disk-answered("leave"); } }
+                                        }
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Push { label: root.disk-yes; asking: true; clicked => { root.disk-answered("index"); } }
+                                        }
+                                    }
+                                }
             VerticalLayout {
                 spacing: 4px;
                 alignment: start;
@@ -4366,26 +4850,110 @@ export component MainWindow inherits Window {
                 if root.disks.length == 0: Note { text: root.disks-none; }
                 Note { text: root.disks-after; }
             }
-        }
+        
+                                SectionHead { text: root.set-later; }
+                                Card {
+                                    SettingRow {
+                                        label: root.set-removable;
+                                        note: root.set-removable-note;
+                                        Choice {
+                                            labels: root.removable-labels;
+                                            values: ["", "always", "never"];
+                                            value: root.removable-choice;
+                                            picked(v) => { root.policy-picked("removable", v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-network;
+                                        note: root.set-network-note;
+                                        Choice {
+                                            labels: root.network-labels;
+                                            values: ["", "never"];
+                                            value: root.network-choice;
+                                            picked(v) => { root.policy-picked("network", v); }
+                                        }
+                                    }
+                                }
+                                SectionHead { text: root.set-folders; }
+                                Text {
+                                    text: root.set-folders-note;
+                                    color: Theme.ink-3;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                                for f in root.folders: HorizontalLayout {
+                                    height: 30px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: f;
+                                        color: Theme.ink;
+                                        font-family: Fonts.mono;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Push { label: "×"; clicked => { root.folder-dropped(f); } }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    height: 28px;
+                                    Rectangle {
+                                        border-width: Theme.hair;
+                                        border-radius: 4px;
+                                        border-color: Theme.line;
+                                        background: Theme.panel;
+                                        clip: true;
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            folder-field := TextInput {
+                                                text <=> root.folder-typed;
+                                                color: Theme.ink;
+                                                font-family: Fonts.mono;
+                                                font-size: 12px;
+                                                single-line: true;
+                                                vertical-alignment: center;
+                                                selection-background-color: Theme.selection;
+                                                selection-foreground-color: Theme.ink;
+                                                edited => {
+                                                    if (self.text.character-count > 400) {
+                                                        self.text = "";
+                                                    }
+                                                }
+                                                accepted => { root.folder-added(self.text); }
+                                            }
+                                        }
+                                        if folder-field.text == "": Text {
+                                            text: root.folder-hint;
+                                            color: Theme.ink-3;
+                                            font-family: Fonts.mono;
+                                            font-size: 12px;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            x: 8px;
+                                            width: parent.width - 16px;
+                                            height: parent.height;
+                                        }
+                                    }
+                                    Push {
+                                        label: root.folder-add;
+                                        clicked => { root.folder-added(root.folder-typed); }
+                                    }
+                                }
+                                if root.folder-error != "": Text {
+                                    text: root.folder-error;
+                                    color: Theme.q-not;
+                                    font-size: 12px;
+                                    wrap: word-wrap;
+                                }
+                            }
 
-        Sheet {
-            title: root.rules-title;
-            open: root.panel == "rules";
-            dismissed => { root.panel = ""; }
-            room-w: root.width - 40px;
-            room-h: root.height - 40px;
-            // The field takes the focus when the panel opens: clicking it does
-            // not, because activating the window hands focus to the query line.
-            changed open => {
-                if (self.open) {
-                    fresh.focus();
-                } else {
-                    root.focus-query();
-                }
-            }
-
-            // No scroller here: `Sheet` is one, and a `ScrollView` inside a
-            // `ScrollView` collapses the outer one to four lines.
+                            if root.settings-section == "rules": VerticalLayout {
             VerticalLayout {
                 spacing: 4px;
                 alignment: start;
@@ -4532,158 +5100,50 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-        }
+        
+                            }
 
-    // --- the question that comes before a change --------------------------
-    // Same shape as the menu overlay: a full-window sheet so the click that
-    // answers does not also land on the list. This one dims what is behind it.
-    if root.ask-open: Rectangle {
-        x: 0;
-        y: 0;
-        width: root.width;
-        height: root.height;
-        background: #00000066;
-
-        TouchArea {
-            // Clicking away is "no": a stray press lands on the safe answer.
-            clicked => {
-                root.ask-open = false;
-                root.ask-answer(false);
+                            if root.settings-section == "keys": VerticalLayout {
+            Text {
+                text: root.help-body;
+                color: Theme.ink-2;
+                font-size: 12.5px;
+                wrap: word-wrap;
+                vertical-alignment: top;
             }
-        }
-
-        Rectangle {
-            x: (root.width - self.width) / 2;
-            y: (root.height - self.height) / 2;
-            width: 420px;
-            height: ask-sheet.preferred-height;
-            background: Theme.panel;
-            border-width: Theme.hair;
-            border-color: Theme.line;
-            border-radius: 3px;
-            drop-shadow-blur: 26px;
-            drop-shadow-color: #00000080;
-
-            // Swallows the click, or the sheet behind answers "no".
-            TouchArea { }
-
-            ask-sheet := VerticalLayout {
-                padding: 20px;
-                spacing: 12px;
-
-                Text {
-                    text: root.ask-title;
-                    color: Theme.ink;
-                    font-size: 14px;
-                    font-weight: 650;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: root.ask-body;
-                    color: Theme.ink-3;
-                    font-family: Fonts.mono;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-                if root.ask-typing: Rectangle {
-                    height: 30px;
-                    // The keys go here as it opens, from F2 as from the menu.
-                    // A beat later, not in `init`: that runs mid-layout, and
-                    // taking focus there asks for the layout being made.
-                    Timer {
-                        interval: 1ms;
-                        triggered => {
-                            self.running = false;
-                            renaming.focus();
-                            renaming.select-all();
-                        }
-                    }
-                    border-radius: 3px;
-                    border-width: Theme.hair;
-                    border-color: Theme.focus;
-                    background: Theme.panel-2;
-                    HorizontalLayout {
-                        padding-left: 9px;
-                        padding-right: 9px;
-                        renaming := TextInput {
-                            text <=> root.ask-text;
-                            color: Theme.ink;
-                            font-family: Fonts.mono;
-                            font-size: 12.5px;
-                            single-line: true;
-                            vertical-alignment: center;
-                            selection-background-color: Theme.selection;
-                            selection-foreground-color: Theme.ink;
-                            // Back to the query when it closes.
-                            // Enter is yes, Escape no.
-                            accepted => {
-                                root.ask-open = false;
-                                root.ask-answer(true);
-                                root.focus-query();
+        
                             }
-                            key-pressed(e) => {
-                                if (e.text == Key.Escape) {
-                                    root.ask-open = false;
-                                    root.ask-answer(false);
-                                    root.focus-query();
-                                    return accept;
+
+                            if root.settings-section == "about": VerticalLayout {
+                                Text {
+                                    text: root.about-body;
+                                    color: Theme.ink-2;
+                                    font-size: 12.5px;
+                                    wrap: word-wrap;
                                 }
-                                return reject;
                             }
                         }
                     }
                 }
-                Rectangle { height: 4px; }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
+            }
 
-                    Rectangle {
-                        width: no-text.preferred-width + 26px;
-                        height: 28px;
-                        border-radius: 3px;
-                        border-width: Theme.hair;
-                        border-color: Theme.line;
-                        background: no-hit.has-hover ? Theme.hover : transparent;
-                        no-text := Text {
-                            text: root.ask-no;
-                            color: Theme.ink-2;
-                            font-size: 12.5px;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                        }
-                        no-hit := TouchArea {
-                            clicked => {
-                                root.ask-open = false;
-                                root.ask-answer(false);
-                                root.focus-query();
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        width: yes-text.preferred-width + 26px;
-                        height: 28px;
-                        border-radius: 3px;
-                        background: yes-hit.has-hover
-                            ? Theme.danger.transparentize(0.78)
-                            : Theme.danger.transparentize(0.88);
-                        border-width: Theme.hair;
-                        border-color: Theme.danger.transparentize(0.6);
-                        yes-text := Text {
-                            text: root.ask-yes;
-                            color: Theme.danger;
-                            font-size: 12.5px;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
-                        }
-                        yes-hit := TouchArea {
-                            clicked => {
-                                root.ask-open = false;
-                                root.ask-answer(true);
-                                root.focus-query();
-                            }
-                        }
+            // The way out, over the layout.
+            close-hit := TouchArea {
+                x: parent.width - 40px;
+                y: 12px;
+                width: 28px;
+                height: 28px;
+                mouse-cursor: pointer;
+                clicked => { root.panel = ""; }
+                Rectangle {
+                    border-radius: 6px;
+                    background: close-hit.has-hover ? Theme.hover : transparent;
+                    Text {
+                        text: "×";
+                        color: close-hit.has-hover ? Theme.ink : Theme.ink-3;
+                        font-size: 18px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
                 }
             }

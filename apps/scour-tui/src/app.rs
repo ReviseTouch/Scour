@@ -59,6 +59,8 @@ pub enum Spot {
     Strip(usize),
     /// A line of whatever panel is open.
     Panel(usize),
+    /// A section in the settings' list.
+    Section(usize),
     /// The query line.
     Query,
     /// The filter written beside the query: pressing it takes the filter off.
@@ -84,8 +86,6 @@ pub enum Panel {
     Rules,
     /// The disks, and the question about one that came.
     Disks,
-    /// Which of the two languages to speak.
-    Language,
     /// The desktop's key that opens Scour: what it is, and typing another.
     Key,
     /// Window, terminal, browser.
@@ -102,7 +102,54 @@ pub enum Panel {
     /// The question that comes before something that changes files. The cursor
     /// starts on the safe answer: a terminal cannot dim what is behind it.
     Ask,
+    /// The settings' first section: language, the face that opens, the theme,
+    /// and the way to the key and to the other faces.
+    General,
+    /// What happens to a disk plugged in or on the network, and folders
+    /// indexed on their own.
+    Later,
+    /// The keys, as a section to read.
+    Keys,
+    /// What is running.
+    About,
 }
+
+/// The settings screen's sections, in order: the panel that is each one's
+/// content, its title and the line under it, as msgids. One screen for what
+/// were separate panels, as in the window and the page.
+pub const SECTIONS: [(Panel, &str, &str); 7] = [
+    (
+        Panel::General,
+        "General",
+        "The same for every face: the window, the browser and the terminal read these.",
+    ),
+    (
+        Panel::Columns,
+        "List and look",
+        "Which columns the table shows.",
+    ),
+    (
+        Panel::Disks,
+        "Disks scanned",
+        "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan.",
+    ),
+    (
+        Panel::Later,
+        "Disks that come later",
+        "What happens to a disk plugged in or on the network, and folders added on their own.",
+    ),
+    (
+        Panel::Rules,
+        "Skipped",
+        "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
+    ),
+    (
+        Panel::Keys,
+        "Keyboard",
+        "What the keys do, and what the query understands.",
+    ),
+    (Panel::About, "About", "What is running, and what it holds."),
+];
 
 /// Which of the two the bare letters go to. Search is where it starts: the keys
 /// that move are always on the arrows, and letters that move are a choice.
@@ -262,6 +309,16 @@ pub struct App {
     /// The menu as it stands, built when it is opened. Held rather than rebuilt
     /// per frame: the row under it can move while it is up.
     pub menu: Vec<MenuLine>,
+    /// The settings screen is up, on the section whose panel is `panel`.
+    pub settings: bool,
+    /// What the settings hold, as they were read and as they were changed here:
+    /// `""` is "nobody chose" for every one of these.
+    pub theme: String,
+    pub face_default: String,
+    pub language_choice: String,
+    pub removable: String,
+    pub network: String,
+    pub folders: Vec<String>,
     /// What the menu is about: the row's name, or how many are picked; and
     /// where it is and what it weighs, or what the selection comes to.
     pub menu_title: String,
@@ -390,6 +447,13 @@ impl Default for App {
                 .filter_map(|id| scour_ui::column(id))
                 .collect(),
             menu: Vec::new(),
+            settings: false,
+            theme: String::new(),
+            face_default: String::new(),
+            language_choice: String::new(),
+            removable: String::new(),
+            network: String::new(),
+            folders: Vec::new(),
             menu_title: String::new(),
             menu_detail: String::new(),
             pending: None,
@@ -922,7 +986,7 @@ impl App {
     /// The labels are msgids: [`crate::draw::tool_spans`] measures and looks up.
     pub fn tools(&self) -> [(&'static str, &'static str); 8] {
         [
-            ("faces", "^U"),
+            ("settings", "F5"),
             ("lang", "^L"),
             ("skips", "^K"),
             // Where the window has a `⋮` at the end of the header row.
@@ -938,28 +1002,15 @@ impl App {
     /// Press one of them — the same thing its key does.
     pub fn tool(&mut self, which: usize) -> Want {
         match which {
-            0 => {
-                self.show(Panel::Faces);
-                Want::Nothing
-            }
-            1 => {
-                self.show(Panel::Language);
-                Want::Nothing
-            }
-            2 => {
-                self.show(Panel::Rules);
-                Want::Rules
-            }
-            3 => {
-                self.show(Panel::Columns);
-                Want::Nothing
-            }
+            0 | 1 => self.open_settings(Panel::General),
+            2 => self.open_settings(Panel::Rules),
+            3 => self.open_settings(Panel::Columns),
             4 => self.write_sheet(),
             5 => {
                 self.open_menu();
                 Want::Nothing
             }
-            7 => self.open_disks(),
+            7 => self.open_settings(Panel::Disks),
             _ => {
                 self.helping = !self.helping;
                 self.dirty = true;
@@ -1527,6 +1578,255 @@ impl App {
         true
     }
 
+    /// Open the settings on this section's panel, and say what it needs
+    /// asked for. The key's panel is asked for by the caller, which has the
+    /// desktop's words for it.
+    pub fn open_settings(&mut self, panel: Panel) -> Want {
+        self.settings = true;
+        self.helping = false;
+        self.panel = panel;
+        self.panel_at = 0;
+        self.note.clear();
+        self.dirty = true;
+        match panel {
+            Panel::Rules => Want::Rules,
+            Panel::Disks => Want::Disks,
+            _ => Want::Nothing,
+        }
+    }
+
+    pub fn close_settings(&mut self) {
+        self.settings = false;
+        self.panel = Panel::None;
+        self.panel_at = 0;
+        self.dirty = true;
+    }
+
+    /// Which section a panel belongs to: the key and the faces are reached
+    /// from the first, a folder being typed from the fourth.
+    pub fn section_of(panel: Panel) -> usize {
+        match panel {
+            Panel::Columns => 1,
+            Panel::Disks => 2,
+            Panel::Later | Panel::Ask => 3,
+            Panel::Rules => 4,
+            Panel::Keys => 5,
+            Panel::About => 6,
+            _ => 0,
+        }
+    }
+
+    /// The next section, or the one before, round.
+    pub fn settings_step(&mut self, by: isize) -> Want {
+        let at = Self::section_of(self.panel) as isize;
+        let n = SECTIONS.len() as isize;
+        let next = (at + by).rem_euclid(n) as usize;
+        self.open_settings(SECTIONS[next].0)
+    }
+
+    /// One of a few values, the next or the one before, round.
+    fn cycle(values: &[&str], now: &str, by: isize) -> String {
+        let at = values.iter().position(|v| *v == now).unwrap_or(0) as isize;
+        values[(at + by).rem_euclid(values.len() as isize) as usize].to_string()
+    }
+
+    /// The first section's lines: what each is, and what it is set to.
+    pub fn general_lines(&self) -> Vec<(String, String)> {
+        let language = if self.language_choice.is_empty() {
+            self.say("The desktop's").into_owned()
+        } else {
+            scour_i18n::LANGUAGES
+                .iter()
+                .find(|(tag, _)| *tag == self.language_choice)
+                .map(|(_, name)| (*name).to_string())
+                .unwrap_or_else(|| self.language_choice.clone())
+        };
+        let face = match self.face_default.as_str() {
+            "browser" => "Browser",
+            "tui" => "Terminal",
+            _ => "Window",
+        };
+        let theme = match self.theme.as_str() {
+            "light" => "Light",
+            "dark" => "Dark",
+            _ => "The desktop's",
+        };
+        vec![
+            (self.say("Language").into_owned(), format!("‹ {language} ›")),
+            (
+                self.say("When Scour opens").into_owned(),
+                format!("‹ {} ›", self.say(face)),
+            ),
+            (
+                self.say("Theme").into_owned(),
+                format!("‹ {} ›", self.say(theme)),
+            ),
+            (
+                format!("{}…", self.say("Keyboard shortcut")),
+                self.key_bound
+                    .clone()
+                    .unwrap_or_else(|| self.say("not bound").into_owned()),
+            ),
+            (
+                format!("{}…", self.say("Open another face now")),
+                String::new(),
+            ),
+        ]
+    }
+
+    /// Change the setting on this line of the first section: `by` is left or
+    /// right; a press is right.
+    pub fn general_side(&mut self, by: isize) -> Want {
+        let change = match self.panel_at {
+            0 => {
+                let mut tags: Vec<&str> = vec![""];
+                tags.extend(scour_i18n::LANGUAGES.iter().map(|(tag, _)| *tag));
+                let next = Self::cycle(&tags, &self.language_choice, by);
+                self.language_choice = next.clone();
+                // Spoken now: the same choice the panel made.
+                let speak = scour_i18n::choose(&next, "");
+                self.words = scour_i18n::Catalogue::for_language(&speak);
+                scour_settings::Change {
+                    language: Some(next),
+                    ..Default::default()
+                }
+            }
+            1 => {
+                let next = Self::cycle(&["window", "browser", "tui"], &self.face_default, by);
+                self.face_default = next.clone();
+                scour_settings::Change {
+                    face: Some(next),
+                    ..Default::default()
+                }
+            }
+            2 => {
+                let next = Self::cycle(&["", "light", "dark"], &self.theme, by);
+                self.theme = next.clone();
+                scour_settings::Change {
+                    theme: Some(next),
+                    ..Default::default()
+                }
+            }
+            _ => return Want::Nothing,
+        };
+        self.dirty = true;
+        Want::Remember(change)
+    }
+
+    /// The lines of the section on disks that come later.
+    pub fn later_lines(&self) -> Vec<(String, String)> {
+        let word = |v: &str| match v {
+            "always" => "Always scan",
+            "never" => "Never",
+            _ => "Ask",
+        };
+        let mut lines = vec![
+            (
+                self.say("A disk plugged in").into_owned(),
+                format!("‹ {} ›", self.say(word(&self.removable))),
+            ),
+            (
+                self.say("Network disks").into_owned(),
+                format!("‹ {} ›", self.say(word(&self.network))),
+            ),
+        ];
+        for f in &self.folders {
+            lines.push((f.clone(), format!("× {}", self.say("remove"))));
+        }
+        lines.push((format!("{}…", self.say("Add a folder")), String::new()));
+        lines
+    }
+
+    /// Left or right on a rule; a press is right, and on a folder takes it out,
+    /// and on the last line asks for one.
+    pub fn later_side(&mut self, by: isize, pressed: bool) -> Want {
+        let folders = self.folders.len();
+        let change = match self.panel_at {
+            0 => {
+                let next = Self::cycle(&["", "always", "never"], &self.removable, by);
+                self.removable = next.clone();
+                scour_settings::Change {
+                    removable: Some(next),
+                    ..Default::default()
+                }
+            }
+            1 => {
+                let next = Self::cycle(&["", "never"], &self.network, by);
+                self.network = next.clone();
+                scour_settings::Change {
+                    network: Some(next),
+                    ..Default::default()
+                }
+            }
+            at if at < 2 + folders => {
+                if !pressed {
+                    return Want::Nothing;
+                }
+                self.folders.remove(at - 2);
+                self.panel_at = self.panel_at.min(self.panel_lines().saturating_sub(1));
+                scour_settings::Change {
+                    folders: Some(self.folders.clone()),
+                    ..Default::default()
+                }
+            }
+            _ => {
+                if !pressed {
+                    return Want::Nothing;
+                }
+                self.pending = Some(("folder".into(), Vec::new()));
+                self.ask_title = self.say("Add a folder").into_owned();
+                self.ask_typing = true;
+                self.ask_text.clear();
+                self.ask_yes = self.say("add").into_owned();
+                self.panel = Panel::Ask;
+                self.panel_at = 0;
+                self.dirty = true;
+                return Want::Nothing;
+            }
+        };
+        self.dirty = true;
+        Want::Remember(change)
+    }
+
+    /// A folder typed in, checked here, where the disk can be looked at.
+    pub fn add_folder(&mut self, typed: &str) -> Want {
+        let typed = typed.trim();
+        let path = match typed.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                format!("{}{rest}", std::env::var("HOME").unwrap_or_default())
+            }
+            _ => typed.to_owned(),
+        };
+        let native = std::path::Path::new(&path);
+        let wrong = if typed.is_empty() {
+            Some("Type a folder's path first.")
+        } else if !native.is_absolute() {
+            Some("A folder's full path, from the root.")
+        } else if !native.is_dir() {
+            Some("There is no folder there.")
+        } else {
+            None
+        };
+        if let Some(msgid) = wrong {
+            self.note = self.say(msgid).into_owned();
+            return Want::Nothing;
+        }
+        let path = scour_core::path::from_path(native);
+        let path = match path.trim_end_matches('/') {
+            "" => "/".to_owned(),
+            p => p.to_owned(),
+        };
+        if self.folders.contains(&path) {
+            self.note = self.say("That folder is already in the list.").into_owned();
+            return Want::Nothing;
+        }
+        self.folders.push(path);
+        Want::Remember(scour_settings::Change {
+            folders: Some(self.folders.clone()),
+            ..Default::default()
+        })
+    }
+
     /// What a drag from this row carries: the selection when the row is in
     /// it, else the row alone — what a file manager does.
     pub fn drag_rows(&self, row: usize) -> Vec<String> {
@@ -1840,6 +2140,24 @@ impl App {
     /// Answer the question that is up: `0` is the line being typed into, `1` is
     /// *Cancel*, and only `2` is yes.
     pub fn ask_answer(&mut self, which: usize) -> Want {
+        // A folder typed in the settings goes back to where it was asked.
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(what, _)| what == "folder")
+        {
+            self.pending = None;
+            let typed = std::mem::take(&mut self.ask_text);
+            self.ask_typing = false;
+            self.panel = Panel::Later;
+            self.panel_at = self.panel_lines().saturating_sub(1);
+            self.dirty = true;
+            return if which < 2 {
+                Want::Nothing
+            } else {
+                self.add_folder(&typed)
+            };
+        }
         self.panel = Panel::None;
         self.dirty = true;
         let Some((what, paths)) = self.pending.take() else {
@@ -1911,7 +2229,6 @@ impl App {
         match self.panel {
             Panel::Rules => self.rules.len(),
             Panel::Disks => self.disk_lines(),
-            Panel::Language => 2,
             // The line typed into and the one that removes. The state under
             // them is drawn but not walked: a cursor on a fact is a press that
             // does nothing. Where nothing can be bound there is only the
@@ -1924,7 +2241,10 @@ impl App {
             // Every column, and the line that goes back to the default.
             Panel::Columns => scour_ui::COLUMNS.len() + 1,
             Panel::Ask => 3,
-            Panel::None => 0,
+            Panel::General => 5,
+            // The two rules, a line a folder, and the one that adds.
+            Panel::Later => 3 + self.folders.len(),
+            Panel::Keys | Panel::About | Panel::None => 0,
         }
     }
 
@@ -1962,24 +2282,6 @@ impl App {
             .saturating_add_signed(by)
             .min(lines.saturating_sub(1));
         self.dirty = true;
-    }
-
-    /// Speak this language from now on, by its place in `scour_i18n::LANGUAGES`:
-    /// 0 is English, 1 is Turkish. Applied now and remembered for every face.
-    pub fn speak(&mut self, which: usize) -> Want {
-        let Some((tag, endonym)) = scour_i18n::LANGUAGES.get(which) else {
-            return Want::Nothing;
-        };
-        // The words change now, not on the next start: immediate mode redraws
-        // every cell from this struct, digits and their punctuation included.
-        self.words = scour_i18n::Catalogue::for_language(tag);
-        self.panel = Panel::None;
-        self.note = (*endonym).to_string();
-        self.dirty = true;
-        Want::Remember(scour_settings::Change {
-            language: Some((*tag).to_string()),
-            ..Default::default()
-        })
     }
 
     /// Bind what has been typed into the key panel. Nothing is read here: what

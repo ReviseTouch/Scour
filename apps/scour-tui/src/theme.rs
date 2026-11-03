@@ -29,6 +29,20 @@ impl Theme {
         }
     }
 
+    /// The same, in the scheme the settings chose: `light`, `dark`, or `""`
+    /// for whatever this one already is.
+    pub fn chosen(&self, choice: &str) -> Theme {
+        Theme {
+            palette: match choice {
+                "light" => &LIGHT,
+                "dark" => &DARK,
+                _ => self.palette,
+            },
+            truecolor: self.truecolor,
+            theirs: self.theirs,
+        }
+    }
+
     fn of(&self, c: Rgba) -> Color {
         if self.theirs {
             return Color::Reset;

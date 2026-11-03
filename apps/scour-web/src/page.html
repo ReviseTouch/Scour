@@ -1433,6 +1433,99 @@
     background: var(--line); color: var(--ink); outline: none;
   }
 
+
+  /* ---------------- the settings page ---------------- */
+  /* One page for what were four panels; the panels themselves are moved in,
+     so everything that fills them keeps working. */
+  .settings {
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--sans);
+  }
+  .settings[hidden] { display: none; }
+  .set-sheet {
+    width: min(880px, calc(100vw - 40px)); height: min(640px, calc(100vh - 40px));
+    display: flex; overflow: hidden; position: relative;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(0,0,0,.5);
+  }
+  .set-nav {
+    width: 210px; flex: none; box-sizing: border-box;
+    padding: 18px 10px 16px; display: flex; flex-direction: column; gap: 2px;
+    background: var(--panel); border-right: 1px solid var(--line);
+  }
+  .set-nav h2 { margin: 0 10px 12px; font-size: 16px; font-weight: 600; color: var(--ink); }
+  .set-nav button {
+    display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px;
+    border: 0; border-radius: 6px; background: none; cursor: pointer;
+    font: inherit; font-size: 13.5px; color: var(--ink-2); text-align: left;
+  }
+  .set-nav button svg { width: 16px; height: 16px; flex: none; }
+  .set-nav button:hover { background: var(--line-soft); color: var(--ink); }
+  .set-nav button.on { background: var(--line); color: var(--ink); }
+  .set-nav .badge {
+    margin-left: auto; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 5px;
+    box-sizing: border-box; background: var(--q-key); color: var(--ground);
+    font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+  }
+  .set-nav .badge[hidden] { display: none; }
+  .set-foot { margin: auto 10px 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.45; }
+  .set-main { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 26px 22px; box-sizing: border-box; }
+  .set-main h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; color: var(--ink); }
+  .set-lead { margin: 0 0 16px; font-size: 12.5px; color: var(--ink-2); }
+  .set-x {
+    position: absolute; top: 12px; right: 12px; width: 28px; height: 28px;
+    border: 0; border-radius: 6px; background: none; color: var(--ink-3);
+    font-size: 18px; cursor: pointer;
+  }
+  .set-x:hover { background: var(--hover); color: var(--ink); }
+  .settings section[hidden] { display: none; }
+  .set-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .srow {
+    display: flex; align-items: center; gap: 14px; min-height: 54px;
+    padding: 8px 14px; box-sizing: border-box;
+  }
+  .srow + .srow { border-top: 1px solid var(--line); }
+  .srow .t { flex: 1; min-width: 0; }
+  .srow .lab { font-size: 13.5px; color: var(--ink); }
+  .srow .desc { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .seg {
+    display: flex; gap: 2px; padding: 2px; height: 32px; box-sizing: border-box; flex: none;
+    border: 1px solid var(--line); border-radius: 7px; background: var(--ground);
+  }
+  .seg button {
+    border: 0; border-radius: 5px; background: none; padding: 0 11px;
+    font: inherit; font-size: 12.5px; color: var(--ink-2); cursor: pointer;
+  }
+  .seg button:hover { background: var(--hover); color: var(--ink); }
+  .seg button.on { background: var(--line); color: var(--ink); }
+  .set-push {
+    height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel-2); color: var(--ink); font: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .set-push:hover { border-color: var(--q-key); }
+  .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+  .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
+  ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
+  ul.folders li { display: flex; align-items: center; gap: 8px; height: 30px; }
+  ul.folders code { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  form.folder { display: flex; gap: 6px; }
+  form.folder input {
+    flex: 1; height: 30px; box-sizing: border-box; padding: 0 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--ground);
+    color: var(--ink); font-family: var(--mono); font-size: 12px;
+  }
+  .folder-err { margin: 6px 2px 0; font-size: 12px; color: var(--q-not); }
+  .folder-err:empty { display: none; }
+  #set-about { margin: 0; font: 12.5px/1.7 var(--sans); color: var(--ink-2); white-space: pre-wrap; }
+  /* The panels moved in: no longer floating, and the page gives the title. */
+  .settings .sheet, .settings .help {
+    position: static; width: auto; max-height: none; overflow: visible;
+    background: none; border: 0; box-shadow: none; padding: 0;
+  }
+  .settings .sheet > h2, .settings .help > header { display: none; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -1503,22 +1596,25 @@
       <span id="path-note" data-t="connecting…"></span>
       <!-- One group: each of these is about the window, not the results. -->
       <div class="tools" role="group" data-t-aria="window controls">
-        <button type="button" id="faces" class="about" aria-haspopup="dialog"
+        <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
                 aria-expanded="false" data-t-title="how to run it"
                 data-t-aria="switch between the window, the terminal and the browser">⇄</button>
-        <button type="button" id="lang" class="about" aria-haspopup="menu"
+        <button type="button" id="lang" class="about" hidden aria-haspopup="menu"
                 aria-expanded="false" data-t-title="language"
                 data-t-aria="choose the language">文</button>
-        <button type="button" id="rules" class="about" aria-haspopup="dialog"
+        <button type="button" id="rules" class="about" hidden aria-haspopup="dialog"
                 aria-expanded="false" data-t-title="what is skipped"
                 data-t-aria="the rules that keep files out of the index">⊘</button>
-        <button type="button" id="disks" class="about" aria-haspopup="dialog"
+        <button type="button" id="disks" class="about" hidden aria-haspopup="dialog"
                 aria-expanded="false" data-t-title="disks"
                 data-t-aria="the disks this machine has, and which are indexed">⛁</button>
         <button type="button" id="csv" class="about"
                 data-t-title="export as CSV" data-t-aria="export the whole result as CSV">⤓</button>
-        <button type="button" id="about" class="about" aria-pressed="false"
+        <button type="button" id="about" class="about" aria-pressed="false" hidden
                 data-t-title="help" data-t-aria="show the help">?</button>
+        <!-- Faces, language, disks, skips and the keys: one page, Ctrl+,. -->
+        <button type="button" id="settings-btn" class="about" aria-haspopup="dialog"
+                data-t-title="Settings" data-t-aria="Settings"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
       </div>
       <!-- `data-view` is the word the service stores; see `Settings::layout`. -->
       <div class="views" id="peek-switch" role="group">
@@ -1559,6 +1655,64 @@
       <p class="why" data-t="Every disk on this machine. A built-in one is indexed unless switched off; one plugged in or on the network is asked about first."></p>
       <div id="disks-body"></div>
       <p class="why" data-t="Switching a disk on walks it; switching one off takes its files out of the index."></p>
+    </div>
+
+
+    <!-- The settings: a page of sections. The panels above are moved into it
+         when the script starts, so what fills them is unchanged. -->
+    <div id="settings" class="settings" hidden role="dialog" aria-modal="true" data-t-aria="Settings">
+      <div class="set-sheet">
+        <nav class="set-nav">
+          <h2 data-t="Settings"></h2>
+        <button type="button" data-sec="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-t="General"></span></button>
+        <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List and look"></span></button>
+        <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks scanned"></span><span class="badge" id="set-badge" hidden>1</span></button>
+        <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
+        <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
+        <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
+          <p class="set-foot" data-t="Changes apply at once; there is nothing to save. Esc closes."></p>
+        </nav>
+        <div class="set-main">
+          <button type="button" class="set-x" data-t-aria="close">×</button>
+          <h1 id="set-title"></h1>
+          <p class="set-lead" id="set-lead"></p>
+          <section data-sec="general">
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Language"></div><div class="desc" data-t="Empty follows the desktop."></div></div><div class="seg" id="seg-lang"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="When Scour opens"></div><div class="desc" data-t="Which face the key and the menu entry open."></div></div><div class="seg" id="seg-face"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Theme"></div><div class="desc" data-t="Follows the desktop unless one is chosen."></div></div><div class="seg" id="seg-theme"></div></div>
+            </div>
+            <div class="shead" data-t="Open another face now"></div>
+            <div id="set-faces"></div>
+          </section>
+          <section data-sec="view" hidden>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Layout"></div></div><div class="seg" id="seg-layout"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
+            </div>
+          </section>
+          <section data-sec="disks" hidden>
+            <div id="set-disks"></div>
+            <div class="shead" data-t="Disks that come later"></div>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="A disk plugged in"></div><div class="desc" data-t="A stick, an external disk, a card."></div></div><div class="seg" id="seg-removable"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Not watched: looked at again every minute."></div></div><div class="seg" id="seg-network"></div></div>
+            </div>
+            <div class="shead" data-t="Folders added"></div>
+            <p class="set-note" data-t="One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing."></p>
+            <ul class="folders" id="folders"></ul>
+            <form class="folder" id="folder-form">
+              <input type="text" spellcheck="false" autocomplete="off" data-t-ph="/a/folder or ~/a/folder">
+              <button type="submit" class="set-push" data-t="add"></button>
+            </form>
+            <p class="folder-err" id="folder-err"></p>
+          </section>
+          <section data-sec="rules" hidden><div id="set-rules"></div></section>
+          <section data-sec="keys" hidden><div id="set-keys"></div></section>
+          <section data-sec="about" hidden><pre id="set-about"></pre></section>
+        </div>
+      </div>
     </div>
 
     <!-- A disk that came and has not been answered for. One at a time. -->
@@ -4067,6 +4221,8 @@
 
   /* Applied to a window that has already drawn itself with defaults. */
   function applySettings(s) {
+    KEPT = s;
+    applyTheme(s.theme || "");
     const oldSort = sortKey;
     const oldDescending = sortDesc;
     if (Array.isArray(s.columns) && s.columns.length) {
@@ -4098,6 +4254,8 @@
 
   /* Held, because both closures want it and only one owns the transport. */
   let VIEW = {};
+  /* The settings as the service last gave them, for the settings page. */
+  let KEPT = null;
   /* Shared: a duplicate hunt on opening the report means the same everywhere. */
   let DUPES_OPEN = false;
 
@@ -6154,6 +6312,9 @@
     const d = DISK_LIST.find((x) => x.state === "asking");
     diskAsk.hidden = !d;
     disksBtn.classList.toggle("asking", !!d);
+    const badge = document.getElementById("set-badge");
+    if (badge) badge.hidden = !d;
+    settingsBtnAsking(!!d);
     if (!d) return;
     diskAsk.dataset.id = d.volume.id;
     const question = (DISKS.questions || {})[d.volume.kind] || "{name}";
@@ -6241,6 +6402,169 @@
     /* Every msgid here is its own English, so a failed fetch still draws. */
     applyLanguage();
   });
+
+
+  /* ---------------- the settings page ----------------
+   * The panels that were four buttons are moved in once and shown with their
+   * section; their own code fills them as before. What the service holds is
+   * read back from `KEPT`, which `applySettings` keeps. */
+  const settingsBox = document.getElementById("settings");
+  const settingsBtn = document.getElementById("settings-btn");
+  document.getElementById("set-faces").appendChild(facesPanel);
+  document.getElementById("set-disks").appendChild(disksPanel);
+  document.getElementById("set-rules").appendChild(rulesPanel);
+  document.getElementById("set-keys").appendChild(helpBox);
+  const SECTIONS = {
+    general: ["General", "The same for every face: the window, the browser and the terminal read these."],
+    view: ["List and look", "How the list is drawn, and what it shows."],
+    disks: ["Disks scanned", "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."],
+    rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
+    keys: ["Keyboard", "What the keys do, and what the query understands."],
+    about: ["About", "What is running, and what it holds."],
+  };
+  let SECTION = "general";
+
+  /* A few buttons, side by side, the one in force raised. */
+  function seg(id, items, current, pick) {
+    const el = document.getElementById(id);
+    el.innerHTML = items.map(([value, label]) =>
+      `<button type="button" data-v="${esc(value)}" class="${value === current ? "on" : ""}">` +
+      `${esc(label)}</button>`).join("");
+    el.onclick = (e) => {
+      const b = e.target.closest("button[data-v]");
+      if (b) pick(b.dataset.v);
+    };
+  }
+
+  function settingsBtnAsking(on) {
+    const b = document.getElementById("settings-btn");
+    if (b) b.classList.toggle("asking", on);
+  }
+
+  function applyTheme(theme) {
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    else delete document.documentElement.dataset.theme;
+  }
+
+  function drawSettings() {
+    const k = KEPT || {};
+    seg("seg-lang", [["", T("The desktop's")], ...LANGUAGES.map(({ tag, name }) => [tag, name])],
+      k.language || "", (v) => { KEPT.language = v; chooseLanguage(v); drawSettings(); });
+    seg("seg-face", [["window", T("Window")], ["browser", T("Browser")], ["tui", T("Terminal")]],
+      k.face || "window", (v) => { KEPT.face = v; keep({ face: v }); drawSettings(); });
+    seg("seg-theme", [["", T("The desktop's")], ["light", T("Light")], ["dark", T("Dark")]],
+      k.theme || "", (v) => { KEPT.theme = v; applyTheme(v); keep({ theme: v }); drawSettings(); });
+    const mode = (document.querySelector("#views button[aria-pressed=true]") || {}).dataset;
+    seg("seg-layout", [["detail", T("Details")], ["icons", T("Icons")], ["large", T("Large icons")]],
+      (mode && mode.view) || "detail", (v) => {
+        const b = document.querySelector(`#views button[data-view="${v}"]`);
+        if (b) b.click();
+        drawSettings();
+      });
+    const peekOn = peekToggle.getAttribute("aria-pressed") === "true";
+    seg("seg-peek", [["on", T("On")], ["off", T("Off")]], peekOn ? "on" : "off", (v) => {
+      if ((v === "on") !== (peekToggle.getAttribute("aria-pressed") === "true")) peekToggle.click();
+      drawSettings();
+    });
+    seg("seg-removable", [["", T("Ask")], ["always", T("Always scan")], ["never", T("Never")]],
+      k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
+    seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
+      k.network || "", (v) => { KEPT.network = v; keep({ network: v }); loadDisks(); drawSettings(); });
+    const folders = k.folders || [];
+    document.getElementById("folders").innerHTML = folders.map((f) =>
+      `<li><code title="${esc(f)}">${esc(f)}</code>` +
+      `<button type="button" class="set-push" data-drop="${esc(f)}">×</button></li>`).join("");
+  }
+
+  function showSection(sec) {
+    SECTION = sec;
+    for (const b of settingsBox.querySelectorAll(".set-nav button[data-sec]")) {
+      b.classList.toggle("on", b.dataset.sec === sec);
+    }
+    for (const el of settingsBox.querySelectorAll("section[data-sec]")) el.hidden = el.dataset.sec !== sec;
+    document.getElementById("set-title").textContent = T(SECTIONS[sec][0]);
+    document.getElementById("set-lead").textContent = T(SECTIONS[sec][1]);
+    facesPanel.hidden = sec !== "general";
+    rulesPanel.hidden = sec !== "rules";
+    disksPanel.hidden = sec !== "disks";
+    helpBox.hidden = sec !== "keys";
+    if (sec === "general") { ARMED = ""; drawFaces(); loadHotkey(); }
+    if (sec === "rules") loadRules();
+    if (sec === "disks") { drawDisks(); loadDisks(); }
+    if (sec === "about") {
+      SERVICE.get("status", {}).then((st) => {
+        document.getElementById("set-about").textContent =
+          `${fmt(st.entries)} ${T("entries")}\n` +
+          `${T("index")} ${bytes(st.index_bytes)}  ·  ${st.sources} ${T("sources")}  ·  ` +
+          `${st.watching} ${T("watching")}`;
+      }).catch(() => {});
+    }
+    drawSettings();
+  }
+
+  function openSettings(sec) {
+    settingsBox.hidden = false;
+    showSection(sec || SECTION);
+  }
+  function closeSettings() {
+    settingsBox.hidden = true;
+    facesPanel.hidden = rulesPanel.hidden = disksPanel.hidden = true;
+    q.focus();
+  }
+
+  settingsBtn.addEventListener("click", () => (settingsBox.hidden ? openSettings() : closeSettings()));
+  settingsBox.addEventListener("click", (e) => {
+    if (e.target === settingsBox) { closeSettings(); return; }
+    if (e.target.closest(".set-x")) { closeSettings(); return; }
+    const nav = e.target.closest(".set-nav button[data-sec]");
+    if (nav) { showSection(nav.dataset.sec); return; }
+    const drop = e.target.closest("button[data-drop]");
+    if (drop && KEPT) {
+      KEPT.folders = (KEPT.folders || []).filter((f) => f !== drop.dataset.drop);
+      keep({ folders: KEPT.folders });
+      drawSettings();
+    }
+  });
+  document.getElementById("set-cols").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const pick = document.getElementById("pick");
+    if (pick) pick.click();
+  });
+  /* A folder is a path from the root, or from `~`. Whether it is there is the
+     service's to find out: nothing here can look at the disk. */
+  document.getElementById("folder-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const box = e.target.querySelector("input");
+    const err = document.getElementById("folder-err");
+    let v = box.value.trim();
+    if (!v) { err.textContent = T("Type a folder's path first."); return; }
+    if (v === "~" || v.startsWith("~/")) v = HOME + v.slice(1);
+    if (!v.startsWith("/")) { err.textContent = T("A folder's full path, from the root."); return; }
+    v = v.replace(/\/+$/, "") || "/";
+    const have = (KEPT && KEPT.folders) || [];
+    if (have.includes(v)) { err.textContent = T("That folder is already in the list."); return; }
+    KEPT.folders = [...have, v];
+    keep({ folders: KEPT.folders });
+    box.value = "";
+    err.textContent = "";
+    drawSettings();
+    loadDisks();
+  });
+  /* Escape closes the page before anything under it; Ctrl+, opens it. */
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "," && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (settingsBox.hidden) openSettings(); else closeSettings();
+    } else if (e.key === "Escape" && !settingsBox.hidden) {
+      e.stopImmediatePropagation();
+      closeSettings();
+    }
+  }, true);
+  /* The old ways in still lead here. */
+  for (const [id, sec] of [["faces", "general"], ["lang", "general"], ["rules", "rules"], ["disks", "disks"], ["about", "keys"]]) {
+    const b = document.getElementById(id);
+    if (b) b.addEventListener("click", (e) => { e.stopImmediatePropagation(); openSettings(sec); }, true);
+  }
 
   /* What the report may reach: it is a separate closure, so anything
    * unpublished throws into a `catch` that reads as the service being down. */

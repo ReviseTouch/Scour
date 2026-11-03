@@ -1892,3 +1892,164 @@ msgstr "Çöpe"
 # The menu's heading over a selection: "9 files · 3 folders · 48 MiB".
 msgid "{n} files"
 msgstr "{n} dosya"
+
+# The settings page: one page for what were four panels.
+msgid "Settings"
+msgstr "Ayarlar"
+
+msgid "Changes apply at once; there is nothing to save. Esc closes."
+msgstr "Değişiklikler hemen geçerli; kaydedilecek bir şey yok. Esc kapatır."
+
+msgid "General"
+msgstr "Genel"
+
+msgid "List and look"
+msgstr "Liste ve görünüm"
+
+msgid "Disks scanned"
+msgstr "Taranan diskler"
+
+msgid "Skipped"
+msgstr "Atlananlar"
+
+msgid "Keyboard"
+msgstr "Klavye"
+
+msgid "About"
+msgstr "Hakkında"
+
+msgid "The same for every face: the window, the browser and the terminal read these."
+msgstr "Her yüz için aynı: pencere, tarayıcı ve uçbirim bunları okur."
+
+msgid "How the list is drawn, and what it shows."
+msgstr "Listenin nasıl çizildiği ve neyi gösterdiği."
+
+msgid "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."
+msgstr "Scour bu disklerdeki her dosyayı bilir. Kapatılan disk indeksten çıkar; geri açmak bir tarama sürer."
+
+msgid "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."
+msgstr "Taranan disklerin içinde bakılmayan yerler. Kapatılan kural silinmez; yeniden açılabilir."
+
+msgid "What the keys do, and what the query understands."
+msgstr "Tuşlar ne yapar, sorgu neyi anlar."
+
+msgid "What is running, and what it holds."
+msgstr "Ne çalışıyor, ne tutuyor."
+
+msgid "Language"
+msgstr "Dil"
+
+msgid "Empty follows the desktop."
+msgstr "Masaüstünün dilini izler."
+
+msgid "The desktop's"
+msgstr "Masaüstününki"
+
+msgid "When Scour opens"
+msgstr "Scour açılınca"
+
+msgid "Which face the key and the menu entry open."
+msgstr "Kısayol ve menüdeki giriş hangi yüzü açsın."
+
+msgid "Open another face now"
+msgstr "Şimdi başka bir yüzde aç"
+
+msgid "Theme"
+msgstr "Tema"
+
+msgid "Follows the desktop unless one is chosen."
+msgstr "Seçilmedikçe masaüstünü izler."
+
+msgid "Light"
+msgstr "Açık"
+
+msgid "Dark"
+msgstr "Koyu"
+
+msgid "Layout"
+msgstr "Düzen"
+
+msgid "Icons"
+msgstr "Simgeler"
+
+msgid "Large icons"
+msgstr "Büyük simgeler"
+
+msgid "Columns"
+msgstr "Kolonlar"
+
+msgid "Which ones, and their widths back to the default."
+msgstr "Hangileri görünsün; genişlikleri varsayılana döndürmek de buradan."
+
+msgid "Choose…"
+msgstr "Seç…"
+
+msgid "The column beside the list. Space opens it too."
+msgstr "Listenin yanındaki sütun. Boşluk tuşu da açar."
+
+msgid "Disks that come later"
+msgstr "Sonradan gelen diskler"
+
+msgid "A disk plugged in"
+msgstr "Takılan disk"
+
+msgid "A stick, an external disk, a card."
+msgstr "USB bellek, harici disk, kart."
+
+msgid "Ask"
+msgstr "Sor"
+
+msgid "Always scan"
+msgstr "Hep tara"
+
+msgid "Network disks"
+msgstr "Ağ diskleri"
+
+msgid "SMB, NFS, SSHFS. Not watched: looked at again every minute."
+msgstr "SMB, NFS, SSHFS. İzlenemez; dakikada bir yeniden bakılır."
+
+msgid "Folders added"
+msgstr "Eklenen klasörler"
+
+msgid "One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing."
+msgstr "Bütün bir disk yerine tek bir klasör: örneğin kapatılmış bir diskteki bir klasör. Zaten taranan bir diskin içindeki klasör bir şey eklemez."
+
+msgid "/a/folder or ~/a/folder"
+msgstr "/bir/klasör ya da ~/bir/klasör"
+
+msgid "Type a folder's path first."
+msgstr "Önce bir klasörün yolunu yazın."
+
+msgid "A folder's full path, from the root."
+msgstr "Klasörün kökten başlayan tam yolu gerekiyor."
+
+msgid "There is no folder there."
+msgstr "Orada bir klasör yok."
+
+msgid "That folder is already in the list."
+msgstr "Bu klasör zaten listede."
+
+msgid "On"
+msgstr "Açık"
+
+msgid "Off"
+msgstr "Kapalı"
+
+# The terminal's settings screen.
+msgid "Add a folder"
+msgstr "Klasör ekle"
+
+msgid "Esc closes · Tab the next section"
+msgstr "Esc kapatır · Tab sonraki bölüm"
+
+msgid "↑↓ move · ←→ change · Enter press · Tab section · Esc close"
+msgstr "↑↓ gez · ←→ değiştir · Enter bas · Tab bölüm · Esc kapat"
+
+msgid "scour status says what the service holds."
+msgstr "Servisin ne tuttuğunu scour status söyler."
+
+msgid "What happens to a disk plugged in or on the network, and folders added on their own."
+msgstr "Takılan ya da ağdaki bir diske ne olacağı ve tek başına eklenen klasörler."
+
+msgid "Which columns the table shows."
+msgstr "Tablonun hangi kolonları gösterdiği."

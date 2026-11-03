@@ -40,7 +40,17 @@ pub fn room(height: u16) -> usize {
 }
 
 pub fn frame(f: &mut Frame, app: &App, theme: &Theme) {
+    let chosen = theme.chosen(&app.theme);
+    let theme = &chosen;
     let area = f.area();
+    // The settings are a screen of their own, over everything but the help.
+    if app.settings {
+        settings_screen(f, area, app, theme);
+        if app.helping {
+            help(f, area, app, theme);
+        }
+        return;
+    }
     // How this language punctuates numbers, off the catalogue rather than the
     // desktop, so switching the language switches the digits with the words.
     let mark = app.mark();
@@ -373,16 +383,272 @@ fn menu_panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
 }
 
-/// Whatever panel is open, over the middle of the screen. One drawing for all
-/// of them: a title, a list, and a cursor on one line of it.
-fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    if app.panel == Panel::Menu {
-        return menu_panel(f, area, app, theme);
+/// Where the settings screen puts things: the sections down the left, the
+/// open section's lines on the right from `first`, one row each.
+pub struct SettingsLayout {
+    pub side: Rect,
+    pub right: Rect,
+    pub first: u16,
+    pub room: usize,
+    pub lead: Vec<String>,
+}
+
+/// How wide the sections' column is.
+const SECTIONS_WIDE: u16 = 26;
+
+pub fn settings_layout(area: Rect, app: &App) -> SettingsLayout {
+    let body_y = area.y + 2;
+    let body_h = area.height.saturating_sub(4);
+    let side = Rect::new(area.x, body_y, SECTIONS_WIDE.min(area.width), body_h);
+    let right_x = area.x + SECTIONS_WIDE + 2;
+    let right = Rect::new(
+        right_x,
+        body_y,
+        area.width.saturating_sub(SECTIONS_WIDE + 3),
+        body_h,
+    );
+    let section = crate::app::SECTIONS[App::section_of(app.panel)];
+    let lead: Vec<String> = wrapped(
+        &app.say(section.2),
+        right.width.saturating_sub(2) as usize,
+        true,
+    )
+    .into_iter()
+    .map(|l| l.text)
+    .collect();
+    let first = body_y + 2 + lead.len() as u16;
+    let room = (body_y + body_h).saturating_sub(first) as usize;
+    SettingsLayout {
+        side,
+        right,
+        first,
+        room,
+        lead,
     }
-    // The same six the drawing takes off below: the indent, the border and the
-    // gap the shortcut sits in.
-    let wrap = panel_width(area).saturating_sub(6) as usize;
-    let (title, lines): (std::borrow::Cow<str>, Vec<PanelLine>) = match app.panel {
+}
+
+/// The open section's lines, with the rows a rule takes: the row each line
+/// is drawn on, counted from `first`, after scrolling the cursor into view.
+fn settings_rows(app: &App, lines: &[PanelLine], room: usize) -> (usize, Vec<(usize, usize)>) {
+    let mut rows = Vec::new();
+    let mut row = 0usize;
+    for (at, line) in lines.iter().enumerate() {
+        if line.rule && at > 0 {
+            row += 1;
+        }
+        rows.push((at, row));
+        row += 1;
+    }
+    let cursor_row = rows.get(app.panel_at).map_or(0, |(_, r)| *r);
+    let from = cursor_row.saturating_sub(room.saturating_sub(1));
+    (from, rows)
+}
+
+/// What is under a press on the settings screen.
+pub enum SettingsHit {
+    Section(usize),
+    Line(usize),
+}
+
+pub fn settings_hit(app: &App, area: Rect, col: u16, row: u16) -> Option<SettingsHit> {
+    let at = settings_layout(area, app);
+    if col < at.side.x + at.side.width && row >= at.side.y {
+        let i = (row - at.side.y) as usize;
+        return (i < crate::app::SECTIONS.len()).then_some(SettingsHit::Section(i));
+    }
+    if col < at.right.x || row < at.first {
+        return None;
+    }
+    let (_, lines) = panel_content(app, at.right.width.saturating_sub(4) as usize)?;
+    let (from, rows) = settings_rows(app, &lines, at.room);
+    let want = (row - at.first) as usize + from;
+    let pressable = app.panel_lines();
+    rows.iter()
+        .find(|(i, r)| *r == want && *i < pressable)
+        .map(|(i, _)| SettingsHit::Line(*i))
+}
+
+fn settings_screen(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    f.render_widget(Clear, area);
+    f.render_widget(Block::new().style(Style::new().bg(theme.back())), area);
+    let at = settings_layout(area, app);
+    let wide = area.width as usize;
+    let head = app.say("Settings").into_owned();
+    let hint = app.say("Esc closes · Tab the next section").into_owned();
+    let gap = wide.saturating_sub(head.chars().count() + hint.chars().count() + 3);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" {head}"),
+                Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(gap)),
+            Span::styled(format!("{hint} "), Style::new().fg(theme.ink_3())),
+        ])),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(wide),
+            Style::new().fg(theme.line()),
+        )),
+        Rect::new(area.x, area.y + 1, area.width, 1),
+    );
+
+    // The sections, the open one lit.
+    let open = App::section_of(app.panel);
+    let mut side = Vec::new();
+    for (i, (_, title, _)) in crate::app::SECTIONS.iter().enumerate() {
+        let text = format!("  {}", app.say(title));
+        let pad = (SECTIONS_WIDE as usize).saturating_sub(text.chars().count());
+        let lit = if app.pressed == Spot::Section(i) {
+            Style::new().bg(theme.key()).fg(theme.back())
+        } else if i == open {
+            Style::new()
+                .bg(theme.hover())
+                .fg(theme.ink())
+                .add_modifier(Modifier::BOLD)
+        } else if app.hover == Spot::Section(i) {
+            Style::new().bg(theme.hover()).fg(theme.ink_2())
+        } else {
+            Style::new().fg(theme.ink_2())
+        };
+        side.push(Line::from(Span::styled(
+            format!("{text}{}", " ".repeat(pad)),
+            lit,
+        )));
+    }
+    f.render_widget(Paragraph::new(side), at.side);
+    for y in at.side.y..at.side.y + at.side.height {
+        f.render_widget(
+            Paragraph::new(Span::styled("│", Style::new().fg(theme.line()))),
+            Rect::new(at.side.x + SECTIONS_WIDE, y, 1, 1),
+        );
+    }
+
+    // The section: its title, the line under it, then its lines.
+    let Some((title, lines)) = panel_content(app, at.right.width.saturating_sub(4) as usize) else {
+        return;
+    };
+    let mut drawn = vec![Line::from(Span::styled(
+        title.into_owned(),
+        Style::new().fg(theme.ink()).add_modifier(Modifier::BOLD),
+    ))];
+    for l in &at.lead {
+        drawn.push(Line::from(Span::styled(
+            l.clone(),
+            Style::new().fg(theme.ink_3()),
+        )));
+    }
+    drawn.push(Line::from(""));
+    let (from, rows) = settings_rows(app, &lines, at.room);
+    let pressable = app.panel_lines();
+    let width = at.right.width as usize;
+    let mut row = 0usize;
+    for (at_line, line_row) in &rows {
+        let line = &lines[*at_line];
+        if line.rule && *at_line > 0 {
+            if row >= from && row < from + at.room {
+                drawn.push(Line::from(Span::styled(
+                    "─".repeat(width.saturating_sub(2)),
+                    Style::new().fg(theme.line()),
+                )));
+            }
+            row += 1;
+        }
+        let _ = line_row;
+        if row >= from && row < from + at.room {
+            let on = *at_line == app.panel_at && *at_line < pressable;
+            let lit = if app.pressed == Spot::Panel(*at_line) {
+                Style::new().bg(theme.key()).fg(theme.back())
+            } else if app.hover == Spot::Panel(*at_line) && *at_line < pressable {
+                Style::new().bg(theme.hover())
+            } else {
+                Style::new()
+            };
+            let lead = if on { "▸ " } else { "  " };
+            let text_w = line.text.chars().count() + 2;
+            let pad = width.saturating_sub(text_w + line.key.chars().count() + 2);
+            drawn.push(
+                Line::from(vec![
+                    Span::styled(
+                        format!("{lead}{}", line.text),
+                        Style::new().fg(if on && line.careful {
+                            theme.danger()
+                        } else if on {
+                            theme.key()
+                        } else if line.dimmed {
+                            theme.ink_3()
+                        } else {
+                            theme.ink_2()
+                        }),
+                    ),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(
+                        line.key.clone(),
+                        Style::new().fg(if on { theme.key() } else { theme.ink_3() }),
+                    ),
+                ])
+                .style(lit),
+            );
+        }
+        row += 1;
+    }
+    f.render_widget(
+        Paragraph::new(drawn),
+        Rect::new(at.right.x, at.right.y, at.right.width, at.right.height),
+    );
+
+    // What the keys do here, at the foot.
+    let foot = app
+        .say("↑↓ move · ←→ change · Enter press · Tab section · Esc close")
+        .into_owned();
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(wide),
+            Style::new().fg(theme.line()),
+        )),
+        Rect::new(
+            area.x,
+            area.y + area.height.saturating_sub(2),
+            area.width,
+            1,
+        ),
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            format!(" {foot}"),
+            Style::new().fg(theme.ink_3()),
+        )),
+        Rect::new(
+            area.x,
+            area.y + area.height.saturating_sub(1),
+            area.width,
+            1,
+        ),
+    );
+    if !app.note.is_empty() {
+        let note = app.note.clone();
+        let w = note.chars().count() as u16 + 2;
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {note} "),
+                Style::new().fg(theme.danger()),
+            )),
+            Rect::new(
+                area.x + area.width.saturating_sub(w + 1),
+                area.y + area.height.saturating_sub(1),
+                w.min(area.width),
+                1,
+            ),
+        );
+    }
+}
+
+/// What a panel says: its title and its lines. The settings screen draws the
+/// same lines beside its sections; the panel draws them in a box.
+fn panel_content(app: &App, wrap: usize) -> Option<(std::borrow::Cow<'_, str>, Vec<PanelLine>)> {
+    Some(match app.panel {
         Panel::Rules => (
             app.say("WHAT IS SKIPPED"),
             app.rules
@@ -421,15 +687,6 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                     .collect(),
             )
         }
-        // Spelled in themselves, as in `scour_i18n::LANGUAGES`: a reader may
-        // not recognise what the language they are reading calls theirs.
-        Panel::Language => (
-            app.say("LANGUAGE"),
-            scour_i18n::LANGUAGES
-                .iter()
-                .map(|(_, endonym)| ((*endonym).to_string(), false).into())
-                .collect(),
-        ),
         // The key in the title, because it is what the panel is about; what to
         // do about it in the lines. The last line is drawn but not walked —
         // see [`App::panel_lines`].
@@ -588,7 +845,73 @@ fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 },
             ],
         ),
-        Panel::None => return,
+        Panel::General => (
+            app.say("General"),
+            app.general_lines()
+                .into_iter()
+                .enumerate()
+                .map(|(at, (text, key))| PanelLine {
+                    text,
+                    key,
+                    dimmed: false,
+                    careful: false,
+                    rule: at == 3,
+                })
+                .collect(),
+        ),
+        Panel::Later => {
+            let folders = app.folders.len();
+            (
+                app.say("Disks that come later"),
+                app.later_lines()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, (text, key))| PanelLine {
+                        text,
+                        key,
+                        dimmed: false,
+                        careful: false,
+                        rule: at == 2 || (folders == 0 && at == 2),
+                    })
+                    .collect(),
+            )
+        }
+        // Read, not walked: `panel_lines` is zero.
+        Panel::Keys => (
+            app.say("KEYS"),
+            crate::keys::MAP
+                .iter()
+                .map(|(key, what)| (format!("{:<26}{}", app.say(key), app.say(what)), false).into())
+                .collect(),
+        ),
+        Panel::About => (
+            app.say("About"),
+            vec![
+                (format!("Scour {}", env!("CARGO_PKG_VERSION")), false).into(),
+                (String::new(), false).into(),
+                (
+                    app.say("scour status says what the service holds.")
+                        .into_owned(),
+                    true,
+                )
+                    .into(),
+            ],
+        ),
+        Panel::None => return None,
+    })
+}
+
+/// Whatever panel is open, over the middle of the screen. One drawing for all
+/// of them: a title, a list, and a cursor on one line of it.
+fn panel(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    if app.panel == Panel::Menu {
+        return menu_panel(f, area, app, theme);
+    }
+    // The same six the drawing takes off below: the indent, the border and the
+    // gap the shortcut sits in.
+    let wrap = panel_width(area).saturating_sub(6) as usize;
+    let Some((title, lines)) = panel_content(app, wrap) else {
+        return;
     };
 
     // The rules take rows too: sized by the item count alone the box comes up

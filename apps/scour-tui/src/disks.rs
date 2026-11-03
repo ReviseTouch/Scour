@@ -4,7 +4,7 @@
 
 use scour_proto::{Disk, DiskState};
 
-use crate::app::{App, Panel, Want};
+use crate::app::{App, Want};
 
 /// The answers, in the order they are drawn, as the service takes them.
 const ANSWERS: [(&str, &str); 3] = [
@@ -38,11 +38,6 @@ impl App {
 
     pub fn disk_lines(&self) -> usize {
         self.answers() + self.disks.len()
-    }
-
-    pub fn open_disks(&mut self) -> Want {
-        self.show(Panel::Disks);
-        Want::Disks
     }
 
     pub fn disks_came(&mut self, disks: Vec<Disk>) {
@@ -118,6 +113,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::Panel;
     use scour_proto::{Volume, VolumeKind};
 
     fn disk(id: &str, state: DiskState) -> Disk {
@@ -141,7 +137,7 @@ mod tests {
             ],
             ..App::default()
         };
-        assert_eq!(app.open_disks(), Want::Disks);
+        assert_eq!(app.open_settings(Panel::Disks), Want::Disks);
         assert_eq!(app.disk_lines(), 5);
         app.panel_at = 1;
         let later = Want::Disk {

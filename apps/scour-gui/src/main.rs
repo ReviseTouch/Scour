@@ -637,6 +637,20 @@ fn main() -> Result<()> {
             .unwrap_or(scour_ui::preview::PANEL_WIDE)
             .clamp(scour_ui::preview::PANEL_MIN, scour_ui::preview::PANEL_MAX) as f32,
     );
+    // The settings page's choices, as they were left.
+    window
+        .global::<Theme>()
+        .set_chosen(kept.theme.as_str().into());
+    window.set_language_choice(kept.language.as_str().into());
+    window.set_face_default(if kept.face.is_empty() {
+        "window".into()
+    } else {
+        kept.face.as_str().into()
+    });
+    window.set_removable_choice(kept.removable.as_str().into());
+    window.set_network_choice(kept.network.as_str().into());
+    let folders = Rc::new(RefCell::new(kept.folders.clone()));
+    window.set_folders(strings(&folders.borrow()));
     let kept_layout = kept.layout;
     if matches!(kept_layout.as_str(), "icons" | "large") {
         window.set_view_mode(kept_layout.as_str().into());
@@ -873,11 +887,10 @@ fn main() -> Result<()> {
         });
     }
 
-    // Five buttons: four open a panel, the fifth writes a file. A second press
-    // closes the panel.
+    // Two buttons: one writes a file, the other opens the settings. A second
+    // press closes them.
     {
         let weak = window.as_weak();
-        let link = Rc::clone(&link);
         let addr = addr.clone();
         let cat_for_tools = Rc::clone(&cat);
         window.on_tool_clicked(move |what| {
@@ -886,22 +899,141 @@ fn main() -> Result<()> {
                 "export" => {
                     export(&w, &addr, &cat_for_tools.borrow());
                 }
+                // What used to be panels of their own are sections of one page:
+                // the old names still open it, on their section.
                 other => {
-                    let open = w.get_panel() == other;
-                    w.set_panel(if open { "".into() } else { other.into() });
-                    if !open && other == "rules" {
-                        link.send(Ask::Rules);
+                    let section = match other {
+                        "faces" | "language" | "general" => "general",
+                        "rules" => "rules",
+                        "disks" => "disks",
+                        "help" | "keys" => "keys",
+                        "view" => "view",
+                        "about" => "about",
+                        _ => "",
+                    };
+                    let shown = w.get_panel() == "settings";
+                    if shown && (section.is_empty() || w.get_settings_section() == section) {
+                        w.set_panel("".into());
+                        return;
                     }
-                    if !open && other == "disks" {
-                        link.send(Ask::Volumes);
-                    }
-                    // The desktop may have been changed in its own settings
-                    // since this window started; the row must not be stale.
-                    if !open && other == "faces" {
-                        hotkey::work(hotkey::Deed::Look);
-                    }
+                    let section = if section.is_empty() {
+                        w.get_settings_section().to_string()
+                    } else {
+                        section.to_string()
+                    };
+                    w.set_panel("settings".into());
+                    w.invoke_settings_picked(section.into());
                 }
             }
+        });
+    }
+
+    // A section of the settings page, and what it needs asked for: the
+    // lists come from the service, the key from the desktop, each fresh.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_settings_picked(move |section| {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_settings_section(section.clone());
+            match section.as_str() {
+                "rules" => link.send(Ask::Rules),
+                "disks" => link.send(Ask::Volumes),
+                "about" => link.send(Ask::Status),
+                // The desktop may have been changed in its own settings since
+                // this window started; the row must not be stale.
+                "general" => hotkey::work(hotkey::Deed::Look),
+                _ => {}
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_theme_picked(move |theme| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<Theme>().set_chosen(theme.clone());
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    theme: Some(theme.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_face_default_picked(move |face| {
+            if let Some(w) = weak.upgrade() {
+                w.set_face_default(face.clone());
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    face: Some(face.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_policy_picked(move |kind, value| {
+            let Some(w) = weak.upgrade() else { return };
+            let mut change = scour_settings::Change::default();
+            if kind == "network" {
+                w.set_network_choice(value.clone());
+                change.network = Some(value.to_string());
+            } else {
+                w.set_removable_choice(value.clone());
+                change.removable = Some(value.to_string());
+            }
+            link.send(Ask::Remember { change });
+            link.send(Ask::Volumes);
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let folders = Rc::clone(&folders);
+        let cat = Rc::clone(&cat);
+        window.on_folder_added(move |typed| {
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            match folder_to_add(&typed, &folders.borrow()) {
+                Ok(path) => {
+                    folders.borrow_mut().push(path);
+                    w.set_folders(strings(&folders.borrow()));
+                    w.set_folder_typed("".into());
+                    w.set_folder_error("".into());
+                    link.send(Ask::Remember {
+                        change: scour_settings::Change {
+                            folders: Some(folders.borrow().clone()),
+                            ..Default::default()
+                        },
+                    });
+                    link.send(Ask::Volumes);
+                }
+                Err(msgid) => w.set_folder_error(t(&cat, msgid)),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let folders = Rc::clone(&folders);
+        window.on_folder_dropped(move |path| {
+            let Some(w) = weak.upgrade() else { return };
+            folders.borrow_mut().retain(|f| f.as_str() != path.as_str());
+            w.set_folders(strings(&folders.borrow()));
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    folders: Some(folders.borrow().clone()),
+                    ..Default::default()
+                },
+            });
         });
     }
 
@@ -1289,13 +1421,17 @@ fn main() -> Result<()> {
         let held = Rc::clone(&cat);
         let state = Rc::clone(&state);
         let model = Rc::clone(&rows);
+        let configured = config.ui.language.clone();
         window.on_language_picked(move |tag| {
             let Some(w) = weak.upgrade() else { return };
-            w.set_language(tag.clone());
-            w.set_panel("".into());
+            // Empty is the desktop's own: chosen as the config file and the
+            // environment say, as at start.
+            let speak = scour_i18n::choose(&tag, &configured);
+            w.set_language(speak.as_str().into());
+            w.set_language_choice(tag.clone());
             // The words change now. What comes from an answer is re-asked for,
             // because it is worded where it arrives.
-            *held.borrow_mut() = Rc::new(Catalogue::for_language(&tag));
+            *held.borrow_mut() = Rc::new(Catalogue::for_language(&speak));
             words(&w, &held.borrow());
             set_heads(&w, &table.borrow(), &held.borrow());
             link.send(Ask::Remember {
@@ -1911,7 +2047,8 @@ fn main() -> Result<()> {
                     w.set_tab("report".into());
                 }
                 "skip" => {
-                    w.set_panel("rules".into());
+                    w.set_panel("settings".into());
+                    w.invoke_settings_picked("rules".into());
                     say(&w, leaf(&path).into());
                 }
 
@@ -2347,7 +2484,7 @@ fn main() -> Result<()> {
     );
     FIRST.with(|f| f.set(Some(launched)));
     if let Ok(scheme) = std::env::var("SCOUR_GUI_SCHEME") {
-        window.global::<Theme>().set_dark(scheme != "light");
+        window.global::<Theme>().set_chosen(scheme.into());
     }
 
     // How long the event loop was held, a second at a time: a tick every 2 ms
@@ -4120,6 +4257,16 @@ fn apply(
                 holding.push_str("  ·  ");
                 holding.push_str(&t(cat, scour_ui::REBUILD_ADVISED));
             }
+            w.set_about_body(
+                format!(
+                    "Scour {}\n\n{} {}\n{}",
+                    env!("CARGO_PKG_VERSION"),
+                    grouped(st.entries),
+                    t(cat, "entries"),
+                    holding
+                )
+                .into(),
+            );
             w.set_holding(holding.into());
         }
         // This desktop's own folders, each an `under:` term. The labels are the
@@ -4409,6 +4556,117 @@ fn open(path: &str) {
 }
 
 /// Write every string the window shows. It runs again when a language is picked.
+/// Every word on the settings page.
+fn settings_words(w: &MainWindow, cat: &Catalogue) {
+    let list = |ids: &[&str]| -> ModelRc<slint::SharedString> {
+        ModelRc::new(VecModel::from(
+            ids.iter()
+                .map(|id| t(cat, id))
+                .collect::<Vec<slint::SharedString>>(),
+        ))
+    };
+    w.set_settings_title(t(cat, "Settings"));
+    w.set_settings_foot(t(
+        cat,
+        "Changes apply at once; there is nothing to save. Esc closes.",
+    ));
+    w.set_section_labels(list(&[
+        "General",
+        "List and look",
+        "Disks scanned",
+        "Skipped",
+        "Keyboard",
+        "About",
+    ]));
+    w.set_section_leads(list(&[
+        "The same for every face: the window, the browser and the terminal read these.",
+        "How the list is drawn, and what it shows.",
+        "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan.",
+        "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
+        "What the keys do, and what the query understands.",
+        "What is running, and what it holds.",
+    ]));
+    w.set_set_language(t(cat, "Language"));
+    w.set_set_language_note(t(cat, "Empty follows the desktop."));
+    let mut labels = vec![t(cat, "The desktop's")];
+    let mut tokens = vec![slint::SharedString::new()];
+    for (tag, endonym) in scour_i18n::LANGUAGES {
+        labels.push((*endonym).into());
+        tokens.push((*tag).into());
+    }
+    w.set_lang_labels(ModelRc::new(VecModel::from(labels)));
+    w.set_lang_tokens(ModelRc::new(VecModel::from(tokens)));
+    w.set_set_face(t(cat, "When Scour opens"));
+    w.set_set_face_note(t(cat, "Which face the key and the menu entry open."));
+    w.set_face_labels(list(&["Window", "Browser", "Terminal"]));
+    w.set_set_switch(t(cat, "Open another face now"));
+    w.set_set_theme(t(cat, "Theme"));
+    w.set_set_theme_note(t(cat, "Follows the desktop unless one is chosen."));
+    w.set_theme_labels(list(&["The desktop's", "Light", "Dark"]));
+    w.set_set_layout(t(cat, "Layout"));
+    w.set_layout_labels(list(&["Details", "Icons", "Large icons"]));
+    w.set_set_columns(t(cat, "Columns"));
+    w.set_set_columns_note(t(cat, "Which ones, and their widths back to the default."));
+    w.set_set_columns_push(t(cat, "Choose…"));
+    w.set_set_preview(t(cat, "Preview"));
+    w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
+    w.set_set_later(t(cat, "Disks that come later"));
+    w.set_set_removable(t(cat, "A disk plugged in"));
+    w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));
+    w.set_removable_labels(list(&["Ask", "Always scan", "Never"]));
+    w.set_set_network(t(cat, "Network disks"));
+    w.set_set_network_note(t(
+        cat,
+        "SMB, NFS, SSHFS. Not watched: looked at again every minute.",
+    ));
+    w.set_network_labels(list(&["Ask", "Never"]));
+    w.set_set_folders(t(cat, "Folders added"));
+    w.set_set_folders_note(t(
+        cat,
+        "One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing.",
+    ));
+    w.set_folder_hint(t(cat, "/a/folder or ~/a/folder"));
+    w.set_folder_add(t(cat, "add"));
+}
+
+/// A list of strings as a model.
+fn strings(list: &[String]) -> ModelRc<slint::SharedString> {
+    ModelRc::new(VecModel::from(
+        list.iter()
+            .map(|s| s.as_str().into())
+            .collect::<Vec<slint::SharedString>>(),
+    ))
+}
+
+/// A folder typed into the settings, made absolute and checked, or what is
+/// wrong with it as a catalogue key. `~` is the home folder.
+fn folder_to_add(typed: &str, have: &[String]) -> Result<String, &'static str> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err("Type a folder's path first.");
+    }
+    let path = match typed.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            format!("{home}{rest}")
+        }
+        _ => typed.to_owned(),
+    };
+    let native = std::path::Path::new(&path);
+    if !native.is_absolute() {
+        return Err("A folder's full path, from the root.");
+    }
+    if !native.is_dir() {
+        return Err("There is no folder there.");
+    }
+    let path = scour_core::path::from_path(native);
+    let path = path.trim_end_matches('/').to_owned();
+    if have.contains(&path) {
+        return Err("That folder is already in the list.");
+    }
+    Ok(if path.is_empty() { "/".into() } else { path })
+}
+
 fn words(window: &MainWindow, cat: &Catalogue) {
     disks::words(window, cat);
     // Punctuation is part of the language, and this runs whenever it changes.
@@ -4486,6 +4744,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
         "Part of the program. Mostly build output and package caches, which churn constantly and bury real results.",
     ));
     hotkey::words(window, cat);
+    settings_words(window, cat);
     window.set_rules_hint(t(cat, "a directory name, or a path"));
     window.set_rules_add(t(cat, "add"));
     window.set_rules_off_word(t(cat, "off"));
@@ -5422,6 +5681,36 @@ fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedStrin
 
 #[cfg(test)]
 mod tests {
+    /// What may be added as a folder: a real one, absolute or from `~`, not
+    /// twice. Each refusal is a sentence the catalogue knows.
+    #[test]
+    fn an_added_folder_must_be_a_real_one() {
+        let tmp = std::env::temp_dir();
+        let path = scour_core::path::from_path(&tmp);
+        let path = path.trim_end_matches('/').to_owned();
+        assert_eq!(
+            super::folder_to_add(&format!("  {path}/ "), &[]),
+            Ok(path.clone())
+        );
+        assert_eq!(
+            super::folder_to_add(&path, std::slice::from_ref(&path)),
+            Err("That folder is already in the list.")
+        );
+        assert_eq!(
+            super::folder_to_add("relative/dir", &[]),
+            Err("A folder's full path, from the root.")
+        );
+        assert_eq!(
+            super::folder_to_add("/no/such/folder/here", &[]),
+            Err("There is no folder there.")
+        );
+        assert_eq!(
+            super::folder_to_add("   ", &[]),
+            Err("Type a folder's path first.")
+        );
+        assert!(super::folder_to_add("~", &[]).is_ok_and(|p| p.starts_with('/')));
+    }
+
     /// The preview is bounded whatever the service sends, and the cut is checked
     /// for being a real string.
     #[test]

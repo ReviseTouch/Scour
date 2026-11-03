@@ -70,6 +70,11 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
         match key.code {
             KeyCode::Esc => {
                 app.ask_typing = false;
+                // A folder being typed in the settings goes back to them.
+                if app.settings && app.pending.as_ref().is_some_and(|(w, _)| w == "folder") {
+                    app.pending = None;
+                    return app.open_settings(Panel::Later);
+                }
                 app.pending = None;
                 app.show(Panel::Ask);
                 return Want::Nothing;
@@ -106,6 +111,27 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 app.dirty = true;
                 return Want::Nothing;
             }
+            _ => {}
+        }
+    }
+
+    // The settings: a screen of sections. Tab moves between them, Escape
+    // leaves — from the key or the faces, back to the first section first.
+    if app.settings {
+        match key.code {
+            KeyCode::Esc if matches!(app.panel, Panel::Key | Panel::Faces) => {
+                return app.open_settings(Panel::General);
+            }
+            KeyCode::Esc | KeyCode::F(5) => {
+                app.close_settings();
+                return Want::Nothing;
+            }
+            KeyCode::Tab => return settings_opened(app, 1),
+            KeyCode::BackTab => return settings_opened(app, -1),
+            KeyCode::Left if app.panel == Panel::General => return app.general_side(-1),
+            KeyCode::Right if app.panel == Panel::General => return app.general_side(1),
+            KeyCode::Left if app.panel == Panel::Later => return app.later_side(-1, false),
+            KeyCode::Right if app.panel == Panel::Later => return app.later_side(1, false),
             _ => {}
         }
     }
@@ -179,17 +205,15 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
             app.dirty = true;
             return Want::Nothing;
         }
-        KeyCode::Char('k') if ctrl => {
-            app.show(Panel::Rules);
-            // Asked when it opens: this panel is the only thing changing them.
-            return Want::Rules;
-        }
-        KeyCode::Char('l') if ctrl => {
-            app.show(Panel::Language);
-            return Want::Nothing;
-        }
-        KeyCode::Char('d') if ctrl => return app.open_disks(),
+        // The settings, on the key nothing else here uses; the old keys open
+        // them on their own section.
+        KeyCode::F(5) => return app.open_settings(Panel::General),
+        // Asked when it opens: this panel is the only thing changing them.
+        KeyCode::Char('k') if ctrl => return app.open_settings(Panel::Rules),
+        KeyCode::Char('l') if ctrl => return app.open_settings(Panel::General),
+        KeyCode::Char('d') if ctrl => return app.open_settings(Panel::Disks),
         KeyCode::Char('b') if ctrl => {
+            app.open_settings(Panel::General);
             app.show(Panel::Key);
             // Asked when it opens, like the skip list: the desktop can have
             // been changed from its own settings since the last look.
@@ -198,11 +222,9 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
                 _ => Want::Nothing,
             };
         }
-        KeyCode::Char('t') if ctrl => {
-            app.show(Panel::Columns);
-            return Want::Nothing;
-        }
+        KeyCode::Char('t') if ctrl => return app.open_settings(Panel::Columns),
         KeyCode::Char('u') if ctrl => {
+            app.open_settings(Panel::General);
             app.show(Panel::Faces);
             return Want::Nothing;
         }
@@ -355,7 +377,6 @@ fn panel_press(app: &mut App) -> Want {
             None => Want::Nothing,
         },
         Panel::Disks => app.press_disk(),
-        Panel::Language => app.speak(app.panel_at),
         // Nothing to press where nothing can be bound: the panel is a sentence.
         Panel::Key if !app.key_can => Want::Nothing,
         Panel::Key if app.panel_at == 0 => app.bind_key(),
@@ -367,8 +388,31 @@ fn panel_press(app: &mut App) -> Want {
         // Enter on the line being typed into means yes.
         Panel::Ask if app.panel_at == 0 => app.ask_answer(2),
         Panel::Ask => app.ask_answer(app.panel_at),
-        Panel::None => Want::Nothing,
+        // The key and the faces are panels of their own, reached from here.
+        Panel::General => match app.panel_at {
+            3 => {
+                app.show(Panel::Key);
+                Want::Hotkey(Deed::Read)
+            }
+            4 => {
+                app.show(Panel::Faces);
+                Want::Nothing
+            }
+            _ => app.general_side(1),
+        },
+        Panel::Later => app.later_side(1, true),
+        Panel::Keys | Panel::About | Panel::None => Want::Nothing,
     }
+}
+
+/// Another section of the settings, and what it needs asked for.
+fn settings_opened(app: &mut App, by: isize) -> Want {
+    let want = app.settings_step(by);
+    if app.panel == Panel::General {
+        // The key's line says what is bound: asked again each time.
+        return Want::Hotkey(Deed::Read);
+    }
+    want
 }
 
 /// Text arriving in one piece — a paste rather than typing. Newlines become
@@ -470,7 +514,9 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
             app.dirty = true;
             if pressed != spot || pressed == Spot::Nothing {
                 // Let go somewhere else: nothing happens, as everywhere else.
-                if app.panel != Panel::None && !matches!(spot, Spot::Panel(_)) {
+                // The settings are a screen, not a panel: a stray press leaves
+                // them as they are.
+                if !app.settings && app.panel != Panel::None && !matches!(spot, Spot::Panel(_)) {
                     app.show(app.panel);
                 }
                 return Want::Nothing;
@@ -534,6 +580,14 @@ pub fn mouse(app: &mut App, m: MouseEvent, size: (u16, u16)) -> Want {
                     app.panel_at = at;
                     panel_press(app)
                 }
+                Spot::Section(i) => {
+                    let want = app.open_settings(crate::app::SECTIONS[i].0);
+                    if app.panel == Panel::General {
+                        Want::Hotkey(Deed::Read)
+                    } else {
+                        want
+                    }
+                }
                 Spot::Head(column) => app.sort_by(column),
                 // A press on the track jumps there, the same as a drag to it.
                 Spot::Bar(at) => {
@@ -566,6 +620,14 @@ pub fn spot_at(app: &App, col: u16, row: u16, size: (u16, u16)) -> Spot {
     use crate::draw::{LIST_TOP, QUERY_HIGH, RAIL_TOP, RAIL_WIDE};
     let (width, height) = size;
 
+    if app.settings {
+        let area = ratatui::layout::Rect::new(0, 0, width, height);
+        return match crate::draw::settings_hit(app, area, col, row) {
+            Some(crate::draw::SettingsHit::Section(i)) => Spot::Section(i),
+            Some(crate::draw::SettingsHit::Line(i)) => Spot::Panel(i),
+            None => Spot::Nothing,
+        };
+    }
     if app.panel == Panel::Menu {
         let area = ratatui::layout::Rect::new(0, 0, width, height);
         return match crate::draw::menu_item_at(app, area, col, row) {
@@ -898,8 +960,14 @@ mod tests {
             Want::Hotkey(Deed::Bind("super+f".into())),
             "as typed: what counts as a combination is scour-hotkey's judgement"
         );
+        // The key's panel is in the settings now: Escape goes back to their
+        // first section, and a second one leaves them.
+        press(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.panel, Panel::General);
+        assert!(app.settings);
         press(&mut app, key(KeyCode::Esc));
         assert_eq!(app.panel, Panel::None);
+        assert!(!app.settings);
         press(&mut app, key(KeyCode::Char('a')));
         assert_eq!(app.query, "a", "and the letters are the query's again");
     }
