@@ -90,6 +90,12 @@
   <!-- The tags on the repository. Both are marked development: the project
        calls itself alpha and neither release claims otherwise. -->
   <releases>
+    <release version="0.2.0-alpha.12" date="2026-11-03" type="development">
+      <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.12</url>
+      <description>
+        <p>Every disk on the machine is indexed unless taken out, and one plugged in is asked about. One settings page in every face, with a theme and folders added on their own. Rows drag out as files, the right-click menu has a heading and a strip, and searches by path are about twice as fast. A change in a folder that shares a number with one on another disk is no longer missed.</p>
+      </description>
+    </release>
     <release version="0.2.0-alpha.11" date="2026-10-13" type="development">
       <url type="details">https://github.com/ReviseTouch/Scour/releases/tag/v0.2.0-alpha.11</url>
       <description>
