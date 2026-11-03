@@ -782,6 +782,7 @@ component Head inherits Rectangle {
     in property <string> text;
     in property <string> sort;
     in property <string> sorted-by;
+    in property <bool> sorted-down;
     in property <int> total-rows;
     in property <int> window-offset;
     in property <length> w;
@@ -833,7 +834,8 @@ component Head inherits Rectangle {
             width: parent.width;
             // In the text, not beside it: a separate glyph shifts the heading
             // sideways when it becomes the sort.
-            text: root.sorted-by == root.sort ? root.text + " ▾" : root.text;
+            text: root.sorted-by != root.sort ? root.text
+                : root.sorted-down ? root.text + " ▾" : root.text + " ▴";
             color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
             font-size: 10px;
             font-weight: 650;
@@ -1192,6 +1194,7 @@ export component MainWindow inherits Window {
 
     // Which column the list is ordered by, as the protocol's own word.
     in property <string> sorted-by;
+    in property <bool> sorted-down: true;
     // How long the list really is and where the shown window sits in it: a
     // view sized from the model would describe the window, not the result.
     in property <int> total-rows;
@@ -3343,6 +3346,7 @@ export component MainWindow inherits Window {
                             last: i == root.heads.length - 1;
                             w: root.cw[i];
                             sorted-by: root.sorted-by;
+                            sorted-down: root.sorted-down;
                             dragged(c, d) => { root.column-dragged(c, d); }
                             reset(c) => { root.column-reset(c); }
                             clicked(k) => { root.sort-by(k); }

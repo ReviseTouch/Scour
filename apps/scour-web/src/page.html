@@ -4468,7 +4468,8 @@
     // A heading just carried is not one clicked, or a reorder also sorts.
     if (justMoved) return;
     if (sortKey === th.dataset.sort) sortDesc = !sortDesc;
-    else { sortKey = th.dataset.sort; sortDesc = th.dataset.sort === "modified" || th.dataset.sort === "size"; }
+    // SortKey::starts_descending: a date or a size newest or largest first, a word from A.
+    else { sortKey = th.dataset.sort; sortDesc = ["modified", "created", "accessed", "size", "disk"].includes(sortKey); }
     keep({ sort: sortKey, descending: sortDesc });
     render();
   });

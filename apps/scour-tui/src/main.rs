@@ -85,6 +85,7 @@ fn main() -> Result<()> {
     // The table's shape, for the same reason as the language: the first frame
     // is the one somebody left, not a default that lasts an instant.
     state.columns_from(&kept.columns);
+    state.order_from(&kept);
     // The settings screen shows these, and the theme is drawn in from the start.
     state.theme = kept.theme.clone();
     state.face_default = kept.face.clone();
@@ -465,6 +466,9 @@ fn run(
             }
             Beat::Reply(Got::Booting) => state.booting(),
             Beat::Reply(Got::Booted(why)) => state.booted(why),
+        }
+        if let Some(change) = state.order_to_keep() {
+            act(Want::Remember(change), link);
         }
         if state.leaving {
             break;

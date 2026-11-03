@@ -29,6 +29,78 @@ pub enum SortKey {
     Disk,
 }
 
+impl SortKey {
+    pub const ALL: [SortKey; 13] = [
+        SortKey::Relevance,
+        SortKey::Name,
+        SortKey::Path,
+        SortKey::Size,
+        SortKey::Modified,
+        SortKey::Created,
+        SortKey::Accessed,
+        SortKey::Ext,
+        SortKey::Kind,
+        SortKey::Mode,
+        SortKey::Uid,
+        SortKey::Gid,
+        SortKey::Disk,
+    ];
+
+    /// The word the protocol and the settings file use — serde's own.
+    pub fn name(self) -> &'static str {
+        match self {
+            SortKey::Relevance => "relevance",
+            SortKey::Name => "name",
+            SortKey::Path => "path",
+            SortKey::Size => "size",
+            SortKey::Modified => "modified",
+            SortKey::Created => "created",
+            SortKey::Accessed => "accessed",
+            SortKey::Ext => "ext",
+            SortKey::Kind => "kind",
+            SortKey::Mode => "mode",
+            SortKey::Uid => "uid",
+            SortKey::Gid => "gid",
+            SortKey::Disk => "disk",
+        }
+    }
+
+    /// The key a word names, as a face reads it back from the settings.
+    pub fn named(word: &str) -> Option<SortKey> {
+        SortKey::ALL.into_iter().find(|k| k.name() == word)
+    }
+
+    /// Which way a column runs when it is first picked, in every face: a date
+    /// or a size reads best newest or largest first, a word from A.
+    pub fn starts_descending(self) -> bool {
+        matches!(
+            self,
+            SortKey::Relevance
+                | SortKey::Size
+                | SortKey::Disk
+                | SortKey::Modified
+                | SortKey::Created
+                | SortKey::Accessed
+        )
+    }
+}
+
+#[cfg(test)]
+mod sort_names {
+    use super::SortKey;
+
+    /// The words are serde's, so the settings file and the protocol agree.
+    #[test]
+    fn every_key_is_named_as_serde_names_it() {
+        for k in SortKey::ALL {
+            let json = serde_json::to_string(&k).expect("serialises");
+            assert_eq!(json, format!("\"{}\"", k.name()));
+            assert_eq!(SortKey::named(k.name()), Some(k));
+        }
+        assert_eq!(SortKey::named("changed"), None);
+    }
+}
+
 /// Which slice of the results, and how much counting to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Page {

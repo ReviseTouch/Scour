@@ -264,6 +264,8 @@ pub struct App {
     pub room: usize,
     pub sort: SortKey,
     pub descending: bool,
+    /// The order the settings hold, so a change is written once.
+    pub kept_order: (SortKey, bool),
     /// What the last answer cost, for the meter.
     pub took_us: u64,
     pub rows_visited: u64,
@@ -424,6 +426,7 @@ impl Default for App {
             room: 1,
             sort: SortKey::Modified,
             descending: true,
+            kept_order: (SortKey::Modified, true),
             took_us: 0,
             rows_visited: 0,
             capped: false,
@@ -527,21 +530,7 @@ pub const SORTS: [(SortKey, &str); 4] = [
 /// The engine's own key behind a column's `sort` word. `None` is a column that
 /// cannot be sorted by, which the shared table says by leaving it empty.
 pub fn sort_key(name: &str) -> Option<SortKey> {
-    Some(match name {
-        "name" => SortKey::Name,
-        "path" => SortKey::Path,
-        "modified" => SortKey::Modified,
-        "created" => SortKey::Created,
-        "accessed" => SortKey::Accessed,
-        "size" => SortKey::Size,
-        "disk" => SortKey::Disk,
-        "kind" => SortKey::Kind,
-        "ext" => SortKey::Ext,
-        "mode" => SortKey::Mode,
-        "uid" => SortKey::Uid,
-        "gid" => SortKey::Gid,
-        _ => return None,
-    })
+    SortKey::named(name).filter(|k| *k != SortKey::Relevance)
 }
 
 impl App {
@@ -556,7 +545,8 @@ impl App {
     }
 
     /// Sort by a column, or turn it round when it is the one already sorted by.
-    /// The first press sorts, the second reverses, and it starts descending.
+    /// The first press sorts, the second reverses; a date or a size starts
+    /// newest or largest first, a word from A, as in every face.
     pub fn sort_by(&mut self, column: usize) -> Want {
         // The key comes off the column drawn at that position, not off a fixed
         // list: which columns are on screen is somebody's own arrangement.
@@ -567,7 +557,7 @@ impl App {
             return self.flip();
         }
         self.sort = key;
-        self.descending = true;
+        self.descending = key.starts_descending();
         self.reask()
     }
 
@@ -588,6 +578,28 @@ impl App {
         };
         self.sort = SORTS[next].0;
         self.reask()
+    }
+
+    /// Start in the order the settings hold, whichever face chose it.
+    pub fn order_from(&mut self, kept: &scour_settings::Settings) {
+        self.sort = SortKey::named(&kept.sort).unwrap_or_default();
+        self.descending = kept.descending.unwrap_or(true);
+        self.kept_order = (self.sort, self.descending);
+    }
+
+    /// The order, for the settings, when it is not the one they hold: a column
+    /// picked by key or by mouse is kept for every face, as the page keeps it.
+    pub fn order_to_keep(&mut self) -> Option<scour_settings::Change> {
+        let now = (self.sort, self.descending);
+        if now == self.kept_order {
+            return None;
+        }
+        self.kept_order = now;
+        Some(scour_settings::Change {
+            sort: Some(self.sort.name().into()),
+            descending: Some(self.descending),
+            ..Default::default()
+        })
     }
 
     /// Ascending or descending.
@@ -2438,6 +2450,46 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    /// The order chosen in another face is the one this one opens in, and a
+    /// column picked here is written once, not on every key after it.
+    #[test]
+    fn the_order_is_kept_for_every_face() {
+        let mut a = app(10);
+        let kept = scour_settings::Settings {
+            sort: "size".into(),
+            descending: Some(false),
+            ..Default::default()
+        };
+        a.order_from(&kept);
+        assert_eq!((a.sort, a.descending), (SortKey::Size, false));
+        assert!(
+            a.order_to_keep().is_none(),
+            "what was read is not written back"
+        );
+
+        let name = a
+            .columns
+            .iter()
+            .position(|c| c.sort == "name")
+            .expect("the name column");
+        a.sort_by(name);
+        let change = a.order_to_keep().expect("a new order is kept");
+        assert_eq!(change.sort.as_deref(), Some("name"));
+        assert_eq!(change.descending, Some(false), "a word starts from A");
+        assert!(a.order_to_keep().is_none(), "kept once");
+
+        a.flip();
+        assert_eq!(a.order_to_keep().and_then(|c| c.descending), Some(true));
+
+        // Nothing kept, or a word from elsewhere: newest first.
+        let mut b = app(10);
+        b.order_from(&scour_settings::Settings {
+            sort: "changed".into(),
+            ..Default::default()
+        });
+        assert_eq!((b.sort, b.descending), (SortKey::Modified, true));
     }
 
     fn reply(hits: Vec<Hit>, total: u64) -> scour_core::SearchResponse {

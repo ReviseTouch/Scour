@@ -771,16 +771,7 @@ fn under(path: &str) -> String {
 }
 
 fn sort_of(name: &str) -> scour_core::SortKey {
-    use scour_core::SortKey;
-    match name {
-        "size" => SortKey::Size,
-        "modified" => SortKey::Modified,
-        "name" => SortKey::Name,
-        "path" => SortKey::Path,
-        "ext" => SortKey::Ext,
-        "kind" => SortKey::Kind,
-        _ => SortKey::Relevance,
-    }
+    scour_core::SortKey::named(name).unwrap_or_default()
 }
 
 #[cfg(test)]

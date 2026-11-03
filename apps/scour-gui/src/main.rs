@@ -514,7 +514,13 @@ fn main() -> Result<()> {
     answer_the_next_start(claim.listener.try_clone()?, window.as_weak());
     dress(&window);
     words(&window, &cat.borrow());
-    window.set_sorted_by("relevance".into());
+    // The order chosen last, in whichever face: a word no key has is a file
+    // from somewhere else, and the newest-first default stands.
+    let kept_sort = scour_core::SortKey::named(&kept.sort)
+        .unwrap_or_default()
+        .name();
+    window.set_sorted_by(kept_sort.into());
+    window.set_sorted_down(kept.descending.unwrap_or(true));
     window.set_has_past(!kept.history.is_empty());
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
@@ -565,8 +571,8 @@ fn main() -> Result<()> {
         typed_at: None,
         shown: 0,
         query: String::new(),
-        sort: "relevance".into(),
-        descending: true,
+        sort: kept_sort.into(),
+        descending: kept.descending.unwrap_or(true),
         added_paths: Vec::new(),
         added_dirs: Vec::new(),
         added_files: Vec::new(),
@@ -1496,16 +1502,30 @@ fn main() -> Result<()> {
                 if s.sort == key {
                     s.descending = !s.descending;
                 } else {
+                    s.descending = scour_core::SortKey::named(&key)
+                        .unwrap_or_default()
+                        .starts_descending();
                     s.sort = key;
-                    // Every order but the name reads best newest-or-largest first.
-                    s.descending = s.sort != "name" && s.sort != "path";
                 }
                 s.advance_order();
             }
             // Read back: `sort` may be unchanged with only the direction flipped.
             if let Some(w) = weak.upgrade() {
                 w.set_sorted_by(state.borrow().sort.as_str().into());
+                w.set_sorted_down(state.borrow().descending);
             }
+            // Kept for every face, as the page keeps it.
+            let (sort, descending) = {
+                let s = state.borrow();
+                (s.sort.clone(), s.descending)
+            };
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    sort: Some(sort),
+                    descending: Some(descending),
+                    ..Default::default()
+                },
+            });
             let rows = match weak.upgrade() {
                 Some(w) => {
                     w.set_busy(true);
