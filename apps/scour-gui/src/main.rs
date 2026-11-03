@@ -928,6 +928,38 @@ fn main() -> Result<()> {
         });
     }
 
+    // The query field's right-click menu: cut, copy, paste, all of it, none.
+    {
+        let weak = window.as_weak();
+        let cat = Rc::clone(&cat);
+        window.on_query_menu_at(move |x, y| {
+            trace(&format!("query menu at {x},{y}"));
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            let item = |id: &str, msgid: &str, key: &str, rule: bool| MenuItem {
+                id: format!("text:{id}").into(),
+                label: t(&cat, msgid),
+                key: key.into(),
+                rule,
+                ..Default::default()
+            };
+            let model = vec![
+                item("cut", "Cut", "Ctrl+X", false),
+                item("copy", "Copy", "Ctrl+C", false),
+                item("paste", "Paste", "Ctrl+V", false),
+                item("select-all", "Select all", "Ctrl+A", true),
+                item("clear", "Clear", "Esc", false),
+            ];
+            w.set_menu_strip(ModelRc::default());
+            w.set_menu_title("".into());
+            w.set_menu_columns(false);
+            w.set_menu(ModelRc::new(VecModel::from(model)));
+            w.set_menu_x(x);
+            w.set_menu_y(y);
+            w.set_menu_open(true);
+        });
+    }
+
     // A section of the settings page, and what it needs asked for: the
     // lists come from the service, the key from the desktop, each fresh.
     {
@@ -1980,6 +2012,11 @@ fn main() -> Result<()> {
         window.on_menu_pick(move |id| {
             stir(&state, &link);
             let Some(w) = weak.upgrade() else { return };
+            // The query field's own menu: edits, not a row.
+            if let Some(what) = id.strip_prefix("text:") {
+                w.invoke_query_edit(what.into());
+                return;
+            }
             let cat_now = cat.borrow().clone();
             let here = w.get_selected();
             // A path set aside by the report names one file and nothing else;

@@ -54,6 +54,15 @@ pub fn press(app: &mut App, key: KeyEvent) -> Want {
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // Caps Lock turns Ctrl+V into Ctrl+`V`, and every shortcut here is written
+    // in lower case: with Caps Lock on, pasting did nothing.
+    let key = match key.code {
+        KeyCode::Char(c) if ctrl && !shift && c.is_ascii_uppercase() => KeyEvent {
+            code: KeyCode::Char(c.to_ascii_lowercase()),
+            ..key
+        },
+        _ => key,
+    };
     let page = app.room.max(1) as isize;
 
     // The help is a panel over everything, and any key at all closes it.
@@ -970,6 +979,20 @@ mod tests {
         assert!(!app.settings);
         press(&mut app, key(KeyCode::Char('a')));
         assert_eq!(app.query, "a", "and the letters are the query's again");
+    }
+
+    /// With Caps Lock on, Ctrl and a letter arrive as the capital: the
+    /// shortcut is the same one.
+    #[test]
+    fn caps_lock_does_not_change_a_shortcut() {
+        let mut app = app(4);
+        let want = press(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(want, Want::Rules);
+        assert!(app.settings);
+        assert_eq!(app.query, "", "not typed into the query");
     }
 
     /// `x` removes, but only where it cannot be the key somebody is typing.

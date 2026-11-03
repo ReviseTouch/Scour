@@ -2053,3 +2053,16 @@ msgstr "Takılan ya da ağdaki bir diske ne olacağı ve tek başına eklenen kl
 
 msgid "Which columns the table shows."
 msgstr "Tablonun hangi kolonları gösterdiği."
+
+# The query field's right-click menu.
+msgid "Cut"
+msgstr "Kes"
+
+msgid "Paste"
+msgstr "Yapıştır"
+
+msgid "Select all"
+msgstr "Tümünü seç"
+
+msgid "Clear"
+msgstr "Temizle"

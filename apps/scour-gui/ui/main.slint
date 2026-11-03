@@ -1084,6 +1084,21 @@ component SectionHead inherits Text {
     vertical-alignment: bottom;
 }
 
+// A field somebody types into. Slint matches its editing keys in lower case
+// only: with Caps Lock on, Ctrl+V arrives as `V` and pasted nothing. The four
+// that matter are answered here for either case.
+component Field inherits TextInput {
+    key-pressed(e) => {
+        if (e.modifiers.control && !e.modifiers.shift) {
+            if (e.text == "V") { self.paste(); return accept; }
+            if (e.text == "C") { self.copy(); return accept; }
+            if (e.text == "X") { self.cut(); return accept; }
+            if (e.text == "A") { self.select-all(); return accept; }
+        }
+        return reject;
+    }
+}
+
 export component MainWindow inherits Window {
     title: "Scour";
     icon: @image-url("../../../assets/scour.svg");
@@ -1634,6 +1649,25 @@ export component MainWindow inherits Window {
         input.focus();
     }
 
+    /// The query field's own edits, for its right-click menu.
+    public function query-edit(what: string) {
+        input.focus();
+        if (what == "cut") {
+            input.cut();
+        } else if (what == "copy") {
+            input.copy();
+        } else if (what == "paste") {
+            input.paste();
+        } else if (what == "select-all") {
+            input.select-all();
+        } else if (what == "clear") {
+            root.query = "";
+            root.query-changed("");
+        }
+    }
+    /// The query field was right-clicked, here.
+    callback query-menu-at(length, length);
+
     // What was searched before, already filtered by what is typed.
     in property <[string]> past;
     in-out property <bool> past-open;
@@ -1843,6 +1877,23 @@ export component MainWindow inherits Window {
                         overflow: elide;
                     }
 
+                // Under the field: the right button, which the field leaves
+                // alone, opens cut, copy and paste. The left one is the field's.
+                TouchArea {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    mouse-cursor: text;
+                    pointer-event(e) => {
+                        if (e.button == PointerEventButton.right && e.kind == PointerEventKind.down) {
+                            input.focus();
+                            root.query-menu-at(self.absolute-position.x + self.mouse-x,
+                                self.absolute-position.y + self.mouse-y);
+                        }
+                    }
+                }
+
                 input := TextInput {
                     // A child of a `Rectangle` gets its preferred size, and a
                     // text input's preferred width is its text — which leaves
@@ -1914,6 +1965,14 @@ export component MainWindow inherits Window {
                                 && root.peek-from != root.peek-to) {
                             root.copy-span(root.peek-text, root.peek-from, root.peek-to);
                             return accept;
+                        }
+                        // Caps Lock: Slint takes its editing keys in lower case
+                        // only, so `V` pasted nothing. See `Field`.
+                        if (e.modifiers.control && !e.modifiers.shift) {
+                            if (e.text == "V") { self.paste(); return accept; }
+                            if (e.text == "C") { self.copy(); return accept; }
+                            if (e.text == "X") { self.cut(); return accept; }
+                            if (e.text == "A") { self.select-all(); return accept; }
                         }
                         // `Alt+↓` opens what was searched before; plain `↓`
                         // still walks into the results.
@@ -4338,6 +4397,13 @@ export component MainWindow inherits Window {
                                 root.focus-query();
                             }
                             key-pressed(e) => {
+                                // Caps Lock, as in `Field`.
+                                if (e.modifiers.control && !e.modifiers.shift) {
+                                    if (e.text == "V") { self.paste(); return accept; }
+                                    if (e.text == "C") { self.copy(); return accept; }
+                                    if (e.text == "X") { self.cut(); return accept; }
+                                    if (e.text == "A") { self.select-all(); return accept; }
+                                }
                                 if (e.text == Key.Escape) {
                                     root.ask-open = false;
                                     root.ask-answer(false);
@@ -4692,7 +4758,7 @@ export component MainWindow inherits Window {
                             padding-left: 8px;
                             padding-right: 8px;
 
-                            combo := TextInput {
+                            combo := Field {
                                 text <=> root.key-typed;
                                 color: Theme.ink;
                                 font-family: Fonts.mono;
@@ -4911,7 +4977,7 @@ export component MainWindow inherits Window {
                                         HorizontalLayout {
                                             padding-left: 8px;
                                             padding-right: 8px;
-                                            folder-field := TextInput {
+                                            folder-field := Field {
                                                 text <=> root.folder-typed;
                                                 color: Theme.ink;
                                                 font-family: Fonts.mono;
@@ -5005,7 +5071,7 @@ export component MainWindow inherits Window {
                             padding-left: 8px;
                             padding-right: 8px;
 
-                            fresh := TextInput {
+                            fresh := Field {
                                 color: Theme.ink;
                                 font-family: Fonts.mono;
                                 font-size: 11.5px;
