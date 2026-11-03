@@ -159,6 +159,7 @@ fn run(
         // Written where the change happens, not at shutdown: a killed process
         // never gets to write anything.
         Request::SetSettings { change } => {
+            let replan = change.moves_sources();
             let mut held = kept.settings.lock().unwrap_or_else(|p| p.into_inner());
             let before = rules_of(&held);
             // Folded in, not assigned: what it does not name is another
@@ -230,6 +231,14 @@ fn run(
                         ),
                     }
                 }
+            } else {
+                drop(held);
+            }
+            // What is said about plugged-in disks, or a folder added: planned
+            // again, which swaps the engine when the sources changed. After
+            // the lock, which planning takes.
+            if replan {
+                live.replan(kept);
             }
             Response::Accepted
         }

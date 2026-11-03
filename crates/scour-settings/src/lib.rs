@@ -46,6 +46,19 @@ pub struct Settings {
     /// Disks somebody took out, or said no to, by the same id. Out wins over on.
     #[serde(default)]
     pub volumes_off: Vec<String>,
+    /// What happens when a disk is plugged in that nobody has answered for:
+    /// `""` asks, `always` indexes it, `never` leaves it out without asking.
+    /// An answer already given for that disk wins over this.
+    #[serde(default)]
+    pub removable: String,
+    /// The same for a network disk — SMB, NFS, SSHFS. Not validated here.
+    #[serde(default)]
+    pub network: String,
+    /// Folders indexed on their own, added from a face: a disk is the usual
+    /// unit, and this is the one for "only this folder of that disk". Absolute
+    /// paths. One already inside an indexed disk adds nothing.
+    #[serde(default)]
+    pub folders: Vec<String>,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -85,6 +98,9 @@ pub struct Settings {
     /// has chosen", which the launcher reads as the window. Not validated here.
     #[serde(default)]
     pub face: String,
+    /// `light` or `dark`, or `""` to follow the desktop — the default.
+    #[serde(default)]
+    pub theme: String,
 
     /// Whether the preview panel is open — a mode, not a gesture: the key opens it and
     /// the button pins it. `false` is what a face with no preview panel writes.
@@ -125,6 +141,13 @@ pub struct Change {
     pub layout: Option<String>,
     /// `window`, `browser`, `tui` — or `""` to go back to no opinion.
     pub face: Option<String>,
+    /// `light`, `dark`, or `""` to follow the desktop.
+    pub theme: Option<String>,
+    /// See [`Settings::removable`] and [`Settings::network`].
+    pub removable: Option<String>,
+    pub network: Option<String>,
+    /// Replace the list outright. See [`Settings::folders`].
+    pub folders: Option<Vec<String>>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -139,6 +162,12 @@ pub struct Change {
 }
 
 impl Change {
+    /// Whether this changes what is indexed — the disks asked about, the
+    /// folders added — so the service plans its sources again.
+    pub fn moves_sources(&self) -> bool {
+        self.removable.is_some() || self.network.is_some() || self.folders.is_some()
+    }
+
     /// Fold this into the settings.
     pub fn apply(self, to: &mut Settings) {
         if let Some(v) = self.exclude_paths {
@@ -185,6 +214,18 @@ impl Change {
         }
         if let Some(v) = self.layout {
             to.layout = v;
+        }
+        if let Some(v) = self.theme {
+            to.theme = v;
+        }
+        if let Some(v) = self.removable {
+            to.removable = v;
+        }
+        if let Some(v) = self.network {
+            to.network = v;
+        }
+        if let Some(v) = self.folders {
+            to.folders = v;
         }
         if let Some(v) = self.history {
             to.history = v;

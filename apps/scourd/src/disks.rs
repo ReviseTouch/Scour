@@ -37,7 +37,9 @@ impl Plan {
 }
 
 /// Sources a person wrote in `config.toml` always; built-in disks unless taken
-/// out, when nobody wrote any; plugged-in and network disks only once chosen.
+/// out, when nobody wrote any; plugged-in and network disks once chosen, or as
+/// [`Settings::removable`] and [`Settings::network`] say; folders added from a
+/// face, unless a disk already holds them.
 /// With no disk found at all, the configuration's own default.
 pub fn plan(
     config: &Config,
@@ -74,6 +76,8 @@ pub fn plan(
     {
         sources.insert(0, home);
     }
+    let added = folders_apart(settings, &sources, volumes);
+    sources.extend(added);
     let mut planned: Vec<Planned> = with_skips(sources)
         .into_iter()
         .map(|(source, skip)| Planned {
@@ -156,11 +160,54 @@ fn state_of(
         } else {
             DiskState::Auto
         }
-    } else if later.contains(&v.id) {
-        DiskState::Later
     } else {
-        DiskState::Asking
+        // Nobody has answered for this one: what was said for its kind.
+        let policy = match v.kind {
+            Kind::Network => settings.network.as_str(),
+            _ => settings.removable.as_str(),
+        };
+        match policy {
+            "always" => DiskState::Chosen,
+            "never" => DiskState::Off,
+            _ if later.contains(&v.id) => DiskState::Later,
+            _ => DiskState::Asking,
+        }
     }
+}
+
+/// The folders added from a face, each a source of its own unless a source
+/// already holds it. Named by path, so the rows stay with the folder.
+/// Held means the deepest root above it is a source's: `/` holds `/etc`, but
+/// not `/mnt/depo/x` when `/mnt/depo` is a disk of its own left out — `/`
+/// stops at every disk mounted inside it.
+fn folders_apart(settings: &Settings, sources: &[SourceCfg], volumes: &[Volume]) -> Vec<SourceCfg> {
+    let mut out: Vec<SourceCfg> = Vec::new();
+    for f in &settings.folders {
+        let root = PathBuf::from(f);
+        if !root.is_absolute() {
+            continue;
+        }
+        let indexed: Vec<&PathBuf> = sources.iter().chain(&out).flat_map(|s| &s.roots).collect();
+        let disks = volumes
+            .iter()
+            .flat_map(|v| v.roots.iter().map(PathBuf::from));
+        let deepest = indexed
+            .iter()
+            .map(|r| (*r).clone())
+            .chain(disks)
+            .filter(|r| root.starts_with(r))
+            .max_by_key(|r| r.components().count());
+        let held = deepest.is_some_and(|d| indexed.iter().any(|r| **r == d));
+        if !held {
+            out.push(SourceCfg {
+                name: format!("folder:{f}"),
+                kind: SourceKindCfg::Local,
+                roots: vec![root],
+                watch: true,
+            });
+        }
+    }
+    out
 }
 
 /// A disk as a source, named by its id so a new label or letter keeps its rows.
@@ -286,6 +333,53 @@ mod tests {
             ["/run/media/u/Yedek", "/mnt/depo", "/srv/nas"].map(PathBuf::from)
         );
         assert_eq!(p.asking(), 0);
+    }
+
+    /// What was said for a kind of disk answers for every one of that kind
+    /// nobody answered for; an answer for the disk itself still wins.
+    #[test]
+    fn a_rule_for_plugged_in_and_network_disks_answers_for_them() {
+        let settings = Settings {
+            removable: "always".into(),
+            network: "never".into(),
+            ..Settings::default()
+        };
+        let p = plan(&Config::default(), &machine(), &settings, &HashSet::new());
+        assert_eq!(
+            states(&p),
+            [
+                ("uuid:sys", DiskState::Auto),
+                ("uuid:depo", DiskState::Auto),
+                ("uuid:usb", DiskState::Chosen),
+                ("net:nas:/x", DiskState::Off),
+            ]
+        );
+        assert_eq!(p.asking(), 0);
+        let settings = Settings {
+            removable: "always".into(),
+            volumes_off: vec!["uuid:usb".into()],
+            ..Settings::default()
+        };
+        let p = plan(&Config::default(), &machine(), &settings, &HashSet::new());
+        assert!(states(&p).contains(&("uuid:usb", DiskState::Off)));
+    }
+
+    /// A folder added from a face is a source of its own, unless an indexed
+    /// disk holds it already; and a relative path is not a folder.
+    #[test]
+    fn an_added_folder_is_indexed_unless_a_disk_already_is() {
+        let settings = Settings {
+            volumes_off: vec!["uuid:depo".into()],
+            folders: vec![
+                "/mnt/depo/PROJELER".into(),
+                "/etc".into(),
+                "relative/path".into(),
+                "/mnt/depo/PROJELER/inside".into(),
+            ],
+            ..Settings::default()
+        };
+        let p = plan(&Config::default(), &machine(), &settings, &HashSet::new());
+        assert_eq!(names(&p), ["uuid:sys", "folder:/mnt/depo/PROJELER"]);
     }
 
     /// This machine's own configuration: written by hand, so it is what is
