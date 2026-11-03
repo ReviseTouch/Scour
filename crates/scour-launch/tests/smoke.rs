@@ -157,7 +157,17 @@ fn the_address_the_face_used_is_the_one_the_service_is_given() {
         .every(Duration::from_millis(50))
         .run();
 
-    let said = std::fs::read_to_string(&log).expect("the log");
+    // The stub writes when the shell gets to it: on a busy machine that is
+    // after `run` has given up waiting, and reading at once failed the test.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut said = String::new();
+    while std::time::Instant::now() < deadline {
+        said = std::fs::read_to_string(&log).unwrap_or_default();
+        if said.contains("args:") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(
         said.contains("args: --socket /tmp/a-particular.sock"),
         "{said:?}"
