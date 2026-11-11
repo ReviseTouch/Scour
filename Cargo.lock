@@ -5105,6 +5105,7 @@ version = "0.2.0-alpha.12"
 dependencies = [
  "anyhow",
  "clap",
+ "copypasta",
  "humansize",
  "i-slint-backend-winit",
  "rfd",

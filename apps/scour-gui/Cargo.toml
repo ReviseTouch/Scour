@@ -125,6 +125,16 @@ rfd = { version = "0.15", default-features = false, features = ["async-std", "xd
 # Installing for one account on Windows: a Start menu shortcut is a COM
 # object, and a changed PATH has to be announced. Already in the tree through
 # Slint's font stack, so only features are added.
+# **Pasting reads X11's CLIPBOARD**, through Xwayland, not Slint's Wayland
+# clipboard. Slint's waits on its clipboard thread with no timeout and drops
+# every error, and on a GNOME 51 desktop Ctrl+V and the menu's Paste put
+# nothing in the query field (11 November) — not reproduced in a headless
+# GNOME with GPaste, IBus and a Turkish layout. Mutter keeps the two
+# selections in step, and X11 needs no keyboard focus to read. Already in the
+# tree through Slint; the same version, with X11 only.
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
+copypasta = { version = "=0.10.2", default-features = false, features = ["x11"] }
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_System_Com",

@@ -328,6 +328,21 @@ component FacetRow inherits Rectangle {
     }
 }
 
+// What a paste makes of a field: its new text and where the caret goes. `ok`
+// false means the clipboard could not be read this way, and the field asks
+// Slint's own.
+export struct Spliced {
+    ok: bool,
+    text: string,
+    caret: int,
+}
+
+// Pasting, for every field: the clipboard is read in Rust (see `paste.rs`),
+// and a `TextInput` has no way to insert text but this.
+export global Clip {
+    callback paste-into(string, int, int, bool) -> Spliced;
+}
+
 // The report's two ramps, by index. A brush cannot travel in a model: which
 // scheme is showing is decided here, and Rust sends the step instead.
 global Tones {
@@ -1088,11 +1103,23 @@ component SectionHead inherits Text {
 
 // A field somebody types into. Slint matches its editing keys in lower case
 // only: with Caps Lock on, Ctrl+V arrives as `V` and pasted nothing. The four
-// that matter are answered here for either case.
+// that matter are answered here for either case, and a paste goes through
+// `Clip` rather than Slint's own clipboard.
 component Field inherits TextInput {
+    function paste-here() {
+        let r = Clip.paste-into(self.text, self.anchor-position-byte-offset,
+            self.cursor-position-byte-offset, self.single-line);
+        if (!r.ok) {
+            self.paste();
+            return;
+        }
+        self.text = r.text;
+        self.set-selection-offsets(r.caret, r.caret);
+        self.edited();
+    }
     key-pressed(e) => {
         if (e.modifiers.control && !e.modifiers.shift) {
-            if (e.text == "V") { self.paste(); return accept; }
+            if (e.text == "v" || e.text == "V") { self.paste-here(); return accept; }
             if (e.text == "C") { self.copy(); return accept; }
             if (e.text == "X") { self.cut(); return accept; }
             if (e.text == "A") { self.select-all(); return accept; }
@@ -1660,7 +1687,7 @@ export component MainWindow inherits Window {
         } else if (what == "copy") {
             input.copy();
         } else if (what == "paste") {
-            input.paste();
+            input.paste-here();
         } else if (what == "select-all") {
             input.select-all();
         } else if (what == "clear") {
@@ -1955,6 +1982,17 @@ export component MainWindow inherits Window {
                     edited => {
                         root.query-changed(self.text);
                     }
+                    function paste-here() {
+                        let r = Clip.paste-into(self.text, self.anchor-position-byte-offset,
+                            self.cursor-position-byte-offset, true);
+                        if (!r.ok) {
+                            self.paste();
+                            return;
+                        }
+                        self.text = r.text;
+                        self.set-selection-offsets(r.caret, r.caret);
+                        root.query-changed(self.text);
+                    }
 
 
                     // Down and up move through the results without leaving the
@@ -1972,7 +2010,7 @@ export component MainWindow inherits Window {
                         // Caps Lock: Slint takes its editing keys in lower case
                         // only, so `V` pasted nothing. See `Field`.
                         if (e.modifiers.control && !e.modifiers.shift) {
-                            if (e.text == "V") { self.paste(); return accept; }
+                            if (e.text == "v" || e.text == "V") { self.paste-here(); return accept; }
                             if (e.text == "C") { self.copy(); return accept; }
                             if (e.text == "X") { self.cut(); return accept; }
                             if (e.text == "A") { self.select-all(); return accept; }
@@ -4400,10 +4438,20 @@ export component MainWindow inherits Window {
                                 root.ask-answer(true);
                                 root.focus-query();
                             }
+                            function paste-here() {
+                                let r = Clip.paste-into(self.text, self.anchor-position-byte-offset,
+                                    self.cursor-position-byte-offset, true);
+                                if (!r.ok) {
+                                    self.paste();
+                                    return;
+                                }
+                                self.text = r.text;
+                                self.set-selection-offsets(r.caret, r.caret);
+                            }
                             key-pressed(e) => {
                                 // Caps Lock, as in `Field`.
                                 if (e.modifiers.control && !e.modifiers.shift) {
-                                    if (e.text == "V") { self.paste(); return accept; }
+                                    if (e.text == "v" || e.text == "V") { self.paste-here(); return accept; }
                                     if (e.text == "C") { self.copy(); return accept; }
                                     if (e.text == "X") { self.cut(); return accept; }
                                     if (e.text == "A") { self.select-all(); return accept; }

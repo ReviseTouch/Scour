@@ -13,6 +13,7 @@ mod drag;
 mod hotkey;
 mod install;
 mod link;
+mod paste;
 mod report;
 mod rows;
 mod tray;
@@ -514,6 +515,35 @@ fn main() -> Result<()> {
     answer_the_next_start(claim.listener.try_clone()?, window.as_weak());
     dress(&window);
     words(&window, &cat.borrow());
+    window
+        .global::<ui::Clip>()
+        .on_paste_into(|text, anchor, cursor, one_line| {
+            let spliced = paste::text().and_then(|pasted| {
+                paste::splice(
+                    &text,
+                    usize::try_from(anchor).ok()?,
+                    usize::try_from(cursor).ok()?,
+                    &pasted,
+                    one_line,
+                )
+            });
+            trace(&format!(
+                "paste: {}",
+                if spliced.is_some() {
+                    "X11"
+                } else {
+                    "Slint's own"
+                }
+            ));
+            match spliced {
+                Some((text, caret)) => ui::Spliced {
+                    ok: true,
+                    text: text.into(),
+                    caret: i32::try_from(caret).unwrap_or(i32::MAX),
+                },
+                None => ui::Spliced::default(),
+            }
+        });
     // The order chosen last, in whichever face: a word no key has is a file
     // from somewhere else, and the newest-first default stands.
     let kept_sort = scour_core::SortKey::named(&kept.sort)
