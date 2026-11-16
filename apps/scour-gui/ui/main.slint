@@ -1186,7 +1186,7 @@ export component MainWindow inherits Window {
     out property <length> tile-h: root.view-mode == "large" ? 172px : 104px;
     out property <length> pic: root.view-mode == "large" ? 110px : 52px;
     out property <int> per-line: max(1, Math.floor(
-        (root.width - root.chrome - 40px) / root.tile-w));
+        (root.width - root.chrome) / root.tile-w));
     /// The tiles, a line at a time. A model of models: a `for` over a count
     /// builds every element at once, and a `ListView` stops being lazy.
     in property <[[Row]]> lines;
@@ -1224,10 +1224,13 @@ export component MainWindow inherits Window {
     in property <int> total-rows;
     in property <int> window-offset;
 
-    // Everything between the window edge and the list — 20px card margins, 1px
-    // border, the 186px rail and divider, 12px list padding, 14px of scrollbar
+    // Everything between the window edge and the list — the sidebar and its
+    // divider, 12px list padding, 14px of scrollbar
     // gutter. The columns are sized from this, not from the list: that is a loop.
-    property <length> chrome: 40px + 2px + 186px + 1px + 24px + 14px;
+    property <length> chrome: root.rail-w + 1px + 24px + 14px;
+    /// The sidebar's width, which the header's mark matches so the field
+    /// starts where the list does.
+    out property <length> rail-w: 212px;
     // One gap between each pair of headings, and one more before the picker.
     // Counted, because how many columns there are is a choice.
     property <length> gaps: 8px * max(1, root.heads.length);
@@ -1741,15 +1744,14 @@ export component MainWindow inherits Window {
 
     // A card on a ground: 20px all round, a 1px line, a 3px corner. No shadow —
     // the compositor draws the window's own, and two read as a border.
+    // Edge to edge, as a desktop window is: the card used to sit on a 20px
+    // ground with a corner, which read as a page in a browser.
     Rectangle {
-        x: 20px;
-        y: 20px;
-        width: parent.width - 40px;
-        height: parent.height - 40px;
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
         background: Theme.panel;
-        border-width: Theme.hair;
-        border-color: Theme.line;
-        border-radius: 3px;
         clip: true;
 
     VerticalLayout {
@@ -1761,8 +1763,8 @@ export component MainWindow inherits Window {
         Rectangle {
             // 16px above the box, 12px below, the box 26px of 20px monospace.
             // Taller when the query is read back — see `reading`.
-            height: root.reading == "" && root.chips-of(root.query).length == 0 ? 63px : 84px;
-            background: Theme.panel;
+            height: root.reading == "" && root.chips-of(root.query).length == 0 ? 56px : 77px;
+            background: Theme.ground;
 
             // The line between the query and what is under it. A plain rule:
             // the field's own border is what says where the keyboard is.
@@ -1773,21 +1775,22 @@ export component MainWindow inherits Window {
             }
 
             VerticalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
-                padding-top: 16px;
-                padding-bottom: 12px;
+                padding-left: 16px;
+                padding-right: 12px;
+                padding-top: 12px;
+                padding-bottom: 11px;
                 spacing: 5px;
 
             HorizontalLayout {
                 // The box's own height, so the reading under it moves nothing.
-                height: 35px;
-                spacing: 12px;
+                height: 32px;
+                spacing: 10px;
 
                 // The mark: the desktop's icon, then letter-spaced small capitals.
                 mark := HorizontalLayout {
                     spacing: 8px;
                     alignment: start;
+                    width: root.rail-w - 26px;
                     Image {
                         source: @image-url("../../../assets/scour.svg");
                         width: 20px;
@@ -1810,8 +1813,8 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                     // Or the scrolled text paints across the window.
                     clip: true;
-                    background: Theme.panel-2;
-                    border-radius: 4px;
+                    background: Theme.panel;
+                    border-radius: 8px;
                     border-width: Theme.hair;
                     border-color: input.has-focus ? Theme.focus : Theme.line;
                     animate border-color { duration: 120ms; }
@@ -2160,152 +2163,42 @@ export component MainWindow inherits Window {
                     // Painted last, so a letter cannot cover it.
                     Rectangle {
                         x: field.caret-x;
-                        y: (field.height - 24px) / 2;
+                        y: (field.height - 19px) / 2;
                         width: 2px;
-                        height: 24px;
+                        height: 19px;
                         background: Theme.q-key;
                         visible: input.has-focus && field.caret-lit;
                     }
 
                 }
-            }
 
-                // What the engine read, in words: the colours say what each
-                // piece is, this says why the answer is what it is. Shown only
-                // when there is something worth saying — `Role::is_telling`.
-                if root.reading != "" || root.chips-of(root.query).length > 0: HorizontalLayout {
-                    spacing: 6px;
-                    height: 20px;
-
-                    for chip in root.chips-of(root.query): Chip {
-                        term: chip;
-                        dropped => { root.chip-dropped(chip); }
-                    }
-                    Text {
-                        text: root.reading;
-                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
-                        font-size: 11.5px;
-                        font-weight: 500;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        horizontal-stretch: 1;
+                // Search or report, and what the list looks like: a desktop's
+                // header bar, beside the field rather than in rows of their own.
+                VerticalLayout {
+                    alignment: center;
+                    Choice {
+                        height: 30px;
+                        labels: [root.tab-search, root.tab-report];
+                        values: ["search", "report"];
+                        value: root.tab == "report" ? "report" : "search";
+                        picked(v) => {
+                            root.tab = v;
+                            // Asked for when looked at: weighing a folder is a walk.
+                            if (v == "report") {
+                                root.report-open("");
+                            }
+                        }
                     }
                 }
-            }
-        }
-
-        // What is true of the whole window: how many, how long, how big the
-        // index is. Above the list, because "is this everything?" is asked
-        // before reading rather than after.
-        Rectangle {
-            height: 30px;
-            background: Theme.panel;
-
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.line-soft;
-            }
-
-            HorizontalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
-                spacing: 10px;
-
-                // Three claims of different weight: the count is the answer,
-                // the cost wears the "today" hue, the walk stays quiet. `meter`
-                // holds the sentences that are not numbers; never both at once.
-                if root.notice != "": Text {
-                    text: root.notice;
-                    color: Theme.ink-2;
-                    font-size: 11.5px;
-                    vertical-alignment: center;
-                }
-
-                if root.notice == "" && root.meter-count != "": HorizontalLayout {
-                    spacing: 6px;
-
-                    Text {
-                        text: root.meter-count;
-                        color: Theme.ink;
-                        font-size: 12.5px;
-                        font-weight: 650;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.meter-ms == "" ? "" : "·";
-                        color: Theme.line;
-                        font-size: 11.5px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.meter-ms;
-                        color: Theme.t0;
-                        font-size: 11.5px;
-                        font-weight: 650;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.meter-rows == "" ? "" : "·";
-                        color: Theme.line;
-                        font-size: 11.5px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.meter-rows;
-                        color: Theme.ink-3;
-                        font-size: 11.5px;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.scanning == "" ? "" : "·";
-                        color: Theme.line;
-                        font-size: 11.5px;
-                        vertical-alignment: center;
-                    }
-                    // The key colour: the one thing on this line still moving.
-                    Text {
-                        text: root.scanning;
-                        color: Theme.q-key;
-                        font-size: 11.5px;
-                        font-weight: 650;
-                        vertical-alignment: center;
+                if root.tab == "report" && root.report-web-ready: VerticalLayout {
+                    alignment: center;
+                    Push {
+                        label: root.report-web;
+                        clicked => {
+                            root.report-in-browser();
+                        }
                     }
                 }
-
-                if root.notice == "" && root.meter-count == "": Text {
-                    text: root.meter;
-                    color: Theme.ink-3;
-                    font-size: 11.5px;
-                    vertical-alignment: center;
-                }
-
-                // What the service is holding, not what it just answered.
-                Text {
-                    text: root.holding == "" ? "" : "  ·  " + root.holding;
-                    color: Theme.ink-3;
-                    font-size: 11.5px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                Rectangle { }
-
-                if root.note != "": Text {
-                    text: root.note;
-                    color: Theme.q-key;
-                    font-size: 11.5px;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                if root.busy: Text {
-                    text: "…";
-                    color: Theme.focus;
-                    font-size: 11.5px;
-                    vertical-alignment: center;
-                }
-
                 // The window's own controls, then a rule, then the switches for
                 // what is being read rather than what the program is doing.
                 Rectangle { width: 10px; }
@@ -2370,6 +2263,29 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+
+                // What the engine read, in words: the colours say what each
+                // piece is, this says why the answer is what it is. Shown only
+                // when there is something worth saying — `Role::is_telling`.
+                if root.reading != "" || root.chips-of(root.query).length > 0: HorizontalLayout {
+                    spacing: 6px;
+                    height: 20px;
+
+                    for chip in root.chips-of(root.query): Chip {
+                        term: chip;
+                        dropped => { root.chip-dropped(chip); }
+                    }
+                    Text {
+                        text: root.reading;
+                        color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
+                        font-size: 11.5px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
         }
 
         // A disk that came and has not been answered for, one at a time.
@@ -2416,52 +2332,6 @@ export component MainWindow inherits Window {
                     Push {
                         label: root.disk-never;
                         clicked => { root.disk-answered("leave"); }
-                    }
-                }
-            }
-        }
-
-        // Search and report, the window's two tabs.
-        Rectangle {
-            height: 29px;
-            background: Theme.panel;
-
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.line;
-            }
-
-            HorizontalLayout {
-                padding-left: 20px;
-                spacing: 0px;
-                alignment: start;
-
-                Tab {
-                    label: root.tab-search;
-                    on: root.tab != "report";
-                    clicked => {
-                        root.tab = "search";
-                    }
-                }
-                Tab {
-                    label: root.tab-report;
-                    on: root.tab == "report";
-                    clicked => {
-                        root.tab = "report";
-                        // Asked for when looked at: weighing a folder is a walk.
-                        root.report-open("");
-                    }
-                }
-                Rectangle { }
-                if root.tab == "report" && root.report-web-ready: VerticalLayout {
-                    alignment: center;
-                    padding-right: 20px;
-                    Push {
-                        label: root.report-web;
-                        clicked => {
-                            root.report-in-browser();
-                        }
                     }
                 }
             }
@@ -3224,8 +3094,8 @@ export component MainWindow inherits Window {
             Rectangle {
                 // A fixed track: it carries counts that must not reflow while
                 // the list beside it does.
-                width: 186px;
-                background: Theme.panel-2;
+                width: root.rail-w;
+                background: Theme.ground;
 
                 Rectangle {
                     x: parent.width - 1px;
@@ -3247,6 +3117,34 @@ export component MainWindow inherits Window {
                     padding-right: 0px;
                     spacing: 1px;
                     alignment: start;
+
+                    // Where, not what: the scopes are this desktop's own folders,
+                    // answered by the service, which runs where the files are.
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        Text {
+                            text: root.scope-heading;
+                            color: Theme.ink-3;
+                            font-size: 12px;
+                            font-weight: 500;
+                            overflow: elide;
+                            height: 18px;
+                        }
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    for sc[i] in root.scopes: FacetRow {
+                        label: sc.label;
+                        count: sc.count;
+                        share: sc.share;
+                        on: root.term-on(root.query, sc.token);
+                        clicked => { root.facet-clicked(sc.token); }
+                    }
+
+                    Rectangle { height: 14px; }
 
                     // Indented by a layout, not by an `x`: moving the text
                     // right inside a box that stays put clips the first glyph.
@@ -3271,33 +3169,6 @@ export component MainWindow inherits Window {
                         share: f.share;
                         on: root.term-on(root.query, f.token);
                         clicked => { root.facet-clicked(f.token); }
-                    }
-
-                    // Where, not what: the scopes are this desktop's own folders,
-                    // answered by the service, which runs where the files are.
-                    Rectangle { height: 12px; }
-
-                    HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
-                        Text {
-                            text: root.scope-heading;
-                            color: Theme.ink-3;
-                            font-size: 12px;
-                            font-weight: 500;
-                            overflow: elide;
-                            height: 18px;
-                        }
-                    }
-
-                    Rectangle { height: 8px; }
-
-                    for sc[i] in root.scopes: FacetRow {
-                        label: sc.label;
-                        count: sc.count;
-                        share: sc.share;
-                        on: root.term-on(root.query, sc.token);
-                        clicked => { root.facet-clicked(sc.token); }
                     }
 
                     // Three bands rather than a histogram: a size filter answers
@@ -4052,7 +3923,7 @@ export component MainWindow inherits Window {
         // is selected.
         if root.picked > 0 && root.tab != "report": Rectangle {
             height: 38px;
-            background: Theme.panel-2;
+            background: Theme.ground;
 
             // The count on the left, the buttons on the right: one is read,
             // the others are aimed at.
@@ -4127,9 +3998,9 @@ export component MainWindow inherits Window {
         // `scour_ui::bar_edges`, shared with every other face.
         Rectangle {
             visible: root.tab != "report";
-            min-height: root.tab == "report" ? 0px : 107px;
-            max-height: root.tab == "report" ? 0px : 107px;
-            background: Theme.panel-2;
+            min-height: root.tab == "report" ? 0px : 76px;
+            max-height: root.tab == "report" ? 0px : 76px;
+            background: Theme.panel;
 
             Rectangle {
                 height: 1px;
@@ -4139,8 +4010,8 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
-                padding-top: 10px;
-                padding-bottom: 12px;
+                padding-top: 6px;
+                padding-bottom: 6px;
                 spacing: 0px;
 
                 HorizontalLayout {
@@ -4187,14 +4058,12 @@ export component MainWindow inherits Window {
                             alignment: end;
                             Rectangle {
                                 // A fixed ceiling, not a share of the parent:
-                                // that is a binding loop. 36px leaves the axis
-                                // its line inside the ribbon's 107.
+                                // that is a binding loop. 22px leaves the axis
+                                // its line inside the ribbon's 76.
                                 height: b.count == 0 ? 2px
-                                    : max(4px, 36px * b.count / max(1, root.bar-peak));
-                                background: b.count == 0 ? Theme.line
-                                    : b.band == 0 ? Theme.t0 : b.band == 1 ? Theme.t1
-                                    : b.band == 2 ? Theme.t2 : b.band == 3 ? Theme.t3
-                                    : b.band == 4 ? Theme.t4 : Theme.t5;
+                                    : max(3px, 22px * b.count / max(1, root.bar-peak));
+                                // One ink: the axis says how old, not the colour.
+                                background: b.count == 0 ? Theme.line : Theme.ink-3;
                                 // Lighter under the pointer: a bar that can be
                                 // pressed says so before it is.
                                 opacity: bartouch.has-hover && b.days > 0 ? 0.75 : 1.0;
@@ -4247,6 +4116,118 @@ export component MainWindow inherits Window {
             }
         }
 
+        // The status bar: how many, how long, how big the index is. At the
+        // foot, as a desktop puts it; the answer's count is its first word.
+        Rectangle {
+            height: 28px;
+            background: Theme.ground;
+
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 10px;
+
+                // Three claims of different weight: the count is the answer,
+                // the cost wears the "today" hue, the walk stays quiet. `meter`
+                // holds the sentences that are not numbers; never both at once.
+                if root.notice != "": Text {
+                    text: root.notice;
+                    color: Theme.ink-2;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+
+                if root.notice == "" && root.meter-count != "": HorizontalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: root.meter-count;
+                        color: Theme.ink;
+                        font-size: 12.5px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-ms == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-ms;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-rows == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.meter-rows;
+                        color: Theme.ink-3;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.scanning == "" ? "" : "·";
+                        color: Theme.line;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    // The key colour: the one thing on this line still moving.
+                    Text {
+                        text: root.scanning;
+                        color: Theme.q-key;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+                }
+
+                if root.notice == "" && root.meter-count == "": Text {
+                    text: root.meter;
+                    color: Theme.ink-3;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+
+                // What the service is holding, not what it just answered.
+                Text {
+                    text: root.holding == "" ? "" : "  ·  " + root.holding;
+                    color: Theme.ink-3;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Rectangle { }
+
+                if root.note != "": Text {
+                    text: root.note;
+                    color: Theme.q-key;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                if root.busy: Text {
+                    text: "…";
+                    color: Theme.focus;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+
+            }
+        }
 
     }
 

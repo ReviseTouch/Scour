@@ -457,7 +457,7 @@ msgid "Kind"
 msgstr "Tür"
 
 msgid "Scope"
-msgstr "Kapsam"
+msgstr "Yerler"
 
 msgid "Size"
 msgstr "Boyut"

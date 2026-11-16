@@ -28,7 +28,7 @@
     font-family: var(--sans);
     font-size: 14px;
     line-height: 1.45;
-    padding: calc(var(--u) * 5);
+    padding: 0;
     height: 100%;
     box-sizing: border-box;
     display: grid;
@@ -46,28 +46,32 @@
   /* ---------------- the application window ---------------- */
   .app {
     background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 3px;
     overflow: hidden;
-    box-shadow: 0 18px 50px -28px rgba(0,0,0,.7);
-    /* Every child but the list is `auto`, so leftover height lands on the list. */
+    /* Header, a disk question, the list, the status bar. Every row but the
+       list is `auto`, so leftover height lands on the list. */
     display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     min-height: 0;
     height: 100%;
   }
 
+  /* The header bar: the name over the sidebar, the field, then the switches. */
   .query {
     display: flex;
-    align-items: baseline;
+    flex-wrap: wrap;
+    align-items: center;
+    background: var(--ground);
     /* Its own layer, above the list's sticky header: the suggestion box that
        drops out of it must not be drawn under the column names. */
     position: relative;
     z-index: 20;
-    gap: calc(var(--u) * 3);
-    padding: calc(var(--u) * 4) calc(var(--u) * 5) calc(var(--u) * 3);
-    border-bottom: 1px solid var(--line-soft);
+    gap: calc(var(--u) * 2.5);
+    padding: 10px 12px 10px 16px;
+    border-bottom: 1px solid var(--line);
   }
+  .query .brand { width: calc(212px - 26px); display: flex; align-items: center; }
+  .query .qread { flex-basis: 100%; margin: 0; padding-left: 196px; }
+  .query .qread:empty { display: none; }
   .brand {
     font-size: 14px;
     font-weight: 600;
@@ -288,8 +292,11 @@
   .meter {
     display: flex;
     align-items: center;
-    gap: calc(var(--u) * 4);
-    padding: 0 calc(var(--u) * 5) calc(var(--u) * 3);
+    gap: calc(var(--u) * 3);
+    height: 28px;
+    padding: 0 16px;
+    background: var(--ground);
+    border-top: 1px solid var(--line);
     font: 500 11.5px/1 var(--mono);
     font-variant-numeric: tabular-nums;
     color: var(--ink-3);
@@ -301,7 +308,7 @@
   .meter > span { white-space: nowrap; flex: none; }
   .meter > .tools, .meter > .views { flex: none; }
   .meter .big { color: var(--ink); font-size: 12.5px; font-weight: 650; }
-  .meter .ms  { color: var(--t0); font-weight: 650; }
+  .meter .ms  { color: var(--ink-3); font-weight: 600; }
   .meter .sep { color: var(--line); }
   /* What the meter has shed for want of width — see `fitMeter`. */
   .meter[data-drop~="note"] #path-note, .meter[data-drop~="note"] #path-note-sep,
@@ -312,10 +319,13 @@
   .meter[data-stale="short"] #stale .short { display: inline; }
 
   /* ---------------- body ---------------- */
-  .body { display: grid; grid-template-columns: 186px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  .body { display: grid; grid-template-columns: 212px minmax(0, 1fr); min-height: 0; overflow: hidden; }
   /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
   .body[hidden], .report[hidden] { display: none; }
-  #view-search, #view-report { grid-row: 4; }
+  .query { grid-row: 1; }
+  .disk-ask { grid-row: 2; }
+  #view-search, #view-report { grid-row: 3; }
+  .meter { grid-row: 4; }
   .rail { overflow-y: auto; min-height: 0; }
   /* Advice, not an alarm: the window works, it is only slower than it should be. */
   .stale { color: var(--t1); }
@@ -324,9 +334,9 @@
   @media (max-width: 720px) { .body { grid-template-columns: 1fr; } .rail { display: none; } }
 
   .rail {
-    border-right: 1px solid var(--line-soft);
+    border-right: 1px solid var(--line);
     padding: calc(var(--u) * 3) 0;
-    background: var(--panel-2);
+    background: var(--ground);
   }
   .rail h2 {
     margin: calc(var(--u) * 3) calc(var(--u) * 4) calc(var(--u) * 1.5);
@@ -560,21 +570,21 @@
   body.grid #rows-body > tr.far > td { height: auto; }
 
   /* The three shapes, in the bar that carries what is true of the window. */
-  .views { display: flex; gap: 2px; }
+  .views { display: flex; gap: 2px; flex: none; }
   .views button {
-    background: none; border: 1px solid var(--line); color: var(--ink-3);
-    width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
-    font: 600 11px/1 var(--sans); padding: 0;
+    background: none; border: 1px solid transparent; color: var(--ink-2);
+    width: 28px; height: 28px; border-radius: 7px; cursor: pointer;
+    font: 500 14px/1 var(--sans); padding: 0;
   }
-  .views button:hover { color: var(--ink); border-color: var(--ink-3); }
-  .views button[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
+  .views button:hover { color: var(--ink); background: var(--hover); }
+  .views button[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
   .views button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
   /* ---------------- the time ribbon ---------------- */
   .ribbon {
     border-top: 1px solid var(--line);
-    background: var(--panel-2);
-    padding: calc(var(--u) * 2.5) calc(var(--u) * 5) calc(var(--u) * 3);
+    background: var(--panel);
+    padding: 6px 16px 6px;
   }
   .ribbon-head {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -583,14 +593,15 @@
   }
   .ribbon-head span { letter-spacing: .02em; text-transform: none; font-weight: 500;
                       font-family: var(--mono); font-size: 12px; }
-  .bars { display: flex; align-items: flex-end; gap: 2px; height: 46px; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 24px; }
   .bars button {
     flex: 1; border: 0; padding: 0; background: none; cursor: pointer;
     display: flex; align-items: flex-end; height: 100%;
     border-radius: 1px;
   }
   .bars button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .bars i { display: block; width: 100%; border-radius: 1px 1px 0 0; opacity: .9; }
+  /* One ink: the axis says how old, not the colour. */
+  .bars i { display: block; width: 100%; border-radius: 1px 1px 0 0; opacity: .9; background: var(--ink-3) !important; }
   .bars button:hover i { opacity: 1; }
   .bars button[aria-pressed="true"] i { opacity: 1; box-shadow: 0 0 0 1px var(--ink) inset; }
   .scale {
@@ -1036,15 +1047,18 @@
   }
 
   /* ---------------- theme switch ---------------- */
-  .tabs { display: flex; gap: 1px; padding: 0 calc(var(--u) * 5); background: var(--panel); }
+  .tabs {
+    display: flex; gap: 2px; padding: 2px; flex: none;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+  }
   .tabs button {
-    background: none; border: 0; border-bottom: 2px solid transparent;
-    padding: calc(var(--u) * 2) calc(var(--u) * 3);
+    background: none; border: 0; border-radius: 5px;
+    padding: 6px 12px;
     font: 500 12.5px/1 var(--sans); 
     color: var(--ink-3); cursor: pointer;
   }
   .tabs button:hover { color: var(--ink-2); }
-  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+  .tabs button[aria-selected="true"] { color: var(--ink); background: var(--panel); }
   .tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
   /* The report: the same last row as the list, so it scrolls inside. */
@@ -1216,15 +1230,15 @@
   .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 
   /* One `margin-left: auto`, on the group: a second one does nothing. */
-  .tools { display: flex; gap: 2px; margin-left: auto; align-items: center; }
+  .tools { display: flex; gap: 2px; align-items: center; flex: none; }
   .about {
-    background: none; border: 1px solid var(--line); color: var(--ink-3);
-    width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
+    background: none; border: 1px solid transparent; color: var(--ink-2);
+    width: 28px; height: 28px; border-radius: 7px; cursor: pointer;
     font: 600 11px/1 var(--sans); padding: 0;
   }
-  .about:hover { color: var(--ink); border-color: var(--ink-3); }
-  .about[aria-pressed="true"] { color: var(--q-key); border-color: var(--q-key); }
-  .about[aria-expanded="true"] { color: var(--q-key); border-color: var(--q-key); }
+  .about:hover { color: var(--ink); background: var(--hover); }
+  .about[aria-pressed="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
+  .about[aria-expanded="true"] { color: var(--ink); background: var(--panel-2); border-color: var(--line); }
   .about:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   /* Left of the line is about the window, right of it about the list's shape. */
   .tools + .views {
@@ -1574,24 +1588,10 @@
           <div class="hints" id="hints" role="listbox" data-t-aria="Suggestions" hidden></div>
         </div>
       </div>
-      <p class="qread" id="qread"></p>
-    </div>
-
-    <div class="meter">
-      <span class="big" id="count">—</span>
-      <span class="sep">·</span>
-      <span class="ms" id="ms">—</span>
-      <span class="sep" id="rows-sep">·</span>
-      <span id="rows"></span>
-      <!-- Switching a skip rule off starts a walk; this is what then moves. -->
-      <span class="sep" id="scanning-sep" hidden>·</span>
-      <span id="scanning" class="scanning" hidden></span>
-      <!-- Every query reads the unsorted tail: a week took ordering by path
-           from 1.9 ms to 21.5, and a rebuild put it back. -->
-      <span class="sep" id="stale-sep" hidden>·</span>
-      <span id="stale" class="stale" hidden></span>
-      <span class="sep" id="path-note-sep">·</span>
-      <span id="path-note" data-t="connecting…"></span>
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
+        <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
+      </div>
       <!-- One group: each of these is about the window, not the results. -->
       <div class="tools" role="group" data-t-aria="window controls">
         <button type="button" id="faces" class="about" hidden aria-haspopup="dialog"
@@ -1627,6 +1627,24 @@
         <button type="button" data-view="large" aria-pressed="false"
                 data-t-title="large icons" data-t-aria="show the results as large icons">▣</button>
       </div>
+      <p class="qread" id="qread"></p>
+    </div>
+
+    <div class="meter">
+      <span class="big" id="count">—</span>
+      <span class="sep">·</span>
+      <span class="ms" id="ms">—</span>
+      <span class="sep" id="rows-sep">·</span>
+      <span id="rows"></span>
+      <!-- Switching a skip rule off starts a walk; this is what then moves. -->
+      <span class="sep" id="scanning-sep" hidden>·</span>
+      <span id="scanning" class="scanning" hidden></span>
+      <!-- Every query reads the unsorted tail: a week took ordering by path
+           from 1.9 ms to 21.5, and a rebuild put it back. -->
+      <span class="sep" id="stale-sep" hidden>·</span>
+      <span id="stale" class="stale" hidden></span>
+      <span class="sep" id="path-note-sep">·</span>
+      <span id="path-note" data-t="connecting…"></span>
     </div>
 
     <!-- Choosing a face starts a program, so a second press confirms it. -->
@@ -1721,17 +1739,12 @@
       <button type="button" data-do="leave" data-t="Never"></button>
     </div>
 
-    <div class="tabs" role="tablist">
-      <button role="tab" id="tab-search" aria-selected="true" aria-controls="view-search" data-t="Search"></button>
-      <button role="tab" id="tab-report" aria-selected="false" aria-controls="view-report" data-t="Report"></button>
-    </div>
-
     <div class="body" id="view-search" role="tabpanel" aria-labelledby="tab-search">
       <nav class="rail" data-t-aria="Filters">
-        <h2 data-t="Kind"></h2>
-        <div id="kinds"></div>
         <h2 data-t="Scope"></h2>
         <div id="scopes"></div>
+        <h2 data-t="Kind"></h2>
+        <div id="kinds"></div>
         <h2 data-t="Size"></h2>
         <div id="sizes"></div>
       </nav>
@@ -3831,7 +3844,7 @@
     const max = Math.max(1, ...counts);
     const edges = [...BAR_EDGES].reverse();
     bars.innerHTML = counts.map((v, i) => {
-      const h = v === 0 ? 2 : Math.max(4, Math.round((v / max) * 46));
+      const h = v === 0 ? 2 : Math.max(3, Math.round((v / max) * 24));
       const days = edges[i];
       const oldest = i === 0;
       const c = v === 0 ? "--line" : bandOf(now - days * DAY);
