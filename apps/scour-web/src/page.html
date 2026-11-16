@@ -69,11 +69,9 @@
     border-bottom: 1px solid var(--line-soft);
   }
   .brand {
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: .28em;
-    text-transform: uppercase;
-    color: var(--ink-3);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
     flex: none;
     padding-top: 3px;
   }
@@ -91,17 +89,20 @@
     gap: calc(var(--u) * 3);
     flex: 1;
     min-width: 0;
-    border-bottom: 2px solid var(--line);
-    padding-bottom: calc(var(--u) * 1.5);
+    /* A field, as a desktop draws one: a box, not an underline. */
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 12px;
   }
-  .qline:focus-within { border-bottom-color: var(--t1); }
+  .qline:focus-within { border-color: var(--focus); }
   .prompt {
     flex: none;
-    font: 600 17px/1.35 var(--mono);
+    font: 500 15px/1.35 var(--mono);
     color: var(--ink-3);
     user-select: none;
   }
-  .qline:focus-within .prompt { color: var(--t1); }
+  .qline:focus-within .prompt { color: var(--ink-2); }
 
   .qfield { flex: 1; min-width: 0; position: relative; overflow: visible; }
   .qfield input {
@@ -111,7 +112,7 @@
     outline: 0;
     color: transparent;
     caret-color: var(--ink);
-    font: 600 20px/1.3 var(--mono);
+    font: 500 16px/1.3 var(--mono);
     letter-spacing: -.01em;
     padding: 0;
     position: relative;
@@ -121,7 +122,7 @@
   .qshadow {
     position: absolute;
     inset: 0;
-    font: 600 20px/1.3 var(--mono);
+    font: 500 16px/1.3 var(--mono);
     letter-spacing: -.01em;
     white-space: pre;
     overflow: hidden;
@@ -329,9 +330,7 @@
   }
   .rail h2 {
     margin: calc(var(--u) * 3) calc(var(--u) * 4) calc(var(--u) * 1.5);
-    font-size: 10px;
-    letter-spacing: .18em;
-    text-transform: uppercase;
+    font-size: 12px; 
     color: var(--ink-3);
     font-weight: 650;
   }
@@ -353,13 +352,14 @@
   }
   .facet:hover { background: var(--panel); color: var(--ink); }
   .facet:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .facet[aria-pressed="true"] { color: var(--ink); border-left-color: var(--t1); background: var(--panel); }
+  .facet[aria-pressed="true"] { color: var(--ink); border-left-color: var(--ink-3); background: var(--panel); }
   .facet .dot { width: 7px; height: 7px; border-radius: 1px; flex: none; }
   /* Kinds get no colour — colour means time — so a bar carries the count. */
   .facet.bar { position: relative; }
+  /* A hairline under the row, not a block behind it: the share is a hint. */
   .facet.bar > .fill {
-    position: absolute; left: 0; top: 2px; bottom: 2px;
-    background: var(--line); border-radius: 0 2px 2px 0; z-index: 0;
+    position: absolute; left: 0; bottom: 1px; height: 2px;
+    background: var(--line); border-radius: 1px; z-index: 0;
   }
   .facet.bar > .nm, .facet.bar > .ct { position: relative; z-index: 1; }
   .facet.bar[aria-pressed="true"] > .fill { background: var(--line); opacity: 1; }
@@ -392,9 +392,7 @@
     border-bottom: 1px solid var(--line);
     padding: calc(var(--u) * 2) calc(var(--u) * 3);
     text-align: left;
-    font-size: 10px;
-    letter-spacing: .14em;
-    text-transform: uppercase;
+    font-size: 12px; 
     color: var(--ink-3);
     font-weight: 650;
     white-space: nowrap;
@@ -433,7 +431,7 @@
   thead th:hover { color: var(--ink); }
   thead th.num { text-align: right; }
   thead th[aria-sort]:not([aria-sort="none"]) { color: var(--ink); }
-  thead th .arrow { color: var(--t1); }
+  thead th .arrow { color: var(--ink-2); }
 
   tbody tr { border-bottom: 1px solid var(--line-soft); }
   tbody tr:hover { background: var(--panel-2); }
@@ -469,6 +467,9 @@
    * `top: 0; bottom: 0` beats a stated height a fractional row rounds past. */
   td.age { padding: 0 0 0 3px; width: 30px; position: relative; text-align: center; }
   td.age i { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+  /* The age stripe is the window's choice too: gone. A column of one colour
+   * down a list of today's files was the loudest thing on the page. */
+  tbody td.age i { display: none; }
 
   .name { font: 500 13px/1 var(--mono); color: var(--ink); white-space: nowrap; }
   /* A wash, not a highlighter: it stacks over a selected row. */
@@ -577,11 +578,11 @@
   }
   .ribbon-head {
     display: flex; justify-content: space-between; align-items: baseline;
-    font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    font-size: 12px; 
     color: var(--ink-3); font-weight: 650; margin-bottom: calc(var(--u) * 2);
   }
   .ribbon-head span { letter-spacing: .02em; text-transform: none; font-weight: 500;
-                      font-family: var(--mono); font-size: 10.5px; }
+                      font-family: var(--mono); font-size: 12px; }
   .bars { display: flex; align-items: flex-end; gap: 2px; height: 46px; }
   .bars button {
     flex: 1; border: 0; padding: 0; background: none; cursor: pointer;
@@ -608,7 +609,7 @@
   }
   .dupes-head h4 {
     margin: 0; flex: none;
-    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 11px; 
     color: var(--ink); font-weight: 650;
   }
   .dupes-sum {
@@ -655,7 +656,7 @@
   .dupe .save { color: var(--ink); font-weight: 650; }
   .dupe .of { color: var(--ink-3); }
   /* Proven and same-length-only are different claims, so this is coloured. */
-  .dupe .sure { margin-left: auto; font-size: 10.5px; letter-spacing: .04em; }
+  .dupe .sure { margin-left: auto; font-size: 12px; letter-spacing: .04em; }
   /* Read and compared is calm; not-yet-read must catch the eye. */
   .dupe .sure.content { color: var(--ink-2); }
   .dupe .sure.size, .dupe .sure.edges { color: var(--t1); font-weight: 650; }
@@ -682,7 +683,7 @@
   }
   .dupe .path:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .dupe li.kept .path { color: var(--ink); font-weight: 650; }
-  .dupe .when { flex: none; color: var(--ink-3); font-size: 10.5px; }
+  .dupe .when { flex: none; color: var(--ink-3); font-size: 12px; }
   .dupe .rest {
     font: inherit; background: none; border: 0; padding: 0;
     color: var(--ink-3); cursor: pointer; text-align: left;
@@ -875,11 +876,11 @@
     cursor: pointer; white-space: nowrap;
   }
   .sheet h2 {
-    font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 13px; 
     font-weight: 650; color: var(--ink); margin: 0 0 calc(var(--u) * 3);
   }
   .sheet h3 {
-    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 12px; 
     font-weight: 650; color: var(--ink-3);
     margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
     padding-top: calc(var(--u) * 3);
@@ -971,7 +972,7 @@
   .help-head { display: flex; align-items: baseline; gap: calc(var(--u) * 3); }
   .help h1 {
     flex: 1;
-    font-size: 13px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 13px; 
     font-weight: 650; color: var(--ink); margin: 0;
   }
   .help-head button {
@@ -981,7 +982,7 @@
   .help-head button:hover { color: var(--ink); }
   .help-head button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .help h2 {
-    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 12px; 
     font-weight: 650; color: var(--ink-3);
     margin: calc(var(--u) * 5) 0 calc(var(--u) * 2);
     padding-top: calc(var(--u) * 3);
@@ -1015,7 +1016,7 @@
   .legend section { padding-top: 0; }
   .legend h3 {
     margin: 0 0 calc(var(--u) * 1.5);
-    font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 11px; 
     color: var(--ink); font-weight: 650;
   }
   .legend p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }
@@ -1039,11 +1040,11 @@
   .tabs button {
     background: none; border: 0; border-bottom: 2px solid transparent;
     padding: calc(var(--u) * 2) calc(var(--u) * 3);
-    font: 650 10.5px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
+    font: 500 12.5px/1 var(--sans); 
     color: var(--ink-3); cursor: pointer;
   }
   .tabs button:hover { color: var(--ink-2); }
-  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--t1); }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
   .tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 
   /* The report: the same last row as the list, so it scrolls inside. */
@@ -1084,8 +1085,7 @@
 
   /* The report's own headings; `.panel h4` and the duplicates keep theirs. */
   .report h4.sec {
-    margin: calc(var(--u) * 6) 0 calc(var(--u) * 2); font-size: 9.5px;
-    letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); font-weight: 650;
+    margin: calc(var(--u) * 6) 0 calc(var(--u) * 2); font-size: 12px;  color: var(--ink-3); font-weight: 650;
   }
   .report h4.sec small {
     text-transform: none; letter-spacing: 0; font-weight: 400;
@@ -1126,8 +1126,7 @@
                         border-bottom: 1px solid var(--line-soft);
                         font-variant-numeric: tabular-nums; }
   .report .rows .hd {
-    color: var(--ink-3); font-size: 9.5px; letter-spacing: .16em; font-weight: 650;
-    text-transform: uppercase; border-bottom: 1px solid var(--line);
+    color: var(--ink-3); font-size: 12px;  font-weight: 650;  border-bottom: 1px solid var(--line);
   }
   .report .rows .nm { position: relative; padding-left: calc(var(--u) * 2); min-width: 0; }
   .report .rows .nm i {
@@ -1162,7 +1161,7 @@
   .report .ring svg { flex: none; }
   .report .ring circle[data-kind] { cursor: pointer; }
   .report .ring .mid { font: 300 20px/1 var(--sans); fill: var(--ink); }
-  .report .ring .mid2 { font: 650 9.5px/1 var(--sans); fill: var(--ink-3); letter-spacing: .16em; }
+  .report .ring .mid2 { font: 650 9.5px/1 var(--sans); fill: var(--ink-3);  }
 
   /* `gap: 0` on purpose: the help sheet's `.legend` sets one, and a report row
      is a row, not a paragraph. */
@@ -1206,8 +1205,7 @@
     background: var(--panel-2); padding: calc(var(--u) * 3);
   }
   .panel h4 {
-    margin: 0 0 calc(var(--u) * 2); font-size: 9.5px; letter-spacing: .16em;
-    text-transform: uppercase; color: var(--ink-3); font-weight: 650;
+    margin: 0 0 calc(var(--u) * 2); font-size: 12px;  color: var(--ink-3); font-weight: 650;
   }
   .panel .line {
     display: flex; justify-content: space-between; gap: calc(var(--u) * 2);
@@ -1215,7 +1213,7 @@
   }
   .panel .line span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .panel .line em { font-style: normal; color: var(--ink-3); }
-  .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 10.5px; color: var(--ink-3); line-height: 1.5; }
+  .panel .hint { margin: calc(var(--u) * 2) 0 0; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 
   /* One `margin-left: auto`, on the group: a second one does nothing. */
   .tools { display: flex; gap: 2px; margin-left: auto; align-items: center; }
@@ -1762,7 +1760,7 @@
 
         <div class="ribbon">
           <div class="ribbon-head">
-            <span style="letter-spacing:.14em;text-transform:uppercase;font-weight:650" data-t="Time distribution"></span>
+            <span style="font-weight:500" data-t="Time distribution"></span>
             <span id="ribbon-note" data-t="by when the results last changed — click to filter to a range"></span>
           </div>
           <div class="bars" id="bars"></div>
@@ -3530,7 +3528,7 @@
         if (td.textContent !== text) td.textContent = text;
         if (col.key === "modified") {
           // Guarded: an unconditional style write invalidates the cell.
-          const c = `var(${bandOf(v)})`;
+          const c = "var(--ink-3)";
           if (td.style.color !== c) td.style.color = c;
         }
       }
@@ -3940,7 +3938,7 @@
     { id: "mtime", msgid: "Modified",  key: "modified", w: 120, min: 100, near: 0, far: 0, max: 0,
       write: (td, f) => {
         cell("n left", (x) => ago(x.mtime))(td, f);
-        td.style.color = `var(${bandOf(f.mtime)})`;
+        td.style.color = "var(--ink-3)";
         const t = exact(f.mtime);
         if (td.title !== t) td.title = t;
       } },

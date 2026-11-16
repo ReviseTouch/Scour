@@ -257,9 +257,8 @@ component Tab inherits Rectangle {
         Text {
             text: root.label;
             color: root.on ? Theme.ink : touch.has-hover ? Theme.ink-2 : Theme.ink-3;
-            font-size: 10.5px;
-            font-weight: 650;
-            letter-spacing: 1.7px;
+            font-size: 12px;
+            font-weight: 500;
             vertical-alignment: center;
         }
     }
@@ -267,7 +266,7 @@ component Tab inherits Rectangle {
     if root.on: Rectangle {
         y: parent.height - 2px;
         height: 2px;
-        background: Theme.q-not;
+        background: Theme.ink;
     }
 }
 
@@ -287,13 +286,14 @@ component FacetRow inherits Rectangle {
 
     // Inset two pixels top and bottom, at full strength: half an opacity over
     // `line` is invisible in both schemes.
+    // A hairline under the row, not a block behind it: the share is a hint.
     if root.share > 0: Rectangle {
-        x: 0;
-        y: 2px;
-        height: parent.height - 4px;
-        width: parent.width * root.share;
+        x: 14px;
+        y: parent.height - 3px;
+        height: 2px;
+        width: (parent.width - 28px) * root.share;
         background: Theme.line;
-        border-radius: 2px;
+        border-radius: 1px;
     }
 
     touch := TouchArea {
@@ -413,9 +413,8 @@ component Heading inherits HorizontalLayout {
         Text {
             text: root.label;
             color: Theme.ink-3;
-            font-size: 10.5px;
-            font-weight: 650;
-            letter-spacing: 1.2px;
+            font-size: 12px;
+            font-weight: 500;
         }
     }
     VerticalLayout {
@@ -852,9 +851,8 @@ component Head inherits Rectangle {
             text: root.sorted-by != root.sort ? root.text
                 : root.sorted-down ? root.text + " ▾" : root.text + " ▴";
             color: root.sorted-by == root.sort ? Theme.ink-2 : Theme.ink-3;
-            font-size: 10px;
-            font-weight: 650;
-            letter-spacing: 1.4px;
+            font-size: 12px;
+            font-weight: 500;
             horizontal-alignment: root.align-right ? right : left;
             vertical-alignment: center;
             overflow: elide;
@@ -1096,7 +1094,6 @@ component Card inherits Rectangle {
 component SectionHead inherits Text {
     color: Theme.ink-3;
     font-size: 11px;
-    letter-spacing: 0.6px;
     height: 26px;
     vertical-alignment: bottom;
 }
@@ -1798,11 +1795,10 @@ export component MainWindow inherits Window {
                         y: (parent.height - self.height) / 2;
                     }
                     Text {
-                        text: "SCOUR";
-                        color: Theme.ink-3;
-                        font-size: 12px;
-                        font-weight: 700;
-                        letter-spacing: 3.4px;
+                        text: "Scour";
+                        color: Theme.ink;
+                        font-size: 14px;
+                        font-weight: 600;
                         vertical-alignment: center;
                     }
                 }
@@ -1852,8 +1848,8 @@ export component MainWindow inherits Window {
                     ruler := Text {
                         text: "0000000000000000000000000000000000000000";
                         font-family: Fonts.mono;
-                        font-size: 20px;
-                        font-weight: 600;
+                        font-size: 16px;
+                        font-weight: 500;
                         visible: false;
                     }
 
@@ -1862,10 +1858,10 @@ export component MainWindow inherits Window {
                             height: parent.height;
                             text: sp.text;
                             font-family: Fonts.mono;
-                            font-size: 20px;
+                            font-size: 16px;
                             // Operators are heavier: one character that changes
                             // what a whole term means.
-                            font-weight: sp.role == 1 || sp.role == 4 ? 700 : 600;
+                            font-weight: sp.role == 1 || sp.role == 4 ? 600 : 500;
                             vertical-alignment: center;
                             // A misreading is said before a polarity, and an
                             // exclusion before a role: `!kind:zurna` is both,
@@ -1890,8 +1886,8 @@ export component MainWindow inherits Window {
                         text: root.query;
                         color: Theme.ink;
                         font-family: Fonts.mono;
-                        font-size: 20px;
-                        font-weight: 600;
+                        font-size: 16px;
+                        font-weight: 500;
                         vertical-alignment: center;
                     }
 
@@ -1901,8 +1897,8 @@ export component MainWindow inherits Window {
                         text: root.hint;
                         color: Theme.ink-3;
                         font-family: Fonts.mono;
-                        font-size: 20px;
-                        font-weight: 600;
+                        font-size: 16px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         overflow: elide;
                     }
@@ -1965,8 +1961,8 @@ export component MainWindow inherits Window {
                     // underneath. This takes Slint's own caret with it, which
                     // is why the window draws one of its own.
                     color: transparent;
-                    font-size: 20px;
-                    font-weight: 600;
+                    font-size: 16px;
+                    font-weight: 500;
                     font-family: Fonts.mono;
                     single-line: true;
                     vertical-alignment: center;
@@ -2190,7 +2186,6 @@ export component MainWindow inherits Window {
                         color: root.reading-warn ? Theme.q-bad : Theme.ink-3;
                         font-size: 11.5px;
                         font-weight: 500;
-                        letter-spacing: 0.12px;
                         vertical-alignment: center;
                         overflow: elide;
                         horizontal-stretch: 1;
@@ -2224,7 +2219,6 @@ export component MainWindow inherits Window {
                     text: root.notice;
                     color: Theme.ink-2;
                     font-size: 11.5px;
-                    letter-spacing: 0.2px;
                     vertical-alignment: center;
                 }
 
@@ -2261,7 +2255,6 @@ export component MainWindow inherits Window {
                         text: root.meter-rows;
                         color: Theme.ink-3;
                         font-size: 11.5px;
-                        letter-spacing: 0.2px;
                         vertical-alignment: center;
                     }
                     Text {
@@ -2284,7 +2277,6 @@ export component MainWindow inherits Window {
                     text: root.meter;
                     color: Theme.ink-3;
                     font-size: 11.5px;
-                    letter-spacing: 0.2px;
                     vertical-alignment: center;
                 }
 
@@ -2636,27 +2628,24 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.head-folder;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         width: 34%;
                     }
                     Text {
                         text: root.head-age;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         width: root.age-bar;
                     }
                     Text {
                         text: root.head-size;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         horizontal-alignment: right;
                         width: 90px;
@@ -2664,9 +2653,8 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.head-share;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         horizontal-alignment: right;
                         width: 70px;
@@ -2674,9 +2662,8 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.head-files;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                         horizontal-alignment: right;
                         width: 80px;
@@ -2899,9 +2886,8 @@ export component MainWindow inherits Window {
                                 height: 14px;
                                 text: root.kinds-word;
                                 color: Theme.ink-3;
-                                font-size: 10px;
-                                font-weight: 650;
-                                letter-spacing: 1.1px;
+                                font-size: 12px;
+                                font-weight: 500;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
                             }
@@ -3081,9 +3067,8 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.head-jump;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                     }
 
                     HorizontalLayout {
@@ -3133,9 +3118,8 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.head-dupes;
                         color: Theme.ink-3;
-                        font-size: 10.5px;
-                        font-weight: 650;
-                        letter-spacing: 1.2px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
                     }
                 }
@@ -3272,11 +3256,10 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.scope-label;
                             color: Theme.ink-3;
-                            font-size: 10px;
-                            font-weight: 650;
-                            letter-spacing: 1.8px;
+                            font-size: 12px;
+                            font-weight: 500;
                             overflow: elide;
-                            height: 15px;
+                            height: 18px;
                         }
                     }
 
@@ -3300,11 +3283,10 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.scope-heading;
                             color: Theme.ink-3;
-                            font-size: 10px;
-                            font-weight: 650;
-                            letter-spacing: 1.8px;
+                            font-size: 12px;
+                            font-weight: 500;
                             overflow: elide;
-                            height: 15px;
+                            height: 18px;
                         }
                     }
 
@@ -3328,11 +3310,10 @@ export component MainWindow inherits Window {
                         Text {
                             text: root.size-heading;
                             color: Theme.ink-3;
-                            font-size: 10px;
-                            font-weight: 650;
-                            letter-spacing: 1.8px;
+                            font-size: 12px;
+                            font-weight: 500;
                             overflow: elide;
-                            height: 15px;
+                            height: 18px;
                         }
                     }
 
@@ -3472,10 +3453,10 @@ export component MainWindow inherits Window {
                             // "more selected", which is not a thing.
                             // Shown, not built: a slot is never rebuilt, see `pool`.
                             Rectangle {
-                                visible: i == root.selected;
+                                visible: i == root.selected && !here.picked;
                                 background: transparent;
                                 border-width: Theme.hair;
-                                border-color: Theme.focus;
+                                border-color: Theme.line;
                             }
 
                             rowtouch := TouchArea {
@@ -3523,16 +3504,6 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            Rectangle {
-                                x: 0;
-                                // Fixed: the stripe is the age, and an arrival does
-                                // not change it. The wash behind the row says that.
-                                width: 3px;
-                                height: parent.height;
-                                background: here.age == 0 ? Theme.t0 : here.age == 1 ? Theme.t1
-                                     : here.age == 2 ? Theme.t2 : here.age == 3 ? Theme.t3
-                                     : here.age == 4 ? Theme.t4 : Theme.t5;
-                            }
 
                             HorizontalLayout {
                                 padding-left: 12px;
@@ -3588,7 +3559,7 @@ export component MainWindow inherits Window {
                                         pre: c.pre;
                                         hit: c.hit;
                                         post: c.post;
-                                        colour: here.is-dir ? Theme.q-key : Theme.ink;
+                                        colour: Theme.ink;
                                         width: parent.width;
                                         // The row's pointer, in this cell, judged
                                         // by the column table rather than by this
@@ -3616,11 +3587,10 @@ export component MainWindow inherits Window {
                                         text: c.text;
                                         // The age is the stamp's own colour; `-1` is
                                         // a column that is not a time at all.
+                                        // Quiet, dates too: the stripe at the row's
+                                        // edge already says how old it is.
                                         color: c.dim ? Theme.ink-3
-                                             : c.age < 0 ? (c.right ? Theme.ink-2 : Theme.ink-3)
-                                             : c.age == 0 ? Theme.t0 : c.age == 1 ? Theme.t1
-                                             : c.age == 2 ? Theme.t2 : c.age == 3 ? Theme.t3
-                                             : c.age == 4 ? Theme.t4 : Theme.t5;
+                                             : c.right ? Theme.ink-2 : Theme.ink-3;
                                         // An empty family is the window's own.
                                         font-family: c.mono ? Fonts.mono : "";
                                         font-size: c.mono ? 11.5px : Fonts.small;
@@ -3761,7 +3731,7 @@ export component MainWindow inherits Window {
 
                                     Text {
                                         text: cell.name;
-                                        color: cell.is-dir ? Theme.q-key : Theme.ink;
+                                        color: Theme.ink;
                                         font-family: Fonts.mono;
                                         font-size: root.view-mode == "large" ? 12px : 11px;
                                         horizontal-alignment: center;
@@ -4177,11 +4147,10 @@ export component MainWindow inherits Window {
                     Text {
                         text: root.ribbon-label;
                         color: Theme.ink-3;
-                        font-size: 10px;
-                        font-weight: 650;
-                        letter-spacing: 1.8px;
+                        font-size: 12px;
+                        font-weight: 500;
                         vertical-alignment: center;
-                        height: 15px;
+                        height: 18px;
                     }
                     Rectangle { }
                     Text {
@@ -4740,7 +4709,6 @@ export component MainWindow inherits Window {
                     color: Theme.ink;
                     font-size: 11px;
                     font-weight: 650;
-                    letter-spacing: 1.2px;
                 }
 
                 if root.key-bound: Text {
@@ -5083,7 +5051,6 @@ export component MainWindow inherits Window {
                     color: Theme.ink;
                     font-size: 11px;
                     font-weight: 650;
-                    letter-spacing: 1.2px;
                 }
                 Text {
                     text: root.rules-added-note;
@@ -5175,7 +5142,6 @@ export component MainWindow inherits Window {
                     color: Theme.ink;
                     font-size: 11px;
                     font-weight: 650;
-                    letter-spacing: 1.2px;
                 }
                 Text {
                     text: root.rules-config-note;
@@ -5200,7 +5166,6 @@ export component MainWindow inherits Window {
                     color: Theme.ink;
                     font-size: 11px;
                     font-weight: 650;
-                    letter-spacing: 1.2px;
                 }
                 Text {
                     text: root.rules-builtin-note;

@@ -142,21 +142,23 @@ pub struct Palette {
     pub q_bad: Rgba,
 }
 
-/// The dark scheme. The neutrals lean blue; chosen, not inherited.
+/// The dark scheme. Warm neutrals on one hue, like the light one: a quiet
+/// desktop, not a code editor (17 November).
 pub const DARK: Palette = Palette {
-    ground: Rgba::hex(0x0d1117),
-    panel: Rgba::hex(0x131920),
-    panel_2: Rgba::hex(0x171e26),
-    line: Rgba::hex(0x212a35),
-    line_soft: Rgba::hex(0x1a222c),
-    ink: Rgba::hex(0xe7eaee),
-    ink_2: Rgba::hex(0x9aa5b1),
-    ink_3: Rgba::hex(0x63707e),
+    ground: Rgba::hex(0x1c1c1a),
+    panel: Rgba::hex(0x1a1a18),
+    panel_2: Rgba::hex(0x242421),
+    line: Rgba::hex(0x33322e),
+    line_soft: Rgba::hex(0x2a2a27),
+    ink: Rgba::hex(0xecebe6),
+    ink_2: Rgba::hex(0xb3b1a8),
+    ink_3: Rgba::hex(0x8a887f),
     mark: Rgba::wash(0xffd24a, 17),
     mark_ink: Rgba::hex(0x1a1200),
-    pick: Rgba::wash(0x4a9eff, 26),
-    focus: Rgba::hex(0x4a9eff),
-    hover: Rgba::hex(0x171f29),
+    // Neutral: the match wash is the only colour a row carries.
+    pick: Rgba::wash(0xecebe6, 12),
+    focus: Rgba::hex(0x8fb0e6),
+    hover: Rgba::hex(0x232320),
     // Legible on the dark panel without shouting.
     danger: Rgba::hex(0xd07070),
     t: [
@@ -175,7 +177,7 @@ pub const DARK: Palette = Palette {
         Rgba::hex(0x35618d),
         Rgba::hex(0x264a6d),
     ],
-    kx: Rgba::hex(0x212a35),
+    kx: Rgba::hex(0x33322e),
     q_term: Rgba::hex(0x59a6ff),
     q_key: Rgba::hex(0x7fa9e0),
     q_val: Rgba::hex(0x6fc2a0),
@@ -184,22 +186,22 @@ pub const DARK: Palette = Palette {
     q_bad: Rgba::hex(0xe8a33d),
 };
 
-/// The light scheme. `focus` stays `#4a9eff` here rather than darkening, which
-/// is the ring people have actually been looking at.
+/// The light scheme: one warm hue from the ground to the ink, and `ink_3` kept
+/// above 3:1 on the ground so a label is still read.
 pub const LIGHT: Palette = Palette {
-    ground: Rgba::hex(0xf7f5f0),
-    panel: Rgba::hex(0xfffefb),
-    panel_2: Rgba::hex(0xf1efe9),
-    line: Rgba::hex(0xddd8cd),
-    line_soft: Rgba::hex(0xe8e4db),
-    ink: Rgba::hex(0x1c1e21),
-    ink_2: Rgba::hex(0x5c636c),
-    ink_3: Rgba::hex(0x8a9198),
+    ground: Rgba::hex(0xf6f5f1),
+    panel: Rgba::hex(0xfcfcfa),
+    panel_2: Rgba::hex(0xf0efeb),
+    line: Rgba::hex(0xdedcd5),
+    line_soft: Rgba::hex(0xe8e7e1),
+    ink: Rgba::hex(0x1d1d1a),
+    ink_2: Rgba::hex(0x58564e),
+    ink_3: Rgba::hex(0x86847a),
     mark: Rgba::wash(0xe2a000, 18),
     mark_ink: Rgba::hex(0x2a1f00),
-    pick: Rgba::wash(0x0062cc, 20),
-    focus: Rgba::hex(0x4a9eff),
-    hover: Rgba::hex(0xefece4),
+    pick: Rgba::wash(0x3f3e37, 10),
+    focus: Rgba::hex(0x4d6fa8),
+    hover: Rgba::hex(0xf2f1ec),
     // Darker on paper, for the same weight against a light ground.
     danger: Rgba::hex(0xa8342c),
     t: [
@@ -218,7 +220,7 @@ pub const LIGHT: Palette = Palette {
         Rgba::hex(0xb3c9e2),
         Rgba::hex(0xd7e2ee),
     ],
-    kx: Rgba::hex(0xddd8cd),
+    kx: Rgba::hex(0xdedcd5),
     q_term: Rgba::hex(0x1c5fa8),
     q_key: Rgba::hex(0x2f6ba3),
     q_val: Rgba::hex(0x1a7a58),
@@ -325,27 +327,27 @@ mod tests {
     }
 
     /// The translucent colours stay translucent, and round the way CSS reads.
+    /// Literal colours, not the palette's: these test the writing, and the
+    /// palette is a choice that changes.
     #[test]
     fn a_wash_keeps_its_alpha() {
+        assert_eq!(Rgba::wash(0xffd24a, 17).css(), "rgba(255, 210, 74, .17)");
+        assert_eq!(Rgba::wash(0x0062cc, 20).css(), "rgba(0, 98, 204, .20)");
         assert_eq!(DARK.mark.css(), "rgba(255, 210, 74, .17)");
-        assert_eq!(DARK.pick.css(), "rgba(74, 158, 255, .26)");
-        assert_eq!(LIGHT.mark.css(), "rgba(226, 160, 0, .18)");
-        assert_eq!(LIGHT.pick.css(), "rgba(0, 98, 204, .20)");
     }
 
     /// Opaque colours are written the short way, as the page writes them.
     #[test]
     fn an_opaque_colour_is_six_digits() {
-        assert_eq!(DARK.ground.css(), "#0d1117");
-        assert_eq!(DARK.q_key.css(), "#7fa9e0");
-        assert_eq!(LIGHT.panel.css(), "#fffefb");
+        assert_eq!(Rgba::hex(0x0d1117).css(), "#0d1117");
+        assert_eq!(Rgba::hex(0x7fa9e0).css(), "#7fa9e0");
     }
 
     /// Slint takes alpha first, the browser last: reversed, `#ffffff` still
     /// looks right and nothing else does.
     #[test]
     fn argb_is_alpha_first() {
-        assert_eq!(DARK.focus.argb(), (255, 0x4a, 0x9e, 0xff));
+        assert_eq!(Rgba::hex(0x4a9eff).argb(), (255, 0x4a, 0x9e, 0xff));
         assert_eq!(DARK.mark.argb().0, 43);
     }
 }
