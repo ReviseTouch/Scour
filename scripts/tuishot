@@ -28,8 +28,8 @@ import time
 import unicodedata
 
 # The palette's own ground and ink, so a cell nobody coloured is still ours.
-GROUND = "#1c1c1a"
-INK = "#ecebe6"
+GROUND = "#111113"
+INK = "#ededef"
 FONT = '"MesloLGS Nerd Font Mono", "Adwaita Mono", "DejaVu Sans Mono", monospace'
 
 

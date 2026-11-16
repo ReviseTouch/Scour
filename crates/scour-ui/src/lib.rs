@@ -142,23 +142,23 @@ pub struct Palette {
     pub q_bad: Rgba,
 }
 
-/// The dark scheme. Warm neutrals on one hue, like the light one: a quiet
-/// desktop, not a code editor (17 November).
+/// The dark scheme: a deep neutral, the list darkest and the chrome a step
+/// up. The warm grey tried first read as muddy (17 November).
 pub const DARK: Palette = Palette {
-    ground: Rgba::hex(0x1c1c1a),
-    panel: Rgba::hex(0x1a1a18),
-    panel_2: Rgba::hex(0x242421),
-    line: Rgba::hex(0x33322e),
-    line_soft: Rgba::hex(0x2a2a27),
-    ink: Rgba::hex(0xecebe6),
-    ink_2: Rgba::hex(0xb3b1a8),
-    ink_3: Rgba::hex(0x8a887f),
+    ground: Rgba::hex(0x18181a),
+    panel: Rgba::hex(0x111113),
+    panel_2: Rgba::hex(0x1f1f22),
+    line: Rgba::hex(0x2c2c30),
+    line_soft: Rgba::hex(0x222225),
+    ink: Rgba::hex(0xededef),
+    ink_2: Rgba::hex(0xb4b4ba),
+    ink_3: Rgba::hex(0x8b8b93),
     mark: Rgba::wash(0xffd24a, 17),
     mark_ink: Rgba::hex(0x1a1200),
     // Neutral: the match wash is the only colour a row carries.
-    pick: Rgba::wash(0xecebe6, 12),
+    pick: Rgba::wash(0xededef, 11),
     focus: Rgba::hex(0x8fb0e6),
-    hover: Rgba::hex(0x232320),
+    hover: Rgba::hex(0x1b1b1e),
     // Legible on the dark panel without shouting.
     danger: Rgba::hex(0xd07070),
     t: [
@@ -177,7 +177,7 @@ pub const DARK: Palette = Palette {
         Rgba::hex(0x35618d),
         Rgba::hex(0x264a6d),
     ],
-    kx: Rgba::hex(0x33322e),
+    kx: Rgba::hex(0x2c2c30),
     q_term: Rgba::hex(0x59a6ff),
     q_key: Rgba::hex(0x7fa9e0),
     q_val: Rgba::hex(0x6fc2a0),

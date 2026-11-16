@@ -4002,7 +4002,10 @@ export component MainWindow inherits Window {
             max-height: root.tab == "report" ? 0px : 76px;
             background: Theme.panel;
 
+            // `y` said: a rectangle with only a height is centred in its
+            // parent, and this line ran through the middle of the bars.
             Rectangle {
+                y: 0px;
                 height: 1px;
                 background: Theme.line;
             }
@@ -4123,6 +4126,7 @@ export component MainWindow inherits Window {
             background: Theme.ground;
 
             Rectangle {
+                y: 0px;
                 height: 1px;
                 background: Theme.line;
             }

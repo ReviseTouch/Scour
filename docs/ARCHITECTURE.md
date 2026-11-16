@@ -64,7 +64,7 @@ shared crate:
 | `scour-ui::format` | `5.356.281`, `1,44 MiB`, `2026-08-13 00:49`, the six age bands | punctuation belongs to the **language**, not the platform: an English window on a Turkish desktop prints `5,356,281` |
 | `scour-ui::path` | leaf, folder, breadcrumb steps | three faces were cutting paths three different ways |
 | `scour-ui::query` | how a pressed filter joins the typed text, and how pressing it again clears it | "one filter, appended" is a language rule, not a drawing rule |
-| `scour-ui` (palette, columns, bands, kind colours) | `#1c1c1a`, the twelve columns and their widths, the time bands | CSS and `.slint` held two copies, and the focus colour had already drifted |
+| `scour-ui` (palette, columns, bands, kind colours) | `#111113`, the twelve columns and their widths, the time bands | CSS and `.slint` held two copies, and the focus colour had already drifted |
 | `scour-ui::faces` | what each face has | §5 |
 | `scour-page` | pages of 200 rows, an LRU of 32, an answer written at the offset *it* names, when a short page is the end | the paging rules; each was once wrong in one interface |
 | `scour-settings` | columns and their order, widths, language, layout, **which face opens**, skip rules | the four faces' shared memory; `config.toml` stays the file written by hand |
