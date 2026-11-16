@@ -398,6 +398,8 @@ pub struct App {
     /// How far a walk of the index has got, when one is running. Drawn beside
     /// the counts: nothing else on screen moves while a scan runs.
     pub scanning: Option<u64>,
+    /// Writes of the index that have failed in a row; see `scour_ui::UNWRITTEN`.
+    pub unwritten: u32,
     /// Whether the index has grown an unsorted tail worth rebuilding: every
     /// query reads that tail, so it is what the search drifts to.
     pub rebuild_advised: bool,
@@ -493,6 +495,7 @@ impl Default for App {
             in_rail: false,
             rail_at: 0,
             scanning: None,
+            unwritten: 0,
             dirty: true,
             leaving: false,
             words: scour_i18n::Catalogue::english(),

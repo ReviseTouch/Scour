@@ -144,8 +144,9 @@ pub enum Got {
     /// The index moved: its revision, how far a walk has got when one is
     /// running, and whether the index has grown an unsorted tail worth
     /// rebuilding — a week of use takes ordering by path from 1.9 ms to 21.5.
-    /// And how many disks wait for an answer.
-    Awake(u64, Option<u64>, bool, u32),
+    /// And how many disks wait for an answer, and how many writes of the index
+    /// have failed in a row.
+    Awake(u64, Option<u64>, bool, u32, u32),
     /// A spreadsheet is being written, and how much of it so far: the whole
     /// index is 400,000 rows and 100 MB, and a still screen reads as a crash.
     Writing(u64),
@@ -610,6 +611,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
                     st.scanning.then_some(st.scanned),
                     st.rebuild_advised,
                     st.asking,
+                    st.unwritten,
                 ));
             }
             Ok(Response::Preview(look)) => {

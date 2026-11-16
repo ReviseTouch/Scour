@@ -368,6 +368,9 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 println!("{}{}", label("seen so far"), s.scanned);
             }
             println!("{}{}", label("pending"), s.pending);
+            if s.unwritten > 0 {
+                println!("{}{}", label("warning"), t(scour_ui::UNWRITTEN));
+            }
             println!(
                 "{}{}{}",
                 label("unsorted"),

@@ -1273,6 +1273,9 @@ msgstr "Scour başka bir yerde açıldı. Bu sekmeyi kapatabilirsiniz."
 msgid "scanning {n}"
 msgstr "taranıyor {n}"
 
+msgid "the index cannot be saved — is the disk full?"
+msgstr "dizin kaydedilemiyor — disk dolu mu?"
+
 msgid "`scour maintain rebuild` would speed searches up"
 msgstr "`scour maintain rebuild` aramaları hızlandırır"
 

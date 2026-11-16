@@ -14,6 +14,12 @@ pub mod preview;
 /// sentence, because only the caller can punctuate a number.
 pub const SCANNING: &str = "scanning {n}";
 
+/// What every face says while the index cannot be written down: the changes
+/// are in memory, findable, and gone if the service stops. Said in the place
+/// the walk is said, and before it — a full disk was twelve lines in a journal
+/// nobody reads (14 November) and nothing on screen.
+pub const UNWRITTEN: &str = "the index cannot be saved — is the disk full?";
+
 /// The index has grown an unsorted tail, and searching has slowed for it: a
 /// week of ordinary use took ordering by path from 1.9 ms to 21.5, and one
 /// rebuild put it back. Names the command, not only the condition.

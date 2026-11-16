@@ -5477,7 +5477,8 @@
       /* The same msgid the window and the terminal draw. */
       const walking = document.getElementById("scanning");
       const sep = document.getElementById("scanning-sep");
-      const said = s.scanning ? T("scanning {n}", { n: fmt(s.scanned || 0) }) : "";
+      const said = s.unwritten ? T("the index cannot be saved — is the disk full?")
+        : s.scanning ? T("scanning {n}", { n: fmt(s.scanned || 0) }) : "";
       walking.textContent = said;
       walking.hidden = !said;
       sep.hidden = !said;

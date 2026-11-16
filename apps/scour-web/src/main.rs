@@ -974,6 +974,7 @@ fn status_json(s: &scour_core::Status) -> serde_json::Value {
     serde_json::json!({
         "entries": s.entries,
         "scanning": s.scanning,
+        "unwritten": s.unwritten,
         "watching": s.watching,
         "sources": s.sources,
         "pending": s.pending,

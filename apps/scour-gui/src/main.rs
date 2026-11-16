@@ -5758,6 +5758,9 @@ fn peek_facts(cat: &Catalogue, entry: &scour_core::Entry) -> ModelRc<Fact> {
 /// `taranıyor 1.240.000` while the index is walked, nothing otherwise. The
 /// wording is `scour_ui::SCANNING`, so every face says the same.
 fn scanning_note(cat: &Catalogue, st: &scour_core::Status) -> slint::SharedString {
+    if st.unwritten > 0 {
+        return t(cat, scour_ui::UNWRITTEN);
+    }
     if !st.scanning {
         return slint::SharedString::new();
     }

@@ -1139,7 +1139,13 @@ fn counts(f: &mut Frame, area: Rect, app: &App, theme: &Theme, mark: (char, char
     }
     // What the index is doing, beside what the search found: switching a skip
     // rule off starts a walk, and nothing else on this line moves while it runs.
-    if let Some(walked) = app.scanning {
+    if app.unwritten > 0 {
+        parts.push(Span::styled("  ·  ", dim));
+        parts.push(Span::styled(
+            app.say(scour_ui::UNWRITTEN).into_owned(),
+            Style::new().fg(theme.key()),
+        ));
+    } else if let Some(walked) = app.scanning {
         parts.push(Span::styled("  ·  ", dim));
         parts.push(Span::styled(
             app.say(scour_ui::SCANNING)

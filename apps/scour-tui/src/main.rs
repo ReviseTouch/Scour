@@ -448,8 +448,9 @@ fn run(
             Beat::Reply(Got::Explained { generation, spans }) => {
                 state.explained(generation, spans);
             }
-            Beat::Reply(Got::Awake(revision, walked, stale, asking)) => {
+            Beat::Reply(Got::Awake(revision, walked, stale, asking, unwritten)) => {
                 state.scanning = walked;
+                state.unwritten = unwritten;
                 state.rebuild_advised = stale;
                 act(state.disks_moved(asking), link);
                 let want = state.awake(revision);
@@ -540,8 +541,9 @@ fn settle(state: &mut App, link: &Link, waiting: &Receiver<Beat>, quiet: u64) {
             Beat::Reply(Got::Counted { generation, total }) => {
                 state.counted_exactly(generation, total);
             }
-            Beat::Reply(Got::Awake(revision, walked, stale, asking)) => {
+            Beat::Reply(Got::Awake(revision, walked, stale, asking, unwritten)) => {
                 state.scanning = walked;
+                state.unwritten = unwritten;
                 state.rebuild_advised = stale;
                 act(state.disks_moved(asking), link);
                 let want = state.awake(revision);

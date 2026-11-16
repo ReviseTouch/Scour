@@ -1401,8 +1401,24 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
         // it in memory and says so the way a failed commit does.
         if published && last_persist.elapsed() >= shared.opts.persist_every {
             match shared.index.commit() {
-                Ok(()) => published = false,
-                Err(e) => scour_core::note!("scourd: the index could not be written: {e}"),
+                Ok(()) => {
+                    published = false;
+                    shared.status.write().unwritten = 0;
+                }
+                // Counted with the failed commits, so the faces say it: this is
+                // the write a full disk refuses, and the one above rarely is.
+                Err(e) => {
+                    let n = {
+                        let mut st = shared.status.write();
+                        st.unwritten += 1;
+                        st.unwritten
+                    };
+                    if n == 1 || n % 30 == 0 {
+                        scour_core::note!(
+                            "scourd: the index could not be written ({n} attempts): {e}"
+                        );
+                    }
+                }
             }
             last_persist = Instant::now();
         }
