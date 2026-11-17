@@ -8,4 +8,4 @@ mod engine;
 mod reconcile;
 mod tree;
 
-pub use engine::{Engine, EngineOptions, Explained};
+pub use engine::{Engine, EngineOptions, Explained, Keeping};

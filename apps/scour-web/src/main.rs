@@ -363,6 +363,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         || req.path == "/api/face"
         || req.path == "/api/thumb"
         || req.path == "/api/volume"
+        || req.path == "/api/rescan"
         || (req.path == "/api/settings" && req.param("set").is_some())
         // Reading the desktop's key is a `GET`; writing one carries a body.
         || (req.path == "/api/hotkey" && !req.body.is_empty());
@@ -397,6 +398,7 @@ fn serve(mut stream: TcpStream, client: &Mutex<Link>, addr: &str, token: &str, d
         "/api/places" => api_places(&mut stream, client),
         "/api/volumes" => disks::api_volumes(&mut stream, client),
         "/api/volume" => disks::api_volume(&mut stream, client, &req),
+        "/api/rescan" => disks::api_rescan(&mut stream, client, &req),
         "/api/rules" => api_rules(&mut stream, client),
         "/api/settings" => api_settings(&mut stream, client, &req),
         "/api/facets" => api_facets(&mut stream, client, &req),

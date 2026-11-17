@@ -141,6 +141,11 @@ export struct Disk {
     roots: string,
     on: bool,
     fixed: bool,
+    // How it is kept up to date: files, watched live or last walked, last change.
+    status: string,
+    walking: bool,
+    // The root a refresh walks again.
+    root: string,
 }
 
 // One folder in the report: what it weighs, what share of its parent that is,
@@ -233,6 +238,9 @@ export struct FolderRow {
     watched: bool,
     status: string,
     problem: bool,
+    walking: bool,
+    // A source of its own, so a refresh means something.
+    walkable: bool,
 }
 
 export struct Facet {
@@ -734,7 +742,10 @@ component DiskRow inherits Rectangle {
     in property <string> roots;
     in property <bool> on;
     in property <bool> fixed;
+    in property <string> status;
+    in property <bool> walking;
     callback toggled();
+    callback refresh();
 
     height: layout.preferred-height;
     border-radius: 3px;
@@ -798,6 +809,22 @@ component DiskRow inherits Rectangle {
                 font-family: Fonts.mono;
                 font-size: 11px;
                 overflow: elide;
+            }
+            if root.status != "": Text {
+                text: root.status;
+                color: Theme.ink-3;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        // Walk it again now. Above the row's own touch, which switches it.
+        if root.on: VerticalLayout {
+            alignment: center;
+            Push {
+                label: "↻";
+                enabled: !root.walking;
+                clicked => { root.refresh(); }
             }
         }
     }
@@ -1648,6 +1675,8 @@ export component MainWindow inherits Window {
     callback policy-picked(string, string);
     callback folder-added(string);
     callback folder-dropped(string);
+    // Walk this disk's or folder's root again, now.
+    callback rescan-root(string);
     changed panel => {
         // Nothing stays armed behind a closed page.
         if (self.panel != "settings") {
@@ -5210,7 +5239,10 @@ export component MainWindow inherits Window {
                     roots: d.roots;
                     on: d.on;
                     fixed: d.fixed;
+                    status: d.status;
+                    walking: d.walking;
                     toggled => { root.disk-toggled(d.id, !d.on); }
+                    refresh => { root.rescan-root(d.root); }
                 }
                 if root.disks.length == 0: Note { text: root.disks-none; }
                 Note { text: root.disks-after; }
@@ -5286,6 +5318,14 @@ export component MainWindow inherits Window {
                                                 values: ["on", "off"];
                                                 value: f.watched ? "on" : "off";
                                                 picked(v) => { root.folder-watched(f.path, v == "on"); }
+                                            }
+                                        }
+                                        if f.walkable: VerticalLayout {
+                                            alignment: center;
+                                            Push {
+                                                label: "↻";
+                                                enabled: !f.walking;
+                                                clicked => { root.rescan-root(f.path); }
                                             }
                                         }
                                         VerticalLayout {

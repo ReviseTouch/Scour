@@ -759,6 +759,9 @@ fn main() -> Result<()> {
                 watched: !kept.folders_unwatched.contains(f),
                 held: false,
                 walked: None,
+                live: false,
+                changed: None,
+                walking: false,
             })
             .collect::<Vec<_>>(),
     );
@@ -1358,6 +1361,19 @@ fn main() -> Result<()> {
         let weak = window.as_weak();
         let link = Rc::clone(&link);
         let folders = Rc::clone(&folders);
+        {
+            let link = Rc::clone(&link);
+            window.on_rescan_root(move |path| {
+                if path.is_empty() {
+                    return;
+                }
+                link.send(Ask::Rescan {
+                    path: path.to_string(),
+                });
+                // The answer to that is the line beside it turning to "walking".
+                link.send(Ask::Volumes);
+            });
+        }
         window.on_folder_dropped(move |path| {
             let Some(w) = weak.upgrade() else { return };
             folders.borrow_mut().retain(|f| f.as_str() != path.as_str());
@@ -4579,6 +4595,18 @@ fn apply(
             Response::Volumes { disks, folders } => {
                 state.borrow_mut().asked_disk = disks::draw(w, cat, &disks);
                 disks::draw_folders(w, cat, &folders);
+                // While something is being walked and the page is open, asked
+                // again: the line beside it says when the walk ends.
+                let walking =
+                    disks.iter().any(|d| d.seen.walking) || folders.iter().any(|f| f.walking);
+                let open = w.get_panel() == "settings"
+                    && matches!(w.get_settings_section().as_str(), "disks" | "folders");
+                if walking && open {
+                    let link = Rc::clone(link);
+                    slint::Timer::single_shot(std::time::Duration::from_millis(1500), move || {
+                        link.send(Ask::Volumes);
+                    });
+                }
             }
             _ => link.send(Ask::Volumes),
         },

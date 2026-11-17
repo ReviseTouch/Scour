@@ -32,6 +32,7 @@ fn row(cat: &Catalogue, d: &scour_proto::Disk) -> Disk {
     }
     aside.push_str(" · ");
     aside.push_str(&t(cat, scour_ui::disks::state(d.state.as_str())));
+    let s = &d.seen;
     Disk {
         id: v.id.as_str().into(),
         name: v.name().into(),
@@ -39,7 +40,46 @@ fn row(cat: &Catalogue, d: &scour_proto::Disk) -> Disk {
         roots: v.roots.join("  ").into(),
         on: d.state.indexed(),
         fixed: d.state == DiskState::Configured,
+        status: if d.state.indexed() {
+            keeping(cat, s.walked.as_ref(), s.live, s.changed, s.walking).into()
+        } else {
+            Default::default()
+        },
+        walking: s.walking,
+        root: v.roots.first().cloned().unwrap_or_default().into(),
     }
+}
+
+/// How a disk or a folder is kept up to date, in one line: how many files,
+/// watched live or when it was last walked, and when a change last reached
+/// the index. A date beside something watched live would only say when the
+/// service started.
+pub fn keeping(
+    cat: &Catalogue,
+    walked: Option<&scour_core::Walked>,
+    live: bool,
+    changed: Option<i64>,
+    walking: bool,
+) -> String {
+    if walking {
+        return t(cat, "Being walked…").to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(wk) = walked {
+        parts.push(t(cat, "{n} files").replace("{n}", &grouped(wk.entries)));
+    }
+    if live {
+        parts.push(t(cat, "watched live").to_string());
+    } else if let Some(wk) = walked {
+        parts.push(t(cat, "walked {when}").replace("{when}", &scour_ui::format::stamp(wk.at)));
+    }
+    if let Some(at) = changed {
+        parts.push(t(cat, "last change {when}").replace("{when}", &scour_ui::format::stamp(at)));
+    }
+    if parts.is_empty() {
+        return t(cat, "Not walked yet").to_string();
+    }
+    parts.join(" · ")
 }
 
 /// The "Folders scanned" rows: each folder's switches and how its last walk
@@ -57,15 +97,12 @@ pub fn draw_folders(w: &MainWindow, cat: &Catalogue, folders: &[scour_proto::Fol
                 )
             } else {
                 match &f.walked {
-                    None => (t(cat, "Not walked yet").to_string(), false),
-                    Some(wk) if !wk.problem.is_empty() => (
+                    Some(wk) if !wk.problem.is_empty() && !f.walking => (
                         t(cat, "Could not be read: {why}").replace("{why}", &wk.problem),
                         true,
                     ),
-                    Some(wk) => (
-                        t(cat, "{n} files · walked {when}")
-                            .replace("{n}", &grouped(wk.entries))
-                            .replace("{when}", &scour_ui::format::stamp(wk.at)),
+                    walked => (
+                        keeping(cat, walked.as_ref(), f.live, f.changed, f.walking),
                         false,
                     ),
                 }
@@ -76,6 +113,8 @@ pub fn draw_folders(w: &MainWindow, cat: &Catalogue, folders: &[scour_proto::Fol
                 watched: f.watched,
                 status: status.into(),
                 problem,
+                walking: f.walking,
+                walkable: f.on && !f.held,
             }
         })
         .collect();

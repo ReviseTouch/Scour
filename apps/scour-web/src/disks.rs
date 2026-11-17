@@ -27,6 +27,21 @@ pub fn api_volumes(stream: &mut TcpStream, client: &Mutex<Link>) {
 }
 
 /// An answer about one disk: `do` is `index`, `leave` or `later`.
+/// Walk a disk's or a folder's root again, now: the refresh button beside it.
+pub fn api_rescan(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
+    let Some(path) = req.param("path").filter(|p| !p.is_empty()) else {
+        return http::fail(stream, "400 Bad Request", "path is required");
+    };
+    let request = Request::Rescan {
+        path: Some(path.to_owned()),
+    };
+    match call(client, request) {
+        Ok(Response::Accepted) => http::json(stream, &serde_json::json!({ "ok": true })),
+        Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
+        Err(e) => http::fail(stream, "502 Bad Gateway", &e),
+    }
+}
+
 pub fn api_volume(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let volume = req.param("id").unwrap_or_default().to_owned();
     let request = match req.param("do") {

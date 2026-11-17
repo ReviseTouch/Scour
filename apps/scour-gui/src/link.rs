@@ -84,6 +84,10 @@ pub enum Ask {
     Remember {
         change: scour_settings::Change,
     },
+    /// Walk this disk's or folder's root again, now: a refresh button.
+    Rescan {
+        path: String,
+    },
     /// What can be shown of this file. The service decides what a file is: that
     /// needs its first eight kilobytes, not a guess from the name.
     Peek {
@@ -249,6 +253,7 @@ impl Freshness {
             | Ask::Status
             | Ask::Await { .. }
             | Ask::Remember { .. }
+            | Ask::Rescan { .. }
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -326,6 +331,7 @@ impl Link {
             | Ask::Disk { .. }
             | Ask::Status
             | Ask::Remember { .. }
+            | Ask::Rescan { .. }
             | Ask::Usage { .. }
             | Ask::Kinds { .. }
             | Ask::Biggest { .. }
@@ -549,6 +555,7 @@ fn spawn_lane(
                     Lane::Explain,
                 ),
                 Ask::Remember { change } => (0, Request::SetSettings { change }, Lane::Places),
+                Ask::Rescan { path } => (0, Request::Rescan { path: Some(path) }, Lane::Places),
                 Ask::Usage { ref path } => (
                     0,
                     Request::Usage {

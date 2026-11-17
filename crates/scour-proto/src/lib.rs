@@ -288,6 +288,24 @@ pub struct DupGroup {
 pub struct Disk {
     pub volume: scour_volumes::Volume,
     pub state: DiskState,
+    /// How it is kept up to date; empty from an older service.
+    #[serde(default)]
+    pub seen: Seen,
+}
+
+/// How a disk or a folder is kept up to date, as a settings page says it:
+/// watched live or walked now and then, when it was last walked, and when a
+/// change in it last reached the index.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Seen {
+    /// Its last whole walk in this run of the service.
+    pub walked: Option<scour_core::Walked>,
+    /// A watcher covers all of it: changes arrive as they happen.
+    pub live: bool,
+    /// When a change in it last reached the index, unix seconds.
+    pub changed: Option<i64>,
+    /// Being walked right now, or waiting to be.
+    pub walking: bool,
 }
 
 /// One folder added from a face, as the settings page shows it.
@@ -302,6 +320,13 @@ pub struct FolderState {
     pub held: bool,
     /// Its last whole walk in this run of the service, if there was one.
     pub walked: Option<scour_core::Walked>,
+    /// The rest of [`Seen`]; `walked` stays where older faces read it.
+    #[serde(default)]
+    pub live: bool,
+    #[serde(default)]
+    pub changed: Option<i64>,
+    #[serde(default)]
+    pub walking: bool,
 }
 
 /// Whether a disk is indexed, and who decided.
@@ -756,6 +781,12 @@ mod tests {
                         size: 64 << 30,
                     },
                     state: DiskState::Asking,
+                    seen: Seen {
+                        walked: None,
+                        live: true,
+                        changed: Some(1_763_380_000),
+                        walking: false,
+                    },
                 }],
                 folders: vec![],
             },

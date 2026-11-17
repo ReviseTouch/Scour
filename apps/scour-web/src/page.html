@@ -2142,6 +2142,15 @@
     },
     status: () => SERVICE.get("status", {}),
     volumes: () => SERVICE.get("volumes", {}),
+    /* Walk a disk's or a folder's root again, now. */
+    rescan: async (path) => {
+      const r = await fetch(`/api/rescan?${new URLSearchParams({ path, t: TOKEN })}`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      if (!r.ok) throw new Error(`rescan: ${r.status}`);
+      return r.json();
+    },
     /* `what` is `index`, `leave` or `later`. */
     answerDisk: async (id, what) => {
       const r = await fetch(`/api/volume?${new URLSearchParams({ id, do: what, t: TOKEN })}`, {
@@ -6526,9 +6535,25 @@
   const diskName = (v) => v.label || v.roots[0] || v.id;
   const diskWord = (table, key) => T((DISKS[table] || {})[key] || key);
 
+  /* How a disk or a folder is kept up to date, in one line: files, watched
+     live or last walked, last change. The same words the window uses. */
+  const keeping = (walked, live, changed, walking) => {
+    if (walking) return T("Being walked…");
+    const parts = [];
+    if (walked) parts.push(T("{n} files", { n: fmt(walked.entries) }));
+    if (live) parts.push(T("watched live"));
+    else if (walked) parts.push(T("walked {when}", { when: exact(walked.at) }));
+    if (changed) parts.push(T("last change {when}", { when: exact(changed) }));
+    return parts.length ? parts.join(" · ") : T("Not walked yet");
+  };
+  const refreshBtn = (path, walking) =>
+    `<button type="button" class="set-push" data-rescan="${esc(path)}"` +
+    `${walking ? " disabled" : ""} title="${esc(T("Walk it again now"))}">↻</button>`;
+
   const drawDisks = () => {
-    const rows = DISK_LIST.map(({ volume: v, state }) => {
+    const rows = DISK_LIST.map(({ volume: v, state, seen }) => {
       const on = INDEXED.has(state);
+      const s = seen || {};
       const size = v.size ? " · " + bytes(v.size) : "";
       return `<li class="${on ? "" : "off"}">` +
         `<label><input type="checkbox" class="onoff" data-id="${esc(v.id)}"` +
@@ -6537,7 +6562,9 @@
         `<span class="disk"><span class="name">${esc(diskName(v))}</span>` +
         `<span class="aside">${esc(diskWord("kinds", v.kind) + size + " · " +
                                    diskWord("states", state))}</span>` +
-        `<code>${esc(v.roots.join("  "))}</code></span></label></li>`;
+        `<code>${esc(v.roots.join("  "))}</code>` +
+        (on ? `<span class="aside">${esc(keeping(s.walked, s.live, s.changed, s.walking))}</span>` : "") +
+        `</span></label>` + (on && v.roots[0] ? refreshBtn(v.roots[0], s.walking) : "") + `</li>`;
     }).join("");
     document.getElementById("disks-body").innerHTML = rows
       ? `<ul class="rules disks">${rows}</ul>`
@@ -6573,9 +6600,9 @@
     const status = (f) => {
       if (!f.on) return [T("Switched off: not in the index"), false];
       if (f.held) return [T("Inside a disk that is scanned already"), false];
-      if (!f.walked) return [T("Not walked yet"), false];
-      if (f.walked.problem) return [T("Could not be read: {why}", { why: f.walked.problem }), true];
-      return [T("{n} files · walked {when}", { n: fmt(f.walked.entries), when: exact(f.walked.at) }), false];
+      if (f.walked && f.walked.problem && !f.walking)
+        return [T("Could not be read: {why}", { why: f.walked.problem }), true];
+      return [keeping(f.walked, f.live, f.changed, f.walking), false];
     };
     const pair = (path, what, on, yes, no) =>
       `<span class="seg mini">` +
@@ -6587,6 +6614,7 @@
         `<span class="fst${bad ? " bad" : ""}">${esc(said)}</span></div>` +
         pair(f.path, "on", f.on, "Scanned", "Off") +
         pair(f.path, "watch", f.watched, "Watched", "Walked only") +
+        (f.on && !f.held ? refreshBtn(f.path, f.walking) : "") +
         `<button type="button" class="set-push" data-drop="${esc(f.path)}">×</button></li>`;
     }).join("");
   }
@@ -6599,6 +6627,11 @@
         if (!settingsBox.hidden) drawFolders();
         drawAsk();
         if (!disksPanel.hidden) drawDisks();
+        /* While something is being walked and it is on screen, asked again:
+           the line beside it says when the walk ends. */
+        const walking = DISK_LIST.some((d) => d.seen && d.seen.walking) ||
+          (FOLDER_LIST || []).some((f) => f.walking);
+        if (walking && (!settingsBox.hidden || !disksPanel.hidden)) setTimeout(loadDisks, 1500);
       })
       .catch(() => {});
 
@@ -6623,6 +6656,16 @@
     disksBtn.setAttribute("aria-expanded", open ? "true" : "false");
     if (open) { drawDisks(); loadDisks(); }
   });
+  /* A refresh beside a disk or a folder, wherever the list is drawn. Inside a
+     label it would also flip the switch, hence the default prevented. */
+  document.addEventListener("click", (e) => {
+    const again = e.target.closest("button[data-rescan]");
+    if (!again) return;
+    e.preventDefault();
+    e.stopPropagation();
+    again.disabled = true;
+    SERVICE.rescan(again.dataset.rescan).then(loadDisks).catch((err) => console.warn("rescan:", err));
+  }, true);
   disksPanel.addEventListener("change", (e) => {
     const box = e.target.closest(".onoff");
     if (!box) return;

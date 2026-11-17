@@ -139,6 +139,10 @@ struct Shared {
     /// Per source: a whole-source walk is already waiting to run. Cleared as the
     /// walk begins, so a rule saved mid-walk still queues one behind it.
     queued: Vec<AtomicBool>,
+    /// Per source: when a change in it last reached the index, unix seconds; 0 never.
+    changed: Vec<std::sync::atomic::AtomicI64>,
+    /// Per source: a whole walk of it is under way.
+    walking: Vec<AtomicBool>,
     stop: AtomicBool,
     /// The live watches, each beside the source it belongs to: the worker runs the
     /// walks, and a subtree walk is when its watcher is told the subtree exists.
@@ -338,6 +342,10 @@ impl Engine {
             pending: AtomicU64::new(0),
             scanning: AtomicBool::new(false),
             queued: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
+            changed: (0..source_count)
+                .map(|_| std::sync::atomic::AtomicI64::new(0))
+                .collect(),
+            walking: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
             stop: AtomicBool::new(false),
             watches: Mutex::new(Vec::new()),
             revision: AtomicU64::new(first_revision),
@@ -395,6 +403,30 @@ impl Engine {
     /// walked in this run is absent.
     pub fn walks(&self) -> std::collections::HashMap<String, scour_core::Walked> {
         self.shared.walks.read().clone()
+    }
+
+    /// How each source is kept up to date, by its name: what a settings page
+    /// says beside a disk or a folder.
+    pub fn keeping(&self) -> std::collections::HashMap<String, Keeping> {
+        let watches = self.shared.watches.lock();
+        self.shared
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(i, src)| {
+                let live = watches
+                    .iter()
+                    .any(|(w, h)| *w == i && h.unwatched().is_empty());
+                let changed = self.shared.changed[i].load(Ordering::Relaxed);
+                let keeping = Keeping {
+                    live,
+                    changed: (changed > 0).then_some(changed),
+                    walking: self.shared.walking[i].load(Ordering::Relaxed)
+                        || self.shared.queued[i].load(Ordering::Relaxed),
+                };
+                (src.describe().name, keeping)
+            })
+            .collect()
     }
 
     /// Start watching every source that can be watched. One that cannot is not an
@@ -468,6 +500,14 @@ impl Engine {
                 let idx = self
                     .owner_of(path)
                     .ok_or_else(|| Error::NotFound { path: path.clone() })?;
+                // A source's own root, asked for by name — a refresh button —
+                // is the source walked whole: a drive's whole walk can be read
+                // from its master file table, a subtree's cannot.
+                let roots = self.shared.sources[idx].describe().roots;
+                let bare = |p: &str| p.trim_end_matches('/').to_lowercase();
+                if roots.len() == 1 && bare(&roots[0]) == bare(path) {
+                    return self.queue_whole(idx);
+                }
                 self.send(Job::Scan {
                     source: idx,
                     subtree,
@@ -1098,6 +1138,23 @@ fn prepare_loop(shared: Arc<Shared>, jobs: Receiver<Prepare>, stop: Receiver<()>
     }
 }
 
+/// How one source is kept up to date. See [`Engine::keeping`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Keeping {
+    /// A watcher covers all of it.
+    pub live: bool,
+    /// When a change in it last reached the index, unix seconds.
+    pub changed: Option<i64>,
+    /// Being walked, or waiting to be.
+    pub walking: bool,
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// The background thread: one loop for jobs, changes and the commit clock.
 fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>) {
     let mut dirty = false;
@@ -1283,9 +1340,11 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                         }
                     }
                     // A handful is enough to prove the watcher is awake.
+                    let now = now_secs();
                     for change in batch.iter().take(64) {
                         if let Some(i) = owner_of(&shared, change.path()) {
                             pulses.saw_event(i);
+                            shared.changed[i].store(now, Ordering::Relaxed);
                         }
                     }
                     // Walks come out first: a thousand from a `git clone` coalesce to one.
@@ -1722,6 +1781,9 @@ fn scan(
         st.scanning_source = Some(src.id());
         st.scanned = 0;
     }
+    if subtree.is_none() {
+        shared.walking[source].store(true, Ordering::Relaxed);
+    }
 
     // A disk the index holds nothing of shows its rows as they are found: nothing
     // else can answer for it until this walk does. Any other walk only corrects
@@ -1827,6 +1889,11 @@ fn scan(
         // Beside `gone`, what the walk found that the watcher had not already
         // said: the measure of whether this walk was needed at all.
         let fresh = shared.index.fresh(generation);
+        // A walk that found something is a change reaching the index too: the
+        // only way one does for a source nothing watches.
+        if fresh > 0 || gone > 0 {
+            shared.changed[source].store(now_secs(), Ordering::Relaxed);
+        }
         scour_core::note!(
             "scourd: {how} {} in {:.1} s — {seen} entries, {fresh} new or changed, \
              {gone} gone{read}{blind}",
@@ -1864,6 +1931,7 @@ fn scan(
     let all_roots = src.describe().roots.iter().all(|root| covered.covers(root));
 
     shared.scanning.store(false, Ordering::Relaxed);
+    shared.walking[source].store(false, Ordering::Relaxed);
     let mut st = shared.status.write();
     st.scanning_source = None;
     st.scanned = seen;
@@ -1948,6 +2016,7 @@ fn scan_lanes(
                         .map(|&i| {
                             let src = Arc::clone(&shared.sources[i]);
                             let started = Instant::now();
+                            shared.walking[i].store(true, Ordering::Relaxed);
                             let first = holds_nothing(&*shared.index, &src.describe().roots);
                             let mut sink = ToIndex {
                                 index: Arc::clone(&shared.index),
@@ -1963,6 +2032,7 @@ fn scan_lanes(
                             };
                             let report = src.scan(opts, &mut sink);
                             sink.flush();
+                            shared.walking[i].store(false, Ordering::Relaxed);
                             LaneWalk {
                                 source: i,
                                 report,

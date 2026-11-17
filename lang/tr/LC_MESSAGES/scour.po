@@ -2187,3 +2187,18 @@ msgstr "Okunamadı: {why}"
 
 msgid "{n} files · walked {when}"
 msgstr "{n} dosya · son tarama {when}"
+
+msgid "Being walked…"
+msgstr "Taranıyor…"
+
+msgid "watched live"
+msgstr "canlı izleniyor"
+
+msgid "walked {when}"
+msgstr "son tarama {when}"
+
+msgid "last change {when}"
+msgstr "son değişiklik {when}"
+
+msgid "Walk it again now"
+msgstr "Şimdi yeniden tara"

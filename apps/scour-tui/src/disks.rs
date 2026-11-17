@@ -125,6 +125,7 @@ mod tests {
                 ..Volume::default()
             },
             state,
+            seen: Default::default(),
         }
     }
 

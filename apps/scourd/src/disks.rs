@@ -66,6 +66,7 @@ pub fn plan(
         disks.push(Disk {
             volume: v.clone(),
             state,
+            seen: Default::default(),
         });
     }
     if sources.is_empty() && volumes.is_empty() {
