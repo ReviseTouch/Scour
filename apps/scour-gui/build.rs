@@ -1,6 +1,15 @@
 fn main() {
     scour_icon::embed();
-    slint_build::compile("ui/main.slint").expect("the interface does not compile");
+    // On a thread of its own with a large stack: Slint's compiler recurses
+    // over the interface, and a build on Windows overflowed the main thread's
+    // 1 MB there (STATUS_STACK_OVERFLOW, 17 November) where Linux's 8 MB held.
+    std::thread::Builder::new()
+        .name("slint-build".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| slint_build::compile("ui/main.slint").expect("the interface does not compile"))
+        .expect("a thread for the interface compiler")
+        .join()
+        .expect("the interface compiler panicked");
     old_glibc_math();
 }
 
