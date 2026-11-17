@@ -108,7 +108,9 @@ impl Pulses {
         self.pending[source] = false;
         let rest = self.scan_rest[source];
         self.pulse_floor[source] = Self::FLOOR.max(rest).max(self.patience[source]);
-        self.fallback[source] = now + self.poll.max(rest);
+        // Patience bounds the timer too: a share nothing watches has no pulse,
+        // and was walked every minute where ten were meant (PC2, 17 November).
+        self.fallback[source] = now + self.poll.max(rest).max(self.patience[source]);
         self.safety[source] = now + self.reconcile.max(rest);
     }
 
@@ -436,6 +438,17 @@ mod pulse_tests {
         p.whole_at[0] = Instant::now() - Duration::from_secs(601);
         p.decide(&[Some(1)], &[0], &count);
         assert_eq!(asked.get(), 1);
+    }
+
+    /// A share nothing watches has no pulse; its patience still decides how
+    /// often it is walked, not the one-minute poll.
+    #[test]
+    fn a_patient_source_without_a_pulse_waits_its_patience() {
+        let mut p = quiet(1);
+        p.be_patient(0, Duration::from_secs(600));
+        p.scanned(0, Duration::from_secs(2));
+        assert!(p.fallback[0].duration_since(p.walked[0]) >= Duration::from_secs(600));
+        assert!(p.decide(&[None], &[], &|| true).is_empty());
     }
 
     #[test]
