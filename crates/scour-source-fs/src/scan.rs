@@ -398,6 +398,10 @@ impl Source for FsSource {
         let Some((first, rest)) = roots.split_first() else {
             return Ok(ScanReport::default());
         };
+        // This thread looks at the roots before and after the walk: as the
+        // same person the walker threads read them as, or a share the walk
+        // read whole is judged unreadable (PC2, 17 November).
+        let _as = self.walk_as.as_ref().and_then(|w| (w.0)());
 
         // A whole drive read from its master file table: seconds where the walk
         // is minutes. Only where this process may open the volume — the
