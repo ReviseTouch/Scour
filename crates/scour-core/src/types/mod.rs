@@ -22,5 +22,5 @@ pub use search::{
     SearchResponse, SortKey, Subtree, UsageRequest, UsageResponse,
 };
 pub use source::{Caps, ScanOptions, ScanReport, SourceInfo, SourceKind};
-pub use status::{Status, TreeNode};
+pub use status::{Status, TreeNode, Walked};
 pub use syntax::{Completion, CompletionKind, Role, Span};

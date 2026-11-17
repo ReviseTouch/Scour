@@ -596,7 +596,7 @@ fn serve(addr: &str, log: &std::path::Path, inbox: &Receiver<Ask>, out: &Sender<
             // A preference kept, a disk answered for: what it did comes back
             // by its own road — the next status, or the list asked after it.
             Ok(Response::Accepted) => {}
-            Ok(Response::Volumes { disks }) => {
+            Ok(Response::Volumes { disks, .. }) => {
                 let _ = out.send(Got::Disks(disks));
             }
             Ok(Response::Explain { spans, .. }) => {

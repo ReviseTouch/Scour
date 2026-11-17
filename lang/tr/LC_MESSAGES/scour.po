@@ -2157,3 +2157,33 @@ msgstr "Seçimi kaldır"
 
 msgid "{n} folders: too many to open"
 msgstr "{n} klasör: açmak için çok fazla"
+
+msgid "Folders scanned"
+msgstr "Taranan klasörler"
+
+msgid "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched."
+msgstr "Disklerin yanında tek tek klasörler: kapatılmış bir diskteki ya da bir ağ paylaşımındaki bir klasör. Her biri kapatılabilir ya da izlenmeden yalnız taranabilir."
+
+msgid "Scanned"
+msgstr "Taranıyor"
+
+msgid "Watched"
+msgstr "Sürekli izle"
+
+msgid "Walked only"
+msgstr "Yalnız tara"
+
+msgid "Switched off: not in the index"
+msgstr "Kapalı: indekste değil"
+
+msgid "Inside a disk that is scanned already"
+msgstr "Zaten taranan bir diskin içinde"
+
+msgid "Not walked yet"
+msgstr "Henüz taranmadı"
+
+msgid "Could not be read: {why}"
+msgstr "Okunamadı: {why}"
+
+msgid "{n} files · walked {when}"
+msgstr "{n} dosya · son tarama {when}"

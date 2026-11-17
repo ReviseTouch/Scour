@@ -179,7 +179,7 @@ pub fn human(r: &Response) -> String {
             }
             out
         }
-        Response::Volumes { disks } => {
+        Response::Volumes { disks, .. } => {
             let mut out = String::new();
             for d in disks {
                 let v = &d.volume;

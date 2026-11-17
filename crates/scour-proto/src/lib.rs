@@ -290,6 +290,20 @@ pub struct Disk {
     pub state: DiskState,
 }
 
+/// One folder added from a face, as the settings page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderState {
+    pub path: String,
+    /// Switched on: in the index.
+    pub on: bool,
+    /// Watched for changes, rather than only walked.
+    pub watched: bool,
+    /// Already inside a disk that is indexed, so not a source of its own.
+    pub held: bool,
+    /// Its last whole walk in this run of the service, if there was one.
+    pub walked: Option<scour_core::Walked>,
+}
+
 /// Whether a disk is indexed, and who decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -421,6 +435,10 @@ pub enum Response {
     Places(scour_places::Places),
     Volumes {
         disks: Vec<Disk>,
+        /// The folders added from a face, each with how it is kept and how its
+        /// last walk went. Absent from an older service.
+        #[serde(default)]
+        folders: Vec<FolderState>,
     },
     Preview(scour_preview::Look),
     Thumbnails(scour_thumbs::Made),
@@ -739,6 +757,7 @@ mod tests {
                     },
                     state: DiskState::Asking,
                 }],
+                folders: vec![],
             },
             Response::Facets(FacetResponse::default()),
             Response::Tree {

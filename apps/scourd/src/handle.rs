@@ -277,9 +277,36 @@ fn run(
             }
         }
         Request::Places {} => Response::Places(scour_places::look()),
-        Request::Volumes {} => Response::Volumes {
-            disks: live.plan().disks,
-        },
+        Request::Volumes {} => {
+            let plan = live.plan();
+            let walks = engine.walks();
+            let settings = kept
+                .settings
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone();
+            let named: std::collections::HashSet<String> =
+                plan.sources.iter().map(|s| s.source.name.clone()).collect();
+            let folders = settings
+                .folders
+                .iter()
+                .map(|f| {
+                    let name = crate::disks::folder_source(f);
+                    let on = !settings.folders_off.contains(f);
+                    scour_proto::FolderState {
+                        path: f.clone(),
+                        on,
+                        watched: !settings.folders_unwatched.contains(f),
+                        held: on && !named.contains(&name),
+                        walked: walks.get(&name).cloned(),
+                    }
+                })
+                .collect();
+            Response::Volumes {
+                disks: plan.disks,
+                folders,
+            }
+        }
         Request::Postpone { volume } => {
             live.postpone(kept, volume);
             Response::Accepted

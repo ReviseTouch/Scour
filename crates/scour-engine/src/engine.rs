@@ -130,6 +130,8 @@ struct Shared {
     /// while the service runs; an `Arc` inside so a walk copies it and lets go.
     scan: RwLock<Arc<ScanOptions>>,
     status: RwLock<Status>,
+    /// Each source's last whole walk, by its name. See [`Engine::walks`].
+    walks: RwLock<std::collections::HashMap<String, scour_core::Walked>>,
     pending: AtomicU64,
     scanning: AtomicBool,
     /// Per source: a whole-source walk is already waiting to run. Cleared as the
@@ -330,6 +332,7 @@ impl Engine {
             index,
             opts,
             scan,
+            walks: RwLock::new(std::collections::HashMap::new()),
             pending: AtomicU64::new(0),
             scanning: AtomicBool::new(false),
             queued: (0..source_count).map(|_| AtomicBool::new(false)).collect(),
@@ -384,6 +387,12 @@ impl Engine {
 
     pub fn sources(&self) -> Vec<SourceInfo> {
         self.shared.sources.iter().map(|s| s.describe()).collect()
+    }
+
+    /// How each source's last whole walk went, by source name. A source not yet
+    /// walked in this run is absent.
+    pub fn walks(&self) -> std::collections::HashMap<String, scour_core::Walked> {
+        self.shared.walks.read().clone()
     }
 
     /// Start watching every source that can be watched. One that cannot is not an
@@ -1761,6 +1770,22 @@ fn scan(
             began.elapsed().as_secs_f64()
         );
         pulses.scanned(source, began.elapsed());
+        let problem = match report.as_ref() {
+            Err(e) => e.to_string(),
+            Ok(_) if !could_look => "could not be read".to_owned(),
+            Ok(_) => String::new(),
+        };
+        shared.walks.write().insert(
+            src.describe().name,
+            scour_core::Walked {
+                at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64),
+                entries: seen,
+                unreadable: report.as_ref().map_or(0, |r| r.unreadable),
+                problem,
+            },
+        );
         // Recognising a whole source's unchanged rows read the index end to end:
         // 162 MB left resident after a startup that nothing looked at again.
         shared.index.release_memory();

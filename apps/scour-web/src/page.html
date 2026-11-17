@@ -1562,7 +1562,11 @@
   .shead { margin: 18px 2px 8px; font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
   .set-note { margin: 0 2px 8px; font-size: 12px; color: var(--ink-3); }
   ul.folders { list-style: none; margin: 0 0 8px; padding: 0; }
-  ul.folders li { display: flex; align-items: center; gap: 8px; height: 30px; }
+  ul.folders li { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+  ul.folders .fw { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  ul.folders .fst { font-size: 11.5px; color: var(--ink-3); }
+  ul.folders .fst.bad { color: var(--q-not); }
+  .seg.mini button { font-size: 11.5px; padding: 3px 8px; }
   ul.folders code { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--ink);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   form.folder { display: flex; gap: 6px; }
@@ -1730,6 +1734,7 @@
         <button type="button" data-sec="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-t="General"></span></button>
         <button type="button" data-sec="view"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 9h17M9 9v10.5"/></svg><span data-t="List and look"></span></button>
         <button type="button" data-sec="disks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="13" width="17" height="6.5" rx="2"/><path d="M5.5 13l2-7.5h9l2 7.5"/></svg><span data-t="Disks scanned"></span><span class="badge" id="set-badge" hidden>1</span></button>
+        <button type="button" data-sec="folders"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 18.5V7a1.5 1.5 0 0 1 1.5-1.5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9z"/></svg><span data-t="Folders scanned"></span></button>
         <button type="button" data-sec="rules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.3 17.7L17.7 6.3"/></svg><span data-t="Skipped"></span></button>
         <button type="button" data-sec="keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span data-t="Keyboard"></span></button>
         <button type="button" data-sec="about"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5M12 7.8v.1"/></svg><span data-t="About"></span></button>
@@ -1765,8 +1770,8 @@
               <div class="srow"><div class="t"><div class="lab" data-t="A disk plugged in"></div><div class="desc" data-t="A stick, an external disk, a card."></div></div><div class="seg" id="seg-removable"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Not watched: looked at again every minute."></div></div><div class="seg" id="seg-network"></div></div>
             </div>
-            <div class="shead" data-t="Folders added"></div>
-            <p class="set-note" data-t="One folder rather than a whole disk: a folder on a disk left out, say. One already inside a scanned disk adds nothing."></p>
+          </section>
+          <section data-sec="folders" hidden>
             <ul class="folders" id="folders"></ul>
             <form class="folder" id="folder-form">
               <input type="text" spellcheck="false" autocomplete="off" data-t-ph="/a/folder or ~/a/folder">
@@ -6552,10 +6557,46 @@
     diskAsk.querySelector(".said").textContent = T(question, { name: diskName(d.volume) });
   };
 
+  /* The folders as the service last described them: switches and last walk.
+     `null` until it has, and then the settings' own list is drawn bare. */
+  let FOLDER_LIST = null;
+
+  /* Each folder: its path, how its last walk went, whether it is scanned and
+     whether it is watched, and the way to take it away. */
+  function drawFolders() {
+    const k = KEPT || {};
+    const off = new Set(k.folders_off || []);
+    const unwatched = new Set(k.folders_unwatched || []);
+    const rows = FOLDER_LIST || (k.folders || []).map((path) => ({
+      path, on: !off.has(path), watched: !unwatched.has(path), held: false, walked: null,
+    }));
+    const status = (f) => {
+      if (!f.on) return [T("Switched off: not in the index"), false];
+      if (f.held) return [T("Inside a disk that is scanned already"), false];
+      if (!f.walked) return [T("Not walked yet"), false];
+      if (f.walked.problem) return [T("Could not be read: {why}", { why: f.walked.problem }), true];
+      return [T("{n} files · walked {when}", { n: fmt(f.walked.entries), when: exact(f.walked.at) }), false];
+    };
+    const pair = (path, what, on, yes, no) =>
+      `<span class="seg mini">` +
+      `<button type="button" data-fold="${what}" data-path="${esc(path)}" data-v="on"${on ? ' aria-pressed="true"' : ""}>${esc(T(yes))}</button>` +
+      `<button type="button" data-fold="${what}" data-path="${esc(path)}" data-v="off"${on ? "" : ' aria-pressed="true"'}>${esc(T(no))}</button></span>`;
+    document.getElementById("folders").innerHTML = rows.map((f) => {
+      const [said, bad] = status(f);
+      return `<li><div class="fw"><code title="${esc(f.path)}">${esc(f.path)}</code>` +
+        `<span class="fst${bad ? " bad" : ""}">${esc(said)}</span></div>` +
+        pair(f.path, "on", f.on, "Scanned", "Off") +
+        pair(f.path, "watch", f.watched, "Watched", "Walked only") +
+        `<button type="button" class="set-push" data-drop="${esc(f.path)}">×</button></li>`;
+    }).join("");
+  }
+
   const loadDisks = () =>
     SERVICE.volumes()
       .then((r) => {
         DISK_LIST = r.disks || [];
+        FOLDER_LIST = r.folders || null;
+        if (!settingsBox.hidden) drawFolders();
         drawAsk();
         if (!disksPanel.hidden) drawDisks();
       })
@@ -6649,6 +6690,7 @@
     general: ["General", "The same for every face: the window, the browser and the terminal read these."],
     view: ["List and look", "How the list is drawn, and what it shows."],
     disks: ["Disks scanned", "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan."],
+    folders: ["Folders scanned", "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched."],
     rules: ["Skipped", "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again."],
     keys: ["Keyboard", "What the keys do, and what the query understands."],
     about: ["About", "What is running, and what it holds."],
@@ -6719,10 +6761,7 @@
       k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
     seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
       k.network || "", (v) => { KEPT.network = v; keep({ network: v }); loadDisks(); drawSettings(); });
-    const folders = k.folders || [];
-    document.getElementById("folders").innerHTML = folders.map((f) =>
-      `<li><code title="${esc(f)}">${esc(f)}</code>` +
-      `<button type="button" class="set-push" data-drop="${esc(f)}">×</button></li>`).join("");
+    drawFolders();
   }
 
   function showSection(sec) {
@@ -6736,6 +6775,7 @@
     facesPanel.hidden = sec !== "general";
     rulesPanel.hidden = sec !== "rules";
     disksPanel.hidden = sec !== "disks";
+    if (sec === "folders") loadDisks();
     helpBox.hidden = sec !== "keys";
     if (sec === "general") { ARMED = ""; drawFaces(); loadHotkey(); }
     if (sec === "rules") loadRules();
@@ -6771,7 +6811,26 @@
     if (drop && KEPT) {
       KEPT.folders = (KEPT.folders || []).filter((f) => f !== drop.dataset.drop);
       keep({ folders: KEPT.folders });
+      FOLDER_LIST = FOLDER_LIST && FOLDER_LIST.filter((f) => f.path !== drop.dataset.drop);
       drawSettings();
+      return;
+    }
+    /* A folder switched on or off, watched or only walked: the list goes whole,
+       and the service is asked again once the change has been written. */
+    const fold = e.target.closest("button[data-fold]");
+    if (fold && KEPT) {
+      const key = fold.dataset.fold === "on" ? "folders_off" : "folders_unwatched";
+      const path = fold.dataset.path;
+      const list = (KEPT[key] || []).filter((f) => f !== path);
+      if (fold.dataset.v === "off") list.push(path);
+      KEPT[key] = list;
+      keep({ [key]: list });
+      if (FOLDER_LIST) {
+        const f = FOLDER_LIST.find((x) => x.path === path);
+        if (f) f[fold.dataset.fold === "on" ? "on" : "watched"] = fold.dataset.v === "on";
+      }
+      drawFolders();
+      setTimeout(loadDisks, 600);
     }
   });
   document.getElementById("set-cols").addEventListener("click", (e) => {
@@ -6788,7 +6847,10 @@
     let v = box.value.trim();
     if (!v) { err.textContent = T("Type a folder's path first."); return; }
     if (v === "~" || v.startsWith("~/")) v = HOME + v.slice(1);
-    if (!v.startsWith("/")) { err.textContent = T("A folder's full path, from the root."); return; }
+    /* Windows writes `C:\x` and `\\server\share`; the index writes forward. */
+    const win = /^[A-Za-z]:[\\/]/.test(v) || /^(\\\\|\/\/)/.test(v);
+    if (win) v = v.replace(/\\/g, "/");
+    if (!v.startsWith("/") && !win) { err.textContent = T("A folder's full path, from the root."); return; }
     v = v.replace(/\/+$/, "") || "/";
     const have = (KEPT && KEPT.folders) || [];
     if (have.includes(v)) { err.textContent = T("That folder is already in the list."); return; }
@@ -6796,8 +6858,9 @@
     keep({ folders: KEPT.folders });
     box.value = "";
     err.textContent = "";
+    FOLDER_LIST = null;
     drawSettings();
-    loadDisks();
+    setTimeout(loadDisks, 600);
   });
   /* Escape closes the page before anything under it; Ctrl+, opens it. */
   document.addEventListener("keydown", (e) => {

@@ -42,6 +42,18 @@ pub struct Status {
     pub asking: u32,
 }
 
+/// How the last whole walk of a source went: what a settings page says beside a
+/// folder, so a share nobody may read is not silently empty.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Walked {
+    /// When it ended, seconds since the epoch.
+    pub at: i64,
+    pub entries: u64,
+    pub unreadable: u64,
+    /// Why nothing could be seen, in the system's words; empty when it could.
+    pub problem: String,
+}
+
 /// One node of a directory listing, answered from the index rather than the
 /// filesystem: `children` is a count the index already holds, not a read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

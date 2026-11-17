@@ -11,10 +11,16 @@ use crate::{Link, call};
 /// Every disk with its state, as the service words them on the wire.
 pub fn api_volumes(stream: &mut TcpStream, client: &Mutex<Link>) {
     match call(client, Request::Volumes {}) {
-        Ok(Response::Volumes { disks }) => match serde_json::to_value(&disks) {
-            Ok(v) => http::json(stream, &serde_json::json!({ "disks": v })),
-            Err(e) => http::fail(stream, "500 Internal Server Error", &e.to_string()),
-        },
+        Ok(Response::Volumes { disks, folders }) => {
+            match (serde_json::to_value(&disks), serde_json::to_value(&folders)) {
+                (Ok(d), Ok(f)) => {
+                    http::json(stream, &serde_json::json!({ "disks": d, "folders": f }))
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    http::fail(stream, "500 Internal Server Error", &e.to_string())
+                }
+            }
+        }
         Ok(_) => http::fail(stream, "502 Bad Gateway", "unexpected reply"),
         Err(e) => http::fail(stream, "502 Bad Gateway", &e),
     }

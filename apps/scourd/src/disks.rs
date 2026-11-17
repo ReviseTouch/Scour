@@ -175,6 +175,12 @@ fn state_of(
     }
 }
 
+/// The name a folder added from a face goes by as a source: what its last walk
+/// is filed under, for the settings page.
+pub fn folder_source(path: &str) -> String {
+    format!("folder:{path}")
+}
+
 /// The folders added from a face, each a source of its own unless a source
 /// already holds it. Named by path, so the rows stay with the folder.
 /// Held means the deepest root above it is a source's: `/` holds `/etc`, but
@@ -184,7 +190,7 @@ fn folders_apart(settings: &Settings, sources: &[SourceCfg], volumes: &[Volume])
     let mut out: Vec<SourceCfg> = Vec::new();
     for f in &settings.folders {
         let root = PathBuf::from(f);
-        if !root.is_absolute() {
+        if !root.is_absolute() || settings.folders_off.contains(f) {
             continue;
         }
         let indexed: Vec<&PathBuf> = sources.iter().chain(&out).flat_map(|s| &s.roots).collect();
@@ -200,10 +206,10 @@ fn folders_apart(settings: &Settings, sources: &[SourceCfg], volumes: &[Volume])
         let held = deepest.is_some_and(|d| indexed.iter().any(|r| **r == d));
         if !held {
             out.push(SourceCfg {
-                name: format!("folder:{f}"),
+                name: folder_source(f),
                 kind: SourceKindCfg::Local,
                 roots: vec![root],
-                watch: true,
+                watch: !settings.folders_unwatched.contains(f),
             });
         }
     }

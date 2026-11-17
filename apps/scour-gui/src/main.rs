@@ -44,8 +44,8 @@ mod ui {
 }
 
 pub use ui::{
-    Bar, Big, Cell, Disk, DragTray, Dupe, Facet, Fact, Fonts, HeadInfo, Kid, MainWindow, MenuItem,
-    Row, Rule, Scheme, Seg, Slice, Slot, Span, Theme,
+    Bar, Big, Cell, Disk, DragTray, Dupe, Facet, Fact, FolderRow, Fonts, HeadInfo, Kid, MainWindow,
+    MenuItem, Row, Rule, Scheme, Seg, Slice, Slot, Span, Theme,
 };
 
 thread_local! {
@@ -742,6 +742,26 @@ fn main() -> Result<()> {
     window.set_removable_choice(kept.removable.as_str().into());
     window.set_network_choice(kept.network.as_str().into());
     let folders = Rc::new(RefCell::new(kept.folders.clone()));
+    // Which of them are switched off, and which only walked: replaced whole
+    // when either changes, as `Change` carries them.
+    let folders_off = Rc::new(RefCell::new(kept.folders_off.clone()));
+    let folders_unwatched = Rc::new(RefCell::new(kept.folders_unwatched.clone()));
+    // Before the service has said how their walks went: the folders, bare.
+    disks::draw_folders(
+        &window,
+        &cat.borrow(),
+        &kept
+            .folders
+            .iter()
+            .map(|f| scour_proto::FolderState {
+                path: f.clone(),
+                on: !kept.folders_off.contains(f),
+                watched: !kept.folders_unwatched.contains(f),
+                held: false,
+                walked: None,
+            })
+            .collect::<Vec<_>>(),
+    );
     window.set_folders(strings(&folders.borrow()));
     let kept_layout = kept.layout;
     if matches!(kept_layout.as_str(), "icons" | "large") {
@@ -1248,7 +1268,7 @@ fn main() -> Result<()> {
             w.set_settings_section(section.clone());
             match section.as_str() {
                 "rules" => link.send(Ask::Rules),
-                "disks" => link.send(Ask::Volumes),
+                "disks" | "folders" => link.send(Ask::Volumes),
                 "about" => link.send(Ask::Status),
                 // The desktop may have been changed in its own settings since
                 // this window started; the row must not be stale.
@@ -1349,6 +1369,47 @@ fn main() -> Result<()> {
                 },
             });
         });
+    }
+
+    // A folder switched on or off, or watched or only walked. The list goes to
+    // the service whole, and the folders are asked for again: the answer says
+    // what the switch did.
+    for watch in [false, true] {
+        let link = Rc::clone(&link);
+        let list = Rc::clone(if watch {
+            &folders_unwatched
+        } else {
+            &folders_off
+        });
+        let handler = move |path: slint::SharedString, on: bool| {
+            let path = path.to_string();
+            {
+                let mut l = list.borrow_mut();
+                l.retain(|p| p != &path);
+                if !on {
+                    l.push(path);
+                }
+            }
+            let now = Some(list.borrow().clone());
+            let change = if watch {
+                scour_settings::Change {
+                    folders_unwatched: now,
+                    ..Default::default()
+                }
+            } else {
+                scour_settings::Change {
+                    folders_off: now,
+                    ..Default::default()
+                }
+            };
+            link.send(Ask::Remember { change });
+            link.send(Ask::Volumes);
+        };
+        if watch {
+            window.on_folder_watched(handler);
+        } else {
+            window.on_folder_switched(handler);
+        }
     }
 
     // A disk switched in the panel, or the question answered. The bar goes at
@@ -3013,6 +3074,11 @@ fn main() -> Result<()> {
         slint::Timer::single_shot(std::time::Duration::from_millis(1200), move || {
             if let Some(w) = weak.upgrade() {
                 w.invoke_tool_clicked(what.as_str().into());
+                // `SCOUR_GUI_SECTION=folders`: which page of the settings, for a
+                // photograph of one.
+                if let Ok(section) = std::env::var("SCOUR_GUI_SECTION") {
+                    w.invoke_settings_picked(section.as_str().into());
+                }
             }
         });
     }
@@ -4510,8 +4576,9 @@ fn apply(
         // The list, or an answer taken: then the list again, which says what
         // the answer did.
         Got::Volumes(reply) => match *reply {
-            Response::Volumes { disks } => {
+            Response::Volumes { disks, folders } => {
                 state.borrow_mut().asked_disk = disks::draw(w, cat, &disks);
+                disks::draw_folders(w, cat, &folders);
             }
             _ => link.send(Ask::Volumes),
         },
@@ -5031,6 +5098,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "General",
         "List and look",
         "Disks scanned",
+        "Folders scanned",
         "Skipped",
         "Keyboard",
         "About",
@@ -5039,6 +5107,7 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
         "The same for every face: the window, the browser and the terminal read these.",
         "How the list is drawn, and what it shows.",
         "Scour knows every file on these. A disk taken out leaves the index; putting it back takes a scan.",
+        "Single folders, beside the disks: one on a disk left out, or on a network share. Each can be switched off or walked without being watched.",
         "Places inside the scanned disks that are not looked at. A rule switched off is kept, and can be switched on again.",
         "What the keys do, and what the query understands.",
         "What is running, and what it holds.",
@@ -5065,6 +5134,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_columns(t(cat, "Columns"));
     w.set_set_columns_note(t(cat, "Which ones, and their widths back to the default."));
     w.set_set_columns_push(t(cat, "Choose…"));
+    w.set_folder_on_labels(list(&["Scanned", "Off"]));
+    w.set_folder_watch_labels(list(&["Watched", "Walked only"]));
     w.set_set_preview(t(cat, "Preview"));
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
     w.set_set_service(t(cat, "Windows service"));

@@ -75,6 +75,14 @@ pub struct Settings {
     /// paths. One already inside an indexed disk adds nothing.
     #[serde(default)]
     pub folders: Vec<String>,
+    /// Folders of [`Settings::folders`] switched off: kept in the list, out of
+    /// the index until switched on again.
+    #[serde(default)]
+    pub folders_off: Vec<String>,
+    /// Folders of [`Settings::folders`] not watched: walked at the start and
+    /// when asked, and otherwise left alone.
+    #[serde(default)]
+    pub folders_unwatched: Vec<String>,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -189,6 +197,10 @@ pub struct Change {
     pub network: Option<String>,
     /// Replace the list outright. See [`Settings::folders`].
     pub folders: Option<Vec<String>>,
+    /// Replace the list outright. See [`Settings::folders_off`].
+    pub folders_off: Option<Vec<String>>,
+    /// Replace the list outright. See [`Settings::folders_unwatched`].
+    pub folders_unwatched: Option<Vec<String>>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -206,7 +218,11 @@ impl Change {
     /// Whether this changes what is indexed — the disks asked about, the
     /// folders added — so the service plans its sources again.
     pub fn moves_sources(&self) -> bool {
-        self.removable.is_some() || self.network.is_some() || self.folders.is_some()
+        self.removable.is_some()
+            || self.network.is_some()
+            || self.folders.is_some()
+            || self.folders_off.is_some()
+            || self.folders_unwatched.is_some()
     }
 
     /// Fold this into the settings.
@@ -283,6 +299,12 @@ impl Change {
         }
         if let Some(v) = self.folders {
             to.folders = v;
+        }
+        if let Some(v) = self.folders_off {
+            to.folders_off = v;
+        }
+        if let Some(v) = self.folders_unwatched {
+            to.folders_unwatched = v;
         }
         if let Some(v) = self.history {
             to.history = v;

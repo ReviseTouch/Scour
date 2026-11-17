@@ -252,7 +252,7 @@ pub fn human(reply: &Response, echo: Option<&str>) -> Result<()> {
                 }
             }
         }
-        Response::Volumes { disks } => {
+        Response::Volumes { disks, .. } => {
             for d in disks {
                 let v = &d.volume;
                 let size = if v.size == 0 {
