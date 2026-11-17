@@ -78,6 +78,12 @@ pub fn start(
     if let Some(journal) = crate::usn::try_start(&source, Arc::clone(&rules), Arc::clone(&sink)) {
         return Ok(journal);
     }
+    // A share read as its owner is watched as its owner too: a watcher of
+    // `notify`'s opens its handles as SYSTEM, which the share turns away.
+    #[cfg(windows)]
+    if let Some(walk_as) = source.walk_as().cloned() {
+        return crate::share::start(&source, walk_as, rules, sink);
+    }
 
     let handler = {
         let sink = Arc::clone(&sink);

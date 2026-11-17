@@ -2008,8 +2008,8 @@ msgstr "Hep tara"
 msgid "Network disks"
 msgstr "Ağ diskleri"
 
-msgid "SMB, NFS, SSHFS. Not watched: looked at again every minute."
-msgstr "SMB, NFS, SSHFS. İzlenemez; dakikada bir yeniden bakılır."
+msgid "SMB, NFS, SSHFS. Walked again as often as the folders page says."
+msgstr "SMB, NFS, SSHFS. Taranan klasörler sayfasındaki aralıkla yeniden taranır."
 
 msgid "Folders added"
 msgstr "Eklenen klasörler"
@@ -2202,3 +2202,24 @@ msgstr "son değişiklik {when}"
 
 msgid "Walk it again now"
 msgstr "Şimdi yeniden tara"
+
+msgid "Walk again every"
+msgstr "Yeniden tarama aralığı"
+
+msgid "For a folder nothing reports changes for: a share whose server sends none, or one set to walk only."
+msgstr "Değişikliğini bildiren olmayan klasörler için: bildirim göndermeyen bir ağ paylaşımı ya da yalnız taranan bir klasör."
+
+msgid "1 min"
+msgstr "1 dk"
+
+msgid "5 min"
+msgstr "5 dk"
+
+msgid "10 min"
+msgstr "10 dk"
+
+msgid "30 min"
+msgstr "30 dk"
+
+msgid "1 hour"
+msgstr "1 saat"

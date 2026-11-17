@@ -1638,6 +1638,10 @@ export component MainWindow inherits Window {
     in property <string> set-network-note;
     in property <[string]> network-labels;
     in property <string> network-choice;
+    in property <string> set-every;
+    in property <string> set-every-note;
+    in property <[string]> every-labels;
+    in property <string> every-choice;
     /// Windows only: whether the index is kept by the `Scour` service, and the
     /// button that moves it into Program Files or back. See `service_mode`.
     in property <bool> service-offered;
@@ -5385,6 +5389,21 @@ export component MainWindow inherits Window {
                                     color: Theme.q-not;
                                     font-size: 12px;
                                     wrap: word-wrap;
+                                }
+                                // How often a folder that reports no changes is
+                                // walked again: a share whose server sends none,
+                                // one switched to "walk only".
+                                Card {
+                                    SettingRow {
+                                        label: root.set-every;
+                                        note: root.set-every-note;
+                                        Choice {
+                                            labels: root.every-labels;
+                                            values: ["1", "5", "10", "30", "60"];
+                                            value: root.every-choice;
+                                            picked(v) => { root.policy-picked("every", v); }
+                                        }
+                                    }
                                 }
                             }
 

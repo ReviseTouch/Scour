@@ -83,6 +83,10 @@ pub struct Settings {
     /// when asked, and otherwise left alone.
     #[serde(default)]
     pub folders_unwatched: Vec<String>,
+    /// Minutes between walks of a folder nothing reports changes for — a share
+    /// whose server sends none, one only walked. Zero is the default, ten.
+    #[serde(default)]
+    pub folders_every: u32,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -201,6 +205,8 @@ pub struct Change {
     pub folders_off: Option<Vec<String>>,
     /// Replace the list outright. See [`Settings::folders_unwatched`].
     pub folders_unwatched: Option<Vec<String>>,
+    /// See [`Settings::folders_every`].
+    pub folders_every: Option<u32>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -223,6 +229,7 @@ impl Change {
             || self.folders.is_some()
             || self.folders_off.is_some()
             || self.folders_unwatched.is_some()
+            || self.folders_every.is_some()
     }
 
     /// Fold this into the settings.
@@ -302,6 +309,9 @@ impl Change {
         }
         if let Some(v) = self.folders_off {
             to.folders_off = v;
+        }
+        if let Some(v) = self.folders_every {
+            to.folders_every = v;
         }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;

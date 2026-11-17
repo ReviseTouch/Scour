@@ -740,6 +740,14 @@ fn main() -> Result<()> {
         kept.face.as_str().into()
     });
     window.set_removable_choice(kept.removable.as_str().into());
+    window.set_every_choice(
+        match kept.folders_every {
+            0 => 10,
+            n => n,
+        }
+        .to_string()
+        .into(),
+    );
     window.set_network_choice(kept.network.as_str().into());
     let folders = Rc::new(RefCell::new(kept.folders.clone()));
     // Which of them are switched off, and which only walked: replaced whole
@@ -1316,7 +1324,10 @@ fn main() -> Result<()> {
         window.on_policy_picked(move |kind, value| {
             let Some(w) = weak.upgrade() else { return };
             let mut change = scour_settings::Change::default();
-            if kind == "network" {
+            if kind == "every" {
+                w.set_every_choice(value.clone());
+                change.folders_every = value.parse().ok();
+            } else if kind == "network" {
                 w.set_network_choice(value.clone());
                 change.network = Some(value.to_string());
             } else {
@@ -5188,10 +5199,16 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_removable(t(cat, "A disk plugged in"));
     w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));
     w.set_removable_labels(list(&["Ask", "Always scan", "Never"]));
+    w.set_set_every(t(cat, "Walk again every"));
+    w.set_set_every_note(t(
+        cat,
+        "For a folder nothing reports changes for: a share whose server sends none, or one set to walk only.",
+    ));
+    w.set_every_labels(list(&["1 min", "5 min", "10 min", "30 min", "1 hour"]));
     w.set_set_network(t(cat, "Network disks"));
     w.set_set_network_note(t(
         cat,
-        "SMB, NFS, SSHFS. Not watched: looked at again every minute.",
+        "SMB, NFS, SSHFS. Walked again as often as the folders page says.",
     ));
     w.set_network_labels(list(&["Ask", "Never"]));
     w.set_set_folders(t(cat, "Folders added"));

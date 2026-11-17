@@ -24,6 +24,9 @@ pub struct Planned {
     pub source: SourceCfg,
     pub skip: Vec<PathBuf>,
     pub system: bool,
+    /// For a folder of its own: the least time between two walks when nothing
+    /// reports its changes, as the person chose it.
+    pub every: Option<std::time::Duration>,
 }
 
 impl Plan {
@@ -83,6 +86,10 @@ pub fn plan(
         .into_iter()
         .map(|(source, skip)| Planned {
             system: system.contains(&source.name),
+            // A folder of its own, and a network disk: nothing may report
+            // their changes, and they wait between walks as long as was chosen.
+            every: (source.name.starts_with("folder:") || source.kind == SourceKindCfg::Network)
+                .then(|| folders_every(settings)),
             source,
             skip,
         })
@@ -219,6 +226,16 @@ fn folders_apart(settings: &Settings, sources: &[SourceCfg], volumes: &[Volume])
         }
     }
     out
+}
+
+/// How long a folder nothing reports changes for waits between walks.
+pub fn folders_every(settings: &Settings) -> std::time::Duration {
+    let minutes = if settings.folders_every == 0 {
+        10
+    } else {
+        settings.folders_every
+    };
+    std::time::Duration::from_secs(u64::from(minutes) * 60)
 }
 
 /// A disk as a source, named by its id so a new label or letter keeps its rows.

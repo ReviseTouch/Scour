@@ -278,6 +278,11 @@ impl FsSource {
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn walk_as(&self) -> Option<&WalkAs> {
+        self.walk_as.as_ref()
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn journal_dir(&self) -> Option<&std::path::Path> {
         self.journal_dir.as_deref()
     }

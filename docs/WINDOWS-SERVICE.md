@@ -66,7 +66,10 @@ would otherwise read every file name of every disk.
 
 Also for the service: a network folder is walked as its owner
 (`scourd/src/as_owner.rs`: the walker threads borrow the token of the owner's
-logged-on session), and not watched, every ten minutes at most. Tried on
+logged-on session). Watched through the server's change notifications
+(`scour-source-fs/src/share.rs`, `ReadDirectoryChangesW` on a handle opened as
+the owner; untried), and walked again as often as the folders page says —
+ten minutes unless chosen — Tried on
 PC2: 2,808 entries in 2.4 s. Walked in order on that one thread — the
 parallel walker's threads read a directory before calling the visitor, so
 each one's first read was as SYSTEM.

@@ -1768,7 +1768,7 @@
             <div class="shead" data-t="Disks that come later"></div>
             <div class="set-card">
               <div class="srow"><div class="t"><div class="lab" data-t="A disk plugged in"></div><div class="desc" data-t="A stick, an external disk, a card."></div></div><div class="seg" id="seg-removable"></div></div>
-              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Not watched: looked at again every minute."></div></div><div class="seg" id="seg-network"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Network disks"></div><div class="desc" data-t="SMB, NFS, SSHFS. Walked again as often as the folders page says."></div></div><div class="seg" id="seg-network"></div></div>
             </div>
           </section>
           <section data-sec="folders" hidden>
@@ -1778,6 +1778,9 @@
               <button type="submit" class="set-push" data-t="add"></button>
             </form>
             <p class="folder-err" id="folder-err"></p>
+            <div class="set-card">
+              <div class="srow"><div class="t"><div class="lab" data-t="Walk again every"></div><div class="desc" data-t="For a folder nothing reports changes for: a share whose server sends none, or one set to walk only."></div></div><div class="seg" id="seg-every"></div></div>
+            </div>
           </section>
           <section data-sec="rules" hidden><div id="set-rules"></div></section>
           <section data-sec="keys" hidden><div id="set-keys"></div></section>
@@ -6804,6 +6807,10 @@
       k.removable || "", (v) => { KEPT.removable = v; keep({ removable: v }); loadDisks(); drawSettings(); });
     seg("seg-network", [["", T("Ask")], ["never", T("Never")]],
       k.network || "", (v) => { KEPT.network = v; keep({ network: v }); loadDisks(); drawSettings(); });
+    seg("seg-every",
+      [["1", T("1 min")], ["5", T("5 min")], ["10", T("10 min")], ["30", T("30 min")], ["60", T("1 hour")]],
+      String(k.folders_every || 10),
+      (v) => { KEPT.folders_every = Number(v); keep({ folders_every: Number(v) }); loadDisks(); drawSettings(); });
     drawFolders();
   }
 

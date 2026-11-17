@@ -102,14 +102,7 @@ pub(crate) fn settle(
             Act::Changed
         };
         match at.get(&path) {
-            Some(&i) => {
-                let was = out[i].1;
-                out[i].1 = match (was, act) {
-                    (_, Act::Gone) => Act::Gone,
-                    (_, Act::Fresh) | (Act::Gone, Act::Changed) => Act::Fresh,
-                    (was, Act::Changed) => was,
-                };
-            }
+            Some(&i) => out[i].1 = merge(out[i].1, act),
             None => {
                 at.insert(path.clone(), out.len());
                 out.push((path, act));
@@ -120,6 +113,16 @@ pub(crate) fn settle(
         }
     }
     out
+}
+
+/// Two things said about one path in one batch, as one: the last removal
+/// wins, a creation after it makes it fresh, a write keeps what was said.
+pub(crate) fn merge(was: Act, act: Act) -> Act {
+    match (was, act) {
+        (_, Act::Gone) => Act::Gone,
+        (_, Act::Fresh) | (Act::Gone, Act::Changed) => Act::Fresh,
+        (was, Act::Changed) => was,
+    }
 }
 
 /// Is `path` under one of `roots`? Both lower-cased: NTFS does not tell `C:/A`
