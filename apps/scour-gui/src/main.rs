@@ -16,6 +16,7 @@ mod link;
 mod paste;
 mod report;
 mod rows;
+mod service_mode;
 mod tabs;
 mod tray;
 
@@ -461,6 +462,13 @@ struct Args {
     install: bool,
     #[arg(long, hide = true)]
     uninstall: bool,
+    // The two halves of a move between the session and the Windows service that
+    // need an administrator: this window started again with `runas`. See
+    // `service_mode`.
+    #[arg(long, hide = true, num_args = 6, allow_hyphen_values = true)]
+    service_on: Option<Vec<String>>,
+    #[arg(long, hide = true, num_args = 1, allow_hyphen_values = true)]
+    service_off: Option<Vec<String>>,
     /// Start with this query
     #[arg(short, long, default_value = "")]
     query: String,
@@ -474,6 +482,23 @@ fn main() -> Result<()> {
     let args = <Args as clap::Parser>::parse();
     if args.install || args.uninstall {
         install::run(args.install);
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if let Some(v) = args.service_on.as_ref().or(args.service_off.as_ref()) {
+        let done = if args.service_on.is_some() {
+            service_mode::elevated_on(v)
+        } else {
+            service_mode::elevated_off(v)
+        };
+        if let Err(e) = done {
+            let _ = rfd::MessageDialog::new()
+                .set_title("Scour")
+                .set_description(e)
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+            std::process::exit(1);
+        }
         return Ok(());
     }
     let launched = std::time::Instant::now();
@@ -746,6 +771,39 @@ fn main() -> Result<()> {
         config.state_dir().join("scourd.log"),
         sink,
     ));
+
+    // The move between the session and the Windows service. Off this thread:
+    // the consent dialog and the copying take seconds. On success the next
+    // window is already open, and this one leaves.
+    {
+        let weak = window.as_weak();
+        let config = config.clone();
+        window.on_service_switch(move || {
+            let Some(w) = weak.upgrade() else { return };
+            w.set_service_busy(true);
+            let to_service = !service_mode::active();
+            let config = config.clone();
+            let weak = w.as_weak();
+            std::thread::spawn(move || {
+                let done = service_mode::switch(to_service, &config);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_service_busy(false);
+                    }
+                    match done {
+                        Ok(()) => std::process::exit(0),
+                        Err(e) => {
+                            let _ = rfd::MessageDialog::new()
+                                .set_title("Scour")
+                                .set_description(e)
+                                .set_level(rfd::MessageLevel::Error)
+                                .show();
+                        }
+                    }
+                });
+            });
+        });
+    }
 
     // The tabs switched on or off; the tabs themselves are kept either way.
     {
@@ -3692,6 +3750,26 @@ fn past_matching(past: &[String], typed: &str) -> Vec<slint::SharedString> {
 /// (`scour_settings::HISTORY`).
 const PAST_SHOWN: usize = 12;
 
+/// The Windows service row: what runs the index now, and the way to the other.
+fn draw_service(w: &MainWindow, cat: &Catalogue) {
+    w.set_service_offered(service_mode::OFFERED);
+    if service_mode::active() {
+        w.set_service_state(t(cat, "Running as the Scour service"));
+        w.set_service_note(t(
+            cat,
+            "From Program Files, started with Windows. Your settings stay in your own folder.",
+        ));
+        w.set_service_push(t(cat, "Run in my session"));
+    } else {
+        w.set_service_state(t(cat, "Running in your session"));
+        w.set_service_note(t(
+            cat,
+            "As a Windows service it starts with Windows and keeps working when you sign out. It asks once for administrator rights.",
+        ));
+        w.set_service_push(t(cat, "Run as a service"));
+    }
+}
+
 /// The tab in front as the window has it now: what is typed and the order.
 fn now_tab(s: &State) -> scour_settings::SearchTab {
     scour_settings::SearchTab {
@@ -4880,6 +4958,8 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_columns_push(t(cat, "Choose…"));
     w.set_set_preview(t(cat, "Preview"));
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
+    w.set_set_service(t(cat, "Windows service"));
+    draw_service(w, cat);
     w.set_set_tabs(t(cat, "Search tabs"));
     w.set_set_tabs_note(t(cat, "Several searches side by side. Ctrl+T opens one."));
     w.set_set_grid(t(cat, "Grid lines"));

@@ -77,6 +77,12 @@ impl<'a> Autostart<'a> {
         if (self.reachable)(self.addr) {
             return Outcome::AlreadyRunning;
         }
+        // Run as a Windows service, the index is the service's: a session
+        // `scourd` started beside it would find the pipe taken or, worse, a
+        // second index of its own. The service starts with Windows; this waits.
+        if windows_service_registered() {
+            return self.wait_for_service();
+        }
         let exe = match self.exe.clone().or_else(crate::binary::scourd) {
             Some(exe) => exe,
             None => return Outcome::Failed(self.nowhere()),
@@ -127,6 +133,24 @@ impl<'a> Autostart<'a> {
                 spell(self.patience)
             ),
         })
+    }
+
+    /// The Windows service is registered: give it the same patience a started
+    /// child gets, and say what to do if it never answers.
+    fn wait_for_service(&self) -> Outcome {
+        let deadline = Instant::now() + self.patience;
+        while Instant::now() < deadline {
+            if (self.reachable)(self.addr) {
+                return Outcome::AlreadyRunning;
+            }
+            std::thread::sleep(self.beat);
+        }
+        Outcome::Failed(
+            "Scour runs as a Windows service, and the service is not answering — \
+             start \"Scour\" in Services, or go back to running it in your session \
+             from the settings"
+                .into(),
+        )
     }
 
     /// Detached: a new session, no standard input, output appended to the log.
@@ -196,6 +220,24 @@ fn detach(cmd: &mut Command) {
 
 #[cfg(not(any(unix, windows)))]
 fn detach(_cmd: &mut Command) {}
+
+/// Whether a Windows service named `Scour` is registered. Asked of `sc.exe`,
+/// which any account may run for a query: this crate takes no Windows crate.
+#[cfg(windows)]
+pub fn windows_service_registered() -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new("sc")
+        .args(["query", "Scour"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(not(windows))]
+pub fn windows_service_registered() -> bool {
+    false
+}
 
 /// Is starting a service allowed at all? `SCOUR_NO_AUTOSTART` set to anything
 /// but `0` says no.

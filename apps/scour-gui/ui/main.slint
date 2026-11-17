@@ -1585,6 +1585,15 @@ export component MainWindow inherits Window {
     in property <string> set-network-note;
     in property <[string]> network-labels;
     in property <string> network-choice;
+    /// Windows only: whether the index is kept by the `Scour` service, and the
+    /// button that moves it into Program Files or back. See `service_mode`.
+    in property <bool> service-offered;
+    in property <string> set-service;
+    in property <string> service-state;
+    in property <string> service-note;
+    in property <string> service-push;
+    in property <bool> service-busy;
+    callback service-switch();
     in property <string> set-folders;
     in property <string> set-folders-note;
     in property <[string]> folders;
@@ -5177,6 +5186,20 @@ export component MainWindow inherits Window {
                                     color: Theme.q-not;
                                     font-size: 12px;
                                     wrap: word-wrap;
+                                }
+                                if root.service-offered: SectionHead { text: root.set-service; }
+                                if root.service-offered: SettingRow {
+                                    label: root.service-state;
+                                    note: root.service-note;
+                                    Push {
+                                        label: root.service-push;
+                                        asking: root.service-busy;
+                                        clicked => {
+                                            if (!root.service-busy) {
+                                                root.service-switch();
+                                            }
+                                        }
+                                    }
                                 }
                             }
 

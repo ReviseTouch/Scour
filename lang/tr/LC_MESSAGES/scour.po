@@ -2094,3 +2094,24 @@ msgstr "Yan yana birden çok arama. Ctrl+T yenisini açar."
 
 msgid "Several searches side by side. Alt+T opens one."
 msgstr "Yan yana birden çok arama. Alt+T yenisini açar."
+
+msgid "Windows service"
+msgstr "Windows hizmeti"
+
+msgid "Running as the Scour service"
+msgstr "Scour hizmeti olarak çalışıyor"
+
+msgid "From Program Files, started with Windows. Your settings stay in your own folder."
+msgstr "Program Files'tan, Windows ile başlar. Ayarlarınız kendi klasörünüzde kalır."
+
+msgid "Run in my session"
+msgstr "Oturumumda çalıştır"
+
+msgid "Running in your session"
+msgstr "Oturumunuzda çalışıyor"
+
+msgid "As a Windows service it starts with Windows and keeps working when you sign out. It asks once for administrator rights."
+msgstr "Windows hizmeti olarak Windows ile başlar, oturumu kapatsanız da çalışır. Bir kez yönetici izni ister."
+
+msgid "Run as a service"
+msgstr "Hizmet olarak çalıştır"

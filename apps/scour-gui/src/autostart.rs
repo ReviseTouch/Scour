@@ -28,8 +28,15 @@ fn reg(args: &[&str]) -> std::io::Result<std::process::Output> {
 /// Start the service with Windows, or stop doing so.
 #[cfg(windows)]
 pub fn set(on: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    set_for(&exe, on)
+}
+
+/// [`set`], for a window other than this one: the copy a move to the session
+/// has just put in place.
+#[cfg(windows)]
+pub fn set_for(exe: &std::path::Path, on: bool) -> Result<(), String> {
     let out = if on {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let command = format!("\"{}\" --start-service", exe.display());
         reg(&[
             "add", RUN_KEY, "/v", VALUE, "/t", "REG_SZ", "/d", &command, "/f",

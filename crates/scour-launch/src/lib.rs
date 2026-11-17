@@ -22,4 +22,4 @@ mod start;
 
 pub use binary::{NAME, locate, scourd};
 pub use outcome::Outcome;
-pub use start::{Autostart, ensure_once, wanted};
+pub use start::{Autostart, ensure_once, wanted, windows_service_registered};

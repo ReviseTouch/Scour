@@ -64,6 +64,19 @@ mod imp {
         Ok(to)
     }
 
+    /// Point the Start menu and PATH at `dir` instead of `previous`: what a
+    /// move between the session and the service changes for the person.
+    pub fn adopt(dir: &Path, previous: &Path) -> Result<(), String> {
+        link(&dir.join("scour-gui.exe"), dir)?;
+        on_path(previous, false)?;
+        on_path(dir, true)
+    }
+
+    /// Where a per-user installation lives.
+    pub fn user_home() -> Result<PathBuf, String> {
+        home()
+    }
+
     pub fn uninstall() -> Result<(), String> {
         let to = home()?;
         let _ = crate::autostart::set(false);
@@ -189,6 +202,9 @@ mod imp {
         }
     }
 }
+
+#[cfg(windows)]
+pub use imp::{adopt, user_home};
 
 /// Install, open the installed window, and say what happened if it failed —
 /// to a dialog, since this program has no console.
