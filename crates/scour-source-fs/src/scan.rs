@@ -512,14 +512,18 @@ impl Source for FsSource {
                 // This thread looks at the roots before any worker does: as
                 // SYSTEM it found a share's root unreadable and walked nothing.
                 let _as = walk_as.and_then(|w| (w.0)());
-                builder.build_parallel().run(|| {
+                let visitor = || {
                     let tx = walker_tx.clone();
                     let mut batch = Batch::new(tx.clone());
                     // On the first entry, not here: `ignore` builds the visitor on the
                     // spawning thread.
                     let mut polite = false;
                     let mut held: Option<Box<dyn std::any::Any + Send>> = None;
-                    Box::new(move |result| {
+                    let visit: Box<
+                        dyn FnMut(std::result::Result<ignore::DirEntry, ignore::Error>) -> WalkState
+                            + Send
+                            + '_,
+                    > = Box::new(move |result| {
                         if !polite {
                             polite = true;
                             stand_aside();
@@ -577,8 +581,35 @@ impl Source for FsSource {
                             return WalkState::Quit;
                         }
                         WalkState::Continue
-                    })
-                });
+                    });
+                    visit
+                };
+                if walk_as.is_some() {
+                    // A borrowed identity: on this thread alone, in order. The
+                    // parallel walker's threads read a directory before they
+                    // call the visitor, so a worker's first read was always
+                    // as SYSTEM — and the first read is the share's root
+                    // (PC2, 17 November). One thread is right for a share
+                    // anyway. Pruned here, since this walker cannot be told
+                    // to skip from inside the loop.
+                    let pruned = rules.clone();
+                    builder.filter_entry(move |de| {
+                        if pruned.is_empty() || !de.file_type().is_some_and(|t| t.is_dir()) {
+                            return true;
+                        }
+                        let at = path::from_path(de.path());
+                        let name = path::from_path(std::path::Path::new(de.file_name()));
+                        !(pruned.excludes(&at, &name, true) && !pruned.may_contain_allowed(&at))
+                    });
+                    let mut visit = visitor();
+                    for entry in builder.build() {
+                        if matches!(visit(entry), WalkState::Quit) {
+                            break;
+                        }
+                    }
+                } else {
+                    builder.build_parallel().run(visitor);
+                }
             });
             // The walker holds clones of the sender; this one has to go.
             drop(tx);

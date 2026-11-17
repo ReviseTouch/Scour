@@ -792,3 +792,37 @@ fn a_root_under_an_excluded_path_is_walked_by_the_rules_inside_it() {
         "{got:?}"
     );
 }
+
+/// A walk under a borrowed identity runs in order on one thread, so the
+/// identity covers the very first directory read; it must still list exactly
+/// what the parallel walk lists, rules included, and take the identity on
+/// the thread that reads.
+#[test]
+fn a_walk_under_a_borrowed_identity_lists_what_the_parallel_one_does() {
+    let (dir, plain) = tree();
+    let opts = ScanOptions {
+        exclude_dirs: vec!["node_modules".into()],
+        ..Default::default()
+    };
+    let (parallel, _) = scan(&plain, &opts);
+
+    let asked = Arc::new(Mutex::new(Vec::<std::thread::ThreadId>::new()));
+    let seen = Arc::clone(&asked);
+    let borrowed = FsSource::new(SourceId(1), "test", vec![dir.path().to_path_buf()]).with_walk_as(
+        Some(scour_source_fs::WalkAs(Arc::new(move || {
+            seen.lock().expect("lock").push(std::thread::current().id());
+            Some(Box::new(()) as Box<dyn std::any::Any + Send>)
+        }))),
+    );
+    let (ordered, report) = scan(&borrowed, &opts);
+    assert_eq!(ordered, parallel);
+    assert!(
+        !rel(&ordered, dir.path())
+            .iter()
+            .any(|p| p.starts_with("node_modules"))
+    );
+    assert!(report.excluded >= 1 || !ordered.is_empty());
+    // The scan's thread and the walker's: no worker of its own any more.
+    let threads: HashSet<_> = asked.lock().expect("lock").iter().copied().collect();
+    assert!(threads.len() <= 3, "{threads:?}");
+}
