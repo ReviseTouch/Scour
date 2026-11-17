@@ -518,16 +518,22 @@ component SearchTabChip inherits Rectangle {
 component Push inherits Rectangle {
     in property <string> label;
     in property <bool> asking;
+    /// Shown but not pressable: what it would do is out of reach just now.
+    in property <bool> enabled: true;
+    /// No frame: a way out rather than a thing to do, set apart from the rest.
+    in property <bool> plain;
     callback clicked();
 
     width: text.preferred-width + 24px;
     height: 26px;
-    border-width: Theme.hair;
+    border-width: root.plain ? 0px : Theme.hair;
     border-radius: 3px;
-    border-color: root.asking ? Theme.q-key : touch.has-hover ? Theme.ink-3 : Theme.line;
-    background: touch.has-hover ? Theme.hover : transparent;
+    border-color: root.asking ? Theme.q-key : touch.has-hover && root.enabled ? Theme.ink-3 : Theme.line;
+    background: touch.has-hover && root.enabled ? Theme.hover : transparent;
+    opacity: root.enabled ? 1 : 0.45;
 
     touch := TouchArea {
+        enabled: root.enabled;
         clicked => {
             root.clicked();
         }
@@ -1728,6 +1734,8 @@ export component MainWindow inherits Window {
     in property <string> pick-folders;
     in property <string> pick-drop;
     in property <bool> pick-asking;
+    /// False past `scour_ui::OPEN_FOLDERS_MOST` folders.
+    in property <bool> pick-folders-ok: true;
     /// A row was picked: which, whether to add to the selection, and whether
     /// to take the run from the last one picked.
     callback pick(int, bool, bool);
@@ -4102,19 +4110,46 @@ export component MainWindow inherits Window {
             // The count on the left, the buttons on the right: one is read,
             // the others are aimed at.
             HorizontalLayout {
-                padding-left: 20px;
+                padding-left: 12px;
                 padding-right: 20px;
                 spacing: 8px;
 
+                // The way out first and apart: a frameless × and a rule, so it
+                // is not read as one more thing to do with the selection.
                 VerticalLayout {
                     alignment: center;
+                    Push {
+                        label: "×  " + root.pick-drop;
+                        plain: true;
+                        clicked => {
+                            root.pick-dropped();
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 1px;
+                    height: 18px;
+                    y: (parent.height - 18px) / 2;
+                    background: Theme.line;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    min-width: 0px;
                     HorizontalLayout {
                         spacing: 0px;
+                        // Packed to the left: three texts of no stretch were
+                        // spread across the bar, "30" far from "selected".
+                        alignment: start;
+                        // One row selected: its path, which elides from the end.
                         Text {
                             text: root.picked-pre;
-                            color: Theme.ink-3;
+                            color: root.picked-n == "" ? Theme.ink-2 : Theme.ink-3;
                             font-size: Fonts.small;
                             vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: root.picked-n == "" ? 1 : 0;
                         }
                         Text {
                             text: root.picked-n;
@@ -4132,8 +4167,6 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle { }
-
                 VerticalLayout {
                     alignment: center;
                     Push {
@@ -4149,18 +4182,9 @@ export component MainWindow inherits Window {
                     Push {
                         label: root.pick-folders;
                         asking: root.pick-asking;
+                        enabled: root.pick-folders-ok;
                         clicked => {
                             root.pick-opened();
-                        }
-                    }
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    Push {
-                        label: root.pick-drop;
-                        clicked => {
-                            root.pick-dropped();
                         }
                     }
                 }

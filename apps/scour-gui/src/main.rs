@@ -340,6 +340,16 @@ fn picked_line(
     if dirs > 0 {
         after.push(t(cat, "{n} folders").replace("{n}", &grouped(dirs as u64)));
     }
+    // One row: its path, which says more than "1 selected".
+    if let [one] = picks.values().collect::<Vec<_>>().as_slice() {
+        let tail = after.join("  ·  ");
+        let tail = if tail.is_empty() {
+            String::new()
+        } else {
+            format!("  ·  {tail}")
+        };
+        return (one.path.clone(), String::new(), tail);
+    }
     // Split where the number goes: a language need not put it first.
     let sentence = t(cat, "{n} selected");
     let (pre, post) = sentence
@@ -375,11 +385,14 @@ fn show_picks(
     w.set_picked_n(n.into());
     w.set_picked_post(post.into());
     w.set_pick_copy(t(cat, "Copy the paths"));
-    w.set_pick_drop(t(cat, "Drop it"));
+    w.set_pick_drop(t(cat, "Clear the selection"));
     w.set_pick_asking(asking);
     let folders = folders_of(picks).len();
+    w.set_pick_folders_ok(folders <= scour_ui::OPEN_FOLDERS_MOST);
     w.set_pick_folders(
-        if asking {
+        if folders > scour_ui::OPEN_FOLDERS_MOST {
+            t(cat, "{n} folders: too many to open").replace("{n}", &grouped(folders as u64))
+        } else if asking {
             t(cat, "Open {n} windows?").replace("{n}", &grouped(folders as u64))
         } else {
             t(cat, "Open their folders ({n})").replace("{n}", &grouped(folders as u64))
@@ -2045,8 +2058,11 @@ fn main() -> Result<()> {
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
             let folders = folders_of(&picks.borrow());
-            // More than a couple of windows is asked about first.
-            if folders.len() > 2 && !asking.get() {
+            if folders.len() > scour_ui::OPEN_FOLDERS_MOST {
+                return;
+            }
+            // More than a few windows is asked about first.
+            if folders.len() > scour_ui::OPEN_FOLDERS_ASK && !asking.get() {
                 asking.set(true);
                 show_picks(&w, &cat, &rows, &picks.borrow(), true);
                 return;

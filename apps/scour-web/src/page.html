@@ -507,6 +507,13 @@
   .selbar button:hover { color: var(--ink); border-color: var(--ink-3); }
   .selbar button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .selbar button.asking { color: var(--q-not); border-color: var(--q-not); }
+  .selbar button:disabled { opacity: .45; cursor: default; }
+  .selbar button:disabled:hover { color: var(--ink-2); border-color: var(--line); }
+  /* The way out: frameless and set apart by a rule, not one more action. */
+  .selbar button.out { border-color: transparent; color: var(--ink-3); }
+  .selbar button.out:hover { color: var(--ink); background: var(--hover); border-color: transparent; }
+  .selbar .rule { width: 1px; height: 16px; background: var(--line); }
+  .selbar .one { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
 
   /* The mark column: the freshness rule and the type glyph share it, and
    * `top: 0; bottom: 0` beats a stated height a fractional row rounds past. */
@@ -4912,20 +4919,30 @@
     }
     /* Folders are counted, not weighed. The count sits inside the msgid with
        its markup, because a language need not put the number first. */
-    const parts = [T('<span class="n">{n}</span> selected', { n: fmt(n) })];
+    /* One row: its path, which says more than "1 selected". */
+    const only = n === 1 ? [...SEL.keys()][0] : null;
+    const parts = only
+      ? [`<span class="one" title="${escape_(only)}">${escape_(only)}</span>`]
+      : [T('<span class="n">{n}</span> selected', { n: fmt(n) })];
     if (n - dirs > 0) parts.push(`<span class="sum">${bytes(total)}</span>`);
     if (dirs) parts.push(T('<span class="sum">{n} folders</span>', { n: fmt(dirs) }));
     const nFolders = foldersOf().length;
+    const tooMany = nFolders > OPEN_MOST;
+    /* The way out first and apart, frameless; the folders' button off past
+       twenty, asked about past three. Numbers from `scour_ui`. */
     selbar.innerHTML =
+      `<button type="button" data-sel="clear" class="out">× ${escape_(T("Clear the selection"))}</button>` +
+      `<span class="rule"></span>` +
       parts.join(' <span class="sum">·</span> ') +
       `<span class="grow"></span>` +
       `<button type="button" data-sel="copy">${escape_(T("Copy the paths"))}</button>` +
-      `<button type="button" data-sel="folder"${asking ? ' class="asking"' : ""}>` +
-      escape_(asking
-        ? T("Open {n} windows?", { n: fmt(nFolders) })
-        : T("Open their folders ({n})", { n: fmt(nFolders) })) +
-      `</button>` +
-      `<button type="button" data-sel="clear">${escape_(T("Drop it"))}</button>`;
+      `<button type="button" data-sel="folder"${tooMany ? " disabled" : asking ? ' class="asking"' : ""}>` +
+      escape_(tooMany
+        ? T("{n} folders: too many to open", { n: fmt(nFolders) })
+        : asking
+          ? T("Open {n} windows?", { n: fmt(nFolders) })
+          : T("Open their folders ({n})", { n: fmt(nFolders) })) +
+      `</button>`;
   }
 
   /* The folders a selection sits in: eleven files there are one window. */
@@ -4933,7 +4950,8 @@
 
   /* Asked about past a handful, and always on the bar's own button: a menu
    * closes when clicked and has nowhere to put a question. */
-  const OPEN_MANY = 5;
+  const OPEN_MANY = 3;    /* scour_ui::OPEN_FOLDERS_ASK */
+  const OPEN_MOST = 20;   /* scour_ui::OPEN_FOLDERS_MOST */
   let asking = false;
   let askTimer = null;
 
@@ -4947,6 +4965,7 @@
 
   function openFolders() {
     const dirs = foldersOf();
+    if (dirs.length > OPEN_MOST) return;
     if (dirs.length > OPEN_MANY && !asking) { askFolders(); return; }
     asking = false;
     clearTimeout(askTimer);

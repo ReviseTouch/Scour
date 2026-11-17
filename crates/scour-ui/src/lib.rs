@@ -9,6 +9,11 @@ pub mod format;
 pub mod path;
 pub mod preview;
 
+/// Opening a selection's folders: asked about past this many windows, and not
+/// offered past [`OPEN_FOLDERS_MOST`] — nobody means fifty Explorer windows.
+pub const OPEN_FOLDERS_ASK: usize = 3;
+pub const OPEN_FOLDERS_MOST: usize = 20;
+
 /// What every face says while the index is being walked. A number, not a word:
 /// a still indicator cannot be told from a stuck one. The msgid rather than the
 /// sentence, because only the caller can punctuate a number.

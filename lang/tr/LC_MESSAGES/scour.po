@@ -2151,3 +2151,9 @@ msgstr "boyutu bilinmiyor"
 
 msgid "files the size of {name}: any copy of it is here"
 msgstr "{name} ile aynı boyuttaki dosyalar: kopyası varsa buradadır"
+
+msgid "Clear the selection"
+msgstr "Seçimi kaldır"
+
+msgid "{n} folders: too many to open"
+msgstr "{n} klasör: açmak için çok fazla"
