@@ -86,9 +86,19 @@ pub fn launch(opener: &Opener, path: &Path) -> std::io::Result<()> {
 /// Spawned and forgotten, every standard stream closed. Whether it would *run*
 /// something is the caller's question — see `scour_core::runs_when_opened`.
 pub fn open(target: &std::ffi::OsStr) -> std::io::Result<()> {
-    let program = if cfg!(windows) {
-        "explorer"
-    } else if cfg!(target_os = "macos") {
+    #[cfg(windows)]
+    {
+        windows::open(target)
+    }
+    #[cfg(not(windows))]
+    {
+        open_elsewhere(target)
+    }
+}
+
+#[cfg(not(windows))]
+fn open_elsewhere(target: &std::ffi::OsStr) -> std::io::Result<()> {
+    let program = if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
@@ -112,6 +122,14 @@ pub fn reveal(paths: &[&Path]) {
     if paths.is_empty() {
         return;
     }
+    #[cfg(windows)]
+    windows::reveal(paths);
+    #[cfg(not(windows))]
+    reveal_elsewhere(paths);
+}
+
+#[cfg(not(windows))]
+fn reveal_elsewhere(paths: &[&Path]) {
     let quiet = |mut c: std::process::Command| {
         let _ = c
             .stdin(std::process::Stdio::null())
@@ -124,16 +142,6 @@ pub fn reveal(paths: &[&Path]) {
         let mut c = std::process::Command::new("open");
         c.arg("-R").args(paths);
         quiet(c);
-        return;
-    }
-    if cfg!(windows) {
-        for p in paths {
-            let mut c = std::process::Command::new("explorer");
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(p.as_os_str());
-            c.arg(arg);
-            quiet(c);
-        }
         return;
     }
     let uris: Vec<String> = paths.iter().map(|p| file_uri(p)).collect();
@@ -164,11 +172,104 @@ pub fn reveal(paths: &[&Path]) {
     });
 }
 
+/// The shell's own calls, not `explorer` with arguments: Rust quotes an
+/// argument holding a space whole, `"/select,C:\a b\c"`, which Explorer does
+/// not parse — it opened Documents for every such path.
+#[cfg(windows)]
+mod windows {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+
+    use windows_sys::Win32::System::Com::{
+        COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
+    };
+    use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
+    use windows_sys::Win32::UI::Shell::{
+        ILFree, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// COM for the length of `f`, on this thread; left alone where the thread
+    /// had it already.
+    fn with_com<T>(f: impl FnOnce() -> T) -> T {
+        // SAFETY: paired with the uninitialise below when it succeeded.
+        let ours =
+            unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
+        let out = f();
+        if ours {
+            unsafe { CoUninitialize() };
+        }
+        out
+    }
+
+    /// What a double-click would do.
+    pub fn open(target: &std::ffi::OsStr) -> std::io::Result<()> {
+        let file = wide(target);
+        let verb: Vec<u16> = "open\0".encode_utf16().collect();
+        // SAFETY: null-terminated strings that outlive the call.
+        let r = with_com(|| unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                verb.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        });
+        // Above 32 is success; below, an error code in the old style.
+        if r as isize > 32 {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "Windows would not open it (code {})",
+                r as isize
+            )))
+        }
+    }
+
+    /// Each path selected in an Explorer window of its folder.
+    pub fn reveal(paths: &[&Path]) {
+        let owned: Vec<Vec<u16>> = paths.iter().map(|p| wide(p.as_os_str())).collect();
+        // A thread of its own: the shell may start Explorer, which takes a second.
+        std::thread::spawn(move || {
+            with_com(|| {
+                for path in &owned {
+                    let mut item: *mut ITEMIDLIST = std::ptr::null_mut();
+                    // SAFETY: a null-terminated path; the list is freed below.
+                    let hr = unsafe {
+                        SHParseDisplayName(
+                            path.as_ptr(),
+                            std::ptr::null_mut(),
+                            &mut item,
+                            0,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    if hr < 0 || item.is_null() {
+                        continue;
+                    }
+                    // SAFETY: the item the shell just gave, selected in its parent.
+                    unsafe {
+                        SHOpenFolderAndSelectItems(item, 0, std::ptr::null(), 0);
+                        ILFree(item);
+                    }
+                }
+            });
+        });
+    }
+}
+
 /// Bring the file manager's window forward, which it cannot do itself on GNOME
 /// under Wayland: with no activation token from the window that asked, a folder
 /// already open was selected in and left behind. Scour's Shell extension can,
 /// given the process and the window's title; without it nothing happens. Twice,
 /// because a window the file manager is still opening is not there to raise.
+#[cfg_attr(windows, allow(dead_code))]
 fn raise_file_manager(title: &str) {
     let Some(pid) = bus_owner_pid("org.freedesktop.FileManager1") else {
         return;
@@ -198,6 +299,7 @@ fn raise_file_manager(title: &str) {
 }
 
 /// The process that owns a name on the session bus.
+#[cfg_attr(windows, allow(dead_code))]
 fn bus_owner_pid(name: &str) -> Option<u32> {
     let out = std::process::Command::new("gdbus")
         .args([
@@ -221,6 +323,7 @@ fn bus_owner_pid(name: &str) -> Option<u32> {
 }
 
 /// The number in a `gdbus` reply such as `(uint32 12345,)`.
+#[cfg_attr(windows, allow(dead_code))]
 fn uint_reply(reply: &str) -> Option<u32> {
     reply
         .split(|c: char| !c.is_ascii_digit())
@@ -231,6 +334,7 @@ fn uint_reply(reply: &str) -> Option<u32> {
 
 /// Ask the session's file manager to show these, through whichever bus tool
 /// this machine has; false when neither could deliver it.
+#[cfg_attr(windows, allow(dead_code))]
 fn show_items(uris: &[String]) -> bool {
     let quiet = |mut c: std::process::Command| {
         c.stdin(std::process::Stdio::null())
@@ -272,6 +376,7 @@ fn show_items(uris: &[String]) -> bool {
 
 /// A `file://` URI: every byte outside the unreserved set and `/` escaped, so
 /// neither a space nor a quote nor a comma survives to confuse a bus tool.
+#[cfg_attr(windows, allow(dead_code))]
 fn file_uri(path: &Path) -> String {
     let mut out = String::from("file://");
     for &b in path.as_os_str().as_encoded_bytes() {
