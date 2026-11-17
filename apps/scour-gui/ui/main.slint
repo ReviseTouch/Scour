@@ -1570,6 +1570,14 @@ export component MainWindow inherits Window {
     in property <string> set-preview;
     in property <string> set-preview-note;
     in property <bool> preview-on;
+    /// How much bigger or smaller than the desktop everything is drawn: the
+    /// settings' row and Ctrl + / Ctrl - say the same thing. `zoom-choice` is
+    /// one of the row's values, or empty between them.
+    in property <string> zoom-choice;
+    in property <[string]> zoom-labels;
+    in property <string> set-zoom;
+    in property <string> set-zoom-note;
+    callback zoom-picked(string);
     /// Lines between the list's rows and columns, which the settings switch.
     in property <bool> grid-lines;
     in property <string> set-grid;
@@ -5011,6 +5019,17 @@ export component MainWindow inherits Window {
                                             label: root.preview-on ? "✓" : "—";
                                             asking: root.preview-on;
                                             clicked => { root.peek-toggled(); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-zoom;
+                                        note: root.set-zoom-note;
+                                        Choice {
+                                            labels: root.zoom-labels;
+                                            values: ["0.9", "1", "1.1", "1.25", "1.5"];
+                                            value: root.zoom-choice;
+                                            picked(v) => { root.zoom-picked(v); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }

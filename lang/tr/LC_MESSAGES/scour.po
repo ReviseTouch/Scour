@@ -2115,3 +2115,12 @@ msgstr "Windows hizmeti olarak Windows ile başlar, oturumu kapatsanız da çal�
 
 msgid "Run as a service"
 msgstr "Hizmet olarak çalıştır"
+
+msgid "Zoom"
+msgstr "Yakınlaştırma"
+
+msgid "How big everything is drawn. Ctrl + and Ctrl - too."
+msgstr "Her şeyin ne kadar büyük çizileceği. Ctrl + ve Ctrl - ile de olur."
+
+msgid "{n}%"
+msgstr "%{n}"

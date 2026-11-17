@@ -742,6 +742,7 @@ fn main() -> Result<()> {
         .window()
         .set_size(slint::LogicalSize::new(opened_at.0, opened_at.1));
     ZOOM.with(|z| z.set(kept_zoom(kept.view.get("slint"))));
+    window.set_zoom_choice(zoom_choice(ZOOM.with(std::cell::Cell::get)).into());
     trace(&format!("opening at {:.0}x{:.0}", opened_at.0, opened_at.1));
     let addr = match &args.socket {
         Some(given) => given.clone(),
@@ -3408,19 +3409,19 @@ fn main() -> Result<()> {
             let next = match step {
                 0 => default_zoom(),
                 s => ((now + 0.1 * s as f32) * 20.0).round() / 20.0,
+            };
+            set_zoom(&w, &link, next);
+        });
+    }
+    // The same, from the settings' row.
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        window.on_zoom_picked(move |v| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Ok(next) = v.parse::<f32>() {
+                set_zoom(&w, &link, next);
             }
-            .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
-            ZOOM.with(|z| z.set(next));
-            apply_zoom(&w);
-            link.send(Ask::Remember {
-                change: scour_settings::Change {
-                    view: std::collections::BTreeMap::from([(
-                        "slint".to_owned(),
-                        serde_json::json!({ "zoom": next }),
-                    )]),
-                    ..Default::default()
-                },
-            });
         });
     }
     // The first frame is drawn at the desktop's scale; the zoom follows at once.
@@ -4960,6 +4961,17 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
     w.set_set_service(t(cat, "Windows service"));
     draw_service(w, cat);
+    w.set_set_zoom(t(cat, "Zoom"));
+    w.set_set_zoom_note(t(
+        cat,
+        "How big everything is drawn. Ctrl + and Ctrl - too.",
+    ));
+    let percent = t(cat, "{n}%");
+    let labels: Vec<slint::SharedString> = ["90", "100", "110", "125", "150"]
+        .into_iter()
+        .map(|n| percent.replace("{n}", n).into())
+        .collect();
+    w.set_zoom_labels(ModelRc::new(VecModel::from(labels)));
     w.set_set_tabs(t(cat, "Search tabs"));
     w.set_set_tabs_note(t(cat, "Several searches side by side. Ctrl+T opens one."));
     w.set_set_grid(t(cat, "Grid lines"));
@@ -5833,6 +5845,34 @@ fn native_scale(win: &slint::Window) -> f32 {
 }
 
 /// Draw at the desktop's scale times the zoom, if it is not already.
+/// The values the settings' zoom row offers, as it names them.
+const ZOOM_CHOICES: [&str; 5] = ["0.9", "1", "1.1", "1.25", "1.5"];
+
+/// Which of [`ZOOM_CHOICES`] a zoom is, or `""` between them.
+fn zoom_choice(z: f32) -> &'static str {
+    ZOOM_CHOICES
+        .into_iter()
+        .find(|c| c.parse::<f32>().is_ok_and(|v| (v - z).abs() < 0.001))
+        .unwrap_or("")
+}
+
+/// Draw at this zoom, show it on the settings' row, and keep it.
+fn set_zoom(w: &MainWindow, link: &Link, next: f32) {
+    let next = next.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+    ZOOM.with(|z| z.set(next));
+    apply_zoom(w);
+    w.set_zoom_choice(zoom_choice(next).into());
+    link.send(Ask::Remember {
+        change: scour_settings::Change {
+            view: std::collections::BTreeMap::from([(
+                "slint".to_owned(),
+                serde_json::json!({ "zoom": next }),
+            )]),
+            ..Default::default()
+        },
+    });
+}
+
 fn apply_zoom(w: &MainWindow) {
     let win = w.window();
     let want = native_scale(win) * ZOOM.with(std::cell::Cell::get);
