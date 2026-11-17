@@ -5807,11 +5807,11 @@ thread_local! {
 /// How far the zoom goes either way.
 const ZOOM_RANGE: (f32, f32) = (0.6, 1.6);
 
-/// What the zoom starts at. Smaller on Windows: its desktop scales a laptop's
-/// full-HD screen to 125%, a quarter bigger than the same screen here, and
-/// this window was sized on a desktop that does not.
+/// What the zoom starts at: the desktop's own scale, everywhere. Windows once
+/// started at 0.85, sized for the older, looser window on a 125% laptop; on a
+/// 100% desktop that drew text at ten pixels, thin and faint (17 November).
 fn default_zoom() -> f32 {
-    if cfg!(windows) { 0.85 } else { 1.0 }
+    1.0
 }
 
 /// The zoom a person left, under `view.slint.zoom`, or the default.
