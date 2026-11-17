@@ -5,6 +5,8 @@
 mod disks;
 mod handle;
 mod live;
+#[cfg(windows)]
+mod service;
 mod sources;
 mod wire;
 
@@ -17,9 +19,9 @@ use clap::Parser;
 use scour_config::Config;
 use scour_ipc::Server;
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(name = "scourd", about = "The Scour indexing service", version)]
-struct Args {
+pub(crate) struct Args {
     /// Read settings from this file instead of the usual place.
     #[arg(long, value_name = "FILE")]
     config: Option<std::path::PathBuf>,
@@ -32,6 +34,37 @@ struct Args {
     /// Report what would be done, then exit.
     #[arg(long)]
     check: bool,
+    /// Run under the Windows Service Control Manager. See docs/WINDOWS-SERVICE.md.
+    #[arg(long)]
+    service: bool,
+    /// The one account, by SID, that may talk to this service besides SYSTEM
+    /// and the administrators. Windows only: the pipe's access list.
+    #[arg(long, value_name = "SID")]
+    owner: Option<String>,
+    /// Keep the settings here rather than beside the index: the person's own
+    /// folder when the service runs as SYSTEM with its index in ProgramData.
+    #[arg(long, value_name = "DIR")]
+    state: Option<std::path::PathBuf>,
+    /// The index here rather than where the configuration says.
+    #[arg(long, value_name = "DIR")]
+    index: Option<std::path::PathBuf>,
+}
+
+/// What stops a running service from outside the accept loop: Ctrl-C, SIGTERM,
+/// or the Service Control Manager's stop. Set once `run` is serving.
+static STOP: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Stop the service as Ctrl-C would. Nothing before it is serving.
+pub(crate) fn stop_now() {
+    if let Some(stop) = STOP.get() {
+        stop();
+    }
+}
+
+/// The pipe's access list for a service run as SYSTEM: full control for SYSTEM
+/// and the administrators, read and write for the one owner, nobody else.
+fn access_for(owner: &str) -> String {
+    format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{owner})")
 }
 
 /// The exit status for "another scourd has this index": `EX_TEMPFAIL`, which
@@ -68,7 +101,16 @@ fn main() -> Result<()> {
     scour_source_fs::keep_from_children();
     cap_allocator_arenas();
     let args = Args::parse();
-    let (config, problem) = match &args.config {
+    #[cfg(windows)]
+    if args.service {
+        return service::dispatch(args);
+    }
+    run(args)
+}
+
+/// Everything after the arguments: the same for a console start and a service.
+pub(crate) fn run(args: Args) -> Result<()> {
+    let (mut config, problem) = match &args.config {
         Some(p) => (Config::load_from(p)?, None),
         None => Config::load_or_default(),
     };
@@ -78,13 +120,20 @@ fn main() -> Result<()> {
         // it no longer has. A service that will not start is the cheaper fault.
         return Err(e.into());
     }
+    if let Some(dir) = &args.index {
+        config.index.dir = dir.clone();
+    }
 
     let addr = args.socket.clone().unwrap_or_else(|| config.socket());
     // Beside the index rather than in the config file, which is hand-edited.
     // Beside *this* index, not the default one: everything the config points
     // at moves together, or `--config` is not the isolation it claims to be.
     // Before the engine: what a person said about the disks decides its sources.
-    let kept = handle::Kept::open(wire::state_dir(&config), config.clone());
+    let state = args
+        .state
+        .clone()
+        .unwrap_or_else(|| wire::state_dir(&config));
+    let kept = handle::Kept::open(state, config.clone());
     let plan = kept.plan();
     let index = match wire::open(&config) {
         Ok(index) => index,
@@ -133,7 +182,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let server = Server::bind(&addr)?;
+    let access = args.owner.as_deref().map(access_for);
+    let server = Server::bind_for(&addr, access.as_deref())?;
     let stop = Arc::new(AtomicBool::new(false));
     scour_core::note!(
         "scourd: listening on {addr} · {} sources · watching starting",
@@ -154,7 +204,7 @@ fn main() -> Result<()> {
         // blocked in `accept`. Setting the flag and connecting once wakes it.
         let (stop, addr) = (Arc::clone(&stop), addr.clone());
         let live = Arc::clone(&live);
-        let _ = ctrlc::set_handler(move || {
+        let _ = STOP.set(Box::new(move || {
             stop.store(true, Ordering::Relaxed);
             live.shutdown();
             // Nothing else wakes `accept`. With the socket's file gone — a
@@ -164,7 +214,8 @@ fn main() -> Result<()> {
             if scour_ipc::Client::connect(&addr).is_err() {
                 std::process::exit(0);
             }
-        });
+        }));
+        let _ = ctrlc::set_handler(stop_now);
     }
 
     let handler_live = Arc::clone(&live);

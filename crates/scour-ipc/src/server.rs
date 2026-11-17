@@ -42,12 +42,38 @@ impl Server {
     /// failure is checked by trying to connect: an answer means a real instance is
     /// running, and no answer means the file on disk is a corpse.
     pub fn bind(addr: &str) -> Result<Server> {
+        Server::bind_for(addr, None)
+    }
+
+    /// [`Server::bind`], with who may connect said outright: on Windows an
+    /// access list in SDDL. The Windows service runs as SYSTEM, and a pipe it
+    /// makes with the default list lets every account on the machine read every
+    /// file name of every disk. Elsewhere the socket's directory decides, and
+    /// `access` is not read.
+    pub fn bind_for(addr: &str, access: Option<&str>) -> Result<Server> {
         if let Some(dir) = std::path::Path::new(addr).parent()
             && !cfg!(windows)
         {
             let _ = std::fs::create_dir_all(dir);
         }
-        match ListenerOptions::new().name(name(addr)?).create_sync() {
+        let options = || -> Result<ListenerOptions<'_>> {
+            let o = ListenerOptions::new().name(name(addr)?);
+            #[cfg(windows)]
+            if let Some(sddl) = access {
+                use interprocess::os::windows::local_socket::ListenerOptionsExt;
+                use interprocess::os::windows::security_descriptor::SecurityDescriptor;
+                let wide =
+                    widestring::U16CString::from_str(sddl).map_err(|e| Error::Unreachable {
+                        detail: format!("the pipe's access list: {e}"),
+                    })?;
+                let sd = SecurityDescriptor::deserialize(&wide).map_err(|e| Error::io(&e, addr))?;
+                return Ok(o.security_descriptor(sd));
+            }
+            #[cfg(not(windows))]
+            let _ = access;
+            Ok(o)
+        };
+        match options()?.create_sync() {
             Ok(listener) => Ok(Server {
                 listener,
                 addr: addr.to_owned(),
@@ -59,10 +85,7 @@ impl Server {
                     });
                 }
                 let _ = std::fs::remove_file(addr);
-                let listener = ListenerOptions::new()
-                    .name(name(addr)?)
-                    .create_sync()
-                    .map_err(|e| Error::io(&e, addr))?;
+                let listener = options()?.create_sync().map_err(|e| Error::io(&e, addr))?;
                 Ok(Server {
                     listener,
                     addr: addr.to_owned(),
