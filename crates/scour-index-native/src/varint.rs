@@ -73,7 +73,14 @@ pub fn unpack_one(bytes: &[u8], min: i64, bits: u32, i: usize) -> i64 {
     let offset = (start_bit % 8) as u32;
     let mut acc: u128 = 0;
     // `bits` is at most 64, so with the offset this spans at most nine bytes.
-    for (n, &b) in bytes[start_byte..].iter().take(9).enumerate() {
+    // A block cut short reads as zeroes rather than stopping the service.
+    for (n, &b) in bytes
+        .get(start_byte..)
+        .unwrap_or_default()
+        .iter()
+        .take(9)
+        .enumerate()
+    {
         acc |= u128::from(b) << (n * 8);
     }
     let mask = if bits >= 64 {

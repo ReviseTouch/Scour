@@ -886,7 +886,7 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
         } => {
             let got = seg.num(*field, row);
             match cmp {
-                Cmp::Eq if *span > 1 => got >= *value && got < value + span,
+                Cmp::Eq if *span > 1 => got >= *value && got < value.saturating_add(*span),
                 c => c.holds(got, *value),
             }
         }

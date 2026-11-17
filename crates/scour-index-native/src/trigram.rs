@@ -237,14 +237,16 @@ impl<'a> TrigramIndex<'a> {
     }
 
     fn decode(count: u32, bytes: &[u8]) -> Vec<u32> {
-        let mut out = Vec::with_capacity(count as usize);
+        // Every entry is at least a byte: a count the list cannot hold is
+        // damage, and is not allowed to size anything.
+        let mut out = Vec::with_capacity((count as usize).min(bytes.len()));
         let mut at = 0usize;
         let mut block = 0u32;
         for _ in 0..count {
-            let Some((delta, used)) = varint::get(&bytes[at..]) else {
+            let Some((delta, used)) = varint::get(bytes.get(at..).unwrap_or_default()) else {
                 break;
             };
-            block += delta as u32;
+            block = block.wrapping_add(delta as u32);
             out.push(block);
             at += used;
         }

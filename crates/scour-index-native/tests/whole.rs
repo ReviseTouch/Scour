@@ -4887,3 +4887,92 @@ fn a_streamed_order_reports_the_total_the_stored_order_does() {
         }
     }
 }
+
+/// Nothing in a segment is checksummed, so a file cut short by a full disk or
+/// a failing one is read as it is. It may be refused, and it may answer with
+/// less than it held; what it may not do is take the service down with it.
+#[test]
+fn a_segment_file_cut_short_is_refused_or_read_and_never_a_panic() {
+    for part in [
+        "names", "fnames", "cols", "dirs", "ids", "tgrams", "tpost", "porder", "norder", "eorder",
+        "alive",
+    ] {
+        for keep in [0usize, 1, 3, 2] {
+            let tmp = tempfile::tempdir().expect("tmpdir");
+            let entries = generate(&MockOptions {
+                files: 6_000,
+                now: NOW,
+                ..Default::default()
+            })
+            .entries;
+            {
+                let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+                for chunk in entries.chunks(3_000) {
+                    index
+                        .apply(&mut chunk.iter().cloned().map(Change::Upsert))
+                        .expect("apply");
+                    index.commit().expect("commit");
+                }
+            }
+            // Every file of that kind, cut to nothing, a byte, a third, a half.
+            let mut cut = 0;
+            for file in std::fs::read_dir(tmp.path()).expect("dir").flatten() {
+                let path = file.path();
+                if path.extension().and_then(|e| e.to_str()) != Some(part) {
+                    continue;
+                }
+                let len = std::fs::metadata(&path).expect("meta").len();
+                let to = match keep {
+                    0 => 0,
+                    1 => 1.min(len),
+                    n => len / n as u64,
+                };
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|f| f.set_len(to))
+                    .expect("truncate");
+                cut += 1;
+            }
+            assert!(cut > 0, "no .{part} file to cut");
+            let Ok(index) = NativeIndex::open_or_create(tmp.path()) else {
+                continue;
+            };
+            for q in [
+                "",
+                "a",
+                "rapor",
+                "ext:txt",
+                "kind:folder",
+                "path:src",
+                "src/main",
+                "size:>1kb dm:30d",
+                "under:\"/home\"",
+                "depth:>3",
+            ] {
+                for sort in [
+                    SortKey::Modified,
+                    SortKey::Name,
+                    SortKey::Path,
+                    SortKey::Ext,
+                    SortKey::Size,
+                    SortKey::Relevance,
+                ] {
+                    for offset in [0u32, 2_500] {
+                        let _ = index.search(&SearchRequest {
+                            query: parse_at(q, NOW),
+                            sort,
+                            descending: offset == 0,
+                            page: Page {
+                                offset,
+                                limit: 50,
+                                count_cap: 1_000,
+                            },
+                        });
+                    }
+                }
+            }
+            let _ = index.stats();
+        }
+    }
+}

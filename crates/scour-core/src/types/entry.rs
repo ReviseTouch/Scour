@@ -850,6 +850,18 @@ const WINDOWS_RUNS: &[&str] = &[
     "appx",
     "msixbundle",
     "appxbundle",
+    // An interpreter the file names, a help file's scripts, an add-in, a
+    // document's macros, a troubleshooter and two shell files that fetch.
+    "py",
+    "pyw",
+    "chm",
+    "xll",
+    "docm",
+    "xlsm",
+    "pptm",
+    "diagcab",
+    "settingcontent-ms",
+    "library-ms",
 ];
 
 /// Which of the two id tables to read.

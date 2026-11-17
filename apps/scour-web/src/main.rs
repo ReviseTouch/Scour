@@ -269,7 +269,22 @@ fn token() -> String {
         use std::io::Read;
         let _ = f.read_exact(&mut bytes);
     }
-    // A pid and a clock: a platform with no `/dev/urandom` still cannot repeat.
+    /* **And the system's randomness by the one door the standard library
+     * opens on every platform**: a hash map's keys. Windows has no
+     * `/dev/urandom`, and without this the token there was a pid and a clock,
+     * four bytes repeated — about thirty bits, for a token that opens, runs
+     * and deletes files. */
+    for half in bytes.chunks_mut(8) {
+        use std::hash::{BuildHasher, Hasher};
+        let drawn = std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+            .to_le_bytes();
+        for (b, d) in half.iter_mut().zip(drawn) {
+            *b ^= d;
+        }
+    }
+    // A pid and a clock on top: it cannot repeat even if both of those fail.
     let salt = std::process::id().to_le_bytes();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

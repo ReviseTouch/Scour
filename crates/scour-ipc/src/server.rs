@@ -51,10 +51,17 @@ impl Server {
     /// file name of every disk. Elsewhere the socket's directory decides, and
     /// `access` is not read.
     pub fn bind_for(addr: &str, access: Option<&str>) -> Result<Server> {
+        #[cfg(unix)]
         if let Some(dir) = std::path::Path::new(addr).parent()
-            && !cfg!(windows)
+            && !dir.exists()
         {
-            let _ = std::fs::create_dir_all(dir);
+            // The directory is the fence where the runtime directory is not:
+            // made for this account alone, whatever the umask says.
+            use std::os::unix::fs::DirBuilderExt;
+            let _ = std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir);
         }
         let options = || -> Result<ListenerOptions<'_>> {
             let o = ListenerOptions::new().name(name(addr)?);
@@ -73,11 +80,21 @@ impl Server {
             let _ = access;
             Ok(o)
         };
-        match options()?.create_sync() {
-            Ok(listener) => Ok(Server {
+        // Whoever can write to the socket can ask for anything: this account,
+        // whatever directory it sits in and whatever the umask was.
+        let fenced = |listener| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(addr, std::fs::Permissions::from_mode(0o600));
+            }
+            Server {
                 listener,
                 addr: addr.to_owned(),
-            }),
+            }
+        };
+        match options()?.create_sync() {
+            Ok(listener) => Ok(fenced(listener)),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 if crate::is_running(addr) {
                     return Err(Error::Unreachable {
@@ -86,10 +103,7 @@ impl Server {
                 }
                 let _ = std::fs::remove_file(addr);
                 let listener = options()?.create_sync().map_err(|e| Error::io(&e, addr))?;
-                Ok(Server {
-                    listener,
-                    addr: addr.to_owned(),
-                })
+                Ok(fenced(listener))
             }
             Err(e) => Err(Error::io(&e, addr)),
         }

@@ -100,23 +100,33 @@ impl Live {
         // not enough — an order file this segment does not have would be read as
         // its own.
         Live::erase(dir, number);
-        // Synced: a manifest surviving a crash its segments did not is an
-        // index that cannot be opened.
-        for (ext, blob) in PARTS.iter().zip(blobs) {
-            write_synced(&part_path(dir, number, ext), blob)?;
+        let written = (|| -> Result<()> {
+            // Synced: a manifest surviving a crash its segments did not is an
+            // index that cannot be opened.
+            for (ext, blob) in PARTS.iter().zip(blobs) {
+                write_synced(&part_path(dir, number, ext), blob)?;
+            }
+            // Written only when there is one: absent is a meaningful state, and
+            // an empty blob is what an unreadable directory table produces.
+            if !bytes.porder.is_empty() {
+                write_synced(&part_path(dir, number, PORDER), &bytes.porder)?;
+            }
+            if !bytes.norder.is_empty() {
+                write_synced(&part_path(dir, number, NORDER), &bytes.norder)?;
+            }
+            if !bytes.eorder.is_empty() {
+                write_synced(&part_path(dir, number, EORDER), &bytes.eorder)?;
+            }
+            write_synced(&part_path(dir, number, "alive"), &bytes.alive)?;
+            Ok(())
+        })();
+        if let Err(e) = written {
+            // A full disk is the usual reason, and what was written of this
+            // segment is the first thing to give back: the rows are retried
+            // under another number, and nothing names this one.
+            Live::erase(dir, number);
+            return Err(e);
         }
-        // Written only when there is one: absent is a meaningful state, and an
-        // empty blob is what an unreadable directory table produces.
-        if !bytes.porder.is_empty() {
-            write_synced(&part_path(dir, number, PORDER), &bytes.porder)?;
-        }
-        if !bytes.norder.is_empty() {
-            write_synced(&part_path(dir, number, NORDER), &bytes.norder)?;
-        }
-        if !bytes.eorder.is_empty() {
-            write_synced(&part_path(dir, number, EORDER), &bytes.eorder)?;
-        }
-        write_synced(&part_path(dir, number, "alive"), &bytes.alive)?;
         Live::open(dir, number, generation)
     }
 
@@ -298,6 +308,39 @@ impl Live {
                 ),
             });
         }
+        // Nothing is checksummed, so what can be asked cheaply is asked: that
+        // the three files every row is read from end where their own headers
+        // say, for as many rows as the names hold. A file cut short otherwise
+        // answers with empty names and zeroes, and orders rows by them.
+        let whole = |what: &str, ok: bool| {
+            if ok {
+                Ok(())
+            } else {
+                Err(Error::IndexCorrupt {
+                    detail: format!("seg-{number:08}.{what} is cut short or not for {rows} rows"),
+                })
+            }
+        };
+        whole(
+            "names",
+            NameArena::open(&maps[0]).is_some_and(|a| a.is_whole()),
+        )?;
+        whole(
+            "fnames",
+            NameArena::open(&maps[6]).is_some_and(|a| a.rows() == rows && a.is_whole()),
+        )?;
+        whole(
+            "dirs",
+            crate::dirs::DirTable::open(&maps[2]).is_some_and(|d| {
+                d.len()
+                    .checked_sub(1)
+                    .is_none_or(|last| d.get(last as u32).is_some())
+            }),
+        )?;
+        whole(
+            "cols",
+            ColumnBlocks::open(&maps[1]).is_some_and(|c| c.rows() == rows && c.is_whole()),
+        )?;
         // A path order of the wrong length is damage, refused on the bitmap's
         // argument. Contents are not checked further — nothing here is
         // checksummed — but a bad entry cannot be read as a row: see

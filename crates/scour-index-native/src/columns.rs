@@ -181,6 +181,39 @@ impl<'a> ColumnBlocks<'a> {
         self.rows == 0
     }
 
+    /// Whether every column's last block lies inside the file. The columns are
+    /// written one after another, so a file cut short anywhere fails here.
+    pub fn is_whole(&self) -> bool {
+        let Some(last_row) = self.rows.checked_sub(1) else {
+            return true;
+        };
+        let block = last_row / BLOCK;
+        Field::ALL.iter().all(|field| {
+            let whole = || -> Option<()> {
+                let at = field.index() * 8;
+                let section =
+                    u64::from_le_bytes(self.offsets.get(at..at + 8)?.try_into().ok()?) as usize;
+                let n_blocks =
+                    u32::from_le_bytes(self.bytes.get(section..section + 4)?.try_into().ok()?)
+                        as usize;
+                if n_blocks != block + 1 {
+                    return None;
+                }
+                let idx = section + 4 + block * 4;
+                let start =
+                    u32::from_le_bytes(self.bytes.get(idx..idx + 4)?.try_into().ok()?) as usize;
+                let at = section.checked_add(4 + n_blocks * 4)?.checked_add(start)?;
+                let bits = *self.bytes.get(at + 16)? as usize;
+                if bits > 64 {
+                    return None;
+                }
+                let packed = ((last_row % BLOCK + 1) * bits).div_ceil(8);
+                self.bytes.get(at + 17..at + 17 + packed).map(|_| ())
+            };
+            whole().is_some()
+        })
+    }
+
     /// One value, in constant time. Random access rather than bulk decode: a
     /// filter usually rejects a row on the first column it looks at.
     pub fn get(&self, field: Field, row: usize) -> Option<i64> {

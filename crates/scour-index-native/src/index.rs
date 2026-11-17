@@ -1747,7 +1747,7 @@ fn reach(
     // The merge holds one row a segment, ordered as `sort_hits` orders it:
     // newest first, ties broken by paths compared as if joined.
     let mut dirs: HashMap<(usize, u32), String> = HashMap::new();
-    let mut hits: Vec<Hit> = Vec::with_capacity(limit);
+    let mut hits: Vec<Hit> = Vec::with_capacity(limit.min(counted));
     let mut visited = 0u64;
     while hits.len() < limit {
         let mut best: Option<usize> = None;

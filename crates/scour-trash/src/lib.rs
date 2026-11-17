@@ -255,17 +255,28 @@ fn volume_trash(path: &Path) -> Option<PathBuf> {
         let sticky = md.permissions().mode() & 0o1000 != 0;
         if md.is_dir() && !md.file_type().is_symlink() && sticky {
             let mine = shared.join(uid.to_string());
-            if std::fs::create_dir_all(&mine).is_ok() {
+            if own_dir(&mine, uid) {
                 return Some(mine);
             }
         }
     }
 
     let own = top.join(format!(".Trash-{uid}"));
-    if own.is_dir() || std::fs::create_dir_all(&own).is_ok() {
-        return Some(own);
+    own_dir(&own, uid).then_some(own)
+}
+
+#[cfg(unix)]
+/// Make the directory if it is not there, and say whether it is this account's
+/// own: a real directory, not a link, owned by `uid`. `.Trash` is writable by
+/// everyone and the top of a shared disk often is, so anyone can make the
+/// directory first — and a file trashed into theirs is a file handed to them.
+fn own_dir(dir: &Path, uid: u32) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    if std::fs::symlink_metadata(dir).is_err() {
+        let _ = std::fs::DirBuilder::new().mode(0o700).create(dir);
     }
-    None
+    std::fs::symlink_metadata(dir)
+        .is_ok_and(|md| md.is_dir() && !md.file_type().is_symlink() && md.uid() == uid)
 }
 
 #[cfg(unix)]
@@ -368,6 +379,29 @@ fn local_stamp() -> String {
 
 #[cfg(all(test, unix))]
 mod tests {
+
+    #[test]
+    fn a_trash_directory_somebody_else_made_or_linked_is_not_this_accounts() {
+        let tmp = std::env::temp_dir().join(format!("scour-owndir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("elsewhere")).expect("mkdir");
+        let uid = unsafe { libc::getuid() };
+
+        // Made here: this account's, and for nobody else to read.
+        assert!(super::own_dir(&tmp.join("fresh"), uid));
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(tmp.join("fresh"))
+            .expect("meta")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+        // A link put where the directory would be leads wherever its maker likes.
+        std::os::unix::fs::symlink(tmp.join("elsewhere"), tmp.join("linked")).expect("link");
+        assert!(!super::own_dir(&tmp.join("linked"), uid));
+        // And a directory that is there but another account's is theirs.
+        assert!(!super::own_dir(&tmp.join("fresh"), uid.wrapping_add(1)));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn erasing_takes_a_file_a_tree_and_a_link_but_not_what_the_link_points_at() {

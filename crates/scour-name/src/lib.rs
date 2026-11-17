@@ -69,6 +69,28 @@ pub fn check(path: &Path, new_name: &str) -> Result<(), Refusal> {
     if new_name.contains('\0') {
         return Err(Refusal::HasNul);
     }
+    // Windows reads these in a name as something else: a backslash is a move
+    // to another folder, a colon a stream of another file or a drive, and the
+    // device names open the device.
+    if cfg!(windows) {
+        if new_name.contains('\\') {
+            return Err(Refusal::HasSlash);
+        }
+        let stem = new_name.split('.').next().unwrap_or_default();
+        let device = matches!(
+            stem.to_ascii_uppercase().as_str(),
+            "CON" | "PRN" | "AUX" | "NUL"
+        ) || (stem.len() == 4
+            && (stem[..3].eq_ignore_ascii_case("COM") || stem[..3].eq_ignore_ascii_case("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+        if device
+            || new_name
+                .chars()
+                .any(|c| c.is_control() || matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        {
+            return Err(Refusal::HasNul);
+        }
+    }
     if new_name == "." || new_name == ".." {
         return Err(Refusal::Dots);
     }

@@ -159,6 +159,23 @@ impl<'a> NameArena<'a> {
         self.rows == 0
     }
 
+    /// Whether the arena ends where its header says it does: a block a row
+    /// thirty-two, and the last block holding exactly the names left for it. A
+    /// file cut short anywhere fails here, at the price of one block read.
+    pub fn is_whole(&self) -> bool {
+        let n_blocks = self.blocks.len() / 4;
+        if n_blocks != self.rows.div_ceil(BLOCK) {
+            return false;
+        }
+        let Some(last) = n_blocks.checked_sub(1) else {
+            return self.bytes.is_empty();
+        };
+        let Some(tail) = self.block_start(last).and_then(|at| self.bytes.get(at..)) else {
+            return false;
+        };
+        tail.last() == Some(&0) && memchr::memchr_iter(0, tail).count() == self.rows - last * BLOCK
+    }
+
     fn block_start(&self, block: usize) -> Option<usize> {
         let at = block * 4;
         let b = self.blocks.get(at..at + 4)?;

@@ -223,6 +223,10 @@ impl<'a> DirTable<'a> {
             let (rest, used) = varint::get(self.rows.get(at..)?)?;
             at += used;
             let rest = rest as usize;
+            // A cut in the middle of a character is damage, not a path.
+            if !path.is_char_boundary((shared as usize).min(path.len())) {
+                return None;
+            }
             path.truncate(shared as usize);
             path.push_str(std::str::from_utf8(self.rows.get(at..at + rest)?).ok()?);
             at += rest;
@@ -256,6 +260,9 @@ impl<'a> DirTable<'a> {
             let rest = rest as usize;
             while slashes.last().is_some_and(|&p| p >= shared) {
                 slashes.pop();
+            }
+            if !path.is_char_boundary(shared.min(path.len())) {
+                break;
             }
             path.truncate(shared);
             let Some(bytes) = self.rows.get(at..at + rest) else {
@@ -324,6 +331,9 @@ impl<'a> DirTable<'a> {
             };
             at += used;
             let rest = rest as usize;
+            if !path.is_char_boundary((shared as usize).min(path.len())) {
+                break;
+            }
             path.truncate(shared as usize);
             let Some(bytes) = self.rows.get(at..at + rest) else {
                 break;
@@ -416,11 +426,11 @@ impl<'a> DirTable<'a> {
             if id >= self.count {
                 break;
             }
-            let Some((shared, used)) = varint::get(&self.rows[at..]) else {
+            let Some((shared, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
                 break;
             };
             at += used;
-            let Some((rest, used)) = varint::get(&self.rows[at..]) else {
+            let Some((rest, used)) = varint::get(self.rows.get(at..).unwrap_or_default()) else {
                 break;
             };
             at += used;
