@@ -2256,6 +2256,10 @@ impl EntrySink for ToIndex {
             Flow::Continue
         }
     }
+
+    fn stopping(&self) -> bool {
+        self.stop.stop.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]

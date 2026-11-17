@@ -31,6 +31,13 @@ pub trait EntrySink {
     /// A directory could not be read. Reported rather than swallowed, so that a gap
     /// in the index is visible.
     fn unreadable(&mut self, _path: &str, _error: &crate::types::Error) {}
+
+    /// Has whoever is listening asked the walk to stop? For a walk with a long
+    /// stretch that pushes nothing — the first pass over an NTFS master file
+    /// table — which would otherwise only hear it at its first row.
+    fn stopping(&self) -> bool {
+        false
+    }
 }
 
 /// Where a watcher delivers changes. Called from the watcher's own thread.

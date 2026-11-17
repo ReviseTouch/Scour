@@ -60,6 +60,9 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut *mut u16) {
     }
     HANDLE.store(handle as usize, Ordering::Release);
     report(SERVICE_START_PENDING, 0);
+    if let Some(state) = ARGS.get().and_then(|a| a.state.clone()) {
+        log_to(&state.join("scourd.log"));
+    }
     // Running before the walk and the bind: the manager waits thirty seconds
     // for this, and opening a large index can take longer.
     report(SERVICE_RUNNING, 0);
@@ -117,6 +120,27 @@ fn report(state: SERVICE_STATUS_CURRENT_STATE, code: u32) {
     // SAFETY: a handle the manager gave, and a status that lives for the call.
     unsafe {
         SetServiceStatus(handle as *mut c_void, &status);
+    }
+}
+
+/// A service has nowhere to write: its standard error goes nowhere, and every
+/// note the service makes with it. Sent to a file in the owner's state
+/// directory instead, started afresh once it passes four megabytes. Rust's
+/// `stderr` asks for the handle at every write, so setting it here is enough.
+fn log_to(path: &std::path::Path) {
+    use std::os::windows::io::IntoRawHandle;
+    use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, SetStdHandle};
+    let fresh = std::fs::metadata(path).map_or(true, |m| m.len() > 4 << 20);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(!fresh)
+        .write(true)
+        .truncate(fresh)
+        .open(path);
+    if let Ok(file) = file {
+        // SAFETY: a handle this process owns and gives away for good.
+        unsafe { SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle() as _) };
+        scour_core::note!("scourd: --- the service starts ---");
     }
 }
 

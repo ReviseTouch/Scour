@@ -509,6 +509,9 @@ impl Source for FsSource {
                 &cancelled,
             );
             let walker = scope.spawn(move || {
+                // This thread looks at the roots before any worker does: as
+                // SYSTEM it found a share's root unreadable and walked nothing.
+                let _as = walk_as.and_then(|w| (w.0)());
                 builder.build_parallel().run(|| {
                     let tx = walker_tx.clone();
                     let mut batch = Batch::new(tx.clone());

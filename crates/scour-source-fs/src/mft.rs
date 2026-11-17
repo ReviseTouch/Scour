@@ -396,7 +396,14 @@ pub(crate) fn read(
     let mut root_times = None;
     let mut ext: HashMap<u64, Parsed> = HashMap::new();
     let mut spread: Vec<(u64, Parsed)> = Vec::new();
+    let mut stopped = false;
+    let listening = &*sink;
     each_record(volume, &g, |n, p| {
+        // Nothing reaches the sink in this pass, so it is asked outright.
+        if n % 65_536 == 0 && listening.stopping() {
+            stopped = true;
+            return false;
+        }
         if p.base != 0 {
             ext.entry(p.base).or_default().absorb(&p);
         } else if n == ROOT {
@@ -423,6 +430,10 @@ pub(crate) fn read(
     }
 
     let mut counts = Counts::default();
+    if stopped {
+        counts.stopped = true;
+        return Ok(counts);
+    }
     let mut places: HashMap<u64, Place> = HashMap::new();
     let root_path: Arc<str> = Arc::from(root);
     places.insert(ROOT, Place::Shown(Arc::clone(&root_path)));
@@ -927,6 +938,34 @@ mod tests {
         assert_eq!(pdf.meta.mtime, 1_700_000_001);
         assert_eq!(pdf.meta.ctime, 1_700_000_001 - 100);
         assert_eq!(pdf.meta.atime, 1_700_000_001 + 5);
+    }
+
+    /// A walk told to stop does not read the volume through first.
+    #[test]
+    fn a_stop_is_heard_before_any_row() {
+        struct Stopping(u64);
+        impl EntrySink for Stopping {
+            fn push(&mut self, _e: Entry) -> Flow {
+                self.0 += 1;
+                Flow::Continue
+            }
+            fn stopping(&self) -> bool {
+                true
+            }
+        }
+        let img = sample();
+        let mut sink = Stopping(0);
+        let counts = read(
+            &img,
+            SourceId(1),
+            "C:/",
+            &Rules::from_options(&Default::default()),
+            true,
+            &mut sink,
+        )
+        .expect("a read");
+        assert!(counts.stopped);
+        assert_eq!(sink.0, 0);
     }
 
     #[test]

@@ -21,6 +21,10 @@ pub struct Live {
     plan: Mutex<Plan>,
     /// One swap at a time: the disk watcher and a saved answer can both ask.
     swapping: Mutex<()>,
+    /// The sources the engine in use was built from.
+    built: Mutex<Vec<crate::disks::Planned>>,
+    /// Where a replan asks for the swap, when a thread is there to do it.
+    wake: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 /// Which sources a freshly started engine walks.
@@ -35,8 +39,10 @@ impl Live {
         Live {
             engine: RwLock::new(Arc::new(engine)),
             index,
+            built: Mutex::new(plan.sources.clone()),
             plan: Mutex::new(plan),
             swapping: Mutex::default(),
+            wake: Mutex::new(None),
         }
     }
 
@@ -80,20 +86,38 @@ impl Live {
     /// Look at the disks again, after one came or went or somebody answered.
     /// A change only in what a face shows wakes the faces; a change in what is
     /// indexed replaces the engine.
+    ///
+    /// **The plan at once, the engine behind.** Replacing the engine waits for
+    /// the old one to stop, and a walk in progress stops at its next row: a
+    /// folder removed from a window waited for minutes of a disk's walk
+    /// (PC2, 17 November). The faces see the new plan straight away.
     pub fn replan(&self, kept: &Kept) {
-        let _one = self.swapping.lock().unwrap_or_else(|p| p.into_inner());
         let plan = kept.plan();
-        let was = {
+        {
             let mut held = self.plan.lock().unwrap_or_else(|p| p.into_inner());
             if *held == plan {
                 return;
             }
-            std::mem::replace(&mut *held, plan.clone())
-        };
-        if was.sources == plan.sources {
+            *held = plan;
+        }
+        let wake = self.wake.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        match wake {
+            Some(tx) if tx.send(()).is_ok() => {}
+            _ => self.settle(kept),
+        }
+    }
+
+    /// Bring the engine to the plan: wake the faces when only what they show
+    /// changed, replace it when what is indexed did.
+    fn settle(&self, kept: &Kept) {
+        let _one = self.swapping.lock().unwrap_or_else(|p| p.into_inner());
+        let plan = self.plan();
+        let same = *self.built.lock().unwrap_or_else(|p| p.into_inner()) == plan.sources;
+        if same {
             self.engine().nudge();
         } else {
             self.swap(kept, &plan);
+            *self.built.lock().unwrap_or_else(|p| p.into_inner()) = plan.sources.clone();
         }
     }
 
@@ -182,6 +206,19 @@ fn walk_named(engine: &Engine, names: &HashSet<String>) {
 /// Wait for disks to come and go, for the life of the process. A burst — a
 /// stick with three partitions — is let settle first, so it is one swap.
 pub fn follow_disks(live: Arc<Live>, kept: Arc<Kept>) {
+    // The swaps, on a thread of their own: see [`Live::replan`].
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    *live.wake.lock().unwrap_or_else(|p| p.into_inner()) = Some(tx);
+    {
+        let (live, kept) = (Arc::clone(&live), Arc::clone(&kept));
+        std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                // Several answers in a row are one swap.
+                while rx.try_recv().is_ok() {}
+                live.settle(&kept);
+            }
+        });
+    }
     std::thread::spawn(move || {
         let mut changes = scour_volumes::Changes::new();
         loop {
