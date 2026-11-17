@@ -32,6 +32,21 @@ pub(crate) fn walk_as(roots: &[std::path::PathBuf]) -> Option<WalkAs> {
     Some(WalkAs(Arc::new(move || imp::become_owner(&owner))))
 }
 
+/// The owner's identity for one read made on a request — a preview — when
+/// this is the service: `Ok(None)` anywhere else, where the process already
+/// is the person asking. **`Err` when the owner cannot be become**, and the
+/// read is then refused: as SYSTEM it would show the start of any file on the
+/// machine to an account whose own permissions keep it out.
+pub(crate) fn for_a_read() -> Result<Option<Box<dyn std::any::Any + Send>>, ()> {
+    let Some(owner) = OWNER.get() else {
+        return Ok(None);
+    };
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    imp::become_owner(owner).map(Some).ok_or(())
+}
+
 #[cfg(windows)]
 mod imp {
     use std::any::Any;

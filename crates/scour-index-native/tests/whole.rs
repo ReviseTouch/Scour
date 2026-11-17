@@ -4976,3 +4976,92 @@ fn a_segment_file_cut_short_is_refused_or_read_and_never_a_panic() {
         }
     }
 }
+
+/// A file saved over is a new row and the old row's removal. If the service
+/// dies after the removal is written and before the new segment is named, the
+/// file is in neither when it starts again, and nobody can find it until the
+/// next walk does.
+///
+/// **This fails, and is kept to say so.** A flush writes the live bits of the
+/// rows a published segment replaced before that segment is on disk, and the
+/// persist that follows writes them before the manifest. The order has to
+/// change in both, with the bits held back while a segment is unwritten.
+#[test]
+#[ignore = "an open fault: removals reach the disk before the segment that replaces them"]
+fn a_replacement_whose_removal_never_reached_the_disk_is_still_found() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let victim = "/home/u/saved-over.txt";
+    let rows = |victim_mtime: i64| -> Vec<Entry> {
+        (0..200u64)
+            .map(|i| {
+                if i == 77 {
+                    entry(victim, victim_mtime, i)
+                } else {
+                    entry(&format!("/home/u/keep-{i:03}.txt"), NOW + i as i64, i)
+                }
+            })
+            .collect()
+    };
+    let find = |index: &NativeIndex| -> usize {
+        index
+            .search(&SearchRequest {
+                query: parse_at("saved-over", NOW),
+                page: Page::new(0, 10),
+                ..Default::default()
+            })
+            .expect("search")
+            .hits
+            .len()
+    };
+    {
+        let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+        index
+            .apply(&mut rows(NOW).into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+
+        // Saved over: published, searchable, not yet on disk.
+        index
+            .apply(&mut std::iter::once(Change::Upsert(entry(
+                victim,
+                NOW + 5_000,
+                77,
+            ))))
+            .expect("save over");
+        index.publish().expect("publish");
+        assert_eq!(find(&index), 1);
+
+        // The manifest cannot be replaced, so the new segment is never named:
+        // the disk a service killed between the two writes leaves behind.
+        let manifest = tmp.path().join("native-index.json");
+        let saved = tmp.path().join("saved-manifest");
+        std::fs::rename(&manifest, &saved).expect("move the manifest aside");
+        std::fs::create_dir(&manifest).expect("block its replacement");
+        assert!(
+            index.maintain(Maintenance::Flush).is_err(),
+            "a directory accepted a manifest rename"
+        );
+        std::fs::remove_dir(&manifest).expect("remove blocker");
+        std::fs::rename(&saved, &manifest).expect("the manifest as it was");
+    }
+
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    assert!(find(&index) >= 1, "{victim} is in neither segment");
+
+    // The walk at the next start meets the file once and leaves one row.
+    let g = index.begin_generation().expect("generation");
+    index
+        .apply(&mut rows(NOW + 5_000).into_iter().map(Change::Upsert))
+        .expect("walk");
+    index
+        .sweep(
+            SourceId(0),
+            &["/home/u".to_string()],
+            g,
+            &PrefixSet::default(),
+        )
+        .expect("sweep");
+    index.commit().expect("commit");
+    assert_eq!(find(&index), 1);
+    assert_eq!(index.stats().expect("stats").entries, 200);
+}

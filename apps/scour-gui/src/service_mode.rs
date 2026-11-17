@@ -29,8 +29,27 @@ mod imp {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const SERVICE: &str = "Scour";
 
+    /// A tool of the system's, by its full path. **Never by name**: a name is
+    /// looked for beside this program first, in a folder the person's own
+    /// account can write to — and these run after the administrator has said
+    /// yes. The directory is asked of the system, not read from an
+    /// environment the caller chose.
+    fn system_tool(program: &str) -> PathBuf {
+        let mut buf = [0u16; 260];
+        // SAFETY: a buffer and its length in characters.
+        let n = unsafe {
+            windows::Win32::System::SystemInformation::GetSystemDirectoryW(Some(&mut buf))
+        } as usize;
+        let dir = if n == 0 || n >= buf.len() {
+            PathBuf::from(r"C:\Windows\System32")
+        } else {
+            PathBuf::from(String::from_utf16_lossy(&buf[..n]))
+        };
+        dir.join(format!("{program}.exe"))
+    }
+
     fn quiet(program: &str, args: &[&str]) -> Result<std::process::Output, String> {
-        Command::new(program)
+        Command::new(system_tool(program))
             .args(args)
             .creation_flags(CREATE_NO_WINDOW)
             .output()
@@ -367,9 +386,12 @@ mod imp {
         // The window that asked still runs from Program Files: the folder goes
         // once it has left.
         let pf = program_files()?.display().to_string();
-        let _ = Command::new("cmd")
+        // Quoted as a whole: `cmd` drops the first and the last quote of a line
+        // that holds more than two.
+        let ping = system_tool("ping").display().to_string();
+        let _ = Command::new(system_tool("cmd"))
             .raw_arg(format!(
-                "/c ping -n 8 127.0.0.1 >nul & rmdir /s /q \"{pf}\""
+                "/c \"\"{ping}\" -n 8 127.0.0.1 >nul & rmdir /s /q \"{pf}\"\""
             ))
             .creation_flags(CREATE_NO_WINDOW)
             .spawn();
