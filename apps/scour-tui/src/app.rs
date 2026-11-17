@@ -242,6 +242,9 @@ pub struct MenuLine {
 
 /// The whole state of the terminal.
 pub struct App {
+    /// How long to leave between re-reading the rows in sight once the index
+    /// moved: `Settings::refresh_after`, shared with the other faces.
+    pub refresh: std::time::Duration,
     /// What has been typed, and where the caret is in it (in bytes).
     pub query: String,
     pub caret: usize,
@@ -415,6 +418,7 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         App {
+            refresh: std::time::Duration::from_secs(2),
             query: String::new(),
             caret: 0,
             mode: Mode::Search,

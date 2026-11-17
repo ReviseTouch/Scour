@@ -1646,6 +1646,13 @@ export component MainWindow inherits Window {
     /// settings' row and Ctrl + / Ctrl - say the same thing. `zoom-choice` is
     /// one of the row's values, or empty between them.
     in property <string> zoom-choice;
+    /// How often the list in sight is re-read once the index moved, in
+    /// seconds, as `scour_settings::Settings::refresh_every` says it.
+    in property <string> refresh-choice;
+    in property <[string]> refresh-labels;
+    in property <string> set-refresh;
+    in property <string> set-refresh-note;
+    callback refresh-picked(string);
     in property <[string]> zoom-labels;
     in property <string> set-zoom;
     in property <string> set-zoom-note;
@@ -5196,6 +5203,17 @@ export component MainWindow inherits Window {
                                             values: ["0.9", "1", "1.1", "1.25", "1.5"];
                                             value: root.zoom-choice;
                                             picked(v) => { root.zoom-picked(v); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-refresh;
+                                        note: root.set-refresh-note;
+                                        Choice {
+                                            labels: root.refresh-labels;
+                                            values: ["1", "2", "5", "15", "60"];
+                                            value: root.refresh-choice;
+                                            picked(v) => { root.refresh-picked(v); }
                                         }
                                     }
                                     Rectangle { height: Theme.hair; background: Theme.line; }

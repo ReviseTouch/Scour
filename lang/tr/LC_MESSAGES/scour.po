@@ -2223,3 +2223,21 @@ msgstr "30 dk"
 
 msgid "1 hour"
 msgstr "1 saat"
+
+msgid "Refresh the list every"
+msgstr "Listeyi yenileme aralığı"
+
+msgid "While the window is in use, how late a new file may reach the list. Scrolling and searching never wait."
+msgstr "Pencere kullanılırken yeni bir dosyanın listeye en geç ne zaman geleceği. Kaydırma ve arama hiç beklemez."
+
+msgid "1 s"
+msgstr "1 sn"
+
+msgid "2 s"
+msgstr "2 sn"
+
+msgid "5 s"
+msgstr "5 sn"
+
+msgid "15 s"
+msgstr "15 sn"

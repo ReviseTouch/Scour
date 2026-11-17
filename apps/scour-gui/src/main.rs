@@ -138,6 +138,9 @@ struct State {
     mounts: Vec<scour_places::Mount>,
     /// When somebody last did something here. See [`AWAKE_FOR`].
     stirred: std::time::Instant,
+    /// How long to leave between re-reading the rows in sight, once the index
+    /// moved. `Settings::refresh_after`.
+    refresh: std::time::Duration,
     dozing: bool,
     generation: u64,
     /// How many entries the index holds: the right-hand number in the meter.
@@ -640,6 +643,7 @@ fn main() -> Result<()> {
         mounts: Vec::new(),
         // Awake at birth: opening the window is somebody doing something in it.
         stirred: std::time::Instant::now(),
+        refresh: kept.refresh_after(),
         dozing: false,
         indexed: 0,
         generation: 0,
@@ -745,6 +749,7 @@ fn main() -> Result<()> {
         kept.face.as_str().into()
     });
     window.set_removable_choice(kept.removable.as_str().into());
+    window.set_refresh_choice(kept.refresh_after().as_secs().to_string().into());
     window.set_every_choice(
         match kept.folders_every {
             0 => 10,
@@ -1318,6 +1323,25 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     face: Some(face.to_string()),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let link = Rc::clone(&link);
+        let state = Rc::clone(&state);
+        window.on_refresh_picked(move |value| {
+            let Some(w) = weak.upgrade() else { return };
+            let Ok(seconds) = value.parse::<u32>() else {
+                return;
+            };
+            w.set_refresh_choice(value.clone());
+            state.borrow_mut().refresh = std::time::Duration::from_secs(u64::from(seconds));
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    refresh_every: Some(seconds),
                     ..Default::default()
                 },
             });
@@ -3613,6 +3637,7 @@ fn main() -> Result<()> {
                 // A scale change takes the focus with it.
                 w.invoke_focus_query();
                 drag::prepare(&w);
+                frame::let_go_on_the_frame(w.window());
             }
         });
     }
@@ -3637,7 +3662,6 @@ fn peek(
         }
         return;
     }
-                frame::let_go_on_the_frame(w.window());
     let path = path_of(rows, w.get_selected()).unwrap_or_default();
     if path == state.borrow().peek_path {
         return;
@@ -4809,10 +4833,12 @@ fn apply(
             rows.mark(state.borrow().revision);
             follow(w, state, link, rows);
             // A beat before waiting again: the service answers the instant its
-            // index moves, and re-arming at once cost a quarter of a core.
+            // index moves, and re-arming at once cost a quarter of a core. The
+            // beat is the person's to choose — see `Settings::refresh_every`.
+            let rest = AWAIT_AGAIN.max(state.borrow().refresh);
             let link = Rc::clone(link);
             let state = Rc::clone(state);
-            slint::Timer::single_shot(AWAIT_AGAIN, move || {
+            slint::Timer::single_shot(rest, move || {
                 link.send(Ask::Await {
                     since: state.borrow().revision,
                 });
@@ -5208,6 +5234,12 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
     w.set_set_service(t(cat, "Windows service"));
     draw_service(w, cat);
+    w.set_set_refresh(t(cat, "Refresh the list every"));
+    w.set_set_refresh_note(t(
+        cat,
+        "While the window is in use, how late a new file may reach the list. Scrolling and searching never wait.",
+    ));
+    w.set_refresh_labels(list(&["1 s", "2 s", "5 s", "15 s", "1 min"]));
     w.set_set_zoom(t(cat, "Zoom"));
     w.set_set_zoom_note(t(
         cat,
@@ -6530,6 +6562,7 @@ mod tests {
             mounts: Vec::new(),
             indexed: 0,
             stirred: std::time::Instant::now(),
+            refresh: std::time::Duration::from_secs(2),
             dozing: false,
             generation: 0,
             query_revision: 0,
@@ -6601,6 +6634,7 @@ mod tests {
         let mut s = State {
             mounts: Vec::new(),
             stirred: std::time::Instant::now(),
+            refresh: std::time::Duration::from_secs(2),
             dozing: false,
             sent_off: None,
             disks_asking: None,

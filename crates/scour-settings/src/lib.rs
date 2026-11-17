@@ -87,6 +87,11 @@ pub struct Settings {
     /// whose server sends none, one only walked. Zero is the default, ten.
     #[serde(default)]
     pub folders_every: u32,
+    /// Seconds a face in use leaves between re-reading the rows in sight after
+    /// the index moved. Zero is the default, two: every second redrew a list
+    /// that moves under a busy machine, 13 to 21% of a core for the window.
+    #[serde(default)]
+    pub refresh_every: u32,
     /// Columns to show, in the order they are shown, by id. Empty means "whatever this
     /// frontend calls its default", not "no columns".
     #[serde(default)]
@@ -207,6 +212,8 @@ pub struct Change {
     pub folders_unwatched: Option<Vec<String>>,
     /// See [`Settings::folders_every`].
     pub folders_every: Option<u32>,
+    /// See [`Settings::refresh_every`].
+    pub refresh_every: Option<u32>,
     /// Whether the preview panel stays open. See [`Settings::preview`].
     pub preview: Option<bool>,
     /// Replace the list outright. For clearing it, mostly.
@@ -230,6 +237,7 @@ impl Change {
             || self.folders_off.is_some()
             || self.folders_unwatched.is_some()
             || self.folders_every.is_some()
+            || self.refresh_every.is_some()
     }
 
     /// Fold this into the settings.
@@ -313,6 +321,9 @@ impl Change {
         if let Some(v) = self.folders_every {
             to.folders_every = v;
         }
+        if let Some(v) = self.refresh_every {
+            to.refresh_every = v;
+        }
         if let Some(v) = self.folders_unwatched {
             to.folders_unwatched = v;
         }
@@ -356,6 +367,14 @@ fn merge(into: &mut Value, patch: Value) {
 }
 
 impl Settings {
+    /// How long a face in use waits between refreshes. See [`Settings::refresh_every`].
+    pub fn refresh_after(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self.refresh_every {
+            0 => 2,
+            n => u64::from(n),
+        })
+    }
+
     /// Index this disk, or leave it out for good: the one way the two lists
     /// change, so a disk is never in both.
     pub fn choose(&mut self, volume: &str, index: bool) {

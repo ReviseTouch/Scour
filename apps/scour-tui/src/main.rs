@@ -80,6 +80,8 @@ fn main() -> Result<()> {
         query: args.query.clone(),
         caret: args.query.len(),
         words: catalogue,
+        // The person's, shared with the other faces, read once.
+        refresh: kept.refresh_after(),
         ..App::default()
     };
     // The table's shape, for the same reason as the language: the first frame
@@ -456,8 +458,8 @@ fn run(
                 let want = state.awake(revision);
                 act(want, link);
                 // A beat before waiting again: during a scan the index moves
-                // several times a second.
-                std::thread::sleep(Duration::from_millis(250));
+                // several times a second. See `Settings::refresh_every`.
+                std::thread::sleep(state.refresh.max(Duration::from_millis(250)));
                 link.doze(Ask::Await {
                     since: state.revision,
                 });
