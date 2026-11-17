@@ -24,7 +24,7 @@ use crate::scan::FsSource;
 /// The outer lock lets [`WatchHandle::retune`] replace it; the inner `Arc` lets
 /// an event copy the set and release the lock before filtering.
 #[cfg(not(target_os = "linux"))]
-type SharedRules = Arc<RwLock<Arc<Rules>>>;
+pub(crate) type SharedRules = Arc<RwLock<Arc<Rules>>>;
 
 /// Watch a source for changes: on Linux a fanotify mark, or nothing at all.
 /// There is no inotify fallback — one watch per directory out of a *session*
@@ -72,6 +72,12 @@ pub fn start(
     // The same rules the walk uses, or the watcher indexes what the walk skips.
     // Behind a lock: [`WatchHandle::retune`] can replace them while this runs.
     let rules: SharedRules = Arc::new(RwLock::new(Arc::new(Rules::from_options(opts))));
+    // An NTFS volume this process may open is read from its change journal,
+    // which does not overflow; anything else is watched directory by directory.
+    #[cfg(windows)]
+    if let Some(journal) = crate::usn::try_start(&source, Arc::clone(&rules), Arc::clone(&sink)) {
+        return Ok(journal);
+    }
 
     let handler = {
         let sink = Arc::clone(&sink);
@@ -285,7 +291,7 @@ pub(crate) fn look(
 
 /// Turn one `notify` event into changes, re-examining every path it names.
 #[cfg(not(target_os = "linux"))]
-fn translate(
+pub(crate) fn translate(
     id: scour_core::SourceId,
     real_modes: bool,
     rules: &Rules,

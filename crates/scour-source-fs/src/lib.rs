@@ -18,6 +18,8 @@ mod rules;
 mod scan;
 /// Other sources' roots, which a source does not go into.
 mod skip;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod usn;
 mod watch;
 
 pub mod fs;
