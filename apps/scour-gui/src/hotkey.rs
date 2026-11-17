@@ -105,8 +105,14 @@ pub fn words(w: &MainWindow, cat: &Catalogue) {
     // nothing here can bind a key there, and a service that starts with the
     // system is what keeps the index current between windows.
     if crate::autostart::OFFERED {
-        w.set_key_nudge_text(t(cat, "Keep the index current: start Scour with Windows?"));
-        w.set_key_nudge_yes(t(cat, "Start with Windows"));
+        // The service first: it is the faster index and the one that never
+        // misses a change. Starting with Windows is the way without rights.
+        w.set_key_nudge_text(t(
+            cat,
+            "Faster indexing: run Scour as a Windows service? It asks once for administrator rights.",
+        ));
+        w.set_key_nudge_yes(t(cat, "Run as a service"));
+        w.set_key_nudge_other(t(cat, "Only start with Windows"));
     } else {
         w.set_key_nudge_text(t(cat, "Open Scour from anywhere: bind Super+F"));
         w.set_key_nudge_yes(t(cat, "Bind Super+F"));
@@ -238,13 +244,37 @@ pub fn wire(w: &MainWindow, link: &Rc<Link>, cat: &Rc<RefCell<Rc<Catalogue>>>) {
                 },
             });
             if yes && crate::autostart::OFFERED {
-                if let Err(e) = crate::autostart::set(true) {
-                    DESK.with(|d| d.borrow_mut().nudge_error = e);
-                }
+                w.invoke_service_switch();
             } else if yes && let Ok(key) = Key::parse(OFFERED) {
                 w.set_key_typed(OFFERED.into());
                 work(Deed::Bind { key, nudge: true });
             }
+            draw(&w, &cat);
+        });
+    }
+    // Windows' second yes: no service, only the session's scourd at login.
+    {
+        let weak = w.as_weak();
+        let cat = Rc::clone(cat);
+        let link = Rc::clone(link);
+        w.on_key_nudged_other(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let cat = cat.borrow().clone();
+            DESK.with(|d| {
+                let mut d = d.borrow_mut();
+                d.seen = true;
+                d.nudge_error.clear();
+            });
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    key_hint_seen: Some(true),
+                    ..Default::default()
+                },
+            });
+            if let Err(e) = crate::autostart::set(true) {
+                DESK.with(|d| d.borrow_mut().nudge_error = e);
+            }
+            w.set_autostart_on(crate::autostart::is_on());
             draw(&w, &cat);
         });
     }
@@ -272,7 +302,8 @@ fn draw(w: &MainWindow, cat: &Catalogue) {
         w.set_key_error(d.error.as_str().into());
         w.set_key_preview(d.preview.as_str().into());
         w.set_key_nudge(if crate::autostart::OFFERED {
-            !d.seen
+            // Asked already, in effect, when the service is what runs.
+            !d.seen && !crate::service_mode::active()
         } else {
             nudge(d.status.as_ref(), d.can_bind, d.seen)
         });

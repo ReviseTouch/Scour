@@ -2124,3 +2124,12 @@ msgstr "Her şeyin ne kadar büyük çizileceği. Ctrl + ve Ctrl - ile de olur."
 
 msgid "{n}%"
 msgstr "%{n}"
+
+msgid "Faster indexing: run Scour as a Windows service? It asks once for administrator rights."
+msgstr "Daha hızlı indeks: Scour Windows hizmeti olarak çalışsın mı? Bir kez yönetici izni ister."
+
+msgid "Only start with Windows"
+msgstr "Yalnız Windows ile başlat"
+
+msgid "Without the service: the index is kept current from the moment you sign in."
+msgstr "Hizmet olmadan: oturum açtığınız andan itibaren indeks güncel tutulur."

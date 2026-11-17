@@ -52,6 +52,17 @@ pub fn set_for(exe: &std::path::Path, on: bool) -> Result<(), String> {
     }
 }
 
+/// Whether the account's Run key starts Scour.
+#[cfg(windows)]
+pub fn is_on() -> bool {
+    reg(&["query", RUN_KEY, "/v", VALUE]).is_ok_and(|o| o.status.success())
+}
+
+#[cfg(not(windows))]
+pub fn is_on() -> bool {
+    false
+}
+
 #[cfg(not(windows))]
 pub fn set(_on: bool) -> Result<(), String> {
     Err("starting with the system is set up by the installer here".into())

@@ -1601,7 +1601,14 @@ export component MainWindow inherits Window {
     in property <string> service-note;
     in property <string> service-push;
     in property <bool> service-busy;
+    in property <bool> service-active;
     callback service-switch();
+    /// Windows, outside the service: whether the session's scourd starts with
+    /// Windows, through the account's Run key. See `autostart`.
+    in property <bool> autostart-on;
+    in property <string> set-autostart;
+    in property <string> set-autostart-note;
+    callback autostart-picked(bool);
     in property <string> set-folders;
     in property <string> set-folders-note;
     in property <[string]> folders;
@@ -1697,6 +1704,10 @@ export component MainWindow inherits Window {
     in property <string> key-nudge-text;
     in property <string> key-nudge-yes;
     in property <string> key-nudge-no;
+    /// A second yes, when there are two ways to say it: on Windows the first
+    /// line offers the service and, short of that, starting with Windows.
+    in property <string> key-nudge-other;
+    callback key-nudged-other();
     in property <string> key-nudge-error;
     /// True for "bind it", false for "not now". Sent once, either way.
     callback key-nudged(bool);
@@ -3805,6 +3816,14 @@ export component MainWindow inherits Window {
                             }
                         }
 
+                        if root.key-nudge && root.key-nudge-other != "": VerticalLayout {
+                            alignment: center;
+                            Push {
+                                label: root.key-nudge-other;
+                                clicked => { root.key-nudged-other(); }
+                            }
+                        }
+
                         if root.key-nudge: VerticalLayout {
                             alignment: center;
                             Push {
@@ -4772,6 +4791,35 @@ export component MainWindow inherits Window {
 
                             if root.settings-section == "general": VerticalLayout {
                                 spacing: 6px;
+                                // How Scour runs on Windows: first, since it decides
+                                // how fast the index is and whether it stays current.
+                                if root.service-offered: Card {
+                                    SettingRow {
+                                        label: root.service-state;
+                                        note: root.service-note;
+                                        Push {
+                                            label: root.service-push;
+                                            asking: root.service-busy;
+                                            clicked => {
+                                                if (!root.service-busy) {
+                                                    root.service-switch();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // A service starts with Windows anyway.
+                                    if !root.service-active: Rectangle { height: Theme.hair; background: Theme.line; }
+                                    if !root.service-active: SettingRow {
+                                        label: root.set-autostart;
+                                        note: root.set-autostart-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.autostart-on ? "on" : "off";
+                                            picked(v) => { root.autostart-picked(v == "on"); }
+                                        }
+                                    }
+                                }
                                 Card {
                                     SettingRow {
                                         label: root.set-language;
@@ -5205,20 +5253,6 @@ export component MainWindow inherits Window {
                                     color: Theme.q-not;
                                     font-size: 12px;
                                     wrap: word-wrap;
-                                }
-                                if root.service-offered: SectionHead { text: root.set-service; }
-                                if root.service-offered: SettingRow {
-                                    label: root.service-state;
-                                    note: root.service-note;
-                                    Push {
-                                        label: root.service-push;
-                                        asking: root.service-busy;
-                                        clicked => {
-                                            if (!root.service-busy) {
-                                                root.service-switch();
-                                            }
-                                        }
-                                    }
                                 }
                             }
 

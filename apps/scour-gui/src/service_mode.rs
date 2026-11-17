@@ -12,7 +12,7 @@ pub fn active() -> bool {
 }
 
 #[cfg(windows)]
-pub use imp::{elevated_off, elevated_on, switch};
+pub use imp::{elevated_off, elevated_on, switch, tidy};
 
 #[cfg(not(windows))]
 pub fn switch(_to_service: bool, _config: &scour_config::Config) -> Result<(), String> {
@@ -255,6 +255,24 @@ mod imp {
                 .map_err(|e| e.to_string())?;
         }
         Ok(())
+    }
+
+    /// Run from Program Files as the service: remove what the session left —
+    /// the per-user programs and the Run value. Both are the person's to remove.
+    pub fn tidy() {
+        let Ok(me) = here() else { return };
+        let Ok(user) = crate::install::user_home() else {
+            return;
+        };
+        if same(&me, &user) {
+            return;
+        }
+        if user.is_dir() {
+            let _ = std::fs::remove_dir_all(&user);
+        }
+        if crate::autostart::is_on() {
+            let _ = crate::autostart::set(false);
+        }
     }
 
     /// As an administrator: programs to Program Files, the index to ProgramData

@@ -806,6 +806,23 @@ fn main() -> Result<()> {
         });
     }
 
+    // Starting with Windows without the service: the account's Run key.
+    {
+        let weak = window.as_weak();
+        window.on_autostart_picked(move |on| {
+            let _ = autostart::set(on);
+            if let Some(w) = weak.upgrade() {
+                w.set_autostart_on(autostart::is_on());
+            }
+        });
+    }
+    // Run as the service, the session's leftovers go: the per-user copy of the
+    // programs and the Run value that started it. Off the window's thread.
+    #[cfg(windows)]
+    if service_mode::active() {
+        std::thread::spawn(service_mode::tidy);
+    }
+
     // The tabs switched on or off; the tabs themselves are kept either way.
     {
         let link = Rc::clone(&link);
@@ -3754,7 +3771,15 @@ const PAST_SHOWN: usize = 12;
 /// The Windows service row: what runs the index now, and the way to the other.
 fn draw_service(w: &MainWindow, cat: &Catalogue) {
     w.set_service_offered(service_mode::OFFERED);
-    if service_mode::active() {
+    let active = service_mode::active();
+    w.set_service_active(active);
+    w.set_autostart_on(autostart::is_on());
+    w.set_set_autostart(t(cat, "Start with Windows"));
+    w.set_set_autostart_note(t(
+        cat,
+        "Without the service: the index is kept current from the moment you sign in.",
+    ));
+    if active {
         w.set_service_state(t(cat, "Running as the Scour service"));
         w.set_service_note(t(
             cat,
