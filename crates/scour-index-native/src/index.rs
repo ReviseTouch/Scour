@@ -2155,6 +2155,18 @@ impl Index for NativeIndex {
         generation: u64,
         spare: &scour_core::PrefixSet,
     ) -> Result<u64> {
+        self.sweep_many(&[(source, under.to_vec())], generation, spare)
+    }
+
+    /// Every source of one pass at once: the notes of unchanged rows belong to
+    /// the pass, so a second `sweep` after the first would find none and delete
+    /// what the first source's notes did not cover.
+    fn sweep_many(
+        &self,
+        parts: &[(SourceId, Vec<String>)],
+        generation: u64,
+        spare: &scour_core::PrefixSet,
+    ) -> Result<u64> {
         let began = Instant::now();
         // A segment in the air holds rows this generation stamped; sweeping
         // before it lands judges them by a walk that never saw them.
@@ -2179,112 +2191,117 @@ impl Index for NativeIndex {
             if live.generation >= generation {
                 continue;
             }
-            let victims: Vec<usize> = {
-                let seg = live.view()?;
-                // One root that is the whole tree makes every other root
-                // redundant, which is what `whole` has always meant.
-                let whole = under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty();
-                let scopes: Vec<_> = under.iter().map(|p| seg.dirs.subtree(p)).collect();
-                // The swept directory's **own** row is not under itself: it lives
-                // in its parent and carries the parent's number, so the range
-                // check walks past it and the name answers for those few rows.
-                let owns: Vec<(u32, &str)> = if whole {
-                    Vec::new()
-                } else {
-                    under
-                        .iter()
-                        .filter_map(|p| {
-                            let p = p.trim_end_matches('/');
-                            let (parent, name) = p.rsplit_once('/')?;
-                            let parent = if parent.is_empty() { "/" } else { parent };
-                            Some((seg.dirs.exact(parent)?, name))
-                        })
-                        .collect()
-                };
-                // **No path is built per row, and that is the whole cost of this
-                // loop.** A row's directory number *is* its parent, so a
-                // descendant is in `scope.below` and a child is `scope.own`.
-                if !whole && scopes.iter().all(|s| s.is_empty()) && owns.is_empty() {
-                    Vec::new()
-                } else {
-                    // Rows the walk found unchanged are stamped here rather than
-                    // by being rewritten. See `Inner::seen`.
-                    let seen = inner_seen.get(&live.number);
-                    let spared = |row: usize| {
-                        seen.is_some_and(|bits: &Vec<u8>| {
-                            bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
-                        })
+            for (source, under) in parts {
+                let (source, under) = (*source, &under[..]);
+                let victims: Vec<usize> = {
+                    let seg = live.view()?;
+                    // One root that is the whole tree makes every other root
+                    // redundant, which is what `whole` has always meant.
+                    let whole = under.iter().any(|p| p.is_empty() || p == "/") || under.is_empty();
+                    let scopes: Vec<_> = under.iter().map(|p| seg.dirs.subtree(p)).collect();
+                    // The swept directory's **own** row is not under itself: it lives
+                    // in its parent and carries the parent's number, so the range
+                    // check walks past it and the name answers for those few rows.
+                    let owns: Vec<(u32, &str)> = if whole {
+                        Vec::new()
+                    } else {
+                        under
+                            .iter()
+                            .filter_map(|p| {
+                                let p = p.trim_end_matches('/');
+                                let (parent, name) = p.rsplit_once('/')?;
+                                let parent = if parent.is_empty() { "/" } else { parent };
+                                Some((seg.dirs.exact(parent)?, name))
+                            })
+                            .collect()
                     };
-                    // Under a subtree, a row's directory number decides first:
-                    // it is one column read where the source is another, and a
-                    // block whose numbers miss every root is not read at all —
-                    // the zone map `kill_under` reads. Every row of every
-                    // segment was read here, write lock held, after each
-                    // subtree walk: 58% of an idle service's CPU.
-                    let in_scope = |row: usize| {
-                        let d = seg.dir_id(row);
-                        scopes.iter().any(|s| s.contains(d))
-                            || owns
-                                .iter()
-                                .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
-                    };
-                    let block_matters = |block: usize| {
-                        whole
-                            || match seg.cols.block_range(Field::DirId, block) {
-                                Some((lo, hi)) if lo >= 0 => {
-                                    let (lo, hi) = (lo as u32, hi as u32);
-                                    scopes.iter().any(|s| s.intersects(lo, hi))
-                                        || owns.iter().any(|(pd, _)| lo <= *pd && *pd <= hi)
+                    // **No path is built per row, and that is the whole cost of this
+                    // loop.** A row's directory number *is* its parent, so a
+                    // descendant is in `scope.below` and a child is `scope.own`.
+                    if !whole && scopes.iter().all(|s| s.is_empty()) && owns.is_empty() {
+                        Vec::new()
+                    } else {
+                        // Rows the walk found unchanged are stamped here rather than
+                        // by being rewritten. See `Inner::seen`.
+                        let seen = inner_seen.get(&live.number);
+                        let spared = |row: usize| {
+                            seen.is_some_and(|bits: &Vec<u8>| {
+                                bits.get(row / 8).is_some_and(|b| b & (1 << (row % 8)) != 0)
+                            })
+                        };
+                        // Under a subtree, a row's directory number decides first:
+                        // it is one column read where the source is another, and a
+                        // block whose numbers miss every root is not read at all —
+                        // the zone map `kill_under` reads. Every row of every
+                        // segment was read here, write lock held, after each
+                        // subtree walk: 58% of an idle service's CPU.
+                        let in_scope = |row: usize| {
+                            let d = seg.dir_id(row);
+                            scopes.iter().any(|s| s.contains(d))
+                                || owns
+                                    .iter()
+                                    .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
+                        };
+                        let block_matters = |block: usize| {
+                            whole
+                                || match seg.cols.block_range(Field::DirId, block) {
+                                    Some((lo, hi)) if lo >= 0 => {
+                                        let (lo, hi) = (lo as u32, hi as u32);
+                                        scopes.iter().any(|s| s.intersects(lo, hi))
+                                            || owns.iter().any(|(pd, _)| lo <= *pd && *pd <= hi)
+                                    }
+                                    _ => true,
                                 }
-                                _ => true,
+                        };
+                        let rows = live.rows();
+                        let mut out = Vec::new();
+                        for block in 0..rows.div_ceil(crate::columns::BLOCK) {
+                            if !block_matters(block) {
+                                continue;
                             }
-                    };
-                    let rows = live.rows();
-                    let mut out = Vec::new();
-                    for block in 0..rows.div_ceil(crate::columns::BLOCK) {
-                        if !block_matters(block) {
-                            continue;
+                            let from = block * crate::columns::BLOCK;
+                            let to = (from + crate::columns::BLOCK).min(rows);
+                            out.extend((from..to).filter(|&row| {
+                                if !live.is_alive(row) {
+                                    return false;
+                                }
+                                // The walk saw it and it had not changed, so it
+                                // was not rewritten. That is a stamp.
+                                if spared(row) {
+                                    return false;
+                                }
+                                if !whole && !in_scope(row) {
+                                    return false;
+                                }
+                                // **Another source's rows are not this walk's to
+                                // judge.** A sweep speaks about one source, and where
+                                // roots overlap it was applied to both.
+                                if seg.source_of(row) != source {
+                                    return false;
+                                }
+                                // Somewhere the walk could not look. Its rows are
+                                // not evidence of anything, so they stay.
+                                !(!spare.is_empty()
+                                    && spare.covers(
+                                        &seg.path(row, seg.names.get(row).unwrap_or_default()),
+                                    ))
+                            }));
                         }
-                        let from = block * crate::columns::BLOCK;
-                        let to = (from + crate::columns::BLOCK).min(rows);
-                        out.extend((from..to).filter(|&row| {
-                            if !live.is_alive(row) {
-                                return false;
-                            }
-                            // The walk saw it and it had not changed, so it
-                            // was not rewritten. That is a stamp.
-                            if spared(row) {
-                                return false;
-                            }
-                            if !whole && !in_scope(row) {
-                                return false;
-                            }
-                            // **Another source's rows are not this walk's to
-                            // judge.** A sweep speaks about one source, and where
-                            // roots overlap it was applied to both.
-                            if seg.source_of(row) != source {
-                                return false;
-                            }
-                            // Somewhere the walk could not look. Its rows are
-                            // not evidence of anything, so they stay.
-                            !(!spare.is_empty()
-                                && spare
-                                    .covers(&seg.path(row, seg.names.get(row).unwrap_or_default())))
-                        }));
+                        if tracing {
+                            gone_paths.extend(
+                                out.iter().map(|&row| {
+                                    seg.path(row, seg.names.get(row).unwrap_or_default())
+                                }),
+                            );
+                        }
+                        out
                     }
-                    if tracing {
-                        gone_paths.extend(
-                            out.iter()
-                                .map(|&row| seg.path(row, seg.names.get(row).unwrap_or_default())),
-                        );
+                };
+                for row in victims {
+                    if live.kill(row) {
+                        gone += 1;
+                        touched[i] = true;
                     }
-                    out
-                }
-            };
-            for row in victims {
-                if live.kill(row) {
-                    gone += 1;
-                    touched[i] = true;
                 }
             }
         }

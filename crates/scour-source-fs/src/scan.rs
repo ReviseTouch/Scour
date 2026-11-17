@@ -165,6 +165,8 @@ pub struct FsSource {
     walk_as: Option<WalkAs>,
     /// Where a change journal's position is kept between runs, when there is one.
     journal_dir: Option<PathBuf>,
+    /// The physical disk under the first root; see [`crate::fs::disk_of`].
+    disk: Option<String>,
 }
 
 /// An identity a walker thread takes before it reads anything: a service on
@@ -198,6 +200,7 @@ impl FsSource {
             .unwrap_or(crate::fs::Medium::Unknown);
         let probes = roots.iter().map(|r| crate::pulse::probe_for(r)).collect();
         let nested = roots.iter().flat_map(|r| crate::pulse::nested(r)).collect();
+        let disk = roots.first().and_then(|r| crate::fs::disk_of(r));
         Self {
             id,
             name: name.into(),
@@ -212,6 +215,7 @@ impl FsSource {
             patience: std::time::Duration::ZERO,
             walk_as: None,
             journal_dir: None,
+            disk,
         }
     }
 
@@ -336,6 +340,10 @@ impl Source for FsSource {
     /// Folded because any root moving is a yes; `None` only when none can be asked.
     fn patience(&self) -> std::time::Duration {
         self.patience
+    }
+
+    fn disk(&self) -> Option<String> {
+        self.disk.clone()
     }
 
     fn pulse(&self) -> Option<u64> {

@@ -91,6 +91,14 @@ pub trait Source: Send + Sync + Debug {
         std::time::Duration::ZERO
     }
 
+    /// The physical disk this source reads, by a name two sources share when
+    /// they share it. Whole walks of different disks run at once; walks of one
+    /// disk take turns, since two would only make its head jump between them.
+    /// None: no claim, and the source takes its turn with every other None.
+    fn disk(&self) -> Option<String> {
+        None
+    }
+
     /// Walk everything and push it into the sink. Returns when the walk is done or
     /// the sink asked it to stop; the report says which.
     fn scan(&self, opts: &ScanOptions, sink: &mut dyn EntrySink) -> Result<ScanReport>;

@@ -2076,3 +2076,144 @@ fn a_new_engine_over_the_same_index_keeps_the_rows_and_the_count() {
     assert_eq!(after.revision, seen + 2);
     assert!(began.elapsed() < Duration::from_secs(1));
 }
+
+/// A source on a disk of its own, for the walks that run side by side.
+#[derive(Debug)]
+struct OnDisk {
+    id: u32,
+    root: String,
+    disk: String,
+    entries: RwLock<Vec<Entry>>,
+    /// When each walk began and ended.
+    spans: RwLock<Vec<(Instant, Instant)>>,
+}
+
+impl OnDisk {
+    fn new(id: u32, root: &str, disk: &str, files: usize) -> Arc<OnDisk> {
+        let entries = (0..files)
+            .map(|i| {
+                let path = format!("{root}/dosya-{i:04}.txt");
+                Entry {
+                    id: EntryId::path_hash(SourceId(id), &path),
+                    path,
+                    is_dir: false,
+                    meta: scour_core::Meta::UNKNOWN,
+                }
+            })
+            .collect();
+        Arc::new(OnDisk {
+            id,
+            root: root.into(),
+            disk: disk.into(),
+            entries: RwLock::new(entries),
+            spans: RwLock::new(Vec::new()),
+        })
+    }
+}
+
+impl Source for OnDisk {
+    fn id(&self) -> SourceId {
+        SourceId(self.id)
+    }
+    fn describe(&self) -> SourceInfo {
+        SourceInfo {
+            id: SourceId(self.id),
+            name: format!("disk-{}", self.id),
+            kind: SourceKind::Local,
+            roots: vec![self.root.clone()],
+            caps: Caps::empty(),
+        }
+    }
+    fn caps(&self) -> Caps {
+        Caps::empty()
+    }
+    fn disk(&self) -> Option<String> {
+        Some(self.disk.clone())
+    }
+    fn scan(
+        &self,
+        _opts: &ScanOptions,
+        sink: &mut dyn EntrySink,
+    ) -> scour_core::Result<ScanReport> {
+        let began = Instant::now();
+        // Long enough that two walks at once overlap for certain.
+        std::thread::sleep(Duration::from_millis(300));
+        let entries = self.entries.read().clone();
+        for e in &entries {
+            let _ = sink.push(e.clone());
+        }
+        self.spans.write().push((began, Instant::now()));
+        Ok(ScanReport {
+            entries: entries.len() as u64,
+            vouched: vec![self.root.clone()],
+            ..Default::default()
+        })
+    }
+    fn watch(
+        &self,
+        _opts: &ScanOptions,
+        _sink: Box<dyn ChangeSink>,
+    ) -> scour_core::Result<Box<dyn WatchHandle>> {
+        Err(Error::unsupported("not watched"))
+    }
+    fn open(&self, _id: &EntryId) -> scour_core::Result<Box<dyn Read + Send>> {
+        Err(Error::unsupported("no content"))
+    }
+    fn stat(&self, p: &str) -> scour_core::Result<Entry> {
+        Err(Error::NotFound { path: p.into() })
+    }
+}
+
+/// Two disks are walked at once, in one pass, and that pass's sweep judges
+/// both: what went from either goes, and what stayed on the second is not
+/// taken for gone because the first was swept before it.
+#[test]
+fn different_disks_are_walked_at_once_and_swept_together() {
+    let dir = tempfile::tempdir().expect("temp");
+    let index = Arc::new(NativeIndex::open_or_create(dir.path()).expect("index"));
+    let a = OnDisk::new(1, "/a", "ssd", 300);
+    let b = OnDisk::new(2, "/b", "hdd", 300);
+    let engine = Engine::new(
+        vec![a.clone() as Arc<dyn Source>, b.clone() as Arc<dyn Source>],
+        index,
+        EngineOptions {
+            commit_interval: Duration::from_millis(50),
+            ..Default::default()
+        },
+    );
+    let wait_for = |want: u64| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
+            let st = engine.status();
+            if !st.scanning && st.entries == want {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    engine.rescan(None).expect("rescan");
+    wait_for(600);
+    assert_eq!(engine.status().entries, 600);
+    let (sa, sb) = (a.spans.read()[0], b.spans.read()[0]);
+    assert!(
+        sa.0 < sb.1 && sb.0 < sa.1,
+        "the two disks were walked one after the other"
+    );
+
+    a.entries.write().truncate(250);
+    b.entries.write().truncate(280);
+    engine.rescan(None).expect("rescan");
+    wait_for(530);
+    assert_eq!(
+        engine.status().entries,
+        530,
+        "a sweep judged the wrong rows"
+    );
+
+    // Nothing changed: nothing goes.
+    engine.rescan(None).expect("rescan");
+    std::thread::sleep(Duration::from_millis(800));
+    wait_for(530);
+    assert_eq!(engine.status().entries, 530);
+    assert_eq!(a.spans.read().len(), 3);
+}

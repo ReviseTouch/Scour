@@ -113,6 +113,27 @@ pub fn medium_of(path: &Path) -> Medium {
     return fallback::medium_of(path);
 }
 
+/// The physical disk under `path`, as a name two paths share exactly when they
+/// share the disk's head: `nvme0n1`, `disk1`, `net:server`. Walks of
+/// different disks run side by side; walks of one disk take turns. None when
+/// nothing can be said, and such a source takes its turn with the others.
+///
+/// macOS, when it comes: `statfs`'s `f_mntfromname` (`/dev/disk3s1`) names an
+/// APFS volume; its physical store is `diskutil info -plist`'s
+/// `APFSPhysicalStores`, or IOKit walking from the media object up to the
+/// `IOBlockStorageDevice`. Every volume of one APFS container shares a disk.
+pub fn disk_of(path: &Path) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    return linux::disk_of(path);
+    #[cfg(windows)]
+    return windows_impl::disk_of(path);
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
 /// What the filesystem under `path` promises: one `statfs` per root at start-up,
 /// not per entry. A root spanning a nested mount is judged by the root itself,
 /// because the narrower promise is the safe one.
@@ -193,6 +214,69 @@ mod linux {
             Some(false) => Medium::Solid,
             None => Medium::Unknown,
         }
+    }
+
+    /// The mount source under `path`, `/dev/nvme0n1p5` — btrfs's `[/@home]` cut off.
+    fn source_of(path: &Path) -> Option<String> {
+        let out = std::process::Command::new("findmnt")
+            .args(["-no", "SOURCE", "--target"])
+            .arg(path)
+            .output()
+            .ok()?;
+        let src = String::from_utf8_lossy(&out.stdout);
+        let src = src.trim().split('[').next()?.trim().to_owned();
+        (!src.is_empty()).then_some(src)
+    }
+
+    pub fn disk_of(path: &Path) -> Option<String> {
+        if matches!(
+            magic(path),
+            Some(NFS | SMB | CIFS | SMB2 | NINEP | AFS | CEPH)
+        ) {
+            // One lane a server: its link is the shared head.
+            let src = source_of(path)?;
+            let host = src
+                .trim_start_matches('/')
+                .split([':', '/'])
+                .next()
+                .unwrap_or(&src);
+            return Some(format!("net:{host}"));
+        }
+        let src = source_of(path)?;
+        if !src.starts_with("/dev/") {
+            return None;
+        }
+        let md = std::fs::metadata(&src).ok()?;
+        use std::os::unix::fs::MetadataExt;
+        let (maj, min) = (libc::major(md.rdev()), libc::minor(md.rdev()));
+        let dev = std::fs::canonicalize(format!("/sys/dev/block/{maj}:{min}")).ok()?;
+        Some(disk_above(&dev, 0))
+    }
+
+    /// The whole disk a block device is part of: a partition's parent, and for a
+    /// mapped device (LUKS, LVM) the disk of the first device beneath it.
+    fn disk_above(dev: &Path, depth: u32) -> String {
+        let name = || {
+            dev.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        if dev.join("partition").exists()
+            && let Some(parent) = dev.parent()
+        {
+            return parent
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(name);
+        }
+        if depth < 4
+            && let Ok(mut below) = std::fs::read_dir(dev.join("slaves"))
+            && let Some(Ok(first)) = below.next()
+            && let Ok(real) = std::fs::canonicalize(first.path())
+        {
+            return disk_above(&real, depth + 1);
+        }
+        name()
     }
 
     /// Does the kernel call the device under this path rotational?
@@ -305,11 +389,106 @@ mod windows_impl {
         // SAFETY: `root` is a NUL-terminated wide string from Windows itself.
         match unsafe { GetDriveTypeW(root.as_ptr()) } {
             DRIVE_REMOTE => Medium::Network,
-            // Usually flash, and assuming spinning would slow every USB stick.
+            // A fixed disk says whether it seeks; a removable one is usually
+            // flash, and assuming spinning would slow every USB stick.
+            DRIVE_FIXED if seeks(&root) == Some(true) => Medium::Spinning,
             DRIVE_REMOVABLE | DRIVE_FIXED => Medium::Solid,
             _ => Medium::Unknown,
         }
-        // Telling NVMe from SATA needs the raw volume handle: privileged, untestable here.
+    }
+
+    /// `\\.\C:` for the root `C:\`, opened for nothing but questions: no
+    /// administrator needed for those. None for a root that is not a letter.
+    fn volume(root: &[u16]) -> Option<isize> {
+        use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        let letter = char::from_u32(*root.first()? as u32)?;
+        if !letter.is_ascii_alphabetic() || root.get(1) != Some(&(b':' as u16)) {
+            return None;
+        }
+        let name: Vec<u16> = format!(r"\\.\{letter}:")
+            .encode_utf16()
+            .chain([0])
+            .collect();
+        // SAFETY: a NUL-terminated name; the handle is closed by the caller.
+        let h = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        (h != INVALID_HANDLE_VALUE).then_some(h as isize)
+    }
+
+    fn ask(root: &[u16], code: u32, input: &[u8], out: &mut [u8]) -> bool {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+        let Some(h) = volume(root) else {
+            return false;
+        };
+        let mut got = 0u32;
+        // SAFETY: buffers of the sizes given; the handle is closed below.
+        let ok = unsafe {
+            DeviceIoControl(
+                h as _,
+                code,
+                input.as_ptr() as *const _,
+                input.len() as u32,
+                out.as_mut_ptr() as *mut _,
+                out.len() as u32,
+                &mut got,
+                std::ptr::null_mut(),
+            )
+        };
+        unsafe { CloseHandle(h as _) };
+        ok != 0
+    }
+
+    /// Whether the disk under a volume pays for seeking: a spinning one.
+    fn seeks(root: &[u16]) -> Option<bool> {
+        const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
+        // StorageDeviceSeekPenaltyProperty, PropertyStandardQuery.
+        let mut query = [0u8; 12];
+        query[0..4].copy_from_slice(&7u32.to_le_bytes());
+        // DEVICE_SEEK_PENALTY_DESCRIPTOR: version, size, IncursSeekPenalty.
+        let mut out = [0u8; 12];
+        ask(root, IOCTL_STORAGE_QUERY_PROPERTY, &query, &mut out).then_some(out[8] != 0)
+    }
+
+    pub fn disk_of(path: &Path) -> Option<String> {
+        let root = volume_root(path)?;
+        // SAFETY: `root` is a NUL-terminated wide string from Windows itself.
+        if unsafe { GetDriveTypeW(root.as_ptr()) } == DRIVE_REMOTE {
+            let n = root.iter().position(|&c| c == 0).unwrap_or(root.len());
+            let text = String::from_utf16_lossy(&root[..n]);
+            let host = text
+                .trim_start_matches('\\')
+                .split('\\')
+                .next()
+                .unwrap_or(&text);
+            return Some(format!("net:{}", host.to_lowercase()));
+        }
+        const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
+        // VOLUME_DISK_EXTENTS: a count, then { DiskNumber, StartingOffset,
+        // ExtentLength } each 24 bytes, the first at 8.
+        let mut out = [0u8; 8 + 24 * 4];
+        if !ask(
+            root.as_slice(),
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            &[],
+            &mut out,
+        ) {
+            return None;
+        }
+        let disk = u32::from_le_bytes(out[8..12].try_into().ok()?);
+        Some(format!("disk{disk}"))
     }
 }
 

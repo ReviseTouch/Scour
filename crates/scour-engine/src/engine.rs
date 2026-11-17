@@ -118,6 +118,8 @@ enum Job {
         source: usize,
         subtree: Option<String>,
     },
+    /// Walk these sources whole: disks side by side, each disk's in turn.
+    ScanAll(Vec<usize>),
     Maintain(Maintenance),
     Stop,
 }
@@ -450,11 +452,10 @@ impl Engine {
                     .map(|(i, _)| *i)
                     .collect()
             };
-            for i in 0..self.shared.sources.len() {
-                if !caught_up.contains(&i) {
-                    self.queue_whole(i)?;
-                }
-            }
+            let all: Vec<usize> = (0..self.shared.sources.len())
+                .filter(|i| !caught_up.contains(i))
+                .collect();
+            self.queue_all(all)?;
         }
         Ok((started, skipped))
     }
@@ -472,8 +473,32 @@ impl Engine {
                     subtree,
                 })
             }
-            None => (0..self.shared.sources.len()).try_for_each(|i| self.queue_whole(i)),
+            None => self.queue_all((0..self.shared.sources.len()).collect()),
         }
+    }
+
+    /// Queue whole walks of these sources as one job, so different disks are
+    /// walked at once. A source already queued is left where it is.
+    fn queue_all(&self, sources: Vec<usize>) -> Result<()> {
+        let fresh: Vec<usize> = sources
+            .into_iter()
+            .filter(|&i| {
+                self.shared
+                    .queued
+                    .get(i)
+                    .is_some_and(|q| !q.swap(true, Ordering::AcqRel))
+            })
+            .collect();
+        if fresh.is_empty() {
+            return Ok(());
+        }
+        let sent = self.send(Job::ScanAll(fresh.clone()));
+        if sent.is_err() {
+            for i in fresh {
+                self.shared.queued[i].store(false, Ordering::Release);
+            }
+        }
+        sent
     }
 
     /// Queue a full walk of the source with this name: one just added.
@@ -1213,6 +1238,24 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
                     // not drain this channel, and `commit_idle` would charge it twice.
                     overdue = !changes.is_empty();
                 }
+                Ok(Job::ScanAll(list)) => {
+                    for &i in &list {
+                        if let Some(flag) = shared.queued.get(i) {
+                            flag.store(false, Ordering::Release);
+                        }
+                    }
+                    for (source, ok) in scan_all(&shared, &mut pulses, list) {
+                        if ok {
+                            retries.retain(|(s, _, _)| *s != source);
+                        } else {
+                            schedule_retry(&mut retries, &pulses, source);
+                        }
+                    }
+                    dirty = true;
+                    idle_done = false;
+                    last_busy = Instant::now();
+                    overdue = !changes.is_empty();
+                }
                 Ok(Job::Maintain(level)) => {
                     match shared.index.maintain(level) {
                         Ok(_) => {
@@ -1299,8 +1342,9 @@ fn run(shared: Arc<Shared>, jobs: Receiver<Job>, changes: Receiver<Box<Change>>)
             // An empty path means "I lost track and cannot say where" — an
             // overflowed kernel queue — so every source is walked.
             if path.is_empty() {
-                for i in 0..shared.sources.len() {
-                    if !scan(&shared, &mut pulses, i, None, false) {
+                let all = (0..shared.sources.len()).collect();
+                for (i, ok) in scan_all(&shared, &mut pulses, all) {
+                    if !ok {
                         schedule_retry(&mut retries, &pulses, i);
                     }
                 }
@@ -1694,6 +1738,7 @@ fn scan(
             at: Instant::now() + SHOW_FIRST,
             every: SHOW_FIRST,
         }),
+        counter: Arc::new(AtomicU64::new(0)),
     };
     // Read once, here: a walk skips by one set of rules from beginning to end, and
     // a rule saved halfway through takes effect on the scan that follows.
@@ -1828,6 +1873,237 @@ fn scan(
     !sink.failed && ended && finished && (subtree.is_some() || (could_look && all_roots))
 }
 
+/// Whole walks of these sources, each disk's one after another and the disks
+/// side by side: PC2's seven volumes on two SSDs and a spinning disk had each
+/// waited for the one before. Says for each source whether its walk finished.
+fn scan_all(shared: &Arc<Shared>, pulses: &mut Pulses, list: Vec<usize>) -> Vec<(usize, bool)> {
+    let mut lanes: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+    for i in list {
+        let Some(src) = shared.sources.get(i) else {
+            continue;
+        };
+        let disk = src.disk();
+        match lanes.iter_mut().find(|(d, _)| *d == disk) {
+            Some((_, lane)) => lane.push(i),
+            None => lanes.push((disk, vec![i])),
+        }
+    }
+    if lanes.len() <= 1 {
+        return lanes
+            .into_iter()
+            .flat_map(|(_, lane)| lane)
+            .map(|i| (i, scan(shared, pulses, i, None, false)))
+            .collect();
+    }
+    scan_lanes(shared, pulses, lanes.into_iter().map(|(_, l)| l).collect())
+}
+
+/// What one walk of a shared pass brought back.
+struct LaneWalk {
+    source: usize,
+    report: Result<scour_core::ScanReport>,
+    seen: u64,
+    failed: bool,
+    took: Duration,
+}
+
+/// The walks of several disks at once, in one generation: the index keeps one
+/// pass open at a time, and a pass's notes of unchanged rows are swept in one
+/// call for every source it walked ([`Index::sweep_many`]).
+fn scan_lanes(
+    shared: &Arc<Shared>,
+    pulses: &mut Pulses,
+    lanes: Vec<Vec<usize>>,
+) -> Vec<(usize, bool)> {
+    let began = Instant::now();
+    let generation = match shared.index.begin_generation() {
+        Ok(g) => g,
+        Err(e) => {
+            scour_core::note!("scourd: a walk of every disk could not start: {e}");
+            return lanes.into_iter().flatten().map(|i| (i, false)).collect();
+        }
+    };
+    shared.scanning.store(true, Ordering::Relaxed);
+    {
+        let mut st = shared.status.write();
+        st.scanning_source = lanes
+            .first()
+            .and_then(|l| l.first())
+            .and_then(|&i| shared.sources.get(i))
+            .map(|s| s.id());
+        st.scanned = 0;
+    }
+    let counter = Arc::new(AtomicU64::new(0));
+    let opts = ScanOptions {
+        subtree: None,
+        ..(*shared.scan()).clone()
+    };
+    let walks: Vec<LaneWalk> = std::thread::scope(|scope| {
+        let handles: Vec<_> = lanes
+            .iter()
+            .map(|lane| {
+                let (counter, opts) = (Arc::clone(&counter), &opts);
+                scope.spawn(move || {
+                    lane.iter()
+                        .map(|&i| {
+                            let src = Arc::clone(&shared.sources[i]);
+                            let started = Instant::now();
+                            let first = holds_nothing(&*shared.index, &src.describe().roots);
+                            let mut sink = ToIndex {
+                                index: Arc::clone(&shared.index),
+                                seen: 0,
+                                buffer: Vec::with_capacity(BATCH),
+                                stop: Arc::clone(shared),
+                                failed: false,
+                                show: first.then(|| Show {
+                                    at: Instant::now() + SHOW_FIRST,
+                                    every: SHOW_FIRST,
+                                }),
+                                counter: Arc::clone(&counter),
+                            };
+                            let report = src.scan(opts, &mut sink);
+                            sink.flush();
+                            LaneWalk {
+                                source: i,
+                                report,
+                                seen: sink.seen,
+                                failed: sink.failed,
+                                took: started.elapsed(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
+    });
+
+    // One sweep for every walk that may judge what it did not see.
+    let trusted = |w: &LaneWalk| {
+        !w.failed
+            && w.report
+                .as_ref()
+                .is_ok_and(|r| !r.cancelled && !r.vouched.is_empty())
+    };
+    let parts: Vec<(scour_core::SourceId, Vec<String>)> = walks
+        .iter()
+        .filter(|w| trusted(w))
+        .filter_map(|w| {
+            let r = w.report.as_ref().ok()?;
+            Some((shared.sources[w.source].id(), r.vouched.clone()))
+        })
+        .collect();
+    let blind: Vec<String> = walks
+        .iter()
+        .filter(|w| trusted(w))
+        .flat_map(|w| {
+            w.report
+                .as_ref()
+                .map(|r| r.blind.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    let spare = scour_core::PrefixSet::new(blind);
+    let mut ended = true;
+    let mut gone = 0;
+    if parts.is_empty() {
+        if let Err(e) = shared.index.abandon_generation(generation) {
+            ended = false;
+            scour_core::note!("scourd: a pass of every disk could not be ended: {e}");
+        }
+    } else {
+        match shared.index.sweep_many(&parts, generation, &spare) {
+            Ok(n) => gone = n,
+            Err(e) => {
+                scour_core::note!("scourd: a walk of every disk could not be reconciled: {e}");
+                ended = false;
+                if let Err(e) = shared.index.abandon_generation(generation) {
+                    scour_core::note!("scourd: an incomplete pass could not be ended: {e}");
+                }
+            }
+        }
+        if gone > 0 {
+            shared.touched();
+        }
+    }
+    let fresh = shared.index.fresh(generation);
+    let total: u64 = walks.iter().map(|w| w.seen).sum();
+    scour_core::note!(
+        "scourd: walked {} disks at once in {:.1} s — {total} entries, {fresh} new or changed, {gone} gone",
+        lanes.len(),
+        began.elapsed().as_secs_f64()
+    );
+
+    let mut out = Vec::new();
+    for w in &walks {
+        let src = &shared.sources[w.source];
+        let trustworthy = trusted(w);
+        let could_look = w.report.as_ref().is_ok_and(|r| !r.vouched.is_empty());
+        scour_core::note!(
+            "scourd: {} {} in {:.1} s — {} entries",
+            if trustworthy {
+                "walked"
+            } else {
+                "stopped walking"
+            },
+            src.describe().name,
+            w.took.as_secs_f64(),
+            w.seen
+        );
+        if let Err(e) = &w.report {
+            scour_core::note!("scourd: a scan of {} failed: {e}", src.describe().name);
+        }
+        pulses.scanned(w.source, w.took);
+        let problem = match w.report.as_ref() {
+            Err(e) => e.to_string(),
+            Ok(_) if !could_look => "could not be read".to_owned(),
+            Ok(_) => String::new(),
+        };
+        shared.walks.write().insert(
+            src.describe().name,
+            scour_core::Walked {
+                at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs() as i64),
+                entries: w.seen,
+                unreadable: w.report.as_ref().map_or(0, |r| r.unreadable),
+                problem,
+            },
+        );
+        let finished = w
+            .report
+            .as_ref()
+            .is_ok_and(|r| !r.cancelled && r.unreadable == r.lasting);
+        let covered = scour_core::PrefixSet::new(
+            w.report
+                .as_ref()
+                .map(|r| r.vouched.clone())
+                .unwrap_or_default(),
+        );
+        let all_roots = src.describe().roots.iter().all(|root| covered.covers(root));
+        out.push((
+            w.source,
+            !w.failed && ended && finished && could_look && all_roots,
+        ));
+    }
+    // A lane that panicked brought nothing back: its sources are walked again.
+    for i in lanes.iter().flatten() {
+        if !out.iter().any(|(s, _)| s == i) {
+            out.push((*i, false));
+        }
+    }
+    shared.index.release_memory();
+    shared.scanning.store(false, Ordering::Relaxed);
+    let mut st = shared.status.write();
+    st.scanning_source = None;
+    st.scanned = total;
+    st.last_scan_ms = began.elapsed().as_millis() as u64;
+    out
+}
+
 /// What this process has had read from the disk so far — the page cache's misses,
 /// not its reads. Linux only; a walk's cost is the difference across it.
 fn disk_read_bytes() -> Option<u64> {
@@ -1892,6 +2168,8 @@ struct ToIndex {
     failed: bool,
     /// When a first walk next shows what it has found. `None` on any other walk.
     show: Option<Show>,
+    /// Shared by the walks of one pass, so the count shown is all of them.
+    counter: Arc<AtomicU64>,
 }
 
 /// Whether the index holds nothing under these roots: an empty index, or a disk
@@ -1966,7 +2244,8 @@ impl EntrySink for ToIndex {
             self.flush();
             // How far this walk has got, while it is still walking: written once a
             // batch, not once a row — a write lock every four thousand entries.
-            self.stop.status.write().scanned = self.seen;
+            let total = self.counter.fetch_add(BATCH as u64, Ordering::Relaxed) + BATCH as u64;
+            self.stop.status.write().scanned = total;
             if self.show.as_ref().is_some_and(|s| Instant::now() >= s.at) {
                 self.show();
             }

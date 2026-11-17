@@ -35,6 +35,23 @@ pub trait Index: Send + Sync + Debug {
         spare: &crate::types::PrefixSet,
     ) -> Result<u64>;
 
+    /// [`Index::sweep`] for every source of one pass at once, `(source, roots)`
+    /// each: what several walks sharing a generation end with. The default
+    /// sweeps them one by one, which is only right for an index whose sweep
+    /// does not consume the pass's notes.
+    fn sweep_many(
+        &self,
+        parts: &[(crate::types::SourceId, Vec<String>)],
+        generation: u64,
+        spare: &crate::types::PrefixSet,
+    ) -> Result<u64> {
+        let mut gone = 0;
+        for (source, under) in parts {
+            gone += self.sweep(*source, under, generation, spare)?;
+        }
+        Ok(gone)
+    }
+
     /// End a pass that will not be swept and throw away what it noted. A walk that
     /// could not look must not sweep, but must still end: notes left behind pin
     /// their segments against compaction for good.

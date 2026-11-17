@@ -68,4 +68,11 @@ Also for the service: a network folder is walked as its owner
 (`scourd/src/as_owner.rs`: the walker threads borrow the token of the owner's
 logged-on session), and not watched, every ten minutes at most. **Untried.**
 
+Whole walks of every source (the start, "walk everything") now run one
+lane per physical disk, side by side, in one index generation swept once
+(`Index::sweep_many`): the disk of a volume from
+`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, a spinning one from its seek penalty.
+**Untried** on Windows; on Linux the disk comes from `findmnt` and
+`/sys/class/block` and was checked here.
+
 Until a step is tried on a real Windows machine it is written down as untried.
