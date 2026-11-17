@@ -376,8 +376,13 @@ pub struct PathSet {
     /// How many directories up to each number can hold a match, for a term with
     /// a separator — where only `whole` and `ending` can answer. A block whose
     /// directory numbers hold none of them is not read: the zone map `under:`
-    /// already skips on. Empty when the name could answer instead.
+    /// already skips on. Empty when the name could answer instead and nothing
+    /// says which blocks' names can.
     reach: Vec<u32>,
+    /// The blocks whose names can hold the term, by the trigram index, when the
+    /// name could answer: with `reach`, what lets `path:rapor` skip the blocks
+    /// neither a directory nor a name can match in. Sorted.
+    named: Option<Vec<u32>>,
 }
 
 impl PathSet {
@@ -396,6 +401,7 @@ impl PathSet {
             tail: tail.as_bytes().to_vec(),
             in_name: None,
             reach: Vec::new(),
+            named: None,
         };
         let needle = Needle::new(term);
         let mut fold = Folded::default();
@@ -407,7 +413,10 @@ impl PathSet {
             set.whole[id] = needle.found_in(folded);
             set.ending[id] = folded.ends_with(head.as_bytes());
         });
-        if set.in_name.is_none() {
+        if set.in_name.is_some() && std::env::var_os("SCOUR_NO_TRIGRAM").is_none() {
+            set.named = seg.tri.candidates(needle.folded());
+        }
+        if set.in_name.is_none() || set.named.is_some() {
             set.reach.reserve_exact(count + 1);
             let mut n = 0u32;
             set.reach.push(0);
@@ -419,9 +428,14 @@ impl PathSet {
         set
     }
 
-    /// Can a block whose directory numbers run from `lo` to `hi` hold a match?
-    fn admits(&self, lo: u32, hi: u32) -> bool {
+    /// Can `block`, whose directory numbers run from `lo` to `hi`, hold a match?
+    fn admits(&self, block: usize, lo: u32, hi: u32) -> bool {
         if self.reach.is_empty() {
+            return true;
+        }
+        if let Some(named) = &self.named
+            && named.binary_search(&(block as u32)).is_ok()
+        {
             return true;
         }
         let at = |i: u32| self.reach.get(i as usize).copied();
@@ -678,7 +692,7 @@ impl Plan {
                 // The same zone map, asked whether any directory in the block's
                 // range can hold the path term.
                 Test::PathIn(set) => match seg.cols.block_range(Field::DirId, block) {
-                    Some((lo, hi)) if lo >= 0 => set.admits(lo as u32, hi as u32),
+                    Some((lo, hi)) if lo >= 0 => set.admits(block, lo as u32, hi as u32),
                     _ => true,
                 },
                 // The same zone map, read as a range of discriminants: a block
@@ -1026,12 +1040,107 @@ pub fn run_with(
             conceals.as_deref_mut(),
             folders,
             Some(budget),
+            None,
+            None,
         )
     {
         return found;
     }
-    walk_segment(seg, plan, want, conceals, folders, None)
-        .expect("a walk with no budget always answers")
+    /* **A walk of most of a large segment is made in parts, a thread each.**
+     * Nothing but the walk itself knows it is one, so it is asked to hand its
+     * blocks back rather than walk them. Not under a veto, which is one
+     * closure and not shareable; not for hits, which the merge does not take. */
+    let mut split: Option<Vec<u32>> = None;
+    let may_split = want.rank_only && conceals.is_none() && need > 0 && search_threads() > 1;
+    if let Some(found) = walk_segment(
+        seg,
+        plan,
+        want,
+        conceals,
+        folders,
+        None,
+        None,
+        may_split.then_some(&mut split),
+    ) {
+        return found;
+    }
+    let blocks = split.expect("a walk with no budget answers or splits");
+    in_parts(seg, plan, want, folders, &blocks)
+}
+
+/// Candidate blocks below which a walk stays on one thread: half a million
+/// rows, about ten milliseconds of the dearest walk. `SCOUR_SPLIT_BLOCKS`
+/// overrides, which is how the tests put every walk they make through parts.
+fn split_blocks() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("SCOUR_SPLIT_BLOCKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(16_384)
+    })
+}
+
+/// The share of its blocks a stored-order walk reads before it asks to be
+/// split: where matches are common the page and the count are both found
+/// there, and where they are rare a sixteenth is what was wasted.
+const SPLIT_AFTER: usize = 16;
+
+/// Threads one search may use. `SCOUR_SEARCH_THREADS` overrides, for measuring;
+/// 1 keeps every walk whole.
+fn search_threads() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("SCOUR_SEARCH_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map_or(1, |n| n.get())
+                    .min(8)
+            })
+            .max(1)
+    })
+}
+
+/// One walk made as several, over equal shares of its candidate blocks. Each
+/// part keeps its own page of candidates and its own count; the caller's merge
+/// orders what they hand back, as it orders the segments.
+fn in_parts(
+    seg: &Segment<'_>,
+    plan: &Plan,
+    want: Wanted,
+    folders: &[(u32, i64)],
+    blocks: &[u32],
+) -> Found {
+    let per = blocks.len().div_ceil(search_threads()).max(1);
+    let parts: Vec<Found> = std::thread::scope(|scope| {
+        let walks: Vec<_> = blocks
+            .chunks(per)
+            .map(|part| {
+                scope.spawn(move || {
+                    walk_segment(seg, plan, want, None, folders, None, Some(part), None)
+                        .expect("a part of a walk always answers")
+                })
+            })
+            .collect();
+        walks
+            .into_iter()
+            .map(|walk| match walk.join() {
+                Ok(found) => found,
+                Err(panic) => std::panic::resume_unwind(panic),
+            })
+            .collect()
+    });
+    let counted: u64 = parts.iter().map(|p| p.total).sum();
+    Found {
+        total: counted.min(want.count_cap as u64),
+        capped: counted >= want.count_cap as u64,
+        early_exit: parts.iter().all(|p| p.early_exit),
+        rows_visited: parts.iter().map(|p| p.rows_visited).sum(),
+        ranked: parts.into_iter().flat_map(|p| p.ranked).collect(),
+        ..Found::default()
+    }
 }
 
 /// Positions a name-reading stream may look at per row the page needs: it
@@ -1053,6 +1162,12 @@ fn walk_segment<'v>(
     mut conceals: Option<&mut (dyn FnMut(&Segment<'_>, usize, &[u8]) -> bool + 'v)>,
     folders: &[(u32, i64)],
     named: Option<usize>,
+    // The candidate blocks to walk instead of the plan's own: one share of a
+    // walk being made in parts. Never streamed, a stream reading no blocks.
+    part: Option<&[u32]>,
+    // Where to leave the candidate blocks, returning `None`, if this turns out
+    // to be a walk worth making in parts. See [`in_parts`].
+    split: Option<&mut Option<Vec<u32>>>,
 ) -> Option<Found> {
     let has_veto = conceals.is_some();
     // A name-reading query streams only when asked to, and then reads the name.
@@ -1112,7 +1227,10 @@ fn walk_segment<'v>(
     // Which blocks are worth opening at all — the trigram index and the zone map,
     // both of which can only remove. Hoisted above the walk because how much of
     // the segment survived decides whether the path order can be streamed.
-    let blocks = blocks_worth_opening(seg, plan);
+    let blocks = match part {
+        Some(part) => part.to_vec(),
+        None => blocks_worth_opening(seg, plan),
+    };
 
     /* **Ordering by path is a stored order too, when the segment has one**: the
      * page is the first `need` positions that are live and match. Two conditions —
@@ -1124,6 +1242,7 @@ fn walk_segment<'v>(
         && need > 0
         && (!plan.needs_name() || streams_names)
         && seg.porder.is_some_and(|o| o.rows() == seg.rows())
+        && part.is_none()
         && blocks.len().saturating_mul(2) >= n_blocks;
     // The name equivalent of `path_stream`, over an order folded at build time as
     // the keyed walk and the merge compare it. A query that reads names stays on
@@ -1132,6 +1251,7 @@ fn walk_segment<'v>(
         && need > 0
         && (!plan.needs_name() || streams_names)
         && seg.norder.is_some_and(|o| o.rows() == seg.rows())
+        && part.is_none()
         && blocks.len().saturating_mul(2) >= n_blocks;
     // Extensions have the same grouped tie semantics as names with far fewer
     // primary values; the boundary map keeps descending order from reversing the
@@ -1140,6 +1260,7 @@ fn walk_segment<'v>(
         && need > 0
         && (!plan.needs_name() || streams_names)
         && seg.eorder.is_some_and(|o| o.rows() == seg.rows())
+        && part.is_none()
         && blocks.len().saturating_mul(2) >= n_blocks;
     let text_stream = name_stream || extension_stream;
     let position_stream = path_stream || text_stream;
@@ -1149,6 +1270,11 @@ fn walk_segment<'v>(
      * same count in row order is under a millisecond. Only where names are
      * read: a column read at random is cheap enough to count with. */
     let count_apart = position_stream && reads_names && want.count_cap > need;
+    // Asked to stream and unable to: the walk is the caller's to make, who may
+    // make it in parts.
+    if named.is_some() && !position_stream {
+        return None;
+    }
 
     // Whether the walk has to read names at all — decided here because the
     // direction depends on it. A streamed text order reads none: a name is wanted
@@ -1471,12 +1597,33 @@ fn walk_segment<'v>(
     // Every other order walks the candidates in row order, or from the far end
     // when the stored order is being read backwards.
     else {
-        let mut runs = runs_of(&blocks, seg.rows());
+        let large = blocks.len() >= split_blocks() && !backwards;
+        let mut from_block = 0usize;
+        // Whether the walk said it needs nothing more.
+        let mut finished = false;
+        if let Some(split) = split.filter(|_| large) {
+            // A keyed walk sees every match whatever it finds; the stored order
+            // may be done within its first blocks.
+            if stored_order {
+                from_block = blocks.len() / SPLIT_AFTER;
+                for (from, to) in runs_of(&blocks[..from_block], seg.rows()) {
+                    if !walk(from, to, false) {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            if !finished {
+                *split = Some(blocks);
+                return None;
+            }
+        }
+        let mut runs = runs_of(&blocks[from_block..], seg.rows());
         if backwards {
             runs.reverse();
         }
         for (from, to) in runs {
-            if !walk(from, to, backwards) {
+            if finished || !walk(from, to, backwards) {
                 break;
             }
         }
@@ -1499,6 +1646,8 @@ fn walk_segment<'v>(
             },
             conceals,
             folders,
+            None,
+            None,
             None,
         )
         .expect("a walk with no budget always answers");

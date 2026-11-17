@@ -50,6 +50,10 @@ fi
 step "tests"
 cargo test --workspace
 
+# The index again with every walk made in parts: a real one splits only above
+# half a million rows, which no fixture has.
+SCOUR_SPLIT_BLOCKS=2 SCOUR_SEARCH_THREADS=4 cargo test -p scour-index-native
+
 if [[ ${1:-} == --quick ]]; then
     echo
     echo "checked: format, lint, the page, tests. Targets skipped (--quick)."

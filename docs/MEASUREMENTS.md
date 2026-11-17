@@ -337,6 +337,43 @@ cargo run --release -p scour-index-native --example deepcheck -- /tmp/idx/native
 SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example deepcheck -- /tmp/idx/native > walk.txt
 ```
 
+## A walk in parts, and a path term in the name (2026-11-17)
+
+Same copy, same method. A walk that has to see most of a large segment — a
+regular expression, a term too short for the trigram index, relevance, a text
+order no stream can answer — is made over equal shares of its candidate
+blocks, a thread each, up to eight; each part keeps its own page and count
+and the merge orders them as it orders segments. Only above 16,384 candidate
+blocks (half a million rows), and a stored-order walk reads a sixteenth of
+its blocks first, where a query with common matches is already done.
+
+| query, count cap 1,000 | one thread | eight |
+|---|---:|---:|
+| `regex:^ab.*\.rs$` by name | 146–150 ms | 46–50 ms |
+| `regex:^ab.*\.rs$` by date | 147–148 ms | 54 ms |
+| `a` by relevance | 171–179 ms | 45–49 ms |
+| `ab` by relevance | 91–94 ms | 23–24 ms |
+| `zq` by name | 82–84 ms | 23 ms |
+| `zq` by date | 48–50 ms | 25–26 ms |
+| `a` by date, `rapor`, `*.rs` by name, the empty query | unchanged | unchanged |
+
+Sixteen threads: `zq` by name 18.7 ms, the regular expression no faster.
+
+`path:` with no separator can match in the name, so no block could be
+skipped on its directories alone. The trigram index says which blocks' names
+can hold the term; a block is read when either can.
+
+| query by name | before | after | rows read |
+|---|---:|---:|---:|
+| `path:xyzzyq` (nothing) | 148–151 ms | 26 ms | 5.08 M → 0 |
+| `path:scour` | 146–149 ms | 37 ms | 5.08 M → 0.31 M |
+| `path:rapor` | 150–152 ms | 50–52 ms | 5.08 M → 0.74 M |
+| `path:Projeler` | 143–147 ms | 49–50 ms | 4.98 M → 1.99 M |
+| `path:Projeler` by path | 226 ms | 90 ms | |
+
+The 26 ms left under every path term is the directory table folded and
+searched once a segment a query: 553,525 directories.
+
 ## Reproducing
 
 ```sh
