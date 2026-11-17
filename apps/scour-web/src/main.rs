@@ -1053,31 +1053,20 @@ fn api_explain(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
 /// names, not a path: a program name from the page would run anything.
 fn api_face(stream: &mut TcpStream, client: &Mutex<Link>, req: &http::Req) {
     let which = req.param("face").unwrap_or_default();
-    // The terminal needs a tty; which one to open is `scripts/scour-open`'s list.
-    let program = match which {
-        "window" => "scour-gui",
-        "tui" => "scour-open",
-        _ => {
-            http::fail(stream, "400 Bad Request", "no such face");
-            return;
-        }
-    };
-    let Some(binary) = beside_or_path(program) else {
+    // Two names only: a program name from the page would run anything. The
+    // terminal needs a tty, which `scour_launch::face` knows how to give.
+    if !matches!(which, "window" | "tui") {
+        http::fail(stream, "400 Bad Request", "no such face");
+        return;
+    }
+    let Some(mut command) = scour_launch::face(which) else {
         http::fail(
             stream,
             "404 Not Found",
-            &format!("{program} is not installed"),
+            &format!("{which} is not installed"),
         );
         return;
     };
-    let mut command = std::process::Command::new(&binary);
-    command.args(if which == "tui" {
-        &["tui"][..]
-    } else {
-        &[][..]
-    });
-    // Its own process group, or closing this server closes what it opened.
-    scour_ui::faces::detach(&mut command);
     match command.spawn() {
         Ok(_) => {
             // Switching is also choosing: the desktop entry opens the last

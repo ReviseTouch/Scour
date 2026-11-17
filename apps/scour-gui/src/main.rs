@@ -1976,19 +1976,17 @@ fn main() -> Result<()> {
             let cat = Rc::clone(&cat);
             window.on_report_in_browser(move || {
                 let Some(w) = weak.upgrade() else { return };
-                let Some(binary) = which("scour-open") else {
+                let Some(mut command) = scour_launch::face("browser") else {
                     return;
                 };
                 let query = state.borrow().query.clone();
-                let mut command = std::process::Command::new(binary);
-                command.arg("browser").env(
+                command.env(
                     "SCOUR_APP_GOTO",
                     format!("q={}&tab=report", query_encoded(&query)),
                 );
-                scour_ui::faces::detach(&mut command);
                 match command.spawn() {
                     Ok(_) => said(&w, t(&cat.borrow(), "starting…")),
-                    Err(e) => said(&w, format!("scour-open: {e}").into()),
+                    Err(e) => said(&w, format!("browser: {e}").into()),
                 }
             });
         }
@@ -5299,9 +5297,9 @@ fn words(window: &MainWindow, cat: &Catalogue) {
     ));
     window.set_face_go(t(cat, "open"));
     // The terminal one is offered when there is something to run.
-    window.set_face_tui_ready(which("scour-tui").is_some() && which("scour-open").is_some());
+    window.set_face_tui_ready(scour_launch::face("tui").is_some());
     window.set_report_web(t(cat, "Open the full report in the browser"));
-    window.set_report_web_ready(which("scour-open").is_some());
+    window.set_report_web_ready(scour_launch::face("browser").is_some());
     window.set_lang_title(t(cat, "language"));
     window.set_rules_title(t(cat, "What is skipped"));
     window.set_rules_added_title(t(cat, "Added here"));
@@ -5744,28 +5742,6 @@ pub(crate) fn scheme(p: &scour_ui::Palette) -> Scheme {
     }
 }
 
-/// The first `name` beside this program, else on the `PATH`: a build being tried
-/// out must not quietly start the installed copy.
-fn which(name: &str) -> Option<std::path::PathBuf> {
-    if let Ok(here) = std::env::current_exe()
-        && let Some(dir) = here.parent()
-    {
-        let beside = dir.join(name);
-        if beside.is_file() {
-            return Some(beside);
-        }
-        // A build run out of `target/release` has the scripts two levels up.
-        let script = dir.join("../../scripts").join(name);
-        if script.is_file() {
-            return Some(script);
-        }
-    }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|p| p.is_file())
-}
-
 /// A query as one value of a URL's query string: everything but the unreserved
 /// characters escaped, so a `&` or a `#` in it stays in it.
 fn query_encoded(query: &str) -> String {
@@ -5782,24 +5758,18 @@ fn query_encoded(query: &str) -> String {
 
 /// Start another way of running Scour, detached and never waited for.
 fn open_face(window: &MainWindow, which_one: &str, cat: &Catalogue, link: &Link) {
-    // Through the launcher, not directly: a terminal interface without a tty exits
-    // at once, and which terminal to start is nine programs in `scour-open`.
-    let (program, args): (&str, Vec<&str>) = match which_one {
-        "browser" => ("scour-open", vec!["browser"]),
-        "tui" => ("scour-open", vec!["tui"]),
-        _ => return,
-    };
-    let Some(binary) = which(program) else {
+    // A terminal interface without a tty exits at once: see `scour_launch::face`.
+    if !matches!(which_one, "browser" | "tui") {
+        return;
+    }
+    let program = which_one;
+    let Some(mut command) = scour_launch::face(which_one) else {
         said(
             window,
             format!("{} — {program}", t(cat, "not found")).into(),
         );
         return;
     };
-    let mut command = std::process::Command::new(&binary);
-    command.args(&args);
-    // In a process group of its own, or closing this window closes what it opened.
-    scour_ui::faces::detach(&mut command);
     match command.spawn() {
         Ok(_) => {
             // Switching is also choosing: the desktop entry names no face.

@@ -2369,18 +2369,21 @@ impl App {
             self.dirty = true;
             return Want::Nothing;
         }
-        let mut command = std::process::Command::new("scour-open");
-        command.arg(face);
-        // In a process group of its own, or closing this terminal closes what
-        // it just opened. See `scour_ui::faces::detach`.
-        scour_ui::faces::detach(&mut command);
-        match command.spawn() {
+        // Detached, or closing this terminal closes what it just opened.
+        let spawned = match scour_launch::face(face) {
+            Some(mut command) => command.spawn(),
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not installed",
+            )),
+        };
+        match spawned {
             Ok(_) => {
                 self.note = self.say("starting…").into_owned();
                 // And this one goes: switching is moving, not opening a second.
                 self.leaving = true;
             }
-            Err(e) => self.note = format!("scour-open: {e}"),
+            Err(e) => self.note = format!("{face}: {e}"),
         }
         self.panel = Panel::None;
         self.dirty = true;

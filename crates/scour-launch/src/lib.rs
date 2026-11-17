@@ -17,9 +17,11 @@
 //! service want that.
 
 mod binary;
+mod face;
 mod outcome;
 mod start;
 
 pub use binary::{NAME, locate, scourd};
+pub use face::{face, program};
 pub use outcome::Outcome;
 pub use start::{Autostart, ensure_once, wanted, windows_service_registered};
