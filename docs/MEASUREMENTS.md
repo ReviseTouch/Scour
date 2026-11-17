@@ -374,6 +374,35 @@ can hold the term; a block is read when either can.
 The 26 ms left under every path term is the directory table folded and
 searched once a segment a query: 553,525 directories.
 
+## A deep page in a numeric order is gathered, not kept (2026-11-18)
+
+Scrolling the window two million rows down a size order sent the service from
+25 MB to 1.2–1.5 GB of anonymous memory for a few seconds at a time. The order
+is not stored, so the walk kept every row above the page to know where the page
+began — 48 bytes a row — and the window asks over three connections at once.
+
+Now, from offset 300,000 in any walked numeric order (size, created, accessed,
+kind, and the rest), one pass counts the keys into 2^19 logarithmic bins (a
+value below 4,096 is a bin of its own, above that a 4,096th of its magnitude),
+which places the page and the rows before it; a second pass gathers only the
+page's bins, at most 400,000 rows of 24 bytes. A bin fuller than that — one
+value shared by most of the index, as kind has — is split by date in one more
+pass. Peak anonymous memory, sampled every 2 ms during one query, on the 5.0 M
+entry copy:
+
+| query, order, offset | before | after |
+|---|---|---|
+| everything, size, 2 M | 271 MB · 288 ms | 3 MB · 279 ms |
+| everything, kind, 2 M | 274 MB · 262 ms | 6 MB · 183 ms |
+| `a`, size, 1 M | 136 MB · 216 ms | 3 MB · 317 ms |
+| `a`, created, 1 M | 139 MB · 289 ms | 9 MB · 386 ms |
+
+A filtered page is slower: the walk it replaces is made in parts on several
+threads, and the two passes are one. Below 300,000 the walk stays — at 150,000
+it was 102 ms and 81 MB peak (VmHWM) against 270 ms and 55 MB gathered. The
+extension order is still walked (410 MB VmHWM at 2 M); it has a stored order
+and wants the name order's reach instead.
+
 ## Reproducing
 
 ```sh

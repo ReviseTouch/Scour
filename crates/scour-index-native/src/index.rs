@@ -1635,6 +1635,21 @@ impl Eq for Cursor {}
 /// the top of a result, where the reach costs a rank table to be built.
 const REACH_FROM: usize = 2_000;
 
+/// Below this offset a numeric page is walked to. Gathering costs two passes
+/// over every match, and the walk's zone map skips most of a segment near the
+/// top: at 150,000 the walk was 102 ms and 81 MB, gathering 270 ms and 55 MB.
+/// Past here what the walk keeps is what costs. `SCOUR_GATHER_FROM`
+/// overrides, which is how the tests put small indexes through it.
+fn numeric_from() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("SCOUR_GATHER_FROM")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(300_000)
+    })
+}
+
 /// How far the merge will step through a group of rows that share a second
 /// before giving up and letting the walk do it. There is no rank *within* a tie,
 /// and the bound keeps the reach from ever being the slower path.
@@ -2527,7 +2542,7 @@ impl Index for NativeIndex {
         .flatten();
         // Where the page sits in the pool: the request's own offset after a
         // walk, a few rows in after a reach.
-        let (offset, need) = match &deep {
+        let (mut offset, mut need) = match &deep {
             Some(deep) => (deep.skip, deep.skip + limit),
             None => (offset, need),
         };
@@ -2613,6 +2628,70 @@ impl Index for NativeIndex {
             cache.fresh_rows(&inner.segments);
             parking_lot::RwLockWriteGuard::downgrade(cache)
         });
+        // **A deep page in a numeric order, gathered rather than kept.** See
+        // `deep::reach_numeric`. Not the date order, which is stored and keeps
+        // four bytes a row even walked backwards.
+        let mut gathered = false;
+        if deep.is_none()
+            && offset >= numeric_from()
+            && limit > 0
+            && !walk_only()
+            && req.sort != scour_core::SortKey::Modified
+            && crate::search::is_numeric(req.sort)
+        {
+            let plans = views
+                .iter()
+                .map(|seg| Plan::compile(&req.query, seg))
+                .collect::<Result<Vec<_>>>()?;
+            let dooms: Vec<Doomed<'_>> = views
+                .iter()
+                .map(|seg| Doomed::new(seg, &inner.hidden_prefixes))
+                .collect();
+            let under: Vec<&[(u32, i64)]> = inner
+                .segments
+                .iter()
+                .map(|live| {
+                    folders
+                        .as_ref()
+                        .and_then(|c| c.rows_of(live.number))
+                        .unwrap_or(&[])
+                })
+                .collect();
+            let sort = req.sort;
+            let found = crate::deep::reach_numeric(req.descending, offset, limit, |f| {
+                for (which, seg) in views.iter().enumerate() {
+                    let doomed = &dooms[which];
+                    crate::search::walk_matches(seg, &plans[which], |row| {
+                        if !doomed.is_empty() && doomed.takes(seg, row, seg.dir_id(row)) {
+                            return true;
+                        }
+                        if let Some(v) = crate::search::numeric_key(seg, row, sort, under[which]) {
+                            f(which as u32, row as u32, v, seg.num_of(Field::Mtime, row));
+                        }
+                        true
+                    });
+                }
+            });
+            if let Some(found) = found {
+                counted = found.total as u64;
+                rows = inner.segments.iter().map(|live| live.rows() as u64).sum();
+                visited = rows;
+                pool.extend(
+                    found
+                        .rows
+                        .iter()
+                        .map(|&(seg, row, value, mtime)| Candidate {
+                            key: crate::search::SortValue::Num(value),
+                            mtime,
+                            seg,
+                            row,
+                        }),
+                );
+                offset = found.skip;
+                need = found.skip + limit;
+                gathered = true;
+            }
+        }
         if let Some(deep) = &deep {
             counted = deep.total as u64;
             visited = deep.read;
@@ -2628,7 +2707,7 @@ impl Index for NativeIndex {
             }));
         }
         for (which, live) in inner.segments.iter().enumerate() {
-            if deep.is_some() {
+            if deep.is_some() || gathered {
                 break;
             }
             rows += live.rows() as u64;

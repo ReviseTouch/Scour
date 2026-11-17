@@ -324,3 +324,186 @@ pub(crate) fn reach(
         read: keys.read,
     })
 }
+
+/// Mantissa bits a numeric bin keeps: a bin is one value below 4,096 and a
+/// 4,096th of its magnitude above.
+const MANTISSA: u32 = 12;
+/// Bins on each side of zero. `mag` tops out at `(52 << 12) | 4095`.
+const HALF: u32 = 1 << 18;
+/// The most rows the pass that gathers a page's neighbourhood will hold, 9.6 MB
+/// of them. Past it the bin is split again by date, or the page is left to the
+/// walk. `SCOUR_GATHER_ROWS` overrides, for the tests.
+fn gather_rows() -> usize {
+    static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("SCOUR_GATHER_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(400_000)
+    })
+}
+
+fn mag(x: u64) -> u32 {
+    if x < 1 << MANTISSA {
+        return x as u32;
+    }
+    let e = 63 - x.leading_zeros();
+    ((e - MANTISSA + 1) << MANTISSA) | ((x >> (e - MANTISSA)) as u32 & ((1 << MANTISSA) - 1))
+}
+
+/// A bin a number falls in, in the same order as the numbers: smaller first.
+fn bin(z: i64) -> u32 {
+    if z >= 0 {
+        HALF + mag(z as u64)
+    } else {
+        HALF - 1 - mag(!z as u64)
+    }
+}
+
+/// The bins holding positions `first..=last` of a histogram, and how many rows
+/// come before the first of them.
+fn bins_for(hist: &[u32], first: usize, last: usize) -> (u32, u32, usize, usize) {
+    let (mut b1, mut b2, mut ahead, mut through) = (0, 0, 0, 0);
+    let mut cum = 0usize;
+    let mut found_first = false;
+    for (b, &n) in hist.iter().enumerate() {
+        if n == 0 {
+            continue;
+        }
+        let next = cum + n as usize;
+        if !found_first && first < next {
+            b1 = b as u32;
+            ahead = cum;
+            found_first = true;
+        }
+        if last < next {
+            b2 = b as u32;
+            through = next;
+            break;
+        }
+        cum = next;
+    }
+    (b1, b2, ahead, through - ahead)
+}
+
+/// What [`reach_numeric`] found: every row whose key lies between the page's
+/// first and last, so ties at either end are whole.
+pub(crate) struct Numeric {
+    /// `(segment, row, value, mtime)`, in no order.
+    pub rows: Vec<(u32, u32, i64, i64)>,
+    /// How many of those precede the page once they are ordered.
+    pub skip: usize,
+    /// Every match.
+    pub total: usize,
+}
+
+/// A deep page in a numeric order **without holding what is above it**. The
+/// walk kept every row ahead of the page to know where the page starts: 300 to
+/// 400 MB for a page two million rows down, and the window asks that of three
+/// connections at once while it scrolls. Instead a first pass counts the keys
+/// into bins, which says which bin the page starts in and how many rows come
+/// before it; a second pass gathers only the rows of that bin. A bin too full to
+/// gather — one value shared by a million rows, as a sort by kind has — is split
+/// by date in one more pass, the order's own tie-break.
+///
+/// `each` runs its argument for every match: `(segment, row, value, mtime)`.
+/// `None` when the page cannot be gathered in [`gather_rows`]; the walk answers.
+pub(crate) fn reach_numeric(
+    descending: bool,
+    offset: usize,
+    limit: usize,
+    mut each: impl FnMut(&mut dyn FnMut(u32, u32, i64, i64)),
+) -> Option<Numeric> {
+    use crate::search::zone_key;
+    // In key space, smaller is earlier: the value by the requested direction,
+    // then the newer date, which is how the merge breaks a tie.
+    let z = |v: i64| zone_key(v, descending);
+    let zm = |m: i64| zone_key(m, true);
+
+    let mut hist = vec![0u32; 2 * HALF as usize];
+    let mut total = 0usize;
+    each(&mut |_, _, v, _| {
+        hist[bin(z(v)) as usize] += 1;
+        total += 1;
+    });
+    if offset >= total || limit == 0 {
+        return Some(Numeric {
+            rows: Vec::new(),
+            skip: 0,
+            total,
+        });
+    }
+    let last = (offset + limit).min(total) - 1;
+    let (b1, b2, mut ahead, mut inside) = bins_for(&hist, offset, last);
+
+    // One value too common to gather: split it by date.
+    let mut only: Option<(i64, u32, u32)> = None;
+    if inside > gather_rows() {
+        if b1 != b2 {
+            return None;
+        }
+        hist.iter_mut().for_each(|n| *n = 0);
+        let (mut lo, mut hi) = (i64::MAX, i64::MIN);
+        each(&mut |_, _, v, m| {
+            let k = z(v);
+            if bin(k) == b1 {
+                lo = lo.min(k);
+                hi = hi.max(k);
+                hist[bin(zm(m)) as usize] += 1;
+            }
+        });
+        if lo != hi {
+            return None;
+        }
+        let (m1, m2, before, within) = bins_for(&hist, offset - ahead, last - ahead);
+        if within > gather_rows() {
+            return None;
+        }
+        ahead += before;
+        inside = within;
+        only = Some((lo, m1, m2));
+    }
+    drop(hist);
+
+    let mut rows: Vec<(i64, i64, u32, u32)> = Vec::with_capacity(inside);
+    each(&mut |s, r, v, m| {
+        let (k, d) = (z(v), zm(m));
+        let keep = match only {
+            None => (b1..=b2).contains(&bin(k)),
+            Some((value, m1, m2)) => k == value && (m1..=m2).contains(&bin(d)),
+        };
+        if keep {
+            rows.push((k, d, s, r));
+        }
+    });
+    if rows.len() != inside {
+        // The index changed between passes, which a read lock forbids; or the
+        // passes disagree. Either way this is not an answer.
+        return None;
+    }
+    // The page's first and last keys, then every row between them: a tie at
+    // either end comes whole, and the caller's comparator orders inside it.
+    let (first, last) = (offset - ahead, last - ahead);
+    let key = |r: &(i64, i64, u32, u32)| (r.0, r.1);
+    rows.select_nth_unstable_by_key(first, key);
+    let lo = key(&rows[first]);
+    let hi = if last > first {
+        let tail = &mut rows[first + 1..];
+        tail.select_nth_unstable_by_key(last - first - 1, key);
+        key(&tail[last - first - 1])
+    } else {
+        lo
+    };
+    let before = rows.iter().filter(|r| key(r) < lo).count();
+    let unz = |k: i64| if descending { !k } else { k };
+    let rows = rows
+        .into_iter()
+        .filter(|r| (lo..=hi).contains(&key(r)))
+        .map(|(k, d, s, r)| (s, r, unz(k), !d))
+        .collect();
+    Some(Numeric {
+        rows,
+        skip: first - before,
+        total,
+    })
+}

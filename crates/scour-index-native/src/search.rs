@@ -1954,6 +1954,38 @@ fn sort_value_into(
     };
 }
 
+/// What a row sorts by in a numeric order, outside a walk: the number
+/// [`sort_value_into`] makes for it, folders included. `None` for an order whose
+/// key is not a stored number.
+pub(crate) fn numeric_key(
+    seg: &Segment<'_>,
+    row: usize,
+    sort: SortKey,
+    folders: &[(u32, i64)],
+) -> Option<i64> {
+    sort_field(sort)?;
+    let mut v = SortValue::Num(0);
+    sort_value_into(
+        &mut v,
+        seg,
+        row,
+        b"",
+        sort,
+        &[],
+        folders,
+        &mut DirPaths::default(),
+    );
+    match v {
+        SortValue::Num(n) => Some(n),
+        _ => None,
+    }
+}
+
+/// Whether an order's key is a number a row stores.
+pub(crate) fn is_numeric(sort: SortKey) -> bool {
+    sort_field(sort).is_some()
+}
+
 /// The column a numeric order reads, when there is one: the keys whose value is a
 /// number a row stores, which is what lets the zone map bound a block without
 /// decoding it. `Size` is here because [`zone_order`] widens the range to cover
@@ -1976,7 +2008,7 @@ fn sort_field(key: SortKey) -> Option<Field> {
 /// A sort value as the block order reads it: **smaller is better**, whichever
 /// direction was asked for. The complement rather than the negation, because
 /// `-i64::MIN` is not an `i64` — so [`out_of_reach`] needs no direction at all.
-fn zone_key(value: i64, desc: bool) -> i64 {
+pub(crate) fn zone_key(value: i64, desc: bool) -> i64 {
     if desc { !value } else { value }
 }
 

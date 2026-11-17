@@ -50,9 +50,10 @@ fi
 step "tests"
 cargo test --workspace
 
-# The index again with every walk made in parts: a real one splits only above
-# half a million rows, which no fixture has.
-SCOUR_SPLIT_BLOCKS=2 SCOUR_SEARCH_THREADS=4 cargo test -p scour-index-native
+# The index again with every walk made in parts, and every deep numeric page
+# gathered, split by date and handed back to the walk: a real index does these
+# only above a hundred thousand rows, which no fixture has.
+SCOUR_SPLIT_BLOCKS=2 SCOUR_SEARCH_THREADS=4 SCOUR_GATHER_FROM=500 SCOUR_GATHER_ROWS=300 cargo test -p scour-index-native
 
 if [[ ${1:-} == --quick ]]; then
     echo
