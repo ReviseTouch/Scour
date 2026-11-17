@@ -61,6 +61,7 @@ pub fn engine(
                     .with_watch(s.watch && !shared)
                     .with_skip(p.skip.clone())
                     .with_walk_as(walk_as)
+                    .with_journal_dir(Some(config.index.dir.clone()))
                     .with_patience(if p.system || shared {
                         SYSTEM_PATIENCE
                     } else {

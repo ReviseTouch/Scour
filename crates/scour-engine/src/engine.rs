@@ -435,7 +435,26 @@ impl Engine {
         let started = self.start_watching()?;
         let skipped = self.unwatched();
         if walk {
-            self.rescan(None)?;
+            // A watch that picked up where the last one stopped has the changes
+            // in between already: walking it again is minutes of a disk for
+            // nothing. Not for an index that holds nothing yet.
+            let cold = self.shared.status.read().cold;
+            let caught_up: Vec<usize> = if cold {
+                Vec::new()
+            } else {
+                self.shared
+                    .watches
+                    .lock()
+                    .iter()
+                    .filter(|(_, h)| h.caught_up())
+                    .map(|(i, _)| *i)
+                    .collect()
+            };
+            for i in 0..self.shared.sources.len() {
+                if !caught_up.contains(&i) {
+                    self.queue_whole(i)?;
+                }
+            }
         }
         Ok((started, skipped))
     }

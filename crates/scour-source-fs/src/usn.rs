@@ -132,6 +132,25 @@ pub(crate) fn under(path: &str, roots: &[String]) -> bool {
     })
 }
 
+/// How old a journal position must be before it is written down: longer than
+/// the index takes to keep what it was told (`persist_every`, thirty seconds).
+const KEEP_LAG: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// `journal-id usn`, as [`write_kept`] leaves it.
+fn read_kept(path: &std::path::Path) -> Option<(u64, i64)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut it = text.split_whitespace();
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+}
+
+/// Replaced whole, through a rename: a half-written position is no position.
+fn write_kept(path: &std::path::Path, journal: u64, usn: i64) {
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, format!("{journal} {usn}\n")).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
 #[cfg(windows)]
 pub(crate) use imp::try_start;
 
@@ -229,13 +248,32 @@ mod imp {
         }
         let volume = Volume(h as usize);
         let journal = query(&volume)?;
+        let kept = source
+            .journal_dir()
+            .map(|d| d.join(format!("journal-{}", source.source_id().0)));
+        let saved = kept.as_deref().and_then(super::read_kept);
+        // Read on from where the last run stopped, if the journal still holds
+        // that far back; otherwise from now, and the start walk covers the gap.
+        let (next, caught_up) = match saved {
+            Some((id, usn))
+                if id == journal.UsnJournalID && usn >= journal.FirstUsn && usn <= journal.NextUsn =>
+            {
+                (usn, true)
+            }
+            _ => (journal.NextUsn, false),
+        };
         let name = scour_core::Source::describe(source).name;
-        scour_core::note!("scourd: {name} is watched through the NTFS change journal of {letter}");
+        scour_core::note!(
+            "scourd: {name} is watched through the NTFS change journal of {letter}{}",
+            if caught_up { ", read on from the last run" } else { "" }
+        );
         let stopped = Arc::new(AtomicBool::new(false));
         let reader = Reader {
             volume,
             journal: journal.UsnJournalID,
-            next: journal.NextUsn,
+            next,
+            kept,
+            pending: (std::time::Instant::now(), journal.UsnJournalID, next),
             roots: roots.iter().map(|r| r.to_lowercase()).collect(),
             id: source.source_id(),
             real_modes: source.real_modes(),
@@ -248,7 +286,11 @@ mod imp {
             .name(format!("usn {letter}"))
             .spawn(move || reader.run())
             .ok()?;
-        Some(Box::new(Journal { stopped, rules }))
+        Some(Box::new(Journal {
+            stopped,
+            rules,
+            caught_up,
+        }))
     }
 
     fn is_ntfs(letter: &str) -> bool {
@@ -302,6 +344,11 @@ mod imp {
         stopped: Arc<AtomicBool>,
         /// Directory paths by reference number, as the volume gave them.
         dirs: HashMap<u64, String>,
+        /// Where the position is written down between runs.
+        kept: Option<std::path::PathBuf>,
+        /// The position read up to, and when: written once it is [`KEEP_LAG`]
+        /// old, so what is on disk is never ahead of what the index has kept.
+        pending: (std::time::Instant, u64, i64),
     }
 
     impl Reader {
@@ -345,10 +392,25 @@ mod imp {
                 if !records.is_empty() {
                     self.apply(&records);
                 }
+                self.keep();
                 if empty {
                     std::thread::sleep(REST);
                 }
             }
+        }
+
+        /// Write down a position read at least [`KEEP_LAG`] ago. The index keeps
+        /// what it was told every thirty seconds; a position newer than that
+        /// would skip, after a crash, changes the index never wrote. Reading a
+        /// change twice costs a look.
+        fn keep(&mut self) {
+            if self.pending.0.elapsed() < super::KEEP_LAG {
+                return;
+            }
+            if let Some(path) = &self.kept {
+                super::write_kept(path, self.pending.1, self.pending.2);
+            }
+            self.pending = (std::time::Instant::now(), self.journal, self.next);
         }
 
         /// The journal went from under the reader: it wrapped past the USN asked
@@ -361,6 +423,7 @@ mod imp {
                 self.journal = j.UsnJournalID;
                 self.next = j.NextUsn;
                 self.dirs.clear();
+                self.pending = (std::time::Instant::now(), self.journal, self.next);
                 for r in &self.roots {
                     self.sink.emit(Change::Rescan { path: r.clone() });
                 }
@@ -452,6 +515,7 @@ mod imp {
     struct Journal {
         stopped: Arc<AtomicBool>,
         rules: SharedRules,
+        caught_up: bool,
     }
 
     impl std::fmt::Debug for Journal {
@@ -467,6 +531,10 @@ mod imp {
 
         /// The journal covers the whole volume already.
         fn cover(&self, _path: &str) {}
+
+        fn caught_up(&self) -> bool {
+            self.caught_up
+        }
 
         fn retune(&self, opts: &ScanOptions) {
             let fresh = Arc::new(Rules::from_options(opts));
@@ -550,6 +618,17 @@ mod tests {
         assert_eq!(forgot, 2, "a directory that moved makes the kept paths stale");
         // A parent the volume no longer has: nothing to say about it.
         assert!(settle(&recs, |_| None, || {}).is_empty());
+    }
+
+    #[test]
+    fn a_position_is_kept_whole() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let path = dir.path().join("journal-3");
+        assert_eq!(read_kept(&path), None);
+        write_kept(&path, 133_000_000_000, 98_765_432);
+        assert_eq!(read_kept(&path), Some((133_000_000_000, 98_765_432)));
+        std::fs::write(&path, "garbage").expect("write");
+        assert_eq!(read_kept(&path), None);
     }
 
     #[test]

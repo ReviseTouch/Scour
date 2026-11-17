@@ -57,6 +57,13 @@ pub trait WatchHandle: Send + Debug {
     /// rebuild while events are arriving; a no-op for a backend that filters nothing.
     fn retune(&self, _opts: &ScanOptions) {}
 
+    /// Did this watch begin where the last one stopped, so that every change made
+    /// in between reaches it? Then a walk at start finds nothing it will not —
+    /// an NTFS change journal read from the position kept at the last stop.
+    fn caught_up(&self) -> bool {
+        false
+    }
+
     /// Stop watching. Dropping does the same; this exists so a caller can wait
     /// for the watcher's threads to finish.
     fn stop(self: Box<Self>);

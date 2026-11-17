@@ -163,6 +163,8 @@ pub struct FsSource {
     patience: std::time::Duration,
     /// Taken by every walker thread before its first entry, kept until it ends.
     walk_as: Option<WalkAs>,
+    /// Where a change journal's position is kept between runs, when there is one.
+    journal_dir: Option<PathBuf>,
 }
 
 /// An identity a walker thread takes before it reads anything: a service on
@@ -207,6 +209,7 @@ impl FsSource {
             skip: Vec::new(),
             patience: std::time::Duration::ZERO,
             walk_as: None,
+            journal_dir: None,
         }
     }
 
@@ -261,6 +264,18 @@ impl FsSource {
     }
 
     /// Walked no oftener than this when nothing watches it, however its pulse moves.
+    /// Keep a change journal's position in this directory, so the next run
+    /// reads on from it instead of walking.
+    pub fn with_journal_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.journal_dir = dir;
+        self
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn journal_dir(&self) -> Option<&std::path::Path> {
+        self.journal_dir.as_deref()
+    }
+
     /// See [`WalkAs`].
     pub fn with_walk_as(mut self, walk_as: Option<WalkAs>) -> Self {
         self.walk_as = walk_as;
