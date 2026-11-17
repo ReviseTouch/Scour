@@ -567,6 +567,7 @@ fn main() -> Result<()> {
     window.set_sorted_down(kept_descending);
     draw_tabs(&window, &tabs.borrow(), &cat.borrow());
     window.set_has_past(!kept.history.is_empty());
+    window.set_grid_lines(kept.grid_lines);
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
     {
@@ -744,6 +745,23 @@ fn main() -> Result<()> {
         config.state_dir().join("scourd.log"),
         sink,
     ));
+
+    // Lines in the list, from the settings page; kept for every face.
+    {
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_grid_picked(move |on| {
+            if let Some(w) = weak.upgrade() {
+                w.set_grid_lines(on);
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    grid_lines: Some(on),
+                    ..Default::default()
+                },
+            });
+        });
+    }
 
     {
         let link = Rc::clone(&link);
@@ -4844,6 +4862,9 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_set_columns_push(t(cat, "Choose…"));
     w.set_set_preview(t(cat, "Preview"));
     w.set_set_preview_note(t(cat, "The column beside the list. Space opens it too."));
+    w.set_set_grid(t(cat, "Grid lines"));
+    w.set_set_grid_note(t(cat, "Lines between the list's rows and columns."));
+    w.set_grid_labels(list(&["On", "Off"]));
     w.set_set_later(t(cat, "Disks that come later"));
     w.set_set_removable(t(cat, "A disk plugged in"));
     w.set_set_removable_note(t(cat, "A stick, an external disk, a card."));

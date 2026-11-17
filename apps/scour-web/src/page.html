@@ -328,6 +328,11 @@
   #view-search, #view-report { grid-row: 4; }
   .meter { grid-row: 5; }
 
+  /* The grid lines. Shadows, not borders: a border makes a row a pixel taller
+     than the pitch the virtual list counts on. */
+  body.lines:not(.grid) tbody td { box-shadow: inset 0 -1px 0 var(--line-soft); }
+  body.lines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft); }
+
   /* ---------------- search tabs ---------------- */
   .tabstrip {
     display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px;
@@ -1740,6 +1745,7 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Layout"></div></div><div class="seg" id="seg-layout"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Grid lines"></div><div class="desc" data-t="Lines between the list's rows and columns."></div></div><div class="seg" id="seg-grid"></div></div>
             </div>
           </section>
           <section data-sec="disks" hidden>
@@ -4399,8 +4405,14 @@
   }
 
   /* Applied to a window that has already drawn itself with defaults. */
+  /* Lines between rows and columns, when the settings ask for them. */
+  function applyGrid() {
+    document.body.classList.toggle("lines", !!(KEPT && KEPT.grid_lines));
+  }
+
   function applySettings(s) {
     KEPT = s;
+    applyGrid();
     applyTheme(s.theme || "");
     const oldSort = sortKey;
     const oldDescending = sortDesc;
@@ -6648,6 +6660,12 @@
     const peekOn = peekToggle.getAttribute("aria-pressed") === "true";
     seg("seg-peek", [["on", T("On")], ["off", T("Off")]], peekOn ? "on" : "off", (v) => {
       if ((v === "on") !== (peekToggle.getAttribute("aria-pressed") === "true")) peekToggle.click();
+      drawSettings();
+    });
+    seg("seg-grid", [["on", T("On")], ["off", T("Off")]], k.grid_lines ? "on" : "off", (v) => {
+      KEPT.grid_lines = v === "on";
+      applyGrid();
+      keep({ grid_lines: KEPT.grid_lines });
       drawSettings();
     });
     seg("seg-removable", [["", T("Ask")], ["always", T("Always scan")], ["never", T("Never")]],

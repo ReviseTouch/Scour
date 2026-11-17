@@ -2082,3 +2082,9 @@ msgstr "Sekmeyi kapat"
 
 msgid "New tab (Alt+T)"
 msgstr "Yeni sekme (Alt+T)"
+
+msgid "Grid lines"
+msgstr "Izgara çizgileri"
+
+msgid "Lines between the list's rows and columns."
+msgstr "Listenin satır ve sütunları arasında çizgiler."

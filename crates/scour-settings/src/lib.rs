@@ -98,6 +98,10 @@ pub struct Settings {
     /// Which of [`Settings::tabs`] is in front. Out of range reads as the last.
     #[serde(default)]
     pub tab: usize,
+    /// Lines between the list's rows and columns. Off by default: the list is
+    /// read by its alignment, and lines are for somebody who wants a grid.
+    #[serde(default)]
+    pub grid_lines: bool,
     /// Whether the duplicates panel in the report is open. Closed by default: opening
     /// the report must not also hunt duplicates over thirty thousand candidates.
     #[serde(default)]
@@ -158,6 +162,7 @@ pub struct Change {
     /// Replace the tabs outright, capped at [`TABS`]. See [`Settings::tabs`].
     pub tabs: Option<Vec<SearchTab>>,
     pub tab: Option<usize>,
+    pub grid_lines: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
     /// A BCP-47 tag, or `""` to hand the decision back to the config file and the
@@ -229,6 +234,9 @@ impl Change {
         }
         if let Some(v) = self.tab {
             to.tab = v;
+        }
+        if let Some(v) = self.grid_lines {
+            to.grid_lines = v;
         }
         if let Some(v) = self.key_hint_seen {
             to.key_hint_seen = v;

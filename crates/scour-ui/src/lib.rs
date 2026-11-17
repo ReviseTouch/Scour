@@ -142,23 +142,24 @@ pub struct Palette {
     pub q_bad: Rgba,
 }
 
-/// The dark scheme: a deep neutral, the list darkest and the chrome a step
-/// up. The warm grey tried first read as muddy (17 November).
+/// The dark scheme: the desktop's own greys, a dark list under lighter chrome,
+/// white ink, and a blue selection. A greyed-out dark read as faded and dead
+/// (17 November); this is what GNOME's dark applications look like.
 pub const DARK: Palette = Palette {
-    ground: Rgba::hex(0x18181a),
-    panel: Rgba::hex(0x111113),
-    panel_2: Rgba::hex(0x1f1f22),
-    line: Rgba::hex(0x2c2c30),
-    line_soft: Rgba::hex(0x222225),
-    ink: Rgba::hex(0xededef),
-    ink_2: Rgba::hex(0xb4b4ba),
-    ink_3: Rgba::hex(0x8b8b93),
+    ground: Rgba::hex(0x2a2a2c),
+    panel: Rgba::hex(0x1e1e20),
+    panel_2: Rgba::hex(0x323235),
+    line: Rgba::hex(0x3d3d41),
+    line_soft: Rgba::hex(0x2c2c2f),
+    ink: Rgba::hex(0xffffff),
+    ink_2: Rgba::hex(0xc8c8cc),
+    ink_3: Rgba::hex(0x9a9aa0),
     mark: Rgba::wash(0xffd24a, 17),
     mark_ink: Rgba::hex(0x1a1200),
     // Neutral: the match wash is the only colour a row carries.
-    pick: Rgba::wash(0xededef, 11),
-    focus: Rgba::hex(0x8fb0e6),
-    hover: Rgba::hex(0x1b1b1e),
+    pick: Rgba::wash(0x3584e4, 34),
+    focus: Rgba::hex(0x78aeed),
+    hover: Rgba::hex(0x28282b),
     // Legible on the dark panel without shouting.
     danger: Rgba::hex(0xd07070),
     t: [
@@ -177,7 +178,7 @@ pub const DARK: Palette = Palette {
         Rgba::hex(0x35618d),
         Rgba::hex(0x264a6d),
     ],
-    kx: Rgba::hex(0x2c2c30),
+    kx: Rgba::hex(0x3d3d41),
     q_term: Rgba::hex(0x59a6ff),
     q_key: Rgba::hex(0x7fa9e0),
     q_val: Rgba::hex(0x6fc2a0),
@@ -186,22 +187,22 @@ pub const DARK: Palette = Palette {
     q_bad: Rgba::hex(0xe8a33d),
 };
 
-/// The light scheme: one warm hue from the ground to the ink, and `ink_3` kept
-/// above 3:1 on the ground so a label is still read.
+/// The light scheme: a white list, grey chrome, no tint. The warm paper tried
+/// first read as yellowed (17 November). `ink_3` keeps 4.5:1 on white.
 pub const LIGHT: Palette = Palette {
-    ground: Rgba::hex(0xf6f5f1),
-    panel: Rgba::hex(0xfcfcfa),
-    panel_2: Rgba::hex(0xf0efeb),
-    line: Rgba::hex(0xdedcd5),
-    line_soft: Rgba::hex(0xe8e7e1),
-    ink: Rgba::hex(0x1d1d1a),
-    ink_2: Rgba::hex(0x58564e),
-    ink_3: Rgba::hex(0x86847a),
+    ground: Rgba::hex(0xf0f0f2),
+    panel: Rgba::hex(0xffffff),
+    panel_2: Rgba::hex(0xe8e8eb),
+    line: Rgba::hex(0xd6d6da),
+    line_soft: Rgba::hex(0xe6e6e9),
+    ink: Rgba::hex(0x1a1a1c),
+    ink_2: Rgba::hex(0x4a4a50),
+    ink_3: Rgba::hex(0x707078),
     mark: Rgba::wash(0xe2a000, 18),
     mark_ink: Rgba::hex(0x2a1f00),
-    pick: Rgba::wash(0x3f3e37, 10),
-    focus: Rgba::hex(0x4d6fa8),
-    hover: Rgba::hex(0xf2f1ec),
+    pick: Rgba::wash(0x3584e4, 18),
+    focus: Rgba::hex(0x3584e4),
+    hover: Rgba::hex(0xf3f3f5),
     // Darker on paper, for the same weight against a light ground.
     danger: Rgba::hex(0xa8342c),
     t: [
@@ -220,7 +221,7 @@ pub const LIGHT: Palette = Palette {
         Rgba::hex(0xb3c9e2),
         Rgba::hex(0xd7e2ee),
     ],
-    kx: Rgba::hex(0xdedcd5),
+    kx: Rgba::hex(0xd6d6da),
     q_term: Rgba::hex(0x1c5fa8),
     q_key: Rgba::hex(0x2f6ba3),
     q_val: Rgba::hex(0x1a7a58),

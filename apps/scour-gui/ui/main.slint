@@ -1567,6 +1567,12 @@ export component MainWindow inherits Window {
     in property <string> set-preview;
     in property <string> set-preview-note;
     in property <bool> preview-on;
+    /// Lines between the list's rows and columns, which the settings switch.
+    in property <bool> grid-lines;
+    in property <string> set-grid;
+    in property <string> set-grid-note;
+    in property <[string]> grid-labels;
+    callback grid-picked(bool);
     in property <string> set-later;
     in property <string> set-removable;
     in property <string> set-removable-note;
@@ -3410,6 +3416,23 @@ export component MainWindow inherits Window {
                                 : rowtouch.has-hover ? Theme.hover
                                 : transparent;
 
+                            // The grid, when the settings ask for it: shown, not
+                            // built, so a slot is never rebuilt — see `pool`.
+                            Rectangle {
+                                visible: root.grid-lines;
+                                y: parent.height - 1px;
+                                height: 1px;
+                                background: Theme.line-soft;
+                            }
+                            for h[ci] in root.heads: Rectangle {
+                                visible: root.grid-lines && ci < root.heads.length - 1;
+                                x: root.cx[ci] + root.cw[ci] + 4px;
+                                y: 0px;
+                                width: 1px;
+                                height: parent.height;
+                                background: Theme.line-soft;
+                            }
+
                             // The arrival wash: translucent, so a row that is both
                             // new and selected shows both, and it fades away. Not
                             // while the list moves: a slot handed from a new row
@@ -4971,6 +4994,17 @@ export component MainWindow inherits Window {
                                             label: root.preview-on ? "✓" : "—";
                                             asking: root.preview-on;
                                             clicked => { root.peek-toggled(); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-grid;
+                                        note: root.set-grid-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.grid-lines ? "on" : "off";
+                                            picked(v) => { root.grid-picked(v == "on"); }
                                         }
                                     }
                                 }
