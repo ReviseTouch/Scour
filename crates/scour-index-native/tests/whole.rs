@@ -4806,6 +4806,22 @@ fn a_deep_page_in_a_stored_text_order_is_the_page_the_walk_finds() {
         )
         .expect("remove");
     index.commit().expect("commit");
+    // And removals still waiting for a commit — a folder, and scattered files
+    // — which a page asked in that second must already leave out.
+    let pending: Vec<String> = all(SortKey::Name, false)
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % 23 == 11)
+        .map(|(_, p)| p)
+        .chain(["/c/p2/d007".to_owned(), "/c/p4/d031/x".to_owned()])
+        .collect();
+    index
+        .apply(
+            &mut pending
+                .iter()
+                .map(|p| Change::RemoveSubtree { path: p.clone() }),
+        )
+        .expect("remove pending");
 
     for sort in [SortKey::Name, SortKey::Path] {
         for descending in [false, true] {

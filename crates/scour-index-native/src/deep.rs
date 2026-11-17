@@ -52,6 +52,19 @@ impl Order<'_> {
     }
 }
 
+/// Whether a row is shown: alive, and not under a removal that is waiting for
+/// the next commit. `hide` is asked only of segments `hides` names.
+struct Shown<'h> {
+    hide: &'h dyn Fn(usize, usize) -> bool,
+    hides: &'h [bool],
+}
+
+impl Shown<'_> {
+    fn row(&self, s: usize, seg: &Segment<'_>, row: usize) -> bool {
+        seg.is_alive(row) && !(self.hides[s] && (self.hide)(s, row))
+    }
+}
+
 /// Live rows before each position of a stored order. Built per request: one a
 /// deletion stale pages from the wrong place.
 struct Rank {
@@ -61,9 +74,15 @@ struct Rank {
 }
 
 impl Rank {
-    fn build(seg: &Segment<'_>, order: Order<'_>, rows: usize) -> Rank {
+    fn build(
+        seg: &Segment<'_>,
+        s: usize,
+        shown: &Shown<'_>,
+        order: Order<'_>,
+        rows: usize,
+    ) -> Rank {
         let live: usize = seg.alive.iter().map(|b| b.count_ones() as usize).sum();
-        if seg.alive.is_empty() || live == rows {
+        if !shown.hides[s] && (seg.alive.is_empty() || live == rows) {
             return Rank {
                 prefix: Vec::new(),
                 total: rows,
@@ -76,7 +95,10 @@ impl Rank {
             if i % STRIDE == 0 {
                 prefix.push(running);
             }
-            if order.at(i).is_some_and(|row| seg.is_alive(row as usize)) {
+            if order
+                .at(i)
+                .is_some_and(|row| shown.row(s, seg, row as usize))
+            {
                 running += 1;
             }
         }
@@ -88,7 +110,14 @@ impl Rank {
     }
 
     /// Live rows among the positions before `at`.
-    fn upto(&self, seg: &Segment<'_>, order: Order<'_>, at: usize) -> usize {
+    fn upto(
+        &self,
+        seg: &Segment<'_>,
+        s: usize,
+        shown: &Shown<'_>,
+        order: Order<'_>,
+        at: usize,
+    ) -> usize {
         if self.all_live {
             return at;
         }
@@ -98,7 +127,11 @@ impl Rank {
         };
         base as usize
             + (entry * STRIDE..at)
-                .filter(|&i| order.at(i).is_some_and(|row| seg.is_alive(row as usize)))
+                .filter(|&i| {
+                    order
+                        .at(i)
+                        .is_some_and(|row| shown.row(s, seg, row as usize))
+                })
                 .count()
     }
 }
@@ -173,16 +206,22 @@ fn bound(mut lo: usize, mut hi: usize, mut before: impl FnMut(usize) -> bool) ->
     lo
 }
 
-/// The rows around `offset` in `sort` order over every live row, or `None` for
-/// a shape this cannot answer: another order, a segment written without the
-/// stored order, or a tie group too large to gather.
+/// The rows around `offset` in `sort` order over every shown row, or `None`
+/// for a shape this cannot answer: another order, a segment written without the
+/// stored order, or a tie group too large to gather. `hide(segment, row)` is a
+/// removal not yet committed, asked only of the segments `hides` marks: without
+/// it a page asked in the second between a deletion and its commit was walked
+/// to, 1.1 s and 2 GB at three million rows by path.
 pub(crate) fn reach(
     views: &[Segment<'_>],
     sort: SortKey,
     descending: bool,
     offset: usize,
     limit: usize,
+    hide: &dyn Fn(usize, usize) -> bool,
+    hides: &[bool],
 ) -> Option<Deep> {
+    let shown = Shown { hide, hides };
     let orders: Vec<Order<'_>> = views
         .iter()
         .map(|seg| {
@@ -196,7 +235,7 @@ pub(crate) fn reach(
         .collect::<Option<_>>()?;
     let n = views.len();
     let ranks: Vec<Rank> = (0..n)
-        .map(|s| Rank::build(&views[s], orders[s], views[s].rows()))
+        .map(|s| Rank::build(&views[s], s, &shown, orders[s], views[s].rows()))
         .collect();
     let total: usize = ranks.iter().map(|r| r.total).sum();
     if offset >= total {
@@ -215,7 +254,7 @@ pub(crate) fn reach(
         read: 0,
         bad: false,
     };
-    let upto = |s: usize, at: usize| ranks[s].upto(&views[s], orders[s], at);
+    let upto = |s: usize, at: usize| ranks[s].upto(&views[s], s, &shown, orders[s], at);
 
     // The same row counted from the ascending end.
     let target = if descending {
@@ -262,7 +301,7 @@ pub(crate) fn reach(
     let mut rows: Vec<(u32, u32)> = Vec::new();
     let take = |rows: &mut Vec<(u32, u32)>, s: usize, at: usize| -> bool {
         match orders[s].at(at) {
-            Some(row) if views[s].is_alive(row as usize) => {
+            Some(row) if shown.row(s, &views[s], row as usize) => {
                 rows.push((s as u32, row));
                 true
             }

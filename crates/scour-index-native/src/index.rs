@@ -2536,9 +2536,27 @@ impl Index for NativeIndex {
                 req.sort,
                 scour_core::SortKey::Name | scour_core::SortKey::Path
             )
-            && req.query.groups.is_empty()
-            && inner.hidden_prefixes.is_empty())
-        .then(|| crate::deep::reach(&views, req.sort, req.descending, offset, limit))
+            && req.query.groups.is_empty())
+        .then(|| {
+            let dooms: Vec<Doomed<'_>> = views
+                .iter()
+                .map(|seg| Doomed::new(seg, &inner.hidden_prefixes))
+                .collect();
+            let hides: Vec<bool> = dooms.iter().map(|d| !d.is_empty()).collect();
+            let hide = |s: usize, row: usize| {
+                let seg = &views[s];
+                dooms[s].takes(seg, row, seg.dir_id(row))
+            };
+            crate::deep::reach(
+                &views,
+                req.sort,
+                req.descending,
+                offset,
+                limit,
+                &hide,
+                &hides,
+            )
+        })
         .flatten();
         // Where the page sits in the pool: the request's own offset after a
         // walk, a few rows in after a reach.
