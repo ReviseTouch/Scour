@@ -11,6 +11,25 @@ use scour_core::{Hit, Kind, text::Folder};
 
 use crate::{Cell, Row};
 
+/// Whether two rows draw the same. Not `==`: the cells are a model, and two
+/// models built from the same text are two models.
+fn same_row(a: &Row, b: &Row) -> bool {
+    use slint::Model;
+    a.name == b.name
+        && a.path == b.path
+        && a.fresh == b.fresh
+        && a.ktoken == b.ktoken
+        && a.tint == b.tint
+        && a.is_dir == b.is_dir
+        && a.age == b.age
+        && a.picked == b.picked
+        && a.thumb == b.thumb
+        && a.shot == b.shot
+        && a.runs == b.runs
+        && a.cells.row_count() == b.cells.row_count()
+        && a.cells.iter().zip(b.cells.iter()).all(|(x, y)| x == y)
+}
+
 /// The picture a row has when it has none. Not `Image::default()`: two empty
 /// Slint images compare unequal, so every row looks changed every frame and an
 /// idle window goes from 25% to 49% of a core. One shared pixel equals itself.
@@ -443,9 +462,44 @@ impl Rows {
             .collect();
         self.unlooked
             .set(self.unlooked.get() + kept.iter().filter(|k| k.pic == Pic::Unknown).count());
+        // What the rows were, so a refetch that brings the same rows redraws
+        // none of them. The index moves every second on a busy machine and the
+        // page in sight is asked again each time: 200 rows told they changed
+        // was the window's 3% of a core while nothing on screen did.
+        let before: Vec<Option<Row>> = {
+            let pages = self.pages.borrow();
+            (0..SPAN)
+                .map(|i| pages.at(page * SPAN + i).map(|k| k.row.clone()))
+                .collect()
+        };
         let change = self.pages.borrow_mut().put(page, kept, total);
         self.want.set(None);
-        self.tell(change);
+        match change {
+            scour_page::Change::Rows { from, to } => {
+                let differ: Vec<usize> = {
+                    let pages = self.pages.borrow();
+                    (from..to)
+                        .filter(|&row| {
+                            let was = before.get(row - from).and_then(Option::as_ref);
+                            match (was, pages.at(row).map(|k| &k.row)) {
+                                (Some(a), Some(b)) => !same_row(a, b),
+                                (None, None) => false,
+                                _ => true,
+                            }
+                        })
+                        .collect()
+                };
+                crate::trace(&format!(
+                    "page {page}: {} of {} rows changed",
+                    differ.len(),
+                    to - from
+                ));
+                for row in differ {
+                    self.changed(row);
+                }
+            }
+            other => self.tell(other),
+        }
         arrived
     }
 

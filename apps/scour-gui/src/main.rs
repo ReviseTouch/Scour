@@ -10,6 +10,7 @@
 mod autostart;
 mod disks;
 mod drag;
+mod frame;
 mod hotkey;
 mod install;
 mod link;
@@ -3636,6 +3637,7 @@ fn peek(
         }
         return;
     }
+                frame::let_go_on_the_frame(w.window());
     let path = path_of(rows, w.get_selected()).unwrap_or_default();
     if path == state.borrow().peek_path {
         return;
