@@ -593,6 +593,7 @@ fn main() -> Result<()> {
     draw_tabs(&window, &tabs.borrow(), &cat.borrow());
     window.set_has_past(!kept.history.is_empty());
     window.set_grid_lines(kept.grid_lines);
+    window.set_grid_columns(kept.grid_columns);
     window.set_tabs_on(!kept.tabs_off);
     trace(&format!("history: {} past searches", kept.history.len()));
     trace(&format!("window built {:.1?} in", launched.elapsed()));
@@ -834,6 +835,23 @@ fn main() -> Result<()> {
             link.send(Ask::Remember {
                 change: scour_settings::Change {
                     tabs_off: Some(!on),
+                    ..Default::default()
+                },
+            });
+        });
+    }
+
+    // Lines between the columns, the same way.
+    {
+        let link = Rc::clone(&link);
+        let weak = window.as_weak();
+        window.on_grid_columns_picked(move |on| {
+            if let Some(w) = weak.upgrade() {
+                w.set_grid_columns(on);
+            }
+            link.send(Ask::Remember {
+                change: scour_settings::Change {
+                    grid_columns: Some(on),
                     ..Default::default()
                 },
             });
@@ -1281,7 +1299,11 @@ fn main() -> Result<()> {
         window.on_folder_added(move |typed| {
             let Some(w) = weak.upgrade() else { return };
             let cat = cat.borrow().clone();
-            match folder_to_add(&typed, &folders.borrow()) {
+            // Judged first, on its own line: a borrow in a `match`'s head lives
+            // to the end of the match, and the push below then panicked with
+            // "already borrowed" on every folder added (17 November).
+            let judged = folder_to_add(&typed, &folders.borrow());
+            match judged {
                 Ok(path) => {
                     folders.borrow_mut().push(path);
                     w.set_folders(strings(&folders.borrow()));
@@ -1735,6 +1757,8 @@ fn main() -> Result<()> {
         let link = link.clone();
         let model = Rc::clone(&rows);
         let weak = window.as_weak();
+        let tabs = Rc::clone(&tabs);
+        let cat = Rc::clone(&cat);
         window.on_sort_by(move |key| {
             stir(&state, &link);
             let key = key.to_string();
@@ -1754,6 +1778,11 @@ fn main() -> Result<()> {
             if let Some(w) = weak.upgrade() {
                 w.set_sorted_by(state.borrow().sort.as_str().into());
                 w.set_sorted_down(state.borrow().descending);
+            }
+            // The tab in front says its order on its name.
+            tabs.borrow_mut().hold(now_tab(&state.borrow()));
+            if let Some(w) = weak.upgrade() {
+                draw_tabs(&w, &tabs.borrow(), &cat.borrow());
             }
             // Kept for every face, as the page keeps it.
             let (sort, descending) = {
@@ -2283,10 +2312,15 @@ fn main() -> Result<()> {
             // A path set aside by the report names one file and nothing else;
             // otherwise the menu is about the row the list has selected.
             let over = menu_path.borrow().clone();
-            let (path, is_dir) = match over {
-                Some(one) => (one, false),
+            // The size too, for "find its duplicates": a copy is always among
+            // the files of exactly its size. Off the disk for the report's path.
+            let (path, is_dir, bytes) = match over {
+                Some(one) => {
+                    let b = std::fs::metadata(&one).map_or(-1, |m| m.len() as i64);
+                    (one, false, b)
+                }
                 None => match rows.what_at(usize::try_from(here).unwrap_or(0)) {
-                    Some((p, dir, _)) => (p, dir),
+                    Some((p, dir, b)) => (p, dir, b),
                     None => return,
                 },
             };
@@ -2338,10 +2372,27 @@ fn main() -> Result<()> {
                         None => say(&w, t(&cat_now, "no extension to search for")),
                     }
                 }
-                "duplicates" | "usage" => {
-                    if id == "usage" {
-                        w.invoke_query_changed(format!("under:{path}").into());
+                // Every copy of a file is among the files of exactly its size: the
+                // list shows them, here, and says so. It used to open the report
+                // and ask it nothing about this file (17 November).
+                "duplicates" => {
+                    if bytes < 0 {
+                        say(&w, t(&cat_now, "its size is not known"));
+                    } else {
+                        w.set_tab("search".into());
+                        let q = format!("size:={bytes}");
+                        w.set_query(q.as_str().into());
+                        w.invoke_query_changed(q.into());
+                        say(
+                            &w,
+                            t(&cat_now, "files the size of {name}: any copy of it is here")
+                                .replace("{name}", &leaf(&path))
+                                .into(),
+                        );
                     }
+                }
+                "usage" => {
+                    w.invoke_query_changed(format!("under:{path}").into());
                     w.set_tab("report".into());
                 }
                 "skip" => {
@@ -3805,11 +3856,27 @@ fn now_tab(s: &State) -> scour_settings::SearchTab {
     }
 }
 
-/// The strip: every tab's name and which is in front.
+/// The strip: every tab's name and which is in front. A tab ordered other than
+/// newest first says by what, and which way: "rapor · Boyut ▾".
 fn draw_tabs(w: &MainWindow, tabs: &tabs::Tabs, cat: &Catalogue) {
     let untitled = t(cat, "New tab");
-    let labels: Vec<slint::SharedString> =
-        tabs.labels(&untitled).into_iter().map(Into::into).collect();
+    let labels: Vec<slint::SharedString> = tabs
+        .labels(&untitled)
+        .into_iter()
+        .zip(tabs.list())
+        .map(|(name, tab)| {
+            let key = scour_core::SortKey::named(&tab.sort).unwrap_or_default();
+            let down = tab.descending.unwrap_or_else(|| key.starts_descending());
+            if key == scour_core::SortKey::Modified && down {
+                return name.into();
+            }
+            let column = scour_ui::COLUMNS
+                .iter()
+                .find(|c| c.sort == key.name())
+                .map_or_else(|| key.name().to_owned(), |c| t(cat, c.msgid).to_string());
+            format!("{name} · {column} {}", if down { "▾" } else { "▴" }).into()
+        })
+        .collect();
     w.set_tab_labels(ModelRc::new(VecModel::from(labels)));
     w.set_tab_active(i32::try_from(tabs.active()).unwrap_or(0));
 }
@@ -4999,8 +5066,10 @@ fn settings_words(w: &MainWindow, cat: &Catalogue) {
     w.set_zoom_labels(ModelRc::new(VecModel::from(labels)));
     w.set_set_tabs(t(cat, "Search tabs"));
     w.set_set_tabs_note(t(cat, "Several searches side by side. Ctrl+T opens one."));
-    w.set_set_grid(t(cat, "Grid lines"));
-    w.set_set_grid_note(t(cat, "Lines between the list's rows and columns."));
+    w.set_set_grid(t(cat, "Row lines"));
+    w.set_set_grid_note(t(cat, "A line under every row of the list."));
+    w.set_set_grid_columns(t(cat, "Column lines"));
+    w.set_set_grid_columns_note(t(cat, "A line between the list's columns."));
     w.set_grid_labels(list(&["On", "Off"]));
     w.set_set_later(t(cat, "Disks that come later"));
     w.set_set_removable(t(cat, "A disk plugged in"));

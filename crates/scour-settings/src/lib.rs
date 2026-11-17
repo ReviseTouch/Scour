@@ -98,10 +98,14 @@ pub struct Settings {
     /// Which of [`Settings::tabs`] is in front. Out of range reads as the last.
     #[serde(default)]
     pub tab: usize,
-    /// Lines between the list's rows and columns. Off by default: the list is
-    /// read by its alignment, and lines are for somebody who wants a grid.
+    /// A rule under every row of the list. Off by default: the list is read by
+    /// its alignment, and lines are for somebody who wants a grid. The name is
+    /// from when one switch drew both kinds of line.
     #[serde(default)]
     pub grid_lines: bool,
+    /// A rule between each pair of the list's columns. Off by default.
+    #[serde(default)]
+    pub grid_columns: bool,
     /// Search tabs switched off: no strip, no keys, one query line. The tabs
     /// stay in [`Settings::tabs`] and come back with the switch.
     #[serde(default)]
@@ -167,6 +171,7 @@ pub struct Change {
     pub tabs: Option<Vec<SearchTab>>,
     pub tab: Option<usize>,
     pub grid_lines: Option<bool>,
+    pub grid_columns: Option<bool>,
     pub tabs_off: Option<bool>,
     pub dupes_open: Option<bool>,
     pub key_hint_seen: Option<bool>,
@@ -242,6 +247,9 @@ impl Change {
         }
         if let Some(v) = self.grid_lines {
             to.grid_lines = v;
+        }
+        if let Some(v) = self.grid_columns {
+            to.grid_columns = v;
         }
         if let Some(v) = self.tabs_off {
             to.tabs_off = v;

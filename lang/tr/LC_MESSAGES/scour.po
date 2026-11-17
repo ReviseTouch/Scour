@@ -2133,3 +2133,21 @@ msgstr "Yalnız Windows ile başlat"
 
 msgid "Without the service: the index is kept current from the moment you sign in."
 msgstr "Hizmet olmadan: oturum açtığınız andan itibaren indeks güncel tutulur."
+
+msgid "Row lines"
+msgstr "Yatay çizgiler"
+
+msgid "A line under every row of the list."
+msgstr "Listede her satırın altında bir çizgi."
+
+msgid "Column lines"
+msgstr "Dikey çizgiler"
+
+msgid "A line between the list's columns."
+msgstr "Listenin sütunları arasında bir çizgi."
+
+msgid "its size is not known"
+msgstr "boyutu bilinmiyor"
+
+msgid "files the size of {name}: any copy of it is here"
+msgstr "{name} ile aynı boyuttaki dosyalar: kopyası varsa buradadır"

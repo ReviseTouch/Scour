@@ -1580,10 +1580,14 @@ export component MainWindow inherits Window {
     callback zoom-picked(string);
     /// Lines between the list's rows and columns, which the settings switch.
     in property <bool> grid-lines;
+    in property <bool> grid-columns;
     in property <string> set-grid;
     in property <string> set-grid-note;
+    in property <string> set-grid-columns;
+    in property <string> set-grid-columns-note;
     in property <[string]> grid-labels;
     callback grid-picked(bool);
+    callback grid-columns-picked(bool);
     in property <string> set-later;
     in property <string> set-removable;
     in property <string> set-removable-note;
@@ -3461,7 +3465,7 @@ export component MainWindow inherits Window {
                                 background: Theme.line-soft;
                             }
                             for h[ci] in root.heads: Rectangle {
-                                visible: root.grid-lines && ci < root.heads.length - 1;
+                                visible: root.grid-columns && ci < root.heads.length - 1;
                                 x: root.cx[ci] + root.cw[ci] + 4px;
                                 y: 0px;
                                 width: 1px;
@@ -5100,6 +5104,17 @@ export component MainWindow inherits Window {
                                             values: ["on", "off"];
                                             value: root.grid-lines ? "on" : "off";
                                             picked(v) => { root.grid-picked(v == "on"); }
+                                        }
+                                    }
+                                    Rectangle { height: Theme.hair; background: Theme.line; }
+                                    SettingRow {
+                                        label: root.set-grid-columns;
+                                        note: root.set-grid-columns-note;
+                                        Choice {
+                                            labels: root.grid-labels;
+                                            values: ["on", "off"];
+                                            value: root.grid-columns ? "on" : "off";
+                                            picked(v) => { root.grid-columns-picked(v == "on"); }
                                         }
                                     }
                                 }

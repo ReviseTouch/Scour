@@ -331,7 +331,8 @@
   /* The grid lines. Shadows, not borders: a border makes a row a pixel taller
      than the pitch the virtual list counts on. */
   body.lines:not(.grid) tbody td { box-shadow: inset 0 -1px 0 var(--line-soft); }
-  body.lines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft); }
+  body.vlines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft); }
+  body.lines.vlines:not(.grid) tbody td + td { box-shadow: inset 1px 0 0 var(--line-soft), inset 0 -1px 0 var(--line-soft); }
 
   /* ---------------- search tabs ---------------- */
   .tabstrip {
@@ -1746,7 +1747,8 @@
               <div class="srow"><div class="t"><div class="lab" data-t="Columns"></div><div class="desc" data-t="Which ones, and their widths back to the default."></div></div><button type="button" class="set-push" id="set-cols" data-t="Choose…"></button></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Preview"></div><div class="desc" data-t="The column beside the list. Space opens it too."></div></div><div class="seg" id="seg-peek"></div></div>
               <div class="srow"><div class="t"><div class="lab" data-t="Search tabs"></div><div class="desc" data-t="Several searches side by side. Alt+T opens one."></div></div><div class="seg" id="seg-tabs"></div></div>
-              <div class="srow"><div class="t"><div class="lab" data-t="Grid lines"></div><div class="desc" data-t="Lines between the list's rows and columns."></div></div><div class="seg" id="seg-grid"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Row lines"></div><div class="desc" data-t="A line under every row of the list."></div></div><div class="seg" id="seg-grid"></div></div>
+              <div class="srow"><div class="t"><div class="lab" data-t="Column lines"></div><div class="desc" data-t="A line between the list's columns."></div></div><div class="seg" id="seg-vgrid"></div></div>
             </div>
           </section>
           <section data-sec="disks" hidden>
@@ -3687,7 +3689,11 @@
     if (strip.hidden) return;
     const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
     strip.innerHTML = TABS.map((t, i) => {
-      const name = esc(t.query.trim() || T("New tab"));
+      /* Ordered other than newest first, a tab says by what and which way. */
+      const col = COLUMNS.find((c) => c.key === t.sort);
+      const sorted = t.sort !== "modified" || t.descending === false
+        ? ` · ${col ? T(col.msgid) : t.sort} ${t.descending === false ? "▴" : "▾"}` : "";
+      const name = esc((t.query.trim() || T("New tab")) + sorted);
       return `<div class="stab" role="tab" tabindex="0" data-i="${i}" aria-selected="${i === TAB}" title="${name}">`
         + `<span class="nm">${name}</span>`
         + (closable ? `<button type="button" class="x" data-close="${i}" aria-label="${esc(T("Close tab"))}">×</button>` : "")
@@ -4416,6 +4422,7 @@
   /* Lines between rows and columns, when the settings ask for them. */
   function applyGrid() {
     document.body.classList.toggle("lines", !!(KEPT && KEPT.grid_lines));
+    document.body.classList.toggle("vlines", !!(KEPT && KEPT.grid_columns));
   }
 
   function applySettings(s) {
@@ -5223,8 +5230,9 @@
       }
       case "duplicates": {
         /* Every copy of this file is in the set of files its exact size. */
+        /* In the list, where they can be seen: the report asked nothing about
+           this file. */
         if (row && row.size !== undefined && row.size !== null) toggleTerm("size:=" + row.size);
-        document.getElementById("tab-report").click();
         return;
       }
       case "usage":
@@ -6680,6 +6688,12 @@
       KEPT.grid_lines = v === "on";
       applyGrid();
       keep({ grid_lines: KEPT.grid_lines });
+      drawSettings();
+    });
+    seg("seg-vgrid", [["on", T("On")], ["off", T("Off")]], k.grid_columns ? "on" : "off", (v) => {
+      KEPT.grid_columns = v === "on";
+      applyGrid();
+      keep({ grid_columns: KEPT.grid_columns });
       drawSettings();
     });
     seg("seg-removable", [["", T("Ask")], ["always", T("Always scan")], ["never", T("Never")]],
