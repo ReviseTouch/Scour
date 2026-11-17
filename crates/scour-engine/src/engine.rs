@@ -1651,9 +1651,11 @@ fn scan(
         st.scanned = 0;
     }
 
-    // Into an empty index, the rows are shown as they are found: nothing else can
-    // answer until this walk does. Any other walk only corrects what is already there.
-    let first = subtree.is_none() && shared.index.stats().is_ok_and(|s| s.entries == 0);
+    // A disk the index holds nothing of shows its rows as they are found: nothing
+    // else can answer for it until this walk does. Any other walk only corrects
+    // what is already there. Per disk, not per index: the second disk of a first
+    // run was minutes of nothing (eight on a Windows machine, 17 November).
+    let first = subtree.is_none() && holds_nothing(&*shared.index, &src.describe().roots);
     let mut sink = ToIndex {
         index: Arc::clone(&shared.index),
         seen: 0,
@@ -1848,6 +1850,29 @@ struct ToIndex {
     show: Option<Show>,
 }
 
+/// Whether the index holds nothing under these roots: an empty index, or a disk
+/// walked for the first time. One row asked for, so a disk that has rows answers
+/// at the first block it reads.
+fn holds_nothing(index: &dyn Index, roots: &[String]) -> bool {
+    if index.stats().is_ok_and(|s| s.entries == 0) {
+        return true;
+    }
+    roots.iter().all(|root| {
+        let request = SearchRequest {
+            query: scour_query::parse(&format!("under:\"{root}\"")),
+            page: Page {
+                offset: 0,
+                limit: 1,
+                count_cap: 1,
+            },
+            ..SearchRequest::default()
+        };
+        index
+            .search(&request)
+            .is_ok_and(|found| found.hits.is_empty())
+    })
+}
+
 /// A first walk's clock for making its rows searchable while it goes on.
 struct Show {
     at: Instant,
@@ -1912,7 +1937,35 @@ impl EntrySink for ToIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::{PendingWalks, coalesce};
+    use super::{PendingWalks, coalesce, holds_nothing};
+
+    /// A disk is walked "first" — its rows shown as they are found — when the
+    /// index holds nothing under its roots, not only when the index is empty.
+    #[test]
+    fn a_disk_with_no_rows_is_a_first_walk_beside_one_that_has_them() {
+        use scour_core::{Change, Entry, EntryId, Index, Meta, SourceId};
+        let dir = tempfile::tempdir().expect("temp");
+        let index = scour_index_native::NativeIndex::open_or_create(dir.path()).expect("index");
+        assert!(holds_nothing(&index, &["C:/".into()]), "an empty index");
+        let row = |path: &str| {
+            Change::Upsert(Entry {
+                id: EntryId::path_hash(SourceId(0), path),
+                path: path.into(),
+                is_dir: false,
+                meta: Meta::UNKNOWN,
+            })
+        };
+        index
+            .apply(&mut vec![row("C:/a.txt"), row("C:/b/c.txt")].into_iter())
+            .expect("apply");
+        index.publish().expect("publish");
+        assert!(!holds_nothing(&index, &["C:/".into()]), "C: has rows");
+        assert!(holds_nothing(&index, &["G:/".into()]), "G: has none yet");
+        assert!(
+            !holds_nothing(&index, &["G:/".into(), "C:/".into()]),
+            "one root with rows is not a first walk"
+        );
+    }
     use std::time::{Duration, Instant};
 
     fn c(v: &[&str]) -> Vec<String> {
