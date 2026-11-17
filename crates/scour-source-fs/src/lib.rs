@@ -11,6 +11,8 @@ mod fanotify;
 /// Which filesystems that descriptor can hear.
 #[cfg(target_os = "linux")]
 mod marks;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod mft;
 mod pulse;
 /// Looking again at what a mapped write never announced.
 mod revisit;

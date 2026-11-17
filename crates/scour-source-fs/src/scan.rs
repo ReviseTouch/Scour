@@ -397,6 +397,37 @@ impl Source for FsSource {
             return Ok(ScanReport::default());
         };
 
+        // A whole drive read from its master file table: seconds where the walk
+        // is minutes. Only where this process may open the volume — the
+        // service — and only for a whole walk; anything that goes wrong walks.
+        #[cfg(windows)]
+        if opts.subtree.is_none() && rest.is_empty() {
+            let root = path::from_path(first);
+            if let Some(volume) = crate::mft::open(&root) {
+                match crate::mft::read(&volume, self.id, &root, &rules, opts.hidden, sink) {
+                    Ok(c) => {
+                        scour_core::note!(
+                            "scourd: {root} read from its master file table: {} entries in {} ms",
+                            c.entries,
+                            started.elapsed().as_millis()
+                        );
+                        return Ok(ScanReport {
+                            entries: c.entries,
+                            dirs: c.dirs,
+                            excluded: c.excluded,
+                            took_ms: started.elapsed().as_millis() as u64,
+                            cancelled: c.stopped,
+                            vouched: if c.stopped { Vec::new() } else { vec![root] },
+                            ..ScanReport::default()
+                        });
+                    }
+                    Err(e) => scour_core::note!(
+                        "scourd: the master file table of {root} could not be read ({e}); walking it"
+                    ),
+                }
+            }
+        }
+
         // An unreadable root and a genuinely empty one both come back `entries: 0`,
         // and reconciling the first deletes the source; an unmounted mount is a
         // readable, empty directory. Distrusted per root, and for whole sources only.

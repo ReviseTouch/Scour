@@ -54,4 +54,18 @@ would otherwise read every file name of every disk.
    and starts it again; the window offers a newer release from GitHub and runs it
    after checking its SHA-256.
 
+## Where each step stands (17 November)
+
+| Step | State |
+|---|---|
+| 1. The service | tried on PC2: running, automatic start, pipe DACL holds |
+| 2. The move | tried on PC2; the tidy-up of the old session install not yet |
+| 3. The change journal | written: `scour-source-fs/src/usn.rs`, its position kept as `journal-<source>` beside the index, 45 s behind what was read; a restart that finds it still in the journal skips the start walk (`WatchHandle::caught_up`). **Untried** |
+| 4. The master file table | written: `scour-source-fs/src/mft.rs`, a raw read of `$MFT` (not `FSCTL_ENUM_USN_DATA`, which has no sizes or times), for every whole walk of a drive root the process may open. Tested against a volume built in memory. **Untried** on a disk |
+| 5. Installer and updates | not started |
+
+Also for the service: a network folder is walked as its owner
+(`scourd/src/as_owner.rs`: the walker threads borrow the token of the owner's
+logged-on session), and not watched, every ten minutes at most. **Untried.**
+
 Until a step is tried on a real Windows machine it is written down as untried.
