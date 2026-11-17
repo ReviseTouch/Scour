@@ -58,7 +58,12 @@ libc = { workspace = true }
 # The Windows service mode: the Service Control Manager's calls, through the
 # crate already in the tree. See `service.rs` and docs/WINDOWS-SERVICE.md.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Services"] }
+windows-sys = { workspace = true, features = [
+    "Win32_System_Services",
+    "Win32_System_RemoteDesktop",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+] }
 
 [build-dependencies]
 scour-icon = { workspace = true }

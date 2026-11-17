@@ -51,12 +51,17 @@ pub fn engine(
         .zip(&assigned.ids)
         .map(|(p, id)| {
             let s = &p.source;
+            let walk_as = crate::as_owner::walk_as(&s.roots);
+            // A share read as its owner is walked, not watched: a watcher holds
+            // its handle open as SYSTEM, which the share turns away.
+            let shared = walk_as.is_some();
             Arc::new(
                 FsSource::new(SourceId(*id), s.name.clone(), s.roots.clone())
                     .with_kind(s.kind.into())
-                    .with_watch(s.watch)
+                    .with_watch(s.watch && !shared)
                     .with_skip(p.skip.clone())
-                    .with_patience(if p.system {
+                    .with_walk_as(walk_as)
+                    .with_patience(if p.system || shared {
                         SYSTEM_PATIENCE
                     } else {
                         Duration::ZERO

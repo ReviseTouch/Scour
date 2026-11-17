@@ -2,6 +2,7 @@
 //! implementation. `NativeIndex` and `FsSource` appear in [`wire`] and nowhere
 //! else, so replacing the search engine is a change to one line here.
 
+mod as_owner;
 mod disks;
 mod handle;
 mod live;
@@ -110,6 +111,9 @@ fn main() -> Result<()> {
 
 /// Everything after the arguments: the same for a console start and a service.
 pub(crate) fn run(args: Args) -> Result<()> {
+    if let Some(owner) = &args.owner {
+        as_owner::set_owner(owner);
+    }
     let (mut config, problem) = match &args.config {
         Some(p) => (Config::load_from(p)?, None),
         None => Config::load_or_default(),

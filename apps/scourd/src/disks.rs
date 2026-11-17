@@ -207,7 +207,11 @@ fn folders_apart(settings: &Settings, sources: &[SourceCfg], volumes: &[Volume])
         if !held {
             out.push(SourceCfg {
                 name: folder_source(f),
-                kind: SourceKindCfg::Local,
+                kind: if crate::as_owner::is_share(&root) {
+                    SourceKindCfg::Network
+                } else {
+                    SourceKindCfg::Local
+                },
                 roots: vec![root],
                 watch: !settings.folders_unwatched.contains(f),
             });

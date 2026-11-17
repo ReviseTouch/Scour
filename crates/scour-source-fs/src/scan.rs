@@ -161,6 +161,21 @@ pub struct FsSource {
     skip: Vec<String>,
     /// See [`scour_core::Source::patience`].
     patience: std::time::Duration,
+    /// Taken by every walker thread before its first entry, kept until it ends.
+    walk_as: Option<WalkAs>,
+}
+
+/// An identity a walker thread takes before it reads anything: a service on
+/// Windows reads a network share as the person who added it, since the share
+/// does not know SYSTEM. Impersonation belongs to a thread, so it is asked for
+/// on each of them; the guard it returns gives the identity back when dropped.
+#[derive(Clone)]
+pub struct WalkAs(pub std::sync::Arc<dyn Fn() -> Option<Box<dyn std::any::Any + Send>> + Send + Sync>);
+
+impl std::fmt::Debug for WalkAs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WalkAs")
+    }
 }
 
 impl FsSource {
@@ -191,6 +206,7 @@ impl FsSource {
             nested,
             skip: Vec::new(),
             patience: std::time::Duration::ZERO,
+            walk_as: None,
         }
     }
 
@@ -245,6 +261,12 @@ impl FsSource {
     }
 
     /// Walked no oftener than this when nothing watches it, however its pulse moves.
+    /// See [`WalkAs`].
+    pub fn with_walk_as(mut self, walk_as: Option<WalkAs>) -> Self {
+        self.walk_as = walk_as;
+        self
+    }
+
     pub fn with_patience(mut self, least: std::time::Duration) -> Self {
         self.patience = least;
         self
@@ -414,6 +436,7 @@ impl Source for FsSource {
         // over a bounded channel: backpressure free, and no `Send` bound on the trait.
         let (tx, rx) = crossbeam_channel::bounded::<Msg>(IN_FLIGHT);
 
+        let walk_as = self.walk_as.as_ref();
         std::thread::scope(|scope| {
             let walker_tx = tx.clone();
             let (rules, excluded, unreadable, lasting, entries, dirs, cancelled) = (
@@ -432,11 +455,14 @@ impl Source for FsSource {
                     // On the first entry, not here: `ignore` builds the visitor on the
                     // spawning thread.
                     let mut polite = false;
+                    let mut held: Option<Box<dyn std::any::Any + Send>> = None;
                     Box::new(move |result| {
                         if !polite {
                             polite = true;
                             stand_aside();
+                            held = walk_as.and_then(|w| (w.0)());
                         }
+                        let _ = &held;
                         if cancelled.load(Ordering::Relaxed) {
                             return WalkState::Quit;
                         }
