@@ -6,7 +6,7 @@ fn main() {
     for e in std::fs::read_dir(dir).expect("rd").flatten() {
         let n = e.file_name();
         let n = n.to_string_lossy();
-        if !n.ends_with(".names") {
+        if !n.ends_with(".fnames") {
             continue;
         }
         let Some(num) = n
@@ -27,7 +27,7 @@ fn main() {
     let rows = seg.rows();
     let (mut same, mut diff, mut same_bytes, mut diff_bytes) = (0usize, 0usize, 0usize, 0usize);
     for r in 0..rows {
-        let raw = seg.names.get(r).unwrap_or("");
+        let raw = seg.names.get(r).unwrap_or_default();
         let fold = seg.folded.get(r).unwrap_or("");
         if raw == fold {
             same += 1;

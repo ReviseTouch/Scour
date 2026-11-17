@@ -133,7 +133,7 @@ impl Prefix {
             if !parent.is_empty() && parent != "/" {
                 path.push('/');
             }
-            path.push_str(name);
+            path.push_str(&name);
             let scope = seg.dirs.subtree(&path);
             let bounds = [
                 scope.own.unwrap_or(u32::MAX),

@@ -16,7 +16,7 @@ fn main() {
     for entry in std::fs::read_dir(dir).expect("read_dir").flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if !name.ends_with(".names") {
+        if !name.ends_with(".fnames") {
             continue;
         }
         let Some(num) = name

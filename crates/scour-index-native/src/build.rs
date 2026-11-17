@@ -12,8 +12,9 @@ use crate::trigram::TrigramWriter;
 /// The blobs a segment consists of.
 #[derive(Debug, Default, Clone)]
 pub struct SegmentBytes {
-    pub names: Vec<u8>,
-    /// The same names, folded once here so no query ever folds them again.
+    /// How each name's spelling differs from its fold. See [`crate::spelling`].
+    pub spell: Vec<u8>,
+    /// The names, folded once here so no query ever folds them again.
     pub fnames: Vec<u8>,
     pub cols: Vec<u8>,
     pub dirs: Vec<u8>,
@@ -32,7 +33,7 @@ pub struct SegmentBytes {
 
 impl SegmentBytes {
     pub fn total(&self) -> usize {
-        self.names.len()
+        self.spell.len()
             + self.fnames.len()
             + self.cols.len()
             + self.dirs.len()
@@ -117,12 +118,12 @@ pub fn build_sorted(pass: &mut dyn FnMut(&mut dyn FnMut(&Entry))) -> SegmentByte
     let eorder = crate::extension_order::build(rows, names.spelled(), names.folded(), order);
 
     let (tri_dict, tri_post) = tri.finish();
-    // Consumed together: block tables are appended in place, so finishing never
-    // holds a second full copy of both the spelling and its fold.
-    let (name_bytes, folded_bytes) = names.finish_both();
+    // The block table is prepended in place, so finishing never holds a second
+    // copy of the fold.
+    let (spell, folded_bytes) = names.finish_both();
     SegmentBytes {
         fnames: folded_bytes,
-        names: name_bytes,
+        spell,
         cols: cols.finish(),
         dirs: dir_bytes,
         ids: ids.finish(),
@@ -159,6 +160,7 @@ mod tests {
     use crate::names::NameArena;
     use crate::order::PathOrder;
     use crate::search::Segment;
+    use crate::spelling::Spelling;
     use crate::trigram::TrigramIndex;
     use scour_core::{EntryId, Meta, SourceId};
 
@@ -183,7 +185,7 @@ mod tests {
             entry("/a/mid.rs", 200),
         ];
         let b = build(&entries);
-        let arena = NameArena::open(&b.names).expect("names");
+        let arena = NameArena::open(&b.fnames).expect("names");
         assert_eq!(arena.get(0), Some("new.rs"));
         assert_eq!(arena.get(1), Some("mid.rs"));
         assert_eq!(arena.get(2), Some("old.rs"));
@@ -201,7 +203,8 @@ mod tests {
         let first = build(&a);
         a.reverse();
         let second = build(&a);
-        assert_eq!(first.names, second.names);
+        assert_eq!(first.spell, second.spell);
+        assert_eq!(first.fnames, second.fnames);
         assert_eq!(first.cols, second.cols);
         assert_eq!(first.dirs, second.dirs);
     }
@@ -211,7 +214,8 @@ mod tests {
         let entries = vec![entry("/home/u/Projeler/main.rs", 42)];
         let b = build(&entries);
         let seg = Segment {
-            names: NameArena::open(&b.names).expect("names"),
+            names: Spelling::open(NameArena::open(&b.fnames).expect("fnames"), &b.spell)
+                .expect("spell"),
             folded: NameArena::open(&b.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
@@ -234,7 +238,8 @@ mod tests {
     fn a_file_at_the_root_gets_a_sane_path() {
         let b = build(&[entry("/lonely.txt", 1)]);
         let seg = Segment {
-            names: NameArena::open(&b.names).expect("names"),
+            names: Spelling::open(NameArena::open(&b.fnames).expect("fnames"), &b.spell)
+                .expect("spell"),
             folded: NameArena::open(&b.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&b.cols).expect("cols"),
             dirs: DirTable::open(&b.dirs).expect("dirs"),
@@ -250,7 +255,7 @@ mod tests {
     #[test]
     fn an_empty_input_produces_readable_empty_files() {
         let b = build(&[]);
-        assert!(NameArena::open(&b.names).expect("names").is_empty());
+        assert!(NameArena::open(&b.fnames).expect("names").is_empty());
         assert!(ColumnBlocks::open(&b.cols).expect("cols").is_empty());
         assert!(DirTable::open(&b.dirs).expect("dirs").is_empty());
         assert!(b.alive.is_empty());

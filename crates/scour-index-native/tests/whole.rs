@@ -1867,12 +1867,12 @@ fn nothing_is_left_on_disk_for_a_segment_that_was_erased() {
     index.commit().expect("commit");
     assert_eq!(index.stats().expect("stats").entries, 1);
 
-    // Checked against the files, not the manifest: `Live::open` reads `.names`
+    // Checked against the files, not the manifest: `Live::open` reads `.spell`
     // first, so any other part without it is a number nothing can open.
     let files = segment_files(tmp.path());
     let real: std::collections::HashSet<&str> = files
         .iter()
-        .filter(|n| n.ends_with(".names"))
+        .filter(|n| n.ends_with(".spell"))
         .map(|n| &n[..12])
         .collect();
     let strays: Vec<&String> = files.iter().filter(|n| !real.contains(&n[..12])).collect();
@@ -1915,7 +1915,7 @@ fn an_index_forgets_files_the_manifest_never_named() {
 
     // A crash partway through writing a segment leaves exactly this: the first
     // files of the eight, and no manifest entry.
-    std::fs::write(tmp.path().join("seg-00000001.names"), b"junk").expect("write");
+    std::fs::write(tmp.path().join("seg-00000001.spell"), b"junk").expect("write");
     std::fs::write(tmp.path().join("seg-00000002.cols"), b"junk").expect("write");
 
     let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
@@ -2887,7 +2887,7 @@ fn an_index_from_another_version_is_outdated_and_not_damaged() {
         std::fs::read_dir(tmp.path())
             .expect("read_dir")
             .flatten()
-            .all(|e| e.file_name() != "seg-00000001.names"),
+            .all(|e| e.file_name() != "seg-00000001.fnames"),
         "the old segments are still on disk"
     );
     // Discarding what is not there is the state being asked for, not an error.
@@ -4910,7 +4910,7 @@ fn a_streamed_order_reports_the_total_the_stored_order_does() {
 #[test]
 fn a_segment_file_cut_short_is_refused_or_read_and_never_a_panic() {
     for part in [
-        "names", "fnames", "cols", "dirs", "ids", "tgrams", "tpost", "porder", "norder", "eorder",
+        "spell", "fnames", "cols", "dirs", "ids", "tgrams", "tpost", "porder", "norder", "eorder",
         "alive",
     ] {
         for keep in [0usize, 1, 3, 2] {
@@ -5080,4 +5080,155 @@ fn a_replacement_whose_removal_never_reached_the_disk_is_still_found() {
     index.commit().expect("commit");
     assert_eq!(find(&index), 1);
     assert_eq!(index.stats().expect("stats").entries, 200);
+}
+
+/// A name is stored folded and its spelling as a difference from that. Every
+/// way a spelling is read — shown, ordered by path, matched by `case:`, asked
+/// whether its extension counts — has to give back what was written.
+#[test]
+fn spellings_survive_the_fold_they_are_stored_against() {
+    let names = [
+        "README.md",
+        "readme.md",
+        "ReadMe.MD",
+        "Makefile",
+        "IMG_0042.JPG",
+        "KENAN PİLEVNELİ.docx",
+        "kenan pilevneli.docx",
+        "para isteme yazısı.DOCX",
+        "ŞIRNAK MERKEZ.Pdf",
+        "İ.İ",
+        "ı.ı",
+        "I.I",
+        "i.i",
+        "ẞ.txt",
+        "Ölçü.K",
+        "ölçü.\u{212a}",
+        "\u{0307}.txt",
+        "Привет.TXT",
+        "abc.Iiiiiiiiiiii",
+        "abc.İiiiiiiiiiii",
+        "abc.Iiiiiiiiiiiii",
+        "abc.\u{212a}\u{212a}\u{212a}\u{212a}\u{212a}",
+        "abc.kkkkk",
+    ];
+    let mut entries = Vec::new();
+    for i in 0..400u64 {
+        let name = names[(i as usize * 5 + i as usize / 7) % names.len()];
+        entries.push(entry(
+            &format!("/Kök/D{:02}/{i:03}-{name}", i % 23),
+            NOW - ((i * 37) % 29) as i64,
+            70_000 + i,
+        ));
+    }
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    for part in entries.chunks(90) {
+        index
+            .apply(&mut part.iter().cloned().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    let check = |index: &NativeIndex, when: &str| {
+        for q in [
+            "",
+            "case:README",
+            "case:readme",
+            "case:İ",
+            "case:ı",
+            "case:I",
+            "case:i",
+            "case:PİLEVNELİ",
+            "case:yazısı",
+            "case:ŞIRNAK",
+            "case:K",
+            "case:ẞ",
+            "!case:M",
+            "case:Read | case:IMG",
+            "ext:md",
+            "ext:docx",
+            "ext:i",
+            "ext:k",
+            "ext:iiiiiiiiiiii",
+            "ext:iiiiiiiiiiiii",
+            "ext:kkkkk",
+            "ext:txt",
+            "*.jpg",
+        ] {
+            for sort in [
+                SortKey::Modified,
+                SortKey::Path,
+                SortKey::Name,
+                SortKey::Ext,
+            ] {
+                for desc in [false, true] {
+                    let got: Vec<String> = index
+                        .search(&SearchRequest {
+                            query: parse_at(q, NOW),
+                            sort,
+                            descending: desc,
+                            page: Page {
+                                offset: 0,
+                                limit: 400,
+                                count_cap: 10_000_000,
+                            },
+                        })
+                        .expect("search")
+                        .hits
+                        .into_iter()
+                        .map(|h| h.path)
+                        .collect();
+                    let want: Vec<String> =
+                        brute_force(&entries, &parse_at(q, NOW), sort, desc, 400)
+                            .into_iter()
+                            .map(|h| h.path)
+                            .collect();
+                    assert_eq!(got, want, "{q:?} by {sort:?} desc={desc}, {when}");
+                }
+            }
+        }
+    };
+    check(&index, "in five segments");
+    index.maintain(Maintenance::Rebuild).expect("rebuild");
+    check(&index, "rebuilt into one");
+    drop(index);
+    let index = NativeIndex::open_or_create(tmp.path()).expect("reopen");
+    check(&index, "reopened");
+}
+
+/// Each of these is read for every row and is a fixed length for its rows: a
+/// byte short or a byte long is damage, and the index says which file.
+#[test]
+fn a_part_of_the_wrong_length_is_refused_by_name() {
+    for part in ["spell", "norder", "eorder", "porder"] {
+        for longer in [false, true] {
+            let tmp = tempfile::tempdir().expect("tmpdir");
+            {
+                let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+                let mut it = (0..200)
+                    .map(|i| Change::Upsert(entry(&format!("/a/Dosya{i}.RS"), NOW - i as i64, i)));
+                index.apply(&mut it).expect("apply");
+                index.commit().expect("commit");
+            }
+            let file = std::fs::read_dir(tmp.path())
+                .expect("read_dir")
+                .flatten()
+                .map(|e| e.path())
+                .find(|p| p.extension().is_some_and(|e| e == part))
+                .expect("the part was written");
+            let mut bytes = std::fs::read(&file).expect("read");
+            if longer {
+                bytes.push(0);
+            } else {
+                bytes.pop();
+            }
+            std::fs::write(&file, &bytes).expect("rewrite");
+            match NativeIndex::open_or_create(tmp.path()) {
+                Err(scour_core::Error::IndexCorrupt { detail }) => {
+                    assert!(detail.contains(part), "unhelpful detail: {detail}");
+                }
+                other => panic!("{part} longer={longer}: expected damage, got {other:?}"),
+            }
+        }
+    }
 }

@@ -7,7 +7,7 @@
 use scour_core::{Entry, EntryId, Meta, SortKey, SourceId};
 use scour_index_native::{
     ColumnBlocks, DirTable, ExtensionOrder, NameArena, NameOrder, PathOrder, Plan, Segment,
-    SegmentBytes, TrigramIndex, Wanted, build, run,
+    SegmentBytes, Spelling, TrigramIndex, Wanted, build, run,
 };
 use scour_mock::{MockOptions, brute_force, generate};
 use scour_query::parse_at;
@@ -98,7 +98,11 @@ impl Fixture {
 
     fn segment(&self) -> Segment<'_> {
         Segment {
-            names: NameArena::open(&self.bytes.names).expect("names"),
+            names: Spelling::open(
+                NameArena::open(&self.bytes.fnames).expect("fnames"),
+                &self.bytes.spell,
+            )
+            .expect("spell"),
             folded: NameArena::open(&self.bytes.fnames).expect("fnames"),
             cols: ColumnBlocks::open(&self.bytes.cols).expect("cols"),
             dirs: DirTable::open(&self.bytes.dirs).expect("dirs"),
@@ -547,7 +551,11 @@ fn a_dead_row_disappears_without_the_files_being_rewritten() {
     alive[7 / 8] &= !(1 << 7);
 
     let seg = Segment {
-        names: NameArena::open(&f.bytes.names).expect("names"),
+        names: Spelling::open(
+            NameArena::open(&f.bytes.fnames).expect("fnames"),
+            &f.bytes.spell,
+        )
+        .expect("spell"),
         folded: NameArena::open(&f.bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&f.bytes.cols).expect("cols"),
         dirs: DirTable::open(&f.bytes.dirs).expect("dirs"),
@@ -834,7 +842,11 @@ fn an_abbreviated_name_key_still_orders_by_the_whole_name() {
         .collect();
     let bytes = build(&tmp);
     let seg = Segment {
-        names: NameArena::open(&bytes.names).expect("names"),
+        names: Spelling::open(
+            NameArena::open(&bytes.fnames).expect("fnames"),
+            &bytes.spell,
+        )
+        .expect("spell"),
         folded: NameArena::open(&bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),

@@ -50,8 +50,9 @@ const META_FILE: &str = "native-index.json";
 /// 128 rows to 32, and every offset in every file is relative to it; 8 made a
 /// row's identity its path — three identity columns went and the lookup table is
 /// keyed on the path; 9 added the link count, without which a disk-usage report
-/// counts a hard-linked file once per name.
-const FORMAT: u32 = 9;
+/// counts a hard-linked file once per name; 10 keeps a name's spelling as its
+/// difference from the fold, and the spelled arena went.
+const FORMAT: u32 = 10;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SegRef {
@@ -1145,7 +1146,7 @@ impl NativeIndex {
             fresh.extend(
                 (0..live.rows())
                     .filter(|&row| live.is_alive(row))
-                    .map(|row| seg.path(row, seg.names.get(row).unwrap_or_default())),
+                    .map(|row| seg.path(row, &seg.names.get(row).unwrap_or_default())),
             );
         }
         // Where they are, counted, before which they are: tens of thousands of
@@ -1250,7 +1251,7 @@ impl NativeIndex {
 
         // The segment is written before the lock is taken: it is a new file
         // that nothing names yet, so nobody can be reading it.
-        let mut folded = if bytes.names.is_empty() || bytes.alive.is_empty() {
+        let mut folded = if bytes.fnames.is_empty() || bytes.alive.is_empty() {
             None
         } else if durable {
             Some(
@@ -1786,7 +1787,7 @@ fn reach(
         } else {
             let seg = &views[i];
             if let Some(name) = seg.names.get(row) {
-                hits.push(seg.hit(row, name));
+                hits.push(seg.hit(row, &name));
             }
         }
         at[i] = next_live(views, segments, i, row + 1);
@@ -1831,12 +1832,12 @@ fn first_of(
         dirs.entry(key)
             .or_insert_with(|| views[seg].dirs.get(key.1).unwrap_or_default());
     }
-    let joined = |(seg, row): (usize, usize)| {
+    let parts = |(seg, row): (usize, usize)| {
         let dir = dirs[&(seg, views[seg].dir_id(row))].as_str();
-        let name = views[seg].names.get(row).unwrap_or_default();
-        joined_path(dir, name)
+        (dir, views[seg].names.get(row).unwrap_or_default())
     };
-    joined(a).lt(joined(b))
+    let ((a_dir, a_name), (b_dir, b_name)) = (parts(a), parts(b));
+    joined_path(a_dir, &a_name).lt(joined_path(b_dir, &b_name))
 }
 
 /// Emit every live row of every segment, in the merged stored order. Each
@@ -1903,7 +1904,7 @@ fn entry_storage(entries: &Vec<Entry>) -> usize {
 
 #[cfg(feature = "memory-trace")]
 fn segment_storage(bytes: &crate::build::SegmentBytes) -> usize {
-    bytes.names.capacity()
+    bytes.spell.capacity()
         + bytes.fnames.capacity()
         + bytes.cols.capacity()
         + bytes.dirs.capacity()
@@ -2253,9 +2254,9 @@ impl Index for NativeIndex {
                         let in_scope = |row: usize| {
                             let d = seg.dir_id(row);
                             scopes.iter().any(|s| s.contains(d))
-                                || owns
-                                    .iter()
-                                    .any(|(pd, name)| *pd == d && seg.names.get(row) == Some(*name))
+                                || owns.iter().any(|(pd, name)| {
+                                    *pd == d && seg.names.get(row).as_deref() == Some(*name)
+                                })
                         };
                         let block_matters = |block: usize| {
                             whole
@@ -2298,16 +2299,14 @@ impl Index for NativeIndex {
                                 // not evidence of anything, so they stay.
                                 !(!spare.is_empty()
                                     && spare.covers(
-                                        &seg.path(row, seg.names.get(row).unwrap_or_default()),
+                                        &seg.path(row, &seg.names.get(row).unwrap_or_default()),
                                     ))
                             }));
                         }
                         if tracing {
-                            gone_paths.extend(
-                                out.iter().map(|&row| {
-                                    seg.path(row, seg.names.get(row).unwrap_or_default())
-                                }),
-                            );
+                            gone_paths.extend(out.iter().map(|&row| {
+                                seg.path(row, &seg.names.get(row).unwrap_or_default())
+                            }));
                         }
                         out
                     }
@@ -2624,7 +2623,7 @@ impl Index for NativeIndex {
                     dirs.entry(at)
                         .or_insert_with(|| seg.dirs.get(at.1).unwrap_or_default());
                 }
-                let joined = |c: &Candidate| {
+                let parts = |c: &Candidate| {
                     let seg = views.get(c.seg as usize);
                     let dir = seg
                         .map(|s| dirs[&(c.seg, s.dir_id(c.row as usize))].as_str())
@@ -2632,9 +2631,10 @@ impl Index for NativeIndex {
                     let name = seg
                         .and_then(|s| s.names.get(c.row as usize))
                         .unwrap_or_default();
-                    joined_path(dir, name)
+                    (dir, name)
                 };
-                joined(a).cmp(joined(b))
+                let ((a_dir, a_name), (b_dir, b_name)) = (parts(a), parts(b));
+                joined_path(a_dir, &a_name).cmp(joined_path(b_dir, &b_name))
             })
         };
 
@@ -2810,7 +2810,7 @@ impl Index for NativeIndex {
             .filter_map(|c| {
                 let seg = views.get(c.seg as usize)?;
                 let row = c.row as usize;
-                seg.names.get(row).map(|n| seg.hit(row, n))
+                seg.names.get(row).map(|n| seg.hit(row, &n))
             })
             .collect();
         Ok(SearchResponse {
@@ -2844,7 +2844,7 @@ impl Index for NativeIndex {
                 return true;
             };
             rows += 1;
-            f(&seg.hit(row, name))
+            f(&seg.hit(row, &name))
         })?;
         Ok(rows)
     }
@@ -2911,13 +2911,13 @@ impl Index for NativeIndex {
                         *counts[i].entry(k.token().to_owned()).or_default() += 1;
                     }
                     FacetBy::Ext { .. } => {
-                        let ext = scour_core::ext_of(name.unwrap_or_default());
+                        let ext = scour_core::ext_of(name.as_deref().unwrap_or_default());
                         if !ext.is_empty() {
                             *counts[i].entry(ext).or_default() += 1;
                         }
                     }
                     FacetBy::Dir { .. } => {
-                        let path = seg.path(row, name.unwrap_or_default());
+                        let path = seg.path(row, name.as_deref().unwrap_or_default());
                         if let Some(rest) = path
                             .strip_prefix(parents[i].as_str())
                             .and_then(|r| r.strip_prefix('/'))
@@ -4002,8 +4002,8 @@ mod tests {
         index.commit().expect("empty retry commit");
         assert_eq!(index.stats().expect("stats").segments, 1);
         assert!(
-            !tmp.path().join("seg-00000001.names").exists()
-                && !tmp.path().join("seg-00000002.names").exists(),
+            !tmp.path().join("seg-00000001.fnames").exists()
+                && !tmp.path().join("seg-00000002.fnames").exists(),
             "the publication retry left the folded inputs on disk"
         );
         drop(index);

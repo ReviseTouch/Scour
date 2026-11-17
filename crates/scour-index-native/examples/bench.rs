@@ -7,7 +7,7 @@ use std::time::Instant;
 use scour_core::SortKey;
 use scour_index_native::{
     ColumnBlocks, DirTable, ExtensionOrder, NameArena, NameOrder, PathOrder, Plan, Segment,
-    TrigramIndex, Wanted, build, run,
+    Spelling, TrigramIndex, Wanted, build, run,
 };
 use scour_mock::{MockOptions, generate};
 use scour_query::parse_at;
@@ -35,7 +35,11 @@ fn main() {
     );
 
     let seg = Segment {
-        names: NameArena::open(&bytes.names).expect("names"),
+        names: Spelling::open(
+            NameArena::open(&bytes.fnames).expect("fnames"),
+            &bytes.spell,
+        )
+        .expect("spell"),
         folded: NameArena::open(&bytes.fnames).expect("fnames"),
         cols: ColumnBlocks::open(&bytes.cols).expect("cols"),
         dirs: DirTable::open(&bytes.dirs).expect("dirs"),

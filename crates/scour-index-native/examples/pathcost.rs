@@ -48,7 +48,7 @@ fn main() {
         let began = Instant::now();
         for row in 0..rows {
             let name = seg.names.get(row).unwrap_or_default();
-            let path = seg.path(row, name);
+            let path = seg.path(row, &name);
             if path.to_lowercase().contains(&needle) {
                 hits_whole += 1;
             }

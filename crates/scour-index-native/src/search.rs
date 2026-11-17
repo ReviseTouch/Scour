@@ -15,13 +15,14 @@ use crate::extension_order::ExtensionOrder;
 use crate::name_order::NameOrder;
 use crate::names::{Folded, NameArena};
 use crate::order::PathOrder;
+use crate::spelling::Spelling;
 use crate::trigram::TrigramIndex;
 
 /// The files a search reads, opened together.
 #[derive(Debug, Clone, Copy)]
 pub struct Segment<'a> {
     /// Names as the filesystem spells them. Read for the rows that are shown.
-    pub names: NameArena<'a>,
+    pub names: Spelling<'a>,
     /// The same names, folded when the segment was written. **This is what a
     /// search walks**: folding at query time was three quarters of the inner loop.
     pub folded: NameArena<'a>,
@@ -164,7 +165,7 @@ impl<'a> Segment<'a> {
     pub(crate) fn is_at_reading(
         &self,
         dirs: &mut std::collections::HashMap<u32, String>,
-        reader: Option<&mut crate::names::Reader>,
+        reader: Option<&mut crate::spelling::Reader>,
         row: usize,
         source: SourceId,
         path: &str,
@@ -181,7 +182,7 @@ impl<'a> Segment<'a> {
         // "" where `get` says nothing, so an empty name keeps asking `get`.
         let same_name = match reader {
             Some(r) if !name.is_empty() => r.at(&self.names, row) == name,
-            _ => self.names.get(row) == Some(name),
+            _ => self.names.get(row).as_deref() == Some(name),
         };
         if !same_name {
             return false;
@@ -236,7 +237,7 @@ impl<'a> Segment<'a> {
     /// Reconstruct a whole entry, for rebuilding or merging.
     pub fn entry(&self, row: usize) -> Option<Entry> {
         let name = self.names.get(row)?;
-        let h = self.hit(row, name);
+        let h = self.hit(row, &name);
         Some(Entry {
             id: h.id,
             path: h.path,
@@ -282,10 +283,10 @@ enum Test {
     },
     /// The name is this many characters long.
     NameLen { cmp: Cmp, value: i64 },
-    /// The name contains this, spelled exactly. The **written** arena, not the
-    /// folded one, which is why it is priced above `NameHas`: the walk already
-    /// carries the folded name, so this costs a second lookup.
-    NameHasCased(String),
+    /// The name contains this, spelled exactly. Asked of the fold first, which
+    /// the walk already carries and the trigram index is keyed on: a spelling is
+    /// rebuilt from its block's start, and only for a name whose fold holds it.
+    NameHasCased { want: String, folded: Needle },
     /// The name matches this pattern. The most expensive test there is and priced
     /// that way: an automaton over every name that reaches it, and nothing a
     /// trigram index can read narrows a regular expression.
@@ -322,7 +323,7 @@ impl Test {
             Test::Ext { .. } => 3,
             Test::NameHas(_) | Test::NameGlob(_) => 10,
             Test::NameLen { .. } => 4,
-            Test::NameHasCased(_) => 20,
+            Test::NameHasCased { .. } => 20,
             // Two bitmap lookups and, rarely, a prefix test — dearer than a
             // number and cheaper than a name search.
             Test::PathIn(_) => 8,
@@ -510,14 +511,20 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// The complete folded extension, with eligibility read from the spelling.
 fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a [u8] {
     let ext = crate::extension_order::extension(folded);
-    if ext.is_empty() || !spelling_is_eligible(seg, row) {
+    if ext.is_empty() || !spelling_is_eligible(seg, row, ext) {
         return b"";
     }
     ext
 }
 
-/// The spelling is read from its block's start, so this is asked last.
-fn spelling_is_eligible(seg: &Segment<'_>, row: usize) -> bool {
+/// Whether the extension counts, which its *spelling's* length decides. The
+/// fold is as long wherever it is ASCII that no longer letter folds to — `i`
+/// is also `ı` and `İ`, `k` also the Kelvin sign — and the spelling, rebuilt
+/// from its block's start, is read only for the rest.
+fn spelling_is_eligible(seg: &Segment<'_>, row: usize, ext: &[u8]) -> bool {
+    if ext.iter().all(|&b| b < 0x80 && b != b'i' && b != b'k') {
+        return ext.len() <= 12;
+    }
     let spelled = seg.names.get(row).unwrap_or_default();
     crate::extension_order::extension_is_eligible(spelled.as_bytes())
 }
@@ -584,7 +591,7 @@ fn narrow_to_blocks(clauses: &[Clause], seg: &Segment<'_>) -> Option<Vec<u32>> {
 /// the only thing claimed: over-narrowing loses files and reports nothing.
 fn filterable(test: &Test) -> Option<Vec<u8>> {
     match test {
-        Test::NameHas(n) => Some(n.folded().to_vec()),
+        Test::NameHas(n) | Test::NameHasCased { folded: n, .. } => Some(n.folded().to_vec()),
         // A name with extension `pdf` contains `.pdf`. One extension only: a list
         // would need the union of its lists, not the intersection.
         Test::Ext { list, .. } => match &list[..] {
@@ -726,7 +733,7 @@ impl Plan {
                     | Test::PathIn(_)
                     | Test::Regex(_)
                     | Test::NameLen { .. }
-                    | Test::NameHasCased(_)
+                    | Test::NameHasCased { .. }
             )
         })
     }
@@ -805,7 +812,13 @@ fn compile_match(m: &Match, seg: &Segment<'_>) -> Result<Test, scour_core::Error
             cmp: *cmp,
             value: *v,
         },
-        Match::NameContainsCased(t) => Test::NameHasCased(t.clone()),
+        Match::NameContainsCased(t) => Test::NameHasCased {
+            want: t.clone(),
+            folded: Needle::new(&scour_core::text::Folder::fold(
+                &scour_core::text::DefaultFolder,
+                t,
+            )),
+        },
         Match::Depth(cmp, v) => Test::Depth {
             depths: seg.dirs.depths().into(),
             cmp: *cmp,
@@ -903,12 +916,15 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             let n = std::str::from_utf8(name).map_or(name.len(), |s| s.chars().count());
             cmp.holds(n as i64, *value)
         }
-        // The written spelling, compared as written: the one test that is not
-        // about folding.
-        Test::NameHasCased(want) => seg
-            .names
-            .get(row)
-            .is_some_and(|written| written.contains(want.as_str())),
+        // The written spelling, compared as written. Folding is a character at
+        // a time, so a name that holds it holds its fold.
+        Test::NameHasCased { want, folded } => {
+            folded.found_in(name)
+                && seg
+                    .names
+                    .get(row)
+                    .is_some_and(|written| written.contains(want.as_str()))
+        }
         Test::Regex(re) => match std::str::from_utf8(name) {
             Ok(name) => re.is_match(name),
             Err(_) => false,
@@ -932,7 +948,7 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
             let ext = crate::extension_order::extension(name);
             !ext.is_empty()
                 && list.iter().any(|e| e.as_bytes() == ext)
-                && spelling_is_eligible(seg, row)
+                && spelling_is_eligible(seg, row, ext)
                 && (*dirs || seg.num(Field::IsDir, row) == 0)
         }
         Test::NameHas(n) => n.found_in(name),
@@ -1725,7 +1741,7 @@ fn walk_segment<'v>(
         .into_iter()
         .filter_map(|row| {
             let row = row as usize;
-            seg.names.get(row).map(|n| seg.hit(row, n))
+            seg.names.get(row).map(|n| seg.hit(row, &n))
         })
         .collect();
     // **And the backwards walk sorts too**: its rows arrive in date order with the
@@ -1821,34 +1837,25 @@ pub(crate) fn key_is_exact(key: SortKey) -> bool {
 #[derive(Default)]
 pub(crate) struct DirPaths {
     dirs: Vec<Option<Box<str>>>,
-    /// Where the last row's spelled name was found. See [`crate::names::Reader`].
-    names: crate::names::Reader,
+    /// Where the last row's spelled name was found. See [`crate::spelling::Reader`].
+    names: crate::spelling::Reader,
 }
 
-impl DirPaths {
-    fn of<'a>(&'a mut self, seg: &Segment<'_>, id: u32) -> &'a str {
-        if self.dirs.is_empty() {
-            self.dirs.resize_with(seg.dirs.len(), || None);
-        }
-        let at = id as usize;
-        if at >= self.dirs.len() {
-            // A number the table does not hold. `get` says the same thing by
-            // returning nothing, and a row with no directory is its own name.
-            return "";
-        }
-        if self.dirs[at].is_none() {
-            self.dirs[at] = Some(seg.dirs.get(id).unwrap_or_default().into_boxed_str());
-        }
-        self.dirs[at].as_deref().unwrap_or_default()
+/// A directory's path out of the cache, rebuilt the first time it is asked for.
+fn cached_dir<'a>(dirs: &'a mut Vec<Option<Box<str>>>, seg: &Segment<'_>, id: u32) -> &'a str {
+    if dirs.is_empty() {
+        dirs.resize_with(seg.dirs.len(), || None);
     }
-
-    /// The row's name as the filesystem spells it, read forward. **Not
-    /// [`NameArena::get`]**, which restarts from the block offset and pays up to
-    /// thirty-one NUL scans for a name one scan away: **320 ms of 665** on
-    /// 2,234,580 rows. A path is ordered as it is *spelled*, not folded.
-    fn spelled<'a>(&mut self, seg: &Segment<'a>, row: usize) -> &'a str {
-        self.names.at(&seg.names, row)
+    let at = id as usize;
+    if at >= dirs.len() {
+        // A number the table does not hold. `get` says the same thing by
+        // returning nothing, and a row with no directory is its own name.
+        return "";
     }
+    if dirs[at].is_none() {
+        dirs[at] = Some(seg.dirs.get(id).unwrap_or_default().into_boxed_str());
+    }
+    dirs[at].as_deref().unwrap_or_default()
 }
 
 /// `name` is the row's folded name, as the walk yields it. For a caller holding
@@ -1893,13 +1900,14 @@ fn sort_value_into(
             _ => Vec::new(),
         };
         buf.clear();
-        // The name first, and it has to be: `of` hands back a borrow of the
-        // cache, so the reader cannot be asked while that is held.
-        let raw = dirs.spelled(seg, row).as_bytes();
+        // The name as it is *spelled*, read forward: from its block's start was
+        // 320 ms of 665 on 2,234,580 rows. A capitalised one is rebuilt inside
+        // the reader, so the reader and the cache are borrowed apart.
+        let raw = dirs.names.at(&seg.names, row).as_bytes();
         // The same join `Segment::path` makes, over a directory this walk may
         // already have rebuilt. Written into the buffer rather than through
         // `format!`, which allocates twice.
-        let dir = dirs.of(seg, seg.dir_id(row));
+        let dir = cached_dir(&mut dirs.dirs, seg, seg.dir_id(row));
         match dir {
             "" => buf.extend_from_slice(raw),
             "/" => {

@@ -89,7 +89,7 @@ fn main() {
                 let Some(name) = seg.names.get(row) else {
                     continue;
                 };
-                let path = seg.path(row, name);
+                let path = seg.path(row, &name);
                 rows += 1;
                 let d = path_digest(SourceId(0), &path);
                 in_index.insert(d);

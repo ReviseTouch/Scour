@@ -28,7 +28,7 @@ fn main() {
             continue;
         };
         let len = entry.metadata().map(|m| m.len() as usize).unwrap_or(0);
-        if best.is_none_or(|(_, b)| len > b) && name.ends_with(".names") {
+        if best.is_none_or(|(_, b)| len > b) && name.ends_with(".fnames") {
             best = Some((num, len));
         }
     }
@@ -44,7 +44,7 @@ fn main() {
     // --- 1. read every name and nothing else ------------------------------
     let t = Instant::now();
     let mut bytes = 0usize;
-    seg.names.walk(0, |_, name| {
+    seg.folded.walk(0, |_, name| {
         bytes += name.len();
         true
     });
@@ -54,7 +54,7 @@ fn main() {
     let mut fold = Folded::new();
     let t = Instant::now();
     let mut folded_bytes = 0usize;
-    seg.names.walk(0, |_, name| {
+    seg.folded.walk(0, |_, name| {
         folded_bytes += fold.fold_bytes(name).len();
         true
     });
@@ -63,7 +63,7 @@ fn main() {
     // --- 3. read, fold, and search ----------------------------------------
     let t = Instant::now();
     let mut hits = 0usize;
-    seg.names.walk(0, |_, name| {
+    seg.folded.walk(0, |_, name| {
         if finder.find(fold.fold_bytes(name)).is_some() {
             hits += 1;
         }
@@ -75,7 +75,7 @@ fn main() {
     // What the query would cost with a folded arena, built here in memory.
     let mut flat: Vec<u8> = Vec::with_capacity(bytes + rows);
     let mut ends: Vec<u32> = Vec::with_capacity(rows);
-    seg.names.walk(0, |_, name| {
+    seg.folded.walk(0, |_, name| {
         flat.extend_from_slice(fold.fold_bytes(name));
         ends.push(flat.len() as u32);
         true

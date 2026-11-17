@@ -19,10 +19,11 @@ use crate::name_order::NameOrder;
 use crate::names::NameArena;
 use crate::order::PathOrder;
 use crate::search::Segment;
+use crate::spelling::Spelling;
 use crate::trigram::TrigramIndex;
 
 /// The pieces a segment is made of, and the extension each is stored under.
-const PARTS: [&str; 7] = ["names", "cols", "dirs", "ids", "tgrams", "tpost", "fnames"];
+const PARTS: [&str; 7] = ["spell", "cols", "dirs", "ids", "tgrams", "tpost", "fnames"];
 
 /// The persisted row orders a segment may be without. Absent means older, not
 /// damaged: a search without one builds keys instead, so an old index is not
@@ -86,7 +87,7 @@ impl Live {
     /// Write a segment and open it.
     pub fn write(dir: &Path, number: u64, generation: u64, bytes: &SegmentBytes) -> Result<Live> {
         let blobs = [
-            &bytes.names,
+            &bytes.spell,
             &bytes.cols,
             &bytes.dirs,
             &bytes.ids,
@@ -176,7 +177,7 @@ impl Live {
     /// only thing it is not is durable.
     pub fn in_memory(number: u64, generation: u64, bytes: &SegmentBytes) -> Result<Live> {
         let maps = vec![
-            Part::Owned(bytes.names.clone()),
+            Part::Owned(bytes.spell.clone()),
             Part::Owned(bytes.cols.clone()),
             Part::Owned(bytes.dirs.clone()),
             Part::Owned(bytes.ids.clone()),
@@ -202,7 +203,7 @@ impl Live {
     /// publish does once a second with a segment that exists nowhere else.
     pub fn from_bytes(number: u64, generation: u64, bytes: SegmentBytes) -> Result<Live> {
         let SegmentBytes {
-            names,
+            spell,
             fnames,
             cols,
             dirs,
@@ -214,7 +215,7 @@ impl Live {
             norder,
             eorder,
         } = bytes;
-        let maps = [names, cols, dirs, ids, tri_dict, tri_post, fnames]
+        let maps = [spell, cols, dirs, ids, tri_dict, tri_post, fnames]
             .into_iter()
             .map(Part::Owned)
             .collect();
@@ -236,7 +237,7 @@ impl Live {
         let part = |i: usize| self.maps[i].to_vec();
         let order = |p: &Option<Part>| p.as_deref().map(<[u8]>::to_vec).unwrap_or_default();
         SegmentBytes {
-            names: part(0),
+            spell: part(0),
             cols: part(1),
             dirs: part(2),
             ids: part(3),
@@ -292,11 +293,10 @@ impl Live {
         eorder: Option<Part>,
         alive: Vec<u8>,
     ) -> Result<Live> {
-        let rows = NameArena::open(&maps[0])
-            .ok_or_else(|| Error::IndexCorrupt {
-                detail: format!("seg-{number:08}.names is unreadable"),
-            })?
-            .rows();
+        let folded = NameArena::open(&maps[6]).ok_or_else(|| Error::IndexCorrupt {
+            detail: format!("seg-{number:08}.fnames is unreadable"),
+        })?;
+        let rows = folded.rows();
         // A short bitmap is not "these rows are dead": it is one bit a row,
         // written whole, so a length saying otherwise is damage.
         let want = rows.div_ceil(8);
@@ -309,8 +309,8 @@ impl Live {
             });
         }
         // Nothing is checksummed, so what can be asked cheaply is asked: that
-        // the three files every row is read from end where their own headers
-        // say, for as many rows as the names hold. A file cut short otherwise
+        // the files every row is read from end where their own headers say,
+        // for as many rows as the names hold. A file cut short otherwise
         // answers with empty names and zeroes, and orders rows by them.
         let whole = |what: &str, ok: bool| {
             if ok {
@@ -321,13 +321,10 @@ impl Live {
                 })
             }
         };
+        whole("fnames", folded.is_whole())?;
         whole(
-            "names",
-            NameArena::open(&maps[0]).is_some_and(|a| a.is_whole()),
-        )?;
-        whole(
-            "fnames",
-            NameArena::open(&maps[6]).is_some_and(|a| a.rows() == rows && a.is_whole()),
+            "spell",
+            Spelling::open(folded, &maps[0]).is_some_and(|s| s.is_whole()),
         )?;
         whole(
             "dirs",
@@ -502,7 +499,7 @@ impl Live {
         let mut dirs = std::collections::HashMap::new();
         // In row order, so each name is read on from the one before it.
         pairs.sort_unstable();
-        let mut names = crate::names::Reader::default();
+        let mut names = crate::spelling::Reader::default();
         for (row, at) in pairs {
             let e = &staged[at as usize];
             // A digest collision can name the same row twice in one pass, and
@@ -526,13 +523,14 @@ impl Live {
         let corrupt = |what: &str| Error::IndexCorrupt {
             detail: format!("seg-{:08}.{what} is unreadable", self.number),
         };
+        let folded = NameArena::open(&self.maps[6]).ok_or_else(|| corrupt("fnames"))?;
         Ok(Segment {
-            names: NameArena::open(&self.maps[0]).ok_or_else(|| corrupt("names"))?,
+            names: Spelling::open(folded, &self.maps[0]).ok_or_else(|| corrupt("spell"))?,
             cols: ColumnBlocks::open(&self.maps[1]).ok_or_else(|| corrupt("cols"))?,
             dirs: DirTable::open(&self.maps[2]).ok_or_else(|| corrupt("dirs"))?,
             tri: TrigramIndex::open(&self.maps[4], &self.maps[5])
                 .ok_or_else(|| corrupt("tgrams"))?,
-            folded: NameArena::open(&self.maps[6]).ok_or_else(|| corrupt("fnames"))?,
+            folded,
             // Validated once when the segment was opened, so this cannot fail
             // in a way `assemble` would not already have refused.
             porder: self.porder.as_deref().and_then(PathOrder::open),

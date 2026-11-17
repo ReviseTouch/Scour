@@ -84,7 +84,7 @@ fn main() {
             let wall = start.elapsed().as_secs_f64();
             let (cpu, rss) = usage();
             for part in [
-                &bytes.names,
+                &bytes.spell,
                 &bytes.fnames,
                 &bytes.cols,
                 &bytes.dirs,

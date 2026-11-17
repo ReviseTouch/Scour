@@ -1,11 +1,12 @@
-//! The name arena: every file name, NUL-separated, in row order.
+//! The name arena: every file name, folded, NUL-separated, in row order.
 //!
 //! The only index is one 32-bit offset every [`BLOCK`] rows — a search walks in
-//! order, and only forty rows a query are materialised. Two arenas share the row
-//! numbering: the spelling to show, the fold to match. Folding per query instead
-//! costs 40.5 ns a row against 8.3, for 79 MB saved.
+//! order, and only forty rows a query are materialised. The fold is what is
+//! matched: folding per query instead costs 40.5 ns a row against 8.3. How a
+//! name is spelled is kept as its difference from the fold: [`crate::spelling`].
 
 use crate::columns::BLOCK;
+use crate::spelling::SpellingWriter;
 
 /// The longest name folded into the stack buffer. `NAME_MAX` is 255 bytes and
 /// folding can grow a string, so this is generous; a longer name is matched
@@ -14,13 +15,15 @@ const FOLD_CAP: usize = 1024;
 
 #[derive(Debug, Default)]
 pub struct NameWriter {
+    /// The names as spelled: what the path and extension orders are built
+    /// from, and gone once the segment is.
     bytes: Vec<u8>,
-    /// Byte offset of the first name of each block.
-    blocks: Vec<u32>,
     rows: usize,
     /// The same names, folded, with the same row numbering.
     folded: Vec<u8>,
+    /// Byte offset of the first folded name of each block.
     folded_blocks: Vec<u32>,
+    spelling: SpellingWriter,
 }
 
 impl NameWriter {
@@ -35,7 +38,6 @@ impl NameWriter {
     /// Let the segment's trigram writer reuse the exact fold stored here.
     pub(crate) fn push_and_fold(&mut self, name: &str) -> &[u8] {
         if self.rows.is_multiple_of(BLOCK) {
-            self.blocks.push(self.bytes.len() as u32);
             self.folded_blocks.push(self.folded.len() as u32);
         }
         // A NUL cannot occur in a filename, so it separates without escaping.
@@ -47,7 +49,9 @@ impl NameWriter {
             .extend_from_slice(fold.fold_bytes(name.as_bytes()));
         self.folded.push(0);
         self.rows += 1;
-        &self.folded[start..self.folded.len() - 1]
+        let folded = &self.folded[start..self.folded.len() - 1];
+        self.spelling.push(name.as_bytes(), folded);
+        folded
     }
 
     pub fn len(&self) -> usize {
@@ -58,30 +62,24 @@ impl NameWriter {
         self.rows == 0
     }
 
-    /// The arena of names as they are spelled.
-    pub fn finish(&self) -> Vec<u8> {
-        pack(self.rows, &self.blocks, &self.bytes)
-    }
-
-    /// The arena of the same names, folded. Same rows, same block boundaries.
-    pub fn finish_folded(&self) -> Vec<u8> {
+    /// The folded arena alone.
+    #[cfg(test)]
+    pub(crate) fn finish_folded(&self) -> Vec<u8> {
         pack(self.rows, &self.folded_blocks, &self.folded)
     }
 
-    /// Finish both arenas without copying either payload: the single-arena
-    /// finishers allocate a second full buffer, and a rebuild holds both at
-    /// once. Same format, produced by moving each payload inside its own
-    /// allocation.
+    /// The spelling's differences and the folded arena, which is finished
+    /// without a copy: a rebuild holds every name of the index at once.
     pub(crate) fn finish_both(self) -> (Vec<u8>, Vec<u8>) {
         let NameWriter {
-            bytes,
-            blocks,
             rows,
             folded,
             folded_blocks,
+            spelling,
+            ..
         } = self;
         (
-            pack_in_place(rows, &blocks, bytes),
+            spelling.finish(),
             pack_in_place(rows, &folded_blocks, folded),
         )
     }
@@ -99,6 +97,7 @@ impl NameWriter {
     }
 }
 
+#[cfg(test)]
 fn pack(rows: usize, blocks: &[u32], bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len() + blocks.len() * 4 + 8);
     out.extend_from_slice(&(rows as u32).to_le_bytes());
@@ -176,14 +175,18 @@ impl<'a> NameArena<'a> {
         tail.last() == Some(&0) && memchr::memchr_iter(0, tail).count() == self.rows - last * BLOCK
     }
 
-    fn block_start(&self, block: usize) -> Option<usize> {
+    /// Every name, NUL-terminated, in row order.
+    pub(crate) fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    pub(crate) fn block_start(&self, block: usize) -> Option<usize> {
         let at = block * 4;
         let b = self.blocks.get(at..at + 4)?;
         Some(u32::from_le_bytes(b.try_into().ok()?) as usize)
     }
 
-    /// One name, by row: a jump plus at most `BLOCK` NUL scans. A caller asking
-    /// in row order wants `Reader`, which is this without the block scan.
+    /// One name, by row: a jump plus at most `BLOCK` NUL scans.
     pub fn get(&self, row: usize) -> Option<&'a str> {
         if row >= self.rows {
             return None;
@@ -233,58 +236,6 @@ impl<'a> NameArena<'a> {
             }
             at += n + 1;
         }
-    }
-}
-
-/// A place in an arena, kept between reads, so a forward step is one NUL scan
-/// rather than `get`'s scan from the block offset — 320 ms of a 665 ms path
-/// sort. Never worse than `get`: the shorter of the two distances is taken, and
-/// a stale position is repaired by the same block offset `get` would use.
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct Reader {
-    /// Where `row` begins. Meaningless until `placed`.
-    at: usize,
-    row: usize,
-    placed: bool,
-}
-
-impl Reader {
-    /// The name of `row`, spelled as the filesystem spells it. Empty for a row
-    /// the arena lacks or whose bytes are not UTF-8 — exactly what
-    /// `NameArena::get(row).unwrap_or_default()` gives, and so what a sort key
-    /// must be, or rows order by something the shown path does not say.
-    pub(crate) fn at<'a>(&mut self, arena: &NameArena<'a>, row: usize) -> &'a str {
-        if row >= arena.rows {
-            return "";
-        }
-        // Whichever start is nearer: on from the last row, or the block offset.
-        let from_block = row % BLOCK;
-        let (mut at, steps) = match row.checked_sub(self.row) {
-            Some(ahead) if self.placed && ahead <= from_block => (self.at, ahead),
-            _ => match arena.block_start(row / BLOCK) {
-                Some(a) => (a, from_block),
-                None => return "",
-            },
-        };
-        for _ in 0..steps {
-            let Some(rest) = arena.bytes.get(at..) else {
-                return "";
-            };
-            let Some(n) = memchr::memchr(0, rest) else {
-                return "";
-            };
-            at += n + 1;
-        }
-        let Some(rest) = arena.bytes.get(at..) else {
-            return "";
-        };
-        let Some(n) = memchr::memchr(0, rest) else {
-            return "";
-        };
-        self.at = at;
-        self.row = row;
-        self.placed = true;
-        std::str::from_utf8(&rest[..n]).unwrap_or_default()
     }
 }
 
@@ -453,7 +404,7 @@ mod tests {
         for n in names {
             w.push(n);
         }
-        w.finish()
+        w.finish_folded()
     }
 
     #[test]
@@ -471,21 +422,17 @@ mod tests {
     }
 
     #[test]
-    fn in_place_arenas_keep_the_prefix_layout_byte_for_byte() {
+    fn the_arena_finished_in_place_is_the_arena_byte_for_byte() {
         let names: Vec<String> = (0..300).map(|i| format!("İstanbul_{i}.TXT")).collect();
         let mut writer = NameWriter::new();
         for name in &names {
             writer.push(name);
         }
-        let expected_spelled = writer.finish();
-        let expected_folded = writer.finish_folded();
-        let (spelled, folded) = writer.finish_both();
-        assert_eq!(spelled, expected_spelled);
-        assert_eq!(folded, expected_folded);
-        let spelled = NameArena::open(&spelled).expect("spelling");
+        let expected = writer.finish_folded();
+        let (_, folded) = writer.finish_both();
+        assert_eq!(folded, expected);
         let folded = NameArena::open(&folded).expect("fold");
         for (row, name) in names.iter().enumerate() {
-            assert_eq!(spelled.get(row), Some(name.as_str()));
             assert_eq!(folded.get(row), Some(DefaultFolder.fold(name).as_str()));
         }
     }
@@ -533,37 +480,6 @@ mod tests {
             false
         });
         assert_eq!(first, Some((257, "n257".to_owned())));
-    }
-
-    #[test]
-    fn a_reader_answers_whatever_get_would_have_answered() {
-        // A carried position can be wrong; it must agree with `get` on every
-        // order the rows can be asked for.
-        let names: Vec<String> = (0..400).map(|i| format!("n{i}_dosya.rs")).collect();
-        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        let bytes = build(&refs);
-        let arena = NameArena::open(&bytes).expect("open");
-
-        let want = |row: usize| arena.get(row).unwrap_or_default();
-        let orders: Vec<Vec<usize>> = vec![
-            (0..400).collect(),
-            (0..400).rev().collect(),
-            // Runs of blocks with gaps, which is what a narrowed walk hands it.
-            (0..400).step_by(32).collect(),
-            (0..400).step_by(33).collect(),
-            // Astride every block boundary, forwards and back.
-            (30..40).chain(62..72).chain((30..40).rev()).collect(),
-            // The same row twice, and the ends.
-            vec![7, 7, 7, 399, 0, 399, 0, 32, 31, 32],
-            // Rows the arena does not hold sit between rows it does.
-            vec![5, 400, 6, 4_000, 7],
-        ];
-        for order in orders {
-            let mut r = Reader::default();
-            for row in order {
-                assert_eq!(r.at(&arena, row), want(row), "row {row}");
-            }
-        }
     }
 
     #[test]
