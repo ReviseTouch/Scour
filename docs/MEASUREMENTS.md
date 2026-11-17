@@ -281,6 +281,62 @@ machine's index (6.29 M entries), queries alternated, median of seven:
 The same matches in every row. What is left is mostly reading the folder table
 once to find those folders.
 
+## A page deep in a text order, and a count kept apart (2026-11-17)
+
+Two builds alternated on one copy of this machine's index (5.0 M entries, eight
+segments), each query five times, the median of the second pass.
+
+A page far down the list in name or path order was walked to: a merge key
+built for every row above it. Every segment stores both orders, so the row at
+an offset is found by bisecting them on a key until the offset falls in that
+key's tie group; the rows around it are ordered by the merge's own comparator.
+188 pages at fixed pseudo-random offsets, both orders, both directions, came
+back identical to the walk's — in 1.5 s against 101.2 s.
+
+| page of 40 | before | after | keys read after |
+|---|---:|---:|---:|
+| name, offset 3,000,000 | 529–547 ms | 8–12 ms | 1,100–1,700 |
+| name ascending, offset 4,000,000 | 734–789 ms | 7.5–8.2 ms | 1,300–1,800 |
+| path, offset 3,000,000 | 895–951 ms | 7.9–8.3 ms | 800–1,000 |
+| path, offset 100,000 | 43–73 ms | 7.9 ms | 1,400–1,700 |
+
+The walk also held a key for every row above the page: 480 MB of anonymous
+memory for path order at offset three million, on the 6.97 M-entry index.
+Still walked to: a filtered query, any hidden prefix, the size and extension
+orders.
+
+A name-reading query in a stored text order streamed that order until the
+count cap was met, a name read at random per position, and above a cap of a
+few thousand gave the stream up for a walk of every row. The stream now stops
+at the page and the total is counted in row order. The window types with a
+cap of 1,000 and was already quick; the command line and the MCP server ask
+for 100,000.
+
+| query, count cap 100,000 | before | after |
+|---|---:|---:|
+| `a` by name | 100–102 ms | 6.5–7.2 ms |
+| `a` by path | 303–324 ms | 6.5–7.4 ms |
+| `a` by extension | 411–437 ms | 5.7–6.8 ms |
+| `!a` by path | 243–302 ms | 5.8–7.0 ms |
+| `e` by path, cap 10,000 | 374–381 ms | 3.1–3.4 ms |
+| `kind:folder` by name, by path | 15, 17 ms | 15, 17 ms |
+| `rapor` by name | 7.2 ms | 7.6–8.0 ms |
+
+`ext:` read each row's spelling from its block's start to decide whether the
+extension counts, before comparing it. Compared first, read after:
+
+| query | before | after |
+|---|---:|---:|
+| `ext:pdf` by name | 76 ms | 19 ms |
+| `ext:pdf` by size | 75–77 ms | 20 ms |
+| `ext:rs;toml` by size | 99 ms | 20–21 ms |
+| `ext:pdf` by extension | 143 ms | 89 ms |
+
+```sh
+cargo run --release -p scour-index-native --example deepcheck -- /tmp/idx/native > reach.txt
+SCOUR_NO_REACH=1 cargo run --release -p scour-index-native --example deepcheck -- /tmp/idx/native > walk.txt
+```
+
 ## Reproducing
 
 ```sh

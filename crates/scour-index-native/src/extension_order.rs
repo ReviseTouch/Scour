@@ -45,6 +45,7 @@ pub(crate) fn build(rows: usize, spelled: &[u8], folded: &[u8], order: Vec<u32>)
 }
 
 /// The row's complete folded extension, with eligibility decided pre-fold.
+#[cfg(test)]
 pub(crate) fn folded_extension<'a>(spelled: &[u8], folded: &'a [u8]) -> &'a [u8] {
     if extension_is_eligible(spelled) {
         extension(folded)
@@ -54,7 +55,7 @@ pub(crate) fn folded_extension<'a>(spelled: &[u8], folded: &'a [u8]) -> &'a [u8]
 }
 
 /// The suffix after the last dot, with no folded-length restriction.
-fn extension(name: &[u8]) -> &[u8] {
+pub(crate) fn extension(name: &[u8]) -> &[u8] {
     match name.iter().rposition(|&b| b == b'.') {
         Some(i) if i > 0 && i + 1 < name.len() => &name[i + 1..],
         _ => b"",
@@ -62,7 +63,7 @@ fn extension(name: &[u8]) -> &[u8] {
 }
 
 /// Whether the spelling satisfies the core extension contract.
-fn extension_is_eligible(name: &[u8]) -> bool {
+pub(crate) fn extension_is_eligible(name: &[u8]) -> bool {
     name.iter()
         .rposition(|&b| b == b'.')
         .is_some_and(|i| i > 0 && (1..=12).contains(&(name.len() - i - 1)))

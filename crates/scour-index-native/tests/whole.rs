@@ -4737,3 +4737,153 @@ fn a_sweep_of_several_roots_keeps_what_the_walk_saw_in_each() {
         "a root swept after the first must keep the rows the walk saw"
     );
 }
+
+/// A deep page in name or path order is found by bisecting the stored orders
+/// rather than by walking to it. Checked against the walk — which is what any
+/// offset under two thousand still is — over segments that share names, with
+/// rows removed from each, in both directions and at every kind of boundary.
+#[test]
+fn a_deep_page_in_a_stored_text_order_is_the_page_the_walk_finds() {
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let index = NativeIndex::open_or_create(tmp.path()).expect("create");
+    let mut ino = 0u64;
+    // Five segments. Every name appears in several folders and several
+    // segments, a few names hundreds of times, so pages begin and end inside
+    // ties that span segments.
+    for part in 0..5i64 {
+        let entries: Vec<Entry> = (0..2_400i64)
+            .map(|i| {
+                ino += 1;
+                let name = match i % 7 {
+                    0 => "README.md".to_owned(),
+                    1 => format!("Makefile.{}", i % 3),
+                    _ => format!("f{:04}.txt", (i * 37 + part * 11) % 900),
+                };
+                let below = if i % 5 == 0 { "x/" } else { "" };
+                entry(
+                    &format!("/c/p{part}/d{:03}/{below}{name}", i % 40),
+                    NOW - (i * 13 + part * 7) % 5_000,
+                    ino,
+                )
+            })
+            .collect();
+        index
+            .apply(&mut entries.into_iter().map(Change::Upsert))
+            .expect("apply");
+        index.commit().expect("commit");
+    }
+    let all = |sort, descending| -> Vec<String> {
+        index
+            .search(&SearchRequest {
+                query: parse_at("", NOW),
+                sort,
+                descending,
+                page: Page {
+                    offset: 0,
+                    limit: 100_000,
+                    count_cap: 10_000_000,
+                },
+            })
+            .expect("search")
+            .hits
+            .into_iter()
+            .map(|h| h.path)
+            .collect()
+    };
+    // Remove a scattering from every segment, so no rank is a position.
+    let doomed: Vec<String> = all(SortKey::Path, false)
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| i % 9 == 4)
+        .map(|(_, p)| p)
+        .collect();
+    assert!(doomed.len() > 500);
+    index
+        .apply(
+            &mut doomed
+                .iter()
+                .map(|p| Change::RemoveSubtree { path: p.clone() }),
+        )
+        .expect("remove");
+    index.commit().expect("commit");
+
+    for sort in [SortKey::Name, SortKey::Path] {
+        for descending in [false, true] {
+            let whole = all(sort, descending);
+            assert!(whole.len() > 6_000, "{} rows", whole.len());
+            let last = whole.len();
+            let mut offsets: Vec<usize> = (2_000..last).step_by(97).collect();
+            offsets.extend([2_000, 2_001, last - 200, last - 1, last, last + 50]);
+            for (n, &offset) in offsets.iter().enumerate() {
+                let limit = [1usize, 3, 40, 200][n % 4];
+                let got: Vec<String> = index
+                    .search(&SearchRequest {
+                        query: parse_at("", NOW),
+                        sort,
+                        descending,
+                        page: Page {
+                            offset: offset as u32,
+                            limit: limit as u32,
+                            count_cap: 10_000_000,
+                        },
+                    })
+                    .expect("search")
+                    .hits
+                    .into_iter()
+                    .map(|h| h.path)
+                    .collect();
+                let from = offset.min(last);
+                let to = (offset + limit).min(last);
+                assert_eq!(
+                    got,
+                    whole[from..to],
+                    "{sort:?} descending={descending} at {offset}+{limit}"
+                );
+            }
+        }
+    }
+}
+
+/// A streamed order stops at the page and counts apart, so the total it
+/// reports has to be the one the stored order reports for the same query —
+/// under a cap the matches exceed, and under one they do not.
+#[test]
+fn a_streamed_order_reports_the_total_the_stored_order_does() {
+    let f = Fixture::new(60_000, 12_000);
+    let answer = |q: &str, sort, descending, count_cap| {
+        f.index
+            .search(&SearchRequest {
+                query: parse_at(q, NOW),
+                sort,
+                descending,
+                page: Page {
+                    offset: 0,
+                    limit: 40,
+                    count_cap,
+                },
+            })
+            .expect("search")
+    };
+    for q in ["a", "e", "!a", "kind:folder", "ext:txt", ""] {
+        for count_cap in [41, 500, 10_000_000] {
+            let want = answer(q, SortKey::Modified, true, count_cap);
+            for sort in [SortKey::Name, SortKey::Path, SortKey::Ext] {
+                for descending in [false, true] {
+                    let got = answer(q, sort, descending, count_cap);
+                    assert_eq!(
+                        (got.total, got.capped),
+                        (want.total, want.capped),
+                        "{q:?} by {sort:?} descending={descending} cap {count_cap}"
+                    );
+                    let paths: Vec<String> = got.hits.into_iter().map(|h| h.path).collect();
+                    let truth: Vec<String> =
+                        brute_force(&f.entries, &parse_at(q, NOW), sort, descending, 40)
+                            .into_iter()
+                            .map(|h| h.path)
+                            .collect();
+                    assert_eq!(paths, truth, "{q:?} by {sort:?} descending={descending}");
+                }
+            }
+        }
+    }
+}

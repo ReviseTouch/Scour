@@ -495,8 +495,17 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// The complete folded extension, with eligibility read from the spelling.
 fn folded_extension<'a>(seg: &Segment<'_>, row: usize, folded: &'a [u8]) -> &'a [u8] {
+    let ext = crate::extension_order::extension(folded);
+    if ext.is_empty() || !spelling_is_eligible(seg, row) {
+        return b"";
+    }
+    ext
+}
+
+/// The spelling is read from its block's start, so this is asked last.
+fn spelling_is_eligible(seg: &Segment<'_>, row: usize) -> bool {
     let spelled = seg.names.get(row).unwrap_or_default();
-    crate::extension_order::folded_extension(spelled.as_bytes(), folded)
+    crate::extension_order::extension_is_eligible(spelled.as_bytes())
 }
 
 /// Compare complete folded extensions without allocating either one.
@@ -906,9 +915,10 @@ fn evaluate(test: &Test, seg: &Segment<'_>, row: usize, name: &[u8]) -> bool {
         Test::Ext { list, dirs } => {
             // A directory has no extension, so `ext:` never matches one. The
             // column read only happens for a name that already looked right.
-            let ext = folded_extension(seg, row, name);
+            let ext = crate::extension_order::extension(name);
             !ext.is_empty()
                 && list.iter().any(|e| e.as_bytes() == ext)
+                && spelling_is_eligible(seg, row)
                 && (*dirs || seg.num(Field::IsDir, row) == 0)
         }
         Test::NameHas(n) => n.found_in(name),
@@ -1004,7 +1014,7 @@ pub fn run_with(
      * ordinary walk after a budget. `e` sorted by name was 223 ms of reading
      * every name on 4.5 M rows to keep two hundred. */
     let need = want.offset + want.limit;
-    let budget = need.max(want.count_cap).saturating_mul(NAMED_STREAM_TRIES);
+    let budget = need.saturating_mul(NAMED_STREAM_TRIES);
     if plan.needs_name()
         && need > 0
         && matches!(want.sort, SortKey::Name | SortKey::Path | SortKey::Ext)
@@ -1024,8 +1034,8 @@ pub fn run_with(
         .expect("a walk with no budget always answers")
 }
 
-/// Positions a name-reading stream may look at per row the page and the count
-/// need: it succeeds when one name in sixteen matches.
+/// Positions a name-reading stream may look at per row the page needs: it
+/// succeeds when one name in sixteen matches. The count is not its to make.
 const NAMED_STREAM_TRIES: usize = 16;
 
 /// The most of a segment such a stream may read before giving up, as a share:
@@ -1133,6 +1143,12 @@ fn walk_segment<'v>(
         && blocks.len().saturating_mul(2) >= n_blocks;
     let text_stream = name_stream || extension_stream;
     let position_stream = path_stream || text_stream;
+    /* **A streamed order stops at the page and the total is counted apart.**
+     * Counting on in stream order is a name read at random per position: `a` by
+     * name with a cap of a hundred thousand read every row, 125 ms, where the
+     * same count in row order is under a millisecond. Only where names are
+     * read: a column read at random is cheap enough to count with. */
+    let count_apart = position_stream && reads_names && want.count_cap > need;
 
     // Whether the walk has to read names at all — decided here because the
     // direction depends on it. A streamed text order reads none: a name is wanted
@@ -1210,7 +1226,7 @@ fn walk_segment<'v>(
             // Both conditions must hold: enough rows for the page, and enough
             // counted for the total to be honest. The first alone is what made
             // the engine this replaces report a page and a lie.
-            if kept.len() >= need && counted.get() >= want.count_cap {
+            if kept.len() >= need && (count_apart || counted.get() >= want.count_cap) {
                 done = true;
                 return false;
             }
@@ -1467,6 +1483,33 @@ fn walk_segment<'v>(
     }
 
     let done = done || skipped;
+    // A stream that ran out has counted every match; one that stopped at the
+    // page has not, and a walk with no page is the count.
+    let (total, capped) = if count_apart && done {
+        let count = walk_segment(
+            seg,
+            plan,
+            // In the stored order, the one a count may stop at its cap in.
+            Wanted {
+                sort: SortKey::Modified,
+                descending: true,
+                offset: 0,
+                limit: 0,
+                ..want
+            },
+            conceals,
+            folders,
+            None,
+        )
+        .expect("a walk with no budget always answers");
+        visited += count.rows_visited;
+        (count.total, count.capped)
+    } else {
+        (
+            counted.get().min(want.count_cap) as u64,
+            counted.get() >= want.count_cap,
+        )
+    };
 
     // The candidates, each with what it sorts by. The stored order needs no
     // selection, but still has to say what it sorts by: whoever merges this
@@ -1517,8 +1560,8 @@ fn walk_segment<'v>(
                     row,
                 })
                 .collect(),
-            total: counted.get().min(want.count_cap) as u64,
-            capped: counted.get() >= want.count_cap,
+            total,
+            capped,
             early_exit: done,
             rows_visited: visited,
             ..Found::default()
@@ -1557,8 +1600,8 @@ fn walk_segment<'v>(
 
     Some(Found {
         hits,
-        total: counted.get().min(want.count_cap) as u64,
-        capped: counted.get() >= want.count_cap,
+        total,
+        capped,
         early_exit: done,
         rows_visited: visited,
         rows_built,
@@ -1587,6 +1630,30 @@ fn head(bytes: &[u8]) -> u128 {
     let n = bytes.len().min(16);
     v[..n].copy_from_slice(&bytes[..n]);
     u128::from_be_bytes(v)
+}
+
+/// What the merge compares a row by in a stored text order, built outside a
+/// walk: the same key [`sort_value_into`] makes for the same row.
+pub(crate) fn merge_key(seg: &Segment<'_>, row: usize, sort: SortKey) -> SortValue {
+    match sort {
+        SortKey::Name => SortValue::Head(head(seg.folded.get(row).unwrap_or_default().as_bytes())),
+        SortKey::Path => {
+            let dir = seg.dirs.get(seg.dir_id(row)).unwrap_or_default();
+            let name = seg.names.get(row).unwrap_or_default();
+            let mut buf = Vec::with_capacity(dir.len() + 1 + name.len());
+            match dir.as_str() {
+                "" => {}
+                "/" => buf.push(b'/'),
+                d => {
+                    buf.extend_from_slice(d.as_bytes());
+                    buf.push(b'/');
+                }
+            }
+            buf.extend_from_slice(name.as_bytes());
+            SortValue::Text(buf)
+        }
+        _ => SortValue::Num(0),
+    }
 }
 
 /// Is this key exact, or only the beginning of one? Names are abbreviated, and so

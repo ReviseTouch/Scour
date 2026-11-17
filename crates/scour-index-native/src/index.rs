@@ -2512,6 +2512,26 @@ impl Index for NativeIndex {
             return Ok(found);
         }
 
+        // The same for the two stored text orders, where only the place is
+        // found: the rows around it join the pool and are ordered below.
+        let deep = (offset >= REACH_FROM
+            && limit > 0
+            && !walk_only()
+            && matches!(
+                req.sort,
+                scour_core::SortKey::Name | scour_core::SortKey::Path
+            )
+            && req.query.groups.is_empty()
+            && inner.hidden_prefixes.is_empty())
+        .then(|| crate::deep::reach(&views, req.sort, req.descending, offset, limit))
+        .flatten();
+        // Where the page sits in the pool: the request's own offset after a
+        // walk, a few rows in after a reach.
+        let (offset, need) = match &deep {
+            Some(deep) => (deep.skip, deep.skip + limit),
+            None => (offset, need),
+        };
+
         let mut counted = 0u64;
         let mut budget = cap;
         let mut visited = 0u64;
@@ -2593,7 +2613,24 @@ impl Index for NativeIndex {
             cache.fresh_rows(&inner.segments);
             parking_lot::RwLockWriteGuard::downgrade(cache)
         });
+        if let Some(deep) = &deep {
+            counted = deep.total as u64;
+            visited = deep.read;
+            rows = inner.segments.iter().map(|live| live.rows() as u64).sum();
+            pool.extend(deep.rows.iter().filter_map(|&(which, row)| {
+                let seg = views.get(which as usize)?;
+                Some(Candidate {
+                    key: crate::search::merge_key(seg, row as usize, req.sort),
+                    mtime: seg.num_of(Field::Mtime, row as usize),
+                    seg: which,
+                    row,
+                })
+            }));
+        }
         for (which, live) in inner.segments.iter().enumerate() {
+            if deep.is_some() {
+                break;
+            }
             rows += live.rows() as u64;
             let seg = &views[which];
             let plan = Plan::compile(&req.query, seg)?;

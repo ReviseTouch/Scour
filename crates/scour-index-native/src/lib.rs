@@ -12,6 +12,7 @@
 
 mod build;
 mod columns;
+mod deep;
 mod directory_bytes;
 mod dirs;
 mod durable;
