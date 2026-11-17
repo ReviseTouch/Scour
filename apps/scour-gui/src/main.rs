@@ -6190,6 +6190,13 @@ fn show_peek(
             w.set_peek_has_shot(false);
         }
     }
+    // Windows has its own pictures of files, Explorer's; asked off this thread,
+    // since a file the shell has not seen is a decode.
+    if cfg!(windows) && !w.get_peek_has_shot() && look.head.is_empty() {
+        shell_peek(w, cat, path);
+        w.set_peek_note(t(cat, "reading…"));
+        return false;
+    }
     // A picture nobody has made is not one that cannot be made. `can_make` is the
     // machine's own table: one extension and one MIME lookup, no syscall.
     let coming = !w.get_peek_has_shot() && scour_thumbs::can_make(path);
@@ -6207,6 +6214,38 @@ fn show_peek(
         t(cat, "It could not be previewed.")
     });
     coming
+}
+
+/// Ask Windows for its picture of `path` on a thread of its own, and show it
+/// if the panel is still on that file when it comes. Nothing, it says so.
+fn shell_peek(w: &MainWindow, cat: &Catalogue, path: &str) {
+    let weak = w.as_weak();
+    let nothing = t(cat, "It could not be previewed.").to_string();
+    let path = path.to_owned();
+    // The panel's column at its widest, in pixels the screen has.
+    let px = (480.0 * w.window().scale_factor()) as u32;
+    let native = scour_core::path::to_path(&path);
+    std::thread::spawn(move || {
+        let got = scour_thumbs::shell::picture(&native, px).map(|p| {
+            let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(p.width, p.height);
+            buf.make_mut_bytes().copy_from_slice(&p.rgba);
+            buf
+        });
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if w.get_peek_path().as_str() != path {
+                return;
+            }
+            match got {
+                Some(buf) => {
+                    w.set_peek_shot(slint::Image::from_rgba8(buf));
+                    w.set_peek_has_shot(true);
+                    w.set_peek_note(slint::SharedString::new());
+                }
+                None => w.set_peek_note(nothing.into()),
+            }
+        });
+    });
 }
 
 /// The fact list, in the order [`scour_ui::preview::FACTS`] gives.

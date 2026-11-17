@@ -8,6 +8,7 @@ pub mod cache;
 pub mod known;
 pub mod make;
 mod png;
+pub mod shell;
 
 pub use make::{Made, Maker, Wanted, can_make};
 
