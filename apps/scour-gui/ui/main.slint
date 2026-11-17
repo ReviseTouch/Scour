@@ -250,16 +250,21 @@ export struct Facet {
     label: string,
     token: string,
     count: string,
+    // A kind's own token, which picks its icon; empty elsewhere.
+    icon: string,
 }
 
 
-// One row of the rail: a word, a count, and a bar behind them showing what
-// share of the matching set it is. Behind, because a 186px rail has no lane.
+// One row of the rail: an icon, a word, a count, and a bar under them showing
+// what share of the matching set it is. Under, because a narrow rail has no lane.
 component FacetRow inherits Rectangle {
     in property <string> label;
     in property <string> count;
     in property <float> share;
     in property <bool> on;
+    // A kind's token, the list's own icon for it; `place` or `size` for the
+    // other two sections.
+    in property <string> icon;
     callback clicked();
 
     height: 24px;
@@ -271,10 +276,10 @@ component FacetRow inherits Rectangle {
     // `line` is invisible in both schemes.
     // A hairline under the row, not a block behind it: the share is a hint.
     if root.share > 0: Rectangle {
-        x: 14px;
+        x: 12px;
         y: parent.height - 3px;
         height: 2px;
-        width: (parent.width - 28px) * root.share;
+        width: (parent.width - 24px) * root.share;
         background: Theme.line;
         border-radius: 1px;
     }
@@ -284,9 +289,35 @@ component FacetRow inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 12px;
+        padding-right: 12px;
         spacing: 8px;
+
+        // The same icons the list draws beside each file, quiet here: the
+        // rail is for reading words, and the colour is the list's.
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 14px;
+                height: 14px;
+                colorize: root.on ? Theme.ink : Theme.ink-3;
+                source: root.icon == "folder" || root.icon == "place" ? @image-url("icons/folder.svg")
+                    : root.icon == "doc" ? @image-url("icons/doc.svg")
+                    : root.icon == "code" ? @image-url("icons/code.svg")
+                    : root.icon == "image" ? @image-url("icons/image.svg")
+                    : root.icon == "video" ? @image-url("icons/video.svg")
+                    : root.icon == "media" ? @image-url("icons/media.svg")
+                    : root.icon == "audio" ? @image-url("icons/audio.svg")
+                    : root.icon == "archive" ? @image-url("icons/archive.svg")
+                    : root.icon == "exec" ? @image-url("icons/exec.svg")
+                    : root.icon == "data" ? @image-url("icons/data.svg")
+                    : root.icon == "config" ? @image-url("icons/config.svg")
+                    : root.icon == "font" ? @image-url("icons/font.svg")
+                    : root.icon == "build" ? @image-url("icons/build.svg")
+                    : root.icon == "size" ? @image-url("../../../crates/scour-ui/icons/menu/weight.svg")
+                    : @image-url("icons/file.svg");
+            }
+        }
 
         Text {
             text: root.label;
@@ -306,7 +337,7 @@ component FacetRow inherits Rectangle {
             font-family: Fonts.mono;
             vertical-alignment: center;
             horizontal-alignment: right;
-            width: 46px;
+            width: 34px;
         }
     }
 }
@@ -1306,7 +1337,7 @@ export component MainWindow inherits Window {
     property <length> chrome: root.rail-w + 1px + 24px + 14px;
     /// The sidebar's width, which the header's mark matches so the field
     /// starts where the list does.
-    out property <length> rail-w: 212px;
+    out property <length> rail-w: 180px;
     // One gap between each pair of headings, and one more before the picker.
     // Counted, because how many columns there are is a choice.
     property <length> gaps: 8px * max(1, root.heads.length);
@@ -3327,8 +3358,8 @@ export component MainWindow inherits Window {
                     // answered by the service, which runs where the files are.
 
                     HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         Text {
                             text: root.scope-heading;
                             color: Theme.ink-3;
@@ -3342,6 +3373,7 @@ export component MainWindow inherits Window {
                     Rectangle { height: 8px; }
 
                     for sc[i] in root.scopes: FacetRow {
+                        icon: "place";
                         label: sc.label;
                         count: sc.count;
                         share: sc.share;
@@ -3354,8 +3386,8 @@ export component MainWindow inherits Window {
                     // Indented by a layout, not by an `x`: moving the text
                     // right inside a box that stays put clips the first glyph.
                     HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         Text {
                             text: root.scope-label;
                             color: Theme.ink-3;
@@ -3369,6 +3401,7 @@ export component MainWindow inherits Window {
                     Rectangle { height: 8px; }
 
                     for f[i] in root.facets: FacetRow {
+                        icon: f.icon;
                         label: f.label;
                         count: f.count;
                         share: f.share;
@@ -3381,8 +3414,8 @@ export component MainWindow inherits Window {
                     Rectangle { height: 12px; }
 
                     HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
+                        padding-left: 12px;
+                        padding-right: 12px;
                         Text {
                             text: root.size-heading;
                             color: Theme.ink-3;
@@ -3396,6 +3429,7 @@ export component MainWindow inherits Window {
                     Rectangle { height: 8px; }
 
                     for sz[i] in root.sizes: FacetRow {
+                        icon: "size";
                         label: sz.label;
                         count: sz.count;
                         share: sz.share;

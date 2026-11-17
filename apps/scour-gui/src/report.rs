@@ -164,6 +164,7 @@ fn crumb_of(cat: &Catalogue, path: &str) -> Vec<Facet> {
             token: walked.as_str().into(),
             count: slint::SharedString::new(),
             share: 0.0,
+            icon: Default::default(),
         })
         .collect()
 }
@@ -254,6 +255,7 @@ fn age_strip(w: &MainWindow, cat: &Catalogue, age: &[u64]) {
             count: format!("{:.0}%", pct[i]).into(),
             token: slint::SharedString::new(),
             share: 0.0,
+            icon: Default::default(),
         })
         .collect();
     w.set_age_key(ModelRc::new(VecModel::from(key)));

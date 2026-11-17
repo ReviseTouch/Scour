@@ -69,7 +69,7 @@
     padding: 10px 12px 10px 16px;
     border-bottom: 1px solid var(--line);
   }
-  .query .brand { width: calc(212px - 26px); display: flex; align-items: center; }
+  .query .brand { width: calc(180px - 26px); display: flex; align-items: center; }
   .query .qread { flex-basis: 100%; margin: 0; padding-left: 196px; }
   .query .qread:empty { display: none; }
   .brand {
@@ -319,7 +319,7 @@
   .meter[data-stale="short"] #stale .short { display: inline; }
 
   /* ---------------- body ---------------- */
-  .body { display: grid; grid-template-columns: 212px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  .body { display: grid; grid-template-columns: 180px minmax(0, 1fr); min-height: 0; overflow: hidden; }
   /* `hidden` has to win over `display: grid`, or the inactive tab keeps its row. */
   .body[hidden], .report[hidden] { display: none; }
   .query { grid-row: 1; }
@@ -374,7 +374,7 @@
     background: var(--ground);
   }
   .rail h2 {
-    margin: calc(var(--u) * 3) calc(var(--u) * 4) calc(var(--u) * 1.5);
+    margin: calc(var(--u) * 3) calc(var(--u) * 3) calc(var(--u) * 1.5);
     font-size: 12px; 
     color: var(--ink-3);
     font-weight: 650;
@@ -388,7 +388,7 @@
     background: none;
     border: 0;
     text-align: left;
-    padding: 3px calc(var(--u) * 4);
+    padding: 3px calc(var(--u) * 3);
     color: var(--ink-2);
     font: inherit;
     font-size: 12.5px;
@@ -398,7 +398,16 @@
   .facet:hover { background: var(--panel); color: var(--ink); }
   .facet:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
   .facet[aria-pressed="true"] { color: var(--ink); border-left-color: var(--ink-3); background: var(--panel); }
-  .facet .dot { width: 7px; height: 7px; border-radius: 1px; flex: none; }
+  /* The list's own glyphs, quiet: the rail is for reading words. */
+  .facet .ico {
+    width: 14px; height: 14px; flex: none; position: relative; z-index: 1;
+    background-color: var(--ink-3);
+    -webkit-mask: var(--g) center / 14px 14px no-repeat;
+    mask: var(--g) center / 14px 14px no-repeat;
+  }
+  .facet[aria-pressed="true"] .ico { background-color: var(--ink); }
+  .facet .mi { width: 14px; height: 14px; flex: none; color: var(--ink-3); display: flex; }
+  .facet .mi svg { width: 14px; height: 14px; }
   /* Kinds get no colour — colour means time — so a bar carries the count. */
   .facet.bar { position: relative; }
   /* A hairline under the row, not a block behind it: the share is a hint. */
@@ -766,7 +775,7 @@
 
   /* The preview: a third column, shut by default, a third of the width open. */
   .body { --peek-w: 380px; }
-  .body.peeking { grid-template-columns: 186px minmax(0, 1fr) var(--peek-w); }
+  .body.peeking { grid-template-columns: 180px minmax(0, 1fr) var(--peek-w); }
   /* Under 900px there is no room for three, so the panel becomes the window. */
   @media (max-width: 900px) {
     .body.peeking { grid-template-columns: 0 0 1fr; }
@@ -4076,12 +4085,15 @@
     }).join("");
   }
 
-  function facetRow(label, term, count, share, on) {
+  /* `glyph` is a kind's token, or `size` for the weight the menu draws. */
+  function facetRow(label, term, count, share, on, glyph) {
     const fill = share > 0
       ? `<span class="fill" style="width:${(share * 100).toFixed(1)}%"></span>` : "";
+    const ico = glyph === "size" && MENU_ICONS.weight
+      ? `<span class="mi" aria-hidden="true">${MENU_ICONS.weight}</span>`
+      : `<span class="ico k-${GLYPHS.has(glyph) ? glyph : "file"}" aria-hidden="true"></span>`;
     return `<button class="facet${share > 0 ? " bar" : ""}" type="button"
-        data-term="${term}" aria-pressed="${on}">${fill}
-      ${share > 0 ? "" : `<span class="dot"></span>`}
+        data-term="${term}" aria-pressed="${on}">${fill}${ico}
       <span class="nm">${label}</span><span class="ct">${count === null || count === undefined ? "" : fmt(count)}</span></button>`;
   }
 
@@ -4108,12 +4120,12 @@
       KINDS.map((row) => {
         const [tr, key] = row;
         const n = count(row);
-        return facetRow(tr, "kind:" + key, n, n === null ? 0 : n / top, p.kind === key);
+        return facetRow(tr, "kind:" + key, n, n === null ? 0 : n / top, p.kind === key, key);
       }).join("");
     document.getElementById("scopes").innerHTML =
-      SCOPES.map(([tr, path, n]) => facetRow(tr, "under:" + path, n, 0, p.under === path)).join("");
+      SCOPES.map(([tr, path, n]) => facetRow(tr, "under:" + path, n, 0, p.under === path, "folder")).join("");
     document.getElementById("sizes").innerHTML =
-      SIZES.map(([tr, v, n]) => facetRow(tr, "size:" + v, n, 0, p.size === v)).join("");
+      SIZES.map(([tr, v, n]) => facetRow(tr, "size:" + v, n, 0, p.size === v, "size")).join("");
   }
 
   /* Which columns are shown and how wide is the service's, keyed by column id.

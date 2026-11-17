@@ -4846,6 +4846,7 @@ fn apply(
                     token: format!("under:{}", place.path).into(),
                     count: slint::SharedString::new(),
                     share: 0.0,
+                    icon: Default::default(),
                 })
                 .collect();
             w.set_scopes(ModelRc::new(VecModel::from(scopes)));
@@ -4890,6 +4891,7 @@ fn apply(
                         token: format!("kind:{token}").into(),
                         count: compact(hit.count).into(),
                         share: hit.count as f32 / top as f32,
+                        icon: token.into(),
                     });
                 }
                 facets.set_vec(fresh);
@@ -5291,6 +5293,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
         token: (*token).into(),
         count: slint::SharedString::new(),
         share: 0.0,
+        icon: Default::default(),
     })
     .collect();
     window.set_sizes(ModelRc::new(VecModel::from(sizes)));
@@ -5382,6 +5385,7 @@ fn words(window: &MainWindow, cat: &Catalogue) {
             token: (*tag).into(),
             count: slint::SharedString::new(),
             share: 0.0,
+            icon: Default::default(),
         })
         .collect();
     window.set_languages(ModelRc::new(VecModel::from(langs)));
