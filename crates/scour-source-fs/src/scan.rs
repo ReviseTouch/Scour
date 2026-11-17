@@ -172,7 +172,9 @@ pub struct FsSource {
 /// does not know SYSTEM. Impersonation belongs to a thread, so it is asked for
 /// on each of them; the guard it returns gives the identity back when dropped.
 #[derive(Clone)]
-pub struct WalkAs(pub std::sync::Arc<dyn Fn() -> Option<Box<dyn std::any::Any + Send>> + Send + Sync>);
+pub struct WalkAs(
+    pub std::sync::Arc<dyn Fn() -> Option<Box<dyn std::any::Any + Send>> + Send + Sync>,
+);
 
 impl std::fmt::Debug for WalkAs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -256,7 +256,9 @@ mod imp {
         // that far back; otherwise from now, and the start walk covers the gap.
         let (next, caught_up) = match saved {
             Some((id, usn))
-                if id == journal.UsnJournalID && usn >= journal.FirstUsn && usn <= journal.NextUsn =>
+                if id == journal.UsnJournalID
+                    && usn >= journal.FirstUsn
+                    && usn <= journal.NextUsn =>
             {
                 (usn, true)
             }
@@ -265,7 +267,11 @@ mod imp {
         let name = scour_core::Source::describe(source).name;
         scour_core::note!(
             "scourd: {name} is watched through the NTFS change journal of {letter}{}",
-            if caught_up { ", read on from the last run" } else { "" }
+            if caught_up {
+                ", read on from the last run"
+            } else {
+                ""
+            }
         );
         let stopped = Arc::new(AtomicBool::new(false));
         let reader = Reader {
@@ -417,7 +423,9 @@ mod imp {
         /// for, or was deleted and made again. What happened between is unknown,
         /// so the roots are walked, and reading resumes from the journal's end.
         fn lost(&mut self, code: u32) {
-            scour_core::note!("scourd: the change journal could not be read (error {code}); walking again");
+            scour_core::note!(
+                "scourd: the change journal could not be read (error {code}); walking again"
+            );
             std::thread::sleep(Duration::from_secs(5));
             if let Some(j) = query(&self.volume) {
                 self.journal = j.UsnJournalID;
@@ -575,14 +583,29 @@ mod tests {
     fn records_are_read_as_the_volume_writes_them() {
         let mut buf = 1234i64.to_le_bytes().to_vec();
         buf.extend(record(5, FILE_CREATE, 0x20, "rapor.pdf"));
-        buf.extend(record(7, RENAME_NEW_NAME, ATTRIBUTE_DIRECTORY, "Yeni klasör"));
+        buf.extend(record(
+            7,
+            RENAME_NEW_NAME,
+            ATTRIBUTE_DIRECTORY,
+            "Yeni klasör",
+        ));
         let (next, recs) = parse(&buf).expect("a buffer");
         assert_eq!(next, 1234);
         assert_eq!(
             recs,
             vec![
-                Record { parent: 5, reason: FILE_CREATE, dir: false, name: "rapor.pdf".into() },
-                Record { parent: 7, reason: RENAME_NEW_NAME, dir: true, name: "Yeni klasör".into() },
+                Record {
+                    parent: 5,
+                    reason: FILE_CREATE,
+                    dir: false,
+                    name: "rapor.pdf".into()
+                },
+                Record {
+                    parent: 7,
+                    reason: RENAME_NEW_NAME,
+                    dir: true,
+                    name: "Yeni klasör".into()
+                },
             ]
         );
         // A truncated tail is not a record.
@@ -592,7 +615,12 @@ mod tests {
 
     #[test]
     fn a_batch_is_one_look_per_path() {
-        let r = |reason, dir, name: &str| Record { parent: 5, reason, dir, name: name.into() };
+        let r = |reason, dir, name: &str| Record {
+            parent: 5,
+            reason,
+            dir,
+            name: name.into(),
+        };
         let recs = vec![
             r(FILE_CREATE, false, "a.txt"),
             r(0x2, false, "a.txt"), // data extend
@@ -615,7 +643,10 @@ mod tests {
                 ("C:/yeni".into(), Act::Fresh),
             ]
         );
-        assert_eq!(forgot, 2, "a directory that moved makes the kept paths stale");
+        assert_eq!(
+            forgot, 2,
+            "a directory that moved makes the kept paths stale"
+        );
         // A parent the volume no longer has: nothing to say about it.
         assert!(settle(&recs, |_| None, || {}).is_empty());
     }

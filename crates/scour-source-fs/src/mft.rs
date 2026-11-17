@@ -428,45 +428,52 @@ pub(crate) fn read(
     places.insert(ROOT, Place::Shown(Arc::clone(&root_path)));
     let skip = |name: &str, attrs_hidden: bool| !hidden && (attrs_hidden || name.starts_with('.'));
 
-    let place_of = |want: u64, places: &mut HashMap<u64, Place>, counts: &mut Counts| -> Option<Place> {
-        // Up to the first directory already placed, then back down.
-        let mut chain = Vec::new();
-        let mut at = want;
-        while !places.contains_key(&at) {
-            if chain.len() > 4096 || chain.contains(&at) {
-                return None;
-            }
-            dirs.get(&at)?;
-            chain.push(at);
-            at = dirs[&at].parent;
-        }
-        for n in chain.into_iter().rev() {
-            let d = &dirs[&n];
-            let place = match places[&d.parent].clone() {
-                Place::Pruned => Place::Pruned,
-                Place::Through(parent) | Place::Shown(parent) => {
-                    let path: Arc<str> = Arc::from(join(&parent, &d.name));
-                    if skip(&d.name, d.hidden)
-                        || (!rules.is_empty() && rules.excludes(&path, &d.name, true))
-                    {
-                        counts.excluded += 1;
-                        if rules.may_contain_allowed(&path) {
-                            Place::Through(path)
-                        } else {
-                            Place::Pruned
-                        }
-                    } else {
-                        Place::Shown(path)
-                    }
+    let place_of =
+        |want: u64, places: &mut HashMap<u64, Place>, counts: &mut Counts| -> Option<Place> {
+            // Up to the first directory already placed, then back down.
+            let mut chain = Vec::new();
+            let mut at = want;
+            while !places.contains_key(&at) {
+                if chain.len() > 4096 || chain.contains(&at) {
+                    return None;
                 }
-            };
-            places.insert(n, place);
-        }
-        places.get(&want).cloned()
-    };
+                dirs.get(&at)?;
+                chain.push(at);
+                at = dirs[&at].parent;
+            }
+            for n in chain.into_iter().rev() {
+                let d = &dirs[&n];
+                let place = match places[&d.parent].clone() {
+                    Place::Pruned => Place::Pruned,
+                    Place::Through(parent) | Place::Shown(parent) => {
+                        let path: Arc<str> = Arc::from(join(&parent, &d.name));
+                        if skip(&d.name, d.hidden)
+                            || (!rules.is_empty() && rules.excludes(&path, &d.name, true))
+                        {
+                            counts.excluded += 1;
+                            if rules.may_contain_allowed(&path) {
+                                Place::Through(path)
+                            } else {
+                                Place::Pruned
+                            }
+                        } else {
+                            Place::Shown(path)
+                        }
+                    }
+                };
+                places.insert(n, place);
+            }
+            places.get(&want).cloned()
+        };
 
     // The root's own row, as a walk's first.
-    let push = |sink: &mut dyn EntrySink, counts: &mut Counts, path: &str, is_dir: bool, size: u64, times: Option<(i64, i64, i64)>| -> bool {
+    let push = |sink: &mut dyn EntrySink,
+                counts: &mut Counts,
+                path: &str,
+                is_dir: bool,
+                size: u64,
+                times: Option<(i64, i64, i64)>|
+     -> bool {
         let (mtime, ctime, atime) = times.unwrap_or((0, 0, 0));
         let meta = Meta {
             size: if is_dir { 0 } else { size as i64 },
@@ -531,7 +538,14 @@ pub(crate) fn read(
                 counts.excluded += 1;
                 continue;
             }
-            if !push(&mut *sink, &mut counts, &path, false, p.size.unwrap_or(0), p.times) {
+            if !push(
+                &mut *sink,
+                &mut counts,
+                &path,
+                false,
+                p.size.unwrap_or(0),
+                p.times,
+            ) {
                 return false;
             }
         }
@@ -696,11 +710,15 @@ mod tests {
         runs.extend([0x11, half as u8, 24]); // +24 from 16 → 40
         runs.push(0);
         let mut mft = vec![0u8; (count as usize) * RECORD];
-        let mut zero = record(IN_USE, 0, &[
-            standard(0, 0),
-            file_name(ROOT, "$MFT", 3),
-            nonresident_data(count * RECORD as u64, &runs),
-        ]);
+        let mut zero = record(
+            IN_USE,
+            0,
+            &[
+                standard(0, 0),
+                file_name(ROOT, "$MFT", 3),
+                nonresident_data(count * RECORD as u64, &runs),
+            ],
+        );
         mft[..RECORD].swap_with_slice(&mut zero);
         for (n, r) in records {
             let at = *n as usize * RECORD;
@@ -730,33 +748,117 @@ mod tests {
     fn sample() -> Vec<u8> {
         let t = 1_700_000_000;
         volume(&[
-            (ROOT, record(DIR, 0, &[standard(t, 0), file_name(ROOT, ".", 3)])),
-            (24, record(DIR, 0, &[standard(t, 0), file_name(ROOT, "Users", 1), file_name(ROOT, "USERS~1", 2)])),
-            (25, record(DIR, 0, &[standard(t, 0), file_name(24, "hasan", 3)])),
-            (26, record(IN_USE, 0, &[standard(t + 1, 0), file_name(25, "rapor.pdf", 3), attr(ATTR_DATA, "", &[7u8; 300])])),
+            (
+                ROOT,
+                record(DIR, 0, &[standard(t, 0), file_name(ROOT, ".", 3)]),
+            ),
+            (
+                24,
+                record(
+                    DIR,
+                    0,
+                    &[
+                        standard(t, 0),
+                        file_name(ROOT, "Users", 1),
+                        file_name(ROOT, "USERS~1", 2),
+                    ],
+                ),
+            ),
+            (
+                25,
+                record(DIR, 0, &[standard(t, 0), file_name(24, "hasan", 3)]),
+            ),
+            (
+                26,
+                record(
+                    IN_USE,
+                    0,
+                    &[
+                        standard(t + 1, 0),
+                        file_name(25, "rapor.pdf", 3),
+                        attr(ATTR_DATA, "", &[7u8; 300]),
+                    ],
+                ),
+            ),
             // A large file, its data elsewhere; and a second name for it.
-            (27, record(IN_USE, 0, &[standard(t + 2, 0), file_name(25, "büyük.iso", 1), file_name(ROOT, "link.iso", 1), nonresident_data(5_000_000_000, &[0x11, 1, 50, 0])])),
+            (
+                27,
+                record(
+                    IN_USE,
+                    0,
+                    &[
+                        standard(t + 2, 0),
+                        file_name(25, "büyük.iso", 1),
+                        file_name(ROOT, "link.iso", 1),
+                        nonresident_data(5_000_000_000, &[0x11, 1, 50, 0]),
+                    ],
+                ),
+            ),
             // Deleted: not in use.
-            (28, record(0, 0, &[standard(t, 0), file_name(25, "silinmiş.txt", 3)])),
+            (
+                28,
+                record(0, 0, &[standard(t, 0), file_name(25, "silinmiş.txt", 3)]),
+            ),
             // A junction: shown, not entered.
-            (29, record(DIR, 0, &[standard(t, 0), file_name(ROOT, "Documents and Settings", 3), attr(ATTR_REPARSE, "", &TAG_MOUNT_POINT.to_le_bytes())])),
+            (
+                29,
+                record(
+                    DIR,
+                    0,
+                    &[
+                        standard(t, 0),
+                        file_name(ROOT, "Documents and Settings", 3),
+                        attr(ATTR_REPARSE, "", &TAG_MOUNT_POINT.to_le_bytes()),
+                    ],
+                ),
+            ),
             // Excluded by the rules below, with something inside.
-            (30, record(DIR, 0, &[standard(t, 0), file_name(ROOT, "Windows", 3)])),
-            (31, record(IN_USE, 0, &[standard(t, 0), file_name(30, "explorer.exe", 3)])),
+            (
+                30,
+                record(DIR, 0, &[standard(t, 0), file_name(ROOT, "Windows", 3)]),
+            ),
+            (
+                31,
+                record(
+                    IN_USE,
+                    0,
+                    &[standard(t, 0), file_name(30, "explorer.exe", 3)],
+                ),
+            ),
             // Hidden.
-            (32, record(IN_USE, 0, &[standard(t, FILE_ATTRIBUTE_HIDDEN), file_name(ROOT, "pagefile.sys", 3)])),
+            (
+                32,
+                record(
+                    IN_USE,
+                    0,
+                    &[
+                        standard(t, FILE_ATTRIBUTE_HIDDEN),
+                        file_name(ROOT, "pagefile.sys", 3),
+                    ],
+                ),
+            ),
             // A record whose name lives in an extension record.
-            (33, record(IN_USE, 0, &[standard(t, 0), attr(ATTR_DATA, "", b"abc")])),
+            (
+                33,
+                record(IN_USE, 0, &[standard(t, 0), attr(ATTR_DATA, "", b"abc")]),
+            ),
             (40, record(IN_USE, 33, &[file_name(25, "parçalı.txt", 3)])),
             // A reserved record nobody lists.
-            (11, record(DIR, 0, &[standard(t, 0), file_name(ROOT, "$Extend", 3)])),
+            (
+                11,
+                record(DIR, 0, &[standard(t, 0), file_name(ROOT, "$Extend", 3)]),
+            ),
         ])
     }
 
     fn rows(img: &Vec<u8>, rules: &Rules, hidden: bool) -> (Vec<(String, bool, i64)>, Counts) {
         let mut sink = Rows::default();
         let counts = read(img, SourceId(1), "C:/", rules, hidden, &mut sink).expect("a read");
-        let mut out: Vec<_> = sink.0.into_iter().map(|e| (e.path, e.is_dir, e.meta.size)).collect();
+        let mut out: Vec<_> = sink
+            .0
+            .into_iter()
+            .map(|e| (e.path, e.is_dir, e.meta.size))
+            .collect();
         out.sort();
         (out, counts)
     }
@@ -792,8 +894,14 @@ mod tests {
         };
         let (got, counts) = rows(&img, &Rules::from_options(&opts), false);
         let paths: Vec<&str> = got.iter().map(|r| r.0.as_str()).collect();
-        assert!(!paths.iter().any(|p| p.starts_with("C:/Windows")), "{paths:?}");
-        assert!(!paths.contains(&"C:/pagefile.sys"), "a hidden file was listed");
+        assert!(
+            !paths.iter().any(|p| p.starts_with("C:/Windows")),
+            "{paths:?}"
+        );
+        assert!(
+            !paths.contains(&"C:/pagefile.sys"),
+            "a hidden file was listed"
+        );
         assert!(paths.contains(&"C:/Users/hasan/rapor.pdf"));
         assert!(counts.excluded >= 2);
     }
@@ -802,9 +910,20 @@ mod tests {
     fn times_come_from_the_standard_information() {
         let img = sample();
         let mut sink = Rows::default();
-        read(&img, SourceId(1), "C:/", &Rules::from_options(&Default::default()), true, &mut sink)
-            .expect("a read");
-        let pdf = sink.0.iter().find(|e| e.path.ends_with("rapor.pdf")).expect("the pdf");
+        read(
+            &img,
+            SourceId(1),
+            "C:/",
+            &Rules::from_options(&Default::default()),
+            true,
+            &mut sink,
+        )
+        .expect("a read");
+        let pdf = sink
+            .0
+            .iter()
+            .find(|e| e.path.ends_with("rapor.pdf"))
+            .expect("the pdf");
         assert_eq!(pdf.meta.mtime, 1_700_000_001);
         assert_eq!(pdf.meta.ctime, 1_700_000_001 - 100);
         assert_eq!(pdf.meta.atime, 1_700_000_001 + 5);
